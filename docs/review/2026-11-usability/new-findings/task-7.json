@@ -1,0 +1,240 @@
+[
+  {
+    "area": "chat",
+    "journey": "CH-9 Ask for something that needs a tool: the approval appears in place, one click approves, the turn continues with no \"Continue\" step and no trip to the Inbox",
+    "severity": "polish",
+    "kind": "bug",
+    "title": "Characters typed within about 0.3 s of pressing New can be lost",
+    "trigger": "Click New in the conversation list, click the message box and type at once (60 ms per key). Repeat with a wait before typing: 0 ms, 300 ms, 600 ms, 900 ms, 1500 ms.",
+    "expected": "Every typed character lands in the box.",
+    "actual": "Typing 'review-task-7 typing probe' started 0 ms after the box appeared gave 'eview-task-7 typing probe'; at 3 ms per key it gave 'view-task-7 typing probe'. With a 300 ms wait or more the text was complete. Reproduced only with a script that starts typing the moment the box appears (the damaged conversation titles in this review were that script's own text); a person who clicks and types normally is unlikely to hit it, so this is likely, not confirmed for real use. The cause was not traced.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-9-typing-after-new.json",
+      "docs/review/2026-11-usability/evidence/ch/ch-9-dflt-caution-card.png",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx"
+    ],
+    "foundBy": "live",
+    "confidence": "likely",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-9 Ask for something that needs a tool: the approval appears in place, one click approves, the turn continues with no \"Continue\" step and no trip to the Inbox",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "The danger approval review dialog repeats Action and Command that the card above it already shows",
+    "trigger": "On a Chat card waiting on a danger-level shell approval, click 'Review danger approval'.",
+    "expected": "The dialog shows what the card does not, or the card is not repeated inside it.",
+    "actual": "The dialog 'Confirm danger-level action' lists Action: Shell exec, Scope, Expiry, Command and Consequence (the same lines as the card), then Action: Shell exec again, Risk: Danger, a second Command block and Title. Action and Command each appear twice in one dialog.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-9-ver-danger-dialog.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-9-dflt-danger-dialog.png",
+      "apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalAction.tsx:112"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalConfirmationBody.tsx"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-10 Deny an approval; approve after the request expired",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "An expired approval's Chat card says only 'Expired' with dead buttons and no next step",
+    "trigger": "Code read only: let a Chat approval created with an expiry pass its time (the sandbox's approvals have 'No expiry set', and the real timeout could not be waited out).",
+    "expected": "The card says the request expired and what to do (send the request again), as the older shared card did ('Approval expired, rerun the action.').",
+    "actual": "Not reproduced live. The Cockpit card disables its approve button when the expiry has passed (RiskApprovalAction.tsx:64) and shows the one word 'Expired' (approval-preview.ts:87); the shared card with the rerun sentence (InlineApprovalPrompt.tsx:93) is not used by the Cockpit. The disabled state is worked out at render time and no timer re-renders the card, so a card left open can still show a live button after its expiry; the Gateway then answers 'has expired and can no longer be resolved' (approval-lifecycle-service.ts:869 area). A second tab deciding the same approval first was tested live and is handled well (the stale card converged to 'You denied the action' with no error).",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalAction.tsx:64",
+      "apps/mission-control-next/src/cockpit/areas/inbox/approval-preview.ts:87",
+      "packages/mission-control-shared/src/components/InlineApprovalPrompt.tsx:93",
+      "docs/review/2026-11-usability/evidence/ch/ch-10-caution-blocked-tab2-stale-after-approve.png"
+    ],
+    "foundBy": "code",
+    "confidence": "likely",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatBlockers.tsx"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-11 A planning or research request: steps, progress, delegation and the final synthesis are readable; a failed step says what failed and what to do",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "A finished plan's Delegation card says 'Done' while it counts '0 of 4 steps done' and every step reads 'Queued'",
+    "trigger": "Plus menu > Plan first, send 'Plan this deterministic usability turn.', wait for the answer. Look at the Delegation card under it, then click 'Inspect run'.",
+    "expected": "A run that is Done shows its steps as done, or the card says the plan was only written and nothing ran.",
+    "actual": "The card header reads 'Supervised work · Done' and the line under it '0 of 4 steps done · Latest: Synthesizer'. Inspect run shows 'Delegation: Done' with Planner, Worker, Reviewer and Synthesizer all 'Queued'. After a reload the card collapses to the header only. Reproduced twice. 'Open run in Work' is offered although nothing ran.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-11-live-delegation-card.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-11-inspect-run.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-11-after-reload.png",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatRunCard.tsx:48"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatRunCard.tsx"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-11 A planning or research request: steps, progress, delegation and the final synthesis are readable; a failed step says what failed and what to do",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "The plan text runs each step's fields together and shows internal names ('cowork.plan.work.synthesize', 'orch-step-1')",
+    "trigger": "Plus menu > Plan first, send any request. Read the 'Chat plan' answer.",
+    "expected": "A numbered list of steps, each with its goal, what done looks like and what it waits on, in plain words.",
+    "actual": "The answer says 'Chat orchestration plan for <request> using cowork.plan.work.synthesize.' and each step is one run-on paragraph: 'Define the execution path ... Success: ... Output: ... Suggested tools: memory.search, code.search, file.find Depends on: orch-step-1'. The Gateway writes the fields on separate lines but the answer renders them as one paragraph, and a dependency is named by internal step id. The plan is Gateway text, not model text, so a real model does not change it.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-11-plan-answer.png",
+      "apps/gateway/src/services/chat-turn-helpers.ts:179",
+      "apps/gateway/src/services/chat-turn-helpers.ts:191"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/gateway/src/services/chat-turn-helpers.ts"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-11 A planning or research request: steps, progress, delegation and the final synthesis are readable; a failed step says what failed and what to do",
+    "severity": "polish",
+    "kind": "bug",
+    "title": "Every click on New saves an empty 'New chat' conversation that stays in the list",
+    "trigger": "Click New in the conversation list, then click New again or leave without typing. Count conversations through the list API before and after.",
+    "expected": "An empty draft conversation is not kept, or the next New reuses it.",
+    "actual": "One New click raised the Gateway's conversation count from 20 to 21 (POST /api/v1/chat/sessions) with nothing sent. After ten clicks during this review the list held eight 'New chat' rows, each 'just now' or '3 minutes ago', mixed in with real conversations, Reproduced live. No cost beyond list clutter was shown (the empty rows are harmless and can be deleted one by one).",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-11-new-chat-empty-sessions.json",
+      "docs/review/2026-11-usability/evidence/ch/ch-11-plan-answer.png",
+      "apps/mission-control-next/src/cockpit/areas/chat/ConversationListPanel.tsx:88"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ConversationListPanel.tsx"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-12 Deep research with documents; a document that is truncated says so",
+    "severity": "friction",
+    "kind": "missing-state",
+    "title": "A long text document attached to a message is cut to its first 1,600 characters with no word on screen about it",
+    "trigger": "Pick a 122 KB markdown file with @ in the composer (it becomes a chat attachment), ask about its last line, send. Look at the message, the answer, the Inspect Context and Sources tabs.",
+    "expected": "The chip or the answer says that only the start of the document was read, and how to give the model the rest.",
+    "actual": "The chip and the sent message read 'review-task-7-long-document.md · Markdown · 122 KB'. The Gateway keeps the first 4,000 characters at upload (extract status 'ready') and puts the first 1,600 in the prompt under 'Preview:'. Inspect shows 'Routed context: Not recorded' and 'No sources were recorded', so nothing tells the operator the other 98% was not read. The sources path has a notice 'Truncated <title> to stay within the full-text context budget' but it goes only into the model's prompt (chat-thread-knowledge-service.ts:464 area), not the screen. What the model received was not observed live: the stub reply is fixed text.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-12-attachment-preview.json",
+      "docs/review/2026-11-usability/evidence/ch/ch-12-answer.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-12-inspector-context.png",
+      "apps/gateway/src/services/chat-attachment-service.ts:339",
+      "apps/gateway/src/services/chat-turn-user-message.ts:113",
+      "apps/gateway/src/services/chat-thread-knowledge-service.ts:363"
+    ],
+    "foundBy": "both",
+    "confidence": "likely",
+    "priorIds": [],
+    "owner": "apps/gateway/src/services/chat-turn-user-message.ts"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-12 Deep research with documents; a document that is truncated says so",
+    "severity": "polish",
+    "kind": "wrong-status",
+    "title": "After a message with an attached file is sent, the transcript still says 'Attached <file> for the next turn.'",
+    "trigger": "Pick a file with @ in the composer, type a question, send, wait for the answer.",
+    "expected": "The notice goes away once the file has been sent with the message, or says it was used.",
+    "actual": "Under the finished answer a green note reads 'Attached review-task-7-long-document.md for the next turn.' although the file was already part of the message above it.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-12-answer.png",
+      "packages/threaded-surface-core/src/chat/useChatComposerPaletteActions.ts:68"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "packages/threaded-surface-core/src/chat/useChatComposerPaletteActions.ts"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-13 Code Mode run from Chat: approval, run, artifact shown, artifact opened",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "When Create worktree fails, the build editor shows raw JSON with a git command and a server folder path",
+    "trigger": "A project whose folder has lost its .git, or a PC without git installed: open the project's conversation, Conversation actions > Open code workbench, 'Repo actions and checks' > Create worktree. Seen live only on the sandbox's seeded project, which is not a git repository because the seeding route bypassed project creation; projects made through the product are git repositories (chat-project-service.ts:243 runs initializeImportedRepo for a local folder without .git, and GitHub imports are cloned), so a real operator meets this only in the cases above.",
+    "expected": "A sentence saying the project's folder is not a git repository (or git is missing) and what to do, with no raw API output on screen (DESIGN.md: no raw API path reaches the screen).",
+    "actual": "The workbench shows: API error 400: {\"error\":\"Command failed: git worktree add --detach <server runtime folder>\\\\.worktrees\\\\<session id> HEAD fatal: not a git repository (or any of the parent directories): .git\"}. It is raw JSON with the git command, a full folder path on the server and a session id, and no next step. First sign 173 ms after the click.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-13-after-create-worktree.png",
+      "packages/mission-control-shared/src/api/chat-workbench-operations.ts:29",
+      "apps/mission-control-next/src/features/threaded-surface/workflow/CodeWorkbenchToolbar.tsx:180",
+      "apps/gateway/src/services/chat-project-service.ts:243"
+    ],
+    "foundBy": "both",
+    "confidence": "likely",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/features/threaded-surface/workflow/CodeWorkbenchToolbar.tsx"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-13 Code Mode run from Chat: approval, run, artifact shown, artifact opened",
+    "severity": "friction",
+    "kind": "dead-end",
+    "title": "The build editor says 'Create a worktree to begin editing' but the Create worktree button is hidden inside a collapsed 'Repo actions and checks' disclosure",
+    "trigger": "Open the code workbench for a project with no worktree (Conversation actions > Open code workbench).",
+    "expected": "The button the heading and the empty-state sentence ask for is in view.",
+    "actual": "The heading says 'Create a worktree to begin editing' and the body 'No worktree is active yet. Create one to unlock the repo view.' The visible controls are Inspector, Save file, Discard draft (disabled), a disabled 'More', Layout and the file tabs. Create worktree sits under the collapsed 'Repo actions and checks' summary (CodeWorkbenchToolbar.tsx:168), which looks like a menu of optional checks. I found it only by reading the code.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-13-workbench-verif.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-13-repo-actions-open.png",
+      "apps/mission-control-next/src/features/threaded-surface/workflow/CodeWorkbenchToolbar.tsx:168",
+      "apps/mission-control-next/src/features/threaded-surface/workflow/CodeWorkbenchPanel.tsx:490"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/features/threaded-surface/workflow/CodeWorkbenchToolbar.tsx"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-14 Use a skill by name (`use <name>`), and a skill that is switched off",
+    "severity": "stall",
+    "kind": "dead-end",
+    "title": "On a default install, typing 'use <skill>' in Chat does nothing and says nothing, because skill instructions in Chat are off by a setting no screen exposes",
+    "trigger": "Default install. Send 'use debugging skill to look at this' (an enabled, callable skill), 'use genie-npu-ir20 for this' (enabled, not callable), 'use nosuchskill please', '@skill debugging explain this' (and 'use debugging' in the verification workspace). Then open Capabilities > Skills.",
+    "expected": "The skill loads and a chip or line says so, or the screen says it cannot load and why, or the switch that enables it is somewhere an operator can reach.",
+    "actual": "All five turns answered like any other turn: no chip, no message. The skill does not load because the path that loads skill instructions runs only when feature flag chatSkillInstructionsV1Enabled is true (chat-feature-admission-service.ts:171; the `use <name>` reader callable-skill-activation.ts:157 is reached only through that branch). The flag defaults to false (config.ts:1535, feature-flags.ts:57 and :154) and a read-only GET of the sandbox's /api/v1/settings returned features.chatSkillInstructionsV1Enabled = false. No Cockpit screen sets it (git grep finds the flag only in config, Gateway and a shared API type, and the Settings route schema at dashboard.ts:266), and Capabilities > Skills still lists the skill as on and callable, so an operator following the `use <name>` guidance cannot make it work from any screen or learn why. The Gateway trace recorded activated_skill_count 0 for every turn, which is what flag-off produces (chat-turn-runtime-decisions.ts:48). No Chat UI code shows an activated or refused skill either, so even with the flag on there is no chip (git grep). A switched-off skill is dropped silently in the Gateway (chat-skill-selection-runtime.ts:74). Not run live: switching a skill off.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-14-activation-counts.json",
+      "docs/review/2026-11-usability/evidence/ch/ch-14-1-answer.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-14-2-answer.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-14-3-answer.png",
+      "apps/gateway/src/services/callable-skill-activation.ts:157",
+      "apps/gateway/src/services/chat-skill-selection-runtime.ts:74",
+      "apps/gateway/src/services/chat-feature-admission-service.ts:171",
+      "apps/gateway/src/config.ts:1535"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/gateway/src/services/chat-skill-selection-runtime.ts"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-16 Publish a managed project file with the overwrite review",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "When managed files cannot be loaded, the message tells the operator to edit config/tool-policy.json whatever the real cause",
+    "trigger": "Code read only (the Managed files control is not offered in this sandbox, see U-CH-018): open Managed files in a project conversation when the file list request fails for any reason.",
+    "expected": "The message names the actual failure and a step the operator can take in the app.",
+    "actual": "Not reproduced live. Any error in the file list shows 'Managed files are unavailable. Check the path and allow project.files.* in tools.allow in config/tool-policy.json.' The same sentence appears for a network error, a 403 or a wrong path, and sends the operator to a config file by name.",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatManagedFiles.tsx:323",
+      "docs/review/2026-11-usability/evidence/ch/ch-16-inspector-files.png"
+    ],
+    "foundBy": "code",
+    "confidence": "likely",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatManagedFiles.tsx"
+  }
+]

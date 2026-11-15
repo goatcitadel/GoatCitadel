@@ -1,0 +1,51 @@
+{
+ "/settings/general": {
+  "refreshButtons": [
+   "Refresh",
+   "Refresh notification routing"
+  ]
+ },
+ "/settings/models": {
+  "refreshButtons": [
+   "Refresh",
+   "Refresh",
+   "Refresh",
+   "Refresh"
+  ]
+ },
+ "/settings/safety": {
+  "refreshButtons": [
+   "Refresh",
+   "Refresh permission profiles",
+   "Refresh temporary overrides",
+   "Refresh autonomous grants"
+  ]
+ },
+ "/settings/citadel": {
+  "refreshButtons": [
+   "Refresh",
+   "Refresh Mason session"
+  ]
+ },
+ "/settings/access": {
+  "refreshButtons": [
+   "Refresh",
+   "Refresh authentication",
+   "Refresh devices"
+  ]
+ },
+ "/settings/advanced": {
+  "refreshButtons": [
+   "Refresh",
+   "Refresh runtime settings",
+   "Refresh runtime status",
+   "Refresh process status",
+   "Refresh voice runtime"
+  ]
+ },
+ "/settings/first-run": {
+  "refreshButtons": [
+   "Refresh checks"
+  ]
+ }
+}

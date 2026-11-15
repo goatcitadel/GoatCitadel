@@ -1,0 +1,187 @@
+[
+ {
+  "label": "Chat (no thread)",
+  "url": "/chat",
+  "seconds": 120,
+  "apiRequests": 6,
+  "over12": false,
+  "top": [
+   [
+    "GET /api/v1/inbox?workspaceId=default",
+    4
+   ],
+   [
+    "PUT /api/v1/notifications/presence",
+    2
+   ]
+  ]
+ },
+ {
+  "label": "Chat (open thread)",
+  "url": "/chat?sessionId=sess_31da56df2558f3a7cbea21d6",
+  "seconds": 120,
+  "apiRequests": 6,
+  "over12": false,
+  "top": [
+   [
+    "GET /api/v1/inbox?workspaceId=default",
+    4
+   ],
+   [
+    "PUT /api/v1/notifications/presence",
+    2
+   ]
+  ]
+ },
+ {
+  "label": "Inbox",
+  "url": "/inbox",
+  "seconds": 120,
+  "apiRequests": 6,
+  "over12": false,
+  "top": [
+   [
+    "GET /api/v1/inbox?workspaceId=default",
+    4
+   ],
+   [
+    "PUT /api/v1/notifications/presence",
+    2
+   ]
+  ]
+ },
+ {
+  "label": "Work",
+  "url": "/work",
+  "seconds": 120,
+  "apiRequests": 8,
+  "over12": false,
+  "top": [
+   [
+    "GET /api/v1/inbox?workspaceId=default",
+    4
+   ],
+   [
+    "PUT /api/v1/notifications/presence",
+    2
+   ],
+   [
+    "GET /api/v1/tasks?limit=200&view=active&workspaceId=default",
+    1
+   ],
+   [
+    "GET /api/v1/durable/runs?workspaceId=default&limit=100",
+    1
+   ]
+  ]
+ },
+ {
+  "label": "Capabilities",
+  "url": "/capabilities/skills",
+  "seconds": 120,
+  "apiRequests": 6,
+  "over12": false,
+  "top": [
+   [
+    "GET /api/v1/inbox?workspaceId=default",
+    4
+   ],
+   [
+    "PUT /api/v1/notifications/presence",
+    2
+   ]
+  ]
+ },
+ {
+  "label": "Library",
+  "url": "/library/memory",
+  "seconds": 120,
+  "apiRequests": 6,
+  "over12": false,
+  "top": [
+   [
+    "GET /api/v1/inbox?workspaceId=default",
+    4
+   ],
+   [
+    "PUT /api/v1/notifications/presence",
+    2
+   ]
+  ]
+ },
+ {
+  "label": "System",
+  "url": "/system",
+  "seconds": 120,
+  "apiRequests": 16,
+  "over12": true,
+  "top": [
+   [
+    "GET /api/v1/inbox?workspaceId=default",
+    4
+   ],
+   [
+    "PUT /api/v1/notifications/presence",
+    2
+   ],
+   [
+    "GET /api/v1/observe/health",
+    2
+   ],
+   [
+    "GET /api/v1/llamacpp/status",
+    2
+   ],
+   [
+    "GET /api/v1/npu/status",
+    2
+   ],
+   [
+    "GET /api/v1/integrations/connections?limit=300",
+    2
+   ],
+   [
+    "GET /api/v1/ops/workspaces/default/remote-workers?limit=100",
+    2
+   ]
+  ]
+ },
+ {
+  "label": "Settings",
+  "url": "/settings/general",
+  "seconds": 120,
+  "apiRequests": 6,
+  "over12": false,
+  "top": [
+   [
+    "GET /api/v1/inbox?workspaceId=default",
+    4
+   ],
+   [
+    "PUT /api/v1/notifications/presence",
+    2
+   ]
+  ]
+ },
+ {
+  "label": "Settings (Models)",
+  "url": "/settings/models",
+  "seconds": 120,
+  "apiRequests": 14,
+  "over12": true,
+  "top": [
+   [
+    "GET /api/v1/settings",
+    8
+   ],
+   [
+    "GET /api/v1/inbox?workspaceId=default",
+    4
+   ],
+   [
+    "PUT /api/v1/notifications/presence",
+    2
+   ]
+  ]
+ }
+]

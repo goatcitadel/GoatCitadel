@@ -1,0 +1,648 @@
+[
+  {
+    "priorId": "IN-01",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/inbox-presentation.ts:48",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxUpdatesControls.tsx:29",
+      "docs/review/2026-11-usability/evidence/prior/IN-01.png"
+    ],
+    "note": "The rail badge counts only needs_decision items (live: 2 decisions, badge 2, while 2 updates sit apart). Updates have their own unread count, 'Mark all shown updates read' and a view of read ones."
+  },
+  {
+    "priorId": "IN-02",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatApprovalRenderer.tsx:237",
+      "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalDecisionBar.tsx:85",
+      "docs/review/2026-11-usability/evidence/prior/IN-02.png"
+    ],
+    "note": "Chat and Inbox both render the one ApprovalDecisionBar. Live: a danger approval shows 'Review danger approval' + 'Deny' in the Inbox panel; a safe one shows 'Approve once' + 'Deny' with one click."
+  },
+  {
+    "priorId": "IN-03",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/DocumentProposalTarget.tsx:45",
+      "apps/mission-control-next/src/cockpit/areas/inbox/DocumentProposalTarget.tsx:69"
+    ],
+    "note": "Document proposals show 'Target: <title> · Note/Artifact · <workspace name>' with ids under 'Target identifiers', and the diff lines are coloured green/red. Code read only: the sandbox has no document proposal."
+  },
+  {
+    "priorId": "WK-01",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkBoard.tsx:29",
+      "apps/mission-control-next/src/cockpit/areas/work/work-tasks.ts:12",
+      "docs/review/2026-11-usability/evidence/prior/WK-01.png"
+    ],
+    "note": "Cards are now labelled 'Operator task' or 'Run' and counts are split, but tasks and runs still share four run-status lanes. Planning/assigned/testing tasks land in 'Active' and not-started 'inbox' tasks land in 'Needs attention' next to blocked/in review.",
+    "finding": {
+      "area": "work",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "unclear-copy",
+      "title": "The Work board still puts tasks and runs in the same run-status lanes, so a task's lane does not match its own state",
+      "trigger": "Work > Board with tasks in Planning, In progress, Blocked and In review plus waiting Chat runs.",
+      "expected": "Task lanes follow task states and runtime runs appear separately.",
+      "actual": "'Planning' and 'In progress' tasks share 'Active' with queued runs; 'Blocked' and 'In review' tasks share 'Needs attention' with waiting runs; only the card label and the per-lane count tell them apart.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/work/WorkBoard.tsx:29",
+        "apps/mission-control-next/src/cockpit/areas/work/work-tasks.ts:12",
+        "docs/review/2026-11-usability/evidence/prior/WK-01.png"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkBoard.tsx"
+    }
+  },
+  {
+    "priorId": "WK-02",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleSummary.tsx:62",
+      "docs/review/2026-11-usability/evidence/prior/WK-02.png"
+    ],
+    "note": "Live: schedules read 'Every hour America/Los_Angeles', name the action ('Cost report'), show Enabled/Paused, next run and 'Last outcome: Succeeded/Failed/Skipped' with failure count and backoff. Pause and Delete are in the review panel."
+  },
+  {
+    "priorId": "WK-03",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkRunDetail.tsx:156",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkRunDetail.tsx:269",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkRunControls.tsx:33"
+    ],
+    "note": "The run page shows the recorded last error and recovery summary as an alert near the top, a 'Recorded run errors' list, and Retry/Recover controls. Code read; the sandbox has no failed run page I could open (its failed run is not in the run list)."
+  },
+  {
+    "priorId": "WK-04",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleInspector.tsx:143",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleInspector.tsx:170",
+      "docs/review/2026-11-usability/evidence/prior/WK-04.png"
+    ],
+    "note": "Live: the button is 'Delete schedule…' and its dialog says 'Delete permanently removes the schedule... can't be restored' with a danger 'Delete schedule', 'Pause instead' and 'Keep schedule'. I did not confirm anything."
+  },
+  {
+    "priorId": "IN-04",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxItemCard.tsx:49",
+      "apps/gateway/src/services/inbox-projection-service.ts:128",
+      "docs/review/2026-11-usability/evidence/prior/IN-04.png"
+    ],
+    "note": "Rows now show kind, age, a risk chip, an expiry line and the action name, so risk/expiry/age can be triaged. A shell approval still reads 'Target details are available in the approval record' (commands are deliberately kept out of rows), so the target needs a click.",
+    "finding": {
+      "area": "inbox",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "unclear-copy",
+      "title": "An Inbox row for a shell approval does not say what it would run",
+      "trigger": "Open Inbox with a pending shell approval ('Review shell exec').",
+      "expected": "The row names the target so it can be triaged without opening it.",
+      "actual": "The row says 'Review the requested action and its policy reason. Target details are available in the approval record.' The command appears only in the opened panel.",
+      "evidence": [
+        "apps/gateway/src/services/inbox-projection-service.ts:128",
+        "docs/review/2026-11-usability/evidence/prior/IN-04.png"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/gateway/src/services/inbox-projection-service.ts"
+    }
+  },
+  {
+    "priorId": "IN-05",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/inbox-triage.ts:31",
+      "apps/mission-control-next/src/cockpit/areas/inbox/use-inbox-decision-focus.ts:68"
+    ],
+    "note": "Items sort by risk, then expiry, then age (stated on screen: 'Sorted by risk, then expiry, then age'); after a decision focus moves to the next item in the group or the empty state. Code read for the focus part."
+  },
+  {
+    "priorId": "IN-06",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxShortcutsControl.tsx:56",
+      "apps/mission-control-next/src/cockpit/areas/inbox/inbox-shortcuts-preference.ts:7",
+      "apps/mission-control-next/src/cockpit/areas/inbox/use-inbox-shortcuts.ts:43"
+    ],
+    "note": "The keyboard icon in the Inbox header opens a panel with 'Enable Inbox letter shortcuts' (saved per browser); the handler ignores typing in inputs and open dialogs. Shortcuts only move focus."
+  },
+  {
+    "priorId": "WK-05",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkRunDetail.tsx:156",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkRunDetail.tsx:209",
+      "docs/review/2026-11-usability/evidence/prior/WK-05.png"
+    ],
+    "note": "The page now leads with status, controls and the last error, and the plan/delegation/tool records are collapsed. Signed receipt, approvals, artifacts and worktree sections are still open panels, and the 'Recorded run errors' list sits at the very bottom.",
+    "finding": {
+      "area": "work",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "unclear-copy",
+      "title": "A run page still ends in a stack of evidence panels, with the recorded errors list at the bottom",
+      "trigger": "Work > Board > open a waiting 'Chat turn' run.",
+      "expected": "Progress, failure and next action first; secondary evidence collapsed.",
+      "actual": "After the controls come metrics, 'Run history', a signed-receipt block, Approvals, Artifacts and 'Current conversation worktree' each as their own open section, and 'Recorded run errors' ('Turn: Waiting for verification approval.') comes last.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/work/WorkRunDetail.tsx:209",
+        "apps/mission-control-next/src/cockpit/areas/work/WorkRunDetail.tsx:269",
+        "docs/review/2026-11-usability/evidence/prior/WK-05.png"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkRunDetail.tsx"
+    }
+  },
+  {
+    "priorId": "WK-06",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkWaitingDecisions.tsx:8",
+      "docs/review/2026-11-usability/evidence/prior/WK-06.png"
+    ],
+    "note": "Live: the Board opens with 'Waiting on your decision', listing 'Review shell exec' with 'Review current decision' and 'Open run' links; the list is built only from Inbox decisions linked to a run."
+  },
+  {
+    "priorId": "WK-07",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkTaskDetail.tsx:121",
+      "apps/mission-control-next/src/cockpit/areas/work/TaskStatusControl.tsx:70",
+      "docs/review/2026-11-usability/evidence/prior/WK-07.png"
+    ],
+    "note": "The task page links the run only when the task carries durableRunId, and the conversation when it has a session. A task whose execution context has only a run id (the sandbox's) shows 'A run is handling this task. Review its run' with just 'Open linked conversation'.",
+    "finding": {
+      "area": "work",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "dead-end",
+      "title": "A task page can say 'Review its run' without giving a link to that run",
+      "trigger": "Work > Board > open 'Capture prompt-pack quality posture'.",
+      "expected": "A link to the run the page tells the operator to review.",
+      "actual": "Status, assignment and details each say a run owns the task and to review it; the only link is 'Open linked conversation', because the run link needs agenticContext.durableRunId and the task has only agenticContext.runId.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/work/WorkTaskDetail.tsx:121",
+        "docs/review/2026-11-usability/evidence/prior/WK-07.png"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkTaskDetail.tsx"
+    }
+  },
+  {
+    "priorId": "WK-08",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/TaskStatusControl.tsx:37"
+    ],
+    "note": "'Save task status' calls the revision-guarded confirm directly and shows a result notice; no review dialog sits between the edit and the save. (Bulk actions, archive and schedules still use dialogs; see WK-N11.)"
+  },
+  {
+    "priorId": "WK-09",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkTaskCreate.tsx:79"
+    ],
+    "note": "The New task form opens with 'Add an operator task to this workspace. Creating a task does not start a run.' and plain Title, Description and Priority fields; no API identifiers."
+  },
+  {
+    "priorId": "WK-10",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkBoard.tsx:205",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkBoard.tsx:40",
+      "docs/review/2026-11-usability/evidence/prior/WK-10.png"
+    ],
+    "note": "Live: the Board has a search box and a Tasks/Runs filter; the Done column is capped at 25 with a 'See History' link, and Archived tasks has archive and restore."
+  },
+  {
+    "priorId": "WK-12",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/NativeOwnerLink.tsx:38"
+    ],
+    "note": "Every NativeOwnerLink still calls useShellHandoff and renders its own ShellSwitchFeedback; lists share no single handoff owner. Board columns are windowed, which limits the count. No operator-visible cost was measured.",
+    "finding": {
+      "area": "work",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Each owner link in Work and Inbox lists mounts its own navigation handoff owner",
+      "trigger": "Open any list with many owner links (run history, approvals history).",
+      "expected": "Lists share one guarded handoff owner.",
+      "actual": "NativeOwnerLink creates one handoff owner per link; impact on speed not measured.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/ui/NativeOwnerLink.tsx:38"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/ui/NativeOwnerLink.tsx"
+    }
+  },
+  {
+    "priorId": "IN-07",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/approval-settlement.ts:37",
+      "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalSettlement.tsx:28",
+      "docs/review/2026-11-usability/evidence/prior/IN-07.png"
+    ],
+    "note": "Live: denying an Inbox approval with no linked run gave 'Decision recorded: Denied. Approval effects settled...' and 'No original run is linked. The follow-on steps above show what this decision did.' No 'not found' message; a toast named the item."
+  },
+  {
+    "priorId": "IN-09",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxArea.tsx:267",
+      "docs/review/2026-11-usability/evidence/prior/IN-01.png"
+    ],
+    "note": "The Inbox header reads 'Decisions and work that need your attention in this workspace.' and the coverage rules are behind a collapsed 'What this Inbox covers'. Decision panels still carry short caveats, but the contradictory 'can't act here' line is gone."
+  },
+  {
+    "priorId": "WK-11",
+    "verdict": "partial",
+    "evidence": [
+      "packages/mission-control-shared/src/content/status-vocabulary.ts:29",
+      "apps/mission-control-next/src/cockpit/areas/inbox/inbox-presentation.ts:94",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkRunControls.tsx:37",
+      "apps/mission-control-next/src/cockpit/areas/work/RunEvidenceSections.tsx:136"
+    ],
+    "note": "A stopped run is still named three ways: 'Failed · needs recovery' (run status), 'Stopped run' (Inbox kind) and 'dead-lettered' (Recover control text). Helper agents are still 'child run' / 'Child turn'.",
+    "finding": {
+      "area": "work",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "A run that stopped for good is called 'Failed · needs recovery', 'Stopped run' and 'dead-lettered' in different places",
+      "trigger": "Compare a dead-lettered run's badge in Work, its Inbox row kind, and the Recover button's description.",
+      "expected": "One readable term, with the technical state in details.",
+      "actual": "Three different names; delegated work is 'Open child run'.",
+      "evidence": [
+        "packages/mission-control-shared/src/content/status-vocabulary.ts:29",
+        "apps/mission-control-next/src/cockpit/areas/inbox/inbox-presentation.ts:94",
+        "apps/mission-control-next/src/cockpit/areas/work/WorkRunControls.tsx:37"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "packages/mission-control-shared/src/content/status-vocabulary.ts"
+    }
+  },
+  {
+    "priorId": "IN-08",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/inbox-record-read.ts:20",
+      "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalDecisionBar.tsx:203"
+    ],
+    "note": "Opening an approval reads that one record by id (fetchApproval) and a decision re-reads it by id before dispatch, then invalidates the Inbox, record and settlement keys once. Code read."
+  },
+  {
+    "priorId": "IN-10",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxItemCard.tsx:51",
+      "docs/review/2026-11-usability/evidence/prior/IN-02.png"
+    ],
+    "note": "Live: the risk chip fits its text and the panel adds the action preview (command), scope and consequence rather than only repeating the row."
+  },
+  {
+    "priorId": "WK-13",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/work-queries.ts:8",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:105"
+    ],
+    "note": "Work lists fall back to a 120 s poll (was 30 s) and the System event log stops polling while the stream is open. The Board's infinite task and run queries still refetch every loaded page on each fallback tick.",
+    "finding": {
+      "area": "work",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "slow",
+      "title": "The Work board still refetches every loaded page of tasks and runs on each fallback poll",
+      "trigger": "Keep Work > Board open with many loaded pages.",
+      "expected": "Infinite lists avoid refetching every loaded page.",
+      "actual": "Both useInfiniteQuery lists refetch all pages every 120 s; cost not measured.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/work/work-queries.ts:8"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/work/work-queries.ts"
+    }
+  },
+  {
+    "priorId": "IN-11",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/inbox-record-read.ts:20",
+      "apps/mission-control-next/src/cockpit/areas/inbox/LinkedApproval.tsx:68"
+    ],
+    "note": "Approval detail and the linked approval read one record by id. The only remaining 200-row pending reads are the installation-wide reject scope and the System dashboard widget, not detail or Chat blockers."
+  },
+  {
+    "priorId": "N-07",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxOwnerLink.tsx:28",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxOwnerLink.tsx:78",
+      "docs/review/2026-11-usability/evidence/prior/IN-01.png"
+    ],
+    "note": "Live: rows offer 'Open approval', 'Open in Inbox' and 'Open in Work', all native. A kind without a Cockpit page shows 'No page for this item's source yet' instead of a Classic link."
+  },
+  {
+    "priorId": "WK-N07",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleSummary.tsx:135",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleSummary.tsx:142",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkArchive.tsx:161",
+      "docs/review/2026-11-usability/evidence/prior/WK-02.png"
+    ],
+    "note": "Archive rows are hairline rows now and the board cards were kept on purpose. Schedule list items are still bordered cards with an ad-hoc pill instead of StatusBadge.",
+    "finding": {
+      "area": "work",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Schedule list items are bordered cards with a hand-made Enabled/Paused pill",
+      "trigger": "Work > Schedules.",
+      "expected": "Hairline rows and the shared StatusBadge.",
+      "actual": "Each schedule is a rounded bordered card with a custom pill.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleSummary.tsx:135",
+        "docs/review/2026-11-usability/evidence/prior/WK-02.png"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleSummary.tsx"
+    }
+  },
+  {
+    "priorId": "WK-N11",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleInspector.tsx:102",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkArchive.tsx:177",
+      "docs/review/2026-11-usability/evidence/prior/WK-04.png"
+    ],
+    "note": "Pause and Resume still open the 'Review schedule action' dialog ('this review expires after one minute'), and Archive and Restore open a confirmation dialog.",
+    "finding": {
+      "area": "work",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "approval-friction",
+      "title": "Pausing or resuming a schedule, and archiving or restoring a task, each need a review dialog",
+      "trigger": "Work > Schedules > Review schedule > Pause; Work > Archived tasks > Review archive.",
+      "expected": "Reversible actions run directly with an undo or notice; dialogs only for Run now and Delete.",
+      "actual": "A dialog opens for each; the schedule one warns the review expires after one minute.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleInspector.tsx:102",
+        "apps/mission-control-next/src/cockpit/areas/work/WorkArchive.tsx:177"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleInspector.tsx"
+    }
+  },
+  {
+    "priorId": "IN-N04",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxItemCard.tsx:37",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxDocumentProposalDetail.tsx:212",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxMemoryProposalDetail.tsx:171"
+    ],
+    "note": "Inbox and history rows are hairline rows now. The document diff and the memory content are still in bordered sunken boxes inside the inspector.",
+    "finding": {
+      "area": "inbox",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Document diff and memory content in the Inbox inspector are still bordered sunken boxes",
+      "trigger": "Open a document proposal or memory proposal in the Inbox inspector.",
+      "expected": "Code blocks without a border.",
+      "actual": "A rounded bordered sunken box wraps the diff and the memory content.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/inbox/InboxDocumentProposalDetail.tsx:212",
+        "apps/mission-control-next/src/cockpit/areas/inbox/InboxMemoryProposalDetail.tsx:171"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/inbox/InboxDocumentProposalDetail.tsx"
+    }
+  },
+  {
+    "priorId": "IN-N06",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxRunRecovery.tsx:247",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxRunRecovery.tsx:232"
+    ],
+    "note": "The recovery dialog still says 'Review the current run and its prior effects before continuing' but holds only the Confirm and Cancel buttons, and the result notice is always the success colour. Not reproduced live: the sandbox has no recoverable run.",
+    "finding": {
+      "area": "inbox",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "unclear-copy",
+      "title": "The Inbox recovery dialog tells the operator to review the run but shows no run, attempts or effects",
+      "trigger": "Inbox > a failed or stopped run > Retry run / Recover run.",
+      "expected": "The dialog shows the run summary, or is dropped; the notice tone follows the returned status.",
+      "actual": "The dialog has a description and two buttons only; the outcome notice uses the success colour whatever the returned run status.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/inbox/InboxRunRecovery.tsx:247",
+        "apps/mission-control-next/src/cockpit/areas/inbox/InboxRunRecovery.tsx:232"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/inbox/InboxRunRecovery.tsx"
+    }
+  },
+  {
+    "priorId": "IN-03~fu206",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalReviewSummaryContent.tsx:29",
+      "apps/mission-control-next/src/cockpit/areas/inbox/approval-settlement.ts:37",
+      "docs/review/2026-11-usability/evidence/prior/IN-03_fu206.png"
+    ],
+    "note": "Live: scope reads 'Mission Control Next Verification Workspace · one linked conversation', expiry reads 'Expires in 15 minutes', ids are under technical details, and the outcome reads 'Decision recorded: Denied.'"
+  },
+  {
+    "priorId": "WK-01~fu206",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkKanban.tsx:29",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkMoreViews.tsx:6"
+    ],
+    "note": "The embedded Kanban is no longer a 'Task actions' tab: it is 'Older Kanban view' under More, gets the workspace name, and passes the real decision count instead of a hard-coded 0."
+  },
+  {
+    "priorId": "WK-22",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkRunControls.tsx:254",
+      "apps/mission-control-next/src/cockpit/areas/work/TaskStatusControl.tsx:116"
+    ],
+    "note": "Notices are coloured by the returned status's tone and read 'Run moved to <status>' / 'Task moved to <status>'; the 'Gateway recorded...' copy is gone (git grep finds none)."
+  },
+  {
+    "priorId": "VR-01",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkKanban.tsx:66",
+      "docs/review/2026-11-usability/evidence/prior/VR-01.png"
+    ],
+    "note": "The Kanban is demoted to 'Older Kanban view' with a Cockpit header and tabs, but its body is still the embedded Classic page with its own 'Experimental' label, unstyled checkboxes and flat cards.",
+    "finding": {
+      "area": "work",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "The Older Kanban view body still looks like a different product from the rest of Work",
+      "trigger": "Work > More > Older Kanban view.",
+      "expected": "Cockpit styling throughout.",
+      "actual": "Classic-styled lanes, bare checkboxes and an 'Experimental' label under the Cockpit header.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/work/WorkKanban.tsx:66",
+        "docs/review/2026-11-usability/evidence/prior/VR-01.png"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkKanban.tsx"
+    }
+  },
+  {
+    "priorId": "DOCUMENT-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/document-editing-service.ts:135",
+      "packages/storage/src/document-patch-proposal-repo.ts:101"
+    ],
+    "note": "applyProposal locks the pending proposal, writes the target and settles the proposal inside one runTransaction; a conflict rolls the target back and records 'conflicted'. Code read only; not exercised."
+  },
+  {
+    "priorId": "INBOX-PREVIEW-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/approval-preview.ts:42",
+      "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalReviewSummaryContent.tsx:29",
+      "docs/review/2026-11-usability/evidence/prior/IN-02.png"
+    ],
+    "note": "splitApprovalSupport turns the owner's byte count into 'Content size: ...' and moves the SHA-256 to technical details; the recorded title shows as 'Title: ...' in the action preview (live). Memory proposals not available in the sandbox."
+  },
+  {
+    "priorId": "WORK-RUN-SCOPE-COPY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkRunDetail.tsx:119"
+    ],
+    "note": "An unconfirmed workspace shows 'Run workspace unknown' and withholds the details; 'Run outside this workspace' appears only when a different workspace is recorded."
+  },
+  {
+    "priorId": "WORK-INDICATOR-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/WorkRunningIndicator.tsx:63",
+      "apps/mission-control-next/src/cockpit/app/WorkRunningIndicator.tsx:71",
+      "docs/review/2026-11-usability/evidence/prior/WORK-INDICATOR-001.png"
+    ],
+    "note": "The rail indicator reads 'N interactive run(s) queued or running' and 'No queued or running interactive runs' at zero (live, see the rail in the screenshot's page text)."
+  },
+  {
+    "priorId": "SCHEDULE-DST-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/schedule-cadence.ts:154"
+    ],
+    "note": "nextZonedInstant tries every UTC offset around the wall time, keeps only round-trip-valid instants after 'now' and takes the earliest. Worked by hand for New York 01:30 from 06:00Z on Nov 1: candidate 05:30Z is past, 06:30Z is chosen as expected. Lord Howe not run."
+  },
+  {
+    "priorId": "UX457-DOC-TARGET-SIZE",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/DocumentProposalTarget.tsx:20",
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:132"
+    ],
+    "note": "The link has min-h-6 (24 px at the default spacing), but Compact density sets --spacing to 0.21875rem, which makes it about 21 px. Not rendered live: no document proposal in the sandbox.",
+    "finding": {
+      "area": "inbox",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "The 'Open notes' link under a document proposal is about 21 px tall in Compact density",
+      "trigger": "Switch density to Compact, open a document proposal in the Inbox.",
+      "expected": "At least 24 CSS pixels of height or the target-spacing exception.",
+      "actual": "min-h-6 scales with the compact spacing unit (6 x 3.5 px).",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/inbox/DocumentProposalTarget.tsx:20",
+        "apps/mission-control-next/src/cockpit/styles/cockpit.css:132"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/inbox/DocumentProposalTarget.tsx"
+    }
+  },
+  {
+    "priorId": "PR-ops-notifications",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/features/native-routes/ops/RuntimeNotificationsPanel.tsx:95",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxArea.tsx:267"
+    ],
+    "note": "Runtime health, improvement proposals and failed runs are Inbox items, so issues and self-repair proposals can be reviewed natively. Classic's retained-signal feed with an all/unread/read filter, 'mark unread' and the daemon/subagent counts has no Cockpit counterpart in Inbox (System > Activity has no read state).",
+    "finding": {
+      "area": "inbox",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "missing-state",
+      "title": "Classic's notification feed (read/unread filter and mark unread on runtime signals) has no Cockpit screen",
+      "trigger": "Compare Classic Ops > Notifications with Cockpit Inbox and System > Activity.",
+      "expected": "Every action Classic offered can be done in the Cockpit.",
+      "actual": "Inbox covers decisions, proposals and updates; the retained runtime-signal feed with read filter and mark-unread is not offered.",
+      "evidence": [
+        "apps/mission-control-next/src/features/native-routes/ops/RuntimeNotificationsPanel.tsx:95",
+        "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:105"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/inbox/InboxArea.tsx"
+    }
+  },
+  {
+    "priorId": "PR-ops-approvals",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxApprovalHistory.tsx:159",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxBulkRejectZone.tsx:1",
+      "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalAuditRecovery.tsx:120",
+      "docs/review/2026-11-usability/evidence/prior/IN-02.png"
+    ],
+    "note": "Classic's views (pending, history, recovery), approve/deny, 'Reject all pending', replay trail and resume-checkpoint all exist in Inbox: decision bar, Approval history with a Recovery filter, installation-wide rejection, 'Audit and recovery'. Classic-only evidence panels (raw payload, trace linkage) are read-only."
+  },
+  {
+    "priorId": "PR-ops-kanban",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkKanban.tsx:66",
+      "docs/review/2026-11-usability/evidence/prior/VR-01.png"
+    ],
+    "note": "/work/kanban renders the same KanbanRoutePage inside the Cockpit, so every Classic action is available there and no link leaves for Classic. Its look is tracked under VR-01."
+  },
+  {
+    "priorId": "OL-30",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/inbox-projection-service.ts:280",
+      "docs/review/2026-11-usability/evidence/prior/OL-30-verify.png",
+      "docs/review/2026-11-usability/evidence/prior/OL-30-demo.png",
+      "docs/review/2026-11-usability/evidence/prior/OL-30-decide.png"
+    ],
+    "note": "Live: a skill-state change (approval with no linkage) was listed in both workspaces' Inboxes as 'Turn off skill ...', 'Applies to every workspace', with Approve once and Deny; Deny worked in one click. Untested edge: an approval whose linkage exists but names no workspace is matched by no Inbox (approval-repo.ts:610)."
+  }
+]

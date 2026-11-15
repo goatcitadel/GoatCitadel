@@ -1,0 +1,357 @@
+{
+ "chat": {
+  "palette": {
+   "before": "button:Personal / Default Workspace, change Cit",
+   "afterOpen": {
+    "dialog": true,
+    "focusInside": true,
+    "focus": "input:Search or run a command",
+    "expanded": "true"
+   },
+   "afterClose": "button:Personal / Default Workspace, change Cit",
+   "returned": true
+  },
+  "openers": {
+   "/^Rename conversation/": {
+    "presses": 26,
+    "opener": "button:Rename conversation",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "input:",
+     "expanded": null
+    },
+    "afterEscape": "BODY",
+    "dialogGone": true,
+    "focusBackOnOpener": false
+   },
+   "/^Conversation actions/": {
+    "presses": 28,
+    "opener": "button:Conversation actions",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "div:Open code workbench",
+     "expanded": null
+    },
+    "afterEscape": "button:Conversation actions",
+    "dialogGone": true,
+    "focusBackOnOpener": true
+   },
+   "/^Add and options/": {
+    "presses": 36,
+    "opener": "button:Add and options",
+    "afterEnter": {
+     "dialog": true,
+     "focusInside": true,
+     "focus": "button:Attach files",
+     "expanded": null
+    },
+    "afterEscape": "button:Add and options",
+    "dialogGone": true,
+    "focusBackOnOpener": true
+   },
+   "/^Inspect$/": {
+    "presses": 27,
+    "opener": "button:Inspect",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "button:Inspect",
+     "expanded": null
+    },
+    "afterEscape": "button:Inspect",
+    "dialogGone": true,
+    "focusBackOnOpener": true
+   },
+   "/^New$/": {
+    "presses": 13,
+    "opener": "button:New",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "textarea:Message GoatCitadel… Shift+Enter for a n",
+     "expanded": null
+    },
+    "afterEscape": "textarea:Message GoatCitadel… Shift+Enter for a n",
+    "dialogGone": true,
+    "focusBackOnOpener": false
+   }
+  }
+ },
+ "inbox": {
+  "palette": {
+   "before": "button:Personal / Default Workspace, change Cit",
+   "afterOpen": {
+    "dialog": true,
+    "focusInside": true,
+    "focus": "input:Search or run a command",
+    "expanded": "true"
+   },
+   "afterClose": "button:Personal / Default Workspace, change Cit",
+   "returned": true
+  },
+  "openers": {
+   "/Approval history/": {
+    "presses": 30,
+    "opener": "button:Approval history",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "button:Approval history",
+     "expanded": "true"
+    },
+    "afterEscape": "button:Approval history",
+    "dialogGone": true,
+    "focusBackOnOpener": true
+   },
+   "/^Refresh/": {
+    "presses": 14,
+    "opener": "button:Refresh",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "BODY",
+     "expanded": null
+    },
+    "afterEscape": "BODY",
+    "dialogGone": true,
+    "focusBackOnOpener": false
+   }
+  }
+ },
+ "work": {
+  "palette": {
+   "before": "a:Schedules",
+   "afterOpen": {
+    "dialog": true,
+    "focusInside": true,
+    "focus": "input:Search or run a command",
+    "expanded": "true"
+   },
+   "afterClose": "a:Schedules",
+   "returned": true
+  },
+  "openers": {
+   "/^New task$/": {
+    "presses": 56,
+    "opener": "button:New task",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "input:",
+     "expanded": null
+    },
+    "afterEscape": "input:",
+    "dialogGone": true,
+    "focusBackOnOpener": false
+   },
+   "/^Select tasks$/": {
+    "presses": 57,
+    "opener": "button:Select tasks",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "button:Done selecting",
+     "expanded": null
+    },
+    "afterEscape": "button:Done selecting",
+    "dialogGone": true,
+    "focusBackOnOpener": false
+   },
+   "/^More Work views/": {
+    "presses": 59,
+    "opener": "button:More Work views",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "div:Older Kanban view",
+     "expanded": null
+    },
+    "afterEscape": "button:More Work views",
+    "dialogGone": true,
+    "focusBackOnOpener": true
+   }
+  }
+ },
+ "capabilities": {
+  "palette": {
+   "before": "a:Connectors",
+   "afterOpen": {
+    "dialog": true,
+    "focusInside": true,
+    "focus": "input:Search or run a command",
+    "expanded": "true"
+   },
+   "afterClose": "a:Connectors",
+   "returned": true
+  },
+  "openers": {
+   "/^Import from Git/": {
+    "presses": 7,
+    "opener": "button:Import from Git",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "button:Import from Git",
+     "expanded": null
+    },
+    "afterEscape": "button:Import from Git",
+    "dialogGone": true,
+    "focusBackOnOpener": true
+   },
+   "/^View documentation/": {
+    "presses": 27,
+    "opener": "button:View documentation",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "button:View documentation",
+     "expanded": null
+    },
+    "afterEscape": "button:View documentation",
+    "dialogGone": true,
+    "focusBackOnOpener": true
+   },
+   "/^Refresh counts/": {
+    "presses": 17,
+    "opener": "button:Refresh counts",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "button:Refresh counts",
+     "expanded": null
+    },
+    "afterEscape": "button:Refresh counts",
+    "dialogGone": true,
+    "focusBackOnOpener": true
+   }
+  }
+ },
+ "library": {
+  "palette": {
+   "before": "a:Files",
+   "afterOpen": {
+    "dialog": true,
+    "focusInside": true,
+    "focus": "input:Search or run a command",
+    "expanded": "true"
+   },
+   "afterClose": "a:Files",
+   "returned": true
+  },
+  "openers": {
+   "/Open memory diagnostics/": {
+    "presses": 9,
+    "opener": "button:Open memory diagnostics and maintenance",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "button:Open memory diagnostics and maintenance",
+     "expanded": null
+    },
+    "afterEscape": "button:Open memory diagnostics and maintenance",
+    "dialogGone": true,
+    "focusBackOnOpener": true
+   },
+   "/Refresh memory proposals/": {
+    "presses": 10,
+    "opener": "button:Refresh memory proposals",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "BODY",
+     "expanded": null
+    },
+    "afterEscape": "BODY",
+    "dialogGone": true,
+    "focusBackOnOpener": false
+   },
+   "/Show all statuses/": {
+    "presses": 8,
+    "opener": "button:Show all statuses",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "BODY",
+     "expanded": null
+    },
+    "afterEscape": "BODY",
+    "dialogGone": true,
+    "focusBackOnOpener": false
+   }
+  }
+ },
+ "system": {
+  "palette": {
+   "before": "a:Spend",
+   "afterOpen": {
+    "dialog": true,
+    "focusInside": true,
+    "focus": "input:Search or run a command",
+    "expanded": "true"
+   },
+   "afterClose": "a:Spend",
+   "returned": true
+  },
+  "openers": {
+   "/^Refresh system health/": {
+    "presses": 33,
+    "opener": "button:Refresh system health",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "BODY",
+     "expanded": null
+    },
+    "afterEscape": "BODY",
+    "dialogGone": true,
+    "focusBackOnOpener": false
+   }
+  }
+ },
+ "settings": {
+  "palette": {
+   "before": "select:Guided Expert",
+   "afterOpen": {
+    "dialog": true,
+    "focusInside": true,
+    "focus": "input:Search or run a command",
+    "expanded": "true"
+   },
+   "afterClose": "select:Guided Expert",
+   "returned": true
+  },
+  "openers": {
+   "/^New destination/": {
+    "presses": 11,
+    "opener": "button:New destination",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "BODY",
+     "expanded": null
+    },
+    "afterEscape": "BODY",
+    "dialogGone": true,
+    "focusBackOnOpener": false
+   },
+   "/^New rule/": {
+    "presses": 12,
+    "opener": "button:New rule",
+    "afterEnter": {
+     "dialog": false,
+     "focusInside": null,
+     "focus": "BODY",
+     "expanded": null
+    },
+    "afterEscape": "BODY",
+    "dialogGone": true,
+    "focusBackOnOpener": false
+   },
+   "/^Send test notification/": {
+    "found": false
+   }
+  }
+ }
+}

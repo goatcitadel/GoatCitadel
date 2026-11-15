@@ -1,0 +1,134 @@
+{
+  "phone": {
+    "chatScopeVisibleOutsideSheet": {
+      "hasWorkspaceName": false,
+      "hasPersonal": false,
+      "first200": "Skip to main content\nRuntime evidence follow-up\n\nLast response completed\n\nConversations\nMessages\nYou said\n\nYou · 7:31 PM\n\nSay hello in one sentence.\n\nAssistant reply\n\nAssistant 7:31 PM\n\nVerification s"
+    },
+    "moreAtChat": {
+      "ariaCurrent": null,
+      "color": "rgb(176, 200, 213)",
+      "borderTop": "0px",
+      "bg": "rgba(0, 0, 0, 0)",
+      "currentLinkColor": "rgb(244, 251, 255)",
+      "fontWeight": "400"
+    },
+    "moreAtSystem": {
+      "ariaCurrent": "page",
+      "color": "rgb(176, 200, 213)",
+      "borderTop": "0px",
+      "bg": "rgba(0, 0, 0, 0)",
+      "currentLinkColor": null,
+      "fontWeight": "400"
+    },
+    "moreAtSettings": {
+      "ariaCurrent": "page",
+      "color": "rgb(176, 200, 213)",
+      "borderTop": "0px",
+      "bg": "rgba(0, 0, 0, 0)",
+      "currentLinkColor": null,
+      "fontWeight": "400"
+    },
+    "sheet": {
+      "close": {
+        "w": 44,
+        "h": 44
+      },
+      "describedby": null,
+      "handle": false,
+      "scrollable": false,
+      "scrollH": 635,
+      "clientH": 635,
+      "text": "More\n1 check needs review\nUpdates connected\nOpen System health\n\nPersonal / Mission Control Next Verification Workspace\n\nChange Citadel and workspace\nCapabilities\nSystem\nSettings\nSearch\nUse light theme\nMatch system theme\nSwitch to classic Mission Control"
+    },
+    "backWithSheet": {
+      "before": "/settings/general",
+      "after": "/settings/general",
+      "sheetOpen": false
+    },
+    "workTabs": {
+      "cls": "cockpit-area-tabs cockpit-overflow-fade flex gap-1 overflow-x-auto border-b border-line-subtle",
+      "end": "true",
+      "start": null,
+      "sw": 487,
+      "cw": 343,
+      "picker": false
+    },
+    "systemTabs": {
+      "cls": "cockpit-area-tabs-picker",
+      "picker": true,
+      "opts": 9
+    }
+  },
+  "tablet": {
+    "scope": {
+      "collapsed": "true",
+      "width": 56,
+      "firstBtn": {
+        "label": "Personal / Mission Control Next Verification Workspace, change Citadel and workspace",
+        "text": "",
+        "title": "Change Citadel and workspace: Personal / Mission Control Next Verification Workspace"
+      },
+      "bodyHasWorkspace": false
+    }
+  },
+  "labels": {
+    "/library/journey": {
+      "h1": "Journey timeline",
+      "experimental": true,
+      "path": "/library/journey",
+      "snippet": "Experimental. Canonical producers cover skill learning, candidate govern"
+    },
+    "/library/curator": {
+      "h1": "Skill curator",
+      "experimental": true,
+      "path": "/library/curator",
+      "snippet": "Experimental. Curator remains visible as experimental operator assistance."
+    },
+    "/work/kanban": {
+      "h1": "Older Kanban view",
+      "experimental": true,
+      "path": "/work/kanban",
+      "snippet": "Experimental"
+    },
+    "/system/improvement": {
+      "h1": "Improvement",
+      "experimental": true,
+      "path": "/system/improvement",
+      "snippet": "Experimental. Suggestions, weekly reports and test runs are advisory. No"
+    },
+    "/settings/personalities": {
+      "h1": "General",
+      "experimental": true,
+      "path": "/settings/personalities",
+      "snippet": "Personalities · Experimental"
+    },
+    "/library/memory": {
+      "h1": "Memory",
+      "experimental": false,
+      "path": "/library/memory",
+      "snippet": ""
+    },
+    "/system/runtime/workers": {
+      "h1": "Workers",
+      "experimental": false,
+      "path": "/system/runtime/workers",
+      "snippet": ""
+    },
+    "404 /nonexistent-page": {
+      "title": "GoatCitadel Page not found",
+      "h1": "Page not found",
+      "path": "/nonexistent-page"
+    },
+    "404 /work/runs/does-not-exist": {
+      "title": "GoatCitadel Work · Runs",
+      "h1": "Run",
+      "path": "/work/runs/does-not-exist"
+    },
+    "404 /ops/approvals?approvalId=abc": {
+      "title": "GoatCitadel Inbox",
+      "h1": "Inbox",
+      "path": "/inbox?approvalId=abc&shell=cockpit"
+    }
+  }
+}

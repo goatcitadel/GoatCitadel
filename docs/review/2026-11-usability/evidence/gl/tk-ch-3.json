@@ -1,0 +1,38 @@
+{
+  "chips": "llo in one sentence. ut13b CH-1 | Assistant reply | Assistant 3:33 AM | Verification stub reply. | verification-stub-chat · Verification stub (loopback) · 591 ms total | · Open message details | Retry | Copy answer | More | Save as skill | Background run | Recorded for this response | ut13b-notes.txt | Text · 62 B | ut13b-pixel.png | Image · 70 B | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send",
+  "sendFirstMs": 72,
+  "sendDoneMs": 1155,
+  "after": " hello in one sentence. ut13b CH-1 | Assistant reply | Assistant 3:33 AM | Verification stub reply. | verification-stub-chat · Verification stub (loopback) · 591 ms total | · Open message details | Retry | Copy answer | More | Save as skill | You said | You · 3:34 AM | ut13b CH-3 what do the attached files contain? | ut13b-notes.txt · Text · 62 B | ut13b-pixel.png · Image · 70 B | Assistant reply | Assistant 3:34 AM | Verification stub reply. | verification-stub-chat · Verification stub (loopback) · 561 ms total | · Open message details | Retry | Copy answer | More | Save as skill | Background run | Recorded for this response | Inspect run | Open run in Work | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send",
+  "tooLarge": "hat do the attached files contain? | ut13b-notes.txt · Text · 62 B | ut13b-pixel.png · Image · 70 B | Assistant reply | Assistant 3:34 AM | Verification stub reply. | verification-stub-chat · Verification stub (loopback) · 561 ms total | · Open message details | Retry | Copy answer | More | Save as skill | Background run | Recorded for this response | Inspect run | Open run in Work | The attachment didn’t upload. Select the file again to retry. | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send",
+  "alerts": "Response ended. || The attachment didn’t upload. Select the file again to retry.",
+  "net": [
+    [
+      "POST",
+      "/api/v1/chat/attachments",
+      201,
+      ""
+    ],
+    [
+      "POST",
+      "/api/v1/chat/attachments",
+      201,
+      ""
+    ],
+    [
+      "POST",
+      "/api/v1/chat/attachments",
+      413,
+      ""
+    ]
+  ],
+  "log": [
+    {
+      "k": "http413",
+      "t": "POST http://127.0.0.1:18787/api/v1/chat/attachments"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 413 (Payload Too Large)"
+    }
+  ]
+}

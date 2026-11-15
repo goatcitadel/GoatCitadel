@@ -1,0 +1,2 @@
+{"note":"Playwright keyboard.type at 60 ms per key into the composer, started N ms after the box appeared (after clicking New, then clicking the box). Text typed: 'review-task-7 typing probe'. Default workspace, 1440x900.",
+ "results":[{"waitMs":0,"typed":"review-task-7 typing probe","got":"eview-task-7 typing probe"},{"waitMs":0,"delayPerKey":3,"got":"view-task-7 typing probe"},{"waitMs":300,"got":"review-task-7 typing probe"},{"waitMs":600,"got":"review-task-7 typing probe"},{"waitMs":1500,"got":"review-task-7 typing probe"}]}

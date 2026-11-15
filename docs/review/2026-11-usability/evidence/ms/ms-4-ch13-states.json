@@ -1,0 +1,52 @@
+{
+ "states": [
+  {
+   "at": 440,
+   "stop": true,
+   "approval": false,
+   "btns": [],
+   "status": "Sending"
+  },
+  {
+   "at": 764,
+   "stop": true,
+   "approval": false,
+   "btns": [],
+   "status": ""
+  },
+  {
+   "at": 3833,
+   "stop": true,
+   "approval": true,
+   "btns": [],
+   "status": ""
+  },
+  {
+   "at": 5041,
+   "stop": true,
+   "approval": true,
+   "btns": [],
+   "status": "Running code…"
+  },
+  {
+   "at": 6422,
+   "stop": true,
+   "approval": false,
+   "btns": [],
+   "status": ""
+  },
+  {
+   "at": 9934,
+   "stop": false,
+   "approval": false,
+   "btns": [],
+   "status": ""
+  }
+ ],
+ "approvalAt": 3833,
+ "approved": {
+  "at": 4160,
+  "firstClick": "Run it"
+ },
+ "afterApprove": 9934
+}

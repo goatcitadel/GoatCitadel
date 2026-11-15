@@ -1,0 +1,150 @@
+{
+  "method": "Gateway process frozen with NtSuspendProcess ~100 ms after Enter (sockets stay open, requests hang), thawed after ~41 s",
+  "timeline": [
+    {
+      "tSec": 1.4,
+      "stopShown": false,
+      "offlineWord": null,
+      "live": "Response ended.",
+      "tail": "-chat · Verification stub (loopback) · 425 ms total | · Open message details | Retry | Copy answer | More | Save as skill | Background run | Recorded for this response | Inspect run | Open run in Work | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 11.7,
+      "stopShown": false,
+      "offlineWord": null,
+      "live": "Response ended.",
+      "tail": "-chat · Verification stub (loopback) · 425 ms total | · Open message details | Retry | Copy answer | More | Save as skill | Background run | Recorded for this response | Inspect run | Open run in Work | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 21.8,
+      "stopShown": false,
+      "offlineWord": null,
+      "live": "Response ended.",
+      "tail": "-chat · Verification stub (loopback) · 425 ms total | · Open message details | Retry | Copy answer | More | Save as skill | Background run | Recorded for this response | Inspect run | Open run in Work | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 32,
+      "stopShown": false,
+      "offlineWord": null,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation",
+      "tail": "ve as skill | Background run | Recorded for this response | Inspect run | Open run in Work | Can't reach the GoatCitadel gateway. Check that it's running, then try again. | Reload conversation | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 42.2,
+      "stopShown": false,
+      "offlineWord": null,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation",
+      "tail": "ve as skill | Background run | Recorded for this response | Inspect run | Open run in Work | Can't reach the GoatCitadel gateway. Check that it's running, then try again. | Reload conversation | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    }
+  ],
+  "after": [
+    {
+      "tSec": 1,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 2,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 3,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 4,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 5,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 6,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 7,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 8,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 9,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 10,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 11,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 12,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 13,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 14,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    },
+    {
+      "tSec": 15,
+      "stop": false,
+      "answered": true,
+      "live": "Response ended. || Can't reach the GoatCitadel gateway. Check that it's running, then try again.\n\nReload conversation"
+    }
+  ],
+  "log": [
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/startup-reads net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/startup-reads net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/chat/sessions/sess_ce0e62d2461015140aed3cbd/core-state net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/durable/runs net::ERR_ABORTED"
+    }
+  ]
+}

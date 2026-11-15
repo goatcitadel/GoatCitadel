@@ -1,0 +1,18 @@
+{
+ "before": 94,
+ "bannerAfterMs": 60404,
+ "banner": null,
+ "draftKept": "review-b6 outage draft",
+ "sendDisabled": {
+  "disabled": true,
+  "ariaDisabled": null,
+  "label": "Send"
+ },
+ "requestsIn30sDown": 1,
+ "requestSample": [
+  "PUT /api/v1/notifications/presence"
+ ],
+ "recoveredInPlace": true,
+ "recoveredAfterMs": 1512,
+ "draftAfterRecovery": "review-b6 outage draft"
+}

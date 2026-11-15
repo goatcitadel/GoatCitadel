@@ -1,0 +1,184 @@
+{
+ "capturedAt": "2026-11-15T08:24:20.197Z",
+ "endpointsRead": [
+  "/api/v1/observe/health",
+  "/api/v1/daemon/status",
+  "/api/v1/llamacpp/status",
+  "/api/v1/npu/status",
+  "/api/v1/integrations/connections",
+  "/api/v1/ops/workspaces/default/remote-workers",
+  "/api/v1/admin/backups"
+ ],
+ "cardsOnScreen": [
+  {
+   "title": "Runtime service",
+   "lines": [
+    "Runtime service",
+    "Unavailable",
+    "Service control is unavailable on this host.",
+    "Review runtime service"
+   ]
+  },
+  {
+   "title": "Backups",
+   "lines": [
+    "Backups",
+    "No backup yet",
+    "No backup has been published yet. Back up now creates a host-wide backup. Scheduling and offline restore remain separate operator workflows.",
+    "Review backups",
+    "Back up now"
+   ]
+  },
+  {
+   "title": "Managed local models",
+   "lines": [
+    "Managed local models",
+    "Not set up",
+    "No managed local runtime is enabled. Cloud provider health is separate.",
+    "Review managed local models",
+    "Review local runtime start"
+   ]
+  },
+  {
+   "title": "Channels",
+   "lines": [
+    "Channels",
+    "Not set up",
+    "No channel connection is enabled.",
+    "Review channels"
+   ]
+  },
+  {
+   "title": "Integrations",
+   "lines": [
+    "Integrations",
+    "Not set up",
+    "No non-channel integration connection is enabled.",
+    "Review integrations"
+   ]
+  },
+  {
+   "title": "Desktop updates",
+   "lines": [
+    "Desktop updates",
+    "Desktop app only",
+    "Update status is available in the installed Windows app.",
+    "Review desktop updates"
+   ]
+  },
+  {
+   "title": "Remote workers",
+   "lines": [
+    "Remote workers",
+    "Not set up",
+    "No worker is registered in this workspace.",
+    "Review remote workers",
+    "The workers page shows worker records, assignments and spending budgets. Enrollment and containment recovery keep their existing runtime controls."
+   ]
+  },
+  {
+   "title": "GoatCitadel server",
+   "lines": [
+    "GoatCitadel server",
+    "Responding",
+    "The health summary is responding.",
+    "Review goatcitadel server"
+   ]
+  },
+  {
+   "title": "Database",
+   "lines": [
+    "Database",
+    "Reachable",
+    "The configured store is reachable with no reported issues.",
+    "Review database"
+   ]
+  }
+ ],
+ "rows": [
+  {
+   "card": "Page heading",
+   "screen": "1 check needs attention",
+   "gateway": "derived: problems=1 (service tone waiting), unknown=0",
+   "verdict": "consistent with the derivation; the one 'problem' is the service line"
+  },
+  {
+   "card": "Runtime service",
+   "screen": "Unavailable / Service control is unavailable on this host.",
+   "gateway": {
+    "supported": false,
+    "controllable": false,
+    "running": true,
+    "state": "running"
+   },
+   "verdict": "Gateway says the process is running and healthy; it says service control is not supported (hard-coded false). Page counts that as an attention item. Not a fault of the install."
+  },
+  {
+   "card": "Backups",
+   "screen": "No backup yet",
+   "gateway": {
+    "items": 0,
+    "healthLatest": null
+   },
+   "verdict": "backed by the Gateway (zero records)"
+  },
+  {
+   "card": "Managed local models",
+   "screen": "Not set up",
+   "gateway": {
+    "llamaEnabled": false,
+    "llamaState": "stopped",
+    "npuEnabled": false
+   },
+   "verdict": "backed"
+  },
+  {
+   "card": "Channels",
+   "screen": "Not set up (No channel connection is enabled)",
+   "gateway": {
+    "connections": 0
+   },
+   "verdict": "backed"
+  },
+  {
+   "card": "Integrations",
+   "screen": "Not set up",
+   "gateway": {
+    "connections": 0
+   },
+   "verdict": "backed"
+  },
+  {
+   "card": "Desktop updates",
+   "screen": "Desktop app only",
+   "gateway": "browser-side desktop bridge, no Gateway read",
+   "verdict": "not a Gateway claim"
+  },
+  {
+   "card": "Remote workers",
+   "screen": "Not set up (No worker is registered in this workspace)",
+   "gateway": {
+    "items": 0
+   },
+   "verdict": "backed"
+  },
+  {
+   "card": "GoatCitadel server",
+   "screen": "Responding",
+   "gateway": {
+    "generatedAt": "2026-11-15T08:24:20.158Z"
+   },
+   "verdict": "backed"
+  },
+  {
+   "card": "Database",
+   "screen": "Reachable / no reported issues",
+   "gateway": {
+    "driver": "sqlite",
+    "reachable": true,
+    "issues": 0
+   },
+   "verdict": "backed"
+  }
+ ]
+}

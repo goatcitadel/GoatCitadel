@@ -1,0 +1,17 @@
+{
+  "default": {
+    "head": "2 decisions waiting.",
+    "skillRows": 1,
+    "rowText": "Approval · just now | Turn on skill bundled:documentation | Applies to every workspace. | Danger | Expires in 15 minutes | Review | Open approval"
+  },
+  "verification": {
+    "head": "4 decisions waiting, 2 updates.",
+    "skillRows": 1,
+    "rowText": "Approval · just now | Turn on skill bundled:documentation | Applies to every workspace. | Danger | Expires in 15 minutes | Review | Open approval"
+  },
+  "demo": {
+    "head": "2 decisions waiting, 1 update.",
+    "skillRows": 1,
+    "rowText": "Approval · just now | Turn on skill bundled:documentation | Applies to every workspace. | Danger | Expires in 15 minutes | Review | Open approval"
+  }
+}

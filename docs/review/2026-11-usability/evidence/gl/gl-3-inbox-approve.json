@@ -1,0 +1,20 @@
+{
+ "approvalId": "3ade3388-57f8-453d-8f19-bfe07fb92cad",
+ "marked": "marked card: Details Approve once Deny Open approval Show source context",
+ "presses": 25,
+ "reachedMine": true,
+ "rowGoneMs": 1241,
+ "focusAfter": {
+  "tag": "button",
+  "label": "Details",
+  "visible": true,
+  "outline": "solid 2px",
+  "shadow": "no",
+  "inView": false,
+  "focusVisible": true
+ },
+ "statusAfter": "approved",
+ "live": [
+  "Approved Run code. Approval effects settled. Linked work has its own execution outcome."
+ ]
+}

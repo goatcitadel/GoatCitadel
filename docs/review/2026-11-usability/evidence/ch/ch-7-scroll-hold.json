@@ -1,0 +1,6 @@
+{
+  "note": "Stub answers finish in about 400 ms, so a long streaming answer could not be produced. Scrolled up 1500 px about 150 ms after sending, sampled scrollTop and scrollHeight every ~60 ms for 3.5 s in a 20-turn conversation.",
+  "samples_ms_scrollTop_scrollHeight": [[50,4338,5019],[109,2838,5019],[171,2838,5019],[327,2838,5065],[581,2838,5165],[704,2838,5171],[975,2838,5265],[3545,2838,5265]],
+  "result": "scrollTop stayed at 2838 while scrollHeight grew 5019 -> 5265; a 'Jump to latest · 2 new messages' button appeared",
+  "earlier_run": "With the view scrolled to 400 and then a message sent, the view jumped to the bottom (4016 -> 4262); expected after the operator's own send"
+}

@@ -1,0 +1,222 @@
+[
+  {
+    "area": "first-run",
+    "priorIds": [],
+    "journey": "FR-1 Fresh sandbox with onboarding not done: the first screen, Get started, choose a model, the first task, arrive in Chat",
+    "severity": "friction",
+    "kind": "dead-end",
+    "title": "A fresh install says 'You can chat now' above a first-send failure ('no provider is configured') whose only button, 'Reload conversation', changes nothing",
+    "trigger": "Fresh install, onboarding not completed, no provider. Open the app, Chat > New conversation, type a message, press Send (or Enter).",
+    "expected": "No 'You can chat now' line while no model exists, and the failure card carries a link or button to setup next to the failure.",
+    "actual": "Feedback is quick (126 ms) but the sent message disappears from the transcript (it stays in the composer) and a red card (from ChatStreamErrorNotice) says 'The run cannot start because no provider is configured.' with one button, 'Reload conversation', which changes nothing (card unchanged after 2 s). The path to setup exists, but above the failure and not next to it: the banner row directly above carries 'Return to setup' (one click), the top banner names Settings -> Providers & models as plain text with no link and stays more than 7 s, and the composer says 'No model is connected yet.' with a 'Choose model' chip whose panel has empty selects and no link. The core is the contradiction: the banner row says 'You can chat now. Finish setup to verify your first answer.' with no check that a model exists, and the code comment on ChatSetupBanner ('sending works before setup is finished') is false when no provider is configured.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/fr/fr-1-first-send-no-model.png",
+      "docs/review/2026-11-usability/evidence/fr/fr-1-after-reload-conversation.png",
+      "docs/review/2026-11-usability/evidence/fr/fr-1-first-send.json",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatAreaChrome.tsx:198",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatAreaChrome.tsx:202",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx:339"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatAreaChrome.tsx"
+  },
+  {
+    "area": "first-run",
+    "priorIds": [],
+    "journey": "FR-1 Fresh sandbox with onboarding not done: the first screen, Get started, choose a model, the first task, arrive in Chat",
+    "severity": "stall",
+    "kind": "missing-state",
+    "title": "'Check connection' for LM Studio or llama.cpp says nothing when the server is not running: no error, status stays 'Not verified'",
+    "trigger": "Settings > Get started > Use a cloud provider > choose LM Studio (nothing listening) > Check connection. Same for llama.cpp.",
+    "expected": "A line such as 'LM Studio did not answer at its address. Start it, then check again', as the llama.cpp panel already does before the click.",
+    "actual": "The button runs (one GET to the models list) and the screen does not change at all for 5 s: no message, no dialog, Connection stays 'Not verified', the model box keeps a suggested name. The Gateway answers 200 with source 'error_fallback' and warning 'fetch failed' (llama.cpp: 'llama.cpp runtime is disabled in assistant config'); the guided setup throws that warning away. LM Studio also has no 'start it first' help text (llama.cpp has four steps). An operator cannot tell a failed check from one that did not run.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/fr/fr-1-lmstudio-check-unreachable.png",
+      "docs/review/2026-11-usability/evidence/fr/fr-1-lmstudio-after-check-5s.png",
+      "docs/review/2026-11-usability/evidence/fr/fr-1-llamacpp-check-unreachable.png",
+      "docs/review/2026-11-usability/evidence/fr/fr-1-lmstudio-check.json",
+      "apps/mission-control-next/src/cockpit/areas/settings/use-guided-model-setup.ts:369"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/use-guided-model-setup.ts"
+  },
+  {
+    "area": "first-run",
+    "priorIds": [],
+    "journey": "FR-1 Fresh sandbox with onboarding not done: the first screen, Get started, choose a model, the first task, arrive in Chat",
+    "severity": "friction",
+    "kind": "missing-state",
+    "title": "Nothing outside Chat and Settings says that no model is configured: System > Health, Work > Schedules and Library > Knowledge are silent, and Chat's model chooser opens empty",
+    "trigger": "Fresh install, no provider. Open System > Health, Work > Schedules, Library > Knowledge, and in Chat press 'Choose model'.",
+    "expected": "At least System > Health lists a 'Model' check ('Not set up', link to Get started), and the Chat model chooser points to setup when it has no providers.",
+    "actual": "System > Health shows '1 check needs attention' that is the runtime service ('Service control is unavailable on this host'); no check mentions the model (the Managed local models card says 'Cloud provider health is separate' and no card covers it). Seven schedules show Enabled with no hint. Library > Knowledge offers an ingest form with no sign that retrieval needs a model. Chat's 'Choose model' panel has an empty Provider box and an empty Model box with no link. Chat (error card, though see the first finding) and Settings > Models are the only places that name the problem.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/fr/fr-1-nomodel-system-health.png",
+      "docs/review/2026-11-usability/evidence/fr/fr-1-nomodel-work-schedules.png",
+      "docs/review/2026-11-usability/evidence/fr/fr-1-nomodel-library-knowledge.png",
+      "docs/review/2026-11-usability/evidence/fr/fr-1-choose-model-popover.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/system"
+  },
+  {
+    "area": "first-run",
+    "priorIds": [],
+    "journey": "FR-2 Leave onboarding halfway and come back; skip it; try the demo",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "'Try the demo' ends as 'Partly prepared' with a raw flag name, 'Open recorded demo' opens an empty chat, and the demo switches the workspace",
+    "trigger": "Get started > Try the demo > Review demo preparation > Confirm demo preparation > Open recorded demo (default install, memory feature off).",
+    "expected": "A demo that works on a default install, a plain sentence for anything skipped, and a recorded demo with something recorded in it.",
+    "actual": "Preparation takes 0.3 s and reports 'Partly prepared', with the note 'Memory seed skipped: Feature flag memoryLifecycleAdminV1Enabled is disabled.' (a code name the operator cannot act on, since no screen turns it on). 'Open recorded demo' (3.6 s) moves the whole app to the 'GoatCitadel Demo' workspace and opens 'Demo Chat: guided operations tour' with 'No messages yet' and the generic starter prompts, not the three demo prompts listed on the Get started page; a 'Demo agentic mission ... waiting on your approval' line and an Inbox badge of 1 appear. The demo chat also shows 'Approval mode unavailable / Retry' (existing finding U-CH-018). Get started remains unfinished and the active workspace stays on the demo.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/fr/fr-2-demo-prepared.png",
+      "docs/review/2026-11-usability/evidence/fr/fr-2-demo-chat.png",
+      "docs/review/2026-11-usability/evidence/fr/fr-2-demo-review-dialog.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/FirstRunDemo.tsx"
+  },
+  {
+    "area": "first-run",
+    "priorIds": [],
+    "journey": "FR-2 Leave onboarding halfway and come back; skip it; try the demo",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "Chat's 'Configure models' and 'Return to setup' open two different setups, and the model-only one never marks setup done (beyond U-ST-010)",
+    "trigger": "Fresh install: click Chat > 'Configure models' (or the Chat empty state), Chat > 'Return to setup', and Settings > Models > Get started. On the installed Windows app the first launch opens /?tab=onboarding.",
+    "expected": "One setup with one set of steps, and finishing the model step finishes setup (or says what is left).",
+    "actual": "Distinct from U-ST-010 (which is only Settings > Models: the Get started tab against the Providers & models tab). New here: the two links in Chat go to different setups. 'Return to setup' opens Settings > Get started with steps 'Choose a model / Choose your safety settings / Send a test message' and a Finish button. 'Configure models' opens Settings > Models > Providers & models with a 'Guided model setup' whose steps are 'Connect a provider / Confirm your model / Start the first Chat', ending in a button that goes to Chat without recording setup as done. The installed app's launch URL (/?tab=onboarding, bin/goatcitadel.mjs:908) maps to Settings > Models > Get started (loaded live, but on the shared sandbox where setup is already done, so it did not show the 'Setup isn't finished' state; the screenshot is not evidence for that claim). Only the first screen's Finish (or the terminal wizard) records the marker, so an operator who set the model through the Models page keeps seeing 'Setup isn't finished' and the Chat banner on every launch (relaunch part from the code read, not run).",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/fr/fr-1-configure-models-link.png",
+      "docs/review/2026-11-usability/evidence/fr/fr-1-return-to-setup.png",
+      "docs/review/2026-11-usability/evidence/fr/fr-2-exit-setup.png",
+      "bin/goatcitadel.mjs:908",
+      "apps/mission-control-next/src/cockpit/areas/settings/ModelsSettings.tsx:62"
+    ],
+    "foundBy": "both",
+    "confidence": "likely",
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings"
+  },
+  {
+    "area": "first-run",
+    "priorIds": [],
+    "journey": "FR-1 Fresh sandbox with onboarding not done: the first screen, Get started, choose a model, the first task, arrive in Chat",
+    "severity": "friction",
+    "kind": "missing-state",
+    "title": "The Cockpit opens a bare installation on model-less Chat; only the Classic shell redirects a first visit to guided setup",
+    "trigger": "Fresh install, onboarding not completed: open the app's plain address in a browser (no ?tab=onboarding).",
+    "expected": "The first visit goes to guided setup, as the product intends for a bare installation.",
+    "actual": "The Classic shell redirects the first destination to Get started on purpose (MissionControlNextApp.tsx:748-770; its comment says the first destination stays 'native and guided instead of opening a model-less Chat that cannot produce a useful first turn'; the test 'guards only the first destination, so starting in Get started can still open Chat (safe demo)' pins it). The Cockpit, the default shell, has no counterpart: cockpit/app only maps the onboarding section (cockpit-compatibility.ts:223). Live on the fresh sandbox, opening / landed on Chat with the banner 'You can chat now', no redirect. It leads straight into the first-send failure above. (The installed app's launch URL, ?tab=onboarding, does reach setup.)",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/fr/fr-1-first-paint.png",
+      "apps/mission-control-next/src/app/MissionControlNextApp.tsx:748",
+      "apps/mission-control-next/src/app/MissionControlNextApp.test.tsx:868",
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:223"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/app"
+  },
+  {
+    "area": "first-run",
+    "priorIds": [],
+    "journey": "FR-3 pnpm onboarding:tui in a scratch home: every prompt, a wrong answer at each, quit halfway and rerun",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "Quitting the terminal wizard with Ctrl+C prints 'Onboarding wizard failed.' and a stack trace and exits with code 1 (not run live)",
+    "trigger": "pnpm onboarding:tui, answer a prompt, press Ctrl+C.",
+    "expected": "'Cancelled. Nothing was changed.' and exit code 0 (the wizard writes nothing until its last confirmation, so a rerun is safe).",
+    "actual": "The prompts library rejects the open prompt with ExitPromptError ('User force closed the prompt with SIGINT'); the wizard's catch block prints 'Onboarding wizard failed.' plus the raw error and sets exit code 1. Not reproduced live (no terminal); code read only.",
+    "evidence": [
+      "apps/gateway/src/onboarding-tui.ts:301",
+      "apps/gateway/src/onboarding-tui.ts:302"
+    ],
+    "foundBy": "code",
+    "confidence": "likely",
+    "owner": "apps/gateway/src/onboarding-tui.ts"
+  },
+  {
+    "area": "first-run",
+    "priorIds": [],
+    "journey": "FR-3 pnpm onboarding:tui in a scratch home: every prompt, a wrong answer at each, quit halfway and rerun",
+    "severity": "friction",
+    "kind": "bug",
+    "title": "The terminal wizard applies provider settings first and saves the key second: a failed key save reports 'wizard failed' after the settings were written, and setup is marked complete with no key",
+    "trigger": "pnpm onboarding:tui, pick a cloud provider, paste a key, accept 'Save provider key to the OS secure store?' (default yes) on a host with no keychain, accept 'Mark onboarding complete now?' (default yes). Or skip the key.",
+    "expected": "The final review says what will and will not be saved; a failed key save says that the provider settings were already applied and what to do; completion is not offered while no key or local runtime is configured.",
+    "actual": "The wizard posts the bootstrap (provider, model, approvals, auth) at line 207, then posts the key at line 242; if the second call fails the whole run prints 'Onboarding wizard failed.' and the raw error, although the first call succeeded and the marker may stay unset. The key prompt is 'optional', and 'Mark onboarding complete now?' defaults to yes, so a cloud provider with no key ends as 'Completed: yes' and the first Chat message fails (the browser flow requires a ready model first). The prompts have no validation: Gateway URL, token, username, base URL and model id accept an empty answer, and the default Gateway URL (127.0.0.1:8787) is whatever Gateway is running there. Code read only.",
+    "evidence": [
+      "apps/gateway/src/onboarding-tui.ts:207",
+      "apps/gateway/src/onboarding-tui.ts:242",
+      "apps/gateway/src/onboarding-tui.ts:866"
+    ],
+    "foundBy": "code",
+    "confidence": "likely",
+    "owner": "apps/gateway/src/onboarding-tui.ts"
+  },
+  {
+    "area": "first-run",
+    "priorIds": [],
+    "journey": "FR-4 Bundled Postgres: first start, start with its port taken, and what the operator is told",
+    "severity": "stall",
+    "kind": "missing-state",
+    "title": "A bundled-database start that fails (port taken, wrong password, 3-minute wait) shows only 'Runtime is stopped or degraded' in the desktop window, with no cause and no progress while it waits",
+    "trigger": "Installed app on a default install (database driver postgres, mode bundled, port 45432): another program, or a leftover database container with a different password, already holds the bundled port; launch the app.",
+    "expected": "While it waits: a changing line (starting the database, 40 s of 180 s). On failure: the cause in the window ('the database port 45432 is in use by another program; stop it or change the port'), not only a path to a log file.",
+    "actual": "The shipped config starts a bundled Postgres with startTimeoutMs 180000. The Gateway tries to start it, waits up to the full timeout and then fails with 'Bundled Postgres did not become reachable within 180000ms. Last probe: password authentication failed ... (code=28P01)' (a taken port gives this because the probe's password differs); there is no port-in-use or stale-container message except the case where the other server is a Postgres that answers with a different data directory (bundled-postgres-runtime.ts:138). The desktop window meanwhile shows 'Starting the local runtime...' with an endless bar and no elapsed time (main.ts:203); on failure it shows 'Runtime is stopped (or degraded, when any process is alive: bin/goatcitadel.mjs:913). Gateway and Mission Control did not both become ready.' (main.ts:173), 'Gateway not ready / UI not ready' and a log path, with Retry, Open in Browser, Open Logs, Open Install Folder. The reason sits only in the log. The Windows reserved-port message is clear (bundled-postgres-runtime.ts:1139) but also only reaches the log. Not reproduced (no database or installed app was started). The Gateway-side error does carry the cause, a 'Recovery state' and the last 100 log lines, but these reach only the log; the window offers 'Open Logs' and shows no cause.",
+    "evidence": [
+      "apps/gateway/src/bundled-postgres-runtime.ts:138",
+      "apps/gateway/src/bundled-postgres-runtime.ts:577",
+      "apps/mission-control-desktop/src/main.ts:173",
+      "apps/mission-control-desktop/src/main.ts:203",
+      "config/goatcitadel.example.json:173",
+      "bin/goatcitadel.mjs:913"
+    ],
+    "foundBy": "code",
+    "confidence": "likely",
+    "owner": "apps/gateway/src/bundled-postgres-runtime.ts"
+  },
+  {
+    "area": "first-run",
+    "priorIds": [],
+    "journey": "FR-5 Installer and update paths: code read of scripts/packaging/ and the desktop host only",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "The installer's default 'Full installation' pre-selects 'Chromium runtime' and 'Voice runtime', which download during install and abort the whole install if they fail (not run)",
+    "trigger": "Run GoatCitadel-Setup-windows-x64.exe, keep the default 'Full installation', finish with no network or a blocked download.",
+    "expected": "Optional components that are unchecked or described (what they are, size, needs internet), and an install that succeeds without them.",
+    "actual": "The wizard lists 'Core runtime', 'Chromium runtime' and 'Voice runtime' with no description or size; the Full type selects all. Selected runtimes are installed fail-hard after the payload is promoted ('Installing Chromium runtime...', playwright install chromium; 'Installing local voice runtime...'), and a non-zero exit raises '<node.exe> exited with code N while Installing Chromium runtime...' and rolls the install back. Silent installs skip both. The installer also sets CloseApplications=force, so a running GoatCitadel is closed during an update. Code read only; no installer was run.",
+    "evidence": [
+      "scripts/packaging/build-windows-native-installer.mjs:226",
+      "scripts/packaging/build-windows-native-installer.mjs:227",
+      "scripts/packaging/build-windows-native-installer.mjs:228",
+      "scripts/packaging/build-windows-native-installer.mjs:214"
+    ],
+    "foundBy": "code",
+    "confidence": "likely",
+    "owner": "scripts/packaging/build-windows-native-installer.mjs"
+  },
+  {
+    "area": "first-run",
+    "priorIds": [],
+    "journey": "FR-1 Fresh sandbox with onboarding not done: the first screen, Get started, choose a model, the first task, arrive in Chat",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "Get started shows 'Saved model defaults changed. Your selection is kept...' when the operator changed nothing, and an amber 'Skip normal prompts is unavailable here' line with no explanation",
+    "trigger": "Fresh install: Get started > Use a cloud provider > pick a provider (after the credential-box crash and Try again, or after any provider switch); then open step 2.",
+    "expected": "No 'changed' banner without a change; the amber line says what 'Skip normal prompts' is and why setup keeps prompts on.",
+    "actual": "After the crash and reset the info banner 'Saved model defaults changed. Your selection is kept; confirming reviews the current saved setup.' appears on every provider choice (probably a side effect of the crash, not reproduced without it). Step 2 always shows the amber line 'Skip normal prompts is unavailable here. Guided setup requires an approval rule that keeps normal prompts available.' with no description of the option.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/fr/fr-1-provider-ollama.png",
+      "docs/review/2026-11-usability/evidence/fr/fr-1-safety-step.png"
+    ],
+    "foundBy": "live",
+    "confidence": "likely",
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/CockpitGuidedModelSetup.tsx"
+  }
+]

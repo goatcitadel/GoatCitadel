@@ -1,0 +1,520 @@
+[
+ {
+  "page": "chat",
+  "config": "375-light",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 1,
+  "fontSizes": {
+   "12": 41,
+   "13": 27,
+   "14": 6,
+   "16": 4
+  },
+  "h1": [
+   "ut13-live-chat"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-chat-375-light.png"
+ },
+ {
+  "page": "chat-thread",
+  "config": "375-light",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 1,
+  "fontSizes": {
+   "12": 41,
+   "13": 27,
+   "14": 6,
+   "16": 4
+  },
+  "h1": [
+   "ut11 hello"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-chat-thread-375-light.png"
+ },
+ {
+  "page": "inbox",
+  "config": "375-light",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 0,
+  "fontSizes": {
+   "12": 39,
+   "13": 35,
+   "14": 3,
+   "16": 9,
+   "24": 1
+  },
+  "h1": [
+   "Inbox"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-inbox-375-light.png"
+ },
+ {
+  "page": "work",
+  "config": "375-light",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [
+   "button:Done 22@340-415",
+   "span:22@387-403"
+  ],
+  "interactiveUnder32px": 0,
+  "fontSizes": {
+   "12": 47,
+   "13": 44,
+   "14": 2,
+   "24": 1
+  },
+  "h1": [
+   "Work"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-work-375-light.png"
+ },
+ {
+  "page": "capabilities",
+  "config": "375-light",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 1,
+  "fontSizes": {
+   "12": 28,
+   "13": 117,
+   "14": 27,
+   "20": 25,
+   "24": 1
+  },
+  "h1": [
+   "Capabilities"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-capabilities-375-light.png"
+ },
+ {
+  "page": "library",
+  "config": "375-light",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 0,
+  "fontSizes": {
+   "13": 6,
+   "14": 3,
+   "16": 9,
+   "20": 1,
+   "24": 1
+  },
+  "h1": [
+   "Memory"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-library-375-light.png"
+ },
+ {
+  "page": "system",
+  "config": "375-light",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 0,
+  "fontSizes": {
+   "12": 11,
+   "13": 34,
+   "14": 1,
+   "16": 9,
+   "24": 1
+  },
+  "h1": [
+   "System"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-system-375-light.png"
+ },
+ {
+  "page": "settings",
+  "config": "375-light",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 4,
+  "fontSizes": {
+   "12": 6,
+   "13": 21,
+   "14": 8,
+   "16": 19,
+   "24": 1
+  },
+  "h1": [
+   "General"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-settings-375-light.png"
+ },
+ {
+  "page": "chat",
+  "config": "1440-dark",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 8,
+  "fontSizes": {
+   "12": 45,
+   "13": 29,
+   "14": 5,
+   "16": 2
+  },
+  "h1": [
+   "ut13-live-chat"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-chat-1440-dark.png"
+ },
+ {
+  "page": "chat-thread",
+  "config": "1440-dark",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 8,
+  "fontSizes": {
+   "12": 45,
+   "13": 29,
+   "14": 5,
+   "16": 2
+  },
+  "h1": [
+   "ut11 hello"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-chat-thread-1440-dark.png"
+ },
+ {
+  "page": "inbox",
+  "config": "1440-dark",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 11,
+  "fontSizes": {
+   "12": 39,
+   "13": 35,
+   "14": 3,
+   "16": 9,
+   "24": 1
+  },
+  "h1": [
+   "Inbox"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-inbox-1440-dark.png"
+ },
+ {
+  "page": "work",
+  "config": "1440-dark",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 5,
+  "fontSizes": {
+   "12": 124,
+   "13": 62,
+   "14": 2,
+   "24": 1
+  },
+  "h1": [
+   "Work"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-work-1440-dark.png"
+ },
+ {
+  "page": "capabilities",
+  "config": "1440-dark",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 59,
+  "fontSizes": {
+   "12": 28,
+   "13": 117,
+   "14": 27,
+   "20": 25,
+   "24": 1
+  },
+  "h1": [
+   "Capabilities"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-capabilities-1440-dark.png"
+ },
+ {
+  "page": "library",
+  "config": "1440-dark",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 3,
+  "fontSizes": {
+   "13": 15,
+   "14": 3,
+   "20": 1,
+   "24": 1
+  },
+  "h1": [
+   "Memory"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-library-1440-dark.png"
+ },
+ {
+  "page": "system",
+  "config": "1440-dark",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 3,
+  "fontSizes": {
+   "12": 11,
+   "13": 43,
+   "14": 1,
+   "24": 1
+  },
+  "h1": [
+   "System"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-system-1440-dark.png"
+ },
+ {
+  "page": "settings",
+  "config": "1440-dark",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 6,
+  "fontSizes": {
+   "12": 6,
+   "13": 37,
+   "14": 8,
+   "16": 3,
+   "24": 1
+  },
+  "h1": [
+   "General"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": "evidence/gl/gl-7-settings-1440-dark.png"
+ },
+ {
+  "page": "chat",
+  "config": "1024",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 8,
+  "fontSizes": {
+   "12": 45,
+   "13": 29,
+   "14": 5,
+   "16": 2
+  },
+  "h1": [
+   "ut13-live-chat"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": null
+ },
+ {
+  "page": "chat-thread",
+  "config": "1024",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 8,
+  "fontSizes": {
+   "12": 45,
+   "13": 29,
+   "14": 5,
+   "16": 2
+  },
+  "h1": [
+   "ut11 hello"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": null
+ },
+ {
+  "page": "inbox",
+  "config": "1024",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 11,
+  "fontSizes": {
+   "12": 39,
+   "13": 35,
+   "14": 3,
+   "16": 9,
+   "24": 1
+  },
+  "h1": [
+   "Inbox"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": null
+ },
+ {
+  "page": "work",
+  "config": "1024",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 5,
+  "fontSizes": {
+   "12": 124,
+   "13": 62,
+   "14": 2,
+   "24": 1
+  },
+  "h1": [
+   "Work"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": null
+ },
+ {
+  "page": "capabilities",
+  "config": "1024",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 59,
+  "fontSizes": {
+   "12": 28,
+   "13": 117,
+   "14": 27,
+   "20": 25,
+   "24": 1
+  },
+  "h1": [
+   "Capabilities"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": null
+ },
+ {
+  "page": "library",
+  "config": "1024",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 3,
+  "fontSizes": {
+   "13": 15,
+   "14": 3,
+   "20": 1,
+   "24": 1
+  },
+  "h1": [
+   "Memory"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": null
+ },
+ {
+  "page": "system",
+  "config": "1024",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 3,
+  "fontSizes": {
+   "12": 11,
+   "13": 43,
+   "14": 1,
+   "24": 1
+  },
+  "h1": [
+   "System"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": null
+ },
+ {
+  "page": "settings",
+  "config": "1024",
+  "docOverflow": 0,
+  "mainOverflow": 0,
+  "offscreen": [],
+  "interactiveUnder32px": 6,
+  "fontSizes": {
+   "12": 6,
+   "13": 37,
+   "14": 8,
+   "16": 3,
+   "24": 1
+  },
+  "h1": [
+   "General"
+  ],
+  "sidebarVisible": true,
+  "inspectorOpen": false,
+  "consoleErrors": [],
+  "screenshot": null
+ }
+]

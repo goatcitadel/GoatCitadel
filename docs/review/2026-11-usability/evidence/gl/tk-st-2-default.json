@@ -1,0 +1,42 @@
+{
+  "ws": "default",
+  "clicks": 3,
+  "dlgText": "Turn off Claude Code CLI: reuse one process between tool steps / When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one. This turns it off. / Caution / Only this setting changes. You can turn it on again the same way. / Show details / Approve once / Deny",
+  "btns": [
+    "",
+    "Approve once",
+    "Deny"
+  ],
+  "result": " between tool steps / Applies to Chat turns where the Claude Code CLI uses GoatCitadel tools. / Save setting / Done · Change saved and confirmed. / Refresh change status",
+  "ev": [
+    [
+      493,
+      "RESP 200 POST /api/v1/auth/sse-token"
+    ],
+    [
+      3425,
+      "checked true"
+    ],
+    [
+      3510,
+      "clicked Save setting"
+    ],
+    [
+      3602,
+      "RESP 200 PATCH /api/v1/settings"
+    ],
+    [
+      3768,
+      "DIALOG after 0ms"
+    ],
+    [
+      4113,
+      "RESP 200 POST /api/v1/approvals/d6e283ef-84b6-47f1-9ce7-e1a4a34896d5/resol"
+    ],
+    [
+      7435,
+      "after approve ms~3540"
+    ]
+  ],
+  "log": []
+}

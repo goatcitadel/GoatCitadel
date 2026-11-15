@@ -1,0 +1,26 @@
+[
+  {
+    "text": "Cancel",
+    "bg": "rgb(15, 29, 45)",
+    "color": "rgb(244, 251, 255)",
+    "border": "rgba(178, 224, 245, 0.24)",
+    "borderWidth": "1px",
+    "cls": "group/button inline-flex shrink-0 items-center justify-center rounded-lg border bg-clip-pa"
+  },
+  {
+    "text": "Apply exact change",
+    "bg": "rgb(15, 29, 45)",
+    "color": "rgb(244, 251, 255)",
+    "border": "rgba(178, 224, 245, 0.24)",
+    "borderWidth": "1px",
+    "cls": "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-tra"
+  },
+  {
+    "text": "Close",
+    "bg": "rgba(0, 0, 0, 0)",
+    "color": "rgb(244, 251, 255)",
+    "border": "rgba(178, 224, 245, 0.24)",
+    "borderWidth": "1px",
+    "cls": "group/button inline-flex shrink-0 items-center justify-center border border-transparent bg"
+  }
+]

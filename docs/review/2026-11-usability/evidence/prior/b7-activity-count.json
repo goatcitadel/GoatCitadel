@@ -1,0 +1,12 @@
+{
+ "default": {
+  "showing": "Showing 81 recent signals; older signals are not shown. 19 background signals are hidden.",
+  "rows": 81,
+  "collapsedHint": 0
+ },
+ "withBackground": {
+  "showing": "Showing 100 recent signals; older signals are not shown.",
+  "rows": 97,
+  "collapsedHint": 1
+ }
+}

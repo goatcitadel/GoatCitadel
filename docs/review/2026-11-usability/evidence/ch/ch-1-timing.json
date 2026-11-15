@@ -1,0 +1,42 @@
+{
+  "firstFeedbackMs": 109,
+  "doneMs": 1270,
+  "mutatingRequests": [
+    [
+      -7460,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -3560,
+      "POST",
+      "/api/v1/chat/sessions"
+    ],
+    [
+      -3300,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -3240,
+      "POST",
+      "/api/v1/chat/sessions/sess_63ac8c4e941e145e709a2d06/route-preflight"
+    ],
+    [
+      119,
+      "POST",
+      "/api/v1/chat/sessions/sess_63ac8c4e941e145e709a2d06/route-preflight"
+    ],
+    [
+      135,
+      "POST",
+      "/api/v1/chat/sessions/sess_63ac8c4e941e145e709a2d06/agent-send/stream"
+    ]
+  ],
+  "consoleAndFailedRequests": [
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/chat/messaging net::ERR_ABORTED"
+    }
+  ]
+}

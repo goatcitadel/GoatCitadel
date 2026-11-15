@@ -1,0 +1,5 @@
+{
+  "captured": "Capabilities > Connectors > Advanced setup > Integrations > Manage > Delete integration connection",
+  "dialogText": "Delete integration connection? | Delete Gmail and Google Calendar? GoatCitadel removes its saved configuration and requests runtime synchronization. | Reviewed version: 4c528e69b4e753981a041c9a5ddb2622821600db7cae15b6553e84930b177926 | Delete reviewed integration | Keep integration",
+  "visibleText": true
+}

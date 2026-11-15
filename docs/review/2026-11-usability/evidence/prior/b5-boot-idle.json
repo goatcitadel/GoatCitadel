@@ -1,0 +1,100 @@
+{
+ "boot": {
+  "count": 10,
+  "timeline": [
+   {
+    "t": 484,
+    "method": "GET",
+    "path": "/api/v1/onboarding/startup",
+    "ms": 3
+   },
+   {
+    "t": 586,
+    "method": "PUT",
+    "path": "/api/v1/notifications/presence",
+    "ms": 4
+   },
+   {
+    "t": 681,
+    "method": "GET",
+    "path": "/api/v1/startup-reads?reads=%5B%7B%22path%22%3A%22%2Fapi%2Fv1%2Fworkspaces%3Fview%3Dactive",
+    "ms": 63
+   },
+   {
+    "t": 784,
+    "method": "PUT",
+    "path": "/api/v1/notifications/presence",
+    "ms": 4
+   },
+   {
+    "t": 846,
+    "method": "GET",
+    "path": "/api/v1/startup-reads?reads=%5B%7B%22path%22%3A%22%2Fapi%2Fv1%2Fllm%2Fconfig%22%2C%22corre",
+    "ms": 67
+   },
+   {
+    "t": 933,
+    "method": "GET",
+    "path": "/api/v1/startup-reads?reads=%5B%7B%22path%22%3A%22%2Fapi%2Fv1%2Fdurable%2Fruns%3Fworkspace",
+    "ms": 71
+   },
+   {
+    "t": 934,
+    "method": "POST",
+    "path": "/api/v1/chat/sessions/sess_*/route-preflight",
+    "ms": 3
+   },
+   {
+    "t": 934,
+    "method": "GET",
+    "path": "/api/v1/chat/sessions/sess_*/approval-mode",
+    "ms": 3
+   },
+   {
+    "t": 965,
+    "method": "GET",
+    "path": "/api/v1/startup-reads?reads=%5B%7B%22path%22%3A%22%2Fapi%2Fv1%2Fagentic%2Fruns%3Fworkspace",
+    "ms": 3
+   },
+   {
+    "t": 1583,
+    "method": "GET",
+    "path": "/api/v1/startup-reads?reads=%5B%7B%22path%22%3A%22%2Fapi%2Fv1%2Fchat%2Fsessions%2Fsess_*%2",
+    "ms": 5
+   },
+   {
+    "t": 30712,
+    "method": "GET",
+    "path": "/api/v1/inbox?workspaceId=ws_*",
+    "ms": 24
+   },
+   {
+    "t": 45570,
+    "method": "PUT",
+    "path": "/api/v1/notifications/presence",
+    "ms": 6
+   },
+   {
+    "t": 60752,
+    "method": "GET",
+    "path": "/api/v1/inbox?workspaceId=ws_*",
+    "ms": 22
+   }
+  ]
+ },
+ "idle": {
+  "desktop65s": 3,
+  "desktopPaths": [
+   "/api/v1/inbox",
+   "/api/v1/notifications/presence",
+   "/api/v1/inbox"
+  ],
+  "phone65s": 3,
+  "phonePaths": [
+   "/api/v1/inbox",
+   "/api/v1/notifications/presence",
+   "/api/v1/inbox"
+  ],
+  "phoneSidebarInDom": false
+ }
+}

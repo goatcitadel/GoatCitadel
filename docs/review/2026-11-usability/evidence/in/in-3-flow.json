@@ -1,0 +1,49 @@
+{
+  "res": {
+    "rowCount": 1,
+    "rowAfterSource": "Approval · 10 minutes ago | Search code files | Path: <sandbox runtime root>/workspace/review-task-8/demo | Safe | Expires in 5 minutes | Details | Approve once | Deny | Open approval | Hide source context | Most recent stored message | Current conversation context; the decision above still requires its own exact review. | You · Nov 14, 2026, 11:07 PM | review-task-8 hello from the project",
+    "links": [
+      "Open approval -> /inbox?approvalId=71f6fe69-389e-41e9-8a3e-c0418cc80b57&sessionId=sess_5e41689620da8c72011abf7a&turnId=277e9031-fd9e-47fc-9c03-0face5cc846f&runId=340ebae8-b493-43d3-af84-12dd45b761f6&workspaceId=ws_f13a3cf3b6f04dc49bd4b927&shell=cockpit",
+      "Open approval -> /inbox?approvalId=bbf9a447-aa24-43fe-8ee2-852f180bd340&sessionId=sess_ee070880375c093c5a8a8b21&turnId=40a87fd0-2c1d-4d91-94bd-d378e6f8f92d&runId=ded031b3-44b9-496d-a7fe-8a40a047c7fe&workspaceId=ws_f13a3cf3b6f04dc49bd4b927&shell=cockpit",
+      "Open in Inbox -> /inbox?sessionId=sess_a60e9b7265317e56b71e924c&item=user_input%3A7f11d252-d914-44b8-aacc-7fe187af75c7&turnId=f4f8cda4-d319-4318-91c7-763c90e26fd4&workspaceId=ws_f13a3cf3b6f04dc49bd4b927&shell=cockpit",
+      "Open in Work -> /work/tasks/e122fde7-4cab-484b-8862-345267c0ca52?taskId=e122fde7-4cab-484b-8862-345267c0ca52&workspaceId=ws_f13a3cf3b6f04dc49bd4b927&shell=cockpit",
+      "Open in Work -> /work/tasks/ad59f10d-3034-4099-a7e9-7bb12e16baab?taskId=ad59f10d-3034-4099-a7e9-7bb12e16baab&workspaceId=ws_f13a3cf3b6f04dc49bd4b927&shell=cockpit",
+      "Open source conversation -> /chat?sessionId=sess_ee070880375c093c5a8a8b21&shell=cockpit",
+      "Open approval -> /inbox?approvalId=bbf9a447-aa24-43fe-8ee2-852f180bd340&sessionId=sess_ee070880375c093c5a8a8b21&turnId=40a87fd0-2c1d-4d91-94bd-d378e6f8f92d&runId=ded031b3-44b9-496d-a7fe-8a40a047c7fe&workspaceId=ws_f13a3cf3b6f04dc49bd4b927&shell=cockpit"
+    ],
+    "afterOpenSource": {
+      "url": "/chat?sessionId=sess_ee070880375c093c5a8a8b21&shell=cockpit",
+      "ms": 2665
+    },
+    "chatHead": [
+      "You denied the action. This turn will not start any more tools or request another approval. Send a new message to continue.",
+      "Waiting on you",
+      "Waiting on you",
+      "Waiting on you",
+      "Waiting on you: approval"
+    ],
+    "afterBack": {
+      "url": "/inbox?shell=cockpit",
+      "panelOpen": 0
+    },
+    "openApprovalHref": "/inbox?approvalId=bbf9a447-aa24-43fe-8ee2-852f180bd340&sessionId=sess_ee070880375c093c5a8a8b21&turnId=40a87fd0-2c1d-4d91-94bd-d378e6f8f92d&runId=ded031b3-44b9-496d-a7fe-8a40a047c7fe&workspaceId=ws_f13a3cf3b6f04dc49bd4b927&shell=cockpit",
+    "afterOpenApproval": "/inbox?approvalId=bbf9a447-aa24-43fe-8ee2-852f180bd340&sessionId=sess_ee070880375c093c5a8a8b21&turnId=40a87fd0-2c1d-4d91-94bd-d378e6f8f92d&runId=ded031b3-44b9-496d-a7fe-8a40a047c7fe&workspaceId=ws_f13a3cf3b6f04dc49bd4b927&shell=cockpit",
+    "openApprovalText": "Inbox\n\nDecisions and work that need your attention in this workspace.\n\nRefresh\n\n3 decisions waiting, 2 updates.\nWhat this Inbox covers\nKind\nAll kinds\nApproval\nQuestion\nTask deliverable\nRisk\nAny risk\nNuclear\nDanger\nCaution\nSafe\n\nSorted by risk, then expiry, then age.\n\nNeeds decision\n3\n\nApproval · 47 minutes ago\n\nReview shell exec\n\nReview the requested action and its policy reason. Target details are available in the approval record.\n\nDanger\n\nNo expiry time was given.\n\nReview\nOpen approval\nShow source context\n\nApproval · 11 minutes ago\n\nSearch code files\n\nPath: <sandbox path>",
+    "afterBack2": "/inbox?shell=cockpit"
+  },
+  "log": [
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/chat/sessions/sess_ee070880375c093c5a8a8b21/status net::ERR_ABORTED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+      "u": "http://127.0.0.1:55150/api/v1/chat/sessions/sess_ee070880375c093c5a8a8b21/approval-mode"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/approvals/bbf9a447-aa24-43fe-8ee2-852f180bd340 net::ERR_ABORTED"
+    }
+  ]
+}

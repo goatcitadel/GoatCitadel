@@ -1,0 +1,111 @@
+{
+  "workspace": "default",
+  "tool": "code_mode.request",
+  "clicks": 1,
+  "marks": [
+    [
+      "click1:Run it",
+      45
+    ]
+  ],
+  "focus": "P role=status label=null text=Running code…",
+  "firstChangeAfterFinalClickMs": 775,
+  "inboxBefore": "7",
+  "inboxAfterWithoutReload": "6",
+  "mutatingRequests": [
+    [
+      -19689,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -19440,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -19363,
+      "POST",
+      "/api/v1/chat/sessions/sess_1636b80f3a62c6d956f73a64/route-preflight"
+    ],
+    [
+      -16802,
+      "POST",
+      "/api/v1/chat/sessions"
+    ],
+    [
+      -16447,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -14003,
+      "POST",
+      "/api/v1/chat/sessions/sess_1b12817e92d70b0a5e6df682/route-preflight"
+    ],
+    [
+      -13974,
+      "POST",
+      "/api/v1/chat/sessions/sess_1b12817e92d70b0a5e6df682/route-preflight"
+    ],
+    [
+      -13957,
+      "POST",
+      "/api/v1/chat/sessions/sess_1b12817e92d70b0a5e6df682/agent-send/stream"
+    ],
+    [
+      -4974,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -3774,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -3708,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -3503,
+      "POST",
+      "/api/v1/chat/sessions/sess_1b12817e92d70b0a5e6df682/route-preflight"
+    ],
+    [
+      62,
+      "POST",
+      "/api/v1/approvals/ad1a5f4f-f277-4ad0-9458-edf79118db3d/resolve"
+    ]
+  ],
+  "approval": {
+    "status": "approved"
+  },
+  "turnStatuses": [
+    "completed"
+  ],
+  "cardText": "Conversations\nNew\nProject\nAll projects\nUnassigned\nProjects\nSearch\nRecent\nArchived\nview-task-7 CH-9 dflt-caution please run the governed command\njust now\nWaiting on you\nRead saturday-plan.pdf and review it.\niew-task-7 CH-9 dflt-caution please run the governed command\n1 minute ago\nWaiting on you\nRead saturday-plan.pdf and review it.\nview-task-7 CH-9 dflt-caution please run the governed command\n2 minutes ago\nVerification stub reply.\nview-task-7 CH-9 dflt-caution please run the governed command\n2 minutes ago\nWaiting on you\nRead saturday-plan.pdf and review it.\nview-task-7 CH-9 dflt-danger please run the governed command\n4 minutes ago\nVerification stub reply.\nview-task-7 CH-9 run the governed command\n5 minutes ago\nWaiting on you\nRun the governed verification command.\nview-task-7 CH-9 run the governed command\n6 minutes ago\nVerification stub reply.\nreview-task-7 CH-9 run the governed command\n7 ",
+  "console": [
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/chat/messaging net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/approvals/ad1a5f4f-f277-4ad0-9458-edf79118db3d net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "PUT http://127.0.0.1:55150/api/v1/notifications/presence net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/events/stream net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/chat/sessions/sess_1b12817e92d70b0a5e6df682/turns/699adf54-9739-4bc1-a397-6bb1b937ec7d/stream net::ERR_ABORTED"
+    }
+  ]
+}

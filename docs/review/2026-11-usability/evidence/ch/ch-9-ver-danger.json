@@ -1,0 +1,129 @@
+{
+  "workspace": "ws_f13a3cf3b6f04dc49bd4b927",
+  "tool": "shell.exec",
+  "clicks": 2,
+  "marks": [
+    [
+      "click1:Review danger approval",
+      50
+    ],
+    [
+      "click2:Approve once",
+      871
+    ]
+  ],
+  "focus": "TEXTAREA role=null label=null text=",
+  "firstChangeAfterFinalClickMs": 128,
+  "inboxBefore": "3",
+  "inboxAfterWithoutReload": "2",
+  "mutatingRequests": [
+    [
+      -20853,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -20596,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -20539,
+      "POST",
+      "/api/v1/chat/sessions/sess_b0c9ac4b0c42e487f9aa4738/route-preflight"
+    ],
+    [
+      -17870,
+      "POST",
+      "/api/v1/chat/sessions"
+    ],
+    [
+      -17534,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -15260,
+      "POST",
+      "/api/v1/chat/sessions/sess_e2a1dbdb8784ea66236a04ff/route-preflight"
+    ],
+    [
+      -15226,
+      "POST",
+      "/api/v1/chat/sessions/sess_e2a1dbdb8784ea66236a04ff/route-preflight"
+    ],
+    [
+      -15207,
+      "POST",
+      "/api/v1/chat/sessions/sess_e2a1dbdb8784ea66236a04ff/agent-send/stream"
+    ],
+    [
+      -5071,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -3983,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -3912,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -3777,
+      "POST",
+      "/api/v1/chat/sessions/sess_e2a1dbdb8784ea66236a04ff/route-preflight"
+    ],
+    [
+      888,
+      "POST",
+      "/api/v1/approvals/aff3bb4f-a0ab-408a-a88e-3436b4c623cb/resolve"
+    ]
+  ],
+  "approval": {
+    "status": "approved"
+  },
+  "turnStatuses": [
+    "completed"
+  ],
+  "cardText": "\n\nRun command\n\nDanger\n\nWaiting for verification chat approval.\n\nAction: Shell exec\n\nScope: Mission Control Next Verification Workspace · one linked conversation. This decision authorizes this request once.\n\nExpiry: No expiry set\n\nCommand: pnpm test\n\nTitle: Verification chat approval\n\nConsequence: After approval, the exact reviewed action may run; denying withholds it. The decision alone does not show the work resumed or completed.\n\nReview danger approval\nDeny\nHow this decision works\nInspect persisted approval\nMessage\n\nA decision is waiting above. Resolve it to keep going.\n\nverification-stub-chat · Verification stub (loopback) · Standard\nSend",
+  "console": [
+    {
+      "k": "http403",
+      "t": "GET http://127.0.0.1:55150/api/v1/chat/sessions/sess_b0c9ac4b0c42e487f9aa4738/approval-mode"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+      "u": "http://127.0.0.1:55150/api/v1/chat/sessions/sess_b0c9ac4b0c42e487f9aa4738/approval-mode"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/chat/sessions/sess_b0c9ac4b0c42e487f9aa4738/approval-mode net::ERR_ABORTED"
+    },
+    {
+      "k": "http403",
+      "t": "GET http://127.0.0.1:55150/api/v1/chat/sessions/sess_b0c9ac4b0c42e487f9aa4738/approval-mode"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 403 (Forbidden)",
+      "u": "http://127.0.0.1:55150/api/v1/chat/sessions/sess_b0c9ac4b0c42e487f9aa4738/approval-mode"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/chat/messaging net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/events/stream net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "PUT http://127.0.0.1:55150/api/v1/notifications/presence net::ERR_ABORTED"
+    }
+  ]
+}

@@ -1,0 +1,307 @@
+[
+  {
+    "area": "messaging",
+    "journey": "MS-1 Channel setup to the credential step with an invalid credential",
+    "severity": "stall",
+    "kind": "unclear-copy",
+    "title": "Telegram, Discord and Slack setup blame the key or token when the real cause is that the Gateway has no secure credential storage",
+    "trigger": "In Chat > Messaging > Add, open Telegram (or Discord, or Slack), type any value into the key or token box and press Check key (Check token, Check tokens). The sandbox has no OS keychain; the Gateway answers POST /api/v1/channels/drafts/<id>/secure-fields with 422 and the sentence 'Secure channel credential storage is unavailable.'",
+    "expected": "The page names the cause and a next step, as the WhatsApp page does ('This page stores your keys in this computer's secure storage, which isn't available here. Use WhatsApp's guide in Advanced channel setup with environment variables instead.').",
+    "actual": "Telegram shows 'Telegram didn't accept that key, or GoatCitadel couldn't reach Telegram. Check the key and try again.', Discord 'Discord didn't accept that token, or GoatCitadel couldn't reach Discord…', Slack 'Slack didn't accept the bot token…'. The Gateway's sentence is deliberately dropped, so an operator with a correct token and no secure storage re-checks the token for ever. Advanced channel setup shows the Gateway's sentence, so the same cause reads differently on the two screens. Live in the sandbox (no keychain); on a PC with a working keychain the credential reaches the vendor API instead, which was not run (nothing may leave the PC).",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-1-telegram-invalid-credential.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-1-discord-invalid-credential.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-1-slack-invalid-credential.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-1-whatsapp-invalid-credential.png",
+      "apps/mission-control-next/src/cockpit/areas/chat/channel-setup/use-telegram-setup.ts:267",
+      "apps/mission-control-next/src/cockpit/areas/chat/channel-setup/use-discord-setup.ts:202",
+      "apps/mission-control-next/src/cockpit/areas/chat/channel-setup/whatsapp-setup-model.ts:239"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/channel-setup/use-telegram-setup.ts"
+  },
+  {
+    "area": "messaging",
+    "journey": "MS-1 Channel setup to the credential step with an invalid credential",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "In Advanced channel setup a plainly refused credential save is reported as 'Outcome uncertain' and locks the whole page",
+    "trigger": "Chat > Messaging > Advanced channel setup > Microsoft Teams > Start guided setup > tick the preparation items > Next step to 'Connect the account' > type a value in Webhook URL > Save draft.",
+    "expected": "A refusal the Gateway states outright (422, 'Secure channel credential storage is unavailable.') is shown as a refusal with a next step, and the rest of the page keeps working.",
+    "actual": "After the 422 the page says 'Outcome uncertain. Channel changes are locked in this app session…', and Save address, Clear, Connect channel, Save draft and Next step are all disabled until the operator presses Check outcome. Check outcome then says 'The Gateway released this channel change attempt after an error… part of it may still have been applied or be awaiting approval', and shows a 'Channel draft changed … review saved version 2' box with 'Apply my input to latest version'; Save draft and Next step stay disabled. Leaving asks 'Unsaved changes' with four buttons, where 'Save and continue' repeats the refused save. Nothing was applied: the draft only moved from version 1 to 2.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-1-teams-uncertain-lock.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-1-teams-after-check-outcome.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-1-teams-after-back.png",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/channel-setup-state.ts:28"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/features/native-routes/settings/sections/channel-setup-state.ts"
+  },
+  {
+    "area": "messaging",
+    "journey": "MS-1 Channel setup to the credential step with an invalid credential",
+    "severity": "friction",
+    "kind": "bug",
+    "title": "Every 'Start guided setup' in Advanced channel setup saves another draft, and the Drafts list shows identical rows with no time",
+    "trigger": "Chat > Messaging > Advanced channel setup > pick Microsoft Teams > Start guided setup; leave (Back to channels, Discard changes) or reload; repeat.",
+    "expected": "Coming back to a channel's unfinished setup resumes it (as the Telegram page does), or the list tells the drafts apart.",
+    "actual": "Each visit that ends in Start guided setup saves a new draft: 1, 2, 3 and then 7 drafts for one channel after a few tries. 'Discard changes' keeps the draft (the stale 'Channel setup draft created.' stays on screen). The Drafts list shows seven rows reading 'Microsoft Teams · version 2 · create' or 'version 1 · create', each with Edit and Delete saved draft, and no time or any other difference. The operator cannot tell which one holds their work. Deleting works, one confirmation per row.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-1-draft-count.json",
+      "docs/review/2026-11-usability/evidence/ms/ms-1-teams-after-discard.png",
+      "apps/mission-control-next/src/cockpit/areas/settings/ChannelsSettings.tsx:136"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/ChannelsSettings.tsx"
+  },
+  {
+    "area": "messaging",
+    "journey": "MS-1 Channel setup to the credential step with an invalid credential",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "Deleting a saved channel draft asks 'Review channel lifecycle change' and the buttons read 'Apply reviewed channel change' and 'Keep current channel state'",
+    "trigger": "Advanced channel setup > Drafts > Delete saved draft.",
+    "expected": "A title and buttons that say what happens: 'Delete this draft?', 'Delete draft', 'Keep draft'.",
+    "actual": "The dialog title is 'Review channel lifecycle change', the body says 'Delete this exact saved draft and its temporary credentials. Finished connections are not affected.' and the confirm button is 'Apply reviewed channel change'. Confirms the lead from an earlier task.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-1-delete-draft-dialog.png",
+      "apps/mission-control-next/src/cockpit/areas/settings/ChannelLifecycleControls.tsx:218"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/ChannelLifecycleControls.tsx"
+  },
+  {
+    "area": "messaging",
+    "journey": "MS-1 Channel setup to the credential step with an invalid credential",
+    "severity": "stall",
+    "kind": "missing-state",
+    "title": "A public web address awaiting approval is forgotten when the WhatsApp page is left or reloaded; saving again says 'Settings changed elsewhere' with no way to approve",
+    "trigger": "Chat > Messaging > Add > WhatsApp > type an https address > Save address (the in-place card with Approve once appears) > reload the page (or leave and return) before approving > type the address again > Save address.",
+    "expected": "The page still shows the pending address change with its Approve once button, or saving again re-opens it.",
+    "actual": "After the reload the address box is empty, steps 3 to 6 stay 'Locked' and nothing says a change is waiting; the Inbox badge went from 3 to 4. Saving the same address again shows 'Unsaved draft: this address is not in use yet' and 'Settings changed elsewhere. Your draft is preserved for review.' with no approval card. The change can be finished only from the Inbox row 'Set the public web address', which neither screen mentions. Approving it there worked (one click, 'Approved Set the public web address').",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-1-whatsapp-reload-pending.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-1-whatsapp-second-save.png",
+      "apps/mission-control-next/src/cockpit/areas/settings/PublicWebAddressField.tsx:59"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/PublicWebAddressField.tsx"
+  },
+  {
+    "area": "messaging",
+    "journey": "MS-1 Channel setup to the credential step with an invalid credential",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "Channel setup marks 'Who may message this bot?' and 'Receive messages' Complete before anything is entered, while an empty sender list blocks every inbound message",
+    "trigger": "Advanced channel setup > LINE (also WeCom, QQBot) > Start guided setup; read the step list at once.",
+    "expected": "A step that decides whether anyone can talk to the bot is not marked Complete until the operator has chosen.",
+    "actual": "With step 1 Current the list already reads '5. Receive messages (optional) · Complete' and '6. Who may message this bot? · Complete'. Opening step 6 shows '0 explicit senders configured.' and 'An empty sender list blocks all inbound conversations.' The mark comes from a rule that treats a step with no required fields as complete.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-1-line-credential-step.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-2-line-who-may-message.png",
+      "apps/mission-control-next/src/features/native-routes/settings/channel-setup/channel-wizard-model.ts:90"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/features/native-routes/settings/channel-setup/channel-wizard-model.ts"
+  },
+  {
+    "area": "messaging",
+    "journey": "MS-1 Channel setup to the credential step with an invalid credential",
+    "severity": "friction",
+    "kind": "missing-state",
+    "title": "To learn their own sender id on the ten channels without a guided page, the operator must message the bot, which drops the message silently, then dig it out of System > Diagnostics",
+    "trigger": "Advanced channel setup > LINE > 'Who may message this bot?'. Code read of the inbound gate; not run (nothing may be sent).",
+    "expected": "The setup shows the sender id of the first message it hears, as the Telegram 'say hi' step does.",
+    "actual": "The step says 'Don't know the id? Message the bot once, then open System › Diagnostics and find \"Dropped a … message from …\"', and 'On a Docker install, System › Diagnostics shows \"Diagnostics unavailable\" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.' The gate drops the message before any session opens, replies 200 'ignored' to the provider and records only a developer diagnostic (describeDroppedSender). The sender gets no answer and Chat shows nothing. Not reproduced live: it needs a real message from a real account.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-2-line-who-may-message.png",
+      "apps/gateway/src/services/channel-inbound-dispatch.ts:365",
+      "apps/gateway/src/services/channel-inbound-dispatch.ts:380"
+    ],
+    "foundBy": "both",
+    "confidence": "likely",
+    "priorIds": [],
+    "owner": "apps/gateway/src/services/channel-inbound-dispatch.ts"
+  },
+  {
+    "area": "capabilities",
+    "journey": "MS-3 Integrations: Google sign-in and a vendor MCP connector up to their credential step",
+    "severity": "friction",
+    "kind": "dead-end",
+    "title": "'Set up' on Gmail and Google Calendar ends on an empty 'Saved integrations' list; reaching Connect Google takes about eight more steps in three places",
+    "trigger": "Capabilities > Connectors > Gmail and Google Calendar > Set up > Advanced setup > Add and manage integrations > Add integration connection > choose 'Gmail and Google Calendar' in a 26-item list that opens on Apple Notes > type the client ID > Review new connection > Apply reviewed connection > Manage.",
+    "expected": "Set up opens the Google sign-in, or the connection form with Gmail already chosen.",
+    "actual": "The panel offers only a link 'Advanced setup', which lands on 'No saved integrations match this view. Use Add and manage integrations to set up a connection.' (the sentence stays after management opens). The form has two connection-label fields and two 'enabled' switches ('Integration connection enabled' and 'Enabled'); typing in the second label field did not rename the saved connection, which came out as 'Gmail and Google Calendar'. The Google sign-in section appears only under Manage on the saved row. In the sandbox it then says 'The OS keychain is unavailable, so GoatCitadel cannot keep a Google sign-in on this computer.' with Connect Google disabled, so the hand-off could not be reached; a code read shows the Gateway only returns the sign-in address and the page shows a link 'Open Google sign-in' (target _blank) that the operator clicks.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-3-gmail-setup.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-3-add-integration-form.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-3-google-sign-in-section.png",
+      "apps/mission-control-next/src/features/native-routes/settings/GoogleWorkspaceSignIn.tsx:62"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/ConnectorPanel.tsx"
+  },
+  {
+    "area": "capabilities",
+    "journey": "MS-3 Integrations: Google sign-in and a vendor MCP connector up to their credential step",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "A just-saved, switched-off Gmail and Google Calendar connection reads 'Disabled · Configured status: Connected'",
+    "trigger": "Advanced setup > Integrations > Add integration connection > Gmail and Google Calendar > Apply reviewed connection.",
+    "expected": "A connection that was never signed in reads 'Not connected'.",
+    "actual": "The row reads 'Disabled · Connectivity unverified' and 'Configured status: Connected. A saved status does not verify connectivity'; the Google sign-in section of the same connection says 'Not signed in to Google.' The same word problem as U-CP-013 for MCP servers, on the integration list.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-3-google-sign-in-section.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/features/native-routes/settings/sections/IntegrationsSection.tsx"
+  },
+  {
+    "area": "capabilities",
+    "journey": "MS-3 Integrations: Google sign-in and a vendor MCP connector up to their credential step",
+    "severity": "friction",
+    "kind": "dead-end",
+    "title": "The integration row says 'choose Manage to run diagnostics', but Manage shows 'Run integration diagnostics' disabled with no way to turn it on",
+    "trigger": "Advanced setup > Integrations > a saved connection > Manage.",
+    "expected": "The disabled button names the setting and links to it.",
+    "actual": "The row says 'A saved status does not verify connectivity; choose Manage to run diagnostics.' Manage shows 'Run integration diagnostics' greyed out and the line 'Connector diagnostics are not enabled in Runtime settings.' with no link and no name for the setting.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-3-google-sign-in-section.png",
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionDetails.tsx:75"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionDetails.tsx"
+  },
+  {
+    "area": "capabilities",
+    "journey": "MS-3 Integrations: Google sign-in and a vendor MCP connector up to their credential step",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "The delete-integration dialog prints 'Reviewed version: 4c528e69b4e7…' (a 64-character hash) as visible text",
+    "trigger": "Advanced setup > Integrations > Manage > Delete integration connection.",
+    "expected": "No hash in the visible text (technical details may sit in a TechnicalDetails block).",
+    "actual": "The dialog reads 'Delete Gmail and Google Calendar? GoatCitadel removes its saved configuration and requests runtime synchronization.' then 'Reviewed version: 4c528e69…' in full, then 'Delete reviewed integration' and 'Keep integration'. Same pattern as U-CP-011.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-3-delete-integration-dialog.json",
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationManagementSettings.tsx:121"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/IntegrationManagementSettings.tsx"
+  },
+  {
+    "area": "capabilities",
+    "journey": "MS-3 Integrations: Google sign-in and a vendor MCP connector up to their credential step",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "'Add integration connection' offers macOS, iOS, Android, Windows and Linux platform entries, with Apple Notes preselected, on a Windows PC",
+    "trigger": "Advanced setup > Integrations > Add and manage integrations > Add integration connection.",
+    "expected": "Entries that cannot work on this computer are left out or say so before the operator fills them in.",
+    "actual": "The list has 26 entries including Apple Notes (the default), Apple Reminders, Things 3, Bear Notes, 'macOS Menu Bar + Voice', 'iOS Canvas/Camera/Voice', 'Android Canvas/Camera/Screen', 'Windows (WSL2 Recommended)' and 'Linux Native'. The Apple Notes form says only 'Configure the local bridge GoatCitadel uses to read and write Apple Notes content.' with 'Bridge URL (required)'. The catalog marks almost all of them 'beta' and the page never shows that. That nothing works behind them was not tried (each needs hardware or an app this PC lacks), so this is likely.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-3-integration-catalog-options.json",
+      "docs/review/2026-11-usability/evidence/ms/ms-3-add-integration-form.png"
+    ],
+    "foundBy": "live",
+    "confidence": "likely",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/IntegrationManagementSettings.tsx"
+  },
+  {
+    "area": "capabilities",
+    "journey": "MS-3 Integrations: Google sign-in and a vendor MCP connector up to their credential step",
+    "severity": "friction",
+    "kind": "approval-friction",
+    "title": "Installing a vendor MCP connector (Asana) sends the operator to the Inbox for approval; the panel waits at 'Waiting on Inbox…'",
+    "trigger": "Capabilities > Connectors > Asana > Install > Sign in and install.",
+    "expected": "The approval appears in the panel, one click, and the sign-in step follows (the one-click rule for approvals).",
+    "actual": "The panel shows 'Waiting on Inbox… / Stop', 'Approve in Inbox · Waiting', four steps 'Not started' and 'Waiting on you in Inbox · Open in Inbox · This request expires after 15 minutes.' The Inbox row 'Install Asana' is tagged Danger with 'Review' and 'Open approval'. Same pattern as U-CP-012 for tool groups. The approval was not decided (it would add the vendor's host to the network allowlist); the credential step (an 'Open sign-in page' link to Asana) was therefore not reached.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-3-asana-panel.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-3-asana-waiting-inbox.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-3-asana-inbox-approval.png",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/ConnectorInstallProgress.tsx:17"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/ConnectorInstallPanel.tsx"
+  },
+  {
+    "area": "chat",
+    "journey": "MS-4 Real-model pass: CH-1, CH-2, CH-9, CH-11 and CH-13 with the Claude CLI subscription",
+    "severity": "friction",
+    "kind": "bug",
+    "title": "'Plan first' with a real model makes no model call and returns a fixed four-step engineering template whatever the request",
+    "trigger": "Chat on the Claude Code CLI provider > plus menu > Plan first > send 'Plan three steps to tidy a small bookshelf.'",
+    "expected": "The model writes a plan for the request: three steps about a bookshelf.",
+    "actual": "Answer in 2 s (receipt names claude-sonnet-5-5) with 'Chat plan / Objective … using cowork.plan.work.synthesize' and four template steps ('Define the execution path…', 'Suggested tools: memory.search, code.search, file.find', 'tests.run, lint.run', 'Depends on: orch-step-3'). The Gateway's token counter was identical before and after (4902 output, 291911 input), so no model was asked. The Delegation card reads 'Supervised work · Done' and '0 of 4 steps done' with all four steps Queued (known as U-CH-032 and U-CH-033, now seen with a real model). The 'Plan first' chip stays on the composer after sending.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-4-ch11-end.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-4-ch11-inspect-run.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-4-ch11-states.json"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/gateway/src/services/chat-turn-helpers.ts"
+  },
+  {
+    "area": "chat",
+    "journey": "MS-4 Real-model pass: CH-1, CH-2, CH-9, CH-11 and CH-13 with the Claude CLI subscription",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "A file-creation approval card says only 'Create document / Approval required by policy', with no file name, place or content",
+    "trigger": "Chat on the Claude Code CLI provider > 'Create a text file named ut14-note.txt containing the single word hello, using your file tool, then tell me it is done.' > wait for the card.",
+    "expected": "The card says what will be written and where (name, folder, size or first lines).",
+    "actual": "Card at 8.2 s: 'Approval needed · Caution · Create document · Approval required by policy. · Expires in 15 minutes · Loading approval controls… · Inspect persisted approval'. The buttons arrived about 0.3 s later (clicked at 8.6 s). Nothing on the card names ut14-note.txt or what it contains. One click on Approve once settled it.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-4-ch9a-t8.2s.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-4-ch9a-states.json"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalAction.tsx"
+  },
+  {
+    "area": "chat",
+    "journey": "MS-4 Real-model pass: CH-1, CH-2, CH-9, CH-11 and CH-13 with the Claude CLI subscription",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "Right after an approval the turn says 'Outcome uncertain. Check before retrying.' in internal words, then ends Done 19 seconds later",
+    "trigger": "Same file-creation request as above; approve once; look at the tool line between 9 s and 28 s.",
+    "expected": "The tool line says it ran, or says nothing until the receipt is in.",
+    "actual": "At 9.7 s the tool row reads 'May have created 1 document · Create document · Done · Approved by an operator · Approved execution completed without a canonical effect receipt. Inspect external or runtime state before retrying or running it again. Outcome uncertain. Check before retrying. Automatic replay is suppressed.' The conversation row still says 'Waiting on you' and the transcript still says 'Waiting for your approval below.' while the header reads 'Working'. The turn then carried on by itself and finished at 28.6 s as 'Created 1 document · 1 done' with the answer; the interim wording is replaced. The streamed text before the end said the file could not be written, and the final answer says it was; the screen shows the first version for several seconds.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-4-ch9a-t9.7s.png",
+      "docs/review/2026-11-usability/evidence/ms/ms-4-ch9a-end.png",
+      "apps/gateway/src/services/approval-resolution-effects-service.ts:3527",
+      "packages/threaded-surface-core/src/chat/useChatRunPresentation.ts:193"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/gateway/src/services/approval-resolution-effects-service.ts"
+  }
+]

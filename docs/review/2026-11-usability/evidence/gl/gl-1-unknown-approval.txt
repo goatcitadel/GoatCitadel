@@ -1,0 +1,1 @@
+URL /inbox/approvals/does-not-exist (no such approval): the Inbox opens and the right-hand inspector says "Approval not found." (see gl-1-unknown-approval.png). The text is outside #main-content, so the crawl text did not show it. Not a finding. The browser console logs the 404 GET /api/v1/approvals/does-not-exist.

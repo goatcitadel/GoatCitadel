@@ -1,0 +1,13 @@
+{
+ "note": "second pass after creation",
+ "healthAfterReload": "1 check needs attention | Backups | Verified | The latest backup passed exact-byte and restore-contract verification. A full restore is not proven here. | Review backups",
+ "reviewUrl": "/system/runtime?shell=cockpit#ops-runtime-backups",
+ "backupsAnchorInView": {
+  "top": 0,
+  "vh": 900
+ },
+ "runtimeBackups": "Backups\n\nThe latest backup passed exact-byte and restore-contract verification. A full restore is not proven here.\n\nVerified\nBack up now\njust now · 16 files\nLocal model runtime\n\nThe local model runtime is not running.\n\nNot running\nOpen Settings › Advanced\nIntegrations\n\nMCP servers this workspace has configured.\n\nGoatCitadel Approval Inboxorchestration · http\nOn\nGoatCitadel Durable Tasksorchestration · http\nOn\nOpen Capabilities › Advanced setup\nRuntime records and capabilities\nRuntime authority: what each part of the system last reported, and how fresh it is.\nOpen System › Diagnostics\nMesh capabilities: published tools, activation requests and revocations.\nOpen Library › Candidates and mesh\nModel performance\n\nMeasured model calls, how well each local engine fits, and model comparison runs.\n\nThese figures come from recent model calls this server measured.\n\nAverage response time\n39 ms\ncompl",
+ "api": "{\"items\":[{\"backupId\":\"backup-20261115083351-d8281db9\",\"createdAt\":\"2026-11-15T08:33:51.699Z\",\"appVersion\":\"0.1.0-rc.1\",\"rootDir\":\"<sandbox runtime root>\",\"files\":[{\"path\":\"config/.generations/last-good.json\",\"sizeBytes\":14380,\"sha256\":\"70e8fbd7fca45c4d9f3dac904f8d0a3e6ce33799b65a1b9356c277bbf707cde1\"},{\"path\":\"config/assistant.config.json\",\"sizeBytes\":7192,\"sha256\":\"ddc47931a04d7911c680cf269aeb3c8ec7d7e19f3b662fc86e6ff68a513be85c\"},{\"path\":\"config/budgets.json\",\"sizeBytes\":259,\"sha256\":\"754ad1c14e81145dc42ab2f893bac060b90bd82a4fda666482fe264a15912cca\"},{\"path\":\"config/cron-jobs.json\",\"sizeBytes\":2159,\"sha256\":\"31e42802b0f4bba94c8fde5a559acae975ecd86c18487b41e693f3d783dc3e80\"},{\"path\":\"config/goatcitadel.json\",\"sizeBytes\":14380,\"sha256\":\"70e8fbd7fca45c4d9f3dac904f8d0a3e6ce33799b65a1b9356c277bbf707cd",
+ "console": [],
+ "http": []
+}

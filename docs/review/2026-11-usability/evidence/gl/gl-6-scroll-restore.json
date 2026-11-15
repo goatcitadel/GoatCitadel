@@ -1,0 +1,14 @@
+{
+ "work board -> run -> Back": {
+  "before": 200,
+  "linkVisibleBeforeClick": true,
+  "openedUrl": "/work/runs/393fda00-230e-4e77-a7b0-cbf65c9e553c",
+  "afterBack": 90
+ },
+ "work history -> run -> Back": {
+  "before": 200,
+  "linkVisibleBeforeClick": true,
+  "openedUrl": "/work/runs/chat-post-commit-27d792ad7bf0078148ec3b68b1a8aafa",
+  "afterBack": 90
+ }
+}

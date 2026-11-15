@@ -1,0 +1,168 @@
+[
+  {
+    "area": "system",
+    "priorIds": [],
+    "journey": "SY-4 Activity and Diagnostics: find out why a turn failed an hour ago",
+    "severity": "friction",
+    "kind": "missing-state",
+    "title": "System > Activity cannot reach anything older than its newest 100 signals, and does not say where older history is",
+    "trigger": "A chat turn was stopped or failed an hour ago on a busy install. Open System > Activity and try to find out why.",
+    "expected": "A way to go further back (older signals, a date or kind filter, or a search), or a line saying older runs are in Work > History.",
+    "actual": "The page asks for exactly 100 signals (SystemActivity.tsx:104) and has no pager, search, date or kind filter, although the client and Gateway support a cursor (system-operations.ts:99) and the page already receives nextCursor; it uses it only for the sentence 'older signals are not shown' (:162). The page says plainly that it keeps recent signals only, but nothing says where older history lives. 100 signals cover roughly 10 to 15 chat turns, because one turn writes about six to ten events; in the test sandbox, whose events came from test seeding, that window was about 14 minutes (sandbox figure), so two cancelled chat turns about an hour old had no Activity row. A failure inside the window is labelled and linked: the Gateway publishes durable_run_failed and durable_run_cancelled (durable-run-service.ts:3771, :3969, :4657), the row reads 'Durable run failed' or 'Durable run cancelled' (describeActivity falls back to the event type in words, activity-sentences.ts), and activityOwnerPath gives it an Open source link to /work/runs/<id> (subject to the workspace caveat in the workspace-bound links finding). A failed chat turn runs as a durable run, so its row is that same generic 'Durable run failed' (code only, not reproduced live: the sandbox had no failure inside the window). The wording 'Durable run' is the carried internal-words finding U-GL-034, not a new claim. An operator looking for an hour-old failure on a busy install cannot get there from Activity; the route that worked was Work > History in the owning workspace.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/sy/sy-4-activity.png",
+      "docs/review/2026-11-usability/evidence/sy/sy-4-activity-capture.json",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:104",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:162",
+      "apps/mission-control-next/src/cockpit/areas/system/activity-sentences.ts:70",
+      "apps/gateway/src/services/durable-run-service.ts:3771",
+      "docs/review/2026-11-usability/evidence/sy/sy-4-cancelled-run.png"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx"
+  },
+  {
+    "area": "system",
+    "priorIds": [],
+    "journey": "SY-2 Runtime and Sessions: see what is running, stop something",
+    "journeys": [
+      "SY-4"
+    ],
+    "severity": "stall",
+    "kind": "dead-end",
+    "title": "System > Sessions and Activity list every conversation in the installation, but Details, 'Open in Chat' and 'Open source' only work in the conversation's own workspace and never say so",
+    "trigger": "With the default workspace selected, open System > Sessions, press Details on 'Mission Control Next Verification Session 2' (it belongs to the verification workspace), then 'Open in Chat'. Or press 'Open source' on a 'Chat session updated' row in Activity.",
+    "expected": "Either the session opens, or the screen names the workspace it belongs to and offers to switch.",
+    "actual": "Details shows a red line 'This control state does not match the selected session and workspace. No control actions are available.' beside a 'Reload control' button that cannot fix it. 'Open in Chat' lands on 'Choose a conversation' with 'No conversations in this view', and the Activity conversation rows do the same. With the verification workspace selected, the same session shows 'You control this conversation' and opens in Chat. The list header says 'Conversations across every channel'; 19 rows show in both workspaces. One more link that drops the workspace (code only, not reproduced live): durable-run realtime events carry only the run id (buildDurableRealtimeOptions, durable-run-service.ts:624-629 sets links: { runId }), so an Activity run row cannot open a run that lives in a non-selected workspace directly; the operator gets 'Run outside this workspace - Choose its workspace or return to Work' (WorkRunDetail.tsx:119) and must switch by hand. A live check was not possible: the run rows in the sandbox Activity belonged to workspace-less approval-wait runs (see Sandbox artifacts in the journeys file).",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/sy/sy-2-session-details.png",
+      "docs/review/2026-11-usability/evidence/sy/sy-2-open-in-chat.png",
+      "docs/review/2026-11-usability/evidence/sy/sy-2-session-details-own-workspace.png",
+      "docs/review/2026-11-usability/evidence/sy/sy-2-open-in-chat-own-workspace.png",
+      "docs/review/2026-11-usability/evidence/sy/sy-4-open-source-by-row-kind.json",
+      "apps/mission-control-next/src/cockpit/areas/chat/SessionControlManager.tsx:211",
+      "apps/gateway/src/services/durable-run-service.ts:624",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkRunDetail.tsx:119"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/system/SystemSessions.tsx"
+  },
+  {
+    "area": "system",
+    "priorIds": [],
+    "journey": "SY-2 Runtime and Sessions: see what is running, stop something",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "The 'Close session' button on System > Sessions only hides the details panel; it does not close or stop anything",
+    "trigger": "System > Sessions > Details on any row > Close session.",
+    "expected": "A button called Close session closes the session, or the label says it hides the panel ('Hide details').",
+    "actual": "The panel disappears and the URL loses ?sessionId=; the session stays in the list, unchanged. The label next to a 'Session control' section reads as if it ends the session. Nothing on System stops a run or a session; the page points to no stop control.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/sy/sy-2-session-details-own-workspace.png",
+      "docs/review/2026-11-usability/evidence/sy/sy-2-session-closed.png",
+      "apps/mission-control-next/src/cockpit/areas/system/SelectedSessionSection.tsx:37"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/system/SelectedSessionSection.tsx"
+  },
+  {
+    "area": "system",
+    "priorIds": [],
+    "journey": "SY-5 Create a backup; find where it went",
+    "severity": "friction",
+    "kind": "missing-state",
+    "title": "After 'Back up now' nothing on screen says where the backup was written once the receipt is gone",
+    "trigger": "System > Health > Back up now > Confirm backup. Read the receipt, then reload Health or open System > Runtime > Backups.",
+    "expected": "The backup's folder shown with the backup, or a line saying where backups are kept.",
+    "actual": "The receipt shows 'Backup created just now - 14.7 MB - 16 files' and puts the destination only inside a collapsed 'Backup manifest and recorded hashes' technical-details block. After a reload the receipt is gone, Health says 'Verified', and the Runtime Backups row reads 'just now - 16 files' with no folder. An operator asked to copy the backup somewhere safe must open the technical details before leaving the page, or read the docs. (The backup itself worked: 14.7 MB, written to the sandbox's own backup directory, Verified within seconds.)",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/sy/sy-5-receipt.png",
+      "docs/review/2026-11-usability/evidence/sy/sy-5-runtime-backups.png",
+      "docs/review/2026-11-usability/evidence/sy/sy-5-backup-capture.json",
+      "apps/mission-control-next/src/cockpit/areas/system/HealthBackupAction.tsx:129"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/system/HealthBackupAction.tsx"
+  },
+  {
+    "area": "system",
+    "priorIds": [],
+    "journey": "SY-7 Quality and Dashboards: open each tab; a tab with nothing to show says why",
+    "severity": "polish",
+    "kind": "wrong-status",
+    "title": "System > Quality > Design can show 'Blocking - P0' checks on the product's own source files when the install's root directory does not hold them",
+    "trigger": "System > Quality > Design on an install whose root directory does not contain the repository's design files (the review sandbox pins the root to its runtime folder; probably an installed build too, not verified).",
+    "expected": "Operator-facing checks only, or a note that these developer checks do not apply when the source is absent.",
+    "actual": "In the sandbox, 'Mission Control design tokens are present' and 'Design proof lanes are wired' read Blocking - P0, with next actions such as 'Restore missing token file(s): apps/mission-control-next/src/styles/...' and 'Wire missing design proof script(s): verify:design:quality, ...'. The cause is `fs.existsSync(path.join(root, file))` (design-quality.ts:218-221) with root from `deps.rootDir` (dashboard-route-service.ts:311); the testbench pins that root away from the repository, so the files are guaranteed missing there. The tab says 'reads repo files only' and PRODUCT.md:37 lists release proof as a System purpose, so the tab itself is by design; whether an installed build shows the same red status was not verified. Related to U-SY-006 (developer words on Quality); kept separate because this one is a red status, not wording.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/sy/sy-7-quality-design.png",
+      "docs/review/2026-11-usability/evidence/sy/sy-7-quality-capture.json",
+      "packages/skills/src/design-quality.ts:221",
+      "apps/gateway/src/services/dashboard-route-service.ts:311"
+    ],
+    "foundBy": "both",
+    "confidence": "likely",
+    "owner": "packages/skills/src/design-quality.ts"
+  },
+  {
+    "area": "system",
+    "priorIds": [],
+    "journey": "SY-7 Quality and Dashboards: open each tab; a tab with nothing to show says why",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "System > Quality > Evaluations says 'Model evaluations: unavailable. No results are available for this source.' with no reason and no next step",
+    "trigger": "System > Quality > Evaluations on an install where no model evaluation has been run.",
+    "expected": "Say 'No evaluations have been run yet' and where to run one, or say what is broken.",
+    "actual": "'unavailable' reads as a fault. The Gateway answers evalProof state 'not_available' with an empty list; nothing says whether that means none run, no provider, or an error. The Gates and Design tabs, by contrast, name their next check. The tab switch also does not change the URL, so Back or a reload returns to Gates.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/sy/sy-7-quality-evaluations.png",
+      "docs/review/2026-11-usability/evidence/sy/sy-7-quality-capture.json",
+      "apps/mission-control-next/src/cockpit/areas/system/quality/QualityEvidence.tsx:35"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/system/quality/QualityEvidence.tsx"
+  },
+  {
+    "area": "system",
+    "priorIds": [],
+    "journey": "SY-6 Browser sessions: open one, read its grants, close it",
+    "severity": "polish",
+    "kind": "missing-state",
+    "title": "System > Browser sessions with no sessions says 'No browser sessions match this filter' and never says how a session comes to exist",
+    "trigger": "System > Browser sessions in a workspace where no errand has run.",
+    "expected": "'No browser sessions yet' with a line on what creates one (a browser errand, or the form above).",
+    "actual": "The list says 'No browser sessions match this filter' although no filter hides anything, and the right-hand pane says 'Select a session to review its grants...' with nothing to select. The page explains what a record is not (it does not open a browser) but not when one appears.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/sy/sy-6-empty.png",
+      "docs/review/2026-11-usability/evidence/sy/sy-6-browser-sessions-capture.json",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemBrowserSessions.tsx:173"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/system/SystemBrowserSessions.tsx"
+  },
+  {
+    "area": "system",
+    "priorIds": [],
+    "journey": "SY-4 Activity and Diagnostics: find out why a turn failed an hour ago",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "A cancelled run's reason reads 'Cancelled by auth:[REDACTED]' and 'Run: cancelled by auth:[REDACTED]'",
+    "trigger": "Switch to the verification workspace, then Work > History > the cancelled 'Chat turn' row > Open run record.",
+    "expected": "'Cancelled by you' (or by the named actor).",
+    "actual": "Both the status line and 'Recorded run errors' print the raw actor string with the redaction marker. The run page does reach the reason, the conversation link and a second error 'Turn: Waiting for verification approval', so the trail from Work is complete once the operator is there.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/sy/sy-4-cancelled-run.png",
+      "docs/review/2026-11-usability/evidence/sy/sy-4-cancelled-run-capture.json",
+      "apps/gateway/src/services/durable-run-service.ts:3746"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "owner": "apps/gateway/src/services/durable-run-service.ts"
+  }
+]

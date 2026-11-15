@@ -1,0 +1,1449 @@
+{
+ "/chat": {
+  "title": "GoatCitadel Chat",
+  "heads": [
+   {
+    "tag": "H2",
+    "text": "Conversations",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Messaging",
+    "sr": false
+   },
+   {
+    "tag": "H1",
+    "text": "Runtime evidence follow-up",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Messages",
+    "sr": true
+   },
+   {
+    "tag": "H2",
+    "text": "You said",
+    "sr": true
+   },
+   {
+    "tag": "H2",
+    "text": "Assistant reply",
+    "sr": true
+   },
+   {
+    "tag": "H3",
+    "text": "Background run",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "evidence": 2
+  },
+  "ids": [],
+  "len": 1484
+ },
+ "/inbox": {
+  "title": "GoatCitadel Inbox",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Inbox",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Needs decision",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Review shell exec",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Pick the next verification step",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Updates",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Verification prompt-pack quality evidence",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next proof artifact",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Reject everything pending",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "posture": 1,
+   "evidence": 1
+  },
+  "ids": [],
+  "len": 1380
+ },
+ "/work": {
+  "title": "GoatCitadel Work",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Work",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Waiting on your decision",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Active",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Needs attention",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Failed runs",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Done",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "posture": 1
+  },
+  "ids": [],
+  "len": 1356
+ },
+ "/capabilities": {
+  "title": "GoatCitadel Capabilities · Connectors",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Capabilities",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Connected 1",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Firecrawl",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "On this device 4",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Context7",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "GPT Researcher",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "OpenSpec",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Playwright Browser",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Available 78",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Airtable",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Algolia",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "AllTrails",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Amplitude",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Asana",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Atlassian (Jira and Confluence)",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Attio",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "AWS Knowledge",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Better Stack",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Brave Search",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Buildkite",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Calendly",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Canva",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "CircleCI",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "ClickUp",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Close CRM",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Cloudflare",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Cloudinary",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Comfy Cloud",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Craft",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Datadog",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "DeepWiki",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Discord",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Dropbox",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Figma",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Fireflies",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Gamma",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "GitLab",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Globalping",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Gmail and Google Calendar",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Google Chat",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Grafana Cloud",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Hugging Face",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "IMAP/SMTP Mail",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Indeed",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Intercom",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Kiwi.com",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Klaviyo",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "LINE",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Linear",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mattermost",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Microsoft Learn",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Microsoft Teams",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Miro",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mixpanel",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "monday.com",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "MotherDuck",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Neon",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Netlify",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Nextcloud Talk",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Notion",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Parallel",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "PayPal",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Plaid",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Postman",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Prisma Postgres",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Railway",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "RentAHuman",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Robinhood",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Semgrep",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Sentry",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Slack",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Square",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Strava",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Stripe",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Supabase",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Telegram",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Todoist",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "trivago",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Twelve Data",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Twilio Docs",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Vercel",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Webflow",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Webhooks",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "WhatsApp",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Wolfram",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "WordPress.com",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Zalo OA",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "Gateway": 1,
+   "authoritative": 1
+  },
+  "ids": [],
+  "len": 9448
+ },
+ "/system": {
+  "title": "GoatCitadel System",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "System",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Checks",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Runtime service",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Backups",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Managed local models",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Channels",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Integrations",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Desktop updates",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Remote workers",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "GoatCitadel server",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Database",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 1491
+ },
+ "/system/runtime": {
+  "title": "GoatCitadel System · Runtime",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Runtime",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "GoatCitadel server",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Server checks",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Repair steps",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Backups",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Local model runtime",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Integrations",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Runtime records and capabilities",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Model performance",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Recent model calls",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Local engines",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Model comparison runs",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "Gateway": 5,
+   "durable": 1
+  },
+  "ids": [],
+  "len": 3499
+ },
+ "/system/spend": {
+  "title": "GoatCitadel System · Spend",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Spend",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Cost by day (UTC)",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Recent model calls",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Provider attribution",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Verification Stub",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Budget setting",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "More cost detail",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 2993
+ },
+ "/system/quality": {
+  "title": "GoatCitadel System · Quality",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Quality",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Security quality gates",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Defensive Security Evaluation gate",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Prompt packs",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Pack",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Pack",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Security execution coverage",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Defensive Security Evaluation",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Defensive security definitions",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Defensive Security Evaluation",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Prompt gates",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Runtime truth",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Surface regression",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Design quality",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Visual regression",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "projection": 2,
+   "evidence": 3
+  },
+  "ids": [],
+  "len": 2063
+ },
+ "/system/diagnostics": {
+  "title": "GoatCitadel System · Diagnostics",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Diagnostics",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Setup checks",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Setup Center",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Provider checks",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Host",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Server checks",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Queue recovery",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Daemon logs",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Diagnostic events",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Runtime authority map",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Run: Chat reply",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Recorded run event",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Run: Chat reply",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Run: Approval wait",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Recorded run event",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Run: Chat reply",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Runs",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Workers",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Approval",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Approvals",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mesh nodes",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Local runtime",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Latest backup",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Release certificate",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Running build",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Configuration version",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Configuration in use",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Configuration recovery",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Outside actions to check",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "Gateway": 4
+  },
+  "ids": [],
+  "len": 5610
+ },
+ "/system/activity": {
+  "title": "GoatCitadel System · Activity",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Activity log",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Recent sessions",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Runtime evidence follow-up",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Operator surface polish",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Release readiness review",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 8",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 7",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 6",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 5",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 4",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 3",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 2",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Demo Chat: guided operations tour",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "durable": 14,
+   "evidence": 1
+  },
+  "ids": [],
+  "len": 8491
+ },
+ "/system/sessions": {
+  "title": "GoatCitadel System · Sessions",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Sessions",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Recent sessions",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Runtime evidence follow-up",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Operator surface polish",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Release readiness review",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 8",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 7",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 6",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 5",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 4",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 3",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Mission Control Next Verification Session 2",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Demo Chat: guided operations tour",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Across all workspaces",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "evidence": 1
+  },
+  "ids": [],
+  "len": 2356
+ },
+ "/system/dashboards": {
+  "title": "GoatCitadel System · Dashboards",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Dashboards",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Verification command board",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "canonical": 1
+  },
+  "ids": [],
+  "len": 427
+ },
+ "/system/browser-sessions": {
+  "title": "GoatCitadel System · Browser sessions",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Browser sessions",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "New browser session",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Sessions",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 557
+ },
+ "/settings/general": {
+  "title": "GoatCitadel Settings · General",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "General",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "General",
+    "sr": true
+   },
+   {
+    "tag": "H3",
+    "text": "Attention",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Notification routing",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "Destinations",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "Rules",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Application updates",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 1577
+ },
+ "/settings/models": {
+  "title": "GoatCitadel Settings · Models",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Models",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Models",
+    "sr": true
+   },
+   {
+    "tag": "H3",
+    "text": "Guided model setup",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Model reasoning in Chat",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Claude Code CLI: let it use GoatCitadel tools",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Claude Code CLI: reuse one process between tool steps",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 3030
+ },
+ "/settings/safety": {
+  "title": "GoatCitadel Settings · Safety",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Safety",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Safety",
+    "sr": true
+   },
+   {
+    "tag": "H3",
+    "text": "Chat permission profile",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "How allow and deny rules combine",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "Effective policy contexts",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Manage permission profiles",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Temporary local operator overrides",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "Active overrides for this operator",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Autonomous activation grants",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 1771
+ },
+ "/settings/connections": {
+  "title": "GoatCitadel Capabilities · Connectors",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Capabilities",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Advanced setup",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "MCP servers",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "GoatCitadel Approval Inbox",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "GoatCitadel Durable Tasks",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "Operator requests",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "durable": 1
+  },
+  "ids": [],
+  "len": 1204
+ },
+ "/settings/citadel": {
+  "title": "GoatCitadel Settings · Citadel",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Citadel",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Citadel",
+    "sr": true
+   },
+   {
+    "tag": "H3",
+    "text": "Guided setup · Mason",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 670
+ },
+ "/settings/advanced": {
+  "title": "GoatCitadel Settings · Advanced",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Advanced",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Advanced",
+    "sr": true
+   },
+   {
+    "tag": "H3",
+    "text": "Managed local runtime",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "llama.cpp lifecycle",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "GoatCitadel process",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Local voice runtime",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "Gateway": 3,
+   "owner": 1
+  },
+  "ids": [],
+  "len": 2190
+ }
+}

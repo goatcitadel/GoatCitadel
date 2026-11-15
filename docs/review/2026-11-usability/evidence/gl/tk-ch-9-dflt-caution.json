@@ -1,0 +1,15 @@
+{
+  "sid": true,
+  "seedStatus": 201,
+  "liveCardMs": 5,
+  "label": "Run it",
+  "clicks": 1,
+  "firstChangeMs": 757,
+  "card": "Conversations\nNew\nProject\nAll projects\nUnassigned\nProjects\nSearch\nRecent\nArchived\nb CH-9 dflt-caution run the governed command\njust now\nWaiting on you\nRead saturday-plan.pdf and review it.\nb CH-9 dflt-danger run the governed command\njust now\nVerification stub reply.\nSay hello in one sentence. ut13b CH-1\njust now\nVerification stub reply.\nMessaging\nAdd\n\nNo channels yet\n\nAdd\nb CH-9 dflt-caution run the governed command\n\nWaiting on you: approval\n\nVerification stub (loopback)\n\nMessages\nResponse ended.\nYou said\n\nYou · 3:35 AM\n\nRead saturday-plan.pdf and review it.\n\nWaiting on you\n\nRun code to read the text of saturday-plan.pdf\n\nReads saturday-plan.pdf\n\nRun it\nDeny\nDetails\nAwaiting approval to use ",
+  "dialogText": null,
+  "tail": "35 AM | Read saturday-plan.pdf and review it. | Assistant reply | Assistant 3:35 AM | Verification stub reply. | verification-stub-chat · Verification stub (loopback) · 1 tool · 5 s total | · Open message details | Running code… | Details | Awaiting approval to use 1 tool · 1 tool call · 1 approval needed | Retry | Copy answer | More | Version 2 of 2 | 1 | 2 | Save as skill | Background run | Recorded for this response | Inspect run | Open run in Work | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send",
+  "approvalStatus": "approved",
+  "inboxBefore": "2",
+  "inboxAfter": "1",
+  "log": []
+}

@@ -1,0 +1,12 @@
+{
+  "res": [
+    {
+      "action": "Cancel",
+      "clicks": 2,
+      "dialog": "Cancel this run? | Stops this run. Completed external effects may remain. GoatCitadel will recheck policy and state. | Cancel run | Keep running",
+      "msToFeedback": 83,
+      "after": "Run controls | Refresh | Current status:  | Cancelled These controls are available only for runs scoped to the selected workspace. | No direct control is available from this run state or workspace. | Run moved to Cancelled. Refresh to review its current state and any follow-on effects."
+    }
+  ],
+  "log": []
+}

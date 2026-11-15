@@ -1,0 +1,10 @@
+{
+  "note": "A 125,000-byte markdown file (about 900 lines) picked with @ in the composer became a chat attachment. The composer chip and the sent message show only 'review-task-7-long-document.md · Markdown · 122 KB'. Nothing on screen says how much of the file the model gets.",
+  "upload": {"endpoint": "POST /api/v1/chat/attachments", "status": 201, "bytes": 124939},
+  "gatewayLimits": {
+    "extractedAtUpload": "first 4000 characters (apps/gateway/src/services/chat-attachment-service.ts:339), status 'ready'",
+    "putInPrompt": "first 1600 characters, labelled 'Preview:' (apps/gateway/src/services/chat-turn-user-message.ts:113)"
+  },
+  "inspectorContextTab": {"Routed context": "Not recorded", "Included documents": 0, "Sources": "No sources were recorded for this response."},
+  "notVerifiedLive": "what the model received: the stub reply is fixed text"
+}

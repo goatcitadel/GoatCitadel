@@ -1,0 +1,75 @@
+[
+  {
+    "s": "A sidebar Inbox",
+    "url": "/chat/projects/9f63ef90-17b4-4792-9c7d-239901658c82?shell=cockpit",
+    "dialogs": [],
+    "dlg": [
+      "Unsaved changes\n\nYou have unsaved changes in review-task-8-project.\n\nKeep draft and close\nDiscard changes\nCancel"
+    ],
+    "field": "review-task-8 EDITED unsaved"
+  },
+  {
+    "s": "B Back",
+    "url": "/chat/projects/9f63ef90-17b4-4792-9c7d-239901658c82?shell=cockpit",
+    "dialogs": [],
+    "dlg": [
+      "Unsaved changes\n\nYou have unsaved changes in review-task-8-project.\n\nKeep draft and close\nDiscard changes\nCancel"
+    ],
+    "field": "review-task-8 EDITED unsaved"
+  },
+  {
+    "s": "C All projects",
+    "url": "/chat/projects/9f63ef90-17b4-4792-9c7d-239901658c82?shell=cockpit",
+    "dialogs": [],
+    "dlg": [
+      "Unsaved changes\n\nYou have unsaved changes in review-task-8-project.\n\nKeep draft and close\nDiscard changes\nCancel"
+    ],
+    "field": "review-task-8 EDITED unsaved"
+  },
+  {
+    "s": "D1 reload, Stay",
+    "result": "blocked (prompt dismissed = Stay)",
+    "dialogs": [
+      {
+        "type": "beforeunload",
+        "msg": ""
+      },
+      {
+        "type": "beforeunload",
+        "msg": ""
+      }
+    ],
+    "field": "review-task-8 EDITED unsaved"
+  },
+  {
+    "s": "D2 reload, Leave",
+    "dialogs": [
+      {
+        "type": "beforeunload",
+        "msg": ""
+      },
+      {
+        "type": "beforeunload",
+        "msg": ""
+      }
+    ],
+    "url": "/chat/projects/9f63ef90-17b4-4792-9c7d-239901658c82?shell=cockpit"
+  },
+  {
+    "s": "D3 open Edit after reload",
+    "field": "review-task-8 test project",
+    "text": [
+      "Review destination context in the selected conversation before assigning it. Existing turns and drafts stay; future turns use this project's context and GoatCitadel resets workbench context."
+    ]
+  },
+  {
+    "s": "E tab close (runBeforeUnload)",
+    "closed": false,
+    "dialogs": [
+      {
+        "type": "beforeunload",
+        "msg": ""
+      }
+    ]
+  }
+]

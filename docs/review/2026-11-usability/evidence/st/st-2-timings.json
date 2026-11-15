@@ -1,0 +1,39 @@
+{
+ "toolApprovalRule_default_workspace": {
+  "clicks": "select value, Save approval rule, Review required approval, 'Keep draft and close' (Unsaved changes dialog), Approve once in Inbox = 4 clicks after the select",
+  "msFromSave": {
+   "reviewLinkVisible": 230,
+   "unsavedDialog": 1500,
+   "inboxLoaded": 3500,
+   "approvedAndApplied": 6200
+  },
+  "totalSecondsSaveToApplied": 6.2,
+  "note": "Total run 9.7 s including script waits; setting applied by the Gateway after Approve once, no Continue needed on this path"
+ },
+ "governedToggle_default_workspace": {
+  "control": "Models: Claude Code CLI reuse one process",
+  "clicks": "tick, Save setting, Approve once = 3",
+  "msSaveToDialog": 250,
+  "msApproveToConfirmed": 560
+ },
+ "governedToggle_verification_workspace": {
+  "clicks": "tick, Save setting = 2, then stuck",
+  "dialogText": "Turn on Claude Code CLI: reuse one process between tool steps ... The selected workspace changed. Open this item again in the current Inbox.",
+  "approveButton": "absent",
+  "inboxOfThatWorkspaceListsIt": false
+ },
+ "twoSavesInARow_default_workspace": {
+  "first": "Save + Approve once, confirmed in ~1.5 s",
+  "second": "Save + Approve once, confirmed in ~1.5 s",
+  "conflicts": 0
+ },
+ "firecrawlBaseUrl_default_workspace": {
+  "clicks": "type URL, Save Firecrawl, Approve once = 3",
+  "msSaveToDialog": 1800,
+  "msApproveToConfirmed": 930
+ },
+ "fsAccess_default_workspace": {
+  "clicks": "select Available, Apply fs.copy = 2, then dialog did NOT open on its own; 'Review approval' + 'Continue approved change' buttons and a toast 'Open Inbox item' shown",
+  "revertToDenied": "applied at once with no approval"
+ }
+}

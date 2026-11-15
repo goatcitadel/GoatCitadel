@@ -1,0 +1,58 @@
+[
+  {
+    "area": "chat",
+    "journey": "GL-7 Phone width and light theme on each area's first screen: nothing cut off, nothing unreadable",
+    "severity": "polish",
+    "kind": "bug",
+    "title": "At 1024 px wide the Chat inspector's tab strip is cut off mid-word at 'Conversat'",
+    "trigger": "Open Chat at 1024 x 768, open a conversation, open the conversation inspector.",
+    "expected": "All six tabs (Run, Message, Sources, Context, Files, Conversation) are readable, or the strip scrolls with a visible cue.",
+    "actual": "The strip shows Run, Message, Sources, Context, Files and then 'Conversat', clipped at the inspector's right edge with no scroll cue or overflow menu. The tab list is defined in chat-inspector-evidence.tsx:134. Seen in the Task 13a capture; recorded in Task 15 because the 13a reviewer listed it as missed.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/gl/gl-7-chat-inspector-1024.png",
+      "apps/mission-control-next/src/cockpit/areas/chat/chat-inspector-evidence.tsx:134"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/chat-inspector-evidence.tsx"
+  },
+  {
+    "area": "global",
+    "journey": "GL-T Sign-in in token mode",
+    "severity": "polish",
+    "kind": "bug",
+    "title": "On the token sign-in page the 'Remember credentials on this browser' box shows a dot whether or not it is ticked, and the heading touches the line under it",
+    "trigger": "Gateway in token mode; open the Cockpit in a browser with no stored credentials.",
+    "expected": "A tick box that reads plainly as ticked or not, and space between 'Sign in to continue' and 'Connect to GoatCitadel to load your workspace.'",
+    "actual": "The 'Remember credentials on this browser' control renders as a large dark square with a white dot, so its state cannot be read at a glance, and its label sits on a different baseline. The heading 'Sign in to continue' sits directly on the subtitle (no gap; the descenders touch the next line). Visible in the first-visit capture. Heading: CockpitAccessGate.tsx:37; tick box: GatewayAccessGate.tsx:399.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/gl/tk-signin-first-visit.png",
+      "apps/mission-control-next/src/cockpit/app/CockpitAccessGate.tsx:37",
+      "packages/mission-control-shared/src/components/GatewayAccessGate.tsx:399"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "packages/mission-control-shared/src/components/GatewayAccessGate.tsx"
+  },
+  {
+    "area": "chat",
+    "journey": "MS-4 Real-model pass: CH-1, CH-2, CH-9, CH-11 and CH-13 with the Claude CLI subscription",
+    "severity": "friction",
+    "kind": "bug",
+    "title": "A .txt file Chat creates always starts with its title and a blank line, so 'a file containing the single word hello' comes out as 32 bytes",
+    "trigger": "Chat with a real model: 'Create a text file named ut14-note.txt containing the single word hello, using your file tool, then tell me it is done.' Approve once.",
+    "expected": "The file holds exactly what was asked for (five bytes and a line end).",
+    "actual": "The tool reported 32 bytes written and the model's answer said so itself ('The tool reported 32 bytes written, and \"hello\" is only 5 bytes. The file probably has extra content'). Code read: the document tool builds a plain-text file from plainLines, which always starts with the document title and an empty line (document-artifacts.ts:479-481, used by buildPlainText at :158), so a title such as the file name plus 'hello' gives about 32 bytes. Nothing on screen offers a way to write the exact text. The file itself was not opened (no download from the sandbox), so the exact content is inferred from the code.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ms/ms-4-ch9a-end.png",
+      "packages/policy-engine/src/document-artifacts.ts:479",
+      "packages/policy-engine/src/document-artifacts.ts:158"
+    ],
+    "foundBy": "both",
+    "confidence": "likely",
+    "priorIds": [],
+    "owner": "packages/policy-engine/src/document-artifacts.ts"
+  }
+]

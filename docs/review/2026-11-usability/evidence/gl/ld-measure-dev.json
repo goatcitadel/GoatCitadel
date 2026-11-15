@@ -1,0 +1,282 @@
+{
+  "chatList": {
+    "runs": [
+      {
+        "firstContentMs": 1578,
+        "maxLongTask": 201,
+        "longTasks": 4,
+        "maxGap": 183,
+        "renderedRows": 100,
+        "setsize": "100",
+        "moreButtons": [
+          "Load more",
+          "More",
+          "More"
+        ],
+        "tail": ""
+      },
+      {
+        "firstContentMs": 1519,
+        "maxLongTask": 195,
+        "longTasks": 4,
+        "maxGap": 200,
+        "renderedRows": 100,
+        "setsize": "100",
+        "moreButtons": [
+          "Load more",
+          "More",
+          "More"
+        ],
+        "tail": ""
+      },
+      {
+        "firstContentMs": 1475,
+        "maxLongTask": 197,
+        "longTasks": 4,
+        "maxGap": 183,
+        "renderedRows": 100,
+        "setsize": "100",
+        "moreButtons": [
+          "Load more",
+          "More",
+          "More"
+        ],
+        "tail": ""
+      }
+    ],
+    "medianMainMs": 1519,
+    "medianMaxGapMs": 183,
+    "medianMaxLongTaskMs": 197
+  },
+  "threadOpen": {
+    "runs": [
+      {
+        "firstContentMs": 1921,
+        "lastTurnVisibleMs": 10,
+        "maxLongTask": 303,
+        "longTasks": 3,
+        "maxGap": 300,
+        "renderedTurnText": 2
+      },
+      {
+        "firstContentMs": 1909,
+        "lastTurnVisibleMs": 10,
+        "maxLongTask": 308,
+        "longTasks": 3,
+        "maxGap": 300,
+        "renderedTurnText": 2
+      },
+      {
+        "firstContentMs": 2089,
+        "lastTurnVisibleMs": 12,
+        "maxLongTask": 321,
+        "longTasks": 5,
+        "maxGap": 317,
+        "renderedTurnText": 2
+      }
+    ],
+    "medianMainMs": 1921,
+    "medianMaxGapMs": 300,
+    "medianMaxLongTaskMs": 308
+  },
+  "threadTop": {
+    "runs": [
+      {
+        "reachedTopMs": 947,
+        "wheelSteps": 10,
+        "scrollHeight": 42489,
+        "firstVisibleTurnNumber": "1",
+        "maxLongTask": 136,
+        "longTasks": 1,
+        "maxGap": 133
+      },
+      {
+        "reachedTopMs": 916,
+        "wheelSteps": 10,
+        "scrollHeight": 42489,
+        "firstVisibleTurnNumber": "1",
+        "maxLongTask": 129,
+        "longTasks": 1,
+        "maxGap": 117
+      },
+      {
+        "reachedTopMs": 963,
+        "wheelSteps": 10,
+        "scrollHeight": 42489,
+        "firstVisibleTurnNumber": "1",
+        "maxLongTask": 163,
+        "longTasks": 1,
+        "maxGap": 150
+      }
+    ],
+    "medianMainMs": 947,
+    "medianMaxGapMs": 133,
+    "medianMaxLongTaskMs": 136
+  },
+  "memoryOpen": {
+    "runs": [
+      {
+        "firstContentMs": 1279,
+        "maxLongTask": 63,
+        "longTasks": 1,
+        "maxGap": 0,
+        "renderedItems": 200,
+        "moreButtons": [
+          "Next memory page"
+        ],
+        "countLines": []
+      },
+      {
+        "firstContentMs": 1304,
+        "maxLongTask": 62,
+        "longTasks": 1,
+        "maxGap": 0,
+        "renderedItems": 200,
+        "moreButtons": [
+          "Next memory page"
+        ],
+        "countLines": []
+      },
+      {
+        "firstContentMs": 1286,
+        "maxLongTask": 63,
+        "longTasks": 1,
+        "maxGap": 0,
+        "renderedItems": 200,
+        "moreButtons": [
+          "Next memory page"
+        ],
+        "countLines": []
+      }
+    ],
+    "medianMainMs": 1286,
+    "medianMaxGapMs": 0,
+    "medianMaxLongTaskMs": 63
+  },
+  "workBoard": {
+    "runs": [
+      {
+        "firstContentMs": 1367,
+        "maxLongTask": 79,
+        "longTasks": 2,
+        "maxGap": 67,
+        "renderedTasks": 30,
+        "laneCounts": [
+          "0 tasks · 0 runs",
+          "200 tasks · 0 runs",
+          "0 tasks · 0 runs",
+          "0 tasks · 25 runs"
+        ],
+        "moreButtons": [
+          "More",
+          "Load more runs",
+          "Load more tasks"
+        ]
+      },
+      {
+        "firstContentMs": 1232,
+        "maxLongTask": 76,
+        "longTasks": 2,
+        "maxGap": 67,
+        "renderedTasks": 30,
+        "laneCounts": [
+          "0 tasks · 0 runs",
+          "200 tasks · 0 runs",
+          "0 tasks · 0 runs",
+          "0 tasks · 25 runs"
+        ],
+        "moreButtons": [
+          "More",
+          "Load more runs",
+          "Load more tasks"
+        ]
+      },
+      {
+        "firstContentMs": 1241,
+        "maxLongTask": 76,
+        "longTasks": 2,
+        "maxGap": 83,
+        "renderedTasks": 30,
+        "laneCounts": [
+          "0 tasks · 0 runs",
+          "200 tasks · 0 runs",
+          "0 tasks · 0 runs",
+          "0 tasks · 25 runs"
+        ],
+        "moreButtons": [
+          "More",
+          "Load more runs",
+          "Load more tasks"
+        ]
+      }
+    ],
+    "medianMainMs": 1241,
+    "medianMaxGapMs": 67,
+    "medianMaxLongTaskMs": 76
+  },
+  "chatSearch": {
+    "runs": [
+      {
+        "typedMs": 3041,
+        "foundMsAfterTyping": 6,
+        "rowsAfterFilter": 2,
+        "maxLongTask": 134,
+        "longTasks": 33,
+        "maxGap": 200
+      },
+      {
+        "typedMs": 2917,
+        "foundMsAfterTyping": 2,
+        "rowsAfterFilter": 2,
+        "maxLongTask": 131,
+        "longTasks": 31,
+        "maxGap": 167
+      },
+      {
+        "typedMs": 2906,
+        "foundMsAfterTyping": 6,
+        "rowsAfterFilter": 2,
+        "maxLongTask": 134,
+        "longTasks": 31,
+        "maxGap": 133
+      }
+    ],
+    "medianMainMs": 6,
+    "medianMaxGapMs": 167,
+    "medianMaxLongTaskMs": 134
+  },
+  "memorySearch": {
+    "runs": [
+      {
+        "searchBox": true,
+        "typedMs": 510,
+        "foundMsAfterTyping": 33,
+        "rowsAfterFilter": 2,
+        "maxLongTask": 57,
+        "longTasks": 2,
+        "maxGap": 0
+      },
+      {
+        "searchBox": true,
+        "typedMs": 505,
+        "foundMsAfterTyping": 36,
+        "rowsAfterFilter": 2,
+        "maxLongTask": 53,
+        "longTasks": 2,
+        "maxGap": 0
+      },
+      {
+        "searchBox": true,
+        "typedMs": 526,
+        "foundMsAfterTyping": 33,
+        "rowsAfterFilter": 2,
+        "maxLongTask": 60,
+        "longTasks": 4,
+        "maxGap": 0
+      }
+    ],
+    "medianMainMs": 33,
+    "medianMaxGapMs": 0,
+    "medianMaxLongTaskMs": 57
+  }
+}

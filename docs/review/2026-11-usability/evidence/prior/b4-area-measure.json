@@ -1,0 +1,2135 @@
+{
+ "desktop": {
+  "/chat": {
+   "textSizeShareByChars": {
+    "12": 46,
+    "13": 49.5,
+    "14": 1.5,
+    "16": 2.9
+   },
+   "headings": [
+    {
+     "tag": "H2",
+     "size": 13,
+     "text": "Conversations"
+    },
+    {
+     "tag": "H2",
+     "size": 13,
+     "text": "Messaging"
+    },
+    {
+     "tag": "H1",
+     "size": 14,
+     "text": "Runtime evidence follow-up"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Messages"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "You said"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Assistant reply"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Background run"
+    }
+   ],
+   "tabLists": [],
+   "h1Y": 6,
+   "interactiveCount": 52,
+   "under44": 37,
+   "under24": 5,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Personal / Mission Control Nex"
+    },
+    {
+     "tag": "button",
+     "w": 32,
+     "h": 32,
+     "label": "Collapse sidebar"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Search commands and records"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Chat"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Inbox, 2 decisions"
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  },
+  "/inbox": {
+   "textSizeShareByChars": {
+    "12": 41.9,
+    "13": 45,
+    "14": 4.4,
+    "16": 8.5,
+    "24": 0.3
+   },
+   "headings": [
+    {
+     "tag": "H1",
+     "size": 24,
+     "text": "Inbox"
+    },
+    {
+     "tag": "H2",
+     "size": 16,
+     "text": "Needs decision"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Review shell exec"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Pick the next verification step"
+    },
+    {
+     "tag": "H2",
+     "size": 16,
+     "text": "Updates"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Verification prompt-pack quality evidenc"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Mission Control Next proof artifact"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Reject everything pending"
+    }
+   ],
+   "tabLists": [],
+   "h1Y": 24,
+   "interactiveCount": 30,
+   "under44": 30,
+   "under24": 2,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Personal / Mission Control Nex"
+    },
+    {
+     "tag": "button",
+     "w": 32,
+     "h": 32,
+     "label": "Collapse sidebar"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Search commands and records"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Chat"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Inbox, 2 decisions"
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  },
+  "/work": {
+   "textSizeShareByChars": {
+    "12": 52,
+    "13": 47.7,
+    "24": 0.3
+   },
+   "headings": [
+    {
+     "tag": "H1",
+     "size": 24,
+     "text": "Work"
+    },
+    {
+     "tag": "H2",
+     "size": 13,
+     "text": "Waiting on your decision"
+    },
+    {
+     "tag": "H2",
+     "size": 13,
+     "text": "Active"
+    },
+    {
+     "tag": "H2",
+     "size": 13,
+     "text": "Needs attention"
+    },
+    {
+     "tag": "H2",
+     "size": 13,
+     "text": "Failed runs"
+    },
+    {
+     "tag": "H2",
+     "size": 13,
+     "text": "Done"
+    }
+   ],
+   "tabLists": [],
+   "h1Y": 24,
+   "interactiveCount": 33,
+   "under44": 26,
+   "under24": 2,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Personal / Mission Control Nex"
+    },
+    {
+     "tag": "button",
+     "w": 32,
+     "h": 32,
+     "label": "Collapse sidebar"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Search commands and records"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Chat"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Inbox, 2 decisions"
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  },
+  "/capabilities": {
+   "textSizeShareByChars": {
+    "12": 12.7,
+    "13": 77.2,
+    "14": 9,
+    "20": 0.9,
+    "24": 0.1
+   },
+   "headings": [
+    {
+     "tag": "H1",
+     "size": 24,
+     "text": "Capabilities"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Connected 1"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Firecrawl"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "On this device 4"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Context7"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "GPT Researcher"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "OpenSpec"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Playwright Browser"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Available 78"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Airtable"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Algolia"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "AllTrails"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Amplitude"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Asana"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Atlassian (Jira and Confluence)"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Attio"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "AWS Knowledge"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Better Stack"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Brave Search"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Buildkite"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Calendly"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Canva"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "CircleCI"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "ClickUp"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Close CRM"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Cloudflare"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Cloudinary"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Comfy Cloud"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Craft"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Datadog"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "DeepWiki"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Discord"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Dropbox"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Figma"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Fireflies"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Gamma"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "GitLab"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Globalping"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Gmail and Google Calendar"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Google Chat"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Grafana Cloud"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Hugging Face"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "IMAP/SMTP Mail"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Indeed"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Intercom"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Kiwi.com"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Klaviyo"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "LINE"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Linear"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Mattermost"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Microsoft Learn"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Microsoft Teams"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Miro"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Mixpanel"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "monday.com"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "MotherDuck"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Neon"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Netlify"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Nextcloud Talk"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Notion"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Parallel"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "PayPal"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Plaid"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Postman"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Prisma Postgres"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Railway"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "RentAHuman"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Robinhood"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Semgrep"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Sentry"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Slack"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Square"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Strava"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Stripe"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Supabase"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Telegram"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Todoist"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "trivago"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Twelve Data"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Twilio Docs"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Vercel"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Webflow"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Webhooks"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "WhatsApp"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Wolfram"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "WordPress.com"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Zalo OA"
+    }
+   ],
+   "tabLists": [],
+   "h1Y": 24,
+   "interactiveCount": 107,
+   "under44": 106,
+   "under24": 2,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Personal / Mission Control Nex"
+    },
+    {
+     "tag": "button",
+     "w": 32,
+     "h": 32,
+     "label": "Collapse sidebar"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Search commands and records"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Chat"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Inbox, 2 decisions"
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  },
+  "/library": {
+   "textSizeShareByChars": {
+    "12": 38.6,
+    "13": 55.6,
+    "14": 4.3,
+    "24": 1.5
+   },
+   "headings": [
+    {
+     "tag": "H1",
+     "size": 24,
+     "text": "Candidates and mesh"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Usability browser candidate"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Mesh capability publications"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Invocation outcomes (0)"
+    }
+   ],
+   "tabLists": [
+    {
+     "y": 369,
+     "tabs": [
+      "Overview *",
+      "Policy",
+      "Usage",
+      "Source",
+      "Settings"
+     ]
+    }
+   ],
+   "h1Y": 24,
+   "interactiveCount": 34,
+   "under44": 29,
+   "under24": 2,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Personal / Mission Control Nex"
+    },
+    {
+     "tag": "button",
+     "w": 32,
+     "h": 32,
+     "label": "Collapse sidebar"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Search commands and records"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Chat"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Inbox, 2 decisions"
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  },
+  "/system": {
+   "textSizeShareByChars": {
+    "12": 20.2,
+    "13": 79,
+    "14": 0.4,
+    "24": 0.4
+   },
+   "headings": [
+    {
+     "tag": "H1",
+     "size": 24,
+     "text": "System"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Checks"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Runtime service"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Backups"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Managed local models"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Channels"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Integrations"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Desktop updates"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Remote workers"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "GoatCitadel server"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Database"
+    }
+   ],
+   "tabLists": [],
+   "h1Y": 24,
+   "interactiveCount": 33,
+   "under44": 33,
+   "under24": 1,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Personal / Mission Control Nex"
+    },
+    {
+     "tag": "button",
+     "w": 32,
+     "h": 32,
+     "label": "Collapse sidebar"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Search commands and records"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Chat"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Inbox, 2 decisions"
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  },
+  "/settings": {
+   "textSizeShareByChars": {
+    "12": 24.1,
+    "13": 67.9,
+    "14": 4.6,
+    "16": 2.9,
+    "24": 0.4
+   },
+   "headings": [
+    {
+     "tag": "H1",
+     "size": 24,
+     "text": "General"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "General"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Attention"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Notification routing"
+    },
+    {
+     "tag": "H4",
+     "size": 14,
+     "text": "Destinations"
+    },
+    {
+     "tag": "H4",
+     "size": 14,
+     "text": "Rules"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Application updates"
+    }
+   ],
+   "tabLists": [
+    {
+     "y": 159,
+     "tabs": [
+      "Appearance *",
+      "Personalities · Expe"
+     ]
+    }
+   ],
+   "h1Y": 24,
+   "interactiveCount": 36,
+   "under44": 31,
+   "under24": 6,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Personal / Mission Control Nex"
+    },
+    {
+     "tag": "button",
+     "w": 32,
+     "h": 32,
+     "label": "Collapse sidebar"
+    },
+    {
+     "tag": "button",
+     "w": 231,
+     "h": 32,
+     "label": "Search commands and records"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Chat"
+    },
+    {
+     "tag": "a",
+     "w": 231,
+     "h": 32,
+     "label": "Inbox, 2 decisions"
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  }
+ },
+ "phone": {
+  "/chat": {
+   "textSizeShareByChars": {
+    "12": 32.8,
+    "13": 54.1,
+    "14": 4.5,
+    "16": 8.6
+   },
+   "headings": [
+    {
+     "tag": "H1",
+     "size": 14,
+     "text": "Runtime evidence follow-up"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Messages"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "You said"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Assistant reply"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Background run"
+    }
+   ],
+   "tabLists": [
+    {
+     "y": 766,
+     "tabs": [
+      "Chat *",
+      "2Inbox",
+      "No queued or running",
+      "Library",
+      "More"
+     ]
+    }
+   ],
+   "h1Y": 16,
+   "interactiveCount": 25,
+   "under44": 2,
+   "under24": 2,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    },
+    {
+     "tag": "input",
+     "w": 1,
+     "h": 1,
+     "label": "Choose files to attach"
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  },
+  "/inbox": {
+   "textSizeShareByChars": {
+    "12": 43.7,
+    "13": 42.2,
+    "14": 4.7,
+    "16": 9.1,
+    "24": 0.3
+   },
+   "headings": [
+    {
+     "tag": "H1",
+     "size": 24,
+     "text": "Inbox"
+    },
+    {
+     "tag": "H2",
+     "size": 16,
+     "text": "Needs decision"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Review shell exec"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Pick the next verification step"
+    },
+    {
+     "tag": "H2",
+     "size": 16,
+     "text": "Updates"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Verification prompt-pack quality evidenc"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Mission Control Next proof artifact"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Reject everything pending"
+    }
+   ],
+   "tabLists": [
+    {
+     "y": 766,
+     "tabs": [
+      "Chat",
+      "2Inbox *",
+      "No queued or running",
+      "Library",
+      "More"
+     ]
+    }
+   ],
+   "h1Y": 16,
+   "interactiveCount": 24,
+   "under44": 5,
+   "under24": 1,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    },
+    {
+     "tag": "a",
+     "w": 88,
+     "h": 36,
+     "label": "Open approval"
+    },
+    {
+     "tag": "a",
+     "w": 84,
+     "h": 36,
+     "label": "Open in Inbox"
+    },
+    {
+     "tag": "a",
+     "w": 82,
+     "h": 36,
+     "label": "Open in Work"
+    },
+    {
+     "tag": "a",
+     "w": 82,
+     "h": 36,
+     "label": "Open in Work"
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  },
+  "/work": {
+   "textSizeShareByChars": {
+    "12": 47.3,
+    "13": 52.3,
+    "24": 0.5
+   },
+   "headings": [
+    {
+     "tag": "H1",
+     "size": 24,
+     "text": "Work"
+    },
+    {
+     "tag": "H2",
+     "size": 13,
+     "text": "Waiting on your decision"
+    },
+    {
+     "tag": "H2",
+     "size": 13,
+     "text": "Needs attention"
+    }
+   ],
+   "tabLists": [
+    {
+     "y": 766,
+     "tabs": [
+      "Chat",
+      "2Inbox",
+      "No queued or running *",
+      "Library",
+      "More"
+     ]
+    }
+   ],
+   "h1Y": 16,
+   "interactiveCount": 26,
+   "under44": 4,
+   "under24": 1,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    },
+    {
+     "tag": "a",
+     "w": 154,
+     "h": 32,
+     "label": "Review current decision: Revie"
+    },
+    {
+     "tag": "a",
+     "w": 67,
+     "h": 32,
+     "label": "Open run: Review shell exec"
+    },
+    {
+     "tag": "a",
+     "w": 335,
+     "h": 32,
+     "label": "See History"
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  },
+  "/capabilities": {
+   "textSizeShareByChars": {
+    "12": 12.7,
+    "13": 77.1,
+    "14": 9.1,
+    "20": 1,
+    "24": 0.1
+   },
+   "headings": [
+    {
+     "tag": "H1",
+     "size": 24,
+     "text": "Capabilities"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Connected 1"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Firecrawl"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "On this device 4"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Context7"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "GPT Researcher"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "OpenSpec"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Playwright Browser"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Available 78"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Airtable"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Algolia"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "AllTrails"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Amplitude"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Asana"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Atlassian (Jira and Confluence)"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Attio"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "AWS Knowledge"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Better Stack"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Brave Search"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Buildkite"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Calendly"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Canva"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "CircleCI"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "ClickUp"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Close CRM"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Cloudflare"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Cloudinary"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Comfy Cloud"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Craft"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Datadog"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "DeepWiki"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Discord"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Dropbox"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Figma"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Fireflies"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Gamma"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "GitLab"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Globalping"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Gmail and Google Calendar"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Google Chat"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Grafana Cloud"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Hugging Face"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "IMAP/SMTP Mail"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Indeed"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Intercom"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Kiwi.com"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Klaviyo"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "LINE"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Linear"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Mattermost"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Microsoft Learn"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Microsoft Teams"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Miro"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Mixpanel"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "monday.com"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "MotherDuck"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Neon"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Netlify"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Nextcloud Talk"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Notion"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Parallel"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "PayPal"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Plaid"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Postman"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Prisma Postgres"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Railway"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "RentAHuman"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Robinhood"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Semgrep"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Sentry"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Slack"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Square"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Strava"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Stripe"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Supabase"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Telegram"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Todoist"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "trivago"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Twelve Data"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Twilio Docs"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Vercel"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Webflow"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Webhooks"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "WhatsApp"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Wolfram"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "WordPress.com"
+    },
+    {
+     "tag": "H3",
+     "size": 14,
+     "text": "Zalo OA"
+    }
+   ],
+   "tabLists": [
+    {
+     "y": 766,
+     "tabs": [
+      "Chat",
+      "2Inbox",
+      "No queued or running",
+      "Library",
+      "More *"
+     ]
+    }
+   ],
+   "h1Y": 16,
+   "interactiveCount": 101,
+   "under44": 2,
+   "under24": 2,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    },
+    {
+     "tag": "a",
+     "w": 96,
+     "h": 17,
+     "label": "Advanced setup"
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  },
+  "/library": {
+   "textSizeShareByChars": {
+    "12": 48.4,
+    "13": 46,
+    "14": 3.4,
+    "24": 2.3
+   },
+   "headings": [
+    {
+     "tag": "H1",
+     "size": 24,
+     "text": "Candidates and mesh"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Mesh capability publications"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Invocation outcomes (0)"
+    }
+   ],
+   "tabLists": [
+    {
+     "y": 766,
+     "tabs": [
+      "Chat",
+      "2Inbox",
+      "No queued or running",
+      "Library *",
+      "More"
+     ]
+    }
+   ],
+   "h1Y": 16,
+   "interactiveCount": 15,
+   "under44": 1,
+   "under24": 1,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  },
+  "/system": {
+   "textSizeShareByChars": {
+    "12": 21.4,
+    "13": 77.7,
+    "14": 0.4,
+    "24": 0.4
+   },
+   "headings": [
+    {
+     "tag": "H1",
+     "size": 24,
+     "text": "System"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "Checks"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Runtime service"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Backups"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Managed local models"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Channels"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Integrations"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Desktop updates"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Remote workers"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "GoatCitadel server"
+    },
+    {
+     "tag": "H3",
+     "size": 13,
+     "text": "Database"
+    }
+   ],
+   "tabLists": [
+    {
+     "y": 766,
+     "tabs": [
+      "Chat",
+      "2Inbox",
+      "No queued or running",
+      "Library",
+      "More *"
+     ]
+    }
+   ],
+   "h1Y": 16,
+   "interactiveCount": 19,
+   "under44": 10,
+   "under24": 1,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    },
+    {
+     "tag": "a",
+     "w": 150,
+     "h": 32,
+     "label": "Review runtime service"
+    },
+    {
+     "tag": "a",
+     "w": 108,
+     "h": 32,
+     "label": "Review backups"
+    },
+    {
+     "tag": "a",
+     "w": 192,
+     "h": 32,
+     "label": "Review managed local models"
+    },
+    {
+     "tag": "a",
+     "w": 110,
+     "h": 32,
+     "label": "Review channels"
+    },
+    {
+     "tag": "a",
+     "w": 128,
+     "h": 32,
+     "label": "Review integrations"
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  },
+  "/settings": {
+   "textSizeShareByChars": {
+    "12": 25.4,
+    "13": 65.8,
+    "14": 5,
+    "16": 3.2,
+    "24": 0.5
+   },
+   "headings": [
+    {
+     "tag": "H1",
+     "size": 24,
+     "text": "General"
+    },
+    {
+     "tag": "H2",
+     "size": 14,
+     "text": "General"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Attention"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Notification routing"
+    },
+    {
+     "tag": "H4",
+     "size": 14,
+     "text": "Destinations"
+    },
+    {
+     "tag": "H4",
+     "size": 14,
+     "text": "Rules"
+    },
+    {
+     "tag": "H3",
+     "size": 16,
+     "text": "Application updates"
+    }
+   ],
+   "tabLists": [
+    {
+     "y": 266,
+     "tabs": [
+      "Appearance *",
+      "Personalities · Expe"
+     ]
+    },
+    {
+     "y": 766,
+     "tabs": [
+      "Chat",
+      "2Inbox",
+      "No queued or running",
+      "Library",
+      "More *"
+     ]
+    }
+   ],
+   "h1Y": 16,
+   "interactiveCount": 25,
+   "under44": 5,
+   "under24": 5,
+   "under44Examples": [
+    {
+     "tag": "a",
+     "w": 1,
+     "h": 1,
+     "label": "Skip to main content"
+    },
+    {
+     "tag": "input",
+     "w": 16,
+     "h": 16,
+     "label": ""
+    },
+    {
+     "tag": "input",
+     "w": 16,
+     "h": 16,
+     "label": ""
+    },
+    {
+     "tag": "input",
+     "w": 16,
+     "h": 16,
+     "label": ""
+    },
+    {
+     "tag": "input",
+     "w": 16,
+     "h": 16,
+     "label": ""
+    }
+   ],
+   "minH": 1,
+   "rawUuid": 0,
+   "rawPrefixedIds": [],
+   "rawIso": 0,
+   "rawJsonLines": 0,
+   "rawEnums": [],
+   "colorScheme": "dark",
+   "roleAlert": 0
+  }
+ }
+}

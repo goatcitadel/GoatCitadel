@@ -1,0 +1,236 @@
+[
+ {
+  "url": "/settings/general#appearance",
+  "exists": false,
+  "visible": null,
+  "inView": null,
+  "selectedTab": [
+   "Appearance"
+  ],
+  "activeAnchor": "#appearance"
+ },
+ {
+  "url": "/settings/general#work-personality",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Personalities · Experimental"
+  ],
+  "activeAnchor": "#work-personality"
+ },
+ {
+  "url": "/settings/general#updates",
+  "exists": false,
+  "visible": null,
+  "inView": null,
+  "selectedTab": [
+   "Appearance"
+  ],
+  "activeAnchor": "#updates"
+ },
+ {
+  "url": "/settings/models#providers",
+  "exists": false,
+  "visible": null,
+  "inView": null,
+  "selectedTab": [
+   "Providers & models"
+  ],
+  "activeAnchor": "#providers"
+ },
+ {
+  "url": "/settings/models#local-ai",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Local AI"
+  ],
+  "activeAnchor": "#local-ai"
+ },
+ {
+  "url": "/settings/safety#approval-mode",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Tools"
+  ],
+  "activeAnchor": "#approval-mode"
+ },
+ {
+  "url": "/settings/safety#budget-mode",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Budgets"
+  ],
+  "activeAnchor": "#budget-mode"
+ },
+ {
+  "url": "/settings/safety#trust-policy",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Trust & policy"
+  ],
+  "activeAnchor": "#trust-policy"
+ },
+ {
+  "url": "/settings/safety#permission-profile",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Permissions"
+  ],
+  "activeAnchor": "#permission-profile"
+ },
+ {
+  "url": "/settings/safety#hooks",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Hooks"
+  ],
+  "activeAnchor": "#hooks"
+ },
+ {
+  "url": "/settings/citadel#workspace-directory",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Workspaces"
+  ],
+  "activeAnchor": "#workspace-directory"
+ },
+ {
+  "url": "/settings/citadel#citadel-blueprint",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Export/import · Blueprint"
+  ],
+  "activeAnchor": "#citadel-blueprint"
+ },
+ {
+  "url": "/settings/citadel#citadel-overview",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Citadel overview"
+  ],
+  "activeAnchor": "#citadel-overview"
+ },
+ {
+  "url": "/settings/citadel#citadel-mason",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Guided setup · Mason"
+  ],
+  "activeAnchor": "#citadel-mason"
+ },
+ {
+  "url": "/settings/citadel#citadel-wards",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Rules · Wards"
+  ],
+  "activeAnchor": "#citadel-wards"
+ },
+ {
+  "url": "/settings/citadel#citadel-council",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Agents · Council"
+  ],
+  "activeAnchor": "#citadel-council"
+ },
+ {
+  "url": "/settings/citadel#citadel-vault",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Secrets · Vault"
+  ],
+  "activeAnchor": "#citadel-vault"
+ },
+ {
+  "url": "/settings/access#device-access",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [],
+  "activeAnchor": "#device-access"
+ },
+ {
+  "url": "/settings/advanced#managed-runtime",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [],
+  "activeAnchor": "#managed-runtime"
+ },
+ {
+  "url": "/capabilities/connectors/advanced#mcp-servers",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "MCP servers"
+  ],
+  "activeAnchor": "#mcp-servers"
+ },
+ {
+  "url": "/capabilities/connectors/advanced#integration-connections",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Integrations"
+  ],
+  "activeAnchor": "#integration-connections"
+ },
+ {
+  "url": "/capabilities/connectors/advanced#web-search",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [
+   "Web & Search"
+  ],
+  "activeAnchor": "#web-search"
+ },
+ {
+  "url": "/system/runtime#ops-runtime-backups",
+  "exists": true,
+  "visible": true,
+  "inView": true,
+  "selectedTab": [],
+  "activeAnchor": "#ops-runtime-backups"
+ },
+ {
+  "url": "/settings/general?shell=cockpit#updates",
+  "exists": false,
+  "visible": null,
+  "inView": null,
+  "selectedTab": [
+   "Appearance"
+  ],
+  "activeAnchor": "#updates"
+ }
+]

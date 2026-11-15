@@ -1,0 +1,71 @@
+{
+  "method": "git grep -n -E 'shell=classic|ClassicOwnerLink|EmbeddedClassicPage|buildClassicOwnerUrl|useCockpitShellSwitch' over apps/mission-control-next/src, packages/mission-control-shared/src, apps/gateway/src (tests excluded), then each hit opened.",
+  "gatewayEmitters": "No Gateway service emits a shell=classic href. apps/gateway/src/services/inbox-projection-service.ts:627 only names Classic in a comment; its href is the native /work/kanban?taskId=...",
+  "rows": [
+    {
+      "where": "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:280",
+      "what": "Gear menu item 'Switch to classic Mission Control'",
+      "renders": "Cockpit sidebar, gear menu 'Settings and account'",
+      "reachedBy": "Operator choice only; no Cockpit task needs it",
+      "behaviour": "leaves to Classic and saves Classic as the default shell (useCockpitShellSwitch().request)",
+      "verdict": "explicit rollback, not a dead end"
+    },
+    {
+      "where": "apps/mission-control-next/src/cockpit/app/MobileTabBar.tsx:242",
+      "what": "More sheet item 'Switch to classic Mission Control'",
+      "renders": "Phone tab bar, More sheet",
+      "reachedBy": "Operator choice only",
+      "behaviour": "leaves to Classic, saves Classic as default",
+      "verdict": "explicit rollback"
+    },
+    {
+      "where": "apps/mission-control-next/src/cockpit/app/CommandPaletteView.tsx:141",
+      "what": "Palette item 'Switch to classic Mission Control' (typed 'classic' or '›')",
+      "renders": "Command palette, Ctrl+K",
+      "reachedBy": "Operator choice only",
+      "behaviour": "leaves to Classic, saves Classic as default",
+      "verdict": "explicit rollback"
+    },
+    {
+      "where": "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:223 (ClassicOwnerLink, ui/ClassicOwnerLink.tsx)",
+      "what": "Page 'This view is available in Classic' with a link 'Open the classic view'",
+      "renders": "Only when resolveCockpitCompatibility() returns kind 'classic', which cockpit-compatibility.ts:190 does for a URL that carries ?shell=classic and for nothing else (line 374 comment: every rail destination has a native owner)",
+      "reachedBy": "No Cockpit link or palette entry builds such a URL; reachable only by typing it or from an old bookmark",
+      "behaviour": "leaves to Classic for this visit (buildClassicOwnerUrl sets shellScope=visit)",
+      "verdict": "no Cockpit journey reaches it; not a finding"
+    },
+    {
+      "where": "apps/mission-control-next/src/cockpit/app/use-cockpit-shell-switch.tsx:13-18 (visit)",
+      "what": "visit(): 'a task detour' to Classic that leaves the saved default Cockpit",
+      "renders": "nowhere",
+      "reachedBy": "git grep finds no caller of .visit( in apps/mission-control-next/src or packages/mission-control-shared/src",
+      "behaviour": "dead code",
+      "verdict": "engineering note"
+    },
+    {
+      "where": "apps/mission-control-next/src/cockpit/areas/work/WorkKanban.tsx:66-75",
+      "what": "Work > More Work views > Older Kanban view (/work/kanban, release scope 'experimental') wraps the shared KanbanRoutePage and RunDetailRoutePage in EmbeddedClassicPage",
+      "renders": "Inside the Cockpit at /work/kanban and /work/kanban?runId=...; also reached by the Inbox 'task deliverable' update href /work/kanban?taskId=... (inbox-projection-service.ts:627)",
+      "reachedBy": "More Work views menu; Inbox updates; palette does not list it",
+      "behaviour": "embeds a Classic page inside the Cockpit; page labels itself 'Older Kanban view' with an Experimental badge",
+      "verdict": "embedded and labelled; works (see GL-1 crawl); no finding"
+    },
+    {
+      "where": "apps/mission-control-next/src/cockpit/areas/library/LibraryPromptPacks.tsx:85-106",
+      "what": "Library > Prompt packs wraps the shared prompt-pack workbench in EmbeddedClassicPage",
+      "renders": "Inside the Cockpit at /library/prompt-packs (tab row and palette entry)",
+      "reachedBy": "Library tab row, palette",
+      "behaviour": "embeds a Classic page inside the Cockpit",
+      "verdict": "embedded and working (see GL-1 and GL-7 screenshots); no finding"
+    },
+    {
+      "where": "apps/mission-control-next/src/features/native-routes/settings/sections/GeneralSection.tsx:95 and WebSearchSection.tsx:20",
+      "what": "'Switch to cockpit' buttons (shellSwitch.request('cockpit'))",
+      "renders": "Classic shell Settings only",
+      "reachedBy": "not reachable from the Cockpit",
+      "behaviour": "leaves Classic for Cockpit",
+      "verdict": "out of scope"
+    }
+  ],
+  "cockpitTasksThatEndInClassic": "none found: no Cockpit page or palette entry links to a Classic-only page; every compatibility redirect in GL-1 lands on a native Cockpit view or on Page not found."
+}

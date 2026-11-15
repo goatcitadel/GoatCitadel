@@ -1,0 +1,28 @@
+{
+  "res": {
+    "before": "6 decisions waiting, 2 updates. / Needs decision / 6",
+    "dialogText": "Confirm danger-level action\n\nReview the exact action before approving once.\n\nAction: Shell exec\n\nScope: Mission Control Next Verification Workspace · one linked conversation. This decision authorizes this request once.\n\nExpiry: No expiry set\n\nCommand: pnpm test\n\nTitle: Verification chat approval\n\nConsequence: After approval, the exact reviewed action may run; denying withholds it. The decision alone does not show the work resumed or completed.\n\nAction: Shell exec\n\nRisk: Danger\n\nCommands\nCommand: pnpm test\nOther action details\nTitle: Verification chat approval\nApprove once\nCancel",
+    "approveDanger": {
+      "clicks": 3,
+      "msToFirstFeedback": 85
+    },
+    "afterApproveText": "Inbox\n\nDecisions and work that need your attention in this workspace.\n\nRefresh\n\nApproved Review shell exec. Approval effects settled. Linked work has its own execution outcome. \n\n5 decisions waiting, 2 updates.\nWhat this Inbox covers\nKind\nAll kinds\nApproval\nQuestion\nTask deliverable\nRisk\nAny risk\nNuclear\nDanger\nCaution\nSafe\n\nSorted by risk, then expiry, then age.\n\nNeeds decision\n5\n\nApproval · 44 minutes ago\n\nReview shell exec\n\nReview the requested action and its policy reason. Target details are available in the approval record.\n\nDanger\n\nNo expiry time was given.\n\nReview\nOpen approval\nShow source context\n\nApproval · just now · Selected\n\nReview shell exec\n\nReview the requested action and its policy reason. Target details are available in the approval record.\n\nDanger\n\nNo expiry time was given.\n\nReview\nOpen approval\nShow source context\n\nApproval · just now\n\nRun code\n\nReview the requested action and its policy reason. Target details are available in the approval record.\n\nCaution\n\nNo expiry time was given.\n\nDetails\nApprove once\nDeny\nOpen approval\nShow source context\n\nApproval · 7 minutes ago\n\nSearch code files\n\nPath: <sandbox runtime root>/workspace/review-task-8/demo\n\nSafe\n\nExpires in 8 minutes\n\nDetails\nApprove once\nDeny\nOpen approval\nShow source context\n\nQuestion · 44 minutes ago\n\nPick the next verification step\n\nWhich path should the verification run take from here?\n\nNo expiry time was given.\n\nDetails\nOpen in Inbox\nShow source context\nUpdates\nAt least 2\n\n2 unread · 0 read from shown updates.\n\nRead status is saved in this browser for this workspace.\n\nMark all shown updates read\n\nTask deliverable · 44 minutes ago\n\nVerification prompt-pack quality evidence\n\nA result was added to ‘Capture prom",
+    "afterApprovePanel": "Personal / Mission Control Next Verification Workspace\nSearch\nCtrl K\nChat\nInbox\n5\nWork\nNo queued or running interactive runs\nCapabilities\nLibrary\nSystem\n1 check needs review\nUpdates connected",
+    "afterHead": "5 decisions waiting, 2 updates. / Needs decision / 5",
+    "afterApproveFocus": "BUTTON:Review",
+    "url1": "http://127.0.0.1:55151/inbox?shell=cockpit",
+    "dangerRowsAfter": 2,
+    "denyStepPanel": "Personal / Mission Control Next Verification Workspace\nSearch\nCtrl K\nChat\nInbox\n4\nWork\nNo queued or running interactive runs\nCapabilities\nLibrary\nSystem\n1 check needs review\nUpdates connected",
+    "denyStepTime": 945
+  },
+  "log": [
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/chat/sessions/sess_52f95d92d4a02884bcac50e1/status net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/chat/sessions/sess_29f54de66b2e4b739e2bcaec/status net::ERR_ABORTED"
+    }
+  ]
+}

@@ -1,0 +1,1040 @@
+{
+  "U-CH-001": {
+    "rootCause": "RC-31"
+  },
+  "U-CH-002": {
+    "rootCause": "RC-31"
+  },
+  "U-CH-003": {
+    "rootCause": "RC-84"
+  },
+  "U-CH-004": {
+    "rootCause": "RC-28"
+  },
+  "U-CH-005": {
+    "rootCause": "RC-18"
+  },
+  "U-CH-006": {
+    "rootCause": "RC-85"
+  },
+  "U-CH-007": {
+    "movedTo": "engineering-note",
+    "reason": "Render count only (the inspector registers twice); no operator-visible symptom was measured.",
+    "why": "No operator-visible symptom (Task 15 judgment, same rule as ledger b5)."
+  },
+  "U-CH-008": {
+    "rootCause": "RC-86"
+  },
+  "U-CH-009": {
+    "rootCause": "RC-87"
+  },
+  "U-CH-010": {
+    "rootCause": "RC-83"
+  },
+  "U-CH-011": {
+    "rootCause": "RC-83"
+  },
+  "U-CH-012": {
+    "rootCause": "RC-32"
+  },
+  "U-CH-013": {
+    "rootCause": "RC-51"
+  },
+  "U-CH-014": {
+    "journeys": [
+      "CH-9 Ask for something that needs a tool: the approval appears in place, one click approves, the turn continues with no \"Continue\" step and no trip to the Inbox"
+    ],
+    "rootCause": "RC-76"
+  },
+  "U-CH-015": {
+    "rootCause": "RC-88"
+  },
+  "U-CH-016": {
+    "rootCause": "RC-88"
+  },
+  "U-CH-017": {
+    "rootCause": "RC-21"
+  },
+  "U-CH-018": {
+    "confidence": "confirmed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-5-approval-mode-unavailable.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-5-approval-mode-403.json",
+      "docs/review/2026-11-usability/evidence/gl/tk-ch-1-project.json",
+      "docs/review/2026-11-usability/evidence/gl/tk-ch-1-project-composer.png",
+      "docs/review/2026-11-usability/evidence/st/st-5-access.png",
+      "apps/gateway/src/routes/chat.sessions.ts:29",
+      "apps/gateway/src/routes/session-control-request-context.ts:154",
+      "apps/gateway/src/services/session-control-service.ts:155",
+      "apps/gateway/src/plugins/auth.ts:180",
+      "apps/gateway/src/dev-supervisor.ts:745",
+      "docker-compose.yaml:74",
+      "apps/mission-control-desktop/src-tauri/src/main.rs:710",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatManagedFiles.tsx:109"
+    ],
+    "journeys": [
+      "CH-2 Follow-up, edit an earlier message, retry an answer, stop a streaming answer",
+      "CH-6 Use the composer's plus menu: web on and off, Review answer, a prompt pack, a variable",
+      "CH-13 Code Mode run from Chat: approval, run, artifact shown, artifact opened",
+      "CH-16 Publish a managed project file with the overwrite review",
+      "PJ-1 Create a project, add files, start a conversation in it, switch projects",
+      "FR-2 Leave onboarding halfway and come back; skip it; try the demo"
+    ],
+    "actual": "GET /api/v1/chat/sessions/<id>/approval-mode answers 403 'Chat approval mode requires a local operator connection.' even from curl straight to 127.0.0.1 (no proxy, no cross-origin). In auth mode none the actor source is 'none' (plugins/auth.ts:180-182 returns there, before the loopback-bypass check is reached), and directLocal is never granted for that source, so the route refuses every call. This looks like a deliberate security rule (mode none cannot prove the caller is local); no document states it, and whether none-mode installs should be able to use Auto mode is a product decision, not decided here. What is defective regardless is the presentation: the row says 'unavailable' with a Retry that cannot succeed, gives no reason and no pointer to Settings › Access, and the browser console logs a 403 per load. For an operator whose goal is Auto mode or Managed files there is no path on screen. Who sees it: every mode-none install (packaged desktop, goatcitadel up, pnpm dev; the dev supervisor defaults to mode none, so its loopback bypass is not reached), in any conversation that belongs to a project. Docker (docker-compose.yaml:74-76 sets token mode with loopback bypass false) and proxied or remote setups likely see it as well because the request does not arrive as a direct loopback connection (unverified, not run). Token or basic mode with a direct loopback client does not get the 403 (code only, not run: the auth mode may not be changed in this review). While the row is shown the composer loses only the 'Use Auto mode' / 'Managed files' controls; sending, attachments, model and web options still work (checked live). Confirmed by the token-mode comparison (Task 13b, tk-ch-1-project.json): a project conversation in token mode shows 'Standard approvals / Use Auto mode', Auto mode turns on with no dialog and Managed files opens; mode-none installs therefore lose both. Settings > Access in mode none does not mention it (st-5-access.png); it is the natural place for the pointer. Whether mode-none installs should get Auto mode and Managed files is listed as a design decision.",
+    "rootCause": "RC-08"
+  },
+  "U-CH-020": {
+    "journeys": [
+      "CH-12 Deep research with documents; a document that is truncated says so",
+      "GL-T Sign-in in token mode"
+    ],
+    "rootCause": "RC-10"
+  },
+  "U-CH-021": {
+    "rootCause": "RC-33"
+  },
+  "U-CH-022": {
+    "rootCause": "RC-51"
+  },
+  "U-CH-023": {
+    "rootCause": "RC-59"
+  },
+  "U-CH-024": {
+    "rootCause": "RC-78"
+  },
+  "U-CH-025": {
+    "rootCause": "RC-34"
+  },
+  "U-CH-026": {
+    "rootCause": "RC-71"
+  },
+  "U-CH-027": {
+    "rootCause": "RC-71"
+  },
+  "U-CH-028": {
+    "journeys": [
+      "CH-11 A planning or research request: steps, progress, delegation and the final synthesis are readable; a failed step says what failed and what to do",
+      "PJ-1 Create a project, add files, start a conversation in it, switch projects"
+    ],
+    "rootCause": "RC-31"
+  },
+  "U-CH-031": {
+    "rootCause": "RC-38"
+  },
+  "U-CH-032": {
+    "journeys": [
+      "MS-4 Real-model pass: CH-1, CH-2, CH-9, CH-11 and CH-13 with the Claude CLI subscription"
+    ],
+    "rootCause": "RC-16"
+  },
+  "U-CH-033": {
+    "journeys": [
+      "MS-4 Real-model pass: CH-1, CH-2, CH-9, CH-11 and CH-13 with the Claude CLI subscription"
+    ],
+    "rootCause": "RC-16"
+  },
+  "U-CH-034": {
+    "rootCause": "RC-78"
+  },
+  "U-CH-035": {
+    "rootCause": "RC-41"
+  },
+  "U-CH-036": {
+    "rootCause": "RC-91"
+  },
+  "U-CH-038": {
+    "rootCause": "RC-32"
+  },
+  "U-CH-040": {
+    "relatedIds": [
+      "U-CH-018"
+    ],
+    "rootCause": "RC-10"
+  },
+  "U-CH-041": {
+    "rootCause": "RC-78"
+  },
+  "U-CH-042": {
+    "rootCause": "RC-76"
+  },
+  "U-CH-043": {
+    "journeys": [
+      "PJ-1 Create a project, add files, start a conversation in it, switch projects",
+      "PJ-2 Open, edit and save a project file; leave with unsaved changes"
+    ],
+    "rootCause": "RC-51"
+  },
+  "U-CH-044": {
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-14-activation-counts.json",
+      "docs/review/2026-11-usability/evidence/ch/ch-14-1-answer.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-14-2-answer.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-14-3-answer.png",
+      "docs/review/2026-11-usability/evidence/cp/cp-1-panel.png",
+      "docs/review/2026-11-usability/evidence/cp/cp-1-paused.png",
+      "apps/gateway/src/services/callable-skill-activation.ts:157",
+      "apps/gateway/src/services/chat-skill-selection-runtime.ts:74",
+      "apps/gateway/src/services/chat-feature-admission-service.ts:171",
+      "apps/gateway/src/config.ts:1535",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/skills/SkillPanelSwitch.tsx:13",
+      "docs/1_0_CONTRACT.md:7"
+    ],
+    "actual": "All five turns answered like any other turn: no chip, no message. The skill does not load because the path that loads skill instructions runs only when feature flag chatSkillInstructionsV1Enabled is true (chat-feature-admission-service.ts:171; the `use <name>` reader callable-skill-activation.ts:157 is reached only through that branch). The flag defaults to false (config.ts:1535, feature-flags.ts:57 and :154) and a read-only GET of the sandbox's /api/v1/settings returned features.chatSkillInstructionsV1Enabled = false. No Cockpit screen sets it (git grep finds the flag only in config, Gateway and a shared API type, and the Settings route schema at dashboard.ts:266), and Capabilities > Skills still lists the skill as on and callable, so an operator following the `use <name>` guidance cannot make it work from any screen or learn why. The Gateway trace recorded activated_skill_count 0 for every turn, which is what flag-off produces (chat-turn-runtime-decisions.ts:48). No Chat UI code shows an activated or refused skill either, so even with the flag on there is no chip (git grep). A switched-off skill is dropped silently in the Gateway (chat-skill-selection-runtime.ts:74). Not run live: switching a skill off. Off by default by design (docs/1_0_CONTRACT.md:7), but Capabilities promises the Chat half: SkillPanelSwitch.tsx:13-14 says 'Paused skills are used when you name them in Chat', and the install approval reads 'Lets the AI use <name> in new chats.' (skill-install-view.ts:153). Reading skills from Chat ('skills.read') sits behind another default-off flag.",
+    "rootCause": "RC-01"
+  },
+  "U-CH-045": {
+    "relatedIds": [
+      "U-CH-032",
+      "U-CH-033"
+    ],
+    "rootCause": "RC-16"
+  },
+  "U-CH-046": {
+    "rootCause": "RC-14"
+  },
+  "U-CH-047": {
+    "rootCause": "RC-42"
+  },
+  "U-CH-048": {
+    "rootCause": "RC-31"
+  },
+  "U-CH-049": {
+    "rootCause": "RC-43"
+  },
+  "U-CP-001": {
+    "owner": "apps/gateway/src/services/capability-plugin-inspection-service.ts",
+    "rootCause": "RC-45"
+  },
+  "U-CP-002": {
+    "rootCause": "RC-45"
+  },
+  "U-CP-003": {
+    "actual": "The page shows 'Settings destination unavailable: This capability is hidden from the current release', so an operator who sees a skill left out has no way to bring it back from the Cockpit. The capability-scope pages answer the same when reached as /settings/citadel-capabilities and /settings/workspace-capabilities (Task 13a).",
+    "rootCause": "RC-21"
+  },
+  "U-CP-004": {
+    "actual": "The check of the second install shows 'This skill was removed with an earlier install. It can't come back until skills can be removed.' under the skill and 'So it can't be installed.' under the plugin, with no Install button, although the prompt pack passed. The confirmation promises a reinstall, and the approval dialog that opens right after it warns that one is impossible ('A skill it added can't be installed again until skills can be removed', cp-3-uninstall-dialog-1.png), after the operator has already pressed Uninstall. No screen removes a skill, so there is no way out from the Cockpit. Scope: only a plugin that added a skill. Both approval dialogs carry the warning (plugin-uninstall-change-plan-adapter.ts:186); the confirmation before them, which promises a reinstall, does not.",
+    "rootCause": "RC-04"
+  },
+  "U-CP-005": {
+    "rootCause": "RC-04"
+  },
+  "U-CP-006": {
+    "rootCause": "RC-04"
+  },
+  "U-CP-007": {
+    "rootCause": "RC-46"
+  },
+  "U-CP-011": {
+    "journeys": [
+      "MS-3 Integrations: Google sign-in and a vendor MCP connector up to their credential step"
+    ],
+    "rootCause": "RC-51"
+  },
+  "U-CP-012": {
+    "rootCause": "RC-13"
+  },
+  "U-CP-013": {
+    "journeys": [
+      "MS-3 Integrations: Google sign-in and a vendor MCP connector up to their credential step"
+    ],
+    "rootCause": "RC-17"
+  },
+  "U-CP-014": {
+    "actual": "The Gateway recorded the cause as the server's last error for any connect failure (reviewedConnectFailure stores the cause's own words, secret-redacted; here 'Reviewed MCP connection did not complete: OS keychain backend is unavailable on this host'). The row reads 'Not working - Stopped working; open it to see why - Try again'. The panel reads only 'Not working. Stopped working. Try again'. The reason is rendered only as 'Last error' inside a Technical details block, which exists only when the Settings > Appearance 'Technical details' checkbox is on; it is off by default (showTechnicalDetails false), and the extra sentence 'The last error is under Technical details.' that points at it is also printed only when the preference is on. With the default, the row's promise cannot be kept and no screen says a preference would show the reason. The cause in this run was the sandbox's missing keychain, but the gap holds for any connect failure. Not re-run with the preference on (Last error not seen live). Separately, after the 500 the inspection said 'MCP connection outcome is unconfirmed. Further changes to this server are locked for this app session; inspect its current owner state.' and Review connection and Review disconnect were greyed; seen once, after a 500 in the sandbox, cause not isolated. Correction: Technical details is on by default only in Advanced mode (ui-preferences.tsx:80 and :270-285 derive it from the mode); Simple mode, the default, hides the reason.",
+    "rootCause": "RC-06"
+  },
+  "U-CP-015": {
+    "actual": "Static MCP in Chat defaults to off (chatStaticMcpV1Enabled ?? false, config.ts:1552). The Cockpit does have one way to turn it on: installing a connector from a template shows a pre-ticked 'Also let Chat use connectors' checkbox whenever Chat is blocked for 'mcp_in_chat_off' (ConnectorInstallPanel.tsx:42, :80-89), and the install change plan patches the flag on (connector-install-change-plan-adapter.ts:102, :163-164). A server registered by hand never reaches that panel. Its screens read 'Callable: Static MCP in Chat is disabled for this runtime', 'Ask the runtime operator to enable static MCP in Chat through a reviewed settings change, with resumable runs enabled' and, under 'Runtime operator setting', 'The reviewed settings change uses features.chatStaticMcpV1Enabled. This view does not change runtime settings.' The 'See Chat access in Advanced setup' link lands on the MCP list, which has no such switch (connector-links.ts:11 sends it there and the comment above it says the cockpit has no switch of its own). A git grep of apps/mission-control-next/src and packages/mission-control-shared finds the flag only in a type and in this text. An operator who registers their own server and has never installed a template connector is the runtime operator, is told to ask one, and is not told that installing any template with the box ticked would turn it on for every server. On a desktop install the 'runtime operator' the screens tell the operator to ask is the operator.",
+    "rootCause": "RC-01"
+  },
+  "U-CP-016": {
+    "rootCause": "RC-68"
+  },
+  "U-CP-017": {
+    "relatedIds": [
+      "U-CP-013"
+    ],
+    "rootCause": "RC-17"
+  },
+  "U-CP-018": {
+    "relatedIds": [
+      "U-ST-027"
+    ],
+    "rootCause": "RC-01"
+  },
+  "U-CP-019": {
+    "relatedIds": [
+      "U-CP-011"
+    ],
+    "rootCause": "RC-51"
+  },
+  "U-CP-020": {
+    "rootCause": "RC-68"
+  },
+  "U-CP-021": {
+    "relatedIds": [
+      "U-CP-012",
+      "U-ST-020"
+    ],
+    "rootCause": "RC-13"
+  },
+  "U-FR-001": {
+    "trigger": "In Settings or Get started, save an approval rule and have the request fail after it was sent: a 5xx, a timeout, a 429 or a Gateway restart (use-approval-mode-control.ts:140-185). Then try to save again or press Refresh checks.",
+    "relatedIds": [
+      "U-ST-021"
+    ],
+    "actual": "The control shows 'Save outcome is uncertain. Further saves are locked in this app session; inspect Settings activity before continuing.' plus a link to the activity page. Refresh checks does not clear it and Finish waits on 'Resolve the pending or uncertain approval-rule save'. Only a browser reload clears it, and the screen does not say so. The message says 'locked in this app session' but never names a reload as the way out. Not provoked live (Task 12 saw no lock on a fresh install with no lost response).",
+    "rootCause": "RC-03"
+  },
+  "U-FR-002": {
+    "rootCause": "RC-21"
+  },
+  "U-FR-004": {
+    "severity": "friction",
+    "why": "Refuter B: the right sentence exists in code but is shown only by GuidedModelSteps, which first run hides; the operator can still finish with another provider or by starting the server, with no message saying so.",
+    "actual": "The button runs (one GET to the models list) and the screen does not change at all for 5 s: no message, no dialog, Connection stays 'Not verified', the model box keeps a suggested name. The Gateway answers 200 with source 'error_fallback' and warning 'fetch failed' (llama.cpp: 'llama.cpp runtime is disabled in assistant config'); the guided setup throws that warning away. LM Studio also has no 'start it first' help text (llama.cpp has four steps). An operator cannot tell a failed check from one that did not run. The right sentence exists (guided-model-setup-support.ts:179-208) but reaches only GuidedModelSteps, which first run hides (CockpitGuidedModelSetup.tsx:81, showSteps false on Get started).",
+    "rootCause": "RC-22"
+  },
+  "U-FR-005": {
+    "rootCause": "RC-09"
+  },
+  "U-FR-006": {
+    "relatedIds": [
+      "U-LB-008"
+    ],
+    "rootCause": "RC-27"
+  },
+  "U-FR-008": {
+    "rootCause": "RC-72"
+  },
+  "U-FR-009": {
+    "rootCause": "RC-72"
+  },
+  "U-FR-011": {
+    "rootCause": "RC-19"
+  },
+  "U-FR-012": {
+    "relatedIds": [
+      "U-ST-030"
+    ],
+    "rootCause": "RC-23"
+  },
+  "U-FR-013": {
+    "rootCause": "RC-26"
+  },
+  "U-FR-014": {
+    "rootCause": "RC-24"
+  },
+  "U-FR-015": {
+    "severity": "friction",
+    "title": "A bundled-database start that fails (port taken, a leftover container with another password) ends on 'Runtime is stopped or degraded' and a log path in the desktop window; the cause is only in the log",
+    "why": "Refuter A: the recovery screen offers 'Open Logs' (main.ts:160-215), which holds the cause, and the window changes to recovery after 180 s rather than showing an endless bar; the operator finishes with an extra step.",
+    "actual": "Code only, not reproduced (no database or installed app was started). The shipped config starts a bundled Postgres with startTimeoutMs 180000. When the bundled port 45432 is already held (another program, or a stale database container with a different password), the Gateway waits up to the full timeout and fails with 'Bundled Postgres did not become reachable within 180000ms. Last probe: password authentication failed ... (code=28P01)'; only a Postgres that answers with a different data directory gets its own message (bundled-postgres-runtime.ts:138). While it waits the desktop window shows 'Starting the local runtime...' with no elapsed time (main.ts:203); after 180 s it changes to the recovery screen: 'Runtime is stopped (or degraded, when any process is alive: bin/goatcitadel.mjs:913). Gateway and Mission Control did not both become ready.' (main.ts:173), 'Gateway not ready / UI not ready', a log path, and Retry, Open in Browser, Open Logs, Open Install Folder (main.ts:160-215). The cause, a recovery state and the last 100 log lines reach only the log, which 'Open Logs' opens. The Windows reserved-port message (bundled-postgres-runtime.ts:1139) is clear but also only in the log. Who meets it: a desktop install whose port 45432 is taken or that has a stale container from an earlier install.",
+    "rootCause": "RC-20"
+  },
+  "U-FR-016": {
+    "severity": "friction",
+    "confidence": "confirmed",
+    "title": "On a fresh install Get started shows 'Saved model defaults changed. Your selection is kept...' although the operator changed nothing, and an amber 'Skip normal prompts is unavailable here' line with no explanation",
+    "why": "Ledger Task 12: the banner appeared before the credential-box crash (fr-1-provider-ollama.png), so it is a false 'changed' alarm in the first minutes of first run, not a crash side effect; a confusing message is friction.",
+    "trigger": "Fresh install: Settings > Get started > Use a cloud provider > pick a provider (Ollama here); then open step 2.",
+    "actual": "The info banner 'Saved model defaults changed. Your selection is kept; confirming reviews the current saved setup.' shows under the provider choice although nothing was saved or changed (captured with Ollama selected, before any crash; the crash came about 90 s later). Step 2 always shows the amber line 'Skip normal prompts is unavailable here. Guided setup requires an approval rule that keeps normal prompts available.' with no description of the option.",
+    "rootCause": "RC-25"
+  },
+  "U-GL-001": {
+    "rootCause": "RC-18"
+  },
+  "U-GL-002": {
+    "movedTo": "engineering-note",
+    "reason": "Bundle structure (non-Chat pages load the Chat module graph); the production build opens every area in under 1 s (Task 13b), so no operator-visible cost was shown.",
+    "why": "No operator-visible symptom on a production build (Task 13b numbers)."
+  },
+  "U-GL-004": {
+    "rootCause": "RC-30"
+  },
+  "U-GL-005": {
+    "rootCause": "RC-18"
+  },
+  "U-GL-006": {
+    "rootCause": "RC-18"
+  },
+  "U-GL-007": {
+    "rootCause": "RC-51"
+  },
+  "U-GL-008": {
+    "severity": "friction",
+    "why": "Journey note (Task 7): a confirm that looks like Cancel on a commit dialog is a confusing control, the same defect class measured live on the change-plan dialog; suggested friction for both.",
+    "rootCause": "RC-11"
+  },
+  "U-GL-011": {
+    "rootCause": "RC-79"
+  },
+  "U-GL-012": {
+    "rootCause": "RC-79"
+  },
+  "U-GL-013": {
+    "rootCause": "RC-18"
+  },
+  "U-GL-014": {
+    "movedTo": "engineering-note",
+    "reason": "Developer hygiene (raw buttons and literal radii beside the shared primitives); no operator-visible symptom of its own (ledger b4, GL-42).",
+    "why": "Ledger b4: developer-hygiene row carried as polish."
+  },
+  "U-GL-015": {
+    "movedTo": "engineering-note",
+    "reason": "Developer hygiene (67 Classic/shared class names restyled with mixed selector strength); the register row itself says not operator-visible (ledger b4, GL-43).",
+    "why": "Ledger b4: developer-hygiene row carried as polish."
+  },
+  "U-GL-016": {
+    "rootCause": "RC-28"
+  },
+  "U-GL-017": {
+    "movedTo": "engineering-note",
+    "reason": "Build tooling: the bundle budget check measures the entry stub, not the Cockpit (ledger b4, GL-48).",
+    "why": "Ledger b4: developer-hygiene row carried as polish."
+  },
+  "U-GL-018": {
+    "movedTo": "engineering-note",
+    "reason": "Build tooling: Tailwind scans the whole app folder; no styling is missing, the cost is build work (ledger b4, GL-50).",
+    "why": "Ledger b4: developer-hygiene row carried as polish."
+  },
+  "U-GL-019": {
+    "relatedIds": [
+      "U-GL-033"
+    ],
+    "rootCause": "RC-51"
+  },
+  "U-GL-020": {
+    "rootCause": "RC-53"
+  },
+  "U-GL-022": {
+    "rootCause": "RC-30"
+  },
+  "U-GL-023": {
+    "rootCause": "RC-30"
+  },
+  "U-GL-024": {
+    "rootCause": "RC-80"
+  },
+  "U-GL-025": {
+    "rootCause": "RC-28"
+  },
+  "U-GL-027": {
+    "rootCause": "RC-29"
+  },
+  "U-GL-028": {
+    "withdrawn": "Not reproduced: the More tab carries aria-current=page and a teal underline in Capabilities, System and Settings in both themes (gl-7-system-375-light.png and the finding's own NV-18.png show the underline).",
+    "why": "Task 13a could not reproduce it and the original evidence shows the selected state."
+  },
+  "U-GL-029": {
+    "rootCause": "RC-81"
+  },
+  "U-GL-030": {
+    "rootCause": "RC-81"
+  },
+  "U-GL-031": {
+    "rootCause": "RC-78"
+  },
+  "U-GL-032": {
+    "rootCause": "RC-51"
+  },
+  "U-GL-033": {
+    "rootCause": "RC-51"
+  },
+  "U-GL-034": {
+    "rootCause": "RC-30"
+  },
+  "U-GL-035": {
+    "rootCause": "RC-79"
+  },
+  "U-GL-036": {
+    "rootCause": "RC-30"
+  },
+  "U-GL-037": {
+    "rootCause": "RC-18"
+  },
+  "U-GL-038": {
+    "rootCause": "RC-82"
+  },
+  "U-GL-039": {
+    "rootCause": "RC-39"
+  },
+  "U-GL-040": {
+    "rootCause": "RC-18"
+  },
+  "U-GL-041": {
+    "rootCause": "RC-83"
+  },
+  "U-GL-042": {
+    "rootCause": "RC-81"
+  },
+  "U-GL-043": {
+    "rootCause": "RC-28"
+  },
+  "U-GL-044": {
+    "mergedInto": "U-ST-004",
+    "why": "Same control and same defect (the gear named 'Settings and account' with no account entry); U-ST-004 has the live measurement and screenshot."
+  },
+  "U-GL-045": {
+    "rootCause": "RC-05"
+  },
+  "U-GL-046": {
+    "rootCause": "RC-39"
+  },
+  "U-GL-047": {
+    "actual": "After Enter on Refresh, focus is on the page body at 100 ms, 800 ms and 2.5 s; the next Tab goes to 'Health' (the first System tab) or, on Inbox, to the 'Couldn't fully check 1 source' line. After Approve once on Settings > Models the dialog closes with 'Done · Change saved and confirmed.' and focus is on the body (twice, once for the change and once for the restore). The Refresh buttons are disabled while the fetch runs (InboxArea.tsx:271 and HealthOverview.tsx:148), which makes the browser drop focus; the Settings dialog does not restore it. A screen-reader or keyboard user loses their place on every refresh. The same loss of focus was seen after Settings > General 'New destination' and after Library 'Show all statuses' (Task 13a).",
+    "rootCause": "RC-39"
+  },
+  "U-GL-048": {
+    "rootCause": "RC-39"
+  },
+  "U-GL-049": {
+    "trigger": "Work (or Work > History): scroll the list down 200 px with the mouse wheel (repeated), open a run from the list, press the browser Back button.",
+    "actual": "Measured on #main-content: scrolled 200 px, after Back 90 px; repeated with the same result, for Work and Work > History, with or without '?shell=cockpit' in the address. The page was 2949 px tall, so the position was available. When the scroll was set by a script instead of the wheel it went back to 0. Likely cause, not isolated: the main element is shared across routes, so when the run page's shorter content clamps the scroll position the old address's scroll listener (use-cockpit-scroll.ts:24) records the clamped value. (The 500 px and 1500 px runs are not on disk, so only the 200 px figure is stated.)",
+    "rootCause": "RC-40"
+  },
+  "U-GL-050": {
+    "rootCause": "RC-95"
+  },
+  "U-GL-051": {
+    "rootCause": "RC-80"
+  },
+  "U-GL-052": {
+    "rootCause": "RC-73"
+  },
+  "U-GL-053": {
+    "rootCause": "RC-73"
+  },
+  "U-GL-054": {
+    "rootCause": "RC-73"
+  },
+  "U-IN-001": {
+    "journeys": [
+      "IN-1 Open the Inbox with pending approvals: read what is asked, approve one, deny one, see the result and where it went",
+      "CH-9 Ask for something that needs a tool: the approval appears in place, one click approves, the turn continues with no \"Continue\" step and no trip to the Inbox"
+    ],
+    "relatedIds": [
+      "U-IN-016",
+      "U-CH-046"
+    ],
+    "rootCause": "RC-14"
+  },
+  "U-IN-002": {
+    "rootCause": "RC-18"
+  },
+  "U-IN-003": {
+    "rootCause": "RC-36"
+  },
+  "U-IN-004": {
+    "rootCause": "RC-07"
+  },
+  "U-IN-005": {
+    "rootCause": "RC-18"
+  },
+  "U-IN-006": {
+    "journeys": [
+      "IN-3 Notification from the Inbox to the thing that raised it, and back",
+      "GL-6 Back, Forward and reload on each area keep the operator's place; an unsaved draft is guarded"
+    ],
+    "actual": "selectedId is React state in InboxArea; the URL stays /inbox before and after Review, so a reload returns to an unselected list. The 'Approval history' panel is not in the URL either (Task 13a, GL-6).",
+    "rootCause": "RC-15"
+  },
+  "U-IN-008": {
+    "rootCause": "RC-37"
+  },
+  "U-IN-010": {
+    "journeys": [
+      "GL-T Sign-in in token mode"
+    ],
+    "rootCause": "RC-75"
+  },
+  "U-IN-011": {
+    "rootCause": "RC-38"
+  },
+  "U-IN-012": {
+    "rootCause": "RC-51"
+  },
+  "U-IN-013": {
+    "relatedIds": [
+      "U-SY-009"
+    ],
+    "rootCause": "RC-05"
+  },
+  "U-IN-014": {
+    "rootCause": "RC-90"
+  },
+  "U-IN-015": {
+    "rootCause": "RC-76"
+  },
+  "U-IN-016": {
+    "rootCause": "RC-14"
+  },
+  "U-LB-001": {
+    "rootCause": "RC-51"
+  },
+  "U-LB-002": {
+    "journeys": [
+      "LB-2 Files and artifacts: upload a text file, find an artifact made in Chat, open it",
+      "LB-4 Knowledge: add a source, see it used in an answer with its citation"
+    ],
+    "rootCause": "RC-18"
+  },
+  "U-LB-003": {
+    "severity": "polish",
+    "why": "Journey note (Task 9): Enter in the search box also applies the filter, so only pointer users meet the extra click.",
+    "journeys": [
+      "LB-1 Memory: see what was remembered and why, edit an item, forget an item, see history"
+    ],
+    "rootCause": "RC-93"
+  },
+  "U-LB-004": {
+    "rootCause": "RC-53"
+  },
+  "U-LB-005": {
+    "rootCause": "RC-07"
+  },
+  "U-LB-006": {
+    "rootCause": "RC-53"
+  },
+  "U-LB-007": {
+    "rootCause": "RC-53"
+  },
+  "U-LB-008": {
+    "confidence": "confirmed",
+    "title": "On a default install Library > Memory shows only 'This feature is turned off for this installation.' and no screen offers the setting that turns it on",
+    "why": "Refuter B: Task 12 confirmed it live on a fresh default sandbox (fr-1-nomodel-library-memory.png).",
+    "trigger": "Fresh install on config defaults (the example config sets memoryLifecycleAdminV1Enabled false and first run copies it). Open Library > Memory.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/fr/fr-1-nomodel-library-memory.png",
+      "apps/gateway/src/services/memory-item-pagination-service.ts:21",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:196",
+      "packages/mission-control-shared/src/api/describe-api-error.ts:52",
+      "config/goatcitadel.example.json:202",
+      "apps/gateway/src/config.ts:1475",
+      "apps/gateway/src/config.ts:553",
+      "docs/review/2026-11-usability/evidence/lb/lb-1-memory.png"
+    ],
+    "journeys": [
+      "FR-1 Fresh sandbox with onboarding not done: the first screen, Get started, choose a model, the first task, arrive in Chat"
+    ],
+    "relatedIds": [
+      "U-LB-006",
+      "U-FR-006"
+    ],
+    "actual": "The full chain, read from the code: the in-code fallback is `memoryLifecycleAdminV1Enabled ?? true` (config.ts:1475), but a fresh install materialises its config from the example, which sets false (config/goatcitadel.example.json:202), so a real fresh install gets false. No onboarding or first-run code sets the flag (git grep over apps/gateway/src and apps/mission-control-next/src finds only read checks and the Settings route schema) and no Settings screen exposes it. With false the Gateway refuses the list read with 409 (requireEnabled, memory-item-pagination-service.ts:21), the shared error mapper turns it into 'This feature is turned off for this installation.' and the page shows that sentence in an error callout (LibraryMemoryWorkspace.tsx:196-201) with the filters and batch buttons still on screen. The flag appears only in read checks (LibraryMemoryBatch, LibraryMemoryDiagnostics, LibraryMemoryEditor, LibraryMemoryProposals), a type and a test fixture. The main review sandbox had the setting on (read-only GET /api/v1/settings), so the page worked there; on a fresh default install (the first-run check, fr-1-nomodel-library-memory.png) it showed the full filter row and, twice (directory and Memory proposals), the red 'This feature is turned off for this installation.' with an 'Open memory diagnostics and maintenance' button, and no way to turn the feature on.",
+    "rootCause": "RC-01",
+    "foundBy": "both"
+  },
+  "U-LB-009": {
+    "rootCause": "RC-49"
+  },
+  "U-LB-010": {
+    "rootCause": "RC-50"
+  },
+  "U-LB-011": {
+    "rootCause": "RC-51"
+  },
+  "U-LB-012": {
+    "rootCause": "RC-52"
+  },
+  "U-LB-013": {
+    "rootCause": "RC-46"
+  },
+  "U-LB-014": {
+    "rootCause": "RC-53"
+  },
+  "U-LB-015": {
+    "rootCause": "RC-51"
+  },
+  "U-LB-016": {
+    "rootCause": "RC-54"
+  },
+  "U-MS-001": {
+    "severity": "friction",
+    "title": "On a host with no secure credential storage (Docker, headless Linux, a store that is unavailable), Telegram, Discord and Slack setup blame the key or token instead of the missing storage",
+    "why": "Controller ruling on Refuter B: Windows desktop with a working keychain, the review's primary install, is unaffected and its message is then correct; on keychain-less hosts it is a stall.",
+    "relatedIds": [
+      "U-ST-033"
+    ],
+    "actual": "Telegram shows 'Telegram didn't accept that key, or GoatCitadel couldn't reach Telegram. Check the key and try again.', Discord 'Discord didn't accept that token, or GoatCitadel couldn't reach Discord…', Slack 'Slack didn't accept the bot token…'. The Gateway's sentence is deliberately dropped, so an operator with a correct token and no secure storage re-checks the token for ever. Advanced channel setup shows the Gateway's sentence, so the same cause reads differently on the two screens. Live in the sandbox (no keychain); on a PC with a working keychain the credential reaches the vendor API instead, which was not run (nothing may leave the PC). Scope: on a Windows desktop with a working keychain the credential reaches the vendor and the message is correct; on hosts without one this is a stall (the operator re-checks a correct token for ever).",
+    "rootCause": "RC-12"
+  },
+  "U-MS-002": {
+    "rootCause": "RC-03"
+  },
+  "U-MS-003": {
+    "rootCause": "RC-69"
+  },
+  "U-MS-004": {
+    "rootCause": "RC-30"
+  },
+  "U-MS-005": {
+    "relatedIds": [
+      "U-ST-021",
+      "U-FR-001"
+    ],
+    "actual": "After the reload the address box is empty, steps 3 to 6 stay 'Locked' and nothing says a change is waiting; the Inbox badge went from 3 to 4. Saving the same address again shows 'Unsaved draft: this address is not in use yet' and 'Settings changed elsewhere. Your draft is preserved for review.' with no approval card. The change can be finished only from the Inbox row 'Set the public web address', which neither screen mentions. Approving it there worked (one click, 'Approved Set the public web address'). Same cause as U-ST-021: PublicWebAddressField.tsx:42-61 uses useGovernedRuntimeSetting, which reports the 409 from the waiting plan as 'changed elsewhere'.",
+    "rootCause": "RC-03"
+  },
+  "U-MS-006": {
+    "rootCause": "RC-70"
+  },
+  "U-MS-007": {
+    "rootCause": "RC-70"
+  },
+  "U-PJ-001": {
+    "rootCause": "RC-44"
+  },
+  "U-PJ-004": {
+    "rootCause": "RC-51"
+  },
+  "U-PJ-005": {
+    "rootCause": "RC-92"
+  },
+  "U-PJ-006": {
+    "rootCause": "RC-44"
+  },
+  "U-ST-001": {
+    "journeys": [
+      "ST-2 Change a setting that needs approval: the approval appears in place, one click, applied without a second step",
+      "MS-1 Channel setup to the credential step with an invalid credential"
+    ],
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-16-flip1-1.png",
+      "docs/review/2026-11-usability/evidence/prior/b8-ol16c.json",
+      "docs/review/2026-11-usability/evidence/prior/b8-ol16-inbox.json",
+      "docs/review/2026-11-usability/evidence/st/st-2-verif-gov-governed-1.png",
+      "docs/review/2026-11-usability/evidence/st/st-2-inbox-verification.png",
+      "apps/mission-control-next/src/cockpit/areas/settings/SettingsApprovalDialog.tsx:52",
+      "apps/mission-control-next/src/cockpit/areas/settings/GovernedSettingParts.tsx:117",
+      "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalDecisionBar.tsx:149"
+    ],
+    "actual": "The dialog shows 'The selected workspace changed. Open this item again in the current Inbox.' with no Approve button, and that workspace's Inbox does not list the approval (it appears only under 'default'). Only when a workspace other than 'default' is selected. Workaround the screen does not state: switch to the default workspace and save again (or approve it in the default workspace's Inbox). Task 11 found seven call sites that hard-code workspaceId=\"default\" (GovernedSettingParts.tsx:117, ApprovalModeControl.tsx:177, FilesystemWriteAccessParts.tsx:71, ProviderConnectionSettings.tsx:344, ProviderRoutingSettings.tsx:247, ManagedRuntimeSettings.tsx:195, GatewayAuthSettings.tsx:101), so every governed Settings save is affected; reproduced identically in token mode (Task 13b).",
+    "rootCause": "RC-02"
+  },
+  "U-ST-002": {
+    "journeys": [
+      "ST-1 Add a provider with a key, pick a default model, send a Chat message with it"
+    ],
+    "rootCause": "RC-26"
+  },
+  "U-ST-003": {
+    "rootCause": "RC-30"
+  },
+  "U-ST-004": {
+    "rootCause": "RC-89"
+  },
+  "U-ST-005": {
+    "confidence": "confirmed",
+    "title": "The shared change-plan dialog (Settings and Chat) shows its main action looking the same as Cancel",
+    "why": "Confirmed live twice (Task 7 on the Chat dialog, Task 11 on a Settings dialog: identical computed colours), and ledger b8 asked for the title to name the shared dialog.",
+    "evidence": [
+      "apps/mission-control-next/src/features/threaded-surface/styles/change-plans.css:186",
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:333",
+      "apps/mission-control-next/src/cockpit/areas/settings/GuidedModelPlanDialog.tsx:32",
+      "docs/review/2026-11-usability/evidence/prior/b8-st15-css-cascade.json",
+      "docs/review/2026-11-usability/evidence/ch/ch-change-plan-dialog.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-change-plan-button-styles.json"
+    ],
+    "journeys": [
+      "CH-4 Switch model and provider for one conversation; see which model answered",
+      "ST-1 Add a provider with a key, pick a default model, send a Chat message with it"
+    ],
+    "relatedIds": [
+      "U-GL-008"
+    ],
+    "rootCause": "RC-11"
+  },
+  "U-ST-006": {
+    "rootCause": "RC-11"
+  },
+  "U-ST-007": {
+    "rootCause": "RC-28"
+  },
+  "U-ST-008": {
+    "severity": "friction",
+    "title": "A webhook notification destination cannot be completed from the screen: it needs a keychain reference that nothing in the app creates (the Configured channel destination works)",
+    "why": "Refuter A: notification routing still finishes through the 'Configured channel' destination kind (NotificationRoutingFields.tsx:28-85); only the webhook kind is blocked.",
+    "rootCause": "RC-35"
+  },
+  "U-ST-009": {
+    "rootCause": "RC-30"
+  },
+  "U-ST-010": {
+    "journeys": [
+      "FR-1 Fresh sandbox with onboarding not done: the first screen, Get started, choose a model, the first task, arrive in Chat"
+    ],
+    "relatedIds": [
+      "U-FR-013"
+    ],
+    "rootCause": "RC-26"
+  },
+  "U-ST-011": {
+    "severity": "polish",
+    "why": "Journey note (Task 11): the dialog is short and one click in the default workspace; the paragraph wording applies only to integrations.",
+    "rootCause": "RC-77"
+  },
+  "U-ST-012": {
+    "rootCause": "RC-51"
+  },
+  "U-ST-013": {
+    "rootCause": "RC-51"
+  },
+  "U-ST-014": {
+    "journeys": [
+      "ST-9 Every Settings page: open it, change one harmless value, save, reload, value kept"
+    ],
+    "rootCause": "RC-53"
+  },
+  "U-ST-015": {
+    "rootCause": "RC-51"
+  },
+  "U-ST-016": {
+    "rootCause": "RC-30"
+  },
+  "U-ST-017": {
+    "actual": "The page shows only the preference, its three modes and Save preference; the operator has to know to open System › Spend. Reconciled with the trust-policy parity row (judged fixed because its lost quick jumps lead to pages one tab away): the lost 'Change model routing' link is the same case (Models is one Settings tab away) and is not counted; the lost 'Open cost telemetry' link points to another area (System > Spend), which is why this stays a polish finding.",
+    "rootCause": "RC-07"
+  },
+  "U-ST-018": {
+    "rootCause": "RC-21"
+  },
+  "U-ST-020": {
+    "rootCause": "RC-13"
+  },
+  "U-ST-021": {
+    "trigger": "Models: untick 'Keep one Claude Code process between tool steps', Save setting, close the approval dialog without deciding (Escape), then reload the page; tick the box again and Save setting. Same with Safety > Tools approval rule, and with 'Replace API credential' pressed a second time after a reload.",
+    "actual": "After the reload the page shows no waiting change. The next save returns 409 WRITE_CONFLICT 'Another active Change Plan already owns this target.' The Models page words it 'Settings changed elsewhere. Your draft is preserved for review.' (nothing changed elsewhere), Safety > Tools words it 'Save outcome is uncertain. Further saves are locked in this app session; inspect Settings activity before continuing.' and Replace API credential says 'Change creation outcome is uncertain. Inspect provider activity...' then, after 'Check outcome', 'GoatCitadel released this change after an error, so it did not run again' while the original plan stays open. The way out is the Inbox, which none of the messages name; the plan lasts about 15 minutes. An earlier review reported a related problem ('unchanged provider save returns 409'); the no-change provider save itself now works: its Review button is simply disabled with no sentence saying why. Cause in the code: use-governed-runtime-setting.ts:122-126 turns any 409 into the page's 'changed elsewhere' sentence without looking up the change that is waiting, so every install is affected.",
+    "rootCause": "RC-03"
+  },
+  "U-ST-022": {
+    "rootCause": "RC-33"
+  },
+  "U-ST-023": {
+    "rootCause": "RC-22"
+  },
+  "U-ST-025": {
+    "rootCause": "RC-47"
+  },
+  "U-ST-027": {
+    "rootCause": "RC-01"
+  },
+  "U-ST-028": {
+    "rootCause": "RC-51"
+  },
+  "U-ST-029": {
+    "severity": "polish",
+    "confidence": "likely",
+    "title": "Typing a character into the API credential box crashes the page on the development build; not reproduced on a production build (0 of 5 loads; a 20-character entry and submit completed)",
+    "why": "Controller ruling on Refuter B: Task 13b ran a production build, 0 of 5 loads crashed and a 20-character entry was submitted (pb-prod.json, pb-repeat.json, pb-dev.json); the late updater call is a StrictMode development behaviour (cockpit-entry.tsx:13).",
+    "actual": "On the development build the first keystroke replaces the page with 'Settings couldn't be shown' (Try again / Reload app / Go to Chat) and the console shows 'TypeError: Cannot read properties of null (reading 'value')' (3 of 3 dev loads). On a production build it did not happen in 0 of 5 loads, and a 20-character entry followed by Submit securely completed. Cause in code: the handler reads event.currentTarget.value inside the setSecureValues updater (packages/mission-control-shared/src/components/chat/ChatChangePlanActionDialogBody.tsx:107-113; the state setter is declared at ChatChangePlanActionDialog.tsx:135); the public-field handler at :211 reads the value synchronously and is safe. React nulls currentTarget after the listener returns, so a production crash stays possible if the updater ever runs late. This dialog is the only place in the Cockpit to enter a provider API key (the Inbox cannot take a secret): used by guided model setup on first run, Settings > Models and LibraryCandidatePlan.tsx. The one-line fix (read the value into a local before calling the setter) belongs in the first fix batch. Tests missed it: ChatChangePlanActionDialog.test.tsx:267 passes a hand-built event whose currentTarget is never nulled.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/st/st-1-secure-input-dialog.png",
+      "docs/review/2026-11-usability/evidence/st/st-1-secure-typed.png",
+      "docs/review/2026-11-usability/evidence/st/st-1-secure-input-crash.json",
+      "docs/review/2026-11-usability/evidence/gl/pb-prod.json",
+      "docs/review/2026-11-usability/evidence/gl/pb-repeat.json",
+      "docs/review/2026-11-usability/evidence/gl/pb-dev.json",
+      "packages/mission-control-shared/src/components/chat/ChatChangePlanActionDialogBody.tsx:107",
+      "packages/mission-control-shared/src/components/chat/ChatChangePlanActionDialog.tsx:135",
+      "packages/mission-control-shared/src/components/chat/ChatChangePlanActionDialog.test.tsx:267",
+      "apps/mission-control-next/src/cockpit-entry.tsx:13"
+    ],
+    "journeys": [
+      "FR-1 Fresh sandbox with onboarding not done: the first screen, Get started, choose a model, the first task, arrive in Chat",
+      "GL-P Production build: credential box"
+    ],
+    "rootCause": "RC-74"
+  },
+  "U-ST-030": {
+    "rootCause": "RC-23"
+  },
+  "U-ST-031": {
+    "rootCause": "RC-48"
+  },
+  "U-ST-032": {
+    "movedTo": "engineering-note",
+    "reason": "The 171 near-identical grants were most likely seeded by earlier test tasks in the shared sandbox; not shown to occur on a real install (Task 11 review).",
+    "why": "Ledger Task 11: weak, likely seeded."
+  },
+  "U-ST-033": {
+    "title": "On a host with no OS keychain (Linux without a secret service, Docker, headless), the provider key dialog says only 'The gateway hit an error. Try again, or check System health.'",
+    "why": "Ledger Task 13b: the audience is hosts with no secret service; a Windows desktop with a working keychain does not meet it.",
+    "relatedIds": [
+      "U-MS-001"
+    ],
+    "journeys": [
+      "MS-1 Channel setup to the credential step with an invalid credential"
+    ],
+    "rootCause": "RC-12"
+  },
+  "U-SY-001": {
+    "journeys": [
+      "SY-1 Health: is anything wrong right now, and what to do about it"
+    ],
+    "rootCause": "RC-21"
+  },
+  "U-SY-002": {
+    "title": "On every install, System > Health and the sidebar say '1 check needs attention' / '1 check needs review' because the Gateway always reports service control as unsupported",
+    "why": "Ledger Task 10: supported is hard-coded false (daemon-route-service.ts:100), so the warning is on every install and in the sidebar of every page, not only source runs; kept friction because nothing fails to finish, ranked high by its reach.",
+    "trigger": "Any install: open System > Health, or look at the sidebar's status line on any page.",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/health-overview.ts:117",
+      "apps/gateway/src/services/daemon-route-service.ts:100",
+      "docs/review/2026-11-usability/evidence/prior/b7-health-vs-gateway.json",
+      "docs/review/2026-11-usability/evidence/prior/N-12.png",
+      "docs/review/2026-11-usability/evidence/gl/gl-7-system-375-light.png",
+      "docs/review/2026-11-usability/evidence/gl/gl-7-chat-inspector-1024.png"
+    ],
+    "journeys": [
+      "SY-1 Health: is anything wrong right now, and what to do about it",
+      "FR-1 Fresh sandbox with onboarding not done: the first screen, Get started, choose a model, the first task, arrive in Chat",
+      "GL-7 Phone width and light theme on each area's first screen: nothing cut off, nothing unreadable"
+    ],
+    "relatedIds": [
+      "U-FR-005"
+    ],
+    "actual": "The headline reads '1 check needs attention' and the first card is 'Runtime service - Unavailable - Service control is unavailable on this host.' The Gateway itself reports running=true, state=running and no warning or critical diagnostic. The Gateway's only daemon-status builder hard-codes supported: false and controllable: false (daemon-route-service.ts:100-101), so no install can report otherwise, and health-overview.ts:117 turns 'Unavailable' into the waiting tone that the heading counts. The sidebar shows '1 check needs review' on every page (seen in Chat, Work and Library captures). Severity re-judged (ledger): friction, not stall, because nothing fails to finish; the cost is trust in the one screen meant to say whether anything is wrong.",
+    "rootCause": "RC-09"
+  },
+  "U-SY-003": {
+    "rootCause": "RC-55"
+  },
+  "U-SY-004": {
+    "rootCause": "RC-56"
+  },
+  "U-SY-005": {
+    "journeys": [
+      "SY-4 Activity and Diagnostics: find out why a turn failed an hour ago"
+    ],
+    "rootCause": "RC-60"
+  },
+  "U-SY-006": {
+    "journeys": [
+      "SY-7 Quality and Dashboards: open each tab; a tab with nothing to show says why"
+    ],
+    "rootCause": "RC-53"
+  },
+  "U-SY-009": {
+    "title": "On an install with more than one workspace, System > Sessions and Activity list every conversation, but Details, 'Open in Chat' and 'Open source' only work in the conversation's own workspace and never say so",
+    "why": "Refuter A: scoped to installs with more than one workspace; the run-event sub-claim is code only.",
+    "actual": "Details shows a red line 'This control state does not match the selected session and workspace. No control actions are available.' beside a 'Reload control' button that cannot fix it. 'Open in Chat' lands on 'Choose a conversation' with 'No conversations in this view', and the Activity conversation rows do the same. With the verification workspace selected, the same session shows 'You control this conversation' and opens in Chat. The list header says 'Conversations across every channel'; 19 rows show in both workspaces. One more link that drops the workspace (code only, not reproduced live): durable-run realtime events carry only the run id (buildDurableRealtimeOptions, durable-run-service.ts:624-629 sets links: { runId }), so an Activity run row cannot open a run that lives in a non-selected workspace directly; the operator gets 'Run outside this workspace - Choose its workspace or return to Work' (WorkRunDetail.tsx:119) and must switch by hand. A live check was not possible: the run rows in the sandbox Activity belonged to workspace-less approval-wait runs (see Sandbox artifacts in the journeys file). Scope: only installs with more than one workspace meet this; a single-workspace install (the default) does not. The durable-run event sub-claim (durable-run-service.ts:624) is likely (code only); the session rows are confirmed live.",
+    "rootCause": "RC-05"
+  },
+  "U-SY-010": {
+    "rootCause": "RC-57"
+  },
+  "U-SY-011": {
+    "rootCause": "RC-58"
+  },
+  "U-SY-013": {
+    "rootCause": "RC-59"
+  },
+  "U-SY-014": {
+    "rootCause": "RC-53"
+  },
+  "U-SY-015": {
+    "rootCause": "RC-51"
+  },
+  "U-SY-016": {
+    "rootCause": "RC-60"
+  },
+  "U-SY-017": {
+    "rootCause": "RC-94"
+  },
+  "U-WK-001": {
+    "confidence": "confirmed",
+    "why": "Refuter B kept stall and read the finding as code only; Task 8 had already confirmed it live (wk-1-task-detail.png shows the rule and no control), so confidence is confirmed.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/wk/wk-1-task-detail.png",
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:235",
+      "apps/mission-control-next/src/features/native-routes/cowork/CoworkNativePage.tsx:380",
+      "apps/mission-control-next/src/cockpit/areas/work/TaskStatusControl.tsx:102"
+    ],
+    "journeys": [
+      "WK-1 Create a task on the Board, move it, open its run, read its history"
+    ],
+    "actual": "'Done requires at least one recorded deliverable. The option appears once one is recorded.' with no control to record one. The only way to record one is the Classic shell's task page (CoworkNativePage.tsx:371-390). Runs record their deliverables themselves, so only manual tasks are hit. Confirmed live in Task 8 (WK-1).",
+    "rootCause": "RC-07"
+  },
+  "U-WK-002": {
+    "journeys": [
+      "WK-4 Archive and restore a task; open the Automation designer and the older Kanban view"
+    ],
+    "rootCause": "RC-18"
+  },
+  "U-WK-003": {
+    "journeys": [
+      "WK-4 Archive and restore a task; open the Automation designer and the older Kanban view"
+    ],
+    "rootCause": "RC-61"
+  },
+  "U-WK-004": {
+    "journeys": [
+      "WK-2 Pause, resume, cancel and retry a run; the buttons say what each will do"
+    ],
+    "rootCause": "RC-62"
+  },
+  "U-WK-005": {
+    "why": "Re-judged against stall (ledger b3): it stays friction because the page links the conversation, whose Delegation card holds the run, so the operator reaches the run with one more step that the page offers.",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/WorkTaskDetail.tsx:116",
+      "apps/gateway/src/services/chat-delegation-service.ts:1364",
+      "docs/review/2026-11-usability/evidence/prior/WK-07.png",
+      "docs/review/2026-11-usability/evidence/wk/wk-1-seeded-task.png"
+    ],
+    "journeys": [
+      "WK-1 Create a task on the Board, move it, open its run, read its history"
+    ],
+    "actual": "Status, assignment and details each say a run owns the task and to review it; the only link is 'Open linked conversation', because the run link needs agenticContext.durableRunId and the task has only agenticContext.runId. Scope (code read for Task 15): every task that Chat delegation creates is like this, because chat-delegation-service.ts:1364-1366 sets agenticContext.runId and never durableRunId, while the run link needs durableRunId (WorkTaskDetail.tsx:116). Kept friction rather than stall: 'Open linked conversation' is on the page and the conversation's Delegation card leads to the run. Confirmed live in Task 8.",
+    "rootCause": "RC-63"
+  },
+  "U-WK-006": {
+    "rootCause": "RC-30"
+  },
+  "U-WK-007": {
+    "movedTo": "engineering-note",
+    "reason": "Code structure only (one navigation handoff owner per link); impact on speed was never measured and no operator symptom is described.",
+    "why": "No operator-visible symptom (Task 15 judgment, same rule as ledger b5)."
+  },
+  "U-WK-008": {
+    "rootCause": "RC-95"
+  },
+  "U-WK-009": {
+    "rootCause": "RC-18"
+  },
+  "U-WK-010": {
+    "severity": "polish",
+    "why": "Journey note (Task 8): each is one extra click on a reversible action, and the dialogs are well written (scope, consequence, undo); whether to replace them with an Undo toast is listed as a design decision.",
+    "journeys": [
+      "WK-3 Create a schedule, edit it, see when it next runs, see that it ran",
+      "WK-4 Archive and restore a task; open the Automation designer and the older Kanban view"
+    ],
+    "rootCause": "RC-77"
+  },
+  "U-WK-011": {
+    "rootCause": "RC-64"
+  },
+  "U-WK-012": {
+    "rootCause": "RC-65"
+  },
+  "U-WK-013": {
+    "rootCause": "RC-65"
+  },
+  "U-WK-014": {
+    "rootCause": "RC-66"
+  },
+  "U-WK-015": {
+    "rootCause": "RC-67"
+  },
+  "U-WK-016": {
+    "rootCause": "RC-30"
+  },
+  "U-WK-017": {
+    "rootCause": "RC-51"
+  },
+  "U-WK-018": {
+    "rootCause": "RC-61"
+  }
+}

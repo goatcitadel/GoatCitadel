@@ -1,0 +1,7 @@
+{
+  "action": "fresh install, Chat > New conversation > type 'ut12 first message' > Send",
+  "firstFeedbackMs": 126,
+  "request": { "method": "POST", "path": "/api/v1/chat/sessions/<id>/route-preflight", "status": 200, "blockedReason": "No model provider is configured yet. Connect one in Settings -> Providers & models first." },
+  "screen": ["top banner (text, no link, still there after 7 s): same sentence", "red card in the transcript: 'The run cannot start because no provider is configured.' with one button: Reload conversation", "the sent message is not in the transcript; it stays in the composer", "page above still says: You can chat now. Finish setup to verify your first answer."],
+  "reloadConversationResult": "card unchanged after 2 s"
+}

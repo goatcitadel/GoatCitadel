@@ -1,0 +1,47 @@
+{
+ "/settings/general": {
+  "boxes": 0,
+  "nested": 0,
+  "samples": []
+ },
+ "/settings/safety": {
+  "boxes": 0,
+  "nested": 0,
+  "samples": []
+ },
+ "/settings/models": {
+  "boxes": 3,
+  "nested": 0,
+  "samples": []
+ },
+ "/system/spend": {
+  "boxes": 0,
+  "nested": 0,
+  "samples": []
+ },
+ "/system": {
+  "boxes": 0,
+  "nested": 0,
+  "samples": []
+ },
+ "/work": {
+  "boxes": 0,
+  "nested": 0,
+  "samples": []
+ },
+ "/inbox": {
+  "boxes": 0,
+  "nested": 0,
+  "samples": []
+ },
+ "/library/prompt-packs": {
+  "boxes": 0,
+  "nested": 0,
+  "samples": []
+ },
+ "/library/memory": {
+  "boxes": 0,
+  "nested": 0,
+  "samples": []
+ }
+}

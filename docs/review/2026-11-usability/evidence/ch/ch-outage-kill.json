@@ -1,0 +1,341 @@
+{
+  "method": "taskkill /F of the sandbox Gateway ~60 ms after Enter, pending approval session open; page left open",
+  "killedAtMsAfterEnter": 86,
+  "timeline": [
+    {
+      "tSec": 0.1,
+      "indicator": "Updates connected",
+      "stopShown": false,
+      "answerForKillMsg": false,
+      "live": "A decision is waiting above. Resolve it to keep going.",
+      "tail": "ork resumed or completed. | Review danger approval | Deny | How this decision works | Inspect persisted approval | Message | A decision is waiting above. Resolve it to keep going. | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 0.6,
+      "indicator": "",
+      "stopShown": false,
+      "answerForKillMsg": false,
+      "live": "A decision is waiting above. Resolve it to keep going.",
+      "tail": "ork resumed or completed. | Review danger approval | Deny | How this decision works | Inspect persisted approval | Message | A decision is waiting above. Resolve it to keep going. | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 5.4,
+      "indicator": "",
+      "stopShown": false,
+      "answerForKillMsg": false,
+      "live": "GoatCitadel is unreachable. Sending is paused; your draft is kept. || Still unreachable · checked 10:28 PM || GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns.",
+      "tail": " approval | Deny | How this decision works | Inspect persisted approval | Message | GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns. | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 6.4,
+      "indicator": "",
+      "stopShown": false,
+      "answerForKillMsg": false,
+      "live": "GoatCitadel is unreachable. Sending is paused; your draft is kept. || Checking… || GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns.",
+      "tail": " approval | Deny | How this decision works | Inspect persisted approval | Message | GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns. | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 8.5,
+      "indicator": "",
+      "stopShown": false,
+      "answerForKillMsg": false,
+      "live": "GoatCitadel is unreachable. Sending is paused; your draft is kept. || Still unreachable · checked 10:28 PM || GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns.",
+      "tail": " approval | Deny | How this decision works | Inspect persisted approval | Message | GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns. | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 12.7,
+      "indicator": "",
+      "stopShown": false,
+      "answerForKillMsg": false,
+      "live": "GoatCitadel is unreachable. Sending is paused; your draft is kept. || Checking… || GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns.",
+      "tail": " approval | Deny | How this decision works | Inspect persisted approval | Message | GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns. | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 14.7,
+      "indicator": "",
+      "stopShown": false,
+      "answerForKillMsg": false,
+      "live": "GoatCitadel is unreachable. Sending is paused; your draft is kept. || Still unreachable · checked 10:28 PM || GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns.",
+      "tail": " approval | Deny | How this decision works | Inspect persisted approval | Message | GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns. | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 17.3,
+      "indicator": "",
+      "stopShown": false,
+      "answerForKillMsg": false,
+      "live": "GoatCitadel is unreachable. Sending is paused; your draft is kept. || Checking… || GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns.",
+      "tail": " approval | Deny | How this decision works | Inspect persisted approval | Message | GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns. | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 20.4,
+      "indicator": "",
+      "stopShown": false,
+      "answerForKillMsg": false,
+      "live": "GoatCitadel is unreachable. Sending is paused; your draft is kept. || Still unreachable · checked 10:28 PM || GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns.",
+      "tail": " approval | Deny | How this decision works | Inspect persisted approval | Message | GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns. | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 22,
+      "indicator": "",
+      "stopShown": false,
+      "answerForKillMsg": false,
+      "live": "GoatCitadel is unreachable. Sending is paused; your draft is kept. || Checking… || GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns.",
+      "tail": " approval | Deny | How this decision works | Inspect persisted approval | Message | GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns. | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 24,
+      "indicator": "",
+      "stopShown": false,
+      "answerForKillMsg": false,
+      "live": "GoatCitadel is unreachable. Sending is paused; your draft is kept. || Still unreachable · checked 10:29 PM || GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns.",
+      "tail": " approval | Deny | How this decision works | Inspect persisted approval | Message | GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns. | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 27.1,
+      "indicator": "",
+      "stopShown": false,
+      "answerForKillMsg": false,
+      "live": "GoatCitadel is unreachable. Sending is paused; your draft is kept. || Checking… || GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns.",
+      "tail": " approval | Deny | How this decision works | Inspect persisted approval | Message | GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns. | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "tSec": 29.2,
+      "indicator": "",
+      "stopShown": false,
+      "answerForKillMsg": false,
+      "live": "GoatCitadel is unreachable. Sending is paused; your draft is kept. || Still unreachable · checked 10:29 PM || GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns.",
+      "tail": " approval | Deny | How this decision works | Inspect persisted approval | Message | GoatCitadel is unavailable. Your draft is preserved; send resumes when the connection returns. | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    }
+  ],
+  "log": [
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/events/stream net::ERR_CONNECTION_RESET"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_RESET",
+      "u": "http://127.0.0.1:54765/api/v1/events/stream?clientId=4148e5e1-afe7-47a4-91f9-8bc7159ef126&replay=20"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/onboarding/state net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/events/stream net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/events/stream?clientId=4148e5e1-afe7-47a4-91f9-8bc7159ef126&afterCursor=1189"
+    },
+    {
+      "k": "console",
+      "t": "WebSocket connection to 'ws://127.0.0.1:54766/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54766/@vite/client"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/onboarding/state net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/onboarding/state"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/onboarding/state net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/onboarding/state"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/events/stream net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/events/stream?clientId=4148e5e1-afe7-47a4-91f9-8bc7159ef126&afterCursor=1189"
+    },
+    {
+      "k": "console",
+      "t": "WebSocket connection to 'ws://127.0.0.1:54766/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54766/@vite/client"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/onboarding/state net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/onboarding/state"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/onboarding/state net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/onboarding/state"
+    },
+    {
+      "k": "console",
+      "t": "WebSocket connection to 'ws://127.0.0.1:54766/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54766/@vite/client"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/events/stream net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/events/stream?clientId=4148e5e1-afe7-47a4-91f9-8bc7159ef126&afterCursor=1189"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/onboarding/state net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/onboarding/state"
+    },
+    {
+      "k": "console",
+      "t": "WebSocket connection to 'ws://127.0.0.1:54766/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54766/@vite/client"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/onboarding/state net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/onboarding/state"
+    },
+    {
+      "k": "console",
+      "t": "WebSocket connection to 'ws://127.0.0.1:54766/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54766/@vite/client"
+    },
+    {
+      "k": "console",
+      "t": "WebSocket connection to 'ws://127.0.0.1:54766/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54766/@vite/client"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/onboarding/state net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/onboarding/state"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/onboarding/state net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/events/stream net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/events/stream?clientId=4148e5e1-afe7-47a4-91f9-8bc7159ef126&afterCursor=1189"
+    },
+    {
+      "k": "console",
+      "t": "WebSocket connection to 'ws://127.0.0.1:54766/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54766/@vite/client"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/onboarding/state net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/onboarding/state"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/onboarding/state net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/onboarding/state"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/inbox net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/inbox?workspaceId=ws_9cf765bcfafd49dc95ae578d"
+    },
+    {
+      "k": "console",
+      "t": "WebSocket connection to 'ws://127.0.0.1:54766/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54766/@vite/client"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/inbox net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/inbox?workspaceId=ws_9cf765bcfafd49dc95ae578d"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/onboarding/state net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/onboarding/state"
+    },
+    {
+      "k": "console",
+      "t": "WebSocket connection to 'ws://127.0.0.1:54766/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54766/@vite/client"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/onboarding/state net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/onboarding/state"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/inbox net::ERR_CONNECTION_REFUSED"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54765/api/v1/inbox?workspaceId=ws_9cf765bcfafd49dc95ae578d"
+    },
+    {
+      "k": "console",
+      "t": "WebSocket connection to 'ws://127.0.0.1:54766/' failed: Error in connection establishment: net::ERR_CONNECTION_REFUSED",
+      "u": "http://127.0.0.1:54766/@vite/client"
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+ "steps": [
+  {
+   "label": "filled",
+   "url": "/system/dashboards",
+   "dialog": 0,
+   "txt": "Skip to main content | Personal / Default Workspace | Search | Ctrl K | Chat | Inbox | 1 | Work | Interactive work status unknown | Capabilities | Library | System | 1 check needs review | Updates connected | Dashboards | Saved boards for this workspace. | Open a board for live widgets or create a saved layout. | New board | Refresh | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Show archived boards | Create board | Choose from the five built-in live widgets and arrange them in a bounded grid. | Board name | Description | Widgets (2/12) | Add widget | Agentic run Kanban | Approval queue | Runtime truth | Task status | Usage and cost | Add | Runtime truth | Column 1, row 1 · 6 × 4 | Adjust | Move left | Move right | Move up | Move down | Make narrower | Make wider | Make shorter | Make taller | Apply | Remove | Usage and cost | Column 7, row 1 · 6 × 4 | Adjust | Move left | Move right | Move up | Move down | Make narrower | Make wider | Make shorter | Make taller | Apply | Remove | Preview live widgets | Review new board | Close editor | No saved boards returned | Create a board to save a custom layout for this workspace.",
+   "boards": []
+  },
+  {
+   "label": "review",
+   "url": "/system/dashboards",
+   "dialog": 0,
+   "txt": "Skip to main content | Personal / Default Workspace | Search | Ctrl K | Chat | Inbox | 1 | Work | Interactive work status unknown | Capabilities | Library | System | 1 check needs review | Updates connected | Dashboards | Saved boards for this workspace. | Open a board for live widgets or create a saved layout. | New board | Refresh | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Show archived boards | Create board | Choose from the five built-in live widgets and arrange them in a bounded grid. | Board name | Description | Widgets (2/12) | Add widget | Agentic run Kanban | Approval queue | Runtime truth | Task status | Usage and cost | Add | Runtime truth | Column 1, row 1 · 6 × 4 | Adjust | Move left | Move right | Move up | Move down | Make narrower | Make wider | Make shorter | Make taller | Apply | Remove | Usage and cost | Column 7, row 1 · 6 × 4 | Adjust | Move left | Move right | Move up | Move down | Make narrower | Make wider | Make shorter | Make taller | Apply | Remove | Preview live widgets | Review new board | Close editor | Create ut10-board with 2 widgets? GoatCitadel will check and save this new layout. | Confirm save | Keep editing | No saved boards returned | Create a board to save a custom layout for this workspace.",
+   "boards": []
+  },
+  {
+   "label": "saved",
+   "url": "/system/dashboards/8bfc08e4-7532-4035-a2ed-4d094db00bc6?shell=cockpit",
+   "dialog": 0,
+   "txt": "Skip to main content | Personal / Default Workspace | Search | Ctrl K | Chat | Inbox | 1 | Work | Interactive work status unknown | Capabilities | Library | System | 1 check needs review | Updates connected | ut10-board | ut10 test board | Saved layout version 1 · active. Desktop follows saved positions. Phone stacks widgets. Widgets show the latest values they loaded. | Edit layout | Archive board… | Review current board controls | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Back to Dashboards | Board details | Runtime truth | Host-wide health | Refresh | Runtime truth | Host-wide status applies beyond the selected workspace. | Host | BLD | Runtime service | Unavailable | Memory | 48% used | Open System › Diagnostics | Usage and cost | Installation-wide daily usage | Refresh | Usage and cost | Known spend is a lower bound because 113 provider attempts have unknown cost. This aggregate is not scoped to the selected workspace. | Recorded tokens | 2,078 | Known cost | Under $0.01 known (some costs unknown) | Open spend details",
+   "boards": [
+    "POST 201 /api/v1/ops/boards"
+   ]
+  },
+  {
+   "label": "list after reload",
+   "url": "/system/dashboards",
+   "dialog": 0,
+   "txt": "Skip to main content | Personal / Default Workspace | Search | Ctrl K | Chat | Inbox | 1 | Work | Interactive work status unknown | Capabilities | Library | System | 1 check needs review | Updates connected | Dashboards | Saved boards for this workspace. | Open a board for live widgets or create a saved layout. | New board | Refresh | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Show archived boards | ut10-board | ut10 test board | 2 widgets | Runtime truth | Usage and cost | Open board",
+   "boards": [
+    "POST 201 /api/v1/ops/boards"
+   ]
+  },
+  {
+   "label": "reopened",
+   "url": "/system/dashboards/8bfc08e4-7532-4035-a2ed-4d094db00bc6?shell=cockpit",
+   "dialog": 0,
+   "txt": "Skip to main content | Personal / Default Workspace | Search | Ctrl K | Chat | Inbox | 1 | Work | Interactive work status unknown | Capabilities | Library | System | 1 check needs review | Updates connected | ut10-board | ut10 test board | Saved layout version 1 · active. Desktop follows saved positions. Phone stacks widgets. Widgets show the latest values they loaded. | Edit layout | Archive board… | Review current board controls | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Back to Dashboards | Board details | Runtime truth | Host-wide health | Refresh | Runtime truth | Host-wide status applies beyond the selected workspace. | Host | BLD | Runtime service | Unavailable | Memory | 48% used | Open System › Diagnostics | Usage and cost | Installation-wide daily usage | Refresh | Usage and cost | Known spend is a lower bound because 113 provider attempts have unknown cost. This aggregate is not scoped to the selected workspace. | Recorded tokens | 2,078 | Known cost | Under $0.01 known (some costs unknown) | Open spend details",
+   "boards": [
+    "POST 201 /api/v1/ops/boards"
+   ]
+  }
+ ],
+ "reviewMs": 1551,
+ "dialogButtons": [],
+ "saveMs": 2575,
+ "console": [],
+ "http": []
+}

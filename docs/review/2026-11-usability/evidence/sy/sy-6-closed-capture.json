@@ -1,0 +1,7 @@
+{
+ "closeMs": 2582,
+ "after": "s | Activity | Sessions | Dashboards | Browser sessions | New browser session | Session label | Creates an empty session record in this workspace, with no grants. | Create session | Sessions | Active | Closed | All | Refresh sessions | No browser sessions match this filter. | ut10-session | Closed record | Session and grants | State | Events | Session overview | Workspace | This workspace | Created | 1 minute ago | Active grants | 0 | Closed | just now | A session record governs browser grants and events. It does not show that a browser is open, bound or active. | Session closed Nov 15, 2026, 12:39 AM. No active grant remains. | Scoped grants | Grants let one actor use this session within its scopes and hosts. Tools still pass policy checks and guardrails; a grant does not open, bind or control a browser. | No grants are recorded for this session. | Closed sessions cannot receive grants.",
+ "closedFilter": "nd events. It does not show that a browser is open, bound or active. | Session closed Nov 15, 2026, 12:39 AM. No active grant remains. | Scoped grants | Grants let one actor use this session within its scopes and hosts. Tools still pass policy checks and guardrails; a grant does not open, bind or control a browser. | No grants are recorded for this session. | Closed sessions cannot receive grants.",
+ "console": [],
+ "http": []
+}

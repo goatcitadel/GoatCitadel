@@ -1,0 +1,6 @@
+{
+  "action": "Get started > Use a cloud provider > LM Studio > Check connection (nothing listens on the LM Studio port)",
+  "screenChange": "none after 200 ms, 800 ms, 2 s and 5 s; no dialog, no status line; Connection stays 'Not verified'",
+  "requests": [{ "method": "GET", "path": "/api/v1/llm/models?providerId=lmstudio", "status": 200, "body": { "items": [{ "id": "local-model" }], "source": "error_fallback", "warning": "fetch failed" } }],
+  "llamacpp": { "status": 200, "body": { "source": "error_fallback", "warning": "llama.cpp runtime is disabled in assistant config" } }
+}

@@ -1,0 +1,65 @@
+{
+ "steps": [
+  {
+   "label": "1 day",
+   "ms": 1704,
+   "head": [
+    "Known spend is a lower bound because cost coverage is incomplete.",
+    "Known cost",
+    "Under $0.01 known (some costs unknown)",
+    "By day (UTC)",
+    "Cost in USD per UTC day. “At least” marks a lower bound.",
+    "Under $0.01 known (some costs unknown)",
+    "Scale $0 to $1.00 · highest day Under $0.01 known (some costs unknown)",
+    "Known cost and tokens per provider, with each day's tokens.",
+    "Under $0.01 known (some costs unknown)"
+   ],
+   "url": "http://127.0.0.1:55151/system/spend/details?window=1&shell=cockpit"
+  },
+  {
+   "label": "3 days",
+   "ms": 1696,
+   "head": [
+    "Known spend is a lower bound because cost coverage is incomplete.",
+    "Known cost",
+    "Under $0.01 known (some costs unknown)",
+    "By day (UTC)",
+    "Cost in USD per UTC day. “At least” marks a lower bound.",
+    "no usage recorded",
+    "no usage recorded",
+    "Under $0.01 known (some costs unknown)",
+    "Scale $0 to $1.00 · highest day Under $0.01 known (some costs unknown) · 2 days without a known amount, shown dashed and left out of the scale",
+    "Known cost and tokens per provider, with each day's tokens.",
+    "Under $0.01 known (some costs unknown)"
+   ],
+   "url": "http://127.0.0.1:55151/system/spend/details?window=3&shell=cockpit"
+  },
+  {
+   "label": "7 days",
+   "ms": 1788,
+   "head": [
+    "Known spend is a lower bound because 113 provider attempts have unknown cost.",
+    "Known cost",
+    "Under $0.01 known (some costs unknown)",
+    "By day (UTC)",
+    "Cost in USD per UTC day. “At least” marks a lower bound.",
+    "no usage recorded",
+    "no usage recorded",
+    "no usage recorded",
+    "no usage recorded",
+    "no usage recorded",
+    "no usage recorded",
+    "Under $0.01 known (some costs unknown)"
+   ],
+   "url": "http://127.0.0.1:55151/system/spend/details?shell=cockpit"
+  }
+ ],
+ "loadMs": 8993,
+ "headline": "Spend |  | Usage and known cost for the latest seven days. |  | Grouped by day (UTC) · Nov 8, 2026, 12:26 AM – Nov 15, 2026, 12:26 AM (local time) · currency USD |  | Refresh | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions |  | Known spend is a lower bound because 113 provider attempts have unknown cost. |  | Known cost",
+ "howCounted": "\n\nAccounted cost may combine provider-reported amounts and GoatCitadel pricing estimates. Complete coverage means all costs were accounted; it does not make an estimate a measured bill.\n\nCost by day (UTC)\n\nBars show cost in USD recorded in UTC day buckets. The period above uses local time; these aggregates cannot be rebucketed into local days. “At least” marks a lower bound.\n\nMon 9 Nov\nno usage recorded\nNo usage\nTue 10 Nov\nno usage recorded\nNo usage\nWed 11 Nov\nno usage recorded\nNo usage\nThu 12 Nov\nno usage recorded\nNo usage\nFri 13 Nov\nno usage recorded\nNo usage\nSat 14 Nov\nno usage recorded\nNo usage\nSun 15 Nov\nUnder $0.01 known (some costs unknown)\n\nScale $0 to $1.00 · highest day Under $0.01",
+ "detailLinks": [
+  "Open spend details"
+ ],
+ "console": [],
+ "http": []
+}

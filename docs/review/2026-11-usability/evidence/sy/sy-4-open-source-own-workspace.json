@@ -1,0 +1,22 @@
+[
+ {
+  "sentence": "Durable run completed",
+  "url": "/work/runs/<id>?eventId=<id>&shell=cockpit",
+  "body": "Back to Work Run Run workspace unknown GoatCitadel could not confirm this run's workspace. Return to Work to choose a run."
+ },
+ {
+  "sentence": "Chat session updated",
+  "url": "/chat?shell=cockpit&sessionId=sess_a60e9b7265317e56b71e924c",
+  "body": "Conversations New Project All projects Unassigned Mission Control Verification Projects Search Recent Archived Mission Control Next Verification Session 2 21 minutes ago Waiting on you Help me choose the next verification step for this run. Chat - review-task-"
+ },
+ {
+  "sentence": "A conversation was updated",
+  "url": "/chat?shell=cockpit&sessionId=sess_a60e9b7265317e56b71e924c",
+  "body": "Conversations New Project All projects Unassigned Mission Control Verification Projects Search Recent Archived Mission Control Next Verification Session 2 21 minutes ago Waiting on you Help me choose the next verification step for this run. Chat - review-task-"
+ },
+ {
+  "sentence": "Evidence envelope recorded",
+  "url": "/chat?sessionId=sess_a60e9b7265317e56b71e924c&eventId=<id>&shell=cockpit",
+  "body": "Conversations New Project All projects Unassigned Mission Control Verification Projects Search Recent Archived Mission Control Next Verification Session 2 21 minutes ago Waiting on you Help me choose the next verification step for this run. Chat - review-task-"
+ }
+]

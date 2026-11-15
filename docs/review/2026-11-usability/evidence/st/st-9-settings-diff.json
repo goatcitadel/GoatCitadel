@@ -1,0 +1,82 @@
+{
+ "revisionBefore": 14,
+ "revisionAfter": 35,
+ "differences": [
+  {
+   "path": "globalToolAccess.deny.3",
+   "before": "fs.copy",
+   "after": "fs.move"
+  },
+  {
+   "path": "globalToolAccess.deny.4",
+   "before": "fs.move",
+   "after": "shell.exec"
+  },
+  {
+   "path": "globalToolAccess.deny.5",
+   "before": "shell.exec",
+   "after": "shell.exec_background"
+  },
+  {
+   "path": "globalToolAccess.deny.6",
+   "before": "shell.exec_background",
+   "after": "mcp.invoke"
+  },
+  {
+   "path": "globalToolAccess.deny.7",
+   "before": "mcp.invoke",
+   "after": "browser.cookies.get"
+  },
+  {
+   "path": "globalToolAccess.deny.8",
+   "before": "browser.cookies.get",
+   "after": "browser.storage.get"
+  },
+  {
+   "path": "globalToolAccess.deny.9",
+   "before": "browser.storage.get",
+   "after": "calendar.create"
+  },
+  {
+   "path": "globalToolAccess.deny.10",
+   "before": "calendar.create",
+   "after": "calendar.update"
+  },
+  {
+   "path": "globalToolAccess.deny.11",
+   "before": "calendar.update",
+   "after": "calendar.delete"
+  },
+  {
+   "path": "globalToolAccess.deny.12",
+   "before": "calendar.delete",
+   "after": "fs.copy"
+  },
+  {
+   "path": "llm.providers.1",
+   "after": {
+    "providerId": "ut11-local",
+    "label": "ut11-local-unreachable",
+    "baseUrl": "http://127.0.0.1:9/v1",
+    "apiStyle": "openai-responses",
+    "resolvedApiStyle": "openai-chat-completions",
+    "defaultModel": "ut11-model",
+    "hasApiKey": false,
+    "apiKeySource": "none",
+    "hasKeychainSecret": false,
+    "capabilities": {
+     "vision": false,
+     "audio": false,
+     "video": false,
+     "toolCalling": true,
+     "jsonMode": false,
+     "webSearch": false,
+     "reasoning": false,
+     "imageGenerate": false,
+     "imageEdit": false
+    }
+   }
+  }
+ ],
+ "note": "Revision rose because each applied change and each restore bumps it. Timestamps and status probes are ignored."
+}

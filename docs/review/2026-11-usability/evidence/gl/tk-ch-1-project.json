@@ -1,0 +1,11 @@
+{
+  "sid": true,
+  "row": "Standard approvals\nUse Auto mode",
+  "autoBtn": 1,
+  "afterAutoMs": 2567,
+  "afterAuto": "Auto · Managed project workspace\nUse Standard mode\nManaged files\n\nSaves go to the managed workspace for Mission Control Verification. Deletions always ask for approval.\n\nAuto mode enabled.",
+  "dialogs": 0,
+  "managedBtn": 1,
+  "managedDialog": "Managed project files\n\nPublish a saved version to the original project folder, or download a copy.\n\nFile or folder path\n\nEnter a path relative to the managed project, such as notes or notes/brief.txt.\n\nFind files\n\nAuto mode enabled.\n\nNo managed files saved yet.",
+  "log": []
+}

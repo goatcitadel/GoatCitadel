@@ -1,0 +1,63 @@
+{
+  "page": "/chat at 1440x900, dark, seeded verification workspace (8 conversations), dev server",
+  "note": "apiRequests are requests whose path starts with /api/; the rest of totalRequests are Vite dev module fetches. Query strings and ids dropped.",
+  "loads": [
+    {
+      "load": 1,
+      "totalRequests": 788,
+      "apiRequestCount": 12,
+      "apiRequests": [
+        "GET /api/v1/onboarding/startup",
+        "PUT /api/v1/notifications/presence",
+        "GET /api/v1/startup-reads",
+        "GET /api/v1/events/stream",
+        "PUT /api/v1/notifications/presence",
+        "GET /api/v1/startup-reads",
+        "GET /api/v1/durable/runs",
+        "GET /api/v1/chat/sessions/sess_42ba06bda232faf2a091264d/approval-mode",
+        "POST /api/v1/chat/sessions/sess_42ba06bda232faf2a091264d/route-preflight",
+        "GET /api/v1/chat/sessions/sess_42ba06bda232faf2a091264d/approval-mode",
+        "GET /api/v1/startup-reads",
+        "GET /api/v1/chat/sessions/sess_42ba06bda232faf2a091264d/control"
+      ]
+    },
+    {
+      "load": 2,
+      "totalRequests": 788,
+      "apiRequestCount": 12,
+      "apiRequests": [
+        "GET /api/v1/onboarding/startup",
+        "PUT /api/v1/notifications/presence",
+        "GET /api/v1/startup-reads",
+        "GET /api/v1/events/stream",
+        "PUT /api/v1/notifications/presence",
+        "GET /api/v1/startup-reads",
+        "GET /api/v1/durable/runs",
+        "GET /api/v1/chat/sessions/sess_42ba06bda232faf2a091264d/approval-mode",
+        "POST /api/v1/chat/sessions/sess_42ba06bda232faf2a091264d/route-preflight",
+        "GET /api/v1/chat/sessions/sess_42ba06bda232faf2a091264d/approval-mode",
+        "GET /api/v1/startup-reads",
+        "GET /api/v1/chat/sessions/sess_42ba06bda232faf2a091264d/control"
+      ]
+    },
+    {
+      "load": 3,
+      "totalRequests": 788,
+      "apiRequestCount": 12,
+      "apiRequests": [
+        "GET /api/v1/onboarding/startup",
+        "PUT /api/v1/notifications/presence",
+        "GET /api/v1/startup-reads",
+        "GET /api/v1/events/stream",
+        "PUT /api/v1/notifications/presence",
+        "GET /api/v1/startup-reads",
+        "GET /api/v1/durable/runs",
+        "GET /api/v1/chat/sessions/sess_42ba06bda232faf2a091264d/approval-mode",
+        "POST /api/v1/chat/sessions/sess_42ba06bda232faf2a091264d/route-preflight",
+        "GET /api/v1/chat/sessions/sess_42ba06bda232faf2a091264d/approval-mode",
+        "GET /api/v1/startup-reads",
+        "GET /api/v1/chat/sessions/sess_42ba06bda232faf2a091264d/control"
+      ]
+    }
+  ]
+}

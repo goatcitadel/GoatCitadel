@@ -1,0 +1,137 @@
+{
+  "links": [
+    {
+      "label": "Review runtime service",
+      "url": "/system/runtime?shell=cockpit",
+      "h1": [
+        "Runtime"
+      ],
+      "dialog": 0
+    },
+    {
+      "label": "Review backups",
+      "url": "/system/runtime?shell=cockpit#ops-runtime-backups",
+      "h1": [
+        "Runtime"
+      ],
+      "dialog": 0
+    },
+    {
+      "label": "Review managed local models",
+      "url": "/settings/local-ai?shell=cockpit",
+      "h1": [
+        "Models"
+      ],
+      "dialog": 0
+    },
+    {
+      "label": "Review local runtime start",
+      "url": "/system",
+      "h1": [
+        "System"
+      ],
+      "dialog": 1
+    },
+    {
+      "label": "Review channels",
+      "url": "/chat/messaging/advanced?shell=cockpit",
+      "h1": [
+        "Advanced channel setup",
+        "b CH-9 dflt-danger2 run the governed command"
+      ],
+      "dialog": 0
+    },
+    {
+      "label": "Review integrations",
+      "url": "/capabilities/connectors/advanced?shell=cockpit#integration-connections",
+      "h1": [
+        "Capabilities"
+      ],
+      "dialog": 0
+    },
+    {
+      "label": "Review desktop updates",
+      "url": "/settings/general?shell=cockpit#updates",
+      "h1": [
+        "General"
+      ],
+      "dialog": 0
+    },
+    {
+      "label": "Review remote workers",
+      "url": "/system/runtime/workers?shell=cockpit",
+      "h1": [
+        "Workers"
+      ],
+      "dialog": 0
+    },
+    {
+      "label": "Review goatcitadel server",
+      "url": "/system/runtime?shell=cockpit",
+      "h1": [
+        "Runtime"
+      ],
+      "dialog": 0
+    },
+    {
+      "label": "Review database",
+      "url": "/system/runtime?shell=cockpit",
+      "h1": [
+        "Runtime"
+      ],
+      "dialog": 0
+    }
+  ],
+  "healthMs": 3355,
+  "healthText": "System | Service status as each part of the system reports it, and what each check can confirm. | Updated just now | 1 check needs attention | Refresh | system health | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Checks | Most severe first; checks that could not be confirmed follow problems. | Runtime service | Unavailable | Service control is unavailable on this host. | Review runtime service | Backups | No backup yet | No backup has been published yet. Back up now creates a host-wide backup. Scheduling and offline restore remain separate operator workflows. | Review backups | Back up now | Managed local models | Not set up | No managed local runtime is enabled. Cloud provider health is separate. | Review managed local models | Review local runtime start | Channels | Not set up | No channel connection is enabled. | Review channels | Integrations | Not set up | No non-channel integration connection is enabled. | Review integrations | Desktop updates | Desktop app only | Update status is available in the installed Windows app. | Review desktop updates | Remote workers | Not set up | No worker is registered in this workspace. | Review remote workers | The workers page shows worker records, assignments and spending budgets. Enrollment and containment recovery keep their existing runtime controls. | GoatCitadel server | Responding | The health summary is responding. | Review goatcitadel server | Database | Reachable | The configured store is reachable with no reported issues. | Review database",
+  "reviewControls": [
+    "Review runtime service",
+    "Review backups",
+    "Review managed local models",
+    "Review local runtime start",
+    "Review channels",
+    "Review integrations",
+    "Review desktop updates",
+    "Review remote workers",
+    "Review goatcitadel server",
+    "Review database"
+  ],
+  "gatewayHealthStatus": 200,
+  "gatewayHealthKeys": [
+    "generatedAt",
+    "database",
+    "systemVitals",
+    "daemonStatus",
+    "daemonLogs",
+    "costs",
+    "backups"
+  ],
+  "qualityTabs": [
+    "Gates",
+    "Evaluations",
+    "Design"
+  ],
+  "quality": [
+    {
+      "tab": "Gates",
+      "text": "Quality | Stored quality results for this installation. Refresh and exports do not run evaluations. | Refresh | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Results checked Nov 15, 2026, 3:39 AM. | Counts and totals summarize the rows returned by this bounded read, not guaranteed all-time storage cardinality. | Security eval packs are def"
+    },
+    {
+      "tab": "Evaluations",
+      "text": "Quality | Stored quality results for this installation. Refresh and exports do not run evaluations. | Refresh | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Results checked Nov 15, 2026, 3:39 AM. | Counts and totals summarize the rows returned by this bounded read, not guaranteed all-time storage cardinality. | Security eval packs are def"
+    },
+    {
+      "tab": "Design",
+      "text": "Quality | Stored quality results for this installation. Refresh and exports do not run evaluations. | Refresh | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Results checked Nov 15, 2026, 3:39 AM. | Counts and totals summarize the rows returned by this bounded read, not guaranteed all-time storage cardinality. | Security eval packs are def"
+    }
+  ],
+  "dashEmpty": "Dashboards | Saved boards for this workspace. | Open a board for live widgets or create a saved layout. | New board | Refresh | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Show archived boards | No saved boards returned | Create a board to save a custom layout for this workspace.",
+  "reviewMs": 1526,
+  "saveMs": 3062,
+  "boardReqs": [
+    "POST 201"
+  ],
+  "afterSave": "ut13b-board | ut13b test board | Saved layout version 1 · active. Desktop follows saved positions. Phone stacks widgets. Widgets show the latest values they loaded. | Edit layout | Archive board… | Review current board controls | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Back to Dashboards | Board details | Runtime truth | Host-wide health | Refresh | Runtime truth | Host-wide status applies beyond the selected workspace. | Host | BL",
+  "listAfterReload": "Dashboards | Saved boards for this workspace. | Open a board for live widgets or create a saved layout. | New board | Refresh | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Show archived boards | ut13b-board | ut13b test board | 2 widgets | Runtime truth | Usage and cost | Open board",
+  "log": []
+}

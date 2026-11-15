@@ -1,0 +1,12 @@
+{
+ "/work/runs/does-not-exist": {
+  "title": "GoatCitadel Work · Runs",
+  "h1": "Run",
+  "text": "Back to Work\nRun\nRun details unavailable\n\nThat item no longer exists. Refresh to see the latest.\n\nTry again"
+ },
+ "/work/tasks/nope": {
+  "title": "GoatCitadel Work · Tasks",
+  "h1": "Task",
+  "text": "Back to Work\nTask\nTask unavailable\n\nThat item no longer exists. Refresh to see the latest.\n\nTry again"
+ }
+}

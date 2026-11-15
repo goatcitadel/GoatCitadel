@@ -1,0 +1,45 @@
+{
+ "states": [
+  {
+   "at": 430,
+   "stop": true,
+   "approval": false,
+   "btns": [],
+   "status": "Sending"
+  },
+  {
+   "at": 798,
+   "stop": true,
+   "approval": false,
+   "btns": [],
+   "status": ""
+  },
+  {
+   "at": 8244,
+   "stop": true,
+   "approval": true,
+   "btns": [],
+   "status": ""
+  },
+  {
+   "at": 9692,
+   "stop": true,
+   "approval": false,
+   "btns": [],
+   "status": ""
+  },
+  {
+   "at": 28603,
+   "stop": false,
+   "approval": false,
+   "btns": [],
+   "status": ""
+  }
+ ],
+ "approvalAt": 8244,
+ "approved": {
+  "at": 8556,
+  "firstClick": "Approve once"
+ },
+ "afterApprove": 28603
+}

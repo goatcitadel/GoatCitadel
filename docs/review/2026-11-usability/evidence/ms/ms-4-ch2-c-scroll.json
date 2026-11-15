@@ -1,0 +1,102 @@
+{
+ "firstTokenMs": 670,
+ "doneMs": 15552,
+ "samples": [
+  {
+   "k": 0,
+   "ms": 1700,
+   "top": 0,
+   "h": 335,
+   "c": 301,
+   "atBottom": false
+  },
+  {
+   "k": 1,
+   "ms": 1856,
+   "top": 0,
+   "h": 335,
+   "c": 301,
+   "atBottom": false
+  },
+  {
+   "k": 2,
+   "ms": 2074,
+   "top": 0,
+   "h": 335,
+   "c": 301,
+   "atBottom": false
+  },
+  {
+   "k": 3,
+   "ms": 2230,
+   "top": 40,
+   "h": 341,
+   "c": 301,
+   "atBottom": true
+  },
+  {
+   "k": 4,
+   "ms": 2384,
+   "top": 64,
+   "h": 365,
+   "c": 301,
+   "atBottom": true
+  },
+  {
+   "k": 5,
+   "ms": 2539,
+   "top": 100,
+   "h": 401,
+   "c": 301,
+   "atBottom": true
+  },
+  {
+   "k": 6,
+   "ms": 2694,
+   "top": 100,
+   "h": 401,
+   "c": 301,
+   "atBottom": true
+  },
+  {
+   "k": 7,
+   "ms": 2863,
+   "top": 124,
+   "h": 425,
+   "c": 301,
+   "atBottom": true
+  },
+  {
+   "k": 8,
+   "ms": 3018,
+   "top": 124,
+   "h": 425,
+   "c": 301,
+   "atBottom": true
+  },
+  {
+   "k": 9,
+   "ms": 3179,
+   "top": 184,
+   "h": 485,
+   "c": 301,
+   "atBottom": true
+  },
+  {
+   "k": 10,
+   "ms": 3344,
+   "top": 184,
+   "h": 485,
+   "c": 301,
+   "atBottom": true
+  },
+  {
+   "k": 11,
+   "ms": 3515,
+   "top": 184,
+   "h": 509,
+   "c": 301,
+   "atBottom": false
+  }
+ ]
+}

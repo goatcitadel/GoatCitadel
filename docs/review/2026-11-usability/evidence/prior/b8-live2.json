@@ -1,0 +1,180 @@
+{
+ "modelsBefore": {
+  "boxes": 3,
+  "nested": 0,
+  "maxDepth": 1,
+  "buttons": 14,
+  "touchingPairs": 2,
+  "touchingMismatchedHeight": 0,
+  "ex": [
+   "Get started | Providers & models gap=2.0",
+   "Providers & models | Local AI gap=2.0"
+  ],
+  "smallTargets": 0,
+  "url": "http://127.0.0.1:54766/settings/models#providers"
+ },
+ "modelsExpanded": {
+  "selects": [
+   "Provider or local runtime",
+   "Model",
+   "?",
+   "Credential storage",
+   "Inspect provider",
+   "Default provider",
+   "Default model"
+  ],
+  "heads": [
+   "Guided model setup",
+   "Provider profiles",
+   "Profile and transport",
+   "Provider connection",
+   "ChatGPT OAuth",
+   "Providers and model catalogs",
+   "Last known catalog",
+   "Default model",
+   "Model reasoning in Chat",
+   "Claude Code CLI: let it use GoatCitadel tools",
+   "Claude Code CLI: reuse one process between tool steps"
+  ],
+  "refresh": [
+   "Refresh",
+   "Refresh profiles",
+   "Refresh connection",
+   "Refresh OAuth status",
+   "Refresh providers",
+   "Refresh models",
+   "Refresh models",
+   "Refresh",
+   "Refresh",
+   "Refresh"
+  ],
+  "disabled": [
+   "Review endpoint change",
+   "Discard endpoint draft",
+   "Save setting",
+   "Save setting",
+   "Save setting"
+  ],
+  "h": 3512,
+  "text": "Models\n\nFind a setting, or change the ones on this page.\n\nSearch settings\nRefresh\nGeneral\nModels\nSafety\nCitadel\nAccess\nAdvanced\nModels\nGet started\nProviders & models\nLocal AI\nGuided model setup\n\nCheck the default model, provider connections, and model choices before using Chat.\n\nStep 1\nCurrent\nConnect a provider\nThe last check of Verification stub (loopback) at http://127.0.0.1:54790/v1 is stale. Check the connection again.\nStep 2\nNot started\nConfirm your model\nThis default applies only to Chats created after confirmation.\nStep 3\nNot started\nStart the first Chat\nYour first response was verified earlier. Check the connection to continue.\nConnection\nNot verified\nModel\nSuggested: verification-stub-chat\nFirst response\nVerified before · recheck the connection\nProvider or local runtime\nClaude Code CLI (local login) · not added yet\nVerification stub (loopback)\n\nGoatCitadel checks this connection before Chat can use it.\n\nModel\nverification-stub-chat\n\nConnect the provider first to choose from its models.\n\nAdvanced model settings\nCheck connection\nAdvanced provider configuration\n\nEdit each provider in one place, then inspect catalogs, routing, and advice.\n\nProvider profiles\n\nPick a provider, then edit its profile, transport, connection, and credential in one place. GoatCitadel checks and applies each change.\n\nAdd provider profile\nRefresh profiles\nProvider\nVerification stub (loopback)\nCredential configured · Default provider\nProfile and transport\n\nThe provider's label, API style, credential mode, and advanced request transport.\n\nEdit provider profile\nEdit request transport\nProvider connection\n\nThe endpoint and API credential this provider uses. GoatCitadel checks and applies each change.\n\nRefresh connection\n\nSettings version 8 · Credential: Configured. Saved values are never displayed.\n\nProvider endpoint*\n\nUse the provider API base URL. Credentials belong in the secure credential step.\n\nReview endpoint change\nDiscard endpoint draft\nAPI credential\nCredential storage\nOS keychain (default)\nInstallation environment file (plaintext)\n\nA keychain failure will not switch storage automatically.\n\nReplace API credential\n\nSaved credential: Present (env). Secret values are not returned.\n\nRemove saved API credential\nChatGPT OAuth\n\nProvider profile: Not configured. Login: Not connected.\n\nGoatCitadel handles login, secure storage, and exact credential promotion. Login approval does not change installation routing; review default routing separately.\n\nAdd ChatGPT provider\nRefresh OAuth status\nProviders and model catalogs\n\nInspect configured providers and refresh the models GoatCitadel can discover.\n\nRefresh providers\n\nSaved Chat default: Verification stub (loopback) / verification-stub-chat\n\nInspect provider\nVerification stub (loopback) (Chat default)\nNot checked\nhttp://127.0.0.1:54790\nConnection details\nLast known catalog\nRefresh models\n\nThese recorded models have not been verified by a current request. Refresh before relying on availability.\n\nLast check just now\n\nShowing a stale model catalog while remote provider refresh runs in background.\n\nFilter models\nverification-stub-chat\nSaved Chat default\n\n1–1 of 1 model name\n\nManage provider credentials and endpoints\nDefault model\n\nDefault model: verification-stub-chat · Verification stub (loopback). Conversations that already chose a model keep their choice.\n\nChange default model\nProvider advice\nModel reasoning in Chat\n\nOff by default. When on, a model's reasoning streams into Chat above its answer under “Thinking…”. While the model thinks, its newest line shows next to that label; the full text stays shut unless you open it.\n\nRefresh\n\nCurrent: Off\n\nOff\nShow model reasoning in Chat\nReasoning is the model's own unreviewed text. It is not an explanation you can check the answer against.\nOnly models that report their reasoning send any. With others, nothing changes.\nReasoning is kept in this browser only, so it is gone after a page reload.\nSave setting\nClaude Code CLI: let it use GoatCitadel tools\n\nExperimental and on by default. When on, Chat turns on the Claude Code CLI provider can ask for GoatCitadel tools. Turn it off to stop offering GoatCitadel tools to the Claude Code CLI.\n\nRefresh\n\nCurrent: On\n\nLet the Claude Code CLI use GoatCitadel tools\nTools run in GoatCitadel, not inside Claude Code. Your permissions, tool grants and approvals still decide what may run.\nEach tool step starts a new claude -p run with your own Claude sign-in, unless Claude Code CLI: reuse one process between tool steps is on and the step continues the previous one exactly. A turn that uses tools counts more against your Claude subscription.\nTools are not sandboxed by this setting. It is a GoatCitadel option, not an Anthropic feature.\nSave setting\nClaude Code CLI: reuse one process between tool steps\n\nWhen a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one; any other step still starts a new one. Tools still run in GoatCitadel. Experimental and "
+ },
+ "modelsExpandedMeasure": {
+  "boxes": 3,
+  "nested": 0,
+  "maxDepth": 1,
+  "buttons": 29,
+  "touchingPairs": 2,
+  "touchingMismatchedHeight": 0,
+  "ex": [
+   "Get started | Providers & models gap=2.0",
+   "Providers & models | Local AI gap=2.0"
+  ],
+  "smallTargets": 0
+ },
+ "measure /settings/general": {
+  "boxes": 0,
+  "nested": 0,
+  "maxDepth": 0,
+  "buttons": 8,
+  "touchingPairs": 1,
+  "touchingMismatchedHeight": 0,
+  "ex": [
+   "Appearance | Personalities · Experimen gap=2.0"
+  ],
+  "smallTargets": 0
+ },
+ "measure /settings/safety": {
+  "boxes": 0,
+  "nested": 0,
+  "maxDepth": 0,
+  "buttons": 12,
+  "touchingPairs": 4,
+  "touchingMismatchedHeight": 0,
+  "ex": [
+   "Permissions | Tools gap=2.0",
+   "Tools | Trust & policy gap=2.0",
+   "Trust & policy | Hooks gap=2.0",
+   "Hooks | Budgets gap=2.0"
+  ],
+  "smallTargets": 0
+ },
+ "measure /settings/access": {
+  "boxes": 1,
+  "nested": 0,
+  "maxDepth": 1,
+  "buttons": 4,
+  "touchingPairs": 0,
+  "touchingMismatchedHeight": 0,
+  "ex": [],
+  "smallTargets": 0
+ },
+ "measure /settings/advanced": {
+  "boxes": 6,
+  "nested": 0,
+  "maxDepth": 1,
+  "buttons": 13,
+  "touchingPairs": 0,
+  "touchingMismatchedHeight": 0,
+  "ex": [],
+  "smallTargets": 0
+ },
+ "measure /settings/citadel": {
+  "boxes": 0,
+  "nested": 0,
+  "maxDepth": 0,
+  "buttons": 10,
+  "touchingPairs": 6,
+  "touchingMismatchedHeight": 0,
+  "ex": [
+   "Citadel overview | Workspaces gap=2.0",
+   "Workspaces | Guided setup · Mason gap=2.0",
+   "Guided setup · Mason | Rules · Wards gap=2.0",
+   "Rules · Wards | Agents · Council gap=2.0"
+  ],
+  "smallTargets": 0
+ },
+ "gear": {
+  "w": 24,
+  "h": 24,
+  "current": "page"
+ },
+ "gearMenu": [
+  "Settings",
+  "Use light theme",
+  "Match system theme",
+  "Switch to classic Mission Control"
+ ],
+ "destForm": [
+  "null: Guided / Expert",
+  "null: Light / Dark / Match system",
+  "null: Comfortable / Compact",
+  "null: Off / Subtle / Normal",
+  "Destination kind: Configured channel / Keychain HTTPS webhook",
+  "Notification channel: Choose an enabled channel"
+ ],
+ "destWebhook": "s and test sends are saved after you review them; active rules send matching future events.\n\nNew notification destination\nDestination label\nDestination kind\nConfigured channel\nKeychain HTTPS webhook\n\nUse existing keychain references. Endpoint URLs and credential values are never entered or stored in this form.\n\nWebhook URL secret reference\nCredential secret reference (optional)\nReview notification destination\nClose notification editor\nApplication updates\n\nChoose when to download a version and run its installer.\n\nOpen the installed Windows app to check for updates. Its tray menu also works while the local runtime is unavailable.",
+ "localAi": {
+  "text": "Models\n\nFind a setting, or change the ones on this page.\n\nSearch settings\nRefresh\nGeneral\nModels\nSafety\nCitadel\nAccess\nAdvanced\nModels\nGet started\nProviders & models\nLocal AI\nSet up llama.cpp\n\nChoose a runtime and model for this Gateway installation. Setup plans and the diagnostic Chat are recorded in workspace ws_9cf765bcfafd49dc95ae578d.\n\nOwnership: None. Current Chat route: verification-stub · verification-stub-chat.\n\nHow will the server run?\nUse a running server\nLet GoatCitadel start one\n\nThe external process stays with its owner. Only freshly advertised models can be selected.\n\nServer URL\nModel for Chat\nChoose a verified model\nCheck server\nRefresh setup evidence\nFinish setup\nDiscard setup draft\nSend test message\nLocal AI readiness\n\nInspect this installation's hardware and model fit. Detection and recommendations are advisory; they do not establish working inference.\n\nRefresh readiness\nHardware details\nJobs and endpoints\nPlatform\nWindows, 64-bit\nCPU cores\n24\nHost memory\n64 GiB\n\nObserved just now\n\nNo Local AI job endpoint is registered. A local runtime was found.\n\nModel and backend\nSelect a model fit\nLlama 3.1 8B Instruct FP16 · ollama · excellent\nLlama 3.2 3B Instruct Q4 · llama cpp · excellent\nLlama 3.2 3B Instruct Q4 · ollama · excellent\nMistral Nemo 12B Instruct Q4 · llama cpp · excellent\nMistral Nemo 12B Instruct Q4 · ollama · excellent\nQwen2.5 Coder 7B Instruct Q4 · llama cpp · excellent\nQwen2.5 Coder 7B Instruct Q4 · ollama · excellent\nMixtral 8x7B Instruct Q4 · ollama · good\nLlama 3.1 8B Instruct FP16 · sglang · borderline\nLlama 3.1 8B Instruct FP16 · vllm · borderline\nMistral Nemo 12B Instruct Q4 · vllm · borderline\nMixtral 8x7B Instruct Q4 · sglang · borderline\nMixtral 8x7B Instruct Q4 · vllm · borderline\n\nShowing 13 of 13 returned model fits. Records 1–13.\n\nFit: excellent · high confidence\n\nEstimated memory: 19 GiB · Estimated disk: 16 GiB\n\nReasons\n64 GiB system memory vs 19 GiB estimated runtime memory.\nDetected ollama command on PATH.\nLimitations\n\nNo limitations were reported.\n\nFull model fit details\nSelected identity\nAdvisory approval requests (no execution)\nSet up llama.cpp for Chat\n\nThe managed local runtime is on Advanced › Runtime configuration.",
+  "heads": [
+   "Set up llama.cpp",
+   "Local AI readiness",
+   "Reasons",
+   "Limitations"
+  ],
+  "disabled": [
+   "Finish setup",
+   "Discard setup draft",
+   "Send test message"
+  ]
+ },
+ "mcp": {
+  "text": "Capabilities\n\nEverything GoatCitadel's AI can use, in one place.\n\nSkills\nPlugins\nConnectors\nTools\nAdvanced setup\n\nEvery setting behind the Connectors list: MCP servers, integration connections and web search.\n\nBack to Connectors\nMCP servers\nIntegrations\nWeb & Search\nMCP servers\n\nReview installation-wide saved server configuration. Enabling a server does not connect it or grant permission to call its tools.\n\nRefresh MCP servers\nRegister MCP server\nInspect MCP installation previews\nSearch MCP servers\n\nShowing 2 of 2 loaded servers.\n\nGoatCitadel Approval Inbox\n\nSaved state: Enabled\n\nRemote transport · Last connection state: Connected\n\nReview disable\nConnections, tools and transport\nReview delete\nEdit configuration\n\nThis server is managed by GoatCitadel.\n\nSaved server details\nGoatCitadel Durable Tasks\n\nSaved state: Enabled\n\nRemote transport · Last connection state: Connected\n\nReview disable\nConnections, tools and transport\nReview delete\nEdit configuration\n\nThis server is managed by GoatCitadel.\n\nSaved server details\nOperator requests\n\nInspect GoatCitadel's bounded elicitation list. Requests without a workspace are identified separately. This is not the approval inbox.\n\nInspect MCP requests",
+  "heads": [
+   "H2:Advanced setup",
+   "H3:MCP servers",
+   "H4:GoatCitadel Approval Inbox",
+   "H4:GoatCitadel Durable Tasks",
+   "H4:Operator requests"
+  ]
+ }
+}

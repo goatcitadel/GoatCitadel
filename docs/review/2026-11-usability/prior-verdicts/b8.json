@@ -1,0 +1,878 @@
+[
+  {
+    "priorId": "ST-02",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileSettings.tsx:304",
+      "apps/mission-control-next/src/cockpit/areas/settings/RulesPrecedence.tsx:53",
+      "docs/review/2026-11-usability/evidence/prior/ST-02.png"
+    ],
+    "note": "Live on /settings/safety: Permissions opens with one sentence (current effective profile: Safe), a Change profile button and the rules explainer; policy contexts, profiles, overrides and grants sit under a collapsed Advanced disclosure. Expanded, the page measures about 2,290 px (was 2,950) and shows no raw IDs (they sit under 'Policy identity' in TechnicalDetails). The per-section Refresh buttons that remain are tracked under ST-N19."
+  },
+  {
+    "priorId": "ST-03",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/TechnicalDetails.tsx:7",
+      "apps/mission-control-next/src/app/MissionControlNextApp.tsx:914",
+      "docs/review/2026-11-usability/evidence/prior/b8-technical-details-toggle.json"
+    ],
+    "note": "Measured on six Settings pages with the preference off and on: switching it on adds the 'Technical details' / 'Policy identity' disclosures (Models +3, Safety +5, Advanced +2); off hides them. TechnicalDetails renders nothing unless the preference is on, and the shell also tags itself ui-hide-technical."
+  },
+  {
+    "priorId": "ST-04",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/ApprovalModeControl.tsx:210",
+      "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileEditor.tsx:201",
+      "apps/mission-control-next/src/cockpit/areas/settings/LocalOperatorOverrides.tsx:165",
+      "apps/mission-control-next/src/cockpit/areas/settings/ToolGrantSettings.tsx:310"
+    ],
+    "note": "Each way to skip normal prompts now goes through a named review: the approval-rule dialog 'Skip normal tool prompts?', the profile editor's 'Review profile change', a temporary override that needs an acknowledgement checkbox plus 'Review temporary override', and tool grants that warn when they widen access. Not reproduced live (read from code)."
+  },
+  {
+    "priorId": "ST-05",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/ProviderProfileReview.tsx:76",
+      "apps/mission-control-next/src/cockpit/areas/settings/ProviderProfileReview.tsx:137"
+    ],
+    "note": "The provider profile review shows an alert paragraph outside any collapsed block ('Certificate verification will be disabled ... An impersonated endpoint could receive prompts, responses and credentials') and turns the apply button red only when certificate checks are skipped. Not reproduced live."
+  },
+  {
+    "priorId": "ST-06",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/RulesPrecedence.tsx:53",
+      "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileSettings.tsx:304",
+      "docs/review/2026-11-usability/evidence/prior/ST-02.png"
+    ],
+    "note": "Live: Safety › Permissions shows 'How allow and deny rules combine': deny always wins, then the six checks in order (deny lists, tool groups, profile limit, Wards, grants, Trust & policy). 'Effective policy contexts' shows the profile and approval behaviour per surface. There is no per-action calculator, but the page answers which rule wins and why."
+  },
+  {
+    "priorId": "ST-07",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/ModelsSettings.tsx:74",
+      "apps/mission-control-next/src/cockpit/areas/settings/ProviderCatalogSettings.tsx:135",
+      "apps/mission-control-next/src/cockpit/areas/settings/ProviderRoutingSettings.tsx:91",
+      "docs/review/2026-11-usability/evidence/prior/ST-07.png",
+      "docs/review/2026-11-usability/evidence/prior/b8-live2.json"
+    ],
+    "note": "The guided setup is now primary and the expert editors sit behind 'Advanced provider configuration'. Opened, that block still shows a provider list, an 'Inspect provider' picker and a 'Default provider' picker in three sections, on top of the guided card's own provider picker, plus ten Refresh buttons.",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "severity": "friction",
+      "kind": "bug",
+      "title": "Advanced provider configuration offers three more provider choosers under the guided setup's own provider picker",
+      "trigger": "Settings › Models › Providers & models › Advanced provider configuration.",
+      "expected": "One selected provider drives the details, so the operator chooses a provider once.",
+      "actual": "The expanded block has a Provider radio list (profile editing), an 'Inspect provider' select (catalogs) and a 'Default provider' select (routing), each independent of the guided card's picker; the page also carries ten Refresh buttons. Live, 7 selects in total.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/ModelsSettings.tsx:74",
+        "apps/mission-control-next/src/cockpit/areas/settings/ProviderCatalogSettings.tsx:135",
+        "apps/mission-control-next/src/cockpit/areas/settings/ProviderRoutingSettings.tsx:91",
+        "docs/review/2026-11-usability/evidence/prior/ST-07.png"
+      ],
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/ModelsSettings.tsx"
+    }
+  },
+  {
+    "priorId": "ST-08",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/ChannelsSettings.tsx:29",
+      "packages/mission-control-shared/src/api/channel-plan-handoff.ts:21",
+      "packages/threaded-surface-core/src/chat/WorkspaceChannelPlanReview.tsx:22",
+      "docs/review/2026-11-usability/evidence/prior/b8-live1.json"
+    ],
+    "note": "Finalizing a channel draft creates the plan, then navigates to /chat with the plan, draft and revision in the address; Chat reads that handoff and renders WorkspaceChannelPlanReview, so the plan appears. The old Settings › Channels address now redirects to Chat › Messaging › Advanced channel setup (live). Not reproduced end to end (needs a channel draft with a passing live test)."
+  },
+  {
+    "priorId": "ST-09",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/ToolGrantSettings.tsx:42",
+      "apps/mission-control-next/src/cockpit/areas/settings/ToolGrantSettings.tsx:310"
+    ],
+    "note": "New grants start as 'ttl' (a dated expiry) scoped to the workspace, not 'Until revoked'. A global, wildcard or persistent allow grant gets an extra alert ('This grant widens access ... Review every matching target') inside the review dialog. Not reproduced live."
+  },
+  {
+    "priorId": "ST-10",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionsSettings.tsx:212",
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionsSettings.tsx:216",
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionDetails.tsx:36"
+    ],
+    "note": "Saved integrations read 'Enabled/Disabled · Connectivity unverified', with the saved status labelled 'Configured status ... does not verify connectivity; choose Manage to run diagnostics'. 'Connected' only comes from diagnostics, which show when they were observed. Code read; no integrations in the sandbox."
+  },
+  {
+    "priorId": "ST-01",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileSettings.tsx:197",
+      "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileSettings.tsx:207",
+      "docs/review/2026-11-usability/evidence/prior/ST-01.png",
+      "docs/review/2026-11-usability/evidence/prior/b8-live1.json"
+    ],
+    "note": "Live: Change profile lists four profiles; 'Safe' is the checked radio and carries the 'Current' badge on first render."
+  },
+  {
+    "priorId": "ST-11",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/ST-11.png",
+      "docs/review/2026-11-usability/evidence/prior/b8-live1.json"
+    ],
+    "note": "Live: Models › Get started renders the setup summary (three steps, Open setup) instead of an empty panel, and the old /settings/onboarding address lands on the same Models page."
+  },
+  {
+    "priorId": "ST-12",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/settings-index.ts:30",
+      "apps/mission-control-next/src/cockpit/areas/settings/settings-index.ts:34",
+      "docs/review/2026-11-usability/evidence/prior/ST-12.png",
+      "docs/review/2026-11-usability/evidence/prior/b8-live4.json"
+    ],
+    "note": "Live: typing 'dark' or 'notification routing' in Search settings finds General; 'ollama' finds Providers & models. The search terms now include theme, light, dark, notification routing and ollama."
+  },
+  {
+    "priorId": "ST-13",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:263",
+      "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:274",
+      "docs/review/2026-11-usability/evidence/prior/ST-13.png",
+      "docs/review/2026-11-usability/evidence/prior/b8-live2.json"
+    ],
+    "note": "Settings shows as current now (aria-current plus a filled gear), and the menu's first item opens Settings. But Settings is still a 24 px icon in the sidebar footer named 'Settings and account', and the menu holds no account entry (Settings, a theme item, Switch to classic).",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "The sidebar gear is named 'Settings and account' but opens a menu with no account entry",
+      "trigger": "Look at the sidebar footer; open the gear menu.",
+      "expected": "A control named for Settings and account leads to both, or is named only for what it does.",
+      "actual": "Measured live: the gear is 24 x 24 px; its menu lists Settings, Use light theme, Match system theme and Switch to classic Mission Control. Nothing account-related.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:263",
+        "docs/review/2026-11-usability/evidence/prior/ST-13.png"
+      ],
+      "owner": "apps/mission-control-next/src/cockpit/app/Sidebar.tsx"
+    }
+  },
+  {
+    "priorId": "ST-14",
+    "verdict": "fixed",
+    "evidence": [
+      "DESIGN.md:69",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelWardsSettings.tsx:96",
+      "apps/mission-control-next/src/app/route-navigation-metadata.ts:10"
+    ],
+    "note": "DESIGN-DECISION: DESIGN.md:69 says 'Plain names first, Citadel names second (Rules · Wards)'. Live: the Citadel tabs read 'Rules · Wards', 'Agents · Council', 'Secrets · Vault', 'Export/import · Blueprint', and the empty state says 'No rules yet'. Enums go through plain-word label tables."
+  },
+  {
+    "priorId": "ST-15",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/GuidedModelPlanDialog.tsx:32",
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:333",
+      "apps/mission-control-next/src/features/threaded-surface/styles/change-plans.css:186",
+      "docs/review/2026-11-usability/evidence/prior/b8-st15-css-cascade.json",
+      "docs/review/2026-11-usability/evidence/prior/ST-15.png"
+    ],
+    "note": "Measured with the real stylesheets on a dialog-shaped element: with the class chat-change-plan-modal the last (primary) button keeps the neutral grey fill and the destructive one only turns its text red; without the class they are accent and red. The cockpit's rules live in a CSS layer, the classic change-plan CSS is unlayered and wins. The dialog itself was not opened (no pending plan).",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "both",
+      "confidence": "likely",
+      "severity": "friction",
+      "kind": "bug",
+      "title": "The provider change-plan dialog's main action looks the same as Cancel",
+      "trigger": "Settings › Models › Providers & models; start a change that opens the review dialog (it uses the shared ChatChangePlanActionDialog).",
+      "expected": "The confirming action is the accent button, and a destructive one is red-filled.",
+      "actual": "Measured on the dialog's real classes: 'Apply exact change' computes to the same dark fill and border as 'Keep editing' (accent only without chat-change-plan-modal); a destructive button is not filled.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/GuidedModelPlanDialog.tsx:32",
+        "apps/mission-control-next/src/cockpit/styles/cockpit.css:333",
+        "apps/mission-control-next/src/features/threaded-surface/styles/change-plans.css:186",
+        "docs/review/2026-11-usability/evidence/prior/b8-st15-css-cascade.json"
+      ],
+      "owner": "apps/mission-control-next/src/features/threaded-surface/styles/change-plans.css"
+    }
+  },
+  {
+    "priorId": "ST-16",
+    "verdict": "fixed",
+    "evidence": [
+      "DESIGN.md:103",
+      "docs/review/2026-11-usability/evidence/prior/b8-live2.json"
+    ],
+    "note": "DESIGN-DECISION: DESIGN.md:103 forbids a bordered box inside another. Measured live on Models (expanded), General, Safety, Access, Advanced and Citadel: no bordered box sits inside another (deepest nesting 1), sections use hairline separators."
+  },
+  {
+    "priorId": "ST-17",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/settings-vocabulary.ts:219",
+      "apps/mission-control-next/src/cockpit/areas/settings/HooksSettings.tsx:123",
+      "apps/mission-control-next/src/cockpit/areas/settings/HooksSettings.tsx:309"
+    ],
+    "note": "The hook mode select now reads 'Observe only', 'Can change the request', 'Can block the action'; creating or editing a non-observe hook gets a red 'Apply reviewed hook action' review. Code read."
+  },
+  {
+    "priorId": "ST-18",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/LocalAiSettings.tsx:228",
+      "apps/mission-control-next/src/cockpit/areas/settings/LocalAiSettings.tsx:113",
+      "apps/mission-control-next/src/cockpit/areas/settings/LlamaSetupSettings.tsx:16",
+      "docs/review/2026-11-usability/evidence/prior/ST-18.png"
+    ],
+    "note": "Live Models › Local AI: the real llama.cpp setup (use a running server or let GoatCitadel start one, Check server, Finish setup) is the first section; the advisory 'Request download/serve approval' buttons are tucked in a closed 'Advisory approval requests (no execution)' disclosure that says they only record intent."
+  },
+  {
+    "priorId": "ST-19",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationManagementSettings.tsx:42",
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationManagementSettings.tsx:88",
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionsSettings.tsx:71"
+    ],
+    "note": "One 'Saved integrations' list; the management panel says it 'keeps no second list' and opens the chosen connection from that list. The three management views are one labelled segmented control ('Management views'). Code read."
+  },
+  {
+    "priorId": "ST-20",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/ChannelLifecycleControls.tsx:200",
+      "apps/mission-control-next/src/cockpit/areas/settings/ChannelsSettings.tsx:339",
+      "docs/review/2026-11-usability/evidence/prior/b8-live1.json"
+    ],
+    "note": "Channel setup (now Chat › Messaging › Advanced channel setup) has 'Review disable/enable channel', 'Remove channel connection' and 'Delete saved draft', each through a reviewed dialog with a confirmation message. Code read."
+  },
+  {
+    "priorId": "ST-21",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/ChannelLifecycleControls.tsx:232",
+      "apps/mission-control-next/src/cockpit/areas/settings/DeviceAccessSettings.tsx:98",
+      "apps/mission-control-next/src/cockpit/areas/settings/ProviderProfileReview.tsx:137"
+    ],
+    "note": "Most red buttons now are delete, revoke, replace or access-widening (TLS skip, hook that changes requests, prompt skipping). One is not: the dialog behind 'Review disable/enable channel' confirms with a red 'Apply reviewed channel change' even when the change is only enabling or disabling.",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Enabling or disabling a channel is confirmed with the red delete-style button",
+      "trigger": "Chat › Messaging › Advanced channel setup › a connected channel › Review disable channel.",
+      "expected": "A reversible change uses primary or secondary styling; red is for removing.",
+      "actual": "The confirm button is variant danger whatever the action (toggle or delete).",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/ChannelLifecycleControls.tsx:232"
+      ],
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/ChannelLifecycleControls.tsx"
+    }
+  },
+  {
+    "priorId": "ST-22",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/Field.tsx:38",
+      "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileFields.tsx:65",
+      "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileFields.tsx:60"
+    ],
+    "note": "The shared Field wires help and error text to its control with aria-describedby and aria-invalid, and Settings uses it in 57 places. The permission profile form still hand-builds some fields: the control has an aria-label and the help line below it is not linked to it.",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Some Settings forms show help text that the field does not announce",
+      "trigger": "Settings › Safety › Permissions › Advanced › New permission profile (Tool patterns, Allow rules, Deny rules).",
+      "expected": "Help and validation text is read with the field.",
+      "actual": "These textareas carry an aria-label and a sibling help span with no aria-describedby, so 'One pattern per line, or separate with commas' is not announced with the field. Not reproduced with a screen reader.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileFields.tsx:65",
+        "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileFields.tsx:60"
+      ],
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileFields.tsx"
+    }
+  },
+  {
+    "priorId": "ST-23",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/BudgetModeControl.tsx:27",
+      "apps/mission-control-next/src/cockpit/areas/settings/BudgetModeControl.tsx:70"
+    ],
+    "note": "Live: the control is titled 'Budget preference' and says 'A saved preference ... This is not a dollar limit' and 'no mode switches models or caps spending today'. The rail description says the same."
+  },
+  {
+    "priorId": "ST-24",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/DeviceAccessSettings.tsx:89",
+      "apps/mission-control-next/src/cockpit/areas/settings/DeviceAccessSettings.tsx:147"
+    ],
+    "note": "The device the operator is using is marked ' · This device', and the revoke dialog says 'This can disconnect the current device. A new approval is needed to regain access.' Code read; the sandbox has no device grants."
+  },
+  {
+    "priorId": "ST-25",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/DesktopUpdateSettings.tsx:122",
+      "apps/mission-control-next/src/cockpit/areas/settings/DesktopUpdateSettings.tsx:131"
+    ],
+    "note": "Choosing Preview opens 'Use Preview updates?' ('Preview builds from main are unsigned. Checksums do not establish publisher identity. Downloads and installer execution still require your action') with a red confirm and a stale-state guard. Desktop-app only; read from code."
+  },
+  {
+    "priorId": "ST-26",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/NotificationRoutingFields.tsx:63",
+      "docs/review/2026-11-usability/evidence/prior/ST-26.png",
+      "docs/review/2026-11-usability/evidence/prior/b8-live2.json"
+    ],
+    "note": "Live: New destination › Keychain HTTPS webhook asks for a 'Webhook URL secret reference' typed as free text ('Use existing keychain references'), and nothing on the page creates or lists one. The provider and web-search keys now use secure inputs, so this is the remaining gap.",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "severity": "stall",
+      "kind": "dead-end",
+      "title": "A notification webhook needs a keychain reference that nothing in the app creates",
+      "trigger": "Settings › General › Notification routing › New destination › Destination kind: Keychain HTTPS webhook.",
+      "expected": "The form creates the secret through a secure input, or says exactly where and how to create the reference.",
+      "actual": "Two plain text boxes for a secret reference; the copy says 'Use existing keychain references' and gives no format and no place to make one. Only 'Configured channel' destinations can be completed from the screen.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/NotificationRoutingFields.tsx:63",
+        "docs/review/2026-11-usability/evidence/prior/ST-26.png"
+      ],
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/NotificationRoutingFields.tsx"
+    }
+  },
+  {
+    "priorId": "ST-27",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/McpServerCreate.tsx:97",
+      "apps/mission-control-next/src/cockpit/areas/settings/McpServerCreate.tsx:114",
+      "apps/mission-control-next/src/cockpit/areas/settings/McpServersSettings.tsx:248",
+      "apps/mission-control-next/src/cockpit/areas/settings/McpServerInspection.tsx:198",
+      "docs/review/2026-11-usability/evidence/prior/ST-27.png"
+    ],
+    "note": "Register MCP server is a toolbar button now, and the create dialog opens 'Use an advertised template' above the manual fields. Connecting is still inside the per-server inspection sheet, reached through a button labelled 'Connections, tools and transport'.",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "To connect an MCP server the operator opens a button named 'Connections, tools and transport'",
+      "trigger": "Capabilities › Connectors › Advanced setup › MCP servers; find how to connect a saved server.",
+      "expected": "A visible Connect action, or a name that says connect.",
+      "actual": "The row offers Review enable, 'Connections, tools and transport', Review delete and Edit configuration; the connect controls are inside the first sheet. The create dialog also prints 'Saved server ID: ...' as plain text.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/McpServersSettings.tsx:248",
+        "apps/mission-control-next/src/cockpit/areas/settings/McpServerInspection.tsx:198",
+        "apps/mission-control-next/src/cockpit/areas/settings/McpServerCreate.tsx:85",
+        "docs/review/2026-11-usability/evidence/prior/ST-27.png"
+      ],
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/McpServersSettings.tsx"
+    }
+  },
+  {
+    "priorId": "ST-28",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b8-live2.json"
+    ],
+    "note": "Measured live on six Settings pages: no two action buttons sit closer than 4 px; the only touching controls are the 2 px gaps inside the segmented tab strips, by design. Nothing under 24 px."
+  },
+  {
+    "priorId": "ST-29",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/GatewayAuthSettings.tsx:46",
+      "docs/review/2026-11-usability/evidence/prior/ST-03.png"
+    ],
+    "note": "Live Settings › Access with sign-in off: a warning Callout 'Anyone who can reach this app can change settings. Set up sign-in.' above a Configure access button, instead of plain grey text."
+  },
+  {
+    "priorId": "ST-30",
+    "verdict": "fixed",
+    "evidence": [
+      "scripts/check-mission-control-next-page-anatomy.mjs:34"
+    ],
+    "note": "git grep finds no bare 'rounded' class in cockpit or shared TSX (only a local variable and one stylesheet comment), and the page-anatomy guard counts bare-rounded."
+  },
+  {
+    "priorId": "ST-31",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/ModelsSettings.tsx:72",
+      "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileSettings.tsx:100",
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:103"
+    ],
+    "note": "Sections share one chrome (a hairline top border with pt-4) and the token the Channels section used (border-line-control) is defined (cockpit.css:103). Channels moved to Chat › Messaging › Advanced with an sr-only h2 and h3 sections, no skipped level."
+  },
+  {
+    "priorId": "N-03",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/ST-11.png",
+      "docs/review/2026-11-usability/evidence/prior/b8-live1.json"
+    ],
+    "note": "Same check as ST-11: Models › Get started and /settings/onboarding both render the guided setup with Open setup; no blank panel."
+  },
+  {
+    "priorId": "N-09",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b8-technical-details-toggle.json",
+      "apps/mission-control-next/src/cockpit/ui/TechnicalDetails.tsx:7"
+    ],
+    "note": "Same check as ST-03: the toggle adds and removes the technical-details disclosures on Models, Safety and Advanced."
+  },
+  {
+    "priorId": "N-11",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionsSettings.tsx:160",
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionsSettings.tsx:83"
+    ],
+    "note": "git grep finds no 'classic Settings view' text; the section now reads 'Saved integrations' with one 'Add and manage integrations' button, and the empty line says 'Use Add and manage integrations to set up a connection'."
+  },
+  {
+    "priorId": "ST-N03",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/GuidedModelSteps.tsx:59",
+      "apps/mission-control-next/src/cockpit/areas/settings/CockpitGuidedModelSetup.tsx:81",
+      "docs/review/2026-11-usability/evidence/prior/b8-live1.json"
+    ],
+    "note": "Live: Models › Providers & models prints its own bordered three-step list ('Connect a provider / Confirm your model / Start the first Chat'), while Get started on the same page prints 'Choose a model / Choose your safety settings / Send a test message'. Their states can disagree (Step 1 'Current', connection 'Not verified' on one; 'Setup is done' on the other).",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "severity": "friction",
+      "kind": "wrong-status",
+      "title": "Models shows two different step lists for the same setup, with different names and states",
+      "trigger": "Settings › Models › Get started, then Providers & models.",
+      "expected": "One stepper vocabulary; Providers & models shows a short status and links to setup.",
+      "actual": "Get started: 'Setup is done and your first Chat answer is verified', three steps Done. Providers & models: Step 1 Connect a provider 'Current' (last check stale), step 3 'Check the connection to continue', in three bordered cards.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/GuidedModelSteps.tsx:59",
+        "docs/review/2026-11-usability/evidence/prior/b8-live1.json"
+      ],
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/GuidedModelSteps.tsx"
+    }
+  },
+  {
+    "priorId": "ST-N09",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionsSettings.tsx:170",
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionsSettings.tsx:173"
+    ],
+    "note": "Enabling or disabling a saved integration still opens a 'Enable integration?' confirm modal with a long paragraph, and the intro line still says 'across all workspaces'. The row asked for an inline toggle with an undo toast. Code read (no integrations in the sandbox).",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "severity": "friction",
+      "kind": "approval-friction",
+      "title": "Switching an integration on or off needs a modal with a paragraph of text",
+      "trigger": "Capabilities › Connectors › Advanced setup › Integrations › Review enable on a saved integration.",
+      "expected": "An inline switch that applies and offers undo; reversible changes do not interrupt.",
+      "actual": "A modal titled 'Enable integration?' / 'Disable integration?' with a long message and 'Enable reviewed integration' / 'Keep current state' buttons.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionsSettings.tsx:170",
+        "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionsSettings.tsx:173"
+      ],
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionsSettings.tsx"
+    }
+  },
+  {
+    "priorId": "ST-N12",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/features/native-routes/settings/LlamaSetupControls.tsx:44",
+      "apps/mission-control-next/src/features/native-routes/settings/LlamaSetupControls.tsx:47",
+      "apps/mission-control-next/src/features/native-routes/settings/LlamaSetupControls.tsx:148",
+      "docs/review/2026-11-usability/evidence/prior/ST-18.png"
+    ],
+    "note": "Live Models › Local AI shows 'Setup plans and the diagnostic Chat are recorded in workspace ws_9cf765bcfafd49dc95ae578d' and 'Current Chat route: verification-stub · verification-stub-chat', and the re-read button is 'Refresh setup evidence'.",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "Local AI setup prints a raw workspace ID and raw provider and model IDs in its first sentences",
+      "trigger": "Settings › Models › Local AI.",
+      "expected": "The workspace and route are named; IDs are only in Technical details.",
+      "actual": "'recorded in workspace ws_...' and 'Current Chat route: verification-stub · verification-stub-chat' appear in body copy.",
+      "evidence": [
+        "apps/mission-control-next/src/features/native-routes/settings/LlamaSetupControls.tsx:44",
+        "apps/mission-control-next/src/features/native-routes/settings/LlamaSetupControls.tsx:47",
+        "docs/review/2026-11-usability/evidence/prior/ST-18.png"
+      ],
+      "owner": "apps/mission-control-next/src/features/native-routes/settings/LlamaSetupControls.tsx"
+    }
+  },
+  {
+    "priorId": "ST-N14",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/NotificationRoutingSettings.tsx:113",
+      "apps/mission-control-next/src/cockpit/areas/settings/NotificationRoutingSettings.tsx:155",
+      "apps/mission-control-next/src/cockpit/areas/settings/NotificationRoutingSettings.tsx:161"
+    ],
+    "note": "Recent deliveries now use the notification vocabulary and plural(). Three spots remain: the latest test line is hand-humanized with replaceAll, a rule lists its raw event types, and a removed destination reads 'Unavailable destination <id>'. No destinations exist in the sandbox; read from code.",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "Notification routing still shows a hand-made test status, raw event types and a raw destination ID",
+      "trigger": "Settings › General › Notification routing with a destination, a rule and a test send.",
+      "expected": "Statuses and event types in plain words; a removed destination named as such.",
+      "actual": "'Latest test for X: <status with underscores replaced>', event types joined as stored, and 'Unavailable destination <id>'.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/NotificationRoutingSettings.tsx:113",
+        "apps/mission-control-next/src/cockpit/areas/settings/NotificationRoutingSettings.tsx:155",
+        "apps/mission-control-next/src/cockpit/areas/settings/NotificationRoutingSettings.tsx:161"
+      ],
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/NotificationRoutingSettings.tsx"
+    }
+  },
+  {
+    "priorId": "ST-N18",
+    "verdict": "cannot-check",
+    "evidence": [],
+    "note": "ENGINEERING-NOTE: SettingsSectionTabs.tsx:132 now documents the choice ('Panels open with a heading or text, not a control, so the tabs pattern keeps them a tab stop'), the earlier review marked it already satisfied, and the only operator symptom is one extra Tab stop per panel, which I did not measure."
+  },
+  {
+    "priorId": "ST-N19",
+    "verdict": "open",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b8-crawl-refresh.json",
+      "DESIGN.md:102"
+    ],
+    "note": "Live (b8-crawl-refresh.json): /settings/models has four buttons all named just 'Refresh' (the page's one plus three per-setting ones); Safety has the page Refresh plus 'Refresh permission profiles', 'Refresh temporary overrides' and 'Refresh autonomous grants'; Access, Advanced and General follow the same pattern with named section buttons. DESIGN.md:102 puts one Refresh in the page header. The earlier ruling to keep section buttons does not make the repeated bare 'Refresh' label clear.",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "live",
+      "confidence": "confirmed",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "Settings › Models has four buttons all named 'Refresh', and other pages add section Refresh buttons beside the page one",
+      "trigger": "Open Settings › Models.",
+      "expected": "One Refresh in the page header; section retries only in error states.",
+      "actual": "Four buttons all labelled 'Refresh' (page, Model reasoning, Claude CLI tools, reuse one process), so a screen reader and a sighted operator cannot tell which one reloads the page; Safety, Access and Advanced add 3 to 4 section Refresh buttons.",
+      "evidence": [
+        "DESIGN.md:102",
+        "docs/review/2026-11-usability/evidence/prior/b8-crawl-refresh.json"
+      ],
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/SettingsArea.tsx"
+    }
+  },
+  {
+    "priorId": "ST-N20",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/DesktopUpdateSettings.tsx:33",
+      "apps/mission-control-next/src/cockpit/areas/settings/DesktopUpdateSettings.tsx:62",
+      "apps/mission-control-next/src/cockpit/areas/settings/DesktopUpdateSettings.tsx:71"
+    ],
+    "note": "Commit hashes are printed inline ('· a1b2c3d4') and the download progress is computed by hand with Math.round(bytes / 1048576) instead of the shared size helper. Visible only in the Windows desktop app; read from code, not reproduced live.",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "The desktop update panel prints commit hashes beside the version",
+      "trigger": "Windows desktop app › Settings › General › Application updates.",
+      "expected": "Hashes sit under Technical details; sizes use the shared formatter.",
+      "actual": "'· <8-character hash>' after the installed version and after the offered version.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/DesktopUpdateSettings.tsx:33",
+        "apps/mission-control-next/src/cockpit/areas/settings/DesktopUpdateSettings.tsx:62",
+        "apps/mission-control-next/src/cockpit/areas/settings/DesktopUpdateSettings.tsx:71"
+      ],
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/DesktopUpdateSettings.tsx"
+    }
+  },
+  {
+    "priorId": "ST-N22",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/SettingsArea.tsx:242",
+      "apps/mission-control-next/src/cockpit/areas/settings/SettingsArea.tsx:381",
+      "docs/review/2026-11-usability/evidence/prior/b8-live4.json"
+    ],
+    "note": "The header now reads 'Find a setting, or change the ones on this page.' and the device copy 'Device grants for this GoatCitadel installation', so two of three are fixed. Search results still end each hit with 'Opens cockpit controls' (live).",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "Every Settings search hit says 'Opens cockpit controls'",
+      "trigger": "Settings › Search settings › type 'dark'.",
+      "expected": "Hits show only what each setting is.",
+      "actual": "Each result ends 'Opens cockpit controls' (or '... and management links').",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/SettingsArea.tsx:381",
+        "docs/review/2026-11-usability/evidence/prior/ST-12.png"
+      ],
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/SettingsArea.tsx"
+    }
+  },
+  {
+    "priorId": "ST-N23",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/FirstRunArea.tsx:47",
+      "apps/mission-control-next/src/cockpit/areas/settings/FirstRunArea.tsx:165"
+    ],
+    "note": "Get started has an 'Exit setup' button that returns to Models › Get started, and 'Open Chat' when finished; the sidebar being hidden during first run no longer traps the operator. The literal ?shell=cockpit was ruled harmless."
+  },
+  {
+    "priorId": "ST-01~fu206",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/ModelsSettings.tsx:74",
+      "apps/mission-control-next/src/cockpit/areas/settings/ProviderList.tsx:40",
+      "docs/review/2026-11-usability/evidence/prior/ST-07.png"
+    ],
+    "note": "Same open defect as ST-07: provider setup is down from seven surfaces to a guided card plus one expert block, and the two 'Manage provider' / 'Edit' selects became one Provider list, but Inspect provider and Default provider remain separate pickers.",
+    "sameFindingAs": "ST-07"
+  },
+  {
+    "priorId": "ST-07~fu206",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelWardsSettings.tsx:96",
+      "apps/mission-control-next/src/app/route-navigation-metadata.ts:10"
+    ],
+    "note": "Live: the Citadel page has seven tabs, each plain name first ('Citadel overview', 'Workspaces', 'Guided setup · Mason', 'Rules · Wards', ...), and the empty state reads 'No rules yet'."
+  },
+  {
+    "priorId": "ST-08~fu206",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/RulesPrecedence.tsx:53",
+      "apps/mission-control-next/src/cockpit/areas/settings/LlamaSetupSettings.tsx:16"
+    ],
+    "note": "Safety › Permissions explains which of the five rule places wins and in what order; the llama.cpp setup and the managed runtime now point at each other ('llama.cpp setup is on Models › Local AI', 'Open validated llama.cpp setup')."
+  },
+  {
+    "priorId": "ST-12~fu206",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/features/native-routes/settings/ManagedRuntimeReview.tsx:14",
+      "apps/mission-control-next/src/cockpit/areas/settings/ManagedRuntimeSettings.tsx:236",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelMetadataEditor.tsx:43",
+      "apps/mission-control-next/src/cockpit/areas/settings/McpServerEditor.tsx:119"
+    ],
+    "note": "The wording the row quoted ('dedicated Gateway settings owner', 'cost posture', 'Auth posture') is gone from Settings. 'Retained draft' and 'settings revision N' remain in the managed runtime review text and in the Citadel and MCP editors, against DESIGN.md:89.",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "Some Settings review texts still say 'retained draft' and print a settings revision number",
+      "trigger": "Advanced › Managed local runtime › review a change; Citadel › Workspaces metadata or MCP server editor after another change.",
+      "expected": "'Your draft started from an older version' and no revision numbers outside Technical details.",
+      "actual": "'... refresh and review your retained draft. Review installation settings revision <n> ...' and 'applying your retained draft'.",
+      "evidence": [
+        "apps/mission-control-next/src/features/native-routes/settings/ManagedRuntimeReview.tsx:14",
+        "apps/mission-control-next/src/cockpit/areas/settings/CitadelMetadataEditor.tsx:43",
+        "apps/mission-control-next/src/cockpit/areas/settings/McpServerEditor.tsx:119"
+      ],
+      "owner": "apps/mission-control-next/src/features/native-routes/settings/ManagedRuntimeReview.tsx"
+    }
+  },
+  {
+    "priorId": "ST-16~fu206",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/AppearanceSettings.tsx:45",
+      "apps/mission-control-next/src/cockpit/areas/settings/AppearanceSettings.tsx:30"
+    ],
+    "note": "Live: Appearance says 'These preferences apply right away. This browser tries to save each change automatically.' and confirms each change ('Color theme saved.' or a failure line). Budget and approval stay explicit-save and say what they apply to."
+  },
+  {
+    "priorId": "ST-17~fu206",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/McpDraftLeave.tsx:5",
+      "apps/mission-control-next/src/cockpit/areas/settings/ProviderDraftLeave.tsx:5",
+      "apps/mission-control-next/src/cockpit/areas/settings/ChannelDraftLeave.tsx:5"
+    ],
+    "note": "McpDraftLeave, ProviderDraftLeave and ChannelDraftLeave all render the one shared UnsavedChangesDialog (Save and continue, Keep draft, Discard, Cancel); the Vault and approval dialogs the row named are replace/delete confirmations, not unsaved-changes prompts."
+  },
+  {
+    "priorId": "ST-18~fu206",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/ProviderManagementSettings.tsx:133",
+      "apps/mission-control-next/src/cockpit/areas/settings/ProviderSavedCredential.tsx:17",
+      "apps/mission-control-next/src/cockpit/areas/settings/McpCreateFields.tsx:12",
+      "apps/mission-control-next/src/cockpit/areas/settings/ApprovalModeControl.tsx:127"
+    ],
+    "note": "Each control now states why it is unavailable: 'Add provider profile' (addReason), 'Remove saved API credential' (blocked reason), 'Save as enabled' (enable reason) and the bypass option ('... is unavailable here'). Open Chat only appears when setup is done."
+  },
+  {
+    "priorId": "ST-22~fu206",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/app/route-model.ts:571",
+      "apps/mission-control-next/src/app/route-model.ts:550",
+      "apps/mission-control-next/src/app/route-model.ts:634"
+    ],
+    "note": "Rail descriptions now match the pages: Runtime 'Managed local runtime, Gateway process, and local voice'; Access 'Gateway sign-in, approved devices, and desktop and mobile access checks'; Budgets 'a budget preference ... not a dollar limit'."
+  },
+  {
+    "priorId": "PROVIDER-03",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/claude-code-cli-readiness.ts:102",
+      "apps/gateway/src/services/claude-code-cli-readiness.ts:58",
+      "apps/gateway/src/services/claude-code-cli-readiness.ts:105"
+    ],
+    "note": "Readiness is 'ready' only when the status probe exits 0 and reports a subscription login; exit 1 counts only as logged out when the JSON says so; any other failure is 'unavailable' and is not cached, so the next check re-probes. Code read, not run against a real Claude CLI."
+  },
+  {
+    "priorId": "UX-005",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx:98",
+      "apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx:103",
+      "apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx:105"
+    ],
+    "note": "Save remembers the edit count at submit; if the operator typed more while saving, the editor keeps the newer text, and the status says 'Saved the previous version ... Your newer edits are unsaved'. The server text only replaces the editor when nothing newer was typed."
+  },
+  {
+    "priorId": "APPEARANCE-SAVE-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/mission-control-shared/src/state/ui-preferences.tsx:170",
+      "packages/mission-control-shared/src/state/ui-preferences.tsx:175",
+      "apps/mission-control-next/src/cockpit/areas/settings/AppearanceSettings.tsx:30"
+    ],
+    "note": "The preference setters apply the change at once and return whether each browser write succeeded (setMode ANDs the two writes); AppearanceSettings shows 'saved' or a 'Couldn't save ... in this browser' line from that result."
+  },
+  {
+    "priorId": "WEBSEARCH-SAVE-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/web-search-credential-service.ts:185",
+      "apps/gateway/src/services/web-search-credential-service.ts:235",
+      "apps/gateway/src/services/web-search-credential-service.ts:176"
+    ],
+    "note": "store() calls assertSecretAccepted before writing; for Firecrawl only a check status 'ok' passes, and 'reachable' (key could not be confirmed) throws 'The key was not saved because Firecrawl could not be checked', so the old key stays. Test connection still reports 'reachable'. Code read."
+  },
+  {
+    "priorId": "DESKTOP-008",
+    "verdict": "operator-only",
+    "evidence": [],
+    "note": "Needs the installed Windows desktop app and a Google account. Steps: open the desktop app, Capabilities › Connectors › Advanced setup › Integrations, open the saved Google connection, choose 'Open Google setup in browser' (code: GoogleWorkspaceSignIn.tsx opens it in a new window and MainWindow.xaml.cs:220 hands it to the default browser). Pass: your default browser opens the page, you finish Google consent there, return to the app, 'Refresh sign-in status' shows Connected, and Disconnect still works."
+  },
+  {
+    "priorId": "LOCAL-AI-SETUP-COPY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/LocalAiSettings.tsx:113",
+      "apps/mission-control-next/src/cockpit/areas/settings/LocalAiEvidence.tsx:327",
+      "docs/review/2026-11-usability/evidence/prior/ST-18.png"
+    ],
+    "note": "Live: with no registered endpoint the page says 'No Local AI job endpoint is registered. A local runtime was found.' and points at Chat setup; the endpoints list says 'Registration alone does not prove Chat works'. Chat status comes from the llama.cpp setup section only. (Small flaw seen: with an empty list the sentence reads 'retained endpoints.Registration alone', missing a space.)"
+  },
+  {
+    "priorId": "PROVIDER-CONNECTION-CUSTODY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/provider-connection-state.ts:40",
+      "apps/mission-control-next/src/cockpit/areas/settings/provider-connection-state.ts:46",
+      "apps/mission-control-next/src/cockpit/areas/settings/provider-connection-state.ts:47"
+    ],
+    "note": "Attempts are kept in a module map that retireCustody() clears and bumps a custody counter on whenever the Gateway access or caller scope changes; same-session navigation keeps them. Code read."
+  },
+  {
+    "priorId": "OL-16",
+    "verdict": "partial",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-16-flip1-1.png",
+      "docs/review/2026-11-usability/evidence/prior/OL-16-inplace-1.png",
+      "docs/review/2026-11-usability/evidence/prior/OL-16-inplace-2.png",
+      "docs/review/2026-11-usability/evidence/prior/b8-ol16c.json",
+      "docs/review/2026-11-usability/evidence/prior/b8-ol16f.json",
+      "apps/mission-control-next/src/cockpit/areas/settings/SettingsApprovalDialog.tsx:52"
+    ],
+    "note": "Live, default workspace selected: Save setting on 'Keep one Claude Code process between tool steps' opens an in-place dialog with Approve once and Deny; one click on Approve once saved and confirmed the change automatically (no Continue step) in 8 s, and the Inbox's own Approve once also worked (5 s). With the sandbox's seeded workspace selected the same dialog says 'The selected workspace changed' and has no Approve button.",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "severity": "stall",
+      "kind": "dead-end",
+      "title": "With any workspace but 'default' selected, a Settings change cannot be approved where it was made",
+      "trigger": "Select a workspace other than 'default'; Settings › Models › Providers & models; switch 'Keep one Claude Code process between tool steps' off; Save setting.",
+      "expected": "The approval opens in place and one click approves it.",
+      "actual": "The dialog shows 'The selected workspace changed. Open this item again in the current Inbox.' with no Approve button, and that workspace's Inbox does not list the approval (it appears only under 'default').",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/OL-16-flip1-1.png",
+        "docs/review/2026-11-usability/evidence/prior/b8-ol16c.json",
+        "docs/review/2026-11-usability/evidence/prior/b8-ol16-inbox.json",
+        "apps/mission-control-next/src/cockpit/areas/settings/SettingsApprovalDialog.tsx:52",
+        "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalDecisionBar.tsx:149"
+      ],
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/SettingsApprovalDialog.tsx"
+    }
+  },
+  {
+    "priorId": "OL-17",
+    "verdict": "operator-only",
+    "evidence": [],
+    "note": "Needs the LAN Firecrawl server and a real Chat model; I did not change the network allowlist (a security setting) in the sandbox. Steps: Capabilities › Connectors › Advanced setup › Web & Search; set Self-hosted base URL to the LAN Firecrawl address, add its host to the allowlist if asked (approve), Save Firecrawl, then Test connection; then in Chat (Web access on) ask a question that needs a web page. Pass: the save is confirmed, the test says Reachable (or says plainly why not), and the Chat answer's source is the configured Firecrawl. Code check: the key is only stored after a passing check (web-search-credential-service.ts:185)."
+  },
+  {
+    "priorId": "OL-19",
+    "verdict": "operator-only",
+    "evidence": [],
+    "note": "Needs the installed Windows desktop app, a Google client ID in the connection and a real Google account. Steps: as for DESKTOP-008, then check the connection card. Pass: the consent action opens the sign-in page in your browser, the connection shows Connected after you return and refresh, and Disconnect returns it to not connected."
+  }
+]

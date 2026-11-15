@@ -1,0 +1,11 @@
+{
+  "note": "Gateway decision trace (GET /api/v1/chat/sessions/<id>/thread?includeDecisionTrace=true) for turns sent from the Chat composer. The signal activated_skill_count comes from the 'Prompt preparation measured' decision. The screen showed no skill chip, no 'skill loaded' status and no refusal in any case.",
+  "turns": [
+    {"workspace": "default", "typed": "use debugging skill to look at this", "skillState": "enabled, callable", "activated_skill_count": 0, "screen": "plain stub answer, nothing about the skill"},
+    {"workspace": "default", "typed": "use genie-npu-ir20 for this", "skillState": "enabled, not callable", "activated_skill_count": 0, "screen": "plain stub answer, nothing about the skill"},
+    {"workspace": "default", "typed": "use nosuchskill please", "skillState": "no such skill", "activated_skill_count": 0, "screen": "plain stub answer, nothing about the skill"},
+    {"workspace": "verification", "typed": "use debugging", "skillState": "enabled, callable", "activated_skill_count": 0, "screen": "plain stub answer"},
+    {"workspace": "verification", "typed": "@skill debugging explain this", "skillState": "enabled, callable", "activated_skill_count": 0, "screen": "plain stub answer"}
+  ],
+  "uiSearch": "git grep for skillApplications, activatedSkills, 'Skill loaded', 'Skills used' under apps/mission-control-next/src, packages/threaded-surface-core/src and packages/mission-control-shared/src finds no code that shows an activated skill in Chat"
+}

@@ -1,0 +1,10 @@
+{
+  "captured": "Advanced channel setup, Microsoft Teams, GET /api/v1/channels/drafts after repeated visits",
+  "steps": [
+    {"action": "open Advanced channel setup for Teams, click Start guided setup", "savedDrafts": 1},
+    {"action": "reload, click Start guided setup again", "savedDrafts": 2},
+    {"action": "reload, click Start guided setup again", "savedDrafts": 3},
+    {"action": "three more visits that each ended in a failed credential save or Discard changes", "savedDrafts": 7}
+  ],
+  "listLabelsSeen": ["Microsoft Teams · version 2 · create", "Microsoft Teams · version 1 · create"]
+}

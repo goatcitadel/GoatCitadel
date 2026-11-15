@@ -1,0 +1,36 @@
+{
+  "attachmentRequests": [
+    [
+      "POST",
+      "/api/v1/chat/attachments",
+      201,
+      ""
+    ],
+    [
+      "POST",
+      "/api/v1/chat/attachments",
+      201,
+      ""
+    ],
+    [
+      "POST",
+      "/api/v1/chat/attachments",
+      413,
+      ""
+    ]
+  ],
+  "log": [
+    {
+      "k": "http413",
+      "t": "POST http://127.0.0.1:54765/api/v1/chat/attachments"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 413 (Payload Too Large)",
+      "u": "http://127.0.0.1:54765/api/v1/chat/attachments?sessionId=sess_63ac8c4e941e145e709a2d06&fileName=review-task-6-big.bin&mimeType=application%2Foctet-stream"
+    }
+  ],
+  "usedChooser": false,
+  "sendFirstMs": 67,
+  "sendDoneMs": 1124
+}

@@ -1,0 +1,56 @@
+[
+  {
+    "id": "U-CH-007",
+    "title": "The Chat inspector is re-registered on every controller render, so it renders twice while open",
+    "disposition": "engineering-note",
+    "reason": "Render count only (the inspector registers twice); no operator-visible symptom was measured."
+  },
+  {
+    "id": "U-GL-002",
+    "title": "Opening any non-Chat page still loads the whole Chat module graph",
+    "disposition": "engineering-note",
+    "reason": "Bundle structure (non-Chat pages load the Chat module graph); the production build opens every area in under 1 s (Task 13b), so no operator-visible cost was shown."
+  },
+  {
+    "id": "U-GL-014",
+    "title": "Raw buttons and literal radii still sit beside the shared Button and radius tokens",
+    "disposition": "engineering-note",
+    "reason": "Developer hygiene (raw buttons and literal radii beside the shared primitives); no operator-visible symptom of its own (ledger b4, GL-42)."
+  },
+  {
+    "id": "U-GL-015",
+    "title": "The Cockpit still overrides 67 Classic/shared class names with selectors of different strength",
+    "disposition": "engineering-note",
+    "reason": "Developer hygiene (67 Classic/shared class names restyled with mixed selector strength); the register row itself says not operator-visible (ledger b4, GL-43)."
+  },
+  {
+    "id": "U-GL-017",
+    "title": "The bundle budget check measures the entry stub, not the Cockpit that loads first",
+    "disposition": "engineering-note",
+    "reason": "Build tooling: the bundle budget check measures the entry stub, not the Cockpit (ledger b4, GL-48)."
+  },
+  {
+    "id": "U-GL-018",
+    "title": "Tailwind still scans the whole app folder (Classic, tests, mockups)",
+    "disposition": "engineering-note",
+    "reason": "Build tooling: Tailwind scans the whole app folder; no styling is missing, the cost is build work (ledger b4, GL-50)."
+  },
+  {
+    "id": "U-GL-028",
+    "title": "On a phone, the More tab does not look selected while you are in Capabilities, System or Settings",
+    "disposition": "withdrawn",
+    "reason": "Not reproduced: the More tab carries aria-current=page and a teal underline in Capabilities, System and Settings in both themes (gl-7-system-375-light.png and the finding's own NV-18.png show the underline)."
+  },
+  {
+    "id": "U-ST-032",
+    "title": "Safety > Tools lists dozens of identical-looking 'Allow - Session' grants with only 'Inspect grant' and 'Revoke grant' to tell them apart",
+    "disposition": "engineering-note",
+    "reason": "The 171 near-identical grants were most likely seeded by earlier test tasks in the shared sandbox; not shown to occur on a real install (Task 11 review)."
+  },
+  {
+    "id": "U-WK-007",
+    "title": "Each owner link in Work and Inbox lists mounts its own navigation handoff owner",
+    "disposition": "engineering-note",
+    "reason": "Code structure only (one navigation handoff owner per link); impact on speed was never measured and no operator symptom is described."
+  }
+]

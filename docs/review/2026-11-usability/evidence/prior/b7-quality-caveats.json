@@ -1,0 +1,41 @@
+{
+ "Gates": {
+  "duplicated": [
+   {
+    "n": 2,
+    "l": "Inspect Mission Control Next Verification PackReview Mission Control Next Verification Pack"
+   },
+   {
+    "n": 2,
+    "l": "Import this prompt pack before it can produce run, score, or benchmark evidence."
+   }
+  ],
+  "caveatLines": [
+   "Security eval packs are definitions and stored evidence only; this projection does not call providers or run tests.",
+   "A listed pack is not release proof until its tests have been run and scored through the prompt-pack workflow.",
+   "Security quality gates are read-only projections from stored prompt-pack reports; this endpoint does not run providers, mutate packs, or approve release claims.",
+   "Design quality advisories are calibrated signals, not release blockers unless promoted to P0.",
+   "Security execution depth is computed from stored defensive-security prompt-pack reports; it does not run providers or score tests.",
+   "Definitions are not run or scored quality checks."
+  ]
+ },
+ "Evaluations": {
+  "duplicated": [],
+  "caveatLines": [
+   "Security eval packs are definitions and stored evidence only; this projection does not call providers or run tests.",
+   "A listed pack is not release proof until its tests have been run and scored through the prompt-pack workflow.",
+   "Security quality gates are read-only projections from stored prompt-pack reports; this endpoint does not run providers, mutate packs, or approve release claims.",
+   "Design quality advisories are calibrated signals, not release blockers unless promoted to P0."
+  ]
+ },
+ "Design": {
+  "duplicated": [],
+  "caveatLines": [
+   "Security eval packs are definitions and stored evidence only; this projection does not call providers or run tests.",
+   "A listed pack is not release proof until its tests have been run and scored through the prompt-pack workflow.",
+   "Security quality gates are read-only projections from stored prompt-pack reports; this endpoint does not run providers, mutate packs, or approve release claims.",
+   "Design quality advisories are calibrated signals, not release blockers unless promoted to P0.",
+   "Design quality evidence reads repo files only. It does not run providers, open browsers, mutate source, or update visual baselines."
+  ]
+ }
+}

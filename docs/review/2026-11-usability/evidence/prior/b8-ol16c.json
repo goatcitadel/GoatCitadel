@@ -1,0 +1,55 @@
+{
+ "flip1 afterSave": {
+  "section": "Claude Code CLI: reuse one process between tool steps | When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one; any other step still starts a new one. Tools still run in GoatCitadel. Experimental and on by default. Turn it off to start a new Claude Code process for every tool step. | Refresh | Current: On | Keep one Claude Code process between tool steps | Applies to Chat turns where the Claude Code CLI uses GoatCitadel tools. | Unsaved draft: Off | Save setting | Waiting on you · When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one. This turns it off. | The draft remains unsaved until GoatCitadel confirms the change. | Refresh change status | Review approval | Open in Inbox | Change submitted. Review its status before another save.",
+  "dialogs": [
+   "Turn off Claude Code CLI: reuse one process between tool steps | When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one. This turns it off. | Caution | Only this setting changes. You can turn it on again the same way. | Show details | The selected workspace changed. Open this item again in the current Inbox."
+  ],
+  "buttons": [
+   "Refresh",
+   "Save setting",
+   "Refresh change status",
+   "Review approval"
+  ]
+ },
+ "flip1 approveCount": 0,
+ "flip1 afterApprove": {
+  "section": "Claude Code CLI: reuse one process between tool steps | When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one; any other step still starts a new one. Tools still run in GoatCitadel. Experimental and on by default. Turn it off to start a new Claude Code process for every tool step. | Refresh | Current: On | Keep one Claude Code process between tool steps | Applies to Chat turns where the Claude Code CLI uses GoatCitadel tools. | Unsaved draft: Off | Save setting | Waiting on you · When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one. This turns it off. | The draft remains unsaved until GoatCitadel confirms the change. | Refresh change status | Review approval | Open in Inbox | Change submitted. Review its status before another save.",
+  "dialogs": [
+   "Turn off Claude Code CLI: reuse one process between tool steps | When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one. This turns it off. | Caution | Only this setting changes. You can turn it on again the same way. | Show details | The selected workspace changed. Open this item again in the current Inbox."
+  ],
+  "buttons": [
+   "Refresh",
+   "Save setting",
+   "Refresh change status",
+   "Review approval"
+  ]
+ },
+ "flip1 clicks": 1,
+ "flip1 ms": 2701,
+ "flip1 continue": 0,
+ "original": true,
+ "reqs": [
+  "GET /api/v1/onboarding/startup",
+  "PUT /api/v1/notifications/presence",
+  "GET /api/v1/startup-reads?reads=%5B%7B%22path%22%3A%22%2Fapi%2Fv1%2Fworkspaces%3Fview%3Dactive%26limit%3D200%26citadelId%3Dpersonal%22%2C%22correlationId%22%3A%222866e6c4-73bf-4fb4-96aa-0b6b04bb9749%22%2C%22originSurface%22%3A%22app%22%7D%2C%7B%22path%22%3A%22%2Fapi%2Fv1%2Fobserve%2Fhealth%22%2C%22correlationId%22%3A%22a50453d3-f0f1-4181-a152-9d5feee408c6%22%2C%22originSurface%22%3A%22app%22%7D%2C%7B%22path%22%3A%22%2Fapi%2Fv1%2Finbox%3FworkspaceId%3Dws_9cf765bcfafd49dc95ae578d%22%2C%22correlationId%22%3A%2283018a4e-5fcc-4f38-ad0c-7dd82f7359a5%22%2C%22originSurface%22%3A%22app%22%7D%2C%7B%22path%22%3A%22%2Fapi%2Fv1%2Fcitadels%2Fpersonal%2Fstructure%22%2C%22correlationId%22%3A%2262b83778-905f-4d53-b26d-72802bb82ecf%22%2C%22originSurface%22%3A%22app%22%7D%2C%7B%22path%22%3A%22%2Fapi%2Fv1%2Fdurable%2Fruns%3FworkspaceId%3Dws_9cf765bcfafd49dc95ae578d%26limit%3D100%22%2C%22correlationId%22%3A%22fbe99d9d-160f-472a-b928-11437e8501dd%22%2C%22originSurface%22%3A%22app%22%7D%5D",
+  "GET /api/v1/events/stream?clientId=cb125658-d9f0-485d-8883-2f9722dab753&replay=20",
+  "GET /api/v1/onboarding/state",
+  "GET /api/v1/startup-reads?reads=%5B%7B%22path%22%3A%22%2Fapi%2Fv1%2Fchange-plans%3FworkspaceId%3Dws_9cf765bcfafd49dc95ae578d%26limit%3D25%22%2C%22correlationId%22%3A%226f1a2d50-3980-4569-9af7-b7bf0e2ab063%22%2C%22originSurface%22%3A%22app%22%7D%2C%7B%22path%22%3A%22%2Fapi%2Fv1%2Fllm%2Fconfig%22%2C%22correlationId%22%3A%2201cc9cc0-5bf7-4c18-b18b-92144b6c6758%22%2C%22originSurface%22%3A%22app%22%7D%2C%7B%22path%22%3A%22%2Fapi%2Fv1%2Fllm%2Fmodels%3FproviderId%3Dverification-stub%22%2C%22correlationId%22%3A%2269e2e323-9d17-4178-802a-3f4ff60c011e%22%2C%22originSurface%22%3A%22app%22%7D%2C%7B%22path%22%3A%22%2Fapi%2Fv1%2Fsettings%22%2C%22correlationId%22%3A%225a10b7c6-43fc-4e27-99a8-80b2ae6c5226%22%2C%22originSurface%22%3A%22app%22%7D%2C%7B%22path%22%3A%22%2Fapi%2Fv1%2Fsettings%22%2C%22correlationId%22%3A%22afd5260f-3614-4d1a-9c3b-d6b4cadfb16d%22%2C%22originSurface%22%3A%22app%22%7D%2C%7B%22path%22%3A%22%2Fapi%2Fv1%2Fsettings%22%2C%22correlationId%22%3A%220a3175ed-0db6-4f9f-afef-e216f6d4e8fe%22%2C%22originSurface%22%3A%22app%22%7D%2C%7B%22path%22%3A%22%2Fapi%2Fv1%2Fsettings%22%2C%22correlationId%22%3A%22be90d688-94d4-45e5-9c9f-86bffd7418c6%22%2C%22originSurface%22%3A%22app%22%7D%5D",
+  "GET /api/v1/settings",
+  "PATCH /api/v1/settings",
+  "GET /api/v1/inbox?workspaceId=ws_9cf765bcfafd49dc95ae578d",
+  "GET /api/v1/settings",
+  "GET /api/v1/approvals/979cce9b-1061-4d14-992e-531d5939967c?workspaceId=default",
+  "GET /api/v1/change-plans/99408d5d-7cde-4eb5-bb5a-70822e576ee2?workspaceId=default",
+  "GET /api/v1/approvals/979cce9b-1061-4d14-992e-531d5939967c?workspaceId=default",
+  "GET /api/v1/inbox?workspaceId=ws_9cf765bcfafd49dc95ae578d",
+  "GET /api/v1/settings",
+  "GET /api/v1/settings",
+  "GET /api/v1/settings",
+  "GET /api/v1/settings",
+  "GET /api/v1/durable/runs?workspaceId=ws_9cf765bcfafd49dc95ae578d&limit=100",
+  "GET /api/v1/approvals/979cce9b-1061-4d14-992e-531d5939967c?workspaceId=default"
+ ],
+ "afterReloadChecked": true,
+ "finalChecked": true
+}

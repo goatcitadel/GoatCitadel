@@ -1,0 +1,93 @@
+{
+  "workHead": "Work\n\nWorkspace tasks and recent Chat or supervised plan runs.\n\nNew task\nSelect tasks\nRefresh\nMore\nBoard\nHistory\nSchedules\nArchived tasks\nAutomation designer\nWaiting on your decision\n\nNo decisions linked to runs right now.\n\nSearch loaded work\nRecord type\nTasks and runs\nTasks\nRuns\nActive\n0 tasks · 0 runs\n\nTasks being prepared or worked; runs queued or executing\n\nNo recent work in this state.\n\nNeeds attention\n200 tasks · 0 runs\n\nTasks not started, blocked or in review; runs waiting or paused\n\nOperator task\nNot started\nut13b task 299\nUpdated 5 minutes ago\nOperator task\nNot started\nut13b task 298\nUpdated 5 minutes ago\nOperator task\nNot started\nut13b task 297\nUpdated 5 minutes ago\nOperator task\nNot started\nut13b task 296\nUpdated 5 minutes ago\nOperator task\nNot started\nut13b task 295\nUpdated 5 minutes ago\nOperator task\nNot started\nut13b task 294\nUpdated 5 minutes ago\nOperator task\nNot started\nut13b task 293\nUpdated 5 minutes ago\nOperator task\nNot started\nut13b task 292\nUpdated 5 minutes ago\nOperator task\nNot started\nut13b task 291\nUpdated 5 minutes ago\nOperator task\nNot started\nut13b task 290\nUpdated 5 minutes ago\nOperator task\nNot started\nut13b task 289\nUpdated 5 minutes ago\nOperator ta",
+  "workLoad": [
+    [
+      "More",
+      "Search loaded work",
+      "0 tasks · 0 runs",
+      "300 tasks · 0 runs",
+      "0 tasks · 0 runs",
+      "0 tasks · 25 runs",
+      "Load more runs"
+    ]
+  ],
+  "memHead": "Memory\n\nWorkspace and global memory. Editing and forgetting ask for approval first; the change is confirmed separately after approval.\n\nRefresh memory directory\nCandidates and mesh\nMemory\nNotes\nFiles\nArtifacts\nAgents\nKnowledge\nMail\nPrompt packs\nSearch memory\nMemory status\nActive\nForgotten\nAll statuses, including expired\nMemory namespace\nAll namespaces\nUser preferences\nPreferences\nWorkspace\nProject\nGlobal\nFacts\nMission control next\nApply memory filter\n\n0 visible memory items selected. One approval governs an atomic batch; global items cannot enter a workspace batch.\n\nReview pin selected memory\nReview unpin selected memory\nReview forget selected memory\nClear memory selection\n\nWorkspace and global memory. 500 matching records when this list was read. More pages are available.\n\nut13b memory item 499\n\nActive · Mission control next · This workspace\n\nOpen ut13b memory item 499\nut13b memory item 498\n\nActive · Mission control next · This workspace\n\nOpen ut13b memory item 498\nut13b memory item 497\n\nActive · Mission control next · This workspace\n\nOpen ut13b memory item 497\nut13b memory item 496\n\nActive · Mission control next · This workspace\n\nOpen ut13b memory item 496\nut13b memory item 495\n\nActive · Mission control next · This workspace\n\nOpen ut13b memory item 495\nut13b memory item 494\n\nActive · Mission control next · This workspace\n\nOpen ut13b memory item 494\nut13b memory item 493\n\nActive · Mission control next · This workspace\n\nOpen ut13b memory item 493\nut13b memory item 492\n\nActive",
+  "memControls": [
+    "BUTTON:Refresh memory directory",
+    "INPUT:",
+    "SELECT:Active\nForgotten\nAll statuses, including",
+    "SELECT:All namespaces\nUser preferences\nPreferen",
+    "BUTTON:Apply memory filter",
+    "BUTTON:Review pin selected memory",
+    "BUTTON:Review unpin selected memory",
+    "BUTTON:Review forget selected memory",
+    "BUTTON:Clear memory selection",
+    "INPUT:Select memory ut13b memory item 499",
+    "BUTTON:Open ut13b memory item 499",
+    "INPUT:Select memory ut13b memory item 498",
+    "BUTTON:Open ut13b memory item 498",
+    "INPUT:Select memory ut13b memory item 497",
+    "BUTTON:Open ut13b memory item 497",
+    "INPUT:Select memory ut13b memory item 496",
+    "BUTTON:Open ut13b memory item 496",
+    "INPUT:Select memory ut13b memory item 495",
+    "BUTTON:Open ut13b memory item 495",
+    "INPUT:Select memory ut13b memory item 494",
+    "BUTTON:Open ut13b memory item 494",
+    "INPUT:Select memory ut13b memory item 493",
+    "BUTTON:Open ut13b memory item 493",
+    "INPUT:Select memory ut13b memory item 492",
+    "BUTTON:Open ut13b memory item 492",
+    "INPUT:Select memory ut13b memory item 491",
+    "BUTTON:Open ut13b memory item 491",
+    "INPUT:Select memory ut13b memory item 490",
+    "BUTTON:Open ut13b memory item 490",
+    "INPUT:Select memory ut13b memory item 489",
+    "BUTTON:Open ut13b memory item 489",
+    "INPUT:Select memory ut13b memory item 488",
+    "BUTTON:Open ut13b memory item 488",
+    "INPUT:Select memory ut13b memory item 487",
+    "BUTTON:Open ut13b memory item 487",
+    "INPUT:Select memory ut13b memory item 486",
+    "BUTTON:Open ut13b memory item 486",
+    "INPUT:Select memory ut13b memory item 485",
+    "BUTTON:Open ut13b memory item 485",
+    "INPUT:Select memory ut13b memory item 484"
+  ],
+  "memPage2": [
+    "Memory",
+    "Workspace and global memory. Editing and forgetting ask for approval first; the change is confirmed separately after approval.",
+    "Refresh memory directory",
+    "Memory",
+    "Search memory",
+    "Memory status",
+    "Memory namespace",
+    "Apply memory filter",
+    "0 visible memory items selected. One approval governs an atomic batch; global items cannot enter a workspace batch.",
+    "Review pin selected memory"
+  ],
+  "memPage3": 200,
+  "chatTail": [
+    "Conversations",
+    "Load more",
+    "More",
+    "More"
+  ],
+  "loadMore": [
+    "200",
+    "300",
+    "400",
+    "500",
+    "600",
+    "700",
+    "800",
+    "900",
+    "1000",
+    "1001"
+  ],
+  "finalRows": 11,
+  "chatTailAfter": [
+    "More",
+    "More"
+  ]
+}

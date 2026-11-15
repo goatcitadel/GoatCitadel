@@ -1,0 +1,626 @@
+{
+ "source": "GET /api/v1/settings (features), apps/gateway/src/config.ts:1472-1585 defaults, config/goatcitadel.example.json, git grep in apps/mission-control-next/src and packages/mission-control-shared/src (tests excluded). 'gates' is taken from the flag name, code comments and the screens that read it.",
+ "flags": [
+  {
+   "flag": "durableKernelV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": true,
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryDiagnostics.tsx; packages/mission-control-shared/src/hooks/useMemoryOperatorSnapshot.ts",
+   "gates": "Durable run kernel (resumable Chat/Work runs); read by Library memory diagnostics"
+  },
+  {
+   "flag": "replayOverridesV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": false,
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Replay overrides (recorded-run replay with changes); no UI reads it"
+  },
+  {
+   "flag": "memoryLifecycleAdminV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": false,
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryBatch.tsx; apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryDiagnostics.tsx; apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryEditor.tsx",
+   "gates": "Library > Memory admin (list, edit, forget, history)"
+  },
+  {
+   "flag": "memoryLifecycleAutoForgetEnabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": true,
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Automatic forgetting in memory lifecycle"
+  },
+  {
+   "flag": "memoryMaintenanceV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": false,
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryDiagnostics.tsx; packages/mission-control-shared/src/hooks/useMemoryOperatorSnapshot.ts",
+   "gates": "Memory maintenance operations in Library > Memory diagnostics"
+  },
+  {
+   "flag": "connectorDiagnosticsV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": false,
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "apps/mission-control-next/src/features/native-routes/settings/McpConfigurationReport.tsx; apps/mission-control-next/src/features/native-routes/settings/sections/integration-settings-snapshot.ts; apps/mission-control-next/src/features/native-routes/settings/sections/use-channel-setup-state.ts",
+   "gates": "MCP/integration health-check reports (Capabilities > Connectors > Advanced setup)"
+  },
+  {
+   "flag": "computerUseGuardrailsV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": true,
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Computer-use guardrails"
+  },
+  {
+   "flag": "cronReviewQueueV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": false,
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/work/SchedulerReviewQueue.tsx",
+   "gates": "Work > Schedules review queue"
+  },
+  {
+   "flag": "replayRegressionV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": true,
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Replay regression checks (System > Quality)"
+  },
+  {
+   "flag": "codeModeV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/chat/enable-code-mode.ts",
+   "gates": "Code Mode runs from Chat (Chat can turn it on through its own flow: enable-code-mode.ts)"
+  },
+  {
+   "flag": "codeModeHostSandboxEnabled",
+   "defaultInCode": "false (or capabilities.codeModeSandbox.bestEffortHostEnabled)",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/chat/enable-code-mode.ts",
+   "gates": "Best-effort host sandbox for Code Mode"
+  },
+  {
+   "flag": "improvementLedgerV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Improvement ledger (System > Improvement)"
+  },
+  {
+   "flag": "improvementActivationV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Activation of improvement proposals"
+  },
+  {
+   "flag": "promptRetuneCampaignV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "apps/mission-control-next/src/features/prompt-packs/usePromptPacksWorkbenchState.ts",
+   "gates": "Prompt-pack retune campaigns (Library > Prompt packs)"
+  },
+  {
+   "flag": "structuredReviewV2Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Structured review v2"
+  },
+  {
+   "flag": "delegationScopeExpansionV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Delegation scope expansion"
+  },
+  {
+   "flag": "engineeringLearningsV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/library/LibraryEngineeringLearnings.tsx; apps/mission-control-next/src/features/native-routes/library/LibraryKnowledgeSection.tsx",
+   "gates": "Library > Knowledge > Engineering learnings"
+  },
+  {
+   "flag": "coworkRuntimeQualityV1Disabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Kill switch: Cowork runtime quality"
+  },
+  {
+   "flag": "orchestrationFinalStreamingV1Disabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Kill switch: final answer streaming in orchestration"
+  },
+  {
+   "flag": "autonomyV1Disabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Master kill switch for autonomy"
+  },
+  {
+   "flag": "chatThinkingStreamV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "Models page toggle 'Show model reasoning in Chat' (browser-only preference; the flag itself is not written)",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/settings/ChatThinkingStreamControl.tsx; apps/mission-control-next/src/cockpit/areas/settings/settings-approval-owner.ts; apps/mission-control-next/src/features/threaded-surface/styles/timeline.css",
+   "gates": "Streaming reasoning above answers in Chat"
+  },
+  {
+   "flag": "chatContextBudgetVisibilityV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Context budget meter in Chat"
+  },
+  {
+   "flag": "chatAsyncClarificationV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Chat asks clarifying questions without blocking"
+  },
+  {
+   "flag": "unifiedComposerPaletteV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Chat composer palette (+ and @)"
+  },
+  {
+   "flag": "attachedContextToolsV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "none",
+   "gates": "Tools over attached context"
+  },
+  {
+   "flag": "chatSessionStatusV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Chat session status line"
+  },
+  {
+   "flag": "conversationForksV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "none",
+   "gates": "Conversation forks"
+  },
+  {
+   "flag": "notificationRoutingV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "none",
+   "gates": "Notification routing (Settings > General)"
+  },
+  {
+   "flag": "chatTimersV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Chat timers"
+  },
+  {
+   "flag": "typedRunVariablesV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Typed run variables"
+  },
+  {
+   "flag": "documentEditingV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Document editing in Chat"
+  },
+  {
+   "flag": "channelVoiceInboundV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Voice messages on channels (inbound)"
+  },
+  {
+   "flag": "plannerFastPathV1Disabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Kill switch: planner fast path"
+  },
+  {
+   "flag": "parallelToolExecutionV1Disabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Kill switch: parallel tool execution"
+  },
+  {
+   "flag": "streamIdleWatchdogV1Disabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Kill switch: stream idle watchdog"
+  },
+  {
+   "flag": "plannerFanoutV1Disabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Kill switch: planner fan-out"
+  },
+  {
+   "flag": "subagentFanoutV1Disabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Kill switch: subagent fan-out"
+  },
+  {
+   "flag": "durableChatFanoutV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Durable fan-out inside Chat turns"
+  },
+  {
+   "flag": "chatProviderFallbackV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Provider fallback when a Chat model fails (chatFeatureAvailability.providerFallback)"
+  },
+  {
+   "flag": "chatSkillInstructionsV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "`use <skill>` in Chat (already recorded)"
+  },
+  {
+   "flag": "boundedToolExposureV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Limits tools shown to the model per turn"
+  },
+  {
+   "flag": "scheduledChatTurnsV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Chat turns started by schedules"
+  },
+  {
+   "flag": "chatExplicitContextV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Explicit context in Chat"
+  },
+  {
+   "flag": "chatAutomaticFanoutV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Automatic fan-out in Chat"
+  },
+  {
+   "flag": "chatDelegationControlsV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Supervised delegation controls in Chat (chatFeatureAvailability.supervisedDelegation)"
+  },
+  {
+   "flag": "proactiveHeartbeatTurnsV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Proactive heartbeat turns"
+  },
+  {
+   "flag": "commitmentScheduledTurnsV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Turns scheduled from commitments"
+  },
+  {
+   "flag": "chatMeshCapabilitiesV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Mesh capabilities in Chat"
+  },
+  {
+   "flag": "chatRemotePlacementV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Remote placement of Chat turns"
+  },
+  {
+   "flag": "chatExplicitContextBranchesV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Context branches"
+  },
+  {
+   "flag": "chatWorkspaceSnapshotV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Workspace snapshot"
+  },
+  {
+   "flag": "chatModelCouncilV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Model council"
+  },
+  {
+   "flag": "chatWorkPassportV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Work passport"
+  },
+  {
+   "flag": "chatRequesterMcpV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Requester-supplied MCP in Chat"
+  },
+  {
+   "flag": "chatStaticMcpV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/settings/McpSetupProgress.tsx",
+   "gates": "Static MCP servers in Chat (already recorded)"
+  },
+  {
+   "flag": "claudeCliToolBridgeEnabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "Models page checkbox (governed save)",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/settings/ClaudeCliToolBridgeControl.tsx; apps/mission-control-next/src/cockpit/areas/settings/ClaudeCliWarmContinuationControl.tsx; apps/mission-control-next/src/cockpit/areas/settings/settings-approval-owner.ts",
+   "gates": "GoatCitadel tools offered to the Claude Code CLI provider"
+  },
+  {
+   "flag": "claudeCliWarmContinuationEnabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "Models page checkbox (governed save)",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/settings/ClaudeCliToolBridgeControl.tsx; apps/mission-control-next/src/cockpit/areas/settings/ClaudeCliWarmContinuationControl.tsx; apps/mission-control-next/src/cockpit/areas/settings/settings-approval-owner.ts",
+   "gates": "Reuse one Claude process between tool steps"
+  },
+  {
+   "flag": "browserErrandsEnabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "Safety > Tools 'Let Chat do errands in its own browser window' (governed save)",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/settings/BrowserErrandsControl.tsx; apps/mission-control-next/src/cockpit/areas/settings/settings-approval-owner.ts",
+   "gates": "Browser errands in Chat"
+  },
+  {
+   "flag": "evolutionControlPlaneV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Evolution control plane"
+  },
+  {
+   "flag": "settingsApprovalSkipEnabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "Safety > Tools 'Apply my Settings and Capabilities changes without asking first' (governed save)",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/settings/SettingsApprovalSkipControl.tsx; apps/mission-control-next/src/cockpit/areas/settings/settings-approval-owner.ts",
+   "gates": "Settings/Capabilities changes apply without approval"
+  },
+  {
+   "flag": "improvementLocalObservationV1Enabled",
+   "defaultInCode": "true",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": true,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Local improvement observation"
+  },
+  {
+   "flag": "improvementModelEvaluationV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Model-based improvement evaluation"
+  },
+  {
+   "flag": "productSourceEvolutionV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Product source evolution proposals"
+  },
+  {
+   "flag": "channelVoiceReplyV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Voice replies on channels"
+  },
+  {
+   "flag": "memoryConsolidationV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Memory consolidation job (the 'Memory Consolidation Weekly' schedule shows Paused)"
+  },
+  {
+   "flag": "cronEvidenceV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Evidence capture for scheduled jobs"
+  },
+  {
+   "flag": "utilityModelRoutingV1Enabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "apps/mission-control-next/src/cockpit/areas/settings/ClaudeCliBackgroundJobsNotice.tsx",
+   "gates": "Cheaper utility model for background jobs"
+  },
+  {
+   "flag": "chatTurnInterruptionRecoveryV1Disabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "type definition / test fixture only",
+   "gates": "Kill switch: recovery of interrupted Chat turns"
+  },
+  {
+   "flag": "externalSideEffectReplayJobsV1Disabled",
+   "defaultInCode": "false",
+   "exampleConfigValue": "not listed",
+   "sandboxValueAtStart": false,
+   "settingsPageToggle": "none",
+   "uiReferences": "none",
+   "gates": "Kill switch: replay jobs for external side effects"
+  }
+ ]
+}

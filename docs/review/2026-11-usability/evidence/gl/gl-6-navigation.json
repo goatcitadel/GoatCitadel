@@ -1,0 +1,509 @@
+{
+ "chat": {
+  "start": {
+   "url": "/chat",
+   "h1": [
+    "ut13-live-chat"
+   ],
+   "current": [
+    "Chat",
+    "ut13-live-chat\n20 minutes ago\n"
+   ],
+   "scroll": 0
+  },
+  "afterStep": {
+   "url": "/chat?shell=cockpit&sessionId=sess_01b1b882f09fa746cc7c281d",
+   "h1": [
+    "ut11 hello"
+   ],
+   "current": [
+    "Chat",
+    "ut11 hello\n2 hours ago\nVerific"
+   ],
+   "scroll": 0
+  },
+  "afterBack": {
+   "url": "/chat?shell=cockpit&sessionId=sess_5584579e8d2ef0e434952afd",
+   "h1": [
+    "ut11 hello"
+   ],
+   "current": [
+    "Chat",
+    "ut11 hello\n2 hours ago\nLast re"
+   ],
+   "scroll": 0
+  },
+  "afterForward": {
+   "url": "/chat?shell=cockpit&sessionId=sess_01b1b882f09fa746cc7c281d",
+   "h1": [
+    "ut11 hello"
+   ],
+   "current": [
+    "Chat",
+    "ut11 hello\n2 hours ago\nVerific"
+   ],
+   "scroll": 0
+  },
+  "afterReload": {
+   "url": "/chat?shell=cockpit&sessionId=sess_01b1b882f09fa746cc7c281d",
+   "h1": [
+    "ut11 hello"
+   ],
+   "current": [
+    "Chat",
+    "ut11 hello\n2 hours ago\nVerific"
+   ],
+   "scroll": 0
+  },
+  "backReturnedToStart": false,
+  "forwardReturnedToStep": true,
+  "reloadKept": true
+ },
+ "inbox": {
+  "start": {
+   "url": "/inbox",
+   "h1": [
+    "Inbox"
+   ],
+   "current": [
+    "Inbox\n4"
+   ],
+   "scroll": 0
+  },
+  "afterStep": {
+   "url": "/inbox",
+   "h1": [
+    "Inbox"
+   ],
+   "current": [
+    "Inbox\n4"
+   ],
+   "scroll": 790
+  },
+  "afterBack": {
+   "url": "blank",
+   "h1": [],
+   "current": []
+  },
+  "afterForward": {
+   "url": "/inbox",
+   "h1": [
+    "Inbox"
+   ],
+   "current": [
+    "Inbox\n4"
+   ],
+   "scroll": 0
+  },
+  "afterReload": {
+   "url": "/inbox",
+   "h1": [
+    "Inbox"
+   ],
+   "current": [
+    "Inbox\n4"
+   ],
+   "scroll": 0
+  },
+  "backReturnedToStart": false,
+  "forwardReturnedToStep": true,
+  "reloadKept": true
+ },
+ "work": {
+  "start": {
+   "url": "/work",
+   "h1": [
+    "Work"
+   ],
+   "current": [
+    "Work\nInteractive work status u",
+    "Board"
+   ],
+   "scroll": 0
+  },
+  "afterStep": {
+   "url": "/work/tasks/1cb762d4-bb69-442e-bd89-885fdd688759?shell=cockpit",
+   "h1": [
+    "Read saturday-plan.pdf and review it."
+   ],
+   "current": [
+    "Work\nInteractive work status u"
+   ],
+   "scroll": 0
+  },
+  "afterBack": {
+   "url": "/work",
+   "h1": [
+    "Work"
+   ],
+   "current": [
+    "Work\nInteractive work status u",
+    "Board"
+   ],
+   "scroll": 0
+  },
+  "afterForward": {
+   "url": "/work/tasks/1cb762d4-bb69-442e-bd89-885fdd688759?shell=cockpit",
+   "h1": [
+    "Read saturday-plan.pdf and review it."
+   ],
+   "current": [
+    "Work\nInteractive work status u"
+   ],
+   "scroll": 0
+  },
+  "afterReload": {
+   "url": "/work/tasks/1cb762d4-bb69-442e-bd89-885fdd688759?shell=cockpit",
+   "h1": [
+    "Read saturday-plan.pdf and review it."
+   ],
+   "current": [
+    "Work\nInteractive work status u"
+   ],
+   "scroll": 0
+  },
+  "backReturnedToStart": true,
+  "forwardReturnedToStep": true,
+  "reloadKept": true,
+  "scroll": {
+   "scrollBefore": 700,
+   "scrollAfterBack": 0
+  }
+ },
+ "capabilities": {
+  "start": {
+   "url": "/capabilities/skills",
+   "h1": [
+    "Capabilities"
+   ],
+   "current": [
+    "Capabilities",
+    "Skills",
+    "Installed"
+   ],
+   "scroll": 0
+  },
+  "afterStep": {
+   "url": "/capabilities/skills?item=skill%3Abundled%3Adocumentation&shell=cockpit",
+   "h1": [
+    "Capabilities"
+   ],
+   "current": [
+    "Capabilities",
+    "Skills",
+    "Installed"
+   ],
+   "scroll": 0
+  },
+  "afterBack": {
+   "url": "/capabilities/skills",
+   "h1": [
+    "Capabilities"
+   ],
+   "current": [
+    "Capabilities",
+    "Skills",
+    "Installed"
+   ],
+   "scroll": 0
+  },
+  "afterForward": {
+   "url": "/capabilities/skills?shell=cockpit",
+   "h1": [
+    "Capabilities"
+   ],
+   "current": [
+    "Capabilities",
+    "Skills",
+    "Installed"
+   ],
+   "scroll": 0
+  },
+  "afterReload": {
+   "url": "/capabilities/skills?shell=cockpit",
+   "h1": [
+    "Capabilities"
+   ],
+   "current": [
+    "Capabilities",
+    "Skills",
+    "Installed"
+   ],
+   "scroll": 0
+  },
+  "backReturnedToStart": true,
+  "forwardReturnedToStep": false,
+  "reloadKept": false
+ },
+ "library": {
+  "start": {
+   "url": "/library/memory",
+   "h1": [
+    "Memory"
+   ],
+   "current": [
+    "Library",
+    "Memory"
+   ],
+   "scroll": 0
+  },
+  "afterStep": {
+   "url": "/library/notes?shell=cockpit",
+   "h1": [
+    "Notes"
+   ],
+   "current": [
+    "Library",
+    "Notes"
+   ],
+   "scroll": 0
+  },
+  "afterBack": {
+   "url": "/library/memory",
+   "h1": [
+    "Memory"
+   ],
+   "current": [
+    "Library",
+    "Memory"
+   ],
+   "scroll": 0
+  },
+  "afterForward": {
+   "url": "/library/notes?shell=cockpit",
+   "h1": [
+    "Notes"
+   ],
+   "current": [
+    "Library",
+    "Notes"
+   ],
+   "scroll": 0
+  },
+  "afterReload": {
+   "url": "/library/notes?shell=cockpit",
+   "h1": [
+    "Notes"
+   ],
+   "current": [
+    "Library",
+    "Notes"
+   ],
+   "scroll": 0
+  },
+  "backReturnedToStart": true,
+  "forwardReturnedToStep": true,
+  "reloadKept": true
+ },
+ "system": {
+  "start": {
+   "url": "/system",
+   "h1": [
+    "System"
+   ],
+   "current": [
+    "System",
+    "Health"
+   ],
+   "scroll": 0
+  },
+  "afterStep": {
+   "url": "/system/runtime?shell=cockpit",
+   "h1": [
+    "Runtime"
+   ],
+   "current": [
+    "System",
+    "Runtime"
+   ],
+   "scroll": 0
+  },
+  "afterBack": {
+   "url": "/system",
+   "h1": [
+    "System"
+   ],
+   "current": [
+    "System",
+    "Health"
+   ],
+   "scroll": 0
+  },
+  "afterForward": {
+   "url": "/system/runtime?shell=cockpit",
+   "h1": [
+    "Runtime"
+   ],
+   "current": [
+    "System",
+    "Runtime"
+   ],
+   "scroll": 0
+  },
+  "afterReload": {
+   "url": "/system/runtime?shell=cockpit",
+   "h1": [
+    "Runtime"
+   ],
+   "current": [
+    "System",
+    "Runtime"
+   ],
+   "scroll": 0
+  },
+  "backReturnedToStart": true,
+  "forwardReturnedToStep": true,
+  "reloadKept": true
+ },
+ "settings": {
+  "start": {
+   "url": "/settings/models",
+   "h1": [
+    "Models"
+   ],
+   "current": [
+    "",
+    "Models",
+    "Providers & models"
+   ],
+   "scroll": 0
+  },
+  "afterStep": {
+   "url": "/settings/models?shell=cockpit#local-ai",
+   "h1": [
+    "Models"
+   ],
+   "current": [
+    "",
+    "Models",
+    "Local AI"
+   ],
+   "scroll": 0
+  },
+  "afterBack": {
+   "url": "/settings/models",
+   "h1": [
+    "Models"
+   ],
+   "current": [
+    "",
+    "Models",
+    "Providers & models"
+   ],
+   "scroll": 0
+  },
+  "afterForward": {
+   "url": "/settings/models?shell=cockpit#local-ai",
+   "h1": [
+    "Models"
+   ],
+   "current": [
+    "",
+    "Models",
+    "Local AI"
+   ],
+   "scroll": 0
+  },
+  "afterReload": {
+   "url": "/settings/models?shell=cockpit#local-ai",
+   "h1": [
+    "Models"
+   ],
+   "current": [
+    "",
+    "Models",
+    "Local AI"
+   ],
+   "scroll": 0
+  },
+  "backReturnedToStart": true,
+  "forwardReturnedToStep": true,
+  "reloadKept": true
+ },
+ "draft-chat": {
+  "sidebar-away-and-back": {
+   "afterAwayDialog": null,
+   "urlAfterAway": "/inbox",
+   "draftAfterReturn": true,
+   "bodyHasDraftText": false,
+   "browserDialogs": []
+  },
+  "browser-back": {
+   "urlAfterBack": "/library/files",
+   "dialog": null,
+   "draftStillThere": false,
+   "browserDialogs": []
+  },
+  "reload": {
+   "draftAfterReload": true,
+   "browserDialogs": []
+  }
+ },
+ "draft-settings": {
+  "sidebar-away-and-back": {
+   "afterAwayDialog": "Unsaved changes You have unsaved changes in Notification destination. Keep draft and close Discard changes Cancel",
+   "urlAfterAway": "/settings/general",
+   "stayedOnPage": true,
+   "draftStillThere": false,
+   "browserDialogs": []
+  },
+  "browser-back": {
+   "urlAfterBack": "/settings/general",
+   "dialog": null,
+   "draftStillThere": true,
+   "browserDialogs": [
+    "beforeunload:"
+   ]
+  },
+  "reload": {
+   "draftAfterReload": true,
+   "browserDialogs": [
+    "beforeunload:"
+   ]
+  }
+ },
+ "draft-work": {
+  "sidebar-away-and-back": {
+   "afterAwayDialog": "Unsaved changes You have unsaved changes in New task. Keep draft and close Discard changes Cancel",
+   "urlAfterAway": "/work",
+   "stayedOnPage": true,
+   "draftStillThere": false,
+   "browserDialogs": []
+  },
+  "browser-back": {
+   "urlAfterBack": "/work",
+   "dialog": null,
+   "draftStillThere": true,
+   "browserDialogs": [
+    "beforeunload:"
+   ]
+  },
+  "reload": {
+   "draftAfterReload": true,
+   "browserDialogs": [
+    "beforeunload:"
+   ]
+  }
+ },
+ "draft-library": {
+  "sidebar-away-and-back": {
+   "afterAwayDialog": "Unsaved changes You have unsaved changes in New note. Keep draft and close Discard changes Cancel",
+   "urlAfterAway": "/library/notes?view=create",
+   "stayedOnPage": true,
+   "draftStillThere": false,
+   "browserDialogs": []
+  },
+  "browser-back": {
+   "urlAfterBack": "/library/notes?view=create",
+   "dialog": "Unsaved changes You have unsaved changes in New note. Keep draft and close Discard changes Cancel",
+   "draftStillThere": true,
+   "browserDialogs": []
+  },
+  "reload": {
+   "draftAfterReload": true,
+   "browserDialogs": [
+    "beforeunload:"
+   ]
+  }
+ }
+}

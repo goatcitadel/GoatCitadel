@@ -1,0 +1,269 @@
+{
+  "titles": {
+    "/chat": "GoatCitadel Chat",
+    "/inbox": "GoatCitadel Inbox",
+    "/work": "GoatCitadel Work",
+    "/work/history": "GoatCitadel Work · History",
+    "/capabilities": "GoatCitadel Capabilities · Connectors",
+    "/library": "GoatCitadel Library",
+    "/system": "GoatCitadel System",
+    "/system/activity": "GoatCitadel System · Activity",
+    "/settings/general": "GoatCitadel Settings · General",
+    "/settings/models": "GoatCitadel Settings · Models"
+  },
+  "headers": {
+    "/chat": {
+      "h1": "Runtime evidence follow-up",
+      "desc": null
+    },
+    "/inbox": {
+      "h1": "Inbox",
+      "desc": "Decisions and work that need your attention in this workspace."
+    },
+    "/work": {
+      "h1": "Work",
+      "desc": "Workspace tasks and recent Chat or supervised plan runs."
+    },
+    "/work/history": {
+      "h1": "History",
+      "desc": "Saved runs, conversations, and recent activity in this workspace."
+    },
+    "/capabilities": {
+      "h1": "Capabilities",
+      "desc": "Everything GoatCitadel's AI can use, in one place."
+    },
+    "/library": {
+      "h1": "Candidates and mesh",
+      "desc": "Review skill candidates, capability proposals, and what mesh nodes publish."
+    },
+    "/system": {
+      "h1": "System",
+      "desc": "Service status as each part of the system reports it, and what each check can confirm. | Updated just now | 1 check needs attention"
+    },
+    "/system/activity": {
+      "h1": "Activity log",
+      "desc": "Recent signals across this installation. | This list keeps recent signals only, not the full history. Open the source record for full details. Signals are saved records: a reported host or device does not show its current health. | Updated just now. Quiet live events do not prove current health."
+    },
+    "/settings/general": {
+      "h1": "General",
+      "desc": "Find a setting, or change the ones on this page."
+    },
+    "/settings/models": {
+      "h1": "Models",
+      "desc": "Find a setting, or change the ones on this page."
+    }
+  },
+  "labelInName": {
+    "/chat": [
+      {
+        "label": "Search commands and records",
+        "text": "Search Ctrl K"
+      },
+      {
+        "label": "Work",
+        "text": "Work No queued or running interactive runs"
+      },
+      {
+        "label": "Runtime evidence follow-up, 35 minutes ago, Mission Control Verificati",
+        "text": "Runtime evidence follow-up35 minutes agoMission Co"
+      },
+      {
+        "label": "Operator surface polish, 1 hour ago, Mission Control Verification",
+        "text": "Operator surface polish1 hour agoMission Control V"
+      },
+      {
+        "label": "Release readiness review, 1 hour ago, Mission Control Verification",
+        "text": "Release readiness review1 hour agoMission Control "
+      }
+    ],
+    "/inbox": [
+      {
+        "label": "Search commands and records",
+        "text": "Search Ctrl K"
+      },
+      {
+        "label": "Work",
+        "text": "Work No queued or running interactive runs"
+      }
+    ],
+    "/work": [
+      {
+        "label": "Search commands and records",
+        "text": "Search Ctrl K"
+      },
+      {
+        "label": "Work",
+        "text": "Work No queued or running interactive runs"
+      }
+    ],
+    "/work/history": [
+      {
+        "label": "Search commands and records",
+        "text": "Search Ctrl K"
+      },
+      {
+        "label": "Work",
+        "text": "Work No queued or running interactive runs"
+      }
+    ],
+    "/capabilities": [
+      {
+        "label": "Search commands and records",
+        "text": "Search Ctrl K"
+      },
+      {
+        "label": "Work",
+        "text": "Work No queued or running interactive runs"
+      },
+      {
+        "label": "+4 more categories",
+        "text": "+ 4"
+      }
+    ],
+    "/library": [
+      {
+        "label": "Search commands and records",
+        "text": "Search Ctrl K"
+      },
+      {
+        "label": "Work",
+        "text": "Work No queued or running interactive runs"
+      }
+    ],
+    "/system": [
+      {
+        "label": "Search commands and records",
+        "text": "Search Ctrl K"
+      },
+      {
+        "label": "Work",
+        "text": "Work No queued or running interactive runs"
+      }
+    ],
+    "/system/activity": [
+      {
+        "label": "Search commands and records",
+        "text": "Search Ctrl K"
+      },
+      {
+        "label": "Work",
+        "text": "Work No queued or running interactive runs"
+      }
+    ],
+    "/settings/general": [
+      {
+        "label": "Search commands and records",
+        "text": "Search Ctrl K"
+      },
+      {
+        "label": "Work",
+        "text": "Work No queued or running interactive runs"
+      }
+    ],
+    "/settings/models": [
+      {
+        "label": "Search commands and records",
+        "text": "Search Ctrl K"
+      },
+      {
+        "label": "Work",
+        "text": "Work No queued or running interactive runs"
+      }
+    ]
+  },
+  "refresh": {
+    "/chat": [],
+    "/inbox": [
+      "Refresh"
+    ],
+    "/work": [
+      "Refresh"
+    ],
+    "/work/history": [],
+    "/capabilities": [],
+    "/library": [
+      "Refresh"
+    ],
+    "/system": [],
+    "/system/activity": [
+      "Refresh"
+    ],
+    "/settings/general": [
+      "Refresh"
+    ],
+    "/settings/models": [
+      "Refresh",
+      "Refresh",
+      "Refresh",
+      "Refresh"
+    ]
+  },
+  "palette": {
+    "settings": {
+      "groups": [
+        "Go to",
+        "Settings",
+        "Capabilities"
+      ],
+      "items": [
+        "Go to Settings",
+        "Go to Capabilities › Advanced setup",
+        "Go to Chat › Advanced channel setup",
+        "Settings · General",
+        "Settings · Personalities · Experimental",
+        "Settings · Get started",
+        "Settings · Providers & models",
+        "Settings · Local AI"
+      ],
+      "noMatch": false,
+      "text": "Command palette\n\nFind commands, workspace conversations, Inbox items, and Library records.\n\nSearch or run a command\n\nWorkspace: Mission Control Next Verification Workspace.\n\nGo to\nGo to Settings\nGo to Capabilities › Advanced setup\nGo to Chat › Advanced channel setup\nSettings\nSettings · General\nSettings · Personalities · Experimental\nSettings · Get started\nSettings · Providers & models\nSettings · L"
+    },
+    "approvals": {
+      "groups": [
+        "Go to",
+        "Capabilities"
+      ],
+      "items": [
+        "Go to Inbox",
+        "Agentic skill architectSkill · Capabilities › Skil",
+        "Capabilities searchTool · Capabilities › Tools"
+      ],
+      "noMatch": false,
+      "text": "Command palette\n\nFind commands, workspace conversations, Inbox items, and Library records.\n\nSearch or run a command\n\nWorkspace: Mission Control Next Verification Workspace.\n\nGo to\nGo to Inbox\nCapabilities\nAgentic skill architect\nSkill · Capabilities › Skills\nCapabilities search\nTool · Capabilities › Tools\nSearch coverage"
+    },
+    "health": {
+      "groups": [
+        "Go to",
+        "Capabilities"
+      ],
+      "items": [
+        "Go to System",
+        "Go to System › Health",
+        "OperationsSkill · Capabilities › Skills"
+      ],
+      "noMatch": false,
+      "text": "Command palette\n\nFind commands, workspace conversations, Inbox items, and Library records.\n\nSearch or run a command\n\nWorkspace: Mission Control Next Verification Workspace.\n\nGo to\nGo to System\nGo to System › Health\nCapabilities\nOperations\nSkill · Capabilities › Skills\nSearch coverage"
+    },
+    "zzzqqq": {
+      "groups": [],
+      "items": [],
+      "noMatch": true,
+      "text": "Command palette\n\nFind commands, workspace conversations, Inbox items, and Library records.\n\nSearch or run a command\n\nWorkspace: Mission Control Next Verification Workspace.\n\nNo matching commands or returned records. Try a destination such as Settings, approvals, health, or a different search term.\n\nSearch coverage"
+    }
+  },
+  "nav": {
+    "firstTab": {
+      "el": "History",
+      "href": "/work/history"
+    },
+    "afterSkip": {
+      "active": "BODY",
+      "url": "/work/history"
+    },
+    "afterRouteChange": {
+      "active": "A# Inbox2",
+      "liveRegions": [],
+      "h1": "Inbox"
+    }
+  }
+}

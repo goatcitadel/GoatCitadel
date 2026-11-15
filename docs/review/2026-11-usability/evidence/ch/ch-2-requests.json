@@ -1,0 +1,55 @@
+{
+  "mutatingRequests": [
+    [
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      "POST",
+      "/api/v1/chat/sessions/sess_X/route-preflight"
+    ],
+    [
+      "POST",
+      "/api/v1/chat/sessions/sess_X/route-preflight"
+    ],
+    [
+      "POST",
+      "/api/v1/chat/sessions/sess_X/agent-send/stream"
+    ],
+    [
+      "POST",
+      "/api/v1/chat/sessions/sess_X/route-preflight"
+    ],
+    [
+      "POST",
+      "/api/v1/chat/sessions/sess_X/route-preflight"
+    ],
+    [
+      "POST",
+      "/api/v1/chat/sessions/sess_X/route-preflight"
+    ],
+    [
+      "POST",
+      "/api/v1/chat/sessions/sess_X/turns/21a6695f-8582-4319-a5db-601e751d4256/edit/stream"
+    ],
+    [
+      "POST",
+      "/api/v1/chat/sessions/sess_X/route-preflight"
+    ],
+    [
+      "POST",
+      "/api/v1/chat/sessions/sess_X/turns/68785a46-ba46-42d3-8a1a-d4d619e333d1/retry/stream"
+    ]
+  ],
+  "consoleAndFailedRequests": [],
+  "timings": {
+    "followup": {
+      "first": 83,
+      "done": 1184
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "filesText": "Files\n\nInstallation shared files. Workspace selection does not change this file root.\n\nRefresh files\nCandidates and mesh\nMemory\nNotes\nFiles\nArtifacts\nAgents\nKnowledge\nMail\nPrompt packs\nUpload text file\nCreate from template\nSearch files in this folder\nShared files\nchat/\nworkspace/\n\n3 newest files in the shared file root and its subfolders. No more files. This list is shared across workspaces.\n\n45ea898a-0ebb-40e0-ac8f-3b505b507397-ut13b-pixel.png\n\nIn chat/default/attachments/2026/11 · 70 B · Installation shared files\n\nModified 3 minutes ago\n\nInspect\n390c1f7c-5464-4370-bb79-7ea5bcb79829-ut13b-notes.txt\n\nIn chat/default/attachments/2026/11 · 62 B · Installation shared files\n\nModified 3 minutes a",
+  "reviewMs": 112,
+  "reviewText": "Review text file upload | Confirm the installation shared destination before writing. | Target: ut13b-note.txt | Upload file",
+  "listed": true,
+  "artifactPanel": "Artifacts preview | Generated note | Text · Version 1 | Created Nov 15, 2026, 3:32 AM | Version 1 · Created 5 minutes ago · Source: Conversation | Download artifact | Generated note | text | v1 | text | chat | verification-seed | Saved 11/15/2026, 3:32:49 AM | Verification long-thread response 20 | Open artifact conversation | Reopen exact artifact | Use artifact in Chat",
+  "log": []
+}

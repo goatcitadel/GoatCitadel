@@ -1,0 +1,47 @@
+{
+ "tabs": [
+  "Gates",
+  "Evaluations",
+  "Design"
+ ],
+ "tabsUrlBefore": "http://127.0.0.1:55151/system/quality",
+ "Gates": {
+  "ms": 964,
+  "url": "/system/quality",
+  "txt": "Quality | Stored quality results for this installation. Refresh and exports do not run evaluations. | Refresh | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Results checked Nov 15, 2026, 12:39 AM. | Counts and totals summarize the rows returned by this bounded read, not guaranteed all-time storage cardinality. | Security eval packs are definitions and stored evidence only; this projection does not call providers or run tests. | A listed pack is not release proof until its tests have been run and scored through the prompt-pack workflow. | Security quality gates are read-only projections from stored prompt-pack reports; this endpoint does not run providers, mutate packs, or approve release claims. | Design quality advisories are calibrated signals, not release blockers unless promoted to P0. | Gates | Evaluations | "
+ },
+ "Evaluations": {
+  "ms": 966,
+  "url": "/system/quality",
+  "txt": "Quality | Stored quality results for this installation. Refresh and exports do not run evaluations. | Refresh | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Results checked Nov 15, 2026, 12:39 AM. | Counts and totals summarize the rows returned by this bounded read, not guaranteed all-time storage cardinality. | Security eval packs are definitions and stored evidence only; this projection does not call providers or run tests. | A listed pack is not release proof until its tests have been run and scored through the prompt-pack workflow. | Security quality gates are read-only projections from stored prompt-pack reports; this endpoint does not run providers, mutate packs, or approve release claims. | Design quality advisories are calibrated signals, not release blockers unless promoted to P0. | Gates | Evaluations | "
+ },
+ "Design": {
+  "ms": 977,
+  "url": "/system/quality",
+  "txt": "Quality | Stored quality results for this installation. Refresh and exports do not run evaluations. | Refresh | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | Results checked Nov 15, 2026, 12:39 AM. | Counts and totals summarize the rows returned by this bounded read, not guaranteed all-time storage cardinality. | Security eval packs are definitions and stored evidence only; this projection does not call providers or run tests. | A listed pack is not release proof until its tests have been run and scored through the prompt-pack workflow. | Security quality gates are read-only projections from stored prompt-pack reports; this endpoint does not run providers, mutate packs, or approve release claims. | Design quality advisories are calibrated signals, not release blockers unless promoted to P0. | Gates | Evaluations | "
+ },
+ "exportsText": "",
+ "exportButtons": [
+  "Refresh",
+  "Gates",
+  "Evaluations",
+  "Design",
+  "Inspect check 1",
+  "Inspect check 2",
+  "Inspect check 3",
+  "Inspect check 4",
+  "Inspect check 5",
+  "Inspect check 6",
+  "Inspect check 7",
+  "Inspect check 8",
+  "Inspect check 9",
+  "Inspect check 10",
+  "Inspect check 11",
+  "Inspect check 12",
+  "",
+  ""
+ ],
+ "refreshMs": 1242,
+ "console": [],
+ "http": []
+}

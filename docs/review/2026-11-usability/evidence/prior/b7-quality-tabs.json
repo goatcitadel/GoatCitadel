@@ -1,0 +1,72 @@
+{
+ "before": [
+  {
+   "name": "Gates",
+   "selected": "true",
+   "tab": -1,
+   "controls": "radix-_r_0_-content-gates",
+   "panelExists": true
+  },
+  {
+   "name": "Evaluations",
+   "selected": "false",
+   "tab": -1,
+   "controls": "radix-_r_0_-content-evaluations",
+   "panelExists": true
+  },
+  {
+   "name": "Design",
+   "selected": "false",
+   "tab": -1,
+   "controls": "radix-_r_0_-content-design",
+   "panelExists": true
+  }
+ ],
+ "afterArrowRight": [
+  {
+   "name": "Gates",
+   "selected": "false",
+   "tab": -1,
+   "controls": "radix-_r_0_-content-gates",
+   "panelExists": true
+  },
+  {
+   "name": "Evaluations",
+   "selected": "true",
+   "tab": 0,
+   "controls": "radix-_r_0_-content-evaluations",
+   "panelExists": true
+  },
+  {
+   "name": "Design",
+   "selected": "false",
+   "tab": -1,
+   "controls": "radix-_r_0_-content-design",
+   "panelExists": true
+  }
+ ],
+ "focused": "Evaluations",
+ "afterEnd": [
+  {
+   "name": "Gates",
+   "selected": "false",
+   "tab": -1,
+   "controls": "radix-_r_0_-content-gates",
+   "panelExists": true
+  },
+  {
+   "name": "Evaluations",
+   "selected": "false",
+   "tab": -1,
+   "controls": "radix-_r_0_-content-evaluations",
+   "panelExists": true
+  },
+  {
+   "name": "Design",
+   "selected": "true",
+   "tab": 0,
+   "controls": "radix-_r_0_-content-design",
+   "panelExists": true
+  }
+ ]
+}
