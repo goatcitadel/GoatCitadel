@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
+import { COCKPIT_LOCATION_EVENT } from "./cockpit-back-guard";
 
 // App-session view state only. Key includes installation, caller, scope and exact URL.
 const positions = new Map<string, number>();
@@ -9,6 +10,8 @@ export function useCockpitScroll(key: string) {
     if (!element) return;
     const target = positions.get(key) ?? 0;
     let restoring = true;
+    // Set once navigation starts: the next page may clamp this shared scroller before React swaps it in.
+    let leaving = false;
     const restore = () => {
       if (restoring) element.scrollTop = target;
     };
@@ -17,12 +20,21 @@ export function useCockpitScroll(key: string) {
     const observer = new MutationObserver(restore);
     observer.observe(element, { childList: true, subtree: true });
     const interact = () => {
+      leaving = false;
       restoring = false;
       observer.disconnect();
     };
     const remember = () => {
+      if (leaving) return;
       if (!restoring || element.scrollTop === target) positions.set(key, element.scrollTop);
     };
+    // Both fire before React renders the next page, so this is the last honest position of this one (U-GL-049).
+    const leave = () => {
+      remember();
+      leaving = true;
+    };
+    window.addEventListener(COCKPIT_LOCATION_EVENT, leave);
+    window.addEventListener("popstate", leave);
     element.addEventListener("wheel", interact, { passive: true });
     element.addEventListener("touchstart", interact, { passive: true });
     element.addEventListener("pointerdown", interact);
@@ -35,6 +47,8 @@ export function useCockpitScroll(key: string) {
       element.removeEventListener("pointerdown", interact);
       element.removeEventListener("keydown", interact);
       element.removeEventListener("scroll", remember);
+      window.removeEventListener(COCKPIT_LOCATION_EVENT, leave);
+      window.removeEventListener("popstate", leave);
     };
   }, [key]);
   return ref;
