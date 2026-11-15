@@ -12,7 +12,7 @@ export function describeRuntimeService(daemon: HealthSummaryResponse["daemonStat
 } {
   if (!daemon) return { label: "Unknown", tone: "neutral", detail: "The health summary did not report the service." };
   const issues = daemon.diagnostics?.filter((item) => item.severity === "critical" || item.severity === "warn") ?? [];
-  if (!daemon.supported)
+  if (!daemon.running && !daemon.supported)
     return { label: "Unavailable", tone: "neutral", detail: "Service control is unavailable on this host." };
   if (!daemon.running) return { label: "Problem", tone: "failed", detail: "The managed runtime service is stopped." };
   if (issues.length) {
@@ -23,6 +23,13 @@ export function describeRuntimeService(daemon: HealthSummaryResponse["daemonStat
       detail: `${issues.length} runtime ${issues.length === 1 ? "diagnostic needs" : "diagnostics need"} review.`,
     };
   }
+  if (!daemon.supported)
+    return {
+      label: "Running",
+      tone: "done",
+      detail:
+        "The GoatCitadel server is running. Starting and stopping it happens outside this app, through your service manager.",
+    };
   return {
     label: "Running",
     tone: "done",

@@ -161,8 +161,8 @@ describe("cockpit saved board detail", () => {
     expect(container.textContent).toContain("local-host");
     expect(container.textContent).toContain("50% used");
     expect(container.textContent).toContain("Known costUnknown");
-    // SY-01: the fixture omits supported, so the widget reads the Health derivation ("Unavailable"), never "Stopped".
-    expect(container.textContent).toContain("Runtime serviceUnavailable");
+    // SY-01: the fixture omits supported; a running server reads Running through the Health derivation, never "Stopped".
+    expect(container.textContent).toContain("Runtime serviceRunning");
     expect(container.textContent).not.toContain("Stopped");
     expect(container.textContent).toContain("Host-wide status applies beyond the selected workspace");
     // Each widget names its own destination and its own Refresh, never a shared generic label.

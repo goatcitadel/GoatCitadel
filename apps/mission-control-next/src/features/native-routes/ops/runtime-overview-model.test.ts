@@ -48,8 +48,10 @@ describe("runtime head metrics", () => {
     expect(metric(buildOpsHeadMetrics("diagnostics", failed, undefined), "CPU")).toBe("Unknown");
   });
 
-  it("agrees with Health: an unsupported host reads Unavailable, and a stopped service reads Problem", () => {
-    const unsupported = base({ daemon: { running: true, supported: false } });
+  it("agrees with Health: a running server without service control reads Running, an unsupported stopped one Unavailable, and a stopped service Problem", () => {
+    const external = base({ daemon: { running: true, supported: false } });
+    expect(metric(buildOpsHeadMetrics("runtime", external, undefined), "Daemon")).toBe("Running");
+    const unsupported = base({ daemon: { running: false, supported: false } });
     expect(metric(buildOpsHeadMetrics("runtime", unsupported, undefined), "Daemon")).toBe("Unavailable");
     expect(
       metric(
@@ -118,6 +120,10 @@ describe("runtime hero readiness", () => {
       tone: "warning",
     });
     expect(presentRuntimeReadiness(base({ daemon: { running: true, supported: false } }))).toMatchObject({
+      chip: "Runtime ready",
+      tone: "success",
+    });
+    expect(presentRuntimeReadiness(base({ daemon: { running: false, supported: false } }))).toMatchObject({
       chip: "Service control unavailable",
       tone: "muted",
     });

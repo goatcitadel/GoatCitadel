@@ -200,4 +200,21 @@ describe("describeRuntimeService (SY-01)", () => {
     expect(describeRuntimeService(healthy.daemonStatus).label).toBe("Running");
     expect(describeRuntimeService(undefined).label).toBe("Unknown");
   });
+
+  it("reads a running server without service control as Running, so Health counts nothing", () => {
+    const external = { ...healthy.daemonStatus, supported: false, controllable: false };
+    expect(describeRuntimeService(external)).toEqual({
+      label: "Running",
+      tone: "done",
+      detail:
+        "The GoatCitadel server is running. Starting and stopping it happens outside this app, through your service manager.",
+    });
+    const service = deriveHealthChecks({ ...healthy, daemonStatus: external }).find((check) => check.id === "service");
+    expect(service?.status).toEqual({ label: "Running", tone: "done" });
+    expect(healthOverviewState([service!]).heading).toBe("All reachable checks report no problems");
+    const warned = { ...external, diagnostics: [{ severity: "warn" }] } as typeof external;
+    expect(describeRuntimeService(warned).label).toBe("Needs review");
+    const critical = { ...external, diagnostics: [{ severity: "critical" }] } as typeof external;
+    expect(describeRuntimeService(critical).label).toBe("Problem");
+  });
 });
