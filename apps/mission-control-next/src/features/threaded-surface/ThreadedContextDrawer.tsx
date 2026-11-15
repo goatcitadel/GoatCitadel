@@ -1,5 +1,6 @@
 import { useDraftLeave } from "../native-routes/library/DraftLeaveDialog";
 import { useMemo, useState } from "react";
+import { ThinkingLevelField } from "./ThinkingLevelField";
 import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surface-core";
 import { formatSelectionSourceSummary } from "@goatcitadel/threaded-surface-core/work-trust";
 import type {
@@ -452,36 +453,12 @@ export function ThreadedContextDrawer({
         <div className="mc-next-context-section-stack">
           <section className="mc-next-context-card">
             <p className="mc-next-panel-kicker">Run shape</p>
-            <label className="mc-next-context-field">
-              <span>Thinking</span>
-              <select
-                value={thinkingLevel}
-                onChange={(event) => void props.onPrefPatch({ thinkingLevel: event.target.value as ChatThinkingLevel })}
-                aria-label="Thinking level"
-              >
-                <option value="off" disabled={!supportsThinking("off")}>
-                  No thinking
-                </option>
-                <option value="minimal" disabled={!supportsThinking("minimal")}>
-                  Minimal
-                </option>
-                <option value="standard" disabled={!supportsThinking("standard")}>
-                  Standard
-                </option>
-                <option value="extended" disabled={!supportsThinking("extended")}>
-                  Extended
-                </option>
-                <option value="deep" disabled={!supportsThinking("deep")}>
-                  Deep
-                </option>
-                <option value="max" disabled={!supportsThinking("max")}>
-                  Maximum (supported models only)
-                </option>
-                <option value="ultra" disabled={!supportsThinking("ultra")}>
-                  Ultra (supported models only)
-                </option>
-              </select>
-            </label>
+            <ThinkingLevelField
+              value={thinkingLevel}
+              supports={supportsThinking}
+              scope={props.selectedSessionId}
+              onApply={(level) => void props.onPrefPatch({ thinkingLevel: level })}
+            />
             {isOpenAiRoute && !supportsThinking(thinkingLevel) ? (
               <p role="status">
                 This thinking level is unavailable for the selected OpenAI model. Choose a supported level before
