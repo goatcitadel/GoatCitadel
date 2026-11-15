@@ -6,7 +6,6 @@ import {
   isApiRequestError,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { hasMcpServerBinding } from "./mcp-server-mutation";
-import { FeatureOffLink } from "../../../cockpit/areas/settings/FeatureOffLink";
 
 type State = {
   phase: "idle" | "checking" | "sending" | "recorded" | "uncertain";
@@ -41,9 +40,12 @@ export function McpConfigurationReport({
   server,
   scope,
   button,
+  featureOffLink,
 }: {
   server: McpServerRecord;
   scope: string;
+  /** The way to turn Connector diagnostics on. Only the Cockpit passes it: Classic has no Settings › Advanced page to link to, and no query client. */
+  featureOffLink?: ReactNode;
   button: (label: string, click: () => void, disabled: boolean) => ReactNode;
 }) {
   const identity = canonicalJsonString([scope, binding(server)]);
@@ -166,12 +168,7 @@ export function McpConfigurationReport({
           {state.phase === "recorded" && !report
             ? "Saved metadata changed. The previous report is withheld; record a new configuration check when ready."
             : state.message}
-          {state.featureOff ? (
-            <>
-              {" "}
-              <FeatureOffLink flag="connectorDiagnosticsV1Enabled" />
-            </>
-          ) : null}
+          {state.featureOff && featureOffLink ? <> {featureOffLink}</> : null}
         </p>
       ) : null}
       {report ? (

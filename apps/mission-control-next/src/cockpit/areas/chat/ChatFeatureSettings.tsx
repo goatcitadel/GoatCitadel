@@ -10,6 +10,7 @@ import "./chat-feature-settings.css";
 
 /** Presentation only: existing session controllers and Gateway checks own every action. */
 export function ChatFeatureSettings({ dock }: { dock: MissionThreadedContextDockProps }) {
+  const fallbackSwitchOn = useFeatureSwitchOn("chatProviderFallbackV1Enabled");
   const subagentsSwitchOn = useFeatureSwitchOn("chatDelegationControlsV1Enabled");
   const [confirmAutomatic, setConfirmAutomatic] = useState(false);
   const [pending, setPending] = useState(false);
@@ -68,7 +69,12 @@ export function ChatFeatureSettings({ dock }: { dock: MissionThreadedContextDock
           : "Applies to this conversation only. Tool policy and approvals still decide each call."}
       </p>
       <fieldset disabled={busy} className="min-w-0 border-0 p-0">
-        <ChatProviderFallbackSettings {...dock} sending={busy} />
+        <ChatProviderFallbackSettings
+          {...dock}
+          sending={busy}
+          switchOn={fallbackSwitchOn}
+          featureOffLink={<FeatureOffLink flag="chatProviderFallbackV1Enabled" />}
+        />
       </fieldset>
       <ContextDisclosure summary="Subagents and coding delegates">
         <label className="mc-next-context-field">

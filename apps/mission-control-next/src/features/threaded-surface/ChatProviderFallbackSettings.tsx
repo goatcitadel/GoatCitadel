@@ -1,7 +1,5 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surface-core";
-import { FeatureOffLink } from "../../cockpit/areas/settings/FeatureOffLink";
-import { useFeatureSwitchOn } from "../../cockpit/areas/settings/feature-switches";
 import { ContextDisclosure } from "./ThreadedContextDisclosure";
 
 type Props = Pick<
@@ -15,7 +13,14 @@ type Props = Pick<
   | "sending"
   | "loadModelsForProvider"
   | "providerFallbackAvailable"
->;
+> & {
+  /**
+   * Cockpit only (Classic has no query client and no Settings › Advanced to link to). `featureOffLink` is the way to
+   * turn Provider fallback on; `switchOn` is whether that switch is on. Without `featureOffLink` the old wording stays.
+   */
+  switchOn?: boolean;
+  featureOffLink?: ReactNode;
+};
 
 export function ChatProviderFallbackSettings(props: Props) {
   const { loadModelsForProvider } = props;
@@ -32,7 +37,6 @@ export function ChatProviderFallbackSettings(props: Props) {
     setModel(saved?.model ?? "");
     setAllowLocalToCloud(saved?.allowLocalToCloud ?? false);
   }, [saved?.providerId, saved?.model, saved?.allowLocalToCloud]);
-  const switchOn = useFeatureSwitchOn("chatProviderFallbackV1Enabled");
   const options = (props.providerOptions ?? []).filter((option) => option.providerId !== props.selectedProviderId);
   const provider = options.find((option) => option.providerId === providerId);
   useEffect(() => {
@@ -77,12 +81,14 @@ export function ChatProviderFallbackSettings(props: Props) {
     <ContextDisclosure summary="Provider fallback">
       <p role="status">
         {!props.providerFallbackAvailable ? (
-          switchOn === true ? (
+          !props.featureOffLink ? (
+            "Provider fallback is not enabled for this runtime. You can save a preference for later."
+          ) : props.switchOn === true ? (
             "Provider fallback needs resumable runs, which are turned off on this installation. You can save a preference for later."
           ) : (
             <>
               Provider fallback is turned off on this installation. You can save a preference for later.{" "}
-              <FeatureOffLink flag="chatProviderFallbackV1Enabled" />
+              {props.featureOffLink}
             </>
           )
         ) : props.routePreflight?.fallbackPolicy === "armed" && target ? (
