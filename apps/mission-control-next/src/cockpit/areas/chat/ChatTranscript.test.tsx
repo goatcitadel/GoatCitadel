@@ -182,6 +182,71 @@ describe("ChatTranscript", () => {
     expect(document.activeElement?.hasAttribute("data-chat-waiting-decision")).toBe(true);
   });
 
+  describe("Jump to latest names only a decision whose card is shown and waiting", () => {
+    const jumpButton = () =>
+      [...container.querySelectorAll("button")].find((button) => button.textContent?.startsWith("Jump to"));
+    const renderJump = (extra: Record<string, unknown>) =>
+      act(async () =>
+        renderWithProviders(
+          <InspectorProvider>
+            <ChatTranscript
+              props={{
+                ...sessionProps([turn("jump-turn", true)]),
+                followOutput: false,
+                composerRef: { current: null },
+                ...extra,
+              }}
+            />
+          </InspectorProvider>,
+        ),
+      );
+
+    it("says plain Jump to latest for an approval that is already decided", async () => {
+      vi.mocked(fetchApproval).mockResolvedValue({
+        approvalId: "decided-approval",
+        kind: "tool_invoke",
+        status: "approved",
+        riskLevel: "caution",
+        preview: {},
+        payload: {},
+        createdAt: "2026-10-01T00:00:00Z",
+      } as never);
+      await renderJump({
+        pendingApproval: { approvalId: "decided-approval", toolName: "fs.read", riskLevel: "caution" },
+      });
+      await vi.waitFor(() => expect(container.textContent).toContain("Approval decided"));
+      expect(jumpButton()?.textContent).toBe("Jump to latest");
+    });
+
+    it("says plain Jump to latest for an approval owned by the Code Mode card", async () => {
+      await renderJump({
+        pendingApproval: { approvalId: "code-mode-approval", toolName: "code_mode.request", riskLevel: "caution" },
+      });
+      expect(container.querySelector("[data-chat-waiting-decision]")).toBeNull();
+      expect(jumpButton()?.textContent).toBe("Jump to latest");
+    });
+
+    it("names an optional question until you skip it, then says plain Jump to latest", async () => {
+      await renderJump({
+        pendingUserInput: {
+          promptId: "optional-q",
+          turnId: "t",
+          kind: "text",
+          title: "Pick a name",
+          question: "What name?",
+          required: false,
+          delivery: "background",
+        },
+      });
+      await vi.waitFor(() => expect(container.querySelector('form[aria-label="Pending question"]')).not.toBeNull());
+      expect(jumpButton()?.textContent).toBe("Jump to the question waiting for you");
+      const skip = [...container.querySelectorAll("button")].find((button) => button.textContent === "Skip question");
+      await act(async () => skip!.click());
+      expect(container.textContent).toContain("You skipped");
+      expect(jumpButton()?.textContent).toBe("Jump to latest");
+    });
+  });
+
   it("hydrates missing approval risk from the matching pending canonical record", async () => {
     const onApprovePending = vi.fn();
     vi.mocked(fetchApproval).mockResolvedValueOnce({

@@ -16,6 +16,7 @@ import { presentApprovalAction } from "./chat-vocabulary";
 import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
+import { useReportWaitingDecision } from "./chat-jump-to-latest";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { specialistApprovalCode } from "../inbox/load-specialist-approval-code";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
@@ -151,6 +152,15 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   // The persisted record outranks the retained prompt: once it is decided, the card reports the decision
   // instead of asking for one while Chat waits for the queue to clear it.
   const decided = reviewedApproval && reviewedApproval.status !== "pending" ? reviewedApproval : undefined;
+  // Jump to latest names a decision only while its card is shown and waiting: not decided, not skipped, not owned
+  // by the Code Mode card.
+  useReportWaitingDecision(
+    approval && !ownedByCodeModeCard && !decided
+      ? "approval"
+      : input && !skipped.has(questionScope)
+        ? "question"
+        : null,
+  );
   const expiry = decided ? null : approvalExpiryLabel(approval?.expiresAt);
   function continuationHref(destination: "/inbox", selectedApprovalId?: string) {
     const parameters = new URLSearchParams(search);
