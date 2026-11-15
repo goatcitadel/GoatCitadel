@@ -106,6 +106,7 @@ function SessionsPage({ workspaceId, location }: { workspaceId: string; location
       {runtime.loading && !data ? <p className="text-sm text-fg-muted">Loading sessions…</p> : null}
       {runtime.error && !data ? (
         <EmptyState
+          tone="error"
           title="Sessions unavailable"
           description={runtime.error}
           action={<Button onClick={() => void runtime.reload()}>Try again</Button>}

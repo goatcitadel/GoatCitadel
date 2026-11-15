@@ -49,6 +49,7 @@ export function DiscordTokenFields({
       intentOff={checked?.inTheWay !== undefined}
       busy={busy}
       error={error}
+      workspaceId={workspaceId}
       value={token.value}
       onChange={token.setValue}
       checking={busy}
@@ -95,6 +96,7 @@ export function SlackTokenFields({ workspaceId, connectionId, checked, busy, err
       busy={busy}
       checking={busy}
       error={error}
+      workspaceId={workspaceId}
       onCheck={() => onCheck({ botToken: botToken.value, appToken: appToken.value })}
     />
   );

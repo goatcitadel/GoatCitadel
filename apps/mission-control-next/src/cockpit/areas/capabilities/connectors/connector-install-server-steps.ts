@@ -245,11 +245,17 @@ async function finishSignIn(id: number, token: number, reviewed: McpServerRecord
           return failInstallFlow(id, "finish_sign_in", `${STEP_FAILED.finish_sign_in(runName(id))} ${SIGN_IN_AGAIN}`);
         }
         addChanged(id, "Signed in.");
-        await switchOn(id, token, serverId);
+        await afterSignIn(id, token, serverId);
       },
     });
   }
   addChanged(id, "Signed in.");
+  await afterSignIn(id, token, serverId);
+}
+
+/** A requester-scoped server's flow ends at its sign-in; any other goes on to switch on and connect. */
+async function afterSignIn(id: number, token: number, serverId: string) {
+  if (readRun(id)?.signInOnly) return settleInstallFlow(id, { phase: "done", serverId });
   await switchOn(id, token, serverId);
 }
 

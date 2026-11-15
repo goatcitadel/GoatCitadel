@@ -65,7 +65,7 @@ export function useChatComposerPaletteActions({
           ? current
           : [...current, uploaded],
       );
-      pushLocalNotice(`Attached ${fileName} for the next turn.`, "success");
+      pushLocalNotice(`Attached ${fileName}.`, "success");
     },
     [ensureSession, pushLocalNotice, setPendingAttachments, workspaceId],
   );
@@ -99,8 +99,15 @@ export function useChatComposerPaletteActions({
             break;
           case "attach_document":
             if (explicitContextEnabled && includeDocumentContext) {
-              includeDocumentContext({ kind: item.action.documentKind, ref: item.action.documentId, label: item.action.label });
-              pushLocalNotice(`Included ${item.action.label} for the next turn. The saved version is used when you send.`, "success");
+              includeDocumentContext({
+                kind: item.action.documentKind,
+                ref: item.action.documentId,
+                label: item.action.label,
+              });
+              pushLocalNotice(
+                `Included ${item.action.label} for the next turn. The saved version is used when you send.`,
+                "success",
+              );
             } else {
               pushLocalNotice("Including documents in a turn is temporarily unavailable.", "warning");
             }
@@ -109,7 +116,10 @@ export function useChatComposerPaletteActions({
             await handleAttachKnowledgeUrlValue(item.action.url);
             break;
           case "launch_external_source":
-            pushLocalNotice("Open External sources in Library to review and admit a source before attaching it to this conversation.", "warning");
+            pushLocalNotice(
+              "Open External sources in Library to review and admit a source before attaching it to this conversation.",
+              "warning",
+            );
             break;
           case "explore_workspace":
             pushLocalNotice("Explore workspace delegation is temporarily unavailable.", "warning");

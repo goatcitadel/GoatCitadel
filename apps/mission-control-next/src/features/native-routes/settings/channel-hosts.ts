@@ -29,7 +29,9 @@ export function inboxPlanHref(planId: string, workspaceId: string): string {
 
 /** The hosts, of those a channel needs, that the outbound allowlist does not yet allow. The same check Turn on makes. */
 export function missingHosts(requiredHosts: readonly string[], allowlist: readonly string[]): string[] {
-  return [...new Set(requiredHosts)].filter((host) => !isBaseUrlAllowlisted(`https://${host}/`, allowlist));
+  return [...new Set(requiredHosts)].filter(
+    (host) => !isBaseUrlAllowlisted(`https://${host}/`, allowlist, { hostOnlyEntriesCoverPrivate: true }),
+  );
 }
 
 export interface MissingHosts {

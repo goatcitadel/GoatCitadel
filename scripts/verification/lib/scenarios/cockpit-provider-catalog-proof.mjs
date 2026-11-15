@@ -134,9 +134,14 @@ export async function runCockpitProviderCatalogProof({ context, browser, stack, 
             advanced.locator("#expert-provider-controls"),
           );
           const panel = page.getByRole("region", { name: "Providers and model catalogs", exact: true });
-          const select = panel.getByRole("combobox", { name: "Inspect provider", exact: true });
-          await select.waitFor();
-          await select.selectOption(providerId);
+          // One chooser drives the editor and this catalog: the provider list above it, not a second select.
+          const providerGroup = advanced.getByRole("group", { name: "Provider", exact: true });
+          const providerRadios = providerGroup.locator('input[type="radio"]');
+          await providerRadios.first().waitFor();
+          assert.equal(await panel.getByRole("combobox", { name: "Inspect provider", exact: true }).count(), 0,
+            "The catalog still has its own provider chooser.");
+          await providerGroup.locator(`input[type="radio"][value="${providerId}"]`).check();
+          await panel.getByText(/^Showing the catalog for /).waitFor();
           const refreshModels = panel.getByRole("button", { name: "Refresh models", exact: true })
             .and(panel.locator("button:enabled"));
           // Focus the native control before recording its action window. This avoids
@@ -164,8 +169,8 @@ export async function runCockpitProviderCatalogProof({ context, browser, stack, 
           await panel.locator('[aria-busy="false"]').waitFor();
           await panel.getByRole("list", { name: "Discovered models" }).waitFor();
           const rendered = {
-            providerIds: await select.locator("option").evaluateAll((items) => items.map((item) => item.value)),
-            selectedProviderId: await select.inputValue(),
+            providerIds: await providerRadios.evaluateAll((items) => items.map((item) => item.value)),
+            selectedProviderId: await providerGroup.locator('input[type="radio"]:checked').inputValue(),
             savedDefault: await panel.getByText(/^Saved Chat default:/).innerText(),
             models: await panel.getByRole("list", { name: "Discovered models" }).locator("li > span:first-child").allTextContents(),
           };
@@ -178,7 +183,7 @@ export async function runCockpitProviderCatalogProof({ context, browser, stack, 
             panel.getByRole("button", { name: "Refresh providers", exact: true }).click(),
           ]);
           await readProviderCatalogResult(configResponse, matchProviderCatalogRead(configResponse.request()));
-          await select.waitFor();
+          await panel.getByText(/^Showing the catalog for /).waitFor();
           const after = await requestJson(stack.gatewayUrl, "/api/v1/llm/config");
           assertOk(after, `read ${variant} provider owner after inspection`);
           assertProviderCatalogProof({ before: before.body, after: after.body, providerId, modelCatalog, rendered, mutations });

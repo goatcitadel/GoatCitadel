@@ -62,7 +62,6 @@ import {
   executionProfileFromNormalizationProfile,
   resolveSustainedLocalCodingProfile,
 } from "./chat-turn-execution-profile.js";
-import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
 import { admitChatRouteWard, routeWardActionsFor } from "./chat-route-local-ward.js";
 import {
   resolveInheritedChatContextRefs,
@@ -83,15 +82,13 @@ import {
   type BasePromptCatalogScope,
 } from "./base-prompt-capability-catalog.js";
 import { buildCodeModeRequestTurnShape, loadCodeModeRequestEligibility } from "./code-mode-request-eligibility.js";
-import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
-import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
+import { buildOrchestrationPlan } from "../orchestration/router.js";
 import type {
   OrchestrationPlan as ModeOrchestrationPlan,
   OrchestrationRouterInput,
   OrchestrationStepExecutionResult,
 } from "../orchestration/types.js";
 import {
-  applyExecutionPlanDraftToOrchestrationPlan,
   buildExecutionPlanDraftFromOrchestrationPlan,
   buildPlanningModeSystemInstruction,
   buildRetrievalTrace,
@@ -109,7 +106,6 @@ import {
   type ResolvedRuntimeGuidance,
   scoreSpecialistCandidateMatch,
 } from "./chat-turn-planning-helpers.js";
-import { trimExecutionPlanDraftToPlan } from "./chat-planner-fanout.js";
 import { selectPlannerDraftModel, shouldSkipPlannerDraft } from "./chat-planner-fast-path.js";
 import {
   IMPROVEMENT_TUNE_DEFAULTS,
@@ -119,11 +115,7 @@ import {
 import { appendMobileContextParts, recordMobileContextTurnProvenance } from "./chat-turn-mobile-context.js";
 import { recordPreparedTurnDecisions } from "./chat-turn-runtime-decisions.js";
 import { buildSideChatSystemInstruction } from "./chat-turn-side-chat.js";
-import {
-  routeWithModelRouter,
-  shouldBypassOrchestrationWithModelRouter,
-  withModelRouterOrchestrationDecision,
-} from "./model-router-decision-service.js";
+import { routeWithModelRouter, withModelRouterOrchestrationDecision } from "./model-router-decision-service.js";
 import type {
   ActiveTurnAdmission,
   ChatStreamMutationLifecycle,
@@ -603,8 +595,8 @@ function resolveToolsUnavailableReason(input: {
   missingRequiredProjectBinding: boolean;
 }): BaseAgentToolsUnavailableReason | undefined {
   if (input.effectiveToolAutonomy !== "manual" || input.quickWebTurn) return undefined;
-  if (input.capabilityProfileToolAutonomy !== undefined) return "capability_profile";
   if (input.advisoryPlanning) return "advisory_planning";
+  if (input.capabilityProfileToolAutonomy !== undefined) return "capability_profile";
   if (input.missingRequiredProjectBinding) return "project_binding_required";
   return "manual_autonomy";
 }
@@ -808,7 +800,7 @@ export async function prepareAgentChatTurn(
       }
     : { ...normalizedCandidate, subagentPolicy: "off" };
   const executionProfile = executionProfileFromNormalizationProfile(normalized.normalizationProfile);
-  const quickWebTurn = executionProfile === "quick_web";
+  let quickWebTurn = executionProfile === "quick_web";
   if (!options?.skipProviderPreparation && !systemHeartbeatPosture && branchKind !== "retry") {
     await prepCanonicalWrite(host, options?.turnAdmission, () => host.maybeAutoTitleChatSession(sessionId, content));
   }
@@ -927,18 +919,20 @@ export async function prepareAgentChatTurn(
     userMessage = existingUserMessage;
   }
 
-  const resolvedGuidancePromise = quickWebTurn
+  const resolveGuidance = () => host.resolveRuntimeGuidance(workspaceId);
+  const resolveThreadKnowledge = () => host.resolveThreadKnowledgeContext(sessionId, content);
+  let resolvedGuidancePromise = quickWebTurn
     ? Promise.resolve({
         workspaceId,
         globalFilesUsed: [],
         workspaceFilesUsed: [],
         truncated: false,
       } satisfies Partial<ResolvedRuntimeGuidance>)
-    : host.resolveRuntimeGuidance(workspaceId);
-  const threadKnowledgeContextPromise: Promise<ResolvedThreadKnowledgeContext> =
+    : resolveGuidance();
+  let threadKnowledgeContextPromise: Promise<ResolvedThreadKnowledgeContext> =
     quickWebTurn || options?.skipProviderPreparation
       ? Promise.resolve({ systemInstruction: undefined, citations: [], attachments: [] })
-      : host.resolveThreadKnowledgeContext(sessionId, content);
+      : resolveThreadKnowledge();
   const sideChatSystemInstructionPromise = input.sideChatContext
     ? buildSideChatSystemInstruction(host, sessionId, input.sideChatContext)
     : Promise.resolve(undefined);
@@ -995,6 +989,22 @@ export async function prepareAgentChatTurn(
         toolAutonomy: boundCapabilityProfile.selection.toolAutonomy,
       }
     : { ...persistedPrefs, subagentPolicy: "off" };
+  // Plan first writes its plan from the model alone. A simple-lookup message must not make it a quick web turn
+  // (which keeps web tools under manual autonomy and skips guidance, thread knowledge and history): the saved
+  // mode is only known here, so undo the quick-web choices made above.
+  if (prefs.planningMode === "advisory" && quickWebTurn) {
+    quickWebTurn = false;
+    normalized = boundCapabilityProfile
+      ? { ...normalized, normalizationProfile: "live" }
+      : {
+          ...normalizeAgentInputFromSend({ ...input, content, normalizationProfile: "live" }),
+          subagentPolicy: "off",
+        };
+    resolvedGuidancePromise = resolveGuidance();
+    threadKnowledgeContextPromise = options?.skipProviderPreparation
+      ? Promise.resolve({ systemInstruction: undefined, citations: [], attachments: [] })
+      : resolveThreadKnowledge();
+  }
   const effectiveProviderRoute = boundCapabilityProfile
     ? undefined
     : admitChatRouteWard(await host.resolveChatTurnEffectiveRoute?.(sessionId, input));
@@ -1052,6 +1062,7 @@ export async function prepareAgentChatTurn(
     durableEnabled: await isDurableChatExecution(),
     normalizationProfile: normalized.normalizationProfile,
     serverOnlyTurn: Boolean(systemHeartbeatPosture || input.parentDelegationStepId),
+    advisoryPlanning: prefs.planningMode === "advisory",
   });
   const persistedAutonomy = systemHeartbeatPosture
     ? await host.storage.sessionAutonomyPrefs.get(sessionId)
@@ -1073,11 +1084,15 @@ export async function prepareAgentChatTurn(
   const effectiveMode = "chat";
   const requiresProjectBinding = chatModeRequiresProjectBinding(effectiveMode);
   const missingRequiredProjectBinding = requiresProjectBinding && !projectId;
-  const effectiveToolAutonomy = boundCapabilityProfile
-    ? boundCapabilityProfile.selection.toolAutonomy
-    : prefs.planningMode === "advisory" || missingRequiredProjectBinding
+  // Plan first runs as manual even on a bound profile (the runner offers it no tools either way).
+  const effectiveToolAutonomy =
+    prefs.planningMode === "advisory"
       ? "manual"
-      : prefs.toolAutonomy;
+      : boundCapabilityProfile
+        ? boundCapabilityProfile.selection.toolAutonomy
+        : missingRequiredProjectBinding
+          ? "manual"
+          : prefs.toolAutonomy;
   const retrievalTrace = buildRetrievalTrace({
     content,
     retrievalMode: autonomy.retrievalMode,
@@ -1334,7 +1349,9 @@ export async function prepareAgentChatTurn(
     }
   }
   if (capabilityProfile) {
-    history = upsertChatCapabilityProfileSystemInstruction(history, capabilityProfile);
+    history = upsertChatCapabilityProfileSystemInstruction(history, capabilityProfile, {
+      advisoryPlanning: prefs.planningMode === "advisory",
+    });
     const activatedSkillInstructions = await host.resolveActivatedSkillInstructions?.(capabilityProfile);
     history = upsertChatActivatedSkillSystemInstruction(history, activatedSkillInstructions);
   }
@@ -1428,7 +1445,9 @@ export async function prepareAgentChatTurn(
       sessionState,
     );
     if (capabilityProfile) {
-      history = upsertChatCapabilityProfileSystemInstruction(history, capabilityProfile);
+      history = upsertChatCapabilityProfileSystemInstruction(history, capabilityProfile, {
+        advisoryPlanning: prefs.planningMode === "advisory",
+      });
     }
     history = upsertChatTurnBindingSystemInstruction(history, featureAdmission?.references);
     if (routedContextSnapshot) {
@@ -1710,6 +1729,7 @@ function assertCapabilityProfileMatchesCurrentScope(
 export function upsertChatCapabilityProfileSystemInstruction(
   history: ChatCompletionRequest["messages"],
   profile: ChatTurnCapabilityProfileRecord,
+  options?: { advisoryPlanning?: boolean },
 ): ChatCompletionRequest["messages"] {
   const withoutPriorBinding = history.filter(
     (message) =>
@@ -1719,7 +1739,8 @@ export function upsertChatCapabilityProfileSystemInstruction(
         message.content.startsWith("Server-owned capability profile:")
       ),
   );
-  const toolNames = profile.selection.tools.map((tool) => tool.canonicalName);
+  // Plan first is offered no tools, so the frozen tool list is not callable for it.
+  const toolNames = options?.advisoryPlanning ? [] : profile.selection.tools.map((tool) => tool.canonicalName);
   const skillIds = profile.selection.trustedSkills.map((skill) => skill.skillId);
   const passport = profile.selection.workPassport;
   const instruction = [
@@ -1883,85 +1904,16 @@ export async function resolvePreparedTurnOrchestration(
   if (enforcePreparedRoutedContextOrchestrationBypass(prepared)) {
     return undefined;
   }
-  const mode = prepared.effectiveMode;
   // Execution stays inside the admitted turn: ask uses the durable prompt and
-  // auto uses the governed agent.fanout path. Advisory planning remains distinct.
-  if (prepared.prefs.planningMode !== "advisory") {
-    prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
-      decision: "bypassed",
-      reason: "Separate orchestration is bypassed: non-advisory Chat execution stays inside the admitted turn.",
-    });
-    return undefined;
-  }
-  const runtime = host.llmService.getRuntimeConfig({
-    useCache: true,
-  });
-  const capabilities = buildProviderCapabilityRegistry(runtime);
-  const policy = resolveModePolicy(mode);
-  const routerInput: OrchestrationRouterInput = {
-    task: {
-      sessionId: prepared.session.sessionId,
-      workspaceId: prepared.workspaceId,
-      mode,
-      // The objective is operator-facing and is echoed into delegated step
-      // prompts and synthesis fallbacks. On prompt-pack runs, keep it to the
-      // user's task: the Prompt Lab run contract must not leak into it. Live
-      // turns keep their content verbatim even when it happens to contain a
-      // "## User Task" heading.
-      objective:
-        prepared.normalized.normalizationProfile === "prompt_pack_harness"
-          ? extractPrimaryUserTaskContent(prepared.content) || prepared.content
-          : prepared.content,
-      prefs: prepared.prefs,
-      conversation: prepared.conversationMessages,
-      historyMessages: prepared.history,
-    },
-    runtime,
-    capabilities,
-    policy,
-  };
-  const advisoryOnly = prepared.prefs.planningMode === "advisory";
-  const modelRouterBypass = shouldBypassOrchestrationWithModelRouter({
-    routerInput,
-    decision: prepared.modelRouterDecision,
-    advisoryOnly,
-  });
-  if (modelRouterBypass.bypass) {
-    prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
-      decision: "bypassed",
-      reason: modelRouterBypass.reason,
-    });
-    return undefined;
-  }
-  if (!advisoryOnly && !shouldUseModeOrchestration(routerInput)) {
-    prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
-      decision: "bypassed",
-      reason:
-        "orchestration router suppressed a separate plan because the chat path is tool-backed or live-data handled directly",
-    });
-    return undefined;
-  }
+  // auto uses the governed agent.fanout path. Plan first (advisory) is answered by the model itself, with no tools.
   prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
-    decision: "allowed",
-    reason: modelRouterBypass.reason,
+    decision: "bypassed",
+    reason:
+      prepared.prefs.planningMode === "advisory"
+        ? "Plan first asks the model to write the plan, so no separate orchestration plan is drafted."
+        : "Separate orchestration is bypassed: non-advisory Chat execution stays inside the admitted turn.",
   });
-  const templatePlan = await applyApprovedSpecialistsToPlan(host, prepared, buildOrchestrationPlan(routerInput));
-  const executionPlanDraft = await generatePreparedExecutionPlanDraft(
-    host,
-    prepared,
-    routerInput,
-    templatePlan,
-    advisoryOnly,
-  );
-  const plan = applyExecutionPlanDraftToOrchestrationPlan(templatePlan, executionPlanDraft);
-  return {
-    routerInput,
-    orchestrationPlan: plan,
-    // Round-3 review M3: stage-leveling fallback can drop fan-out extras from
-    // the executed plan; trim the draft to match so the persisted
-    // execution-plan record cannot carry forever-pending phantom steps.
-    executionPlanDraft: trimExecutionPlanDraftToPlan(executionPlanDraft, plan),
-  };
+  return undefined;
 }
 
 export async function applyApprovedSpecialistsToPlan(

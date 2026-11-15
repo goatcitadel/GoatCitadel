@@ -4,6 +4,8 @@ import { fetchOnboardingState } from "@goatcitadel/mission-control-shared/api/cl
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { projectFirstRunState } from "./first-run-state";
 import { CockpitGuidedModelSetup } from "./CockpitGuidedModelSetup";
 import { ProviderCatalogSettings } from "./ProviderCatalogSettings";
 import { ProviderManagementSettings } from "./ProviderManagementSettings";
@@ -14,7 +16,35 @@ import { McpDraftLeave } from "./McpDraftLeave";
 import { getDirtySectionKeys } from "../../../features/native-routes/library/use-form-dirty";
 import { sessionDraftSectionKey } from "../../../features/native-routes/library/session-drafts";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import type { OnboardingState } from "@goatcitadel/contracts";
 import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+
+/** One line on Get started's progress, so this page never keeps a second, disagreeing setup. */
+function SetupStatusLine({ onboarding }: { onboarding: OnboardingState }) {
+  if (!onboarding.completed)
+    return (
+      <p className="mt-3 flex flex-wrap items-center gap-x-3 text-sm text-fg-secondary">
+        <span>
+          Setup isn&apos;t finished. After you confirm a model here, Get started asks for your safety settings and a
+          test message.
+        </span>
+        <NativeOwnerLink
+          href="/settings/first-run"
+          scope="models-setup"
+          className="text-sm font-medium text-accent hover:underline"
+        >
+          Open setup
+        </NativeOwnerLink>
+      </p>
+    );
+  return (
+    <p className="mt-3 text-sm text-fg-secondary">
+      {projectFirstRunState(onboarding).firstResponseVerified
+        ? "Setup is done and your first Chat answer is verified."
+        : "Setup is recorded. Send a test message in Chat to verify the first answer."}
+    </p>
+  );
+}
 
 /** The Models settings section: the provider owners plus the shared guided model setup. */
 export function ModelsSettings() {
@@ -24,6 +54,8 @@ export function ModelsSettings() {
   const [notice, setNotice] = useState<string | null>(null);
   const [codexOAuthStatus, setCodexOAuthStatus] = useState<StatusPresentation>();
   const { mode } = useUiPreferences();
+  // One choice of provider for the editor and the catalog beside it.
+  const [advancedProviderId, setAdvancedProviderId] = useState<string | null>(null);
   const [expertOpen, setExpertOpen] = useState(mode === "advanced");
   const leave = useDraftLeave();
   const onboarding = useQuery({
@@ -33,11 +65,10 @@ export function ModelsSettings() {
   });
   return (
     <>
-      <section aria-label="Model setup" className="mt-4">
-        <h3 className="text-md font-semibold text-fg">Guided model setup</h3>
-        <p className="mt-1 text-sm text-fg-secondary">
-          Check the default model, provider connections, and model choices before using Chat.
-        </p>
+      <section aria-label="Chat model" className="mt-4">
+        <h3 className="text-md font-semibold text-fg">Chat model</h3>
+        <p className="mt-1 text-sm text-fg-secondary">The model new Chats use. Get started uses this same choice.</p>
+        {!onboarding.isError && onboarding.data ? <SetupStatusLine onboarding={onboarding.data} /> : null}
         {onboarding.isLoading ? (
           <p role="status" className="mt-3 text-sm text-fg-muted">
             Checking model setup…
@@ -59,7 +90,9 @@ export function ModelsSettings() {
             reloadOnboarding={async () => {
               await onboarding.refetch();
             }}
-            onEnterChat={() => navigate("/chat")}
+            enterChatLabel={onboarding.data.completed ? undefined : "Continue setup"}
+            onEnterChat={() => navigate(onboarding.data.completed ? "/chat" : "/settings/first-run")}
+            showReadinessNote
             onNoticeChange={setNotice}
           />
         ) : null}
@@ -96,8 +129,12 @@ export function ModelsSettings() {
         </p>
         {expertOpen ? (
           <div id="expert-provider-controls" className="mt-4 grid gap-4">
-            <ProviderManagementSettings onCodexOAuthStatusChange={setCodexOAuthStatus} />
-            <ProviderCatalogSettings codexOAuthStatus={codexOAuthStatus} />
+            <ProviderManagementSettings
+              onCodexOAuthStatusChange={setCodexOAuthStatus}
+              selectedProviderId={advancedProviderId}
+              onSelectedProviderChange={setAdvancedProviderId}
+            />
+            <ProviderCatalogSettings codexOAuthStatus={codexOAuthStatus} providerId={advancedProviderId} />
             <ProviderRoutingSettings />
             <ProviderAdviceSettings />
           </div>

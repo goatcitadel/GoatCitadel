@@ -1041,6 +1041,11 @@ describe("ThreadedContextDrawer", () => {
       subagentSelect.props.onChange({ target: { value: "off" } });
     });
 
+    // Thinking is held until it is applied; the other selects pass through.
+    expect(onPrefPatch).not.toHaveBeenCalledWith({ thinkingLevel: "deep" });
+    await act(async () => {
+      findButton(renderer!.root, "Apply").props.onClick();
+    });
     expect(onPrefPatch).toHaveBeenCalledWith({ thinkingLevel: "deep" });
     expect(onPrefPatch).toHaveBeenCalledWith({ speedMode: "fast" });
     expect(onPrefPatch).toHaveBeenCalledWith({ subagentPolicy: "off" });

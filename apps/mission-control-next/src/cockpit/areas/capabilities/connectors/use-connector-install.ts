@@ -63,7 +63,7 @@ const APPLY_POLL_ROUNDS = 12;
 const RECOVERY_LIMIT = 100;
 const SERVER_REF = "mcp_server:";
 
-const DECLINED = "You declined this install in Inbox. Nothing was changed.";
+const DECLINED = "You declined this install. Nothing was changed.";
 const EXPIRED = "This request expired after 15 minutes. Start again.";
 const WITHDRAWN = "This install was cancelled. Nothing was changed.";
 const UNFINISHED = "The install didn't finish.";
@@ -72,7 +72,7 @@ const NOT_FOUND = "The install finished, but the new app wasn't found. Reload to
 const INSTALL_STOPPED = "Install stopped. Nothing was changed.";
 const STOPPED_STILL_IN_INBOX = `${INSTALL_STOPPED} Its request is still in Inbox, where you can deny it.`;
 const NOT_STOPPED = "Couldn't stop the install. Reload to see where it stands.";
-const FOLLOWED_ELSEWHERE = "Another tab is following this install. It goes on there once you approve it in Inbox.";
+const FOLLOWED_ELSEWHERE = "Another tab is following this install. It goes on there once you approve it.";
 
 type RunContext = Pick<RunStart, "client" | "listKey">;
 
@@ -320,17 +320,21 @@ function startInstall(item: CapabilityConnectorItem, enableChatConnectors: boole
   void install(flow.id, token, templateId, enableChatConnectors);
 }
 
-function resumeServer(item: CapabilityConnectorItem, from: "sign_in" | "connect", context: RunContext) {
+function resumeServer(
+  item: CapabilityConnectorItem,
+  from: "sign_in" | "connect" | "sign_in_only",
+  context: RunContext,
+) {
   const { serverId } = item;
   if (!serverId) return;
   const existing = findInstallFlow(item);
   if (existing && isActiveInstallState(existing.state)) return;
   if (existing) forgetInstallFlow(existing.id);
   const flow = createInstallFlow([serverKey(serverId)]);
-  const token = beginRun(flow.id, { ...context, name: item.name, oauth: true });
+  const token = beginRun(flow.id, { ...context, name: item.name, oauth: true, signInOnly: from === "sign_in_only" });
   // Known from the row before the server is read, so a Stop that early says truly whether it is switched on.
   patchRun(flow.id, { enabled: item.state !== "turned_off" });
-  updateInstallFlow(flow.id, { serverId, state: WORKING[from] });
+  updateInstallFlow(flow.id, { serverId, state: WORKING[from === "sign_in_only" ? "sign_in" : from] });
   void (from === "connect" ? connectServer(flow.id, token, serverId) : startSignIn(flow.id, token, serverId));
 }
 
@@ -414,12 +418,14 @@ export interface ConnectorInstall {
   /** The saved server once the install created it (or the item's own server): the panel finds its row by it (R80). */
   serverId: string | undefined;
   start(options: { enableChatConnectors: boolean }): void;
-  /** For a saved server: "sign_in" runs sign-in, then switch on and connect; "connect" runs connect only. */
-  resume(from: "sign_in" | "connect"): void;
+  /** For a saved server: "sign_in" runs sign-in, then switch on and connect; "connect" runs connect only; "sign_in_only" signs in and stops (a requester-scoped server never joins the global connection). */
+  resume(from: "sign_in" | "connect" | "sign_in_only"): void;
   submitManualCode(code: string, state: string): void;
   /** While signing in: asks for a new sign-in request in place of the one waiting (R94). */
   restartSignIn(): void;
   cancel(): void;
+  /** Reads the install's plan now, for after its approval was decided in place. The poll goes on as before. */
+  checkApproval(): void;
 }
 
 /**
@@ -454,6 +460,9 @@ export function useConnectorInstall(item: CapabilityConnectorItem): ConnectorIns
     },
     cancel: () => {
       if (ownerCustody === custody && id !== undefined) cancelFlow(id);
+    },
+    checkApproval: () => {
+      if (ownerCustody === custody && id !== undefined) void readPlan(id);
     },
   };
 }

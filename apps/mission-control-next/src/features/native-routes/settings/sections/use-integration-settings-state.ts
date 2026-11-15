@@ -5,6 +5,7 @@ import type {
   IntegrationFormSchema,
 } from "@goatcitadel/contracts";
 import { fetchIntegrationFormSchema, type IntegrationConnection } from "@goatcitadel/mission-control-shared/api/client";
+import { orderCreatableCatalog } from "../../../../cockpit/areas/settings/integration-catalog-order";
 import { readIntegrationSettingsSnapshot } from "./integration-settings-snapshot";
 import { getErrorMessage, useAsyncLoad, type Notice } from "../SettingsShared";
 import { applyIntegrationDefaults } from "../helpers/channel-helpers";
@@ -101,9 +102,11 @@ export function useIntegrationSettingsState(activeWorkspaceId: string) {
   >(null);
   const createableCatalog = useMemo(
     () =>
-      data?.catalog.filter(
-        (item) => item.kind !== "external_connector" && item.kind !== "channel" && item.kind !== "model_provider",
-      ) ?? [],
+      orderCreatableCatalog(
+        data?.catalog.filter(
+          (item) => item.kind !== "external_connector" && item.kind !== "channel" && item.kind !== "model_provider",
+        ) ?? [],
+      ),
     [data?.catalog],
   );
   const selectedConnection = data?.connections.find((item) => item.connectionId === selectedConnectionId) ?? null;

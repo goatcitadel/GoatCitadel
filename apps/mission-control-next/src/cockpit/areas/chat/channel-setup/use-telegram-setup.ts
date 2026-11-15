@@ -10,6 +10,7 @@ import {
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { draftWithSender, savedSender } from "./code-sender";
 import { listenForHi } from "./listen-for-hi";
+import { isNoKeyStoreFailure, TELEGRAM_NO_KEY_STORE } from "./no-key-store";
 import { latestDraft } from "./setup-draft-session";
 import { createSetupCode } from "./setup-code";
 import { checkTelegramKey, readTelegramBot } from "./telegram-key-check";
@@ -255,7 +256,7 @@ export function useTelegramSetup(workspaceId: string, resumeDraftId?: string): T
           conflict: check.conflict,
           busy: false,
         });
-      } catch {
+      } catch (cause) {
         // The key may have been stored before the failure, which moved the draft's version on.
         const latest = draft ? await latestDraft(draft.draftId) : null;
         set({
@@ -264,7 +265,7 @@ export function useTelegramSetup(workspaceId: string, resumeDraftId?: string): T
           webhookActive: false,
           conflict: false,
           busy: false,
-          error: TELEGRAM_KEY_FAILED,
+          error: isNoKeyStoreFailure(cause) ? TELEGRAM_NO_KEY_STORE : TELEGRAM_KEY_FAILED,
         });
       }
     },

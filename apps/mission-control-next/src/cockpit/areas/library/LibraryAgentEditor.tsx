@@ -1,5 +1,5 @@
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { canonicalJsonString, type AgentProfileRecord } from "@goatcitadel/contracts";
 import {
@@ -54,8 +54,11 @@ export function LibraryAgentEditor({
   agentId,
   workspaceId,
   onClose,
+  onLoadFailed,
 }: {
   agentId?: string;
+  /** Said once when the profile could not be read, so an "open" that waits to focus it gives up. */
+  onLoadFailed?: () => void;
   workspaceId: string;
   onClose?: () => void;
 }) {
@@ -66,6 +69,10 @@ export function LibraryAgentEditor({
     enabled: Boolean(agentId),
     staleTime: 0,
   });
+  const loadFailed = query.isError;
+  useEffect(() => {
+    if (loadFailed) onLoadFailed?.();
+  }, [loadFailed, onLoadFailed]);
   if (agentId && !query.data)
     return (
       <Callout tone={query.isError ? "error" : "info"}>
@@ -182,7 +189,9 @@ function AgentEditor({
   }
   return (
     <section className="grid gap-3 border-t border-line-subtle pt-4" aria-label="Agent profile editor">
-      <h2 className="text-base font-semibold">{item?.name ?? "New agent profile"}</h2>
+      <h2 tabIndex={-1} className="text-base font-semibold">
+        {item?.name ?? "New agent profile"}
+      </h2>
       <p className="text-sm text-fg-secondary">
         Installation-wide profile
         {item ? ` · ${item.lifecycleStatus} · ${item.isBuiltin ? "Built-in role" : "Custom role"}` : ""}. Default tools

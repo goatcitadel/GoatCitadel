@@ -6,6 +6,8 @@ import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { cn } from "../../../lib/cn";
 import { ConnectorSignInStep, signInTimeWords, useSignInTimeLeft, type SignInTimeLeft } from "./ConnectorSignInStep";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
 import { isActiveInstallState } from "./connector-install-store";
 import { inboxApprovalHref, type ConnectorNextLink } from "./connector-links";
 import type { ConnectorInstall, ConnectorInstallState, ConnectorInstallStep } from "./use-connector-install";
@@ -14,7 +16,7 @@ import type { ConnectorInstall, ConnectorInstallState, ConnectorInstallStep } fr
 export type InstallStepId = "approval" | "plan" | "sign_in" | "switch_on" | "connect";
 const STEP_ORDER: readonly InstallStepId[] = ["approval", "plan", "sign_in", "switch_on", "connect"];
 const STEP_TITLES: Readonly<Record<InstallStepId, string>> = {
-  approval: "Approve in Inbox",
+  approval: "Approve",
   plan: "Allow and save",
   sign_in: "Sign in",
   switch_on: "Switch on",
@@ -78,7 +80,7 @@ function currentStep(state: ConnectorInstallState): InstallStepId | undefined {
 /** What the flow's button says while it runs. */
 function busyLabel(state: ConnectorInstallState): string | undefined {
   if (state.phase === "working") return BUSY_WORDS[state.step];
-  if (state.phase === "waiting_inbox") return "Waiting on Inbox…";
+  if (state.phase === "waiting_inbox") return "Waiting on your approval…";
   if (state.phase === "signing_in") return "Waiting on sign-in…";
   return undefined;
 }
@@ -213,10 +215,24 @@ function ChangedList({ changed, heading }: { changed: readonly string[]; heading
 
 function PhaseBody({ install, scope, doneLine }: { install: ConnectorInstall; scope: string; doneLine?: string }) {
   const { state } = install;
+  const { activeWorkspaceId } = useUiPreferences();
   switch (state.phase) {
     case "waiting_inbox":
       return (
-        <div className="space-y-1 text-sm text-fg-secondary">
+        <div className="space-y-2 text-sm text-fg-secondary">
+          {/* The approval opens here; the Inbox copy stays one link away for whoever prefers it. */}
+          {/* The Gateway makes every connector install in the Default workspace, so it can only be read and decided there. */}
+          {activeWorkspaceId === "default" ? (
+            <SettingsApprovalDialog
+              approvalId={state.approvalId}
+              title="Approve this connector install?"
+              reviewLabel="Review the install"
+              dangerReview
+              onResolved={() => install.checkApproval()}
+            />
+          ) : (
+            <p>This approval is in the Default workspace's Inbox.</p>
+          )}
           <p>
             <span className="font-medium text-fg">{WAITING_INBOX}</span>{" "}
             <NativeOwnerLink scope={scope} href={inboxApprovalHref(state.approvalId)}>

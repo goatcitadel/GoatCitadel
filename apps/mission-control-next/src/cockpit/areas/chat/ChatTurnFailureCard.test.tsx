@@ -114,3 +114,19 @@ describe("ChatTurnFailureCard provider reach failures", () => {
     expect(container.textContent).toContain("The model provider did not answer in time. Wait a moment, then retry");
   });
 });
+
+describe("ChatTurnFailureCard blocked tools", () => {
+  it("links a blocked tool to the tool rules", async () => {
+    await render(
+      <ChatTurnFailureCard failed answered={false} failureClass="tool_blocked" hint="Change the rule, then retry." />,
+    );
+    const link = Array.from(container.querySelectorAll("a")).find((a) => a.textContent === "Open tool rules");
+    expect(link?.getAttribute("href")).toMatch(/^\/settings\/safety/u);
+    expect(link?.getAttribute("href")).toContain("permission-profile");
+  });
+
+  it("offers no tool rules link for another failure", async () => {
+    await render(<ChatTurnFailureCard failed answered={false} failureClass="tool_failed" hint="Retry." />);
+    expect(container.textContent).not.toContain("Open tool rules");
+  });
+});

@@ -25,6 +25,7 @@ vi.mock("../inbox/ApprovalDecisionBar", () => ({
   },
 }));
 
+import { isApprovalHandledInPlace } from "../../data/approvals-handled-in-place";
 import {
   __resetSettingsApprovalDialogsForTests,
   reopenSettingsApproval,
@@ -103,6 +104,44 @@ it("closes and settles the change after one Approve click", async () => {
   await act(async () => button("Approve once")!.click());
   expect(onResolved).toHaveBeenCalledTimes(1);
   expect(dialog()).toBeNull();
+});
+
+it("holds back the Inbox toast only while it is open on a loaded, pending approval", async () => {
+  let loaded!: (value: ApprovalRequest) => void;
+  fetchApproval.mockReset().mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        loaded = resolve;
+      }),
+  );
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <SettingsApprovalDialog approvalId="approval-1" onResolved={vi.fn()} />
+      </QueryClientProvider>,
+    ),
+  );
+  expect(isApprovalHandledInPlace("approval-1")).toBe(false);
+  await act(async () => loaded(approval));
+  for (let tick = 0; tick < 5; tick += 1)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  expect(dialog()).not.toBeNull();
+  expect(isApprovalHandledInPlace("approval-1")).toBe(true);
+  // Closed (its button may be off screen), the dialog no longer holds the toast back.
+  await act(async () => document.body.querySelector<HTMLButtonElement>('[aria-label="Close dialog"]')!.click());
+  expect(dialog()).toBeNull();
+  expect(isApprovalHandledInPlace("approval-1")).toBe(false);
+  await act(async () => button("Review approval")!.click());
+  expect(isApprovalHandledInPlace("approval-1")).toBe(true);
+  act(() => root.unmount());
+  expect(isApprovalHandledInPlace("approval-1")).toBe(false);
+  root = createRoot(container);
+  fetchApproval.mockReset().mockRejectedValue(new Error("offline"));
+  client.clear();
+  await render();
+  expect(isApprovalHandledInPlace("approval-1")).toBe(false);
 });
 
 it("does not reopen an approval the operator closed, but keeps a way back to it", async () => {

@@ -180,6 +180,7 @@ export function DiscordSetupPage({
           intentOff={check !== null && !check.messageContentIntent}
           busy={busy}
           error={setup.error}
+          workspaceId={workspaceId}
           value={token.value}
           onChange={token.setValue}
           checking={checking}

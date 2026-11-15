@@ -14,7 +14,13 @@ const controls = vi.hoisted(() => ({
   switchShell: vi.fn(),
   inspect: vi.fn(),
   create: vi.fn(),
-  search: { groups: [] as PaletteSearchGroup[], loading: false, error: undefined as string | undefined },
+  search: {
+    groups: [] as PaletteSearchGroup[],
+    loading: false,
+    error: undefined as string | undefined,
+    retry: vi.fn(),
+    retrying: false,
+  },
   attempt: undefined as undefined | { state: string; message: string; mode: string; sessionId?: string },
   read: { isFetching: false, isError: false, dataUpdatedAt: 0 },
 }));
@@ -72,7 +78,7 @@ beforeEach(() => {
     (action: (review: { isCurrent: () => boolean; signal: AbortSignal; navigate: typeof controls.navigate }) => void) =>
       action({ isCurrent: () => true, signal: new AbortController().signal, navigate: controls.navigate }),
   );
-  controls.search = { groups: [], loading: false, error: undefined };
+  controls.search = { groups: [], loading: false, error: undefined, retry: vi.fn(), retrying: false };
   controls.attempt = undefined;
   controls.read = { isFetching: false, isError: false, dataUpdatedAt: 0 };
   container = document.createElement("div");
@@ -197,8 +203,51 @@ describe("CommandPalette", () => {
     expect(controls.create).toHaveBeenCalledTimes(1);
   });
 
+  it("swaps a failed search's Try again for the searching line while the retry runs", async () => {
+    controls.search = {
+      groups: [],
+      loading: false,
+      error: "Some owners are unavailable.",
+      retry: vi.fn(),
+      retrying: true,
+    };
+    act(() => {
+      root.render(<CommandPalette open onOpenChange={() => undefined} />);
+    });
+    await ready();
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("Searching…");
+    expect(dialog.textContent).not.toContain("Search didn't respond.");
+    expect(dialog.querySelector("[role='alert']")).toBeNull();
+  });
+
+  it("leaves Enter on Try again to the button instead of running the selected command", async () => {
+    controls.search = {
+      groups: [],
+      loading: false,
+      error: "Some owners are unavailable.",
+      retry: vi.fn(),
+      retrying: false,
+    };
+    act(() => {
+      root.render(<CommandPalette open onOpenChange={() => undefined} />);
+    });
+    await ready();
+    const retry = document.querySelector<HTMLButtonElement>('[role="dialog"] [role="alert"] button')!;
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    act(() => {
+      retry.focus();
+      retry.dispatchEvent(enter);
+    });
+    // cmdk prevents the default of an Enter it handles, which would stop the button's own activation.
+    expect(enter.defaultPrevented).toBe(false);
+    expect(controls.create).not.toHaveBeenCalled();
+  });
+
   it("keeps source evidence and live messages outside the selectable cmdk listbox", async () => {
     controls.search = {
+      retry: vi.fn(),
+      retrying: false,
       loading: true,
       error: "Some owners are unavailable.",
       groups: [
@@ -229,7 +278,13 @@ describe("CommandPalette", () => {
     const listbox = dialog.querySelector('[role="listbox"]')!;
     expect(listbox.querySelector("details, summary, [role='status'], [role='alert']")).toBeNull();
     expect(dialog.textContent).toContain("Library unavailable.");
-    expect(dialog.querySelector("[role='alert']")?.textContent).toBe("Search didn't respond. Try again.");
+    const alert = dialog.querySelector("[role='alert']")!;
+    expect(alert.querySelector("p")?.textContent).toBe("Search didn't respond.");
+    expect(alert.querySelector("button")?.textContent).toBe("Try again");
+    act(() => {
+      alert.querySelector<HTMLButtonElement>("button")!.click();
+    });
+    expect(controls.search.retry).toHaveBeenCalledTimes(1);
     expect(dialog.querySelector("[role='status']")?.textContent?.trim()).toBe("Searching…");
     expect(dialog.textContent).toContain("No matches in the loaded results.");
     expect(dialog.textContent).toContain("Up to ten current workspace matches.");

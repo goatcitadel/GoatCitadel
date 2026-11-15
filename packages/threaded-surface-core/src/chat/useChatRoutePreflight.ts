@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { preflightChatRoute } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { OutboundRequestPrefsSnapshot } from "./useChatSurfaceOrchestration";
+import { rememberPreflight } from "./route-preflight-cache";
 
 const PREFLIGHT_TTL_MS = 30_000;
 
@@ -86,7 +87,7 @@ export function useChatRoutePreflight(input: {
     workspaceSnapshot,
   } = input;
   const cacheRef = useRef(new Map<string, { fetchedAt: number; result: RoutingPreflightResult }>());
-  const [result, setResult] = useState<RoutingPreflightResult | null>(null);
+  const [held, setHeld] = useState<{ scope: string; value: RoutingPreflightResult } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const displayRequest = useMemo(
@@ -104,6 +105,11 @@ export function useChatRoutePreflight(input: {
         : null,
     [content, displayAction, displayTurnId, fullWebAccess, prefs, sessionId, surfaceMode, workspaceSnapshot],
   );
+  const displayScope = useMemo(
+    () =>
+      sessionId && displayRequest ? `${sessionId}:${stableHash({ ...displayRequest, content: undefined })}` : null,
+    [displayRequest, sessionId],
+  );
   const displayKey = useMemo(
     () => (sessionId && displayRequest ? `${sessionId}:${stableHash(displayRequest)}` : null),
     [displayRequest, sessionId],
@@ -120,10 +126,8 @@ export function useChatRoutePreflight(input: {
       const next = await preflightChatRoute(targetSessionId, request, {
         originSurface: request.prefsOverride?.mode,
       });
-      cacheRef.current.set(cacheKey, {
-        fetchedAt: Date.now(),
-        result: next,
-      });
+      const now = Date.now();
+      rememberPreflight(cacheRef.current, cacheKey, { fetchedAt: now, result: next }, now, PREFLIGHT_TTL_MS);
       return next;
     },
     [],
@@ -131,14 +135,14 @@ export function useChatRoutePreflight(input: {
 
   useEffect(() => {
     const displaySessionId = sessionId;
-    if (!displayRequest || !displayKey || !enabled || !displaySessionId) {
-      setResult(null);
+    if (!displayRequest || !displayKey || !displayScope || !enabled || !displaySessionId) {
+      setHeld(null);
       setError(null);
       setLoading(false);
       return;
     }
     let cancelled = false;
-    setResult(null);
+    // A new draft in the same session keeps the last result on screen while loading is true.
     setError(null);
     setLoading(true);
     const fetchDisplayPreflight = () => {
@@ -147,13 +151,15 @@ export function useChatRoutePreflight(input: {
           if (cancelled) {
             return;
           }
-          setResult(next);
+          setHeld({ scope: displayScope, value: next });
           setError(null);
         })
         .catch((cause) => {
           if (cancelled) {
             return;
           }
+          // A failed check must not leave the previous result standing as if it were current.
+          setHeld(null);
           setError(describeApiError(cause).summary);
         })
         .finally(() => {
@@ -172,7 +178,7 @@ export function useChatRoutePreflight(input: {
         clearTimeout(debounce);
       }
     };
-  }, [displayKey, displayRequest, enabled, fetchPreflight, sessionId]);
+  }, [displayKey, displayRequest, displayScope, enabled, fetchPreflight, sessionId]);
 
   const ensureFreshPreflight = useCallback(
     async (override: {
@@ -202,15 +208,18 @@ export function useChatRoutePreflight(input: {
       const cached = cacheRef.current.get(cacheKey);
       const stale = !cached || Date.now() - cached.fetchedAt >= PREFLIGHT_TTL_MS;
       const next = await fetchPreflight(request, { force: override.force || stale, sessionId: targetSessionId });
-      if (displayKey === cacheKey) {
-        setResult(next);
+      if (displayScope && displayKey === cacheKey) {
+        setHeld({ scope: displayScope, value: next });
         setError(null);
       }
       return next;
     },
-    [displayKey, fetchPreflight, fullWebAccess, prefs, sessionId, surfaceMode, workspaceSnapshot],
+    [displayKey, displayScope, fetchPreflight, fullWebAccess, prefs, sessionId, surfaceMode, workspaceSnapshot],
   );
 
+  // What the held result was read for: the session and everything in the request except the draft text.
+  // It is shown across draft text changes only, never for a different model, tools or session.
+  const result = held && held.scope === displayScope ? held.value : null;
   const resultHash = useMemo(() => (result ? stableHash(result) : null), [result]);
 
   return {

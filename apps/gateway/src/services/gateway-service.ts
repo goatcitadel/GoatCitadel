@@ -7630,7 +7630,7 @@ export class GatewayService {
         this.config.assistant.durable.executionEnabled &&
         (await this.isFeatureEnabled("durableKernelV1Enabled")),
       normalizationProfile: input.normalized.normalizationProfile,
-      serverOnlyTurn: Boolean(input.request.parentDelegationStepId),
+      serverOnlyTurn: Boolean(input.request.parentDelegationStepId || input.prefs.planningMode === "advisory"),
     });
     await this.llmService.ensureProviderReadiness(routeResolution.effectiveProviderId);
     const runtime = this.llmService.getRuntimeConfig({

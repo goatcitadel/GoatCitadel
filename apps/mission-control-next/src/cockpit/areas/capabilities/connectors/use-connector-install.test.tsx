@@ -374,6 +374,31 @@ describe("useConnectorInstall", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("reads the plan at once when the approval was decided in place, without waiting for the poll", async () => {
+    vi.useFakeTimers();
+    install.installCapabilityConnector.mockResolvedValueOnce(
+      receipt({ status: "awaiting_approval", requiredAction: APPROVAL }),
+    );
+    plans.fetchChangePlan.mockResolvedValueOnce(plan({ status: "cancelled", requiredAction: undefined }));
+    await startInstall({ ...TEMPLATE, auth: "none" });
+    expect(latest.state).toMatchObject({ phase: "waiting_inbox", approvalId: "approval-1" });
+    expect(plans.fetchChangePlan).not.toHaveBeenCalled();
+
+    await act(async () => latest.checkApproval());
+    await flush();
+    expect(plans.fetchChangePlan).toHaveBeenCalledTimes(1);
+    // A refused or ended plan is shown as stopped, never as installed.
+    expect(latest.state.phase).not.toBe("waiting_inbox");
+    expect(latest.state.phase).not.toBe("done");
+  });
+
+  it("checkApproval reads nothing when no flow exists", async () => {
+    await render(TEMPLATE);
+    await act(async () => latest.checkApproval());
+    await flush();
+    expect(plans.fetchChangePlan).not.toHaveBeenCalled();
+  });
+
   it("ignores a sign-in return with a different state", async () => {
     await startInstall();
     await returnFromProvider("another-state");
@@ -465,6 +490,18 @@ describe("useConnectorInstall", () => {
     expect(install.installCapabilityConnector).not.toHaveBeenCalled();
     expect(calls).toEqual(["read server", "sign in: start"]);
     expect(servers.fetchMcpServer).toHaveBeenCalledWith("srv-1");
+  });
+
+  it("signs a requester-scoped server in and stops there: it never runs the global switch-on or connect", async () => {
+    await render({ ...SAVED, requesterScoped: true, state: "sign_in_expired", reason: "sign_in_expired" });
+    await act(async () => latest.resume("sign_in_only"));
+    await flush();
+    expect(latest.state).toMatchObject({ phase: "signing_in" });
+    await returnFromProvider("state-1");
+    expect(latest.state).toEqual({ phase: "done", serverId: "srv-1" });
+    expect(calls).toEqual(["read server", "sign in: start", "sign in: complete"]);
+    expect(wrappers.commitMcpServerUpdate).not.toHaveBeenCalled();
+    expect(wrappers.commitMcpConnection).not.toHaveBeenCalled();
   });
 
   it("Try again connects a saved server without signing in or switching on", async () => {
@@ -607,7 +644,7 @@ describe("useConnectorInstall", () => {
   });
 
   it.each([
-    ["cancelled", "approval_denied", "You declined this install in Inbox. Nothing was changed."],
+    ["cancelled", "approval_denied", "You declined this install. Nothing was changed."],
     ["failed", "approval_expired", "This request expired after 15 minutes. Start again."],
     ["failed", "expired", "This request expired after 15 minutes. Start again."],
   ] as const)("says plainly when Inbox ends the plan as %s (%s)", async (status, failureCode, message) => {
@@ -1152,7 +1189,7 @@ describe("useConnectorInstall", () => {
 
         expect(latest.state).toEqual({
           phase: "stopped",
-          message: "Another tab is following this install. It goes on there once you approve it in Inbox.",
+          message: "Another tab is following this install. It goes on there once you approve it.",
           changed: [],
           link: { label: "Open in Inbox", href: "/inbox?approvalId=approval-1&workspaceId=default" },
         });
