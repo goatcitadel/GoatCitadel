@@ -1,5 +1,5 @@
 import { Root, Anchor, Portal, Content, Close } from "@radix-ui/react-popover";
-import { useEffect, useMemo, useState, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { ChatCompletionReasoningEffort } from "@goatcitadel/contracts";
 import type { ChatModelOptionsControls as Controls } from "./ChatComposerControls";
 import { useProviderLabelLookup } from "../../data/use-model-label";
@@ -76,6 +76,8 @@ export function ChatModelOptionsPopover({
   // A pick is collected here and sent as one change when the popover closes, so arrowing through a select applies
   // nothing on the way and one deliberate choice makes one change.
   const [draft, setDraft] = useState<ModelDraft>({});
+  // Escape is the cancel key: it closes the popover without sending what was picked.
+  const cancelled = useRef(false);
   useEffect(() => {
     if (open) setDraft({});
   }, [open]);
@@ -231,7 +233,10 @@ export function ChatModelOptionsPopover({
       onOpenChange={(next) => {
         // Done, Escape and a click outside send the collected choice; a close the page asked for (the Chat changed
         // underneath) sends nothing.
-        if (!next && isCurrent()) commitDraft();
+        if (!next && isCurrent() && !cancelled.current) commitDraft();
+        if (!next) {
+          cancelled.current = false;
+        }
         onOpenChange(next);
       }}
     >
@@ -270,6 +275,9 @@ export function ChatModelOptionsPopover({
               event.stopPropagation();
             }
           }}
+          onEscapeKeyDown={() => {
+            cancelled.current = true;
+          }}
           onOpenAutoFocus={(event) => {
             if (!ownsFocus()) event.preventDefault();
           }}
@@ -282,6 +290,7 @@ export function ChatModelOptionsPopover({
           <h3 className="text-sm font-semibold">Model and reasoning</h3>
           <div className="flex flex-wrap items-center gap-3">{modelOptions}</div>
           <p className="text-fg-muted">Effort support depends on the selected model.</p>
+          <p className="text-fg-muted">Your choice applies when you close this.</p>
           {/* The composer's mode toggles explain themselves here in visible text, not only in a tooltip (CH-R07). */}
           <dl className="space-y-1 border-t border-line-subtle pt-2 text-fg-secondary">
             <div>
