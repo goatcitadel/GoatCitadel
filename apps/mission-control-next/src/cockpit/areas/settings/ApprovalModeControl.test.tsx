@@ -431,6 +431,10 @@ describe("cockpit tool approval rule", () => {
     await click("Save approval rule");
     await vi.waitFor(() => expect(container.querySelector("[data-in-place-approval]")).not.toBeNull());
     expect(container.querySelectorAll("[data-in-place-approval]")).toHaveLength(1);
+    // A waiting change to the rule needs the same review step, and works from any workspace, as the save's own dialog.
+    const owner = container.querySelector("[data-in-place-approval]")!;
+    expect(owner.getAttribute("data-danger-review")).toBe("true");
+    expect(owner.getAttribute("data-installation-setting")).toBe("true");
   });
 
   it("locks mismatched completed settings instead of claiming success", async () => {

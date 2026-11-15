@@ -223,6 +223,8 @@ export function ApprovalModeEditor({
           onResolved={control.clearWaiting}
           subject="rule"
           showSentence={false}
+          dangerReview
+          installationSetting
         />
       ) : null}
       {uncertain ? (
