@@ -10,6 +10,7 @@ import { lazy, useEffect, useRef, useState } from "react";
 import { AttachmentImage } from "../../ui/AttachmentImage";
 import { ChatApprovalRenderer } from "./ChatApprovalRenderer";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
+import { useGatewayUnavailable } from "../../app/gateway-unavailable-context";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
 import { approvalExpiredUnresolved } from "../inbox/approval-settlement";
 import { hasExpired, useMinuteClock } from "../inbox/use-minute-clock";
@@ -50,14 +51,9 @@ function errandScreenshotAttachmentId(preview: Record<string, unknown> | undefin
   return typeof id === "string" && id.trim() ? id.trim() : undefined;
 }
 
-export function ChatBlockers({
-  props,
-  gatewayUnavailable,
-}: {
-  props: Blockers;
-  /** The Gateway cannot be reached, so decisions cannot be sent. */
-  gatewayUnavailable?: boolean;
-}) {
+export function ChatBlockers({ props }: { props: Blockers }) {
+  // The Gateway cannot be reached, so decisions cannot be sent.
+  const gatewayUnavailable = useGatewayUnavailable();
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
   const { search, hash } = useCockpitRoute();

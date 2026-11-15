@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatBlockers } from "./ChatBlockers";
+import { GatewayUnavailableContext } from "../../app/gateway-unavailable-context";
 
 const api = vi.hoisted(() => ({
   fetchApproval: vi.fn(),
@@ -551,6 +552,36 @@ it("leaves a message the operator has typed alone and says so (U-CH-031)", async
   } finally {
     composer.remove();
   }
+});
+
+it("pauses the decision buttons while the shell says GoatCitadel is unreachable (U-CH-027)", async () => {
+  const pendingRecord = {
+    ...sweptExpiredRecord,
+    status: "pending",
+    resolutionOutcome: undefined,
+    resolvedBy: undefined,
+  };
+  api.fetchApproval.mockResolvedValue(pendingRecord);
+  const renderCard = (unreachable: boolean) =>
+    act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <GatewayUnavailableContext.Provider value={unreachable}>
+            <ChatBlockers
+              props={blockerProps({
+                pendingApproval: { approvalId: "approval/1", kind: "documents.create", riskLevel: "caution" },
+              })}
+            />
+          </GatewayUnavailableContext.Provider>
+        </QueryClientProvider>,
+      ),
+    );
+  await renderCard(true);
+  await vi.waitFor(() => expect(findButton("Approve once")).toBeDefined());
+  expect(findButton("Approve once")!.closest("fieldset")?.disabled).toBe(true);
+  expect(container.textContent).toContain("GoatCitadel is unreachable, so this decision can");
+  await renderCard(false);
+  expect(findButton("Approve once")!.closest("fieldset")?.disabled).toBe(false);
 });
 
 it("shows a failed record read as an error with Try again and Deny, not as checking (CH-02)", async () => {

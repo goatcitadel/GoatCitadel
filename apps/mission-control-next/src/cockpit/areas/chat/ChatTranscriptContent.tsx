@@ -418,7 +418,7 @@ export function ChatTranscriptFooter({ context }: { context?: TranscriptFooterCo
             <ChatChangePlanCard {...receipt} />
           </Suspense>
         ) : null}
-        <ChatBlockers key={props.selectedSessionId} props={props} gatewayUnavailable={context.gatewayUnavailable} />
+        <ChatBlockers key={props.selectedSessionId} props={props} />
         {props.streamError && latestTurn?.trace.status !== "failed" && latestTurn?.trace.status !== "partial" ? (
           <ChatStreamErrorNotice
             error={props.streamError}

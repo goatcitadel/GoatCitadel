@@ -54,6 +54,7 @@ vi.mock("../areas/library/LibraryArea", () => ({
 vi.mock("../areas/capabilities/CapabilitiesArea", () => ({
   CapabilitiesArea: () => <p>Capabilities content</p>,
 }));
+import { useGatewayUnavailable } from "./gateway-unavailable-context";
 // No other test here visits Chat, so a stub keeps the failure test off the network.
 const chatArea = vi.hoisted(() => ({ failure: null as Error | null, effects: 0 }));
 vi.mock("../areas/chat/ChatArea", () => ({
@@ -68,6 +69,7 @@ vi.mock("../areas/chat/ChatArea", () => ({
     return (
       <>
         <p>Chat content</p>
+        <p data-chat-gateway-unavailable>{String(useGatewayUnavailable())}</p>
         <input aria-label="Retained conversation draft" defaultValue="Draft" />
       </>
     );
@@ -807,6 +809,26 @@ describe("CockpitShell", () => {
       consoleError.mockRestore();
     }
   });
+});
+
+it("tells Chat whether GoatCitadel is unreachable, so its decision buttons can pause (U-CH-027)", async () => {
+  window.history.replaceState(null, "", "/chat?shell=cockpit");
+  const unreachable = { unavailable: true, lastConfirmedAt: null, checking: false, lastCheckedAt: null };
+  const render = (gatewayReachability?: typeof unreachable) =>
+    act(async () =>
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <CockpitShell streamState="retrying" gatewayReachability={gatewayReachability} />
+        </QueryClientProvider>,
+      ),
+    );
+  const seen = () => container.querySelector("[data-chat-gateway-unavailable]")?.textContent;
+  await render();
+  expect(seen()).toBe("false");
+  await render(unreachable);
+  expect(seen()).toBe("true");
+  await render({ ...unreachable, unavailable: false });
+  expect(seen()).toBe("false");
 });
 
 // `/ops/runtime` now redirects natively to System › Health (cockpit-compatibility), so it no longer belongs here.
