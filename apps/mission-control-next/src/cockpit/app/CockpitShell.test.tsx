@@ -11,6 +11,7 @@ import { CockpitNavigationProvider } from "./CockpitNavigationProvider";
 import { useCockpitNavigation } from "./cockpit-navigation-context";
 import { CockpitShell } from "./CockpitShell";
 import { commitCockpitNavigation } from "./cockpit-history";
+import { SHELL_HISTORY_POSITION } from "../../app/shell-transition";
 import { resolveCockpitCompatibility } from "./cockpit-compatibility";
 
 vi.mock("@goatcitadel/mission-control-shared/api/citadels", () => ({
@@ -528,7 +529,8 @@ describe("CockpitShell", () => {
     await goToLibrary();
     container.querySelector<HTMLElement>('nav[aria-label="Areas"] a[href]')!.focus();
     await act(async () => {
-      window.history.replaceState(window.history.state, "", "/inbox?shell=cockpit");
+      // The browser restores the earlier entry (its own number) before it fires popstate.
+      window.history.replaceState({ [SHELL_HISTORY_POSITION]: 0 }, "", "/inbox?shell=cockpit");
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
     expect(window.location.pathname).toBe("/inbox");

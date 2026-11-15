@@ -13,16 +13,18 @@ import type { CockpitNavigationOptions } from "./cockpit-navigation-context";
 export { COCKPIT_LOCATION_EVENT };
 const listeners = new Set<() => void>();
 let generation = 0;
-let visits = 0;
 
 /**
- * How many times the operator has gone somewhere: each pushed address and each Back or Forward. A replace is not one,
- * so a page that tidies its own address (or a load-time redirect) leaves the count where it was.
+ * The number of the history entry on show. Each pushed address and each Back or Forward lands on another number; a
+ * replace keeps it. A visit is told apart by reading this when a page renders, not by counting events: the browser
+ * has already put the entry's state in place before any popstate listener runs, so no listener order can make a
+ * render see a stale answer.
  */
-export const cockpitVisitCount = () => visits;
-const visitedByHistory = () => {
-  visits += 1;
-};
+export function cockpitHistoryPosition(): number | null {
+  const state: unknown = window.history.state;
+  const value = state && typeof state === "object" ? (state as Record<string, unknown>)[SHELL_HISTORY_POSITION] : null;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
 
 function locationChanged() {
   generation += 1;
@@ -32,14 +34,12 @@ function locationChanged() {
 export function subscribeCockpitHistory(listener: () => void) {
   if (listeners.size === 0) {
     for (const name of SHELL_NAVIGATION_EVENTS) window.addEventListener(name, locationChanged);
-    window.addEventListener("popstate", visitedByHistory);
   }
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
     if (listeners.size === 0) {
       for (const name of SHELL_NAVIGATION_EVENTS) window.removeEventListener(name, locationChanged);
-      window.removeEventListener("popstate", visitedByHistory);
     }
   };
 }
@@ -104,10 +104,7 @@ export function commitCockpitNavigation(
   if (afterCockpitSheetsClose(() => commitCockpitNavigation(href, options, isCurrent))) return true;
   // A replaced entry keeps its state, position included. A pushed entry is numbered after the shown one.
   if (options?.replace) window.history.replaceState(window.history.state, "", destination);
-  else {
-    visits += 1;
-    window.history.pushState({ [SHELL_HISTORY_POSITION]: nextCockpitPosition() }, "", destination);
-  }
+  else window.history.pushState({ [SHELL_HISTORY_POSITION]: nextCockpitPosition() }, "", destination);
   window.dispatchEvent(new Event(COCKPIT_LOCATION_EVENT));
   return true;
 }

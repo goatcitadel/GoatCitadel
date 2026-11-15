@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { cockpitVisitCount } from "./cockpit-history";
+import { cockpitHistoryPosition } from "./cockpit-history";
 
 const MODAL_LAYER = '[role="dialog"],[aria-modal="true"]';
 /** A closing layer hands focus back to what opened it a tick later; wait that out before judging where focus is. */
@@ -22,12 +22,12 @@ function focusPage(): void {
  */
 export function useFocusPageOnAreaChange(area: string): void {
   const previous = useRef(area);
-  const visitsSeen = useRef(cockpitVisitCount());
+  const positionSeen = useRef(cockpitHistoryPosition());
   const visited = useRef(false);
   // Every render, so a visit that did not change the area is not counted against a later replace-only area change.
   useEffect(() => {
-    visited.current = cockpitVisitCount() !== visitsSeen.current;
-    visitsSeen.current = cockpitVisitCount();
+    visited.current = cockpitHistoryPosition() !== positionSeen.current;
+    positionSeen.current = cockpitHistoryPosition();
   });
   useEffect(() => {
     if (previous.current === area) return;
