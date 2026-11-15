@@ -15,7 +15,7 @@ export async function assertCitadelCapabilityBoundary(page) {
   const current = new URL(before.href);assert.equal(current.pathname, "/settings/citadel");assert.equal(current.hash, "#citadel-blueprint");
   await page.evaluate(() => { window.location.hash = "citadel-capabilities"; });
   await page.waitForURL(url => url.pathname === current.pathname && url.search === current.search && url.hash === "#citadel-capabilities");
-  await page.getByText("This capability is hidden from the current release. Technical display preferences do not enable it.", { exact: true }).waitFor();
+  await page.getByText("Citadel capabilities is not part of this release yet, so it can't be opened here.", { exact: true }).waitFor();
   assert.equal(await page.getByRole("region", { name: "Citadel capability selections", exact: true }).count(), 0);
   for (const label of ["Citadel capabilities", "Workspace capabilities"]) assert.equal(await page.getByRole("tab", { name: label, exact: true }).count(), 0);
   for (const label of ["Skills", "Integrations", "MCP servers"]) {

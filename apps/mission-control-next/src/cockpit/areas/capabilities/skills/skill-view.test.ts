@@ -5,7 +5,6 @@ import type {
   SkillLifecycleState,
 } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
-import { WORKSPACE_CAPABILITIES_HREF } from "../connectors/connector-links";
 import {
   filterSkills,
   presentSkillChange,
@@ -95,8 +94,8 @@ describe("presentSkillState", () => {
       item: { leftOutOfWorkspace: true },
       label: "Left out of this workspace",
       tone: "waiting",
-      reason: "This workspace's skill choices leave it out, so the AI can't use it here.",
-      link: { label: "Change this workspace's skills", href: WORKSPACE_CAPABILITIES_HREF },
+      reason:
+        "This workspace's skill choices leave it out, so the AI can't use it here. Changing a workspace's skill choices is not available in this release.",
       kind: "left_out",
     },
     {
@@ -104,8 +103,8 @@ describe("presentSkillState", () => {
       item: { state: "paused", leftOutOfWorkspace: true },
       label: "Left out of this workspace",
       tone: "waiting",
-      reason: "This workspace's skill choices leave it out, so the AI can't use it here.",
-      link: { label: "Change this workspace's skills", href: WORKSPACE_CAPABILITIES_HREF },
+      reason:
+        "This workspace's skill choices leave it out, so the AI can't use it here. Changing a workspace's skill choices is not available in this release.",
       kind: "left_out",
     },
     {

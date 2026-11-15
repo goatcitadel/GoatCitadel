@@ -16,7 +16,7 @@ function hiddenFixture({ visibleHiddenControl = false, replaceDocument = false, 
       return { count: async () => visibleHiddenControl && name === "Skills selection" ? 1 : 0,
         waitFor: async () => { assert.equal(name, "Citadel Blueprint");assert.ok(href.endsWith("#citadel-blueprint")); } };
     },
-    getByText: (text, options) => { assert.equal(text, "This capability is hidden from the current release. Technical display preferences do not enable it.");assert.deepEqual(options, { exact: true });
+    getByText: (text, options) => { assert.equal(text, "Citadel capabilities is not part of this release yet, so it can't be opened here.");assert.deepEqual(options, { exact: true });
       return { waitFor: async () => assert.ok(href.endsWith("#citadel-capabilities")) }; },
   };return { page, actions };
 }

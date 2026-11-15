@@ -272,7 +272,7 @@ describe("Settings section tabs", () => {
     });
     await vi.waitFor(() =>
       expect(container.textContent).toContain(
-        "This capability is hidden from the current release. Technical display preferences do not enable it.",
+        "Citadel capabilities is not part of this release yet, so it can't be opened here.",
       ),
     );
     expect(window.location.pathname + window.location.search).toBe(current);
@@ -298,7 +298,7 @@ describe("Settings section tabs", () => {
     expect(container.textContent).toContain("Settings destination unavailable");
     await render("/settings/citadel?shell=cockpit#workspace-capabilities");
     expect(container.querySelector('[aria-label="workspace capabilities workspace-a retained draft"]')).toBeNull();
-    expect(container.textContent).toContain("Technical display preferences do not enable it");
+    expect(container.textContent).toContain("is not part of this release yet, so it can't be opened here.");
     const entries = buildSettingsIndex().flatMap((page) => page.entries);
     expect(entries.find((entry) => entry.section === "citadel-capabilities")?.href).toBe(
       "/settings/citadel#citadel-capabilities",
@@ -460,4 +460,10 @@ describe("the Settings targets of the Diagnostics lanes", () => {
       expect(container.textContent).not.toContain("Settings destination unavailable");
     },
   );
+});
+
+it("names a held-back page as not part of this release (U-ST-018)", async () => {
+  await render("/settings/citadel?shell=cockpit#workspace-capabilities");
+  expect(container.textContent).toContain("is not part of this release yet, so it can't be opened here.");
+  expect(container.textContent).not.toContain("Technical display preferences");
 });

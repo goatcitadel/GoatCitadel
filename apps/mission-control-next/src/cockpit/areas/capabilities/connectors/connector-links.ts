@@ -10,9 +10,6 @@ const MCP_SERVERS_HREF = connectorSetupHref("mcp");
  */
 export const CHAT_CONNECTORS_SETTINGS_HREF = MCP_SERVERS_HREF;
 
-/** Where an operator lets this workspace's AI use an app the workspace hides. */
-export const WORKSPACE_CAPABILITIES_HREF = "/settings/citadel#workspace-capabilities";
-
 /** The Connectors tab, without a panel open. */
 export const CONNECTORS_HREF = "/capabilities/connectors";
 
