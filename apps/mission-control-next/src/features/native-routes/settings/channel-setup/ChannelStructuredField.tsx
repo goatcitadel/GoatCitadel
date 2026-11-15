@@ -20,6 +20,7 @@ export function ChannelStructuredField({
   disabled,
   inputClassName,
   droppedSenders,
+  droppedSendersUnread,
   onChange,
 }: {
   field: ChannelSetupFieldDefinition;
@@ -30,6 +31,8 @@ export function ChannelStructuredField({
   disabled: boolean;
   inputClassName: string;
   droppedSenders?: readonly ChannelDroppedSender[];
+  /** The turned-away list could not be read, which is not the same as nobody having been turned away. */
+  droppedSendersUnread?: boolean;
   onChange: (value: unknown) => void;
 }) {
   const [senderDraft, setSenderDraft] = useState<{ id: string; normalized: string; text: string }>();
@@ -67,6 +70,9 @@ export function ChannelStructuredField({
         <p className="mt-1 text-xs text-fg-muted">
           {entries.length} explicit sender{entries.length === 1 ? "" : "s"} configured.
         </p>
+        {droppedSendersUnread ? (
+          <p className="mt-1 text-xs text-fg-muted">The senders this channel turned away could not be read.</p>
+        ) : null}
         {turnedAway.length ? (
           <section className="mt-3 space-y-2">
             <h4 className="text-sm font-semibold">Recently turned away</h4>

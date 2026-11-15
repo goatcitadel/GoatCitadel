@@ -139,13 +139,10 @@ describe("QQ Bot setup copy", () => {
     expect(wizardText()).not.toMatch(/GoatCitadel can't show/iu);
   });
 
-  it("sends the person to System › Diagnostics for their openid, and quotes the message GoatCitadel records there (A6, C9)", () => {
-    // The dropped message's diagnostic names its sender, so the openid is on screen. The guide quotes its start.
-    const quoted = describeDroppedSender("qqbot", "OPENID").split("OPENID")[0];
-
-    expect(quoted).toBe("Dropped a QQBot message from ");
-    expect(wizardText()).toContain(`"${quoted}…"`);
-    expect(wizardText()).toContain("System › Diagnostics");
+  it("sends the person to Edit setup for their openid, where the sender the bot turned away is listed (A6, C9)", () => {
+    expect(wizardText()).toContain("the sender it turned away is listed there with a button to allow them");
+    expect(wizardText()).not.toContain("System › Diagnostics");
+    expect(wizardText()).not.toContain("GOATCITADEL_DEV_DIAGNOSTICS_ENABLED");
   });
 });
 
@@ -164,11 +161,11 @@ describe("QQ Bot setup guide: what it says up front (items 3, 6, 7, 8, R46, R48)
     ]);
   });
 
-  it("ends with a first message for a person who knows their openid and one who doesn't, and the Docker note", () => {
+  it("ends with a first message for a person who knows their openid and one who doesn't, and no Docker note", () => {
     // Ruling R49: this asks the person to check no test message; the only reply it asks for is the bot's answer to
-    // a message from an allowed sender. Ruling R65: diagnostics are off in a Docker install until switched on.
+    // a message from an allowed sender. The turned-away sender is listed on the sender step, so no Diagnostics page is needed.
     expect(paragraphs("first-message")).toEqual([
-      'In the QQ Bot console set the callback URL to this connection\'s webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. If you already added your openid under Who may message this bot, message the bot and check the reply. If not, message the bot once; it won\'t answer. Open System › Diagnostics, find "Dropped a QQBot message from …" and copy the openid. Add it under Who may message this bot with Edit setup, then message again. On a Docker install, System › Diagnostics shows "Diagnostics unavailable" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.',
+      "In the QQ Bot console set the callback URL to this connection's webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. If you already added your openid under Who may message this bot, message the bot and check the reply. If not, message the bot once; it won't answer. Then open Edit setup and go to Who may message this bot: the sender it turned away is listed there with a button to allow them. Allow it and save, then message again.",
     ]);
   });
 
@@ -226,7 +223,7 @@ describe("QQ Bot setup guide: what it says up front (items 3, 6, 7, 8, R46, R48)
 
   it("says where to find the openid when it isn't known, and what to do when it is (item 1, A6)", () => {
     expect(paragraphs("overview")).toContain(
-      "Don't know your openid? Finish setup, then message the bot once. It won't answer, and System › Diagnostics lists \"Dropped a QQBot message from …\" with your openid in it. If you already know your openid, add it under Who may message this bot.",
+      "Don't know your openid? Finish setup, then message the bot once. It won't answer. Then open Edit setup and go to Who may message this bot: the sender it turned away is listed there with a button to allow them. If you already know your openid, add it under Who may message this bot.",
     );
   });
 
@@ -345,7 +342,7 @@ describe("QQ Bot setup guide: the sender step (item 1, A7, A8)", () => {
     );
   });
 
-  it("says on the sender step that a Docker install needs diagnostics switched on first (R65)", () => {
+  it("says on the sender step to finish setup first, with no Docker diagnostics note (R65)", () => {
     expect(paragraphs("sender-access")).toContain(
       "If you don't know an id yet, finish setup first; you can add it any time with Edit setup.",
     );
@@ -690,8 +687,8 @@ describe("QQ Bot receiving path: can it finish?", () => {
     expect(evaluateChannelInboundAccess({ config, actorId: "SOMEONEELSE" })).toMatchObject({ allowed: false });
     expect(dropped).toContain("from SOMEONEELSE:");
     expect(dropped).toContain("add SOMEONEELSE under Who may message this bot");
-    expect(paragraphs("overview").join("\n")).toContain("System › Diagnostics");
-    expect(paragraphs("first-message")[0]).toContain("GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true");
+    expect(paragraphs("overview").join("\n")).toContain("the sender it turned away is listed there");
+    expect(paragraphs("first-message")[0]).toContain("the sender it turned away is listed there");
   });
 
   it("does not make an edit replay the setup-only steps", () => {

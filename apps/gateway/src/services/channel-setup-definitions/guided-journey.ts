@@ -131,7 +131,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
     ],
     // QQ's approval for group and direct-message events (audit line) is on no QQ page, so it is not claimed here.
     firstMessage:
-      'In the QQ Bot console set the callback URL to this connection\'s webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. If you already added your openid under Who may message this bot, message the bot and check the reply. If not, message the bot once; it won\'t answer. Open System › Diagnostics, find "Dropped a QQBot message from …" and copy the openid. Add it under Who may message this bot with Edit setup, then message again. On a Docker install, System › Diagnostics shows "Diagnostics unavailable" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.',
+      "In the QQ Bot console set the callback URL to this connection's webhook address and subscribe to GROUP_AT_MESSAGE_CREATE, C2C_MESSAGE_CREATE, AT_MESSAGE_CREATE and DIRECT_MESSAGE_CREATE. If you already added your openid under Who may message this bot, message the bot and check the reply. If not, message the bot once; it won't answer. Then open Edit setup and go to Who may message this bot: the sender it turned away is listed there with a button to allow them. Allow it and save, then message again.",
   },
   wecom: {
     // WeCom's callback page allows http or https and recommends https (developer.work.weixin.qq.com/document/path/90238),
@@ -534,8 +534,8 @@ const SENDER_EXPLANATIONS: Readonly<Record<string, string>> = {
 const GENERIC_SENDER_EXPLANATION = "Add trusted platform actor IDs. Empty means every inbound sender is denied.";
 
 /**
- * Channels whose inbound messages all pass the shared sender gate (channel-inbound-dispatch.ts), which records a dropped
- * message's sender for the setup step to list (and names it in its System › Diagnostics message). Telegram pairs people instead, so it has no such line.
+ * Channels whose inbound messages all pass the shared sender gate (channel-inbound-dispatch.ts), which records the
+ * sender it turns away for the setup step to list. Telegram pairs people instead, so it has no such line.
  */
 const SENDER_ID_IN_DIAGNOSTICS: ReadonlySet<string> = new Set([
   "slack",

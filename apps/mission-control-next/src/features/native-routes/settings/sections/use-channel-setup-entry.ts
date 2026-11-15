@@ -127,13 +127,16 @@ export function useChannelSetupEntry(s: ChannelSetupState, saveDraft?: () => Pro
       s.setNotice({ tone: "warning", message: "Choose a channel definition first." });
       return;
     }
-    const existing = unfinishedCreateDraft(s.data?.drafts, s.createDefinition.catalog.catalogId);
+    const { catalogId, label } = s.createDefinition.catalog;
+    const existing = unfinishedCreateDraft(s.data?.drafts, catalogId);
     if (existing) {
-      s.draftSelectionGuard.requestTransition(existing.draftId);
-      s.setNotice({ tone: "success", message: `Opened your unfinished ${s.createDefinition.catalog.label} setup.` });
+      // The notice waits for the leave review, so a cancelled leave never claims the draft was opened.
+      s.draftSelectionGuard.requestTransition(existing.draftId, () =>
+        s.setNotice({ tone: "success", message: `Opened your unfinished ${label} setup.` }),
+      );
       return;
     }
-    await create(s.createDefinition.catalog.catalogId);
+    await create(catalogId);
   };
   const editConnection = async () => {
     if (!s.selectedConnection || s.mutation.pending || s.mutation.uncertain) return;

@@ -22,7 +22,7 @@ import {
   readHeaderValue,
   validateWebhookHostHeader,
 } from "./webhook-handler-factory.js";
-import { describeDroppedSender, readableSenderId } from "../services/channel-inbound-dispatch.js";
+import { describeDroppedSender, recordableSenderId } from "../services/channel-inbound-dispatch.js";
 import {
   deriveGenericChannelInboundIdempotencyKey,
   verifyGenericChannelInboundSignature,
@@ -176,7 +176,7 @@ export const integrationWebhookRoutes: FastifyPluginAsync<IntegrationWebhookRout
             allowedSenderCount: inboundAccess.allowedSenders.length,
           },
         });
-        const droppedSenderId = readableSenderId(parsed.data.actorId);
+        const droppedSenderId = recordableSenderId(parsed.data.actorId);
         if (!hasInvalidConfig && droppedSenderId) {
           fastify.services.integrationWebhooks.recordDroppedSender?.({
             connectionId: params.data.connectionId,

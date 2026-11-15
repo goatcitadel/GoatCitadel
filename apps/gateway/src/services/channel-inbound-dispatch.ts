@@ -358,9 +358,20 @@ const CHANNEL_NAMES_BY_KEY: ReadonlyMap<string, string> = new Map(
 /** A sender id comes from outside, so the message keeps it to one line of a length a person can read. */
 const MAX_SENDER_ID_CHARS = 256;
 
-export function readableSenderId(actorId: string | undefined): string {
+function readableSenderId(actorId: string | undefined): string {
   const oneLine = (actorId ?? "").replace(/\p{Cc}+/gu, " ").trim();
   return oneLine.length > MAX_SENDER_ID_CHARS ? `${oneLine.slice(0, MAX_SENDER_ID_CHARS)}…` : oneLine;
+}
+
+/**
+ * The sender id setup may offer to allow, or undefined. Sender ids come from outside parties, so one is offered only
+ * when it reads exactly as it was sent: nothing control, invisible or direction-changing in it (it could look like
+ * another id on the button), no surrounding blanks, not cut short and not empty (it could never match once allowed).
+ */
+export function recordableSenderId(actorId: string | undefined): string | undefined {
+  const readable = readableSenderId(actorId);
+  if (!readable || readable !== actorId || /\p{Cf}/u.test(readable)) return undefined;
+  return readable;
 }
 
 /**
@@ -435,7 +446,7 @@ function evaluateInboundWebhookAccess(
         allowedSenderCount: inboundAccess.allowedSenders.length,
       },
     });
-    const droppedSenderId = readableSenderId(options.message.actorId);
+    const droppedSenderId = recordableSenderId(options.message.actorId);
     if (!hasInvalidConfig && options.connectionId && droppedSenderId) {
       integrationWebhooks.recordDroppedSender?.({ connectionId: options.connectionId, senderId: droppedSenderId });
     }
@@ -458,7 +469,10 @@ function evaluateInboundWebhookAccess(
 }
 
 export async function dispatchInboundWebhookMessage(
-  integrationWebhooks: Pick<IntegrationWebhookRouteLike, "acceptInboundChannelEvent" | "recordDevDiagnostic">,
+  integrationWebhooks: Pick<
+    IntegrationWebhookRouteLike,
+    "acceptInboundChannelEvent" | "recordDevDiagnostic" | "recordDroppedSender"
+  >,
   options: InboundWebhookDispatchOptions,
 ) {
   const gate = evaluateInboundWebhookAccess(integrationWebhooks, options);

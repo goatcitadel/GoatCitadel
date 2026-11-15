@@ -35,23 +35,22 @@ afterEach(async () => {
   container.remove();
 });
 
-async function mount() {
+async function mount(withProvider = true) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const senders = (
+    <ChannelSenderListField
+      connectionId="conn-1"
+      field={field}
+      value={[]}
+      id="senders"
+      describedBy="senders-help"
+      disabled={false}
+      inputClassName="input"
+      onChange={vi.fn()}
+    />
+  );
   await act(async () => {
-    root.render(
-      <QueryClientProvider client={client}>
-        <ChannelSenderListField
-          connectionId="conn-1"
-          field={field}
-          value={[]}
-          id="senders"
-          describedBy="senders-help"
-          disabled={false}
-          inputClassName="input"
-          onChange={vi.fn()}
-        />
-      </QueryClientProvider>,
-    );
+    root.render(withProvider ? <QueryClientProvider client={client}>{senders}</QueryClientProvider> : senders);
   });
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -69,10 +68,27 @@ describe("the sender list of a saved connection", () => {
     expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Allow U2"]);
   });
 
-  it("shows only the plain list when the read fails", async () => {
+  it("works without a query client above it, as in the Classic shell", async () => {
+    api.fetchChannelDroppedSenders.mockResolvedValue({
+      connectionId: "conn-1",
+      items: [{ senderId: "U2", droppedAt: new Date().toISOString() }],
+    });
+    await mount(false);
+    expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Allow U2"]);
+  });
+
+  it("says the list could not be read, and keeps the plain list usable, when the read fails", async () => {
     api.fetchChannelDroppedSenders.mockRejectedValue(new Error("unavailable"));
     await mount();
     expect(container.querySelector("textarea")).not.toBeNull();
     expect(container.querySelector("h4")).toBeNull();
+    expect(container.textContent).toContain("The senders this channel turned away could not be read.");
+    expect(container.querySelector('[role="alert"], [role="status"], [aria-live]')).toBeNull();
+  });
+
+  it("does not say it while the list is loaded", async () => {
+    api.fetchChannelDroppedSenders.mockResolvedValue({ connectionId: "conn-1", items: [] });
+    await mount();
+    expect(container.textContent).not.toContain("could not be read");
   });
 });

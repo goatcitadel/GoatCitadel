@@ -250,6 +250,10 @@ describe("Telegram is set up in Chat, not here", () => {
     await act(async () => button!.click());
     expect(api.createChannelSetupDraft).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Opened your unfinished Slack setup.");
+    // The editor shows the draft that already existed, not a new one.
+    expect(container.querySelector('section[aria-label="New channel setup"]')).toBeNull();
+    expect(container.querySelector('input[aria-label="Search channels"]')).toBeNull();
+    expect(buttonNamed("Back to channels")).toBeDefined();
   });
 
   it("tells drafts apart by kind and time, without version numbers", async () => {

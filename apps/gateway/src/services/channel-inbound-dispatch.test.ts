@@ -138,6 +138,32 @@ describe("channel-inbound-dispatch shared sender-allowlist gate", () => {
     expect(recordDroppedSender).toHaveBeenCalledWith({ connectionId: CONNECTION_ID, senderId: "U-Stranger" });
   });
 
+  it("offers only a sender id that reads exactly as it was sent", async () => {
+    const zeroWidth = `U${String.fromCodePoint(0x200b)}1`;
+    const rtlOverride = `U${String.fromCodePoint(0x202e)}1`;
+    const control = `U${String.fromCodePoint(0x07)}1`;
+    const overLong = "U".repeat(300);
+    const padded = " U1 ";
+    const recorded: string[] = [];
+    for (const [index, actorId] of [zeroWidth, rtlOverride, control, overLong, padded, "U-Normal"].entries()) {
+      const gateway = createGateway();
+      await dispatchInboundWebhookMessage(
+        { ...gateway, recordDroppedSender: (input: { senderId: string }) => recorded.push(input.senderId) },
+        {
+          channel: "slack",
+          connectionId: CONNECTION_ID,
+          idempotencyKey: `slack:event-odd-${index}`,
+          eventType: "message",
+          bindingTarget: "C1",
+          inboundAccessConfig: { inboundAccessMode: "allowlist", allowedSenders: ["U-Owner"] },
+          allowedSenders: ["U-Owner"],
+          message: { eventId: `event-odd-${index}`, account: CONNECTION_ID, room: "C1", actorId, content: "hi" },
+        },
+      );
+    }
+    expect(recorded).toEqual(["U-Normal"]);
+  });
+
   it("does not remember a message that came with no sender id", async () => {
     const gateway = createGateway();
     const recordDroppedSender = vi.fn();

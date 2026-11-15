@@ -242,6 +242,32 @@ describe("integration webhook security routes", () => {
     expect(item?.message).not.toMatch(/undefined|from\s*[:.]/);
   });
 
+  it("does not offer a sender id with an invisible or direction-changing character", async () => {
+    const recordDroppedSender = vi.fn();
+    app = buildApp({
+      recordDroppedSender,
+      ingestChannelMessage: vi.fn(),
+      getIntegrationConnection: vi.fn(() =>
+        buildConnection("discord", {
+          inboundSecret: "generic-secret",
+          inboundAccessMode: "allowlist",
+          allowedSenders: ["user-owner"],
+        }),
+      ),
+    });
+    await app.register(integrationWebhookRoutes);
+    for (const [index, mark] of [0x200b, 0x202e].entries()) {
+      const response = await signedInboundRequest("discord", {
+        eventId: `evt-odd-${index}`,
+        account: connectionId,
+        actorId: `user${String.fromCodePoint(mark)}-1`,
+        content: "hello",
+      });
+      expect(response.statusCode).toBe(200);
+    }
+    expect(recordDroppedSender).not.toHaveBeenCalled();
+  });
+
   it("keeps the generic malformed-config message as it was", async () => {
     const diagnostics = new GatewayDevDiagnosticsService(true, undefined, false, 10);
     app = buildApp({

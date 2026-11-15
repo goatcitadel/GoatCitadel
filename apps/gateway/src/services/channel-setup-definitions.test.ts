@@ -2137,10 +2137,10 @@ describe("the shared guide builder", () => {
       }
     });
 
-    it("keeps the Docker diagnostics setting out of every guide but QQ's own walkthrough", () => {
+    it("keeps the Docker diagnostics setting out of every guide", () => {
       for (const key of SENDER_ID_IN_DIAGNOSTICS) {
         const occurrences = JSON.stringify(guide(key)).match(/GOATCITADEL_DEV_DIAGNOSTICS_ENABLED/gu) ?? [];
-        expect(occurrences, key).toHaveLength(key === "qqbot" ? 1 : 0);
+        expect(occurrences, key).toHaveLength(0);
       }
     });
 

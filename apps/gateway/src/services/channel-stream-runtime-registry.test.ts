@@ -299,6 +299,58 @@ describe("stream dispatch never applies legacy-open inbound access", () => {
   }
 });
 
+describe("stream dispatch remembers the sender it turned away", () => {
+  for (const channel of ["ntfy", "mattermost"] as const) {
+    it(`offers a ${channel} sender that is not on the allowed list to setup`, async () => {
+      const h = host();
+      const config: Record<string, unknown> =
+        channel === "ntfy"
+          ? { baseUrl: "https://ntfy.example.test", topic: "ops", tokenEnv: "NTFY_TOKEN", inboundStreamEnabled: true }
+          : {
+              serverUrl: "https://chat.example.test",
+              botTokenEnv: "MM_TOKEN",
+              defaultChannel: "town-square",
+              inboundStreamEnabled: true,
+            };
+      const conn = {
+        ...ntfyConnection(),
+        key: channel,
+        catalogId: `channel.${channel}`,
+        config: { ...config, inboundAccessMode: "allowlist", allowedSenders: ["someone-else"] },
+      };
+      (h.value.storage.integrationConnections.list as ReturnType<typeof vi.fn>).mockResolvedValue([conn]);
+      const recordDroppedSender = vi.fn();
+      provideChannelUpdateDeps(h.value, {
+        webhooks: fakeWebhooks({ recordDroppedSender }),
+        readPersonalityCatalog: async () => ({ items: [], defaultPersonalityId: "default" }),
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) =>
+          String(url).endsWith("/users/me")
+            ? new Response(JSON.stringify({ id: "bot" }), { status: 200 })
+            : new Response(ndjson([{ id: "m1", event: "message", message: "hello", topic: "ops" }]), { status: 200 }),
+        ),
+      );
+      vi.stubGlobal("WebSocket", FakeMattermostSocket);
+      const runtime = getChannelStreamRuntime(h.value);
+      try {
+        await runtime.sync();
+        await vi.waitFor(() =>
+          expect(recordDroppedSender).toHaveBeenCalledWith({
+            connectionId: "conn-ntfy",
+            senderId: expect.any(String),
+          }),
+        );
+        expect(h.acceptInboundChannelEvent).not.toHaveBeenCalled();
+      } finally {
+        await runtime.close();
+        vi.unstubAllGlobals();
+      }
+    });
+  }
+});
+
 describe("retired stream channels", () => {
   it("opens no event stream for a saved Signal connection that still has receiveEvents on", async () => {
     const h = host();
