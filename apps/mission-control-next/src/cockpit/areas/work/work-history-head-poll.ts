@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useQueryClient, type QueryClient, type InfiniteData } from "@tanstack/react-query";
+import { focusManager, useQueryClient, type QueryClient, type InfiniteData } from "@tanstack/react-query";
 import type { DurableRunHistoryPage, TaskRecord } from "@goatcitadel/contracts";
 import { fetchDurableRunHistory } from "@goatcitadel/mission-control-shared/api/durable";
 import { fetchTasks } from "@goatcitadel/mission-control-shared/api/tasks";
@@ -50,6 +50,7 @@ async function checkTasks(client: QueryClient, workspaceId: string, signal: Abor
   const queryKey = queryKeys.workTasks(workspaceId);
   const cached = loadedPages<TaskPage>(client, queryKey);
   if (!cached) return;
+  if (getEventStreamStatus().state !== "open") return void (await client.invalidateQueries({ queryKey, exact: true }));
   const head = await fetchTasks(undefined, workspaceId, { limit: TASK_PAGE_SIZE, cursor: undefined, signal });
   if (signal.aborted) return;
   if (!sameTaskPage(cached.pages[0]!, head)) await client.invalidateQueries({ queryKey, exact: true });
@@ -59,6 +60,7 @@ async function checkRuns(client: QueryClient, workspaceId: string, signal: Abort
   const queryKey = queryKeys.durableRunHistory(workspaceId);
   const cached = loadedPages<DurableRunHistoryPage>(client, queryKey);
   if (!cached) return;
+  if (getEventStreamStatus().state !== "open") return void (await client.invalidateQueries({ queryKey, exact: true }));
   const head = await fetchDurableRunHistory({ workspaceId, limit: RUN_PAGE_SIZE, cursor: undefined }, { signal });
   if (signal.aborted) return;
   if (!sameRunPage(cached.pages[0]!, head) || hasUnfinishedOlderRun(cached))
@@ -66,21 +68,29 @@ async function checkRuns(client: QueryClient, workspaceId: string, signal: Abort
 }
 
 /**
- * While the live connection is open, a list with several pages loaded is not refetched page by page on a timer.
- * This reads only its first page every WORK_HISTORY_FALLBACK_MS and refetches every loaded page when that page
- * differs (tasks are listed newest change first, so any change shows there) or a loaded older run may still change.
+ * Owns the fallback poll of every list with more than one page loaded (the query's own timer is off for those).
+ * While the live connection is open it reads only the first page every WORK_HISTORY_FALLBACK_MS and refetches every
+ * loaded page when that page differs (tasks are listed newest change first, so an update to a task on a later page
+ * moves it to the first page) or a loaded older run may still change. While the connection is not open it refetches
+ * every loaded page on each tick, as the old timer did. Like the old timer it skips ticks while the window is hidden.
+ * Left to realtime events by design: a task on a later page that is deleted or hidden (it leaves the first page
+ * unchanged), and a run that finished and then changes again.
  */
 export function useWorkHistoryHeadPoll(workspaceId: string): void {
   const client = useQueryClient();
   useEffect(() => {
     const controller = new AbortController();
+    let inFlight = false;
     const timer = setInterval(() => {
-      if (getEventStreamStatus().state !== "open") return;
-      for (const check of [checkTasks, checkRuns]) {
-        check(client, workspaceId, controller.signal).catch(() => {
-          // A failed head read is not an error to show: the next tick or a realtime event reads again.
+      if (inFlight || !focusManager.isFocused()) return;
+      inFlight = true;
+      Promise.all([checkTasks, checkRuns].map((check) => check(client, workspaceId, controller.signal)))
+        .catch(() => {
+          // A failed read is not an error to show: the next tick or a realtime event reads again.
+        })
+        .finally(() => {
+          inFlight = false;
         });
-      }
     }, WORK_HISTORY_FALLBACK_MS);
     return () => {
       clearInterval(timer);

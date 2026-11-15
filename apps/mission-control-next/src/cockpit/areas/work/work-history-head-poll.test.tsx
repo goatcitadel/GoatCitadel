@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { InfiniteQueryObserver, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { InfiniteQueryObserver, focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkHistoryHeadPoll } from "./work-history-head-poll";
 import { WORK_HISTORY_FALLBACK_MS, workspaceDurableRunsOptions, workspaceTasksOptions } from "./work-queries";
@@ -120,9 +120,45 @@ describe("Work history head poll (U-WK-008)", () => {
     expect(api.fetchDurableRunHistory).toHaveBeenCalledTimes(1);
   });
 
-  it("does nothing while the live connection is not open (the full poll covers it)", async () => {
+  it("refetches every loaded page when the connection drops after the interval was chosen", async () => {
     stream.state = "closed";
     await advance(WORK_HISTORY_FALLBACK_MS);
+    expect(api.fetchTasks).toHaveBeenCalledTimes(3);
+  });
+
+  it("moves a changed later-page task to the first page, so the head differs and every page refetches", async () => {
+    const moved = [task("t3", "2026-11-03T00:00:00.000Z"), task("t1"), task("t2")];
+    api.fetchTasks.mockResolvedValueOnce({ items: moved, nextCursor: "c1" });
+    await advance(WORK_HISTORY_FALLBACK_MS);
+    expect(api.fetchTasks).toHaveBeenCalledTimes(1 + 3);
+  });
+
+  it("polls a one-page list exactly once per tick through the query's own timer", async () => {
+    const only = { items: [run("r1", "running")] };
+    api.fetchDurableRunHistory.mockResolvedValue(only);
+    client.setQueryData(workspaceDurableRunsOptions("w").queryKey, { pages: [only], pageParams: [""] });
+    const observer = new InfiniteQueryObserver(client, {
+      ...workspaceDurableRunsOptions("w"),
+      refetchOnMount: false,
+      staleTime: Infinity,
+    } as never);
+    unsubscribe.push(observer.subscribe(() => undefined));
+    await advance(WORK_HISTORY_FALLBACK_MS);
+    expect(api.fetchDurableRunHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start a tick while the previous one is still reading", async () => {
+    let release: (page: Page<ReturnType<typeof task>>) => void = () => undefined;
+    api.fetchTasks.mockReset().mockImplementation(() => new Promise((resolve) => (release = resolve)));
+    await advance(WORK_HISTORY_FALLBACK_MS * 3);
+    expect(api.fetchTasks).toHaveBeenCalledTimes(1);
+    release(taskPages()[0]!);
+  });
+
+  it("skips the tick while the window is hidden", async () => {
+    focusManager.setFocused(false);
+    await advance(WORK_HISTORY_FALLBACK_MS);
+    focusManager.setFocused(undefined);
     expect(api.fetchTasks).not.toHaveBeenCalled();
   });
 

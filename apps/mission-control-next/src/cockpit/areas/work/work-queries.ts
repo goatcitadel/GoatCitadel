@@ -2,19 +2,21 @@ import { infiniteQueryOptions } from "@tanstack/react-query";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { fetchDurableRunHistory } from "@goatcitadel/mission-control-shared/api/durable";
 import { fetchTasks } from "@goatcitadel/mission-control-shared/api/tasks";
-import { getEventStreamStatus } from "@goatcitadel/mission-control-shared/state/event-stream-status-store";
 import { queryKeys } from "../../data/query-keys";
 
 /** A fallback only: realtime `tasks` and `durable` events refresh these histories. */
 export const WORK_HISTORY_FALLBACK_MS = 120_000;
 
 /**
- * With the live connection open and more than one page loaded, the full refetch is replaced by a check of the first
- * page (see work-history-head-poll.ts). Otherwise every loaded page is refetched on the timer, as before.
+ * A list with more than one page loaded is polled by useWorkHistoryHeadPoll (a first-page check while the live
+ * connection is open, a full refetch of the loaded pages otherwise), so the query's own timer stays off for it.
+ * TanStack only recomputes this interval on a query update, which is why the connection state is not read here:
+ * a timer chosen while the connection was open would stay off through a later outage. With one page loaded the
+ * query's own timer refetches it, as before.
  */
 export function workHistoryFallbackInterval(query: { state: { data?: { pages: unknown[] } } }): number | false {
   const pages = query.state.data?.pages.length ?? 0;
-  return getEventStreamStatus().state === "open" && pages > 1 ? false : WORK_HISTORY_FALLBACK_MS;
+  return pages > 1 ? false : WORK_HISTORY_FALLBACK_MS;
 }
 
 export function workspaceDurableRunsOptions(workspaceId: string) {

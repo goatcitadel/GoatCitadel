@@ -33,14 +33,14 @@ describe("Work history queries (WK-13)", () => {
     expect(WORK_HISTORY_FALLBACK_MS).toBe(120_000);
   });
 
-  it("polls every page only when the live connection is not open or one page is loaded (U-WK-008)", () => {
+  it("hands a multi-page list to the head poll whatever the connection state, and keeps the timer for one page (U-WK-008)", () => {
     const twoPages = { state: { data: { pages: [{}, {}] } } };
-    stream.state = "open";
-    expect(workHistoryFallbackInterval(twoPages)).toBe(false);
-    expect(workHistoryFallbackInterval({ state: { data: { pages: [{}] } } })).toBe(WORK_HISTORY_FALLBACK_MS);
-    expect(workHistoryFallbackInterval({ state: {} })).toBe(WORK_HISTORY_FALLBACK_MS);
-    stream.state = "retrying";
-    expect(workHistoryFallbackInterval(twoPages)).toBe(WORK_HISTORY_FALLBACK_MS);
+    for (const state of ["open", "retrying", "closed"]) {
+      stream.state = state;
+      expect(workHistoryFallbackInterval(twoPages)).toBe(false);
+      expect(workHistoryFallbackInterval({ state: { data: { pages: [{}] } } })).toBe(WORK_HISTORY_FALLBACK_MS);
+      expect(workHistoryFallbackInterval({ state: {} })).toBe(WORK_HISTORY_FALLBACK_MS);
+    }
   });
 
   it("forwards the query's abort signal to the task read", async () => {
