@@ -38,13 +38,32 @@ export function ShellSwitchFeedback({
             Opening view…
           </span>
         ) : null}
-        {owner.error ? <Callout tone="error">{owner.error}</Callout> : null}
+        {owner.error ? (
+          // One alert for both forms. Inline, it renders right after a link, often inside a paragraph or a dense row,
+          // so it stays a span; floating, the framed callout sits inside it and does not announce a second time.
+          <span role="alert" className={floating ? "block" : "block text-sm text-status-failed"}>
+            {floating ? (
+              <Callout tone="error" announce={false}>
+                {owner.error}
+              </Callout>
+            ) : (
+              owner.error
+            )}
+          </span>
+        ) : null}
       </>
     ) : null;
   return (
     <>
       {floating && status ? (
-        <div className="fixed inset-x-4 bottom-20 z-70 mx-auto w-fit max-w-full rounded-md border border-line bg-overlay px-3 py-2 shadow-overlay sm:bottom-4">
+        <div
+          className={
+            // An error alone is already a framed Callout, so the wrapper adds only its position and shadow.
+            owner.error && !owner.opening
+              ? "fixed inset-x-4 bottom-20 z-70 mx-auto w-fit max-w-full shadow-overlay sm:bottom-4"
+              : "fixed inset-x-4 bottom-20 z-70 mx-auto w-fit max-w-full rounded-md border border-line bg-overlay px-3 py-2 shadow-overlay sm:bottom-4"
+          }
+        >
           {status}
         </div>
       ) : (
