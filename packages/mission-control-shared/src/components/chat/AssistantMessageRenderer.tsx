@@ -117,11 +117,13 @@ export function AssistantMessageBody({
     return normalizeAssistantDisplayTextIncremental(normalizeStateRef.current, pacedContent);
   }, [role, content, pacedContent, running, streamTurnId]);
 
-  return role === "assistant" && running ? (
+  // A finished streamed answer keeps the blocks it was rendered in, so nothing is re-parsed or replaced on finish.
+  return role === "assistant" && (running || canSettleInBlocks(displayContent)) ? (
     <StreamingMarkdown
       content={displayContent}
       streamPresentationMode={streamPresentationMode}
       streamTurnId={streamTurnId}
+      settled={!running}
     />
   ) : (
     <MemoizedMarkdownBlock
@@ -130,6 +132,14 @@ export function AssistantMessageBody({
       components={role === "assistant" ? assistantMarkdownComponents : userMarkdownComponents}
     />
   );
+}
+
+const LINK_REFERENCE_DEFINITION = /^ {0,3}\[[^\]]+\]:\s/m;
+const FOOTNOTE_REFERENCE = /\[\^[^\]]+\]/;
+
+/** Link reference definitions and footnotes reach across blocks, so such content stays one block. */
+export function canSettleInBlocks(content: string): boolean {
+  return !LINK_REFERENCE_DEFINITION.test(content) && !FOOTNOTE_REFERENCE.test(content);
 }
 
 // Message headings belong to the message, not the page: an assistant "# Title" must not compete with the page's
@@ -557,9 +567,12 @@ function StreamingMarkdown({
   content,
   streamPresentationMode,
   streamTurnId,
+  settled = false,
 }: {
   content: string;
   streamPresentationMode: AssistantStreamPresentationMode;
+  /** The answer has finished: same blocks and keys, without the streaming tail styling or cursor. */
+  settled?: boolean;
   // Identifies the streaming turn so the incremental parser state is reset when a new
   // message starts (fence-state must never leak across messages).
   streamTurnId?: string;
@@ -588,23 +601,27 @@ function StreamingMarkdown({
       ))}
       {tail ? (
         <div
-          className={cn(
-            "mc-assistant-streaming-tail",
-            streamPresentationMode === "smooth" ? "mc-assistant-streaming-tail-smooth" : "",
-          )}
+          className={
+            settled
+              ? "mc-assistant-settled-tail"
+              : cn(
+                  "mc-assistant-streaming-tail",
+                  streamPresentationMode === "smooth" ? "mc-assistant-streaming-tail-smooth" : "",
+                )
+          }
         >
-          <AssistantStreamingTailContext.Provider value={true}>
+          <AssistantStreamingTailContext.Provider value={!settled}>
             <MemoizedMarkdownBlock
               content={tail}
               tree={tailTree}
               role="assistant"
               components={assistantMarkdownComponents}
-              fadeNewWords={streamPresentationMode === "smooth"}
+              fadeNewWords={!settled && streamPresentationMode === "smooth"}
             />
           </AssistantStreamingTailContext.Provider>
         </div>
       ) : null}
-      <span className="mc-assistant-streaming-cursor" aria-hidden="true" />
+      {settled ? null : <span className="mc-assistant-streaming-cursor" aria-hidden="true" />}
     </div>
   );
 }
