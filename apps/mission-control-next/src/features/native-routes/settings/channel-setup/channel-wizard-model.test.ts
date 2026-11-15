@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { ChannelSetupDefinition, ChannelSetupDraft, ChannelSetupWizardContent } from "@goatcitadel/contracts";
+import type {
+  ChannelSetupDefinition,
+  ChannelSetupDraft,
+  ChannelSetupStepDefinition,
+  ChannelSetupWizardContent,
+} from "@goatcitadel/contracts";
 import {
   channelHosts,
   inboundWebhookPath,
+  isStepComplete,
   isStepForLifecycle,
   SECRET_REDACTION_MARKER,
   unreadableHostFields,
@@ -545,5 +551,52 @@ describe("isStepForLifecycle", () => {
     for (const mode of ["edit", "repair", "rotate_secret", "retest"] as const) {
       expect(isStepForLifecycle(step, mode)).toBe(false);
     }
+  });
+});
+
+describe("isStepComplete: the sender step", () => {
+  const accessStep: ChannelSetupStepDefinition = {
+    id: "access",
+    kind: "instruction",
+    title: "Who may message this bot?",
+    fields: [{ key: "allowedSenders", label: "Allowed sender identities", type: "sender-list", required: false }],
+  };
+  const receiveStep: ChannelSetupStepDefinition = {
+    id: "receive",
+    kind: "instruction",
+    title: "Receive messages",
+    fields: [{ key: "webhookPath", label: "Webhook path", type: "text", required: false }],
+  };
+  const complete = (
+    step: ChannelSetupStepDefinition,
+    values: Record<string, unknown>,
+    visited: Record<string, boolean> = { [step.id]: true },
+  ) => isStepComplete(step, def({ steps: [step] }), draft(), values, visited, {});
+
+  it("stays incomplete while the allowed list is empty", () => {
+    expect(complete(accessStep, { allowedSenders: [] })).toBe(false);
+    expect(complete(accessStep, { allowedSenders: ["U123"] })).toBe(true);
+    expect(complete(accessStep, { allowedSenders: "U123\n" })).toBe(true);
+    expect(complete(accessStep, { allowedSenders: " , \n" })).toBe(false);
+    expect(complete(accessStep, { allowedSenders: [" ", ""] })).toBe(false);
+  });
+
+  it("completes an all-optional step only once it was visited", () => {
+    expect(complete(receiveStep, {}, {})).toBe(false);
+    expect(complete(receiveStep, {}, { receive: true })).toBe(true);
+  });
+
+  it("is not blocked by a sender list the current mode hides", () => {
+    const hidden: ChannelSetupStepDefinition = {
+      ...accessStep,
+      fields: [
+        {
+          ...accessStep.fields![0]!,
+          visibleWhenFieldEquals: { fieldKey: "inboundAccessMode", value: "allowlist" },
+        },
+      ],
+    };
+    expect(complete(hidden, { inboundAccessMode: "open", allowedSenders: [] })).toBe(true);
+    expect(complete(hidden, { inboundAccessMode: "allowlist", allowedSenders: [] })).toBe(false);
   });
 });
