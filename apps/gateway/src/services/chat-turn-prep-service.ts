@@ -1056,18 +1056,14 @@ export async function prepareAgentChatTurn(
     effectiveProviderRoute?.effectiveModel ??
     input.model ??
     prefs.model;
-  // Plan first offers no tools, so the coding-completion checks (tool receipts, files, test results) could never
-  // pass: an advisory turn always takes the standard profile.
-  const sustainedExecutionProfile =
-    prefs.planningMode === "advisory"
-      ? executionProfileFromNormalizationProfile(normalized.normalizationProfile)
-      : resolveSustainedLocalCodingProfile({
-          content: capabilityProfileContent ?? content,
-          providerId: effectiveProviderId,
-          durableEnabled: await isDurableChatExecution(),
-          normalizationProfile: normalized.normalizationProfile,
-          serverOnlyTurn: Boolean(systemHeartbeatPosture || input.parentDelegationStepId),
-        });
+  const sustainedExecutionProfile = resolveSustainedLocalCodingProfile({
+    content: capabilityProfileContent ?? content,
+    providerId: effectiveProviderId,
+    durableEnabled: await isDurableChatExecution(),
+    normalizationProfile: normalized.normalizationProfile,
+    serverOnlyTurn: Boolean(systemHeartbeatPosture || input.parentDelegationStepId),
+    advisoryPlanning: prefs.planningMode === "advisory",
+  });
   const persistedAutonomy = systemHeartbeatPosture
     ? await host.storage.sessionAutonomyPrefs.get(sessionId)
     : await host.getSessionAutonomyPrefs(sessionId);
