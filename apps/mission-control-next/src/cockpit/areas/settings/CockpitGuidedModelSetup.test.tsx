@@ -410,6 +410,8 @@ describe("shared guided model setup", () => {
     };
     await mount();
     expect(container.textContent).not.toContain("Saved model defaults changed");
+    // The newer choice survives the acknowledgement.
+    expect(container.querySelectorAll("select")[1]!.value).toBe("third-model");
   });
   it("says the saved defaults changed once they really changed", async () => {
     catalog("ready");

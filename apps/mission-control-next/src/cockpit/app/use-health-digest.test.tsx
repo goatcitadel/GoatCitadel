@@ -332,3 +332,33 @@ it("retains inspected runtime failures without extra reads and fences them on wo
   expect(api.fetchNpuStatus).not.toHaveBeenCalled();
   expect(api.fetchLlamaCppStatus).not.toHaveBeenCalled();
 });
+it("shows a current core failure instead of an earlier default-model result", async () => {
+  const scope = healthQueryScope(client, "workspace-a", getGatewayAccessRevision());
+  const noModel = onboardingFixture();
+  noModel.settings.llm.activeProviderId = "";
+  noModel.settings.llm.activeModel = "";
+  client.setQueryData([...queryKeys.health("workspace-a"), ...scope], {
+    summary: { state: "unavailable", detail: "Not read in this retained fixture" },
+    llama: { state: "deferred" },
+    npu: { state: "deferred" },
+    connections: { state: "deferred" },
+    channels: { state: "deferred" },
+    workers: { state: "deferred" },
+    onboarding: { state: "current", value: noModel, observedAt: 1760000000000 },
+  } satisfies SystemHealthSources);
+  api.fetchHealthSummary.mockResolvedValue({ ...summary, database: { reachable: false, issues: [] } });
+  function CoreProbe() {
+    status = useHealthDigestStatus("workspace-a", true, true);
+    return <p>{status.label}</p>;
+  }
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <CoreProbe />
+      </QueryClientProvider>,
+    ),
+  );
+  await settle();
+  expect(status.label).not.toBe("Earlier check needs review");
+  expect(status.tone).toBe("failed");
+});

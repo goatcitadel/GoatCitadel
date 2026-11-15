@@ -345,6 +345,11 @@ describe("ChatSetupGate", () => {
     expect(container.textContent).toContain("Connect a model before you send your first message.");
   });
 
+  it("shows no setup instruction when a model is chosen and only its readiness was not reported", async () => {
+    await gate({ data: { ...withModel, setupReadiness: undefined }, isError: false });
+    expect(container.textContent).toBe("");
+  });
+
   it("keeps the advisory wording when a model is ready", async () => {
     await gate({ data: withModel, isError: false });
     expect(container.textContent).toContain("You can chat now.");

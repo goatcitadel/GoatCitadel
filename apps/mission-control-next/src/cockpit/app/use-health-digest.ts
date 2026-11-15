@@ -98,7 +98,16 @@ export function useHealthDigestStatus(
     enabled: false,
   });
   const retry = () => void query.refetch();
-  if (deferOptionalSources && inspected.data) {
+  // A current core problem, or a core read that failed, outranks an earlier inspected result in the sidebar.
+  const coreNeedsReview =
+    view.phase === "error" ||
+    Boolean(
+      view.record &&
+      deriveSystemHealthChecks(view.record, desktopUpdates).some(
+        (check) => check.status.tone === "failed" || check.status.tone === "waiting",
+      ),
+    );
+  if (deferOptionalSources && inspected.data && !coreNeedsReview) {
     const earlierProblems = deriveSystemHealthChecks(retainedHealthObservations(inspected.data), desktopUpdates).filter(
       (check) => check.status.tone === "failed" || check.status.tone === "waiting",
     );

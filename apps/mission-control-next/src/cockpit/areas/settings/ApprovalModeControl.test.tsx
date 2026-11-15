@@ -321,6 +321,15 @@ describe("cockpit tool approval rule", () => {
     expect(container.textContent).not.toContain("Guided setup requires an approval rule");
   });
 
+  it("does not promise a later switch on first run under Remote Hardened", async () => {
+    owner.deploymentProfile = "remote_hardened";
+    await renderSafeOnly();
+    expect(container.textContent).toContain(
+      "Setup keeps it off, so normal prompts stay on. Remote Hardened keeps normal prompt skipping unavailable.",
+    );
+    expect(container.textContent).not.toContain("You can turn it on later");
+  });
+
   it("fails closed when the owner profile is missing", async () => {
     delete owner.deploymentProfile;
     await render();

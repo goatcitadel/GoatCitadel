@@ -131,6 +131,14 @@ describe("Default model check", () => {
     );
   });
 
+  it("keeps a chosen model Unknown when provider readiness was not reported", () => {
+    const onboarding = { ...onboardingFixture(), setupReadiness: undefined };
+    const check = defaultModel({ ...missing, onboarding: { state: "current", value: onboarding } });
+    expect(check?.status).toEqual({ label: "Unknown", tone: "neutral" });
+    expect(check?.detail).toBe("Whether its provider is ready was not reported.");
+    expect(check?.inspectPath).toBe("/settings/models");
+  });
+
   it("keeps an unreadable model setup Unknown, never Not set up", () => {
     const check = defaultModel({ ...missing, onboarding: { state: "unavailable", detail: "Unavailable" } });
     expect(check?.status).toEqual({ label: "Unknown", tone: "neutral" });

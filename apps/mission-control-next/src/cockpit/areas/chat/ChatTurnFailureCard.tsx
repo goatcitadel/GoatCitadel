@@ -37,14 +37,14 @@ const PROVIDER_REACH_FAILURES = new Set<ChatTurnFailureClass>(["network_interrup
 /**
  * The words for a failure to reach the provider. The Cockpit cannot tell a provider that dropped from another
  * network error the Gateway classed the same way, so a drop is worded as "couldn't reach", not as the provider's fault.
+ * The recovery sentence is the hint the card was given, since only the caller knows whether the turn can be resent.
  */
-function describeReachFailure(failureClass: ChatTurnFailureClass | undefined, label: string | undefined) {
-  const advice = "Check that it is running and reachable, or choose another model, then retry.";
+function describeReachFailure(failureClass: ChatTurnFailureClass | undefined, label: string | undefined, hint: string) {
   const name = label ?? "the model provider";
   const lead = label ?? "The model provider";
   return failureClass === "provider_timeout"
-    ? { title: `${lead} took too long to answer`, body: `${lead} did not answer in time. ${advice}` }
-    : { title: `Couldn't reach ${name}`, body: `The connection to ${name} dropped before it answered. ${advice}` };
+    ? { title: `${lead} took too long to answer`, body: `${lead} did not answer in time. ${hint}` }
+    : { title: `Couldn't reach ${name}`, body: `The connection to ${name} dropped before it answered. ${hint}` };
 }
 
 /**
@@ -72,7 +72,7 @@ export function ChatTurnFailureCard({
   const providerLabel = useProviderLabelLookup(Boolean(providerId));
   const known = failureClass && failureClass !== "unknown" ? failureClass : undefined;
   const reach = Boolean(known && providerId && PROVIDER_REACH_FAILURES.has(known));
-  const reachWords = describeReachFailure(known, providerLabel(providerId));
+  const reachWords = describeReachFailure(known, providerLabel(providerId), hint);
   const title =
     reach && failed
       ? reachWords.title

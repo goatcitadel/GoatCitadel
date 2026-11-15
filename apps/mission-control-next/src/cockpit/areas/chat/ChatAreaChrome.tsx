@@ -227,7 +227,10 @@ export function ChatSetupGate({
 }) {
   const state = onboarding.data;
   if (!state || onboarding.isError || state.completed || hidden) return null;
-  return <ChatSetupBanner modelReady={projectFirstRunState(state).modelReady} onReturnToSetup={onSetup} />;
+  const progress = projectFirstRunState(state);
+  // A chosen model whose readiness was not reported is unknown, not missing: no instruction either way.
+  if (progress.modelConfigured && !progress.providerReadinessReported) return null;
+  return <ChatSetupBanner modelReady={progress.modelReady} onReturnToSetup={onSetup} />;
 }
 
 export function ChatEmptyState({

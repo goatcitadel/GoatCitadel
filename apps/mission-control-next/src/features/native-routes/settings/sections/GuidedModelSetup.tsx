@@ -33,6 +33,8 @@ import {
   GUIDED_CATALOG_LOADING_READINESS,
   GUIDED_THINKING_LEVELS,
   guidedConnectionHint,
+  guidedSaveRevision,
+  guidedSavedDefaultsRevision,
   localRuntimeSetupGuide,
   pendingPlanForSelection,
   pickDefaultGuidedProvider,
@@ -109,7 +111,12 @@ export function GuidedModelSetup({
   const modelDraft = useSessionDraft(
     "onboarding:" + workspaceId + ":model",
     canonicalSelection,
-    JSON.stringify(canonicalSelection),
+    // The same revision the Cockpit setup computes for this shared draft, from the saved defaults only.
+    guidedSavedDefaultsRevision({
+      activeProviderId: onboarding.settings?.llm?.activeProviderId ?? "",
+      activeModel: onboarding.settings?.llm?.activeModel ?? "",
+      defaultThinkingLevel: catalog.config?.defaultThinkingLevel,
+    }),
     { label: "First Chat model", available: !catalog.loading },
   );
   const { providerId, model, thinkingLevel: requestedThinkingLevel } = modelDraft.value;
@@ -305,7 +312,11 @@ export function GuidedModelSetup({
             saved,
             supportedGuidedThinkingLevels(savedProvider?.capabilities),
           );
-          modelDraft.acceptSaved(saved, JSON.stringify(saved), submitted);
+          modelDraft.acceptSaved(
+            saved,
+            guidedSaveRevision(updated.request, catalog.config?.defaultThinkingLevel),
+            submitted,
+          );
         }
         setNotice({ tone: "success", message: updated.result?.summary ?? "Change applied and verified." });
         await Promise.all([catalog.reload(), reloadOnboarding()]);

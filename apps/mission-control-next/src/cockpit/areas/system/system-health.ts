@@ -148,7 +148,15 @@ function deriveCurrentSystemHealthChecks(
         status: { label: "Not set up", tone: "waiting" },
       } satisfies HealthCheck;
     const summary = firstRunModelSummary(state);
-    if (!projectFirstRunState(state).modelReady)
+    const firstRun = projectFirstRunState(state);
+    if (!firstRun.providerReadinessReported)
+      return unknown(
+        "default_model",
+        "Default model",
+        "Whether its provider is ready was not reported.",
+        "/settings/models",
+      );
+    if (!firstRun.modelReady)
       return {
         id: "default_model",
         title: "Default model",
