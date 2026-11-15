@@ -44,11 +44,11 @@ export function useRemoteWorkerRegistry(
         if (seen.has(cursor)) throw new Error("Registry cursor repeated");
         seen.add(cursor);
         const next = await fetchRemoteWorkerRegistry(workspaceId, { limit, cursor });
+        if (sequence.current !== id) return;
         if (next.workspaceId !== workspaceId) throw new Error("Registry scope changed");
         next.items.forEach((item) => rows.set(item.workerId, item));
         result = { ...next, items: [...rows.values()] };
       }
-      if (sequence.current !== id) return;
       setPage(result);
       setError(null);
       setMoreError(null);

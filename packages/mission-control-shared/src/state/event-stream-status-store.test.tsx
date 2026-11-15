@@ -2,7 +2,7 @@ import React from "react";
 import { act, create } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { publishEventStreamStatus, resetEventStreamStatus, useEventStreamStatus } from "./event-stream-status-store";
+import { getEventStreamStatus, publishEventStreamStatus, resetEventStreamStatus, useEventStreamStatus } from "./event-stream-status-store";
 
 function StatusProbe({ onStatus }: { onStatus: (state: string, reconnectAttempts: number) => void }) {
   const status = useEventStreamStatus();
@@ -72,6 +72,20 @@ describe("event stream status store", () => {
     renderer.unmount();
   });
 
+  it("publishes the latest queued timestamp once when the stream goes quiet", () => {
+    const status = { state: "open", reconnectAttempts: 0, leaseId: "lease-1" } as const;
+    publishEventStreamStatus({ ...status, lastEventAt: "2026-01-01T00:00:00.000Z" });
+    vi.advanceTimersByTime(1000);
+    publishEventStreamStatus({ ...status, lastEventAt: "2026-01-01T00:00:01.000Z" });
+    vi.advanceTimersByTime(1000);
+    publishEventStreamStatus({ ...status, lastEventAt: "2026-01-01T00:00:02.000Z" });
+
+    vi.advanceTimersByTime(2999);
+    expect(getEventStreamStatus().lastEventAt).toBe("2026-01-01T00:00:00.000Z");
+    vi.advanceTimersByTime(1);
+    expect(getEventStreamStatus().lastEventAt).toBe("2026-01-01T00:00:02.000Z");
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it("drops pending throttled updates when a later state change arrives", () => {
     const snapshots: Array<[string, number]> = [];
     const renderer = create(<StatusProbe onStatus={(state, attempts) => snapshots.push([state, attempts])} />);

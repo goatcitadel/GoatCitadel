@@ -28,11 +28,7 @@ export function publishEventStreamStatus(nextStatus: EventStreamStatus): void {
 
   if (shouldPublishNow) {
     clearPendingPublish();
-    currentStatus = nextStatus;
-    if (nextEventAt > 0) {
-      lastPublishedEventAt = nextEventAt;
-    }
-    notifyListeners();
+    commitEventStreamStatus(nextStatus);
     return;
   }
 
@@ -49,10 +45,18 @@ export function publishEventStreamStatus(nextStatus: EventStreamStatus): void {
     }
     const status = pendingStatus;
     pendingStatus = null;
-    publishEventStreamStatus(status);
+    commitEventStreamStatus(status);
   }, delay);
 }
 
+function commitEventStreamStatus(status: EventStreamStatus): void {
+  currentStatus = status;
+  const eventAt = status.lastEventAt ? Date.parse(status.lastEventAt) : 0;
+  if (eventAt > 0) {
+    lastPublishedEventAt = eventAt;
+  }
+  notifyListeners();
+}
 export function resetEventStreamStatus(): void {
   clearPendingPublish();
   lastPublishedEventAt = 0;
