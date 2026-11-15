@@ -119,3 +119,32 @@ describe("icon button tooltip details", () => {
     await vi.waitFor(() => expect(tooltipText()).toBe("Collapse sidebar"));
   });
 });
+
+describe("disabled icon button layout", () => {
+  it("puts placement classes on the wrapper and keeps look classes on the button", async () => {
+    await act(async () =>
+      root.render(
+        <IconButton
+          label="Collapse sidebar"
+          disabled
+          className="absolute right-2 ml-auto flex-1 md:inline-flex size-11 border"
+          icon={<span />}
+        />,
+      ),
+    );
+    const wrapper = button().parentElement!;
+    for (const name of ["absolute", "right-2", "ml-auto", "flex-1", "md:inline-flex"])
+      expect(wrapper.classList.contains(name)).toBe(true);
+    for (const name of ["absolute", "right-2", "ml-auto", "flex-1", "md:inline-flex"])
+      expect(button().classList.contains(name)).toBe(false);
+    expect(button().classList.contains("size-11")).toBe(true);
+    expect(button().classList.contains("border")).toBe(true);
+  });
+
+  it("leaves an enabled button's classes where they were", async () => {
+    await act(async () =>
+      root.render(<IconButton label="Collapse sidebar" className="absolute ml-auto" icon={<span />} />),
+    );
+    expect(button().classList.contains("absolute")).toBe(true);
+  });
+});

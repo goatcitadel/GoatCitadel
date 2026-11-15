@@ -7,10 +7,22 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
   icon: ReactNode;
 }
 
+// Classes that place the control in its parent (position, margin, flex item, display); a wrapper must carry them.
+const PLACEMENT =
+  /^(?:[a-z0-9-]+:)*(?:-?m[xytblrse]?-|flex-|grow|shrink|self-|order-|col-|row-|justify-self|place-self|absolute$|relative$|fixed$|sticky$|-?inset|-?top-|-?left-|-?right-|-?bottom-|z-|hidden$|block$|inline(?:-flex|-block)?$|flex$)/;
+function splitPlacement(className: string | undefined) {
+  const tokens = (className ?? "").split(/\s+/).filter(Boolean);
+  return {
+    placement: tokens.filter((token) => PLACEMENT.test(token)).join(" "),
+    look: tokens.filter((token) => !PLACEMENT.test(token)).join(" "),
+  };
+}
+
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
   { label, icon, className, type = "button", ...props },
   ref,
 ) {
+  const { placement, look } = props.disabled ? splitPlacement(className) : { placement: "", look: className };
   const button = (
     <button
       ref={ref}
@@ -19,7 +31,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       className={cn(
         "inline-flex size-8 items-center justify-center rounded-md text-fg-secondary transition-colors enabled:hover:bg-sunken enabled:hover:text-fg disabled:cursor-not-allowed disabled:text-fg-muted disabled:opacity-60",
         props.disabled && "pointer-events-none",
-        className,
+        look,
       )}
       {...props}
       // The tooltip says what the accessible name already says; do not read it twice.
@@ -31,7 +43,11 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
   // A disabled button fires no pointer events, so its wrapper carries the tooltip and the not-allowed cursor.
   return (
     <Tooltip label={label}>
-      {props.disabled ? <span className="inline-flex cursor-not-allowed rounded-md">{button}</span> : button}
+      {props.disabled ? (
+        <span className={cn("inline-flex cursor-not-allowed rounded-md", placement)}>{button}</span>
+      ) : (
+        button
+      )}
     </Tooltip>
   );
 });
