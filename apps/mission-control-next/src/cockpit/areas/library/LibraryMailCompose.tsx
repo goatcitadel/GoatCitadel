@@ -39,7 +39,7 @@ type Outcome = { error: boolean; text: string };
 
 const NO_ACCOUNTS: MailAccountRecord[] = [];
 
-const INPUT = "w-full min-w-0 rounded-md border border-line bg-raised p-2";
+const INPUT = "w-full min-w-0 rounded-md border border-line-control bg-raised p-2";
 
 export function LibraryMailCompose(props: Props) {
   const access = useLibraryOperation(JSON.stringify(["communications-send", props.workspaceId]));
