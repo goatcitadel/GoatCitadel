@@ -240,6 +240,7 @@ export function InboxApprovalDetail({
                 <ApprovalShellExplanations
                   commands={evidence.commandPreviews}
                   explanations={approval.shellExplanations}
+                  approvalRisk={approval.riskLevel}
                 />
               ) : null}
               {support.visible.length ? (

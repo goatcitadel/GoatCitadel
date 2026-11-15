@@ -52,3 +52,11 @@ export function inboxItemLocation(item: OperatorInboxItem): string {
     return `/inbox?${new URLSearchParams({ approvalId: item.source.approvalId, workspaceId: item.source.workspaceId })}`;
   return `/inbox?${new URLSearchParams({ workspaceId: item.source.workspaceId, item: item.id })}`;
 }
+
+/**
+ * The description an unprompted toast shows for an Inbox item: its summary, except when the Gateway says the summary names
+ * a program or a line count, which stays in the Inbox row and detail.
+ */
+export function inboxToastDescription(item: OperatorInboxItem): string | undefined {
+  return item.summaryNamesCommand ? undefined : item.summary;
+}

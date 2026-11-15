@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OperatorInboxItem, OperatorInboxResponse, RealtimeEvent } from "@goatcitadel/contracts";
 import type { DerivedRealtimeNotification } from "@goatcitadel/mission-control-shared/state/realtime-derived";
-import { inboxItemLocation, resolveInboxNotificationItem } from "./inbox-notification";
+import { inboxItemLocation, inboxToastDescription, resolveInboxNotificationItem } from "./inbox-notification";
 
 const item: OperatorInboxItem = {
   id: "approval:a/1",
@@ -107,5 +107,22 @@ describe("Inbox notification owner selection", () => {
     expect(
       resolveInboxNotificationItem(projection, event, { ...notice, attentionKind: "runtime_degraded" }, "w"),
     ).toBeUndefined();
+  });
+});
+
+describe("inboxToastDescription", () => {
+  const named: OperatorInboxItem = {
+    ...item,
+    summary: "Command: pnpm (open it to see the full command)",
+    summaryNamesCommand: true,
+  };
+  it("keeps a summary that names a command or code out of a toast", () => {
+    expect(inboxToastDescription(named)).toBeUndefined();
+  });
+  it("keeps every other summary", () => {
+    expect(inboxToastDescription({ ...named, summaryNamesCommand: undefined })).toBe(
+      "Command: pnpm (open it to see the full command)",
+    );
+    expect(inboxToastDescription(item)).toBe(item.summary);
   });
 });

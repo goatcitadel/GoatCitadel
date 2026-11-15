@@ -246,6 +246,100 @@ describe("Gateway inbox projection", () => {
     expect(JSON.stringify(projection)).not.toContain("do-not-project");
   });
 
+  it("names a shell command and Code Mode code in the summary, redacted and on one line (U-IN-001, U-IN-016)", async () => {
+    const deps = dependencies();
+    const token = ["sk", "test".repeat(6)].join("-");
+    const base = {
+      status: "pending",
+      riskLevel: "danger",
+      payload: {},
+      linkage: { workspaceId: "workspace-a" },
+      createdAt: "2026-09-28T12:00:00.000Z",
+    };
+    const shell = (approvalId: string, command: string, tool = "shell.exec") => ({
+      ...base,
+      approvalId,
+      kind: tool,
+      preview: { toolName: tool, command },
+    });
+    vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
+      items: [
+        shell("plain", "pnpm test --filter api"),
+        { ...base, approvalId: "notool", kind: "shell.exec", preview: { command: "pnpm test" } },
+        shell("secret", `curl -H "Authorization: Bearer ${token}" https://example.invalid`),
+        shell("lines", "echo one\necho two\necho three", "shell.exec_background"),
+        shell("oneextra", "echo one\r\n\r\necho two"),
+        shell("long", `echo ${"x".repeat(400)}`),
+        shell("bidi", "echo \u202Egnp.exe\u202C\u0007 ok\u2028 done"),
+        shell("home", "cat C:\\Users\\someone\\notes.txt"),
+        {
+          ...base,
+          approvalId: "code",
+          kind: "code_mode.run",
+          riskLevel: "caution",
+          preview: { codePreview: 'const text = await docs.extract_text({ path: "saturday-plan.pdf" });' },
+        },
+        {
+          ...base,
+          approvalId: "codesecret",
+          kind: "code_mode.run",
+          preview: {
+            codePreview: `fetch("https://example.invalid", { headers: { Authorization: "Bearer ${token}" } })`,
+          },
+        },
+        {
+          ...base,
+          approvalId: "other",
+          kind: "custom.exec",
+          preview: { toolName: "custom.exec", command: "do-not-project-command" },
+        },
+      ],
+    } as never);
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+    const summary = (id: string) => projection.items.find((entry) => entry.id === `approval:${id}`)?.summary;
+    expect(summary("plain")).toBe("Command: pnpm (open it to see the full command)");
+    expect(summary("notool")).toBe("Command: pnpm (open it to see the full command)");
+    expect(summary("secret")).toBe("Command: curl (open it to see the full command)");
+    expect(summary("codesecret")).toBe("Code to run (open it to see the code)");
+    expect(JSON.stringify(projection)).not.toContain(token);
+    expect(summary("lines")).toBe("Command: echo, 3 lines (open it to see the full command)");
+    expect(summary("oneextra")).toBe("Command: echo, 2 lines (open it to see the full command)");
+    expect(summary("long")).toBe("Command: echo (open it to see the full command)");
+    expect(summary("bidi")).toBe("Command: echo, 2 lines (open it to see the full command)");
+    expect(summary("home")).toBe("Command: cat (open it to see the full command)");
+    expect(summary("code")).toBe("Code to run (open it to see the code)");
+    expect(summary("other")).not.toContain("do-not-project-command");
+    // The Cockpit keeps a summary that names a command or code out of a toast, by this flag.
+    const named = (id: string) => projection.items.find((entry) => entry.id === `approval:${id}`)?.summaryNamesCommand;
+    expect(named("notool")).toBe(true);
+    expect(named("code")).toBe(true);
+    expect(named("other")).toBeUndefined();
+  });
+
+  it("counts only decisions still open and keeps expired ones listed (U-IN-011)", async () => {
+    const deps = dependencies();
+    const base = {
+      status: "pending",
+      riskLevel: "caution",
+      payload: {},
+      preview: {},
+      kind: "memory.write",
+      linkage: { workspaceId: "workspace-a" },
+      createdAt: "2026-09-28T12:00:00.000Z",
+    };
+    vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
+      items: [
+        { ...base, approvalId: "expired", expiresAt: "2000-01-01T00:00:00.000Z" },
+        { ...base, approvalId: "open", expiresAt: "2999-01-01T00:00:00.000Z" },
+      ],
+    } as never);
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+    expect(projection.items.map((item) => item.id)).toEqual(
+      expect.arrayContaining(["approval:expired", "approval:open"]),
+    );
+    expect(projection.counts.needs_decision.known).toBe(1);
+  });
+
   it("keeps canonical ownership, risk, and workspace scope while omitting approval payloads", async () => {
     const deps = dependencies();
     vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({

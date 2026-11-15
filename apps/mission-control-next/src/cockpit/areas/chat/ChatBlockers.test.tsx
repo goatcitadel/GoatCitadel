@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatBlockers } from "./ChatBlockers";
+import { GatewayUnavailableContext } from "../../app/gateway-unavailable-context";
 
 const api = vi.hoisted(() => ({
   fetchApproval: vi.fn(),
@@ -392,6 +393,322 @@ function blockerProps(overrides: Record<string, unknown> = {}) {
 }
 const findButton = (label: string) =>
   [...container.querySelectorAll("button")].find((entry) => entry.textContent === label);
+
+it("names the file a document approval would write (U-CH-046)", async () => {
+  api.fetchApproval.mockResolvedValue({
+    approvalId: "approval/1",
+    kind: "documents.create",
+    status: "pending",
+    riskLevel: "caution",
+    payload: {},
+    preview: { toolName: "documents.create", path: "notes/ut14-note.txt" },
+    createdAt: "2026-10-01T00:00:00Z",
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({
+            pendingApproval: {
+              approvalId: "approval/1",
+              kind: "documents.create",
+              toolName: "documents.create",
+              riskLevel: "caution",
+            },
+          })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() =>
+    expect(container.querySelector('section[aria-label="Pending approval"]')?.textContent).toContain(
+      "Path: notes/ut14-note.txt",
+    ),
+  );
+});
+
+it("offers Ask again once the record read after the local deadline says expired (U-CH-031)", async () => {
+  const pendingRecord = {
+    approvalId: "approval/1",
+    kind: "documents.create",
+    status: "pending",
+    riskLevel: "caution",
+    payload: {},
+    preview: { toolName: "documents.create", path: "notes/note.txt" },
+    // Long enough to read the live card first, short enough to cross in the test.
+    expiresAt: new Date(Date.now() + 1500).toISOString(),
+    linkage: { turnId: "turn-1" },
+    createdAt: "2026-10-01T00:00:00Z",
+  };
+  const deadline = Date.parse(pendingRecord.expiresAt);
+  api.fetchApproval.mockImplementation(async () => (Date.now() < deadline ? pendingRecord : sweptExpiredRecord));
+  const composer = document.createElement("textarea");
+  document.body.append(composer);
+  const onDraftChange = vi.fn();
+  try {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChatBlockers
+            props={blockerProps({
+              pendingApproval: { approvalId: "approval/1", kind: "documents.create", riskLevel: "caution" },
+              composerRef: { current: composer },
+              onDraftChange,
+              thread: {
+                turns: [
+                  { turnId: "turn-0", userMessage: { content: "Something else" } },
+                  { turnId: "turn-1", userMessage: { content: "Create the note" } },
+                ],
+              },
+            })}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(findButton("Approve once")).toBeDefined());
+    expect(findButton("Ask again")).toBeUndefined();
+    const readsBefore = api.fetchApproval.mock.calls.length;
+    await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined(), { timeout: 5000 });
+    expect(api.fetchApproval.mock.calls.length).toBeGreaterThan(readsBefore);
+    expect(container.textContent).toContain(
+      "The action did not run. Ask again to put your request back in the message box.",
+    );
+    expect(findButton("Approve once")).toBeUndefined();
+    await act(async () => findButton("Ask again")!.click());
+    expect(onDraftChange).toHaveBeenCalledExactlyOnceWith("Create the note");
+    expect(document.activeElement).toBe(composer);
+  } finally {
+    composer.remove();
+  }
+});
+
+const sweptExpiredRecord = {
+  approvalId: "approval/1",
+  kind: "documents.create",
+  status: "rejected",
+  resolutionOutcome: "expired",
+  resolvedBy: "system:approval-expiry",
+  riskLevel: "caution",
+  payload: {},
+  preview: { toolName: "documents.create", path: "notes/note.txt" },
+  linkage: { turnId: "turn-1" },
+  createdAt: "2026-10-01T00:00:00Z",
+};
+const expiredThread = { turns: [{ turnId: "turn-1", userMessage: { content: "Create the note" } }] };
+
+async function renderExpired(overrides: Record<string, unknown>) {
+  const composer = document.createElement("textarea");
+  document.body.append(composer);
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({
+            pendingApproval: { approvalId: "approval/1", kind: "documents.create", riskLevel: "caution" },
+            composerRef: { current: composer },
+            onDraftChange: vi.fn(),
+            ...overrides,
+          })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  return composer;
+}
+
+/** A record that still reads pending once its deadline has passed on this clock. */
+function lapsedPending() {
+  return {
+    approvalId: "approval/1",
+    kind: "documents.create",
+    status: "pending",
+    riskLevel: "caution",
+    payload: {},
+    preview: { toolName: "documents.create", path: "notes/note.txt" },
+    expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    linkage: { turnId: "turn-1" },
+    createdAt: "2026-10-01T00:00:00Z",
+  };
+}
+
+it("does not say the action did not run or offer Ask again while the late read is not answered (U-CH-031)", async () => {
+  api.fetchApproval.mockImplementation(() => new Promise(() => {}));
+  const composer = await renderExpired({
+    thread: expiredThread,
+    draft: "",
+    pendingApproval: {
+      approvalId: "approval/1",
+      kind: "documents.create",
+      riskLevel: "caution",
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    },
+  });
+  try {
+    await vi.waitFor(() => expect(container.textContent).toContain("Checking whether it was decided"));
+    expect(container.textContent).toContain("The time for this approval has passed.");
+    expect(container.textContent).not.toContain("did not run");
+    expect(findButton("Ask again")).toBeUndefined();
+    // Nothing can be decided on it, so Jump to latest must not name it as waiting.
+    expect(container.querySelector("[data-chat-waiting-decision]")).toBeNull();
+  } finally {
+    composer.remove();
+  }
+});
+
+it("reads again after the deadline and follows an approved record (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValueOnce(lapsedPending());
+  api.fetchApproval.mockResolvedValue({ ...lapsedPending(), status: "approved", resolutionOutcome: "approved" });
+  const composer = await renderExpired({ thread: expiredThread, draft: "" });
+  try {
+    await vi.waitFor(() => expect(container.textContent).toContain("Approval decided"));
+    expect(api.fetchApproval.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(container.textContent).not.toContain("did not run");
+    expect(container.textContent).not.toContain("time for this approval has passed");
+    expect(findButton("Ask again")).toBeUndefined();
+  } finally {
+    composer.remove();
+  }
+});
+
+it("shows the confirmed expired block when the late read says expired (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValueOnce(lapsedPending());
+  api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
+  const composer = await renderExpired({ thread: expiredThread, draft: "" });
+  try {
+    await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
+    expect(container.textContent).toContain("Approval expired");
+    expect(container.textContent).toContain("The action did not run.");
+  } finally {
+    composer.remove();
+  }
+});
+
+it("offers Check again, never Ask again, when the late read fails (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValueOnce(lapsedPending());
+  api.fetchApproval.mockRejectedValueOnce(new Error("offline"));
+  const composer = await renderExpired({ thread: expiredThread, draft: "" });
+  try {
+    await vi.waitFor(() => expect(findButton("Check again")).toBeDefined());
+    expect(container.textContent).toContain("What happened to it is not confirmed yet.");
+    expect(container.textContent).not.toContain("did not run");
+    expect(findButton("Ask again")).toBeUndefined();
+    api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
+    await act(async () => findButton("Check again")!.click());
+    await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
+  } finally {
+    composer.remove();
+  }
+});
+
+it("keeps Ask again when the record read says the sweep expired it (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
+  const onDraftChange = vi.fn();
+  const composer = await renderExpired({ thread: expiredThread, onDraftChange, draft: "" });
+  try {
+    await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
+    expect(container.textContent).toContain("Approval expired");
+    expect(container.textContent).not.toContain("Approval decided");
+    expect(container.textContent).toContain("The action did not run. Ask again to put your request back");
+    await act(async () => findButton("Ask again")!.click());
+    expect(onDraftChange).toHaveBeenCalledExactlyOnceWith("Create the note");
+  } finally {
+    composer.remove();
+  }
+});
+
+it("does not promise Ask again when no linked turn is found (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
+  const composer = await renderExpired({ thread: { turns: [] }, draft: "" });
+  try {
+    await vi.waitFor(() => expect(container.textContent).toContain("The action did not run."));
+    expect(findButton("Ask again")).toBeUndefined();
+    expect(container.textContent).not.toContain("Ask again to put");
+  } finally {
+    composer.remove();
+  }
+});
+
+it("leaves a message the operator has typed alone and says so (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
+  const onDraftChange = vi.fn();
+  const composer = await renderExpired({ thread: expiredThread, onDraftChange, draft: "Something I am typing" });
+  try {
+    await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
+    await act(async () => findButton("Ask again")!.click());
+    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Your message box already has text. Clear it to ask again.");
+    const note = container.querySelector(
+      "#" + CSS.escape(findButton("Ask again")!.getAttribute("aria-describedby") ?? "none"),
+    );
+    expect(note?.textContent).toContain("Clear it to ask again.");
+  } finally {
+    composer.remove();
+  }
+});
+
+it("does not call the request Ask again just restored the operator's own text (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
+  const onDraftChange = vi.fn();
+  const first = await renderExpired({ thread: expiredThread, onDraftChange, draft: "" });
+  const second = document.createElement("textarea");
+  try {
+    await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
+    await act(async () => findButton("Ask again")!.click());
+    expect(onDraftChange).toHaveBeenCalledExactlyOnceWith("Create the note");
+    // The box now holds the restored request; a second click leaves it and says nothing about typed text.
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChatBlockers
+            props={blockerProps({
+              pendingApproval: { approvalId: "approval/1", kind: "documents.create", riskLevel: "caution" },
+              composerRef: { current: second },
+              onDraftChange,
+              thread: expiredThread,
+              draft: "Create the note",
+            })}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    await act(async () => findButton("Ask again")!.click());
+    expect(onDraftChange).toHaveBeenCalledOnce();
+    expect(container.textContent).not.toContain("already has text");
+  } finally {
+    first.remove();
+    second.remove();
+  }
+});
+
+it("pauses the decision buttons while the shell says GoatCitadel is unreachable (U-CH-027)", async () => {
+  const pendingRecord = {
+    ...sweptExpiredRecord,
+    status: "pending",
+    resolutionOutcome: undefined,
+    resolvedBy: undefined,
+  };
+  api.fetchApproval.mockResolvedValue(pendingRecord);
+  const renderCard = (unreachable: boolean) =>
+    act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <GatewayUnavailableContext.Provider value={unreachable}>
+            <ChatBlockers
+              props={blockerProps({
+                pendingApproval: { approvalId: "approval/1", kind: "documents.create", riskLevel: "caution" },
+              })}
+            />
+          </GatewayUnavailableContext.Provider>
+        </QueryClientProvider>,
+      ),
+    );
+  await renderCard(true);
+  await vi.waitFor(() => expect(findButton("Approve once")).toBeDefined());
+  expect(findButton("Approve once")!.closest("fieldset")?.disabled).toBe(true);
+  expect(container.textContent).toContain("GoatCitadel is unreachable, so this decision can");
+  await renderCard(false);
+  expect(findButton("Approve once")!.closest("fieldset")?.disabled).toBe(false);
+});
 
 it("shows a failed record read as an error with Try again and Deny, not as checking (CH-02)", async () => {
   api.fetchApproval.mockRejectedValue(new Error("fixture outage"));

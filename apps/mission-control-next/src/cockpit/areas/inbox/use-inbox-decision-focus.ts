@@ -40,7 +40,7 @@ export function useInboxDecisionFocus({
   orderedItems: OperatorInboxItem[];
   groupOf: (item: OperatorInboxItem) => InboxViewGroupId;
   listHandles: MutableRefObject<Map<string, WindowedRecordListHandle>>;
-  select: (id: string) => void;
+  select: (id: string | null) => void;
   announce: (message: string) => void;
 }) {
   const pending = useRef<FocusTarget | null>(null);
@@ -70,7 +70,8 @@ export function useInboxDecisionFocus({
         remaining.find((entry) => entry.group === item.group) ??
         remaining[Math.min(Math.max(index, 0), remaining.length - 1)];
       pending.current = next ? { kind: "item", id: next.id } : { kind: "empty" };
-      if (next) select(next.id);
+      // Nothing else is marked Selected: the panel keeps the decided item's receipt and focus goes to the next row.
+      select(null);
     },
     [announce, select],
   );

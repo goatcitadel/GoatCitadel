@@ -16,6 +16,14 @@ export function label(value: string): string {
   return value.replaceAll("_", " ").replaceAll("-", " ");
 }
 
+/** A decision with no expiry, an expiry after `generatedAt`, or one that cannot be read is still open. */
+function isStillOpen(item: OperatorInboxItem, generatedAt: string): boolean {
+  if (!item.expiresAt) return true;
+  const expires = Date.parse(item.expiresAt);
+  const generated = Date.parse(generatedAt);
+  return Number.isNaN(expires) || Number.isNaN(generated) || expires > generated;
+}
+
 export function bounded(value: string, limit = 240): string {
   const clean = value.trim();
   return clean.length > limit ? `${clean.slice(0, limit - 1)}…` : clean;
@@ -122,8 +130,14 @@ export function projectInboxBackupTrust(
       : [],
     state: cached ? ("limited" as const) : ("current" as const),
     backupTrust: {
-      state: !inspection.backupId || !inspection.createdAt ? "unknown" as const
-        : !verified ? "failed" as const : stale ? "stale" as const : "verified" as const,
+      state:
+        !inspection.backupId || !inspection.createdAt
+          ? ("unknown" as const)
+          : !verified
+            ? ("failed" as const)
+            : stale
+              ? ("stale" as const)
+              : ("verified" as const),
       ...(inspection.backupId ? { backupId: inspection.backupId } : {}),
       ...(inspection.createdAt ? { createdAt: inspection.createdAt } : {}),
       observedAt,
@@ -166,7 +180,9 @@ export function buildInboxProjection(
     GROUPS.map((group) => [
       group,
       {
-        known: items.filter((item) => item.group === group).length,
+        known: items.filter(
+          (item) => item.group === group && (group !== "needs_decision" || isStillOpen(item, generatedAt)),
+        ).length,
         complete: coverage.every(
           (source) =>
             source.state === "current" ||

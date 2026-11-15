@@ -90,6 +90,10 @@ const thinkingLevels: Record<ChatThinkingLevel, string> = {
   max: "Max",
   ultra: "Ultra",
 };
+/** Shown beside decision buttons while GoatCitadel cannot be reached. The buttons wake up by themselves. */
+export const APPROVAL_PAUSED_NOTE =
+  "GoatCitadel is unreachable, so this decision can't be sent. Approve and Deny come back when the connection returns.";
+
 export const presentThinkingLevel = (value: ChatThinkingLevel) => thinkingLevels[value] ?? "Unknown";
 export const presentMemoryMode = (value: ChatMemoryMode) => memoryModes[value] ?? "Unknown";
 export const presentWebMode = (value: ChatWebMode) => webModes[value] ?? "Unknown";

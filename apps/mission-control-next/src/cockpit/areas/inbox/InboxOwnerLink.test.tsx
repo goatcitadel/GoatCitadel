@@ -51,7 +51,7 @@ it("names each owner link by the cockpit area it opens, never Ops or Approvals (
         id: "approval:a",
         kind: "approval",
         group: "needs_decision",
-        source: { workspaceId: "w", approvalId: "a" },
+        source: { workspaceId: "w", approvalId: "a", sessionId: "s1" },
         href: "/ops/approvals?approvalId=a",
       },
     ]);
@@ -59,9 +59,85 @@ it("names each owner link by the cockpit area it opens, never Ops or Approvals (
     expect(health?.getAttribute("href")).toContain("/system/health");
     expect(run?.textContent).toBe("Open in Work");
     expect(run?.getAttribute("href")).toContain("/work/runs/run-a");
-    expect(approval?.textContent).toBe("Open approval");
-    expect(approval?.getAttribute("href")).toContain("/inbox?approvalId=a");
+    expect(approval?.textContent).toBe("Open in Chat");
+    expect(approval?.getAttribute("href")).toContain("/chat?");
   } finally {
     window.history.replaceState(null, "", originalLocation);
   }
+});
+
+const decisionBase: OperatorInboxItem = {
+  ...base,
+  id: "approval:a",
+  kind: "approval",
+  group: "needs_decision",
+  source: { workspaceId: "w", approvalId: "a" },
+  href: "/inbox?approvalId=a",
+};
+
+function withAddress<T>(search: string, run: () => T): T {
+  const original = window.location.pathname + window.location.search + window.location.hash;
+  window.history.replaceState(null, "", "/inbox" + search);
+  try {
+    return run();
+  } finally {
+    window.history.replaceState(null, "", original);
+  }
+}
+
+it("opens the conversation an approval came from, not the Inbox again (U-IN-014)", () => {
+  const [link] = withAddress("?shell=cockpit&approvalId=a&runId=old-run", () =>
+    renderLinks([
+      { ...decisionBase, source: { ...decisionBase.source, sessionId: "s1", turnId: "t1", runId: "r9", taskId: "k9" } },
+    ]),
+  );
+  expect(link?.textContent).toBe("Open in Chat");
+  const target = new URL(link!.href);
+  expect(target.pathname).toBe("/chat");
+  expect(target.searchParams.get("sessionId")).toBe("s1");
+  expect(target.searchParams.get("turnId")).toBe("t1");
+  expect(target.searchParams.has("runId")).toBe(false);
+  expect(target.searchParams.has("taskId")).toBe(false);
+  expect(target.searchParams.get("workspaceId")).toBe("w");
+  expect(target.searchParams.has("approvalId")).toBe(false);
+});
+
+it("does not carry the address's turn, message or artifact into another conversation's link", () => {
+  const [link] = withAddress(
+    "?shell=cockpit&sessionId=old&turnId=old-turn&artifactId=old-art&messageId=old-msg&sequence=4",
+    () => renderLinks([{ ...decisionBase, source: { ...decisionBase.source, sessionId: "s1" } }]),
+  );
+  const target = new URL(link!.href);
+  expect(target.pathname).toBe("/chat");
+  expect(target.searchParams.get("sessionId")).toBe("s1");
+  for (const key of ["turnId", "artifactId", "messageId", "sequence"]) expect(target.searchParams.has(key)).toBe(false);
+});
+
+it("opens the run an approval belongs to when it has no conversation", () => {
+  const [link] = withAddress("?shell=cockpit", () =>
+    renderLinks([{ ...decisionBase, source: { ...decisionBase.source, runId: "r1" } }]),
+  );
+  expect(link?.textContent).toBe("Open in Work");
+  expect(new URL(link!.href).pathname).toBe("/work/runs/r1");
+});
+
+it("shows no link for an approval with neither a conversation nor a run", () => {
+  expect(withAddress("?shell=cockpit", () => renderLinks([decisionBase]))).toHaveLength(0);
+});
+
+it("opens the conversation of a user input request, and nothing for a change plan without one", () => {
+  const [input, plan] = withAddress("?shell=cockpit", () =>
+    renderLinks([
+      {
+        ...decisionBase,
+        id: "user_input:u",
+        kind: "user_input",
+        source: { workspaceId: "w", sessionId: "s2" },
+      },
+      { ...decisionBase, id: "change_plan:p", kind: "change_plan", source: { workspaceId: "w", planId: "p" } },
+    ]),
+  );
+  expect(input?.textContent).toBe("Open in Chat");
+  expect(new URL(input!.href).searchParams.get("sessionId")).toBe("s2");
+  expect(plan).toBeUndefined();
 });
