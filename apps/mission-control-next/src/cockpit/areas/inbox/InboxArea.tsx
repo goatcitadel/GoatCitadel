@@ -1,8 +1,6 @@
 import { LinkedApproval } from "./LinkedApproval";
 import { InboxApprovalHistory } from "./InboxApprovalHistory";
 import { InboxBulkRejectZone } from "./InboxBulkRejectZone";
-import { markOperatorInboxUpdatesRead } from "@goatcitadel/mission-control-shared/api/operator-inbox";
-import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { WindowedRecordListHandle } from "../../ui/WindowedRecordList";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
@@ -41,7 +39,8 @@ import { InboxInspectorBody } from "./InboxInspectorBody";
 import { InboxItemCard } from "./InboxItemCard";
 import { useInboxLinkedItem } from "./use-inbox-linked-item";
 import { useInboxSelection, type InboxOpenArguments } from "./use-inbox-selection";
-import { inboxUpdateVersion, markInboxUpdateViewed, useInboxViewedUpdates } from "./inbox-viewed-updates";
+import { inboxUpdateVersion, useInboxViewedUpdates } from "./inbox-viewed-updates";
+import { useInboxAcknowledge } from "./use-inbox-acknowledge";
 
 export function InboxArea() {
   const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
@@ -55,8 +54,6 @@ export function InboxArea() {
   const installation = getGatewayApiBaseUrl();
   const scopeKey = JSON.stringify([installation, workspaceId]);
   const localReads = useInboxViewedUpdates(installation, workspaceId);
-  const [readNotice, setReadNotice] = useState("");
-  const [reading, setReading] = useState(false);
   const accessRevision = getGatewayAccessRevision();
   const actorScope = inbox.data?.readStatus?.scopeId;
   const readScope = inbox.data?.readStatus?.scope ?? "unavailable";
@@ -66,56 +63,14 @@ export function InboxArea() {
       readScope === "operator" ? item.read === true : readScope === "browser_local" && isLocallyViewed(item),
     [readScope, isLocallyViewed],
   );
-  async function acknowledge(items: OperatorInboxItem[]) {
-    if (reading) return;
-    const updates = items.filter((item) => inboxUpdateVersion(item, workspaceId) && !isViewed(item));
-    if (!updates.length) return;
-    setReading(true);
-    setReadNotice("");
-    try {
-      if (readScope === "browser_local") {
-        const saved = await Promise.all(
-          updates.map((item) =>
-            markInboxUpdateViewed(
-              installation,
-              workspaceId,
-              item,
-              () =>
-                current.current.workspaceId === workspaceId &&
-                getGatewayApiBaseUrl() === installation &&
-                getGatewayAccessRevision() === accessRevision,
-            ),
-          ),
-        );
-        const failed = saved.some((value) => !value);
-        if (failed) setReadNotice("Read storage unavailable. Unacknowledged updates remain unread.");
-      } else if (readScope === "operator") {
-        let skipped = 0;
-        for (let offset = 0; offset < updates.length; offset += 200) {
-          if (
-            getGatewayAccessRevision() !== accessRevision ||
-            getGatewayApiBaseUrl() !== installation ||
-            current.current.workspaceId !== workspaceId
-          )
-            break;
-          const result = await markOperatorInboxUpdatesRead(
-            workspaceId,
-            updates.slice(offset, offset + 200).map((item) => ({ id: item.id, version: item.version! })),
-          );
-          skipped += result.skipped.length;
-        }
-        if (skipped)
-          setReadNotice(
-            `${plural(skipped, "update was", "updates were")} not acknowledged. Changed or unavailable updates remain unread.`,
-          );
-        await inbox.refetch();
-      } else setReadNotice("Read storage unavailable. Unacknowledged updates remain unread.");
-    } catch {
-      setReadNotice("Read status could not be saved. Refresh to check current receipts.");
-    } finally {
-      setReading(false);
-    }
-  }
+  const { acknowledge, readNotice, reading } = useInboxAcknowledge({
+    workspaceId,
+    installation,
+    accessRevision,
+    readScope,
+    isViewed,
+    refetch: inbox.refetch,
+  });
   const [showViewedScope, setShowViewedScope] = useState<string | null>(null);
   const showViewed = showViewedScope === scopeKey;
   const scopeMatches = inboxMatchesWorkspace(inbox.data, workspaceId);
