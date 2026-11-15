@@ -13,12 +13,15 @@ import type { CockpitNavigationOptions } from "./cockpit-navigation-context";
 export { COCKPIT_LOCATION_EVENT };
 const listeners = new Set<() => void>();
 let generation = 0;
-let replacedLast = false;
+let visits = 0;
 
-/** Whether the newest address change was a replace (a redirect, or a page tidying its own address), not a visit. */
-export const lastCockpitNavigationReplaced = () => replacedLast;
+/**
+ * How many times the operator has gone somewhere: each pushed address and each Back or Forward. A replace is not one,
+ * so a page that tidies its own address (or a load-time redirect) leaves the count where it was.
+ */
+export const cockpitVisitCount = () => visits;
 const visitedByHistory = () => {
-  replacedLast = false;
+  visits += 1;
 };
 
 function locationChanged() {
@@ -100,9 +103,11 @@ export function commitCockpitNavigation(
   if (actual.pathname + actual.search + actual.hash === destination) return false;
   if (afterCockpitSheetsClose(() => commitCockpitNavigation(href, options, isCurrent))) return true;
   // A replaced entry keeps its state, position included. A pushed entry is numbered after the shown one.
-  replacedLast = Boolean(options?.replace);
   if (options?.replace) window.history.replaceState(window.history.state, "", destination);
-  else window.history.pushState({ [SHELL_HISTORY_POSITION]: nextCockpitPosition() }, "", destination);
+  else {
+    visits += 1;
+    window.history.pushState({ [SHELL_HISTORY_POSITION]: nextCockpitPosition() }, "", destination);
+  }
   window.dispatchEvent(new Event(COCKPIT_LOCATION_EVENT));
   return true;
 }

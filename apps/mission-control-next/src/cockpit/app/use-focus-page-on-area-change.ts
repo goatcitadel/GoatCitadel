@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { lastCockpitNavigationReplaced } from "./cockpit-history";
+import { cockpitVisitCount } from "./cockpit-history";
 
 const MODAL_LAYER = '[role="dialog"],[aria-modal="true"]';
 /** A closing layer hands focus back to what opened it a tick later; wait that out before judging where focus is. */
@@ -14,17 +14,25 @@ function focusPage(): void {
 }
 
 /**
- * A new area is a new page: bring keyboard and screen reader focus to it. Not for a replaced address (a redirect or a
- * page tidying its own address is not the operator going somewhere), not while a dialog or sheet still holds focus (it
+ * A new area is a new page: bring keyboard and screen reader focus to it, when the operator went there (a click, a
+ * link, Back or Forward; replaces that follow, such as a page tidying its own address, do not undo that). Not for an
+ * area that only a replace brought (a load-time redirect or first-run gating), not while a dialog or sheet still holds focus (it
  * is moved once that layer has closed, if focus has fallen outside the page), and never when focus is already inside
  * the page, such as a composer that focused itself.
  */
 export function useFocusPageOnAreaChange(area: string): void {
   const previous = useRef(area);
+  const visitsSeen = useRef(cockpitVisitCount());
+  const visited = useRef(false);
+  // Every render, so a visit that did not change the area is not counted against a later replace-only area change.
+  useEffect(() => {
+    visited.current = cockpitVisitCount() !== visitsSeen.current;
+    visitsSeen.current = cockpitVisitCount();
+  });
   useEffect(() => {
     if (previous.current === area) return;
     previous.current = area;
-    if (lastCockpitNavigationReplaced()) return;
+    if (!visited.current) return;
     if (!inModalLayer()) {
       focusPage();
       return;

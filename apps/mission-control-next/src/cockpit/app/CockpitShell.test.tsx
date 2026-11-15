@@ -45,9 +45,13 @@ vi.mock("./CommandPalette", async () => {
       ) : null,
   };
 });
-const libraryArea = vi.hoisted(() => ({ failure: null as Error | null }));
+const libraryArea = vi.hoisted(() => ({ failure: null as Error | null, redirectOnMount: false }));
 vi.mock("../areas/library/LibraryArea", () => ({
   LibraryArea: () => {
+    useEffect(() => {
+      // An area that tidies its own address as it mounts, as Capabilities does from its bare route.
+      if (libraryArea.redirectOnMount) commitCockpitNavigation("/library/memory", { replace: true });
+    }, []);
     if (libraryArea.failure) throw libraryArea.failure;
     return <p>Library content</p>;
   },
@@ -507,6 +511,28 @@ describe("CockpitShell", () => {
     dialog.remove();
     trigger.focus();
     await vi.waitFor(() => expect(document.activeElement?.id).toBe("main-content"));
+    client.clear();
+  });
+  it("still moves focus when the new area replaces its own address as it mounts", async () => {
+    libraryArea.redirectOnMount = true;
+    const client = await renderShell();
+    container.querySelector<HTMLElement>('nav[aria-label="Areas"] a[href]')!.focus();
+    await goToLibrary();
+    expect(window.location.pathname).toBe("/library/memory");
+    expect(document.activeElement?.id).toBe("main-content");
+    libraryArea.redirectOnMount = false;
+    client.clear();
+  });
+  it("moves focus to the page when Back crosses areas", async () => {
+    const client = await renderShell();
+    await goToLibrary();
+    container.querySelector<HTMLElement>('nav[aria-label="Areas"] a[href]')!.focus();
+    await act(async () => {
+      window.history.replaceState(window.history.state, "", "/inbox?shell=cockpit");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(window.location.pathname).toBe("/inbox");
+    expect(document.activeElement?.id).toBe("main-content");
     client.clear();
   });
   it("does not move focus for a redirect that replaces the address (U-GL-025)", async () => {
