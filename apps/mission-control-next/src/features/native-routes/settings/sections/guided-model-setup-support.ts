@@ -178,14 +178,15 @@ function resolveLocalLoginReadiness(provider: GuidedReadinessProvider): GuidedPr
 
 function resolveLocalEndpointReadiness(provider: GuidedReadinessProvider): GuidedProviderReadiness {
   const endpoint = provider.baseUrl;
+  // What the last check found decides readiness; how old the cached list is does not.
+  if (provider.modelProbeState === "ready" && provider.modelProbeSource === "live") {
+    return readiness("ready", `${provider.label} answered at ${endpoint}.`, "local_endpoint");
+  }
   if (provider.modelRefreshStatus === "stale") {
     return readiness(
       "not_verified",
       `The last check of ${provider.label} at ${endpoint} is stale. Check the connection again.`,
     );
-  }
-  if (provider.modelProbeState === "ready" && provider.modelProbeSource === "live") {
-    return readiness("ready", `${provider.label} answered at ${endpoint}.`, "local_endpoint");
   }
   if (!provider.modelProbeState || provider.modelProbeState === "not_checked") {
     return readiness("checking", `Checking ${provider.label} at ${endpoint}…`);

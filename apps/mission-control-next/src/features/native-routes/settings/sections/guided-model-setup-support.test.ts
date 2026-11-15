@@ -58,14 +58,56 @@ describe("guided provider readiness", () => {
         modelRefreshStatus: "fresh",
       }),
     ).toMatchObject({ state: "ready", evidence: "local_endpoint" });
-    const stale = resolveGuidedProviderReadiness({
-      ...LOCAL_RUNTIME,
+  });
+
+  it("keeps a provider whose last live check answered Ready after the check grows old", () => {
+    const readiness = resolveGuidedProviderReadiness({
+      providerId: "lmstudio",
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
       modelProbeState: "ready",
       modelProbeSource: "live",
       modelRefreshStatus: "stale",
     });
-    expect(stale).toMatchObject({ state: "not_verified", evidence: null });
-    expect(stale.description).toContain("stale");
+    expect(readiness).toMatchObject({
+      state: "ready",
+      evidence: "local_endpoint",
+      description: "LM Studio answered at http://127.0.0.1:1234/v1.",
+    });
+  });
+
+  it("still calls a stale fallback catalog not verified", () => {
+    const readiness = resolveGuidedProviderReadiness({
+      providerId: "lmstudio",
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "fallback",
+      modelRefreshStatus: "stale",
+    });
+    expect(readiness).toMatchObject({ state: "not_verified", evidence: null });
+    expect(readiness.description).toContain("stale");
+  });
+
+  it("keeps a check that has not run, one that reached the server with no models, and one that failed apart", () => {
+    const notRun = resolveGuidedProviderReadiness({ ...LOCAL_RUNTIME, modelRefreshStatus: "stale" });
+    expect(notRun.state).not.toBe("ready");
+    expect(notRun.description).not.toContain("has not answered");
+    const empty = resolveGuidedProviderReadiness({
+      ...LOCAL_RUNTIME,
+      modelProbeState: "empty",
+      modelProbeSource: "live",
+    });
+    expect(empty.description).toContain("reported no models");
+    const failed = resolveGuidedProviderReadiness({
+      ...LOCAL_RUNTIME,
+      modelProbeState: "fallback",
+      modelProbeWarning: "fetch failed",
+      modelRefreshStatus: "fresh",
+    });
+    expect(failed.description).toContain("has not answered");
+    expect(failed.description).toContain("fetch failed");
   });
 
   it("uses the Gateway's credential readiness for cloud providers", () => {
@@ -117,10 +159,7 @@ describe("guided default provider", () => {
     ).toBe("llamacpp");
     expect(
       pickDefaultGuidedProvider(
-        [
-          { ...LOCAL_RUNTIME, modelProbeState: "ready", modelProbeSource: "live", modelRefreshStatus: "stale" },
-          withoutKey,
-        ],
+        [{ ...LOCAL_RUNTIME, modelProbeState: "fallback", modelRefreshStatus: "stale" }, withoutKey],
         "",
       ),
     ).toBeNull();
