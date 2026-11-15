@@ -595,8 +595,8 @@ function resolveToolsUnavailableReason(input: {
   missingRequiredProjectBinding: boolean;
 }): BaseAgentToolsUnavailableReason | undefined {
   if (input.effectiveToolAutonomy !== "manual" || input.quickWebTurn) return undefined;
-  if (input.capabilityProfileToolAutonomy !== undefined) return "capability_profile";
   if (input.advisoryPlanning) return "advisory_planning";
+  if (input.capabilityProfileToolAutonomy !== undefined) return "capability_profile";
   if (input.missingRequiredProjectBinding) return "project_binding_required";
   return "manual_autonomy";
 }
@@ -1088,11 +1088,15 @@ export async function prepareAgentChatTurn(
   const effectiveMode = "chat";
   const requiresProjectBinding = chatModeRequiresProjectBinding(effectiveMode);
   const missingRequiredProjectBinding = requiresProjectBinding && !projectId;
-  const effectiveToolAutonomy = boundCapabilityProfile
-    ? boundCapabilityProfile.selection.toolAutonomy
-    : prefs.planningMode === "advisory" || missingRequiredProjectBinding
+  // Plan first runs as manual even on a bound profile (the runner offers it no tools either way).
+  const effectiveToolAutonomy =
+    prefs.planningMode === "advisory"
       ? "manual"
-      : prefs.toolAutonomy;
+      : boundCapabilityProfile
+        ? boundCapabilityProfile.selection.toolAutonomy
+        : missingRequiredProjectBinding
+          ? "manual"
+          : prefs.toolAutonomy;
   const retrievalTrace = buildRetrievalTrace({
     content,
     retrievalMode: autonomy.retrievalMode,
@@ -1349,7 +1353,9 @@ export async function prepareAgentChatTurn(
     }
   }
   if (capabilityProfile) {
-    history = upsertChatCapabilityProfileSystemInstruction(history, capabilityProfile);
+    history = upsertChatCapabilityProfileSystemInstruction(history, capabilityProfile, {
+      advisoryPlanning: prefs.planningMode === "advisory",
+    });
     const activatedSkillInstructions = await host.resolveActivatedSkillInstructions?.(capabilityProfile);
     history = upsertChatActivatedSkillSystemInstruction(history, activatedSkillInstructions);
   }
@@ -1443,7 +1449,9 @@ export async function prepareAgentChatTurn(
       sessionState,
     );
     if (capabilityProfile) {
-      history = upsertChatCapabilityProfileSystemInstruction(history, capabilityProfile);
+      history = upsertChatCapabilityProfileSystemInstruction(history, capabilityProfile, {
+        advisoryPlanning: prefs.planningMode === "advisory",
+      });
     }
     history = upsertChatTurnBindingSystemInstruction(history, featureAdmission?.references);
     if (routedContextSnapshot) {
@@ -1725,6 +1733,7 @@ function assertCapabilityProfileMatchesCurrentScope(
 export function upsertChatCapabilityProfileSystemInstruction(
   history: ChatCompletionRequest["messages"],
   profile: ChatTurnCapabilityProfileRecord,
+  options?: { advisoryPlanning?: boolean },
 ): ChatCompletionRequest["messages"] {
   const withoutPriorBinding = history.filter(
     (message) =>
@@ -1734,7 +1743,8 @@ export function upsertChatCapabilityProfileSystemInstruction(
         message.content.startsWith("Server-owned capability profile:")
       ),
   );
-  const toolNames = profile.selection.tools.map((tool) => tool.canonicalName);
+  // Plan first is offered no tools, so the frozen tool list is not callable for it.
+  const toolNames = options?.advisoryPlanning ? [] : profile.selection.tools.map((tool) => tool.canonicalName);
   const skillIds = profile.selection.trustedSkills.map((skill) => skill.skillId);
   const passport = profile.selection.workPassport;
   const instruction = [

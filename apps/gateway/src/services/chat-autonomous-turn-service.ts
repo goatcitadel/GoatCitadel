@@ -1012,6 +1012,7 @@ export async function enqueueAutonomousChatTurn(
         prepared.history = chatTurnPrepService.upsertChatCapabilityProfileSystemInstruction(
           prepared.history ?? [],
           prepared.capabilityProfile,
+          { advisoryPlanning: prepared.prefs?.planningMode === "advisory" },
         );
       }
     }

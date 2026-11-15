@@ -548,6 +548,80 @@ describe("prepareAgentChatTurn route admission", () => {
     expect(harness.host.resolveChatTurnCapabilityProfile).not.toHaveBeenCalled();
   });
 
+  it("tells a Plan first turn on a bound profile that no tools are callable and runs it as manual", async () => {
+    const harness = createHost("chat", { planningMode: "advisory", toolAutonomy: "safe_auto" });
+    vi.mocked(harness.host.getSessionAutonomyPrefs).mockReturnValue({
+      sessionId: "session-1",
+      revision: 3,
+      proactiveMode: "off",
+      maxActionsPerHour: 6,
+      maxActionsPerTurn: 2,
+      cooldownSeconds: 60,
+      retrievalMode: "standard",
+      reflectionMode: "off",
+      heartbeatEnabled: true,
+      heartbeatIntervalSeconds: 3600,
+      activeHours: { start: 8, end: 22 },
+      createdAt: "2026-05-04T00:00:00.000Z",
+      updatedAt: "2026-05-04T00:00:00.000Z",
+    });
+    const profile = {
+      ...createCapabilityProfileForRoute("provider-frozen", "model-frozen", {
+        turnId: "turn-frozen",
+        sessionId: "session-1",
+        workspaceId: "default",
+        citadelId: "personal",
+      }),
+      hashes: { profileHash: "profile-hash-frozen" },
+      selection: {
+        mode: "chat",
+        effectiveProviderId: "provider-frozen",
+        effectiveModel: "model-frozen",
+        webMode: "off",
+        memory: { mode: "off", retrievalMode: "layered" },
+        thinkingLevel: "minimal",
+        speedMode: "standard",
+        subagentPolicy: "off",
+        toolAutonomy: "safe_auto",
+        tools: [{ canonicalName: "browser.search" }],
+        trustedSkills: [],
+      },
+    } as never;
+    harness.host.loadChatTurnCapabilityProfile = vi.fn(() => profile);
+    const userMessage = {
+      messageId: "message-frozen",
+      sessionId: "session-1",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "Plan the move.",
+      timestamp: "2026-07-13T00:00:00.000Z",
+    } as ChatMessageRecord;
+
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      "session-1",
+      { content: userMessage.content },
+      {
+        existingUserMessage: userMessage,
+        ingestUserMessage: false,
+        turnId: "turn-frozen",
+        capabilityProfileId: profile.profileId,
+        capabilityProfileHash: profile.hashes.profileHash,
+        capabilityProfileContent: "Plan the move.",
+      },
+    );
+
+    const binding = prepared.history.find(
+      (message) =>
+        typeof message.content === "string" && message.content.startsWith("Server-owned capability profile:"),
+    );
+    expect(String(binding?.content)).toContain("Callable tools for this turn: none.");
+    expect(String(binding?.content)).not.toContain("browser.search");
+    expect(prepared.effectiveToolAutonomy).toBe("manual");
+    expect(harness.readGuidance()).toContain("Planning mode is active");
+  });
+
   it("replays a bound profile without inheriting changed session selections", async () => {
     const harness = createHost("chat", {
       providerId: "provider-drifted",
