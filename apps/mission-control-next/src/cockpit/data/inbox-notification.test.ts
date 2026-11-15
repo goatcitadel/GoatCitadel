@@ -111,12 +111,18 @@ describe("Inbox notification owner selection", () => {
 });
 
 describe("inboxToastDescription", () => {
-  const named: OperatorInboxItem = { ...item, summary: "Command: pnpm test", summaryNamesCommand: true };
+  const named: OperatorInboxItem = {
+    ...item,
+    summary: "Command: pnpm (open it to see the full command)",
+    summaryNamesCommand: true,
+  };
   it("keeps a summary that names a command or code out of a toast", () => {
     expect(inboxToastDescription(named)).toBeUndefined();
   });
   it("keeps every other summary", () => {
-    expect(inboxToastDescription({ ...named, summaryNamesCommand: undefined })).toBe("Command: pnpm test");
+    expect(inboxToastDescription({ ...named, summaryNamesCommand: undefined })).toBe(
+      "Command: pnpm (open it to see the full command)",
+    );
     expect(inboxToastDescription(item)).toBe(item.summary);
   });
 });

@@ -27,7 +27,7 @@ describe("shellCommandSummary", () => {
       `PGPASSWORD=${pw} psql`,
       `$env:TOKEN="${pw}"; x`,
       `-p${pw} mysql`,
-      `${"a".repeat(41)} run`,
+      `${"a".repeat(25)} run`,
       "",
       "   ",
     ]) {
@@ -35,17 +35,17 @@ describe("shellCommandSummary", () => {
     }
   });
 
-  it("says how many lines a longer command has", () => {
+  it("says how very long a longer command has", () => {
     expect(shellCommandSummary(`echo one${NL}echo two${NL}${NL}echo three`)).toBe(`Command: echo, 3 lines ${NOTE}`);
     expect(shellCommandSummary(`PGPASSWORD=${pw} psql${NL}select 1`)).toBe(`Command, 2 lines ${NOTE}`);
-    expect(shellCommandSummary(`echo ${"x".repeat(20_000)}${NL}echo two`)).toBe(`Command: echo, many lines ${NOTE}`);
+    expect(shellCommandSummary(`echo ${"x".repeat(20_000)}${NL}echo two`)).toBe(`Command: echo, very long ${NOTE}`);
   });
 
   it("returns at once for a huge or adversarial command", () => {
     const started = performance.now();
-    expect(shellCommandSummary(`${'"'.repeat(200_000)}x`)).toBe(`Command, many lines ${NOTE}`);
-    expect(shellCommandSummary(`${"a".repeat(5_000_000)}`)).toBe(`Command, many lines ${NOTE}`);
-    expect(shellCommandSummary(`echo ${"y".repeat(5_000_000)}`)).toBe(`Command: echo, many lines ${NOTE}`);
+    expect(shellCommandSummary(`${'"'.repeat(200_000)}x`)).toBe(`Command, very long ${NOTE}`);
+    expect(shellCommandSummary(`${"a".repeat(5_000_000)}`)).toBe(`Command, very long ${NOTE}`);
+    expect(shellCommandSummary(`echo ${"y".repeat(5_000_000)}`)).toBe(`Command: echo, very long ${NOTE}`);
     expect(performance.now() - started).toBeLessThan(500);
   });
 
@@ -63,11 +63,11 @@ describe("shellCommandSummary", () => {
 });
 
 describe("codeRunSummary", () => {
-  it("says how many lines of code will run, and shows none of it", () => {
+  it("says how very long of code will run, and shows none of it", () => {
     const code = ["const a = 1;", `const key = "${pw}";`, "run(a);", "done();"].join(NL);
     expect(codeRunSummary(code)).toBe("Code to run, 4 lines (open it to see the code)");
     expect(codeRunSummary(`run("${pw}");`)).toBe("Code to run, 1 line (open it to see the code)");
-    expect(codeRunSummary(`${"x".repeat(20_000)}${NL}y`)).toBe("Code to run, many lines (open it to see the code)");
+    expect(codeRunSummary(`${"x".repeat(20_000)}${NL}y`)).toBe("Code to run, very long (open it to see the code)");
     expect(codeRunSummary("  ")).toBeUndefined();
     expect(codeRunSummary(code)).not.toContain(pw);
   });

@@ -55,7 +55,7 @@ export function inboxItemLocation(item: OperatorInboxItem): string {
 
 /**
  * The description an unprompted toast shows for an Inbox item: its summary, except when the Gateway says the summary names
- * a command or a line of code, which stays in the Inbox row and detail.
+ * a program or a line count, which stays in the Inbox row and detail.
  */
 export function inboxToastDescription(item: OperatorInboxItem): string | undefined {
   return item.summaryNamesCommand ? undefined : item.summary;

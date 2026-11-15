@@ -5,11 +5,11 @@
  * approval detail shows the full text. Nothing here uses a regular expression on that text: each scan is bounded.
  */
 
-/** The most of a command or code text counted for lines; a longer text is said to have many lines. */
+/** The most of a command or code text counted for lines; a longer text is said to be very long. */
 const MAX_COUNTED_TEXT = 10_000;
 /** The most of a command's start read for its program name. */
 const MAX_PROGRAM_SCAN = 256;
-const MAX_PROGRAM_NAME = 40;
+const MAX_PROGRAM_NAME = 24;
 
 const SPACE = 32;
 const LINE_FEED = 10;
@@ -39,9 +39,9 @@ function isProgramCharacter(code: number): boolean {
   );
 }
 
-/** How many non-empty lines the text has, or "many" when it is longer than the counted part. */
-function countLines(text: string): number | "many" {
-  if (text.length > MAX_COUNTED_TEXT) return "many";
+/** How many non-empty lines the text has, or "long" when it is longer than the counted part. */
+function countLines(text: string): number | "long" {
+  if (text.length > MAX_COUNTED_TEXT) return "long";
   let lines = 0;
   let lineHasText = false;
   for (let index = 0; index < text.length; index += 1) {
@@ -83,7 +83,7 @@ export function shellCommandSummary(command: string): string | undefined {
   const lines = countLines(command);
   if (lines === 0) return undefined;
   const program = programName(command);
-  const count = lines === 1 ? "" : lines === "many" ? ", many lines" : `, ${lines} lines`;
+  const count = lines === 1 ? "" : lines === "long" ? ", very long" : `, ${lines} lines`;
   return `Command${program ? `: ${program}` : ""}${count} (open it to see the full command)`;
 }
 
@@ -91,6 +91,6 @@ export function shellCommandSummary(command: string): string | undefined {
 export function codeRunSummary(code: string): string | undefined {
   const lines = countLines(code);
   if (lines === 0) return undefined;
-  const count = lines === "many" ? "many lines" : lines === 1 ? "1 line" : `${lines} lines`;
+  const count = lines === "long" ? "very long" : lines === 1 ? "1 line" : `${lines} lines`;
   return `Code to run, ${count} (open it to see the code)`;
 }
