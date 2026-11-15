@@ -15,6 +15,9 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({
     media.phone && (query === RESPONSIVE_QUERIES.phone || query === RESPONSIVE_QUERIES.belowDesktop),
 }));
 
+const outage = vi.hoisted(() => ({ recover: vi.fn() }));
+vi.mock("./use-chat-outage-recovery", () => ({ useChatOutageRecovery: outage.recover }));
+
 vi.mock("../../data/use-model-label", () => ({
   useModelLabel: (providerId?: string, modelId?: string) =>
     providerId === "anthropic" && modelId === "claude-sonnet" ? "Claude Sonnet · Anthropic" : "Unknown model",
@@ -90,6 +93,31 @@ function renderHeader(build = false) {
 }
 
 describe("ChatSessionHeader", () => {
+  it("hands the active conversation's error and refresh to the outage recovery (U-CH-026)", () => {
+    const onDismissError = vi.fn();
+    const onRefreshThread = vi.fn();
+    const active = { streamError: "Network error: Failed to fetch", onDismissError, onRefreshThread };
+    act(() =>
+      root.render(
+        <ChatSessionHeader
+          input={input()}
+          active={active as unknown as Parameters<typeof ChatSessionHeader>[0]["active"]}
+          session={session}
+          selectedSessionId="session-1"
+          buildEditor={null}
+          onOpenProjects={vi.fn()}
+          onOpenConversations={vi.fn()}
+          onInspect={vi.fn()}
+        />,
+      ),
+    );
+    expect(outage.recover).toHaveBeenLastCalledWith({
+      streamError: "Network error: Failed to fetch",
+      onDismissError,
+      onRefreshThread,
+    });
+  });
+
   it("keeps the way back from an open build editor as a visible header button", () => {
     const view = input();
     const onToggle = vi.fn();

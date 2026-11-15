@@ -24,6 +24,7 @@ import { readCockpitHistory, subscribeCockpitHistory } from "../../app/cockpit-h
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { DeferredOutsideRootWriteGrantOptions } from "./DeferredOutsideRootWriteGrantOptions";
+import { ChatApprovalPausedFieldset } from "./ChatApprovalPausedFieldset";
 import { importChatApprovalRendererBody, importChatApprovalSettlement } from "./load-chat-approval-renderer";
 
 type DecisionCode = Awaited<ReturnType<typeof importChatApprovalRendererBody>>;
@@ -41,6 +42,8 @@ type ChatApprovalRendererProps = Omit<DecisionProps, "approval" | "workspaceId">
   recovery?: RecordRecovery;
   /** Called when the settled decision's follow-on work changes, so Chat re-reads its thread and queue. */
   onFollowOnChange?: () => void;
+  /** GoatCitadel is unreachable: a decision could not be sent, so the buttons wait for the connection. */
+  connectionLost?: boolean;
 };
 
 type RecordRecovery = {
@@ -106,6 +109,7 @@ export function ChatApprovalRenderer({
   recordPending,
   recovery,
   onFollowOnChange,
+  connectionLost,
   ...decisionProps
 }: ChatApprovalRendererProps) {
   const callerRevision = useSyncExternalStore(
@@ -233,7 +237,7 @@ export function ChatApprovalRenderer({
               {record.status === "pending" ? "Loading approval controls…" : "Loading follow-on work…"}
             </p>
           ) : code.kind === "decision" ? (
-            <>
+            <ChatApprovalPausedFieldset paused={connectionLost}>
               <code.ApprovalDecisionBar key={scope} {...decisionProps} approval={record} />
               {decisionProps.sessionId ? (
                 <DeferredOutsideRootWriteGrantOptions
@@ -244,7 +248,7 @@ export function ChatApprovalRenderer({
                   onResolved={decisionProps.onResolved}
                 />
               ) : null}
-            </>
+            </ChatApprovalPausedFieldset>
           ) : (
             <code.ApprovalSettlement
               key={scope}

@@ -7,6 +7,7 @@ import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
 import { ChatSessionOverflow, ChatSessionTitle } from "./ChatSessionControls";
 import { SelectedThreadActivity } from "./SelectedThreadActivity";
+import { useChatOutageRecovery } from "./use-chat-outage-recovery";
 import { useModelLabel } from "../../data/use-model-label";
 import { presentDelegationRunStatus } from "./chat-vocabulary";
 import { projectFirstRunState } from "../settings/first-run-state";
@@ -49,6 +50,12 @@ export function ChatSessionHeader({
   onInspect: () => void;
   onFork?: () => void;
 }) {
+  // The "can't reach GoatCitadel" notice clears itself once the Gateway answers again.
+  useChatOutageRecovery({
+    streamError: active?.streamError,
+    onDismissError: active?.onDismissError,
+    onRefreshThread: active?.onRefreshThread,
+  });
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const rail = input.sessionRail;
   const createConversation = () => void rail.onCreateSession();

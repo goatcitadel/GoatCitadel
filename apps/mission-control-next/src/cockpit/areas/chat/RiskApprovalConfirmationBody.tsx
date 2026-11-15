@@ -7,7 +7,7 @@ import { Button } from "../../ui/Button";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TypedConfirmation, typedConfirmationMatches } from "../../ui/TypedConfirmation";
 import { handleEvidenceScrollKeyDown } from "../../ui/evidence-scroll";
-import { presentApprovalAction } from "./chat-vocabulary";
+import { APPROVAL_PAUSED_NOTE, presentApprovalAction } from "./chat-vocabulary";
 
 /** The deliberate, untimed confirmation word for nuclear risk and for risk levels this build doesn't know. */
 const CRITICAL_CONFIRMATION = "approve";
@@ -20,6 +20,7 @@ export function RiskApprovalConfirmationBody({
   hasActionPreview,
   critical,
   disabled,
+  connectionLost = false,
   riskName,
   confirmAction,
   specialistReview,
@@ -34,6 +35,7 @@ export function RiskApprovalConfirmationBody({
   hasActionPreview: boolean;
   critical: boolean;
   disabled: boolean;
+  connectionLost?: boolean;
   riskName: string;
   confirmAction: string;
   specialistReview?: ReactNode;
@@ -150,6 +152,7 @@ export function RiskApprovalConfirmationBody({
           />
         </div>
       ) : null}
+      {connectionLost ? <p className="mb-2 text-fg-secondary">{APPROVAL_PAUSED_NOTE}</p> : null}
       <div className="flex flex-wrap gap-2">
         <Button variant="danger" disabled={disabled || !hasActionPreview || !confirmed} onClick={onConfirm}>
           {confirmAction}

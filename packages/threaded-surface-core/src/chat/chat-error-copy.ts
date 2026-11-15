@@ -145,6 +145,13 @@ export function describeChatUiError(
   };
 }
 
+const UNREACHABLE_SUMMARY_START = "Can't reach the GoatCitadel gateway.";
+
+/** True for exactly the error texts that read as "Can't reach the GoatCitadel gateway", and no other error. */
+export function isGatewayUnreachableChatError(value: string | null | undefined): boolean {
+  return Boolean(describeChatUiError(value, "other")?.summary.startsWith(UNREACHABLE_SUMMARY_START));
+}
+
 export function formatChatUiError(value?: string | null, source: ChatErrorSource | null = "other"): string | null {
   return describeChatUiError(value, source)?.summary ?? null;
 }
@@ -156,6 +163,8 @@ export function isChatErrorAlreadyShownByTurn(input: {
   assistantContent?: string;
 }): boolean {
   const answer = input.assistantContent?.trim();
-  return input.turnStatus === "failed" && Boolean(input.error && answer && answer.length >= 40
-    && input.error.startsWith(answer));
+  return (
+    input.turnStatus === "failed" &&
+    Boolean(input.error && answer && answer.length >= 40 && input.error.startsWith(answer))
+  );
 }
