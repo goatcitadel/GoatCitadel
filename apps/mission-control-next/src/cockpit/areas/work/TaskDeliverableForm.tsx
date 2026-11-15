@@ -116,14 +116,14 @@ export function TaskDeliverableForm({ task, workspaceId }: { task: TaskRecord; w
           Record deliverable
         </Button>
       </div>
-      {recorded ? (
-        <p role="status" className="text-sm text-fg">
-          Deliverable recorded. You can now mark the task Done.
-        </p>
-      ) : null}
-      {mutation.isError ? (
-        <p role="alert" className="text-sm text-status-failed">
-          Couldn't record the deliverable. {describeApiError(mutation.error).summary}
+      {mutation.isError || recorded ? (
+        <p
+          role={mutation.isError ? "alert" : "status"}
+          className={mutation.isError ? "text-sm text-status-failed" : "text-sm text-fg"}
+        >
+          {mutation.isError
+            ? `Couldn't record the deliverable. ${describeApiError(mutation.error).summary}`
+            : "Deliverable recorded. You can now mark the task Done."}
         </p>
       ) : null}
     </form>
