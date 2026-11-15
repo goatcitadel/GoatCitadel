@@ -35,6 +35,13 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 const AUTO_RETRY_BASE_MS = 2_000;
 const AUTO_RETRY_MAX_MS = 15_000;
 
+/** What the sign-in page says when the Gateway answered and said no. It never reveals anything about the credential. */
+export function describeRefusedCredential(authMode: "basic" | "token" | "none" | undefined): string {
+  return authMode === "basic"
+    ? "That username and password were refused. Check them and try again."
+    : "That token was refused. Check it and try again.";
+}
+
 export type GatewayAccessViewState =
   | GatewayAccessPreflightResult
   | {
@@ -61,15 +68,25 @@ export function useGatewayAccess(options?: { batchStartupReads?: boolean }): Use
   const [callerScope, setCallerScope] = useState<string>();
   const [gatewayBusy, setGatewayBusy] = useState(true);
   const requestGeneration = useRef(0);
+  // Counts calls of retryGatewayAccess only, so a refusal can tell "a newer check started" from "the client cleared the refused credential".
+  const attemptRef = useRef(0);
   const autoRetryDelayRef = useRef(AUTO_RETRY_BASE_MS);
 
   const retryGatewayAccess = useCallback(async () => {
     const generation = ++requestGeneration.current;
+    const attempt = ++attemptRef.current;
     setGatewayBusy(true);
     try {
       const bootstrap = consumeGatewayAccessBootstrapFromLocation();
       const revision = getGatewayAccessRevision();
       const next = await preflightGatewayAccess({ bootstrap });
+      if (next.status === "needs-auth" && next.rejectedStoredAuth === true && attempt === attemptRef.current) {
+        // The client clears a refused credential during the check, which moves the access revision and the
+        // generation; the answer is still this attempt's, so report it instead of dropping it.
+        setGatewayAccess({ ...next, message: describeRefusedCredential(next.authMode) });
+        setGatewayBusy(false);
+        return;
+      }
       if (generation !== requestGeneration.current || revision !== getGatewayAccessRevision()) return;
       if (next.status === "ready") {
         const caller = next.onboardingState?.currentAccess ?? (await fetchGatewayCurrentAccess());
