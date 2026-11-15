@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJobRecordResponse } from "@goatcitadel/mission-control-shared/api/types";
 import {
   lastRunFailureReason,
@@ -11,6 +11,13 @@ import {
   WorkScheduleListItem,
   WorkScheduleRecordDetails,
 } from "./WorkScheduleSummary";
+
+vi.mock("../../data/use-workspace-name", () => ({
+  useWorkspaceNameLookup: () => (workspaceId?: string) => (workspaceId === "ws-c" ? "Research" : undefined),
+}));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
+  useUiPreferences: () => ({ activeCitadelId: undefined }),
+}));
 
 function buildJob(overrides: Partial<CronJobRecordResponse> = {}): CronJobRecordResponse {
   return {
@@ -113,6 +120,18 @@ describe("schedule summary rendering", () => {
     expect(alert?.textContent).toBe("Last scheduled run failed. Backup target is full.");
     expect(container.textContent).not.toContain(output);
     expect(container.textContent).not.toContain("memory_consolidation");
+  });
+
+  it("names the workspace a Task schedule files into, or the default one before its first run", () => {
+    const ran = buildJob({
+      action: "task",
+      lastRunOutput: JSON.stringify({ result: "ok", workspaceId: "ws-c" }),
+    });
+    act(() => root.render(<WorkScheduleRecordDetails selected={ran} />));
+    expect(container.textContent).toContain("Action: Task. Destination: Research's task list.");
+
+    act(() => root.render(<WorkScheduleRecordDetails selected={buildJob({ action: "task" })} />));
+    expect(container.textContent).toContain("Destination: the default workspace's task list.");
   });
 
   it("says a past next run is overdue and marks a projected one", () => {

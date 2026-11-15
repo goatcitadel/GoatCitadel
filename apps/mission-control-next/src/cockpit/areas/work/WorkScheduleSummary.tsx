@@ -1,4 +1,6 @@
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import type { ScheduleAction } from "../../../features/native-routes/ops/schedule-operation";
 import type { CronJobRecordResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { Button } from "../../ui/Button";
@@ -78,6 +80,16 @@ function readNonEmptyString(value: unknown): string | undefined {
 
 function looksLikeJson(value: string): boolean {
   return /^\s*[[{"]/u.test(value);
+}
+
+/** Where a Task schedule files its task: the workspace its last run used, or the default workspace before one ran. */
+function TaskDestination({ job }: { job: CronJobRecordResponse }) {
+  const { activeCitadelId } = useUiPreferences();
+  const nameOf = useWorkspaceNameLookup(activeCitadelId);
+  const workspaceId = readNonEmptyString(readLastRunOutput(job)?.workspaceId);
+  if (!workspaceId) return <>the default workspace&apos;s task list.</>;
+  const name = nameOf(workspaceId);
+  return name ? <>{name}&apos;s task list.</> : <>the task list of the workspace its last run used.</>;
 }
 
 export function lastRunOutcomeLabel(job: CronJobRecordResponse): string {
@@ -241,8 +253,8 @@ export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecor
       ) : null}
       <p className="text-sm text-fg-secondary">
         Installation-wide · Action: {presentScheduleAction(selected.action)}. Destination:{" "}
-        {selected.workdir || "Not reported"}. {scheduleTimezoneSummary(selected.schedule)} Displayed dates use your
-        browser timezone.
+        {selected.action === "task" ? <TaskDestination job={selected} /> : `${selected.workdir || "Not reported"}.`}{" "}
+        {scheduleTimezoneSummary(selected.schedule)} Displayed dates use your browser timezone.
       </p>
       {selected.lastRunOutput || selected.lastRunEvidenceEnvelopeId ? (
         <TechnicalDetails label="Last run technical details">

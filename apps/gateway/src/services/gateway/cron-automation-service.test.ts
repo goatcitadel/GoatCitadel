@@ -2528,6 +2528,30 @@ describe("citadel-scoped cron jobs", () => {
     expect(agentTurn.mock.calls[0]?.[0]).toMatchObject({ workspaceId: "ws-team" });
   });
 
+  it("files a citadel-scoped Task schedule's task in the citadel's workspace and records it", async () => {
+    const task = vi.fn(async (_job: CronJobRecord, _context?: unknown, scope?: { workspaceId?: string }) => ({
+      taskId: "task-ws",
+      workspaceId: scope?.workspaceId ?? "default",
+    }));
+    const service = createService(new FakeDb(), vi.fn(), {
+      citadels: citadelReader([citadelRecord("team", { defaultWorkspaceId: "ws-c" })]),
+      handlers: { task },
+    });
+    await service.createCronJob({ ...taskJob, citadelId: "team" });
+    await service.createCronJob({ ...taskJob, jobId: "global-task" });
+
+    await service.runCronJobNow("scoped-task");
+    await service.runCronJobNow("global-task");
+
+    expect(task.mock.calls[0]?.[2]).toEqual({ workspaceId: "ws-c" });
+    expect(task.mock.calls[1]?.[2]).toEqual({});
+    const output = JSON.parse((await service.getCronJob("scoped-task")).lastRunOutput ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(output.workspaceId).toBe("ws-c");
+  });
+
   it("fails closed when an admitted agent turn's job changes citadel before launch", async () => {
     const agentTurn = vi.fn();
     const cronJobs = new FakeCronJobs();

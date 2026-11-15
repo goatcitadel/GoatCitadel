@@ -209,7 +209,8 @@ export interface CronAutomationServiceDeps {
     task: (
       job: CronJobRecord,
       context?: { contextFrom?: string; contextOutput?: string },
-    ) => Promise<{ taskId?: string } | void>;
+      scope?: { workspaceId?: string },
+    ) => Promise<{ taskId?: string; workspaceId?: string } | void>;
     improvement: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
     backup: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
     memoryFlush: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
@@ -448,7 +449,7 @@ export class CronAutomationService {
     }
     // Citadel scope is enforced for every trigger (due sweep, manual, forced): a job whose
     // citadel is gone or archived is refused rather than run as a global job.
-    await resolveCronJobCitadelScope(this.citadelReader(), job);
+    const citadelScope = await resolveCronJobCitadelScope(this.citadelReader(), job);
     const lifecycleAdmission = this.deps.sharedHostLifecycle?.tryReserve(
       "cron",
       `cron:${normalizedJobId}:${options.admissionKey?.trim() || randomUUID()}`,
@@ -468,13 +469,22 @@ export class CronAutomationService {
       try {
         if (job.action === "task") {
           const context = await this.resolveCronJobContext(job);
-          const taskResult = await this.deps.runHandlers.task(job, context);
+          const taskResult = await this.deps.runHandlers.task(
+            job,
+            context,
+            citadelScope.workspaceId ? { workspaceId: citadelScope.workspaceId } : {},
+          );
           const finishedAt = new Date().toISOString();
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
+          // The last run's output carries the workspace the task was filed in, so the schedule can name it.
+          const lastRunOutput = taskResult?.workspaceId
+            ? JSON.stringify({ result: "ok", workspaceId: taskResult.workspaceId })
+            : undefined;
+          const saved = await this.recordCronRunSuccess(job, runId, finishedAt, lastRunOutput);
           runSummary = {
             ...runSummary,
             action: job.action,
             taskId: taskResult?.taskId,
+            workspaceId: taskResult?.workspaceId,
             nextRunAt: saved.nextRunAt,
             contextFrom: context?.contextFrom,
             force,
