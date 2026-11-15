@@ -9,8 +9,10 @@ import {
   cancelChangePlan,
   confirmChangePlan,
   createChangePlan,
+  fetchChangePlan,
   fetchChatSessionPrefs,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import { runWithSelectedSession } from "./mission-threaded-controller-helpers";
@@ -72,29 +74,43 @@ export function useChatModelChangePlans({
   );
   const applySafeModelChange = useCallback(
     async (plan: ChangePlanRecord, actionNonce: string) => {
-      let updated: ChangePlanRecord;
+      const context = changePlanClientContext(workspaceId, plan);
+      // Records what the Gateway says about the plan. An applied change is shown as applied and the Chat's own
+      // settings are read again, so the composer matches what the Chat now uses.
+      const settle = async (answer: ChangePlanRecord) => {
+        const updated = recordChangePlanResult(answer);
+        if (updated.status !== "completed" && updated.status !== "applied") return;
+        pushLocalNotice(updated.result?.summary ?? "Change applied and verified.", "success");
+        const sessionId = plan.origin.sessionId;
+        if (!sessionId) return;
+        try {
+          const refreshed = await fetchChatSessionPrefs(sessionId);
+          prefsRef.current = refreshed;
+          setPrefs(refreshed);
+        } catch {
+          setUiError("The change was applied, but this Chat's settings could not be read again. Reload the Chat.");
+        }
+      };
       try {
-        updated = recordChangePlanResult(
-          await confirmChangePlan(plan.planId, changePlanClientContext(workspaceId, plan), {
-            expectedRevision: plan.revision,
-            actionNonce,
-          }),
-        );
-      } catch (error) {
-        // The review card stays, so "Review and confirm" still works.
-        setUiError(describeApiError(error, "Unable to apply this model change.").summary);
+        await settle(await confirmChangePlan(plan.planId, context, { expectedRevision: plan.revision, actionNonce }));
         return;
-      }
-      if (updated.status !== "completed") return;
-      pushLocalNotice(updated.result?.summary ?? "Change applied and verified.", "success");
-      const sessionId = plan.origin.sessionId;
-      if (!sessionId) return;
-      try {
-        const refreshed = await fetchChatSessionPrefs(sessionId);
-        prefsRef.current = refreshed;
-        setPrefs(refreshed);
-      } catch {
-        setUiError("The change was applied, but this Chat's settings could not be read again. Reload the Chat.");
+      } catch (error) {
+        const refusal = describeApiError(error, "Unable to apply this model change.").summary;
+        // The answer may have been lost after the Gateway applied the change, so what it holds now is read again
+        // (never joining an older read) before anything is said about the outcome.
+        let current: ChangePlanRecord;
+        try {
+          current = await withFreshReads(() => fetchChangePlan(plan.planId, context));
+        } catch {
+          setUiError(refusal);
+          return;
+        }
+        if (current.status === "awaiting_confirmation" && current.revision === plan.revision) {
+          // Still waiting: the review card stays, so "Review and confirm" still works.
+          setUiError(refusal);
+          return;
+        }
+        await settle(current);
       }
     },
     [prefsRef, pushLocalNotice, recordChangePlanResult, setPrefs, setUiError, workspaceId],

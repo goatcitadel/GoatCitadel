@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   createChangePlan: vi.fn(),
   confirmChangePlan: vi.fn(),
   cancelChangePlan: vi.fn(),
+  fetchChangePlan: vi.fn(),
   fetchChatSessionPrefs: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
@@ -140,9 +141,51 @@ describe("a model change for one Chat", () => {
     expect(cardPlans()).toEqual(["session_model:awaiting_confirmation"]);
   });
 
+  it("treats an applied answer like a completed one: the Chat's settings are read again", async () => {
+    api.createChangePlan.mockResolvedValue(plan());
+    api.confirmChangePlan.mockResolvedValue(applied({ status: "applied" }));
+    api.fetchChatSessionPrefs.mockResolvedValue({ revision: 8, thinkingLevel: "extended" });
+    await request();
+    expect(setPrefs).toHaveBeenCalledWith({ revision: 8, thinkingLevel: "extended" });
+    expect(cardPlans()).toEqual(["session_model:applied"]);
+  });
+
+  it("shows an applied change as applied when only the confirm's answer was lost", async () => {
+    api.createChangePlan.mockResolvedValue(plan());
+    api.confirmChangePlan.mockRejectedValue(new Error("network lost"));
+    api.fetchChangePlan.mockResolvedValue(applied());
+    api.fetchChatSessionPrefs.mockResolvedValue({ revision: 8, thinkingLevel: "extended" });
+    await request();
+    expect(api.fetchChangePlan).toHaveBeenCalledExactlyOnceWith("session_model", {
+      workspaceId: "workspace",
+      sessionId: "session",
+    });
+    expect(setPrefs).toHaveBeenCalledWith({ revision: 8, thinkingLevel: "extended" });
+    expect(pushLocalNotice).toHaveBeenCalledWith("This Chat now uses Provider / model at extended effort.", "success");
+    expect(setUiError).not.toHaveBeenCalled();
+    expect(cardPlans()).toEqual(["session_model:completed"]);
+  });
+
+  it("shows the failure the Gateway recorded when a lost answer hid a failed change", async () => {
+    api.createChangePlan.mockResolvedValue(plan());
+    api.confirmChangePlan.mockRejectedValue(new Error("network lost"));
+    api.fetchChangePlan.mockResolvedValue({
+      ...plan(),
+      status: "failed",
+      revision: 4,
+      requiredAction: undefined,
+      result: { summary: "The model owner refused the change." },
+    });
+    await request();
+    expect(cardPlans()).toEqual(["session_model:failed"]);
+    expect(pushLocalNotice).not.toHaveBeenCalled();
+    expect(setPrefs).not.toHaveBeenCalled();
+  });
+
   it("keeps the review card and says so when the apply is refused", async () => {
     api.createChangePlan.mockResolvedValue(plan());
     api.confirmChangePlan.mockRejectedValue(new Error("revision conflict"));
+    api.fetchChangePlan.mockResolvedValue(plan());
     await request();
     expect(setUiError).toHaveBeenCalledWith(expect.stringContaining("revision conflict"));
     expect(pushLocalNotice).not.toHaveBeenCalled();
