@@ -33,34 +33,34 @@ export function useMcpConnection({
     };
   }, []);
   const [state, setState] = useState<{
-    identity: string;
+    generation: number;
     review?: { action: McpConnectionAction; server: McpServerRecord };
     message?: string;
-  }>({ identity });
+  }>({ generation: live.current.generation });
   const [checking, setChecking] = useState(false);
   const attempt = useMcpServerMutation(server.serverId);
-  const visible = state.identity === identity ? state : undefined;
   const current = (generation: number) =>
     live.current.mounted && live.current.generation === generation && live.current.identity === identity;
+  const visible = current(state.generation) ? state : undefined;
   async function requestReview(action: McpConnectionAction) {
     if (live.current.busy || attempt.locked || mcpConnectionUnavailable(server, action)) return;
     const generation = ++live.current.generation;
     live.current.busy = true;
     setChecking(true);
-    setState({ identity });
+    setState({ generation });
     try {
       const fresh = await fetchMcpServer(server.serverId);
       if (!current(generation)) return;
       if (!mcpConnectionReviewMatches(server, fresh) || mcpConnectionUnavailable(fresh, action)) {
         setState({
-          identity,
+          generation,
           message: "The server changed. Refresh this inspection before reviewing a connection action.",
         });
         return;
       }
-      setState({ identity, review: { action, server: structuredClone(fresh) } });
+      setState({ generation, review: { action, server: structuredClone(fresh) } });
     } catch {
-      if (current(generation)) setState({ identity, message: "Current connection metadata could not be read." });
+      if (current(generation)) setState({ generation, message: "Current connection metadata could not be read." });
     } finally {
       live.current.busy = false;
       if (live.current.mounted) setChecking(false);
@@ -68,13 +68,12 @@ export function useMcpConnection({
   }
   function cancel() {
     if (attempt.phase === "saving") return;
-    live.current.generation += 1;
-    setState({ identity });
+    setState({ generation: ++live.current.generation });
   }
   async function confirm() {
     const review = visible?.review;
-    if (!review || live.current.busy || attempt.locked) return;
-    const generation = live.current.generation;
+    const generation = state.generation;
+    if (!review || !current(generation) || live.current.busy || attempt.locked) return;
     live.current.busy = true;
     setChecking(true);
     try {
@@ -84,7 +83,7 @@ export function useMcpConnection({
         isCurrent: () => current(generation),
       });
       if (!current(generation)) return;
-      setState({ identity, message: result.status === "saved" ? undefined : result.message });
+      setState({ generation, message: result.status === "saved" ? undefined : result.message });
       if (result.status === "saved") {
         try {
           await onSettled();

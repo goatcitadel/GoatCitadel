@@ -147,6 +147,28 @@ it.each(["revision", "connectionRevision", "command"] as const)("rejects changed
   expect(content()).toContain("connection changed");
 });
 
+it.each(["workspace", "server record"])("requires a new review after a %s round trip", async (scopeChange) => {
+  await render();
+  await click("Review connection");
+  expect(content()).toContain("Connect reviewed server");
+  const confirmPriorReview = button("Connect reviewed server").props.onClick;
+
+  if (scopeChange === "workspace") await render("other");
+  else await render("workspace", { ...server, status: "connected" });
+  expect(content()).not.toContain("Connect reviewed server");
+  await render();
+  expect(content()).not.toContain("Connect reviewed server");
+
+  await act(async () => confirmPriorReview());
+  expect(api.fetchMcpServer).toHaveBeenCalledOnce();
+  expect(api.connectReviewedMcpServer).not.toHaveBeenCalled();
+  expect(api.disconnectReviewedMcpServer).not.toHaveBeenCalled();
+
+  await click("Review connection");
+  expect(api.fetchMcpServer).toHaveBeenCalledTimes(2);
+  expect(content()).toContain("Connect reviewed server");
+});
+
 it.each(["away-back", "unmount", "cancel"])("cancels %s during final preflight without dispatch", async (timing) => {
   await render();
   await click("Review connection");
