@@ -271,6 +271,7 @@ beforeEach(() => {
   mcp.fetchMcpServer.mockResolvedValue(savedServer());
   route.search = "";
   prefs.showTechnicalDetails = false;
+  prefs.activeWorkspaceId = "ws-1";
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.append(container);
@@ -400,6 +401,8 @@ describe("Install progress", () => {
 
   it("shows Waiting on you in Inbox with a link", async () => {
     await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    // The panel's own list stays as it was read; only where the approval is decided changes.
+    prefs.activeWorkspaceId = "default";
     setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
     expect(text()).toContain("Waiting on you in Inbox");
     expect(text()).toContain("This request expires after 15 minutes.");
@@ -426,8 +429,21 @@ describe("Install progress", () => {
     expect(body().querySelector("[data-in-place-approval]")).toBeNull();
   });
 
+  it("does not open the approval in the panel from another workspace, and says where it is", async () => {
+    // The Gateway makes every install in the Default workspace, so another workspace's dialog could only dead-end.
+    await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
+    expect(body().querySelector("[data-in-place-approval]")).toBeNull();
+    expect(text()).toContain("This approval is in the Default workspace's Inbox.");
+    const target = href(link("Open in Inbox"));
+    expect(target.searchParams.get("approvalId")).toBe("approval-1");
+    expect(target.searchParams.get("workspaceId")).toBe("default");
+  });
+
   it("opens the approval in the panel and reads the plan again once it is decided there", async () => {
     await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    // The panel's own list stays as it was read; only where the approval is decided changes.
+    prefs.activeWorkspaceId = "default";
     setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
     expect(text()).toContain("Waiting on your approval…");
     // A connector install is always danger, so its dialog keeps the two-step review.
