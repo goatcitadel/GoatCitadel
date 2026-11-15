@@ -20,6 +20,8 @@ const setPrefs = vi.fn();
 const setUiError = vi.fn();
 const pushLocalNotice = vi.fn();
 const session = { sessionId: "session" } as ChatSessionRecord;
+const otherSession = { sessionId: "other" } as ChatSessionRecord;
+let shown: ChatSessionRecord = session;
 const prefs = { revision: 7, thinkingLevel: "standard" } as unknown as ChatSessionPrefsRecord;
 
 const plan = (kind: "session_model" | "installation_default_model" = "session_model"): ChangePlanRecord => ({
@@ -71,7 +73,7 @@ function Harness() {
   state = useChatChangePlanState("session");
   current = useChatModelChangePlans({
     workspaceId: "workspace",
-    selectedSession: session,
+    selectedSession: shown,
     prefs,
     selectedProviderId: "provider",
     selectedModel: "model",
@@ -86,12 +88,27 @@ function Harness() {
   });
   return null;
 }
+const switchToOther = () =>
+  act(async () => {
+    shown = otherSession;
+    renderer?.update(<Harness />);
+  });
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
 const request = () => act(async () => current.requestThreadModelPatch({ thinkingLevel: "extended" }));
 const cardPlans = () => state.chatChangePlans.map((item) => `${item.planId}:${item.status}`);
 
 beforeEach(async () => {
   vi.clearAllMocks();
   prefsRef.current = null;
+  shown = session;
   await act(async () => {
     renderer = create(<Harness />);
   });
@@ -215,5 +232,73 @@ describe("a model change for one Chat", () => {
     await request();
     expect(pushLocalNotice).toHaveBeenCalledWith("This Chat now uses Provider / model at extended effort.", "success");
     expect(setUiError).toHaveBeenCalledWith(expect.stringContaining("could not be read again"));
+  });
+
+  describe("when the operator opens another Chat while the change is pending", () => {
+    it("leaves the other Chat's settings, notices and card alone when the confirm resolves", async () => {
+      const confirm = deferred<ChangePlanRecord>();
+      api.createChangePlan.mockResolvedValue(plan());
+      api.confirmChangePlan.mockReturnValue(confirm.promise);
+      api.fetchChatSessionPrefs.mockResolvedValue({ revision: 8, thinkingLevel: "extended" });
+      prefsRef.current = { revision: 1, model: "other-model" } as unknown as ChatSessionPrefsRecord;
+      await request();
+      await switchToOther();
+      await act(async () => confirm.resolve(applied()));
+      expect(api.confirmChangePlan).toHaveBeenCalledOnce();
+      expect(api.fetchChatSessionPrefs).not.toHaveBeenCalled();
+      expect(setPrefs).not.toHaveBeenCalled();
+      expect(prefsRef.current).toEqual({ revision: 1, model: "other-model" });
+      expect(pushLocalNotice).not.toHaveBeenCalled();
+      expect(state.activeChangePlan).toBeNull();
+    });
+
+    it("does not publish the re-read settings when the Chat changes during that read", async () => {
+      const reread = deferred<ChatSessionPrefsRecord>();
+      api.createChangePlan.mockResolvedValue(plan());
+      api.confirmChangePlan.mockResolvedValue(applied());
+      api.fetchChatSessionPrefs.mockReturnValue(reread.promise);
+      prefsRef.current = { revision: 1, model: "other-model" } as unknown as ChatSessionPrefsRecord;
+      await request();
+      await switchToOther();
+      await act(async () => reread.resolve({ revision: 8, thinkingLevel: "extended" } as ChatSessionPrefsRecord));
+      expect(setPrefs).not.toHaveBeenCalled();
+      expect(prefsRef.current).toEqual({ revision: 1, model: "other-model" });
+      expect(setUiError).not.toHaveBeenCalled();
+    });
+
+    it("does not publish the re-read settings after a lost answer for the Chat that was left", async () => {
+      const lookup = deferred<ChangePlanRecord>();
+      api.createChangePlan.mockResolvedValue(plan());
+      api.confirmChangePlan.mockRejectedValue(new Error("network lost"));
+      api.fetchChangePlan.mockReturnValue(lookup.promise);
+      api.fetchChatSessionPrefs.mockResolvedValue({ revision: 8, thinkingLevel: "extended" });
+      await request();
+      await switchToOther();
+      await act(async () => lookup.resolve(applied()));
+      expect(setPrefs).not.toHaveBeenCalled();
+      expect(prefsRef.current).toBeNull();
+      expect(pushLocalNotice).not.toHaveBeenCalled();
+    });
+
+    it("shows no refusal for the Chat that was left", async () => {
+      const confirm = deferred<ChangePlanRecord>();
+      api.createChangePlan.mockResolvedValue(plan());
+      api.confirmChangePlan.mockReturnValue(confirm.promise);
+      api.fetchChangePlan.mockResolvedValue(plan());
+      await request();
+      await switchToOther();
+      await act(async () => confirm.reject(new Error("revision conflict")));
+      expect(setUiError).not.toHaveBeenCalled();
+      expect(setPrefs).not.toHaveBeenCalled();
+    });
+
+    it("still applies the change when the operator stays on the Chat", async () => {
+      api.createChangePlan.mockResolvedValue(plan());
+      api.confirmChangePlan.mockResolvedValue(applied());
+      api.fetchChatSessionPrefs.mockResolvedValue({ revision: 8, thinkingLevel: "extended" });
+      await request();
+      expect(setPrefs).toHaveBeenCalledWith({ revision: 8, thinkingLevel: "extended" });
+      expect(prefsRef.current).toEqual({ revision: 8, thinkingLevel: "extended" });
+    });
   });
 });
