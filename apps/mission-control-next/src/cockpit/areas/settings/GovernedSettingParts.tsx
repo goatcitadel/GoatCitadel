@@ -20,6 +20,8 @@ export function GovernedSettingLoadState<T extends GovernedSettingValue>({
   incomplete: string;
 }) {
   const { settings, ready } = governed;
+  const failed = settings.isError;
+  const incompleteRead = Boolean(settings.data) && !settings.isError && !ready;
   return (
     <>
       {settings.isLoading ? (
@@ -36,6 +38,11 @@ export function GovernedSettingLoadState<T extends GovernedSettingValue>({
         <p role="alert" className="mt-3 text-sm text-status-failed">
           {incomplete}
         </p>
+      ) : null}
+      {failed || incompleteRead ? (
+        <Button size="sm" className="mt-2" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>
+          Try again
+        </Button>
       ) : null}
     </>
   );
