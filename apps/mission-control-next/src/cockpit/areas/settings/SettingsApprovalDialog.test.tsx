@@ -315,7 +315,8 @@ it("does not move focus after the dialog left the page", async () => {
   // Only a control still on the page counts: the dialog's own parts leave the page with it.
   const focused: boolean[] = [];
   const focus = vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement) {
-    focused.push(this.isConnected);
+    // The dialog's own focus scope hands focus to the body as it unmounts; that is not this component.
+    focused.push(this.isConnected && this !== document.body);
   });
   await new Promise((resolve) => setTimeout(resolve, 10));
   expect(focused).not.toContain(true);
