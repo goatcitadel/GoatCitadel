@@ -203,3 +203,99 @@ it("leaves Settings approvals scoped to their workspace", async () => {
   expect(api.resolveApproval).not.toHaveBeenCalled();
   expect(document.body.textContent).toContain("This approval changed or is no longer in the current pending queue.");
 });
+
+/** A Settings change plan's effect approval, as the Gateway writes it: linked to the default workspace only. */
+const settingsApproval: ApprovalRequest = {
+  ...approval,
+  kind: "change_plan_effect",
+  riskLevel: "caution",
+  payload: {
+    planId: "plan-1",
+    targetOwnerId: "runtime_settings",
+    targetResourceId: "feature:claudeCliWarmContinuationEnabled",
+  },
+  preview: {
+    title: "Turn off Claude Code CLI: reuse one process between tool steps",
+    summary: "s",
+    impact: "i",
+    risk: "caution",
+  },
+  linkage: { workspaceId: "default", actionType: "change_plan_effect", operatorId: "operator" },
+};
+
+const renderSettingsDecision = (record: ApprovalRequest, installationSetting: boolean | undefined) =>
+  act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ApprovalDecisionBar
+          compact
+          reviewedInPlace
+          installationSetting={installationSetting}
+          approval={record}
+          workspaceId="default"
+          onResolved={vi.fn()}
+          onInvalidated={vi.fn()}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+
+it("decides an install-wide Settings approval in place while another workspace is selected", async () => {
+  preferences.activeWorkspaceId = "verification";
+  try {
+    api.fetchApproval.mockResolvedValue(settingsApproval);
+    api.resolveApproval.mockResolvedValue({ approval: { ...settingsApproval, status: "approved" }, effects: [] });
+    const onResolved = vi.fn();
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ApprovalDecisionBar
+            compact
+            reviewedInPlace
+            installationSetting
+            approval={settingsApproval}
+            workspaceId="default"
+            onResolved={onResolved}
+            onInvalidated={vi.fn()}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    expect(document.body.textContent).not.toContain("The selected workspace changed");
+    await vi.waitFor(() => expect(button("Approve once")).toBeDefined());
+    await act(async () => button("Approve once").click());
+    await vi.waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
+    // The read and the decision stay scoped to the workspace the approval was created in.
+    expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval-a", { workspaceId: "default" });
+    expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
+  } finally {
+    preferences.activeWorkspaceId = "default";
+  }
+});
+
+it.each<[string, ApprovalRequest, boolean | undefined]>([
+  ["the caller did not opt in", settingsApproval, undefined],
+  ["the caller opted out", settingsApproval, false],
+  ["it is not a change plan effect", { ...settingsApproval, kind: "file.write" }, true],
+  [
+    "it is linked to another workspace",
+    { ...settingsApproval, linkage: { ...settingsApproval.linkage!, workspaceId: "ws-b" } },
+    true,
+  ],
+  ["it carries a session", { ...settingsApproval, linkage: { ...settingsApproval.linkage!, sessionId: "s-1" } }, true],
+  ["it carries a turn", { ...settingsApproval, linkage: { ...settingsApproval.linkage!, turnId: "t-1" } }, true],
+  [
+    "its target owner is not the runtime settings",
+    { ...settingsApproval, payload: { ...settingsApproval.payload, targetOwnerId: "capability_plugins" } },
+    true,
+  ],
+])("still refuses another workspace's approval when %s", async (_label, record, installationSetting) => {
+  preferences.activeWorkspaceId = "verification";
+  try {
+    await renderSettingsDecision(record, installationSetting);
+    expect(document.body.textContent).toContain("The selected workspace changed");
+    expect(button("Approve once")).toBeUndefined();
+  } finally {
+    preferences.activeWorkspaceId = "default";
+  }
+});

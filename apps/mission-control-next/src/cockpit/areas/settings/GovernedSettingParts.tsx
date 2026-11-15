@@ -107,6 +107,7 @@ export function GovernedSettingChangeStatus<T extends GovernedSettingValue>({
                 {change.change.receipt.requiredAction.approvalId ? (
                   <SettingsApprovalDialog
                     approvalId={change.change.receipt.requiredAction.approvalId}
+                    installationSetting
                     onResolved={change.refresh}
                   />
                 ) : null}

@@ -226,3 +226,14 @@ it("reopens an approval it already offered when asked, mounted or not", async ()
   await render();
   expect(dialog()).toBeNull();
 });
+
+it("marks the decision bar as an install-wide Settings approval only when the owner says so", async () => {
+  await render();
+  expect(decisionBar).toHaveBeenLastCalledWith(expect.objectContaining({ installationSetting: false }));
+  act(() => root.unmount());
+  root = createRoot(container);
+  __resetSettingsApprovalDialogsForTests();
+  decisionBar.mockReset();
+  await render(vi.fn(), { installationSetting: true });
+  expect(decisionBar).toHaveBeenLastCalledWith(expect.objectContaining({ installationSetting: true }));
+});

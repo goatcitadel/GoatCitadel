@@ -346,6 +346,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
           {allowlistApproval ? (
             <SettingsApprovalDialog
               approvalId={allowlistApproval.approvalId}
+              installationSetting
               onResolved={(decision) => settleAllowlistApproval(decision)}
             />
           ) : null}
