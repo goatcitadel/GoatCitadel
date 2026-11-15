@@ -165,6 +165,7 @@ vi.mock("@goatcitadel/mission-control-shared/content/approval-helpers", async (i
       : {
           targets: preview?.targets ?? [],
           commands: preview?.commands ?? [],
+          commandPreviews: (preview?.commands ?? []).map((text: string) => ({ text })),
           supporting: preview?.supporting ?? [],
           changes: preview?.changes ?? [],
         },
