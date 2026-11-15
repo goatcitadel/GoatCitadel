@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 // Prints every number the 2026-11 usability review report states, computed from findings.json, withdrawn.json,
 // overrides.json, root-causes.md, the journey files and prior-register.json. Nothing is edited.
 //
@@ -356,7 +357,7 @@ function main() {
   const args = process.argv.slice(2);
   const n = compute();
   if (args[0] === '--json') {
-    const { data, ...rest } = n;
+    const { data: _data, ...rest } = n;
     process.stdout.write(`${JSON.stringify(rest, null, 2)}\n`);
     return;
   }

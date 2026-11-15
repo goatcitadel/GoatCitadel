@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 // Validates new-findings/*.json (Phase 2 area findings) and merges them into findings.json.
 // Findings whose journey is "prior" belong to apply-verdicts.cjs and are preserved untouched.
 // Every other finding is rebuilt from the new-findings files on each run. Ids are stable through

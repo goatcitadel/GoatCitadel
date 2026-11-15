@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 // Builds docs/review/2026-11-usability/prior-register.json from the earlier review sources.
 //
 // Usage (every input is a path argument; nothing is baked in):

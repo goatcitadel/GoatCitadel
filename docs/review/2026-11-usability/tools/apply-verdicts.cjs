@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 // Applies prior-verdicts/*.json to prior-register.json and rebuilds the carried
 // ("prior" journey) findings in findings.json. Paths resolve from __dirname.
 'use strict';
@@ -105,11 +106,6 @@ function validate(entries, registerById, errors) {
       errors.push(`${where}: finding only allowed for open/partial`);
     }
   }
-}
-
-function numberOf(id, prefix) {
-  const m = new RegExp(`^U-${prefix}-(\\d+)$`).exec(id || '');
-  return m ? parseInt(m[1], 10) : 0;
 }
 
 function main() {

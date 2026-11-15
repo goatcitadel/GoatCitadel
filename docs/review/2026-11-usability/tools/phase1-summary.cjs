@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 // Usage: node docs/review/2026-11-usability/tools/phase1-summary.cjs
 // Reads prior-register.json and findings.json (one directory up) and writes phase-1-summary.md next to them.
 // Deterministic: no dates, stable ordering. Re-run after any verdict changes.

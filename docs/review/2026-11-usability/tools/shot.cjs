@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
+/* global window */
 // Usage: node docs/review/2026-11-usability/tools/shot.cjs <url> <out.png> [--phone] [--light]
 //        [--workspace <id>] [--citadel <id>] [--wait <ms>]
 // Opens the Cockpit with the workspace/citadel/theme keys set before navigation, waits for #main-content,

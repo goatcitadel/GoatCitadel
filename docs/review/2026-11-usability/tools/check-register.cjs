@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 // Usage: node docs/review/2026-11-usability/tools/check-register.cjs [prefix...] [--file <path>]
 // Reads prior-register.json (next to this tool's parent directory unless --file is given) and prints
 //   unverdicted: N   rows whose verdict is null

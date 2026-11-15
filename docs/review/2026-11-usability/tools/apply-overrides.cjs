@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 // Applies overrides.json (Task 15: severity and wording corrections, root causes, merges, removals) to the
 // findings.json that apply-verdicts.cjs and apply-new-findings.cjs leave behind, ranks what remains and writes
 // withdrawn.json. Run it through build-findings.cjs, which runs all three in order. Paths resolve from __dirname.

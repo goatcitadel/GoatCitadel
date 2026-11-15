@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 // Rebuilds findings.json from its sources: apply-verdicts.cjs (carried findings), apply-new-findings.cjs
 // (Phase 2 findings), then apply-overrides.cjs (Task 15 corrections, root causes, ranking). Running it twice
 // gives the same findings.json byte for byte.
