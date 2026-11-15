@@ -498,3 +498,17 @@ describe("chat turn planning helpers", () => {
     expect(extractCompletionText({ choices: [] } as any)).toBe("");
   });
 });
+
+describe("buildPlanningModeSystemInstruction readable steps", () => {
+  it("asks for a numbered, plain-words plan in Plan first and nothing when planning is off", () => {
+    const advisory = buildPlanningModeSystemInstruction("advisory") ?? "";
+    expect(advisory).toContain(
+      "Write the plan as a numbered list. For each step, say what it does, how you will know it is done, and which earlier step it waits on, by its number.",
+    );
+    expect(advisory).toContain("Use plain words. Do not name internal tools, ids or workflow templates.");
+    expect(advisory.indexOf("Write the plan as a numbered list")).toBeGreaterThan(
+      advisory.indexOf("If tools would help"),
+    );
+    expect(buildPlanningModeSystemInstruction("off")).toBeUndefined();
+  });
+});

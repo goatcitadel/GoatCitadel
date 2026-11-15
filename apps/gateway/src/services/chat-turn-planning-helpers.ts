@@ -388,6 +388,8 @@ export function buildPlanningModeSystemInstruction(planningMode: ChatPlanningMod
     "Respond with an advisory plan, specification, or options analysis only.",
     "Do not claim to have executed tools, delegated work, or changed files in this turn.",
     "If tools would help, explain which tool or follow-up action the operator should explicitly run next.",
+    "Write the plan as a numbered list. For each step, say what it does, how you will know it is done, and which earlier step it waits on, by its number.",
+    "Use plain words. Do not name internal tools, ids or workflow templates.",
   ].join("\n");
 }
 
