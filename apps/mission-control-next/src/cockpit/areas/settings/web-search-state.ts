@@ -155,9 +155,14 @@ export function hostOf(baseUrl: string): string | undefined {
 /**
  * Client-side preview of the Gateway allowlist check, used only to offer the "add host" step.
  * The Gateway re-checks on save and on every tool call. Like the Gateway, a loopback or private LAN address passes
- * only by an exact host and port entry; a hostname-only entry or a wildcard does not cover it.
+ * only by an exact host and port entry; a hostname-only entry or a wildcard does not cover it. A channel bridge
+ * keeps its own looser reading, so it asks with `hostOnlyEntriesCoverPrivate`.
  */
-export function isBaseUrlAllowlisted(baseUrl: string, allowlist: readonly string[]): boolean {
+export function isBaseUrlAllowlisted(
+  baseUrl: string,
+  allowlist: readonly string[],
+  options: { hostOnlyEntriesCoverPrivate?: boolean } = {},
+): boolean {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
@@ -167,7 +172,7 @@ export function isBaseUrlAllowlisted(baseUrl: string, allowlist: readonly string
   if (isLocalHost(parsed.hostname) && parsed.port === "3002") return true;
   const host = parsed.host.toLowerCase();
   const hostname = parsed.hostname.toLowerCase();
-  if (isLocalHost(hostname) || isLanIpv4(hostname)) {
+  if (!options.hostOnlyEntriesCoverPrivate && (isLocalHost(hostname) || isLanIpv4(hostname))) {
     return allowlist.some((raw) => raw.trim().toLowerCase() === host);
   }
   return allowlist.some((raw) => {
