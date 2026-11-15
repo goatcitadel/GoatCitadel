@@ -29,6 +29,7 @@ import {
   pluginSkillSource,
 } from "./plugin-owned-refusal.js";
 import { BUNDLED_SKILL_NAME_TAKEN, isBundledSkillName } from "./plugin-skill-name-rules.js";
+import { TAKES_POWER_AWAY, takesPowerAway } from "./skill-hub-operation-power.js";
 
 export const SKILL_HUB_OPERATOR_SCHEMA_VERSION = "goatcitadel.skill-hub-operator.v1" as const;
 export const SKILL_HUB_OPERATOR_MAX_ITEMS = 100 as const;
@@ -200,6 +201,8 @@ interface OperatorInventory {
   candidateInventoryTruncated: boolean;
   catalogBySkillId: Map<string, CapabilityCatalogEntry>;
   approvalsBySnapshot: Map<string, Partial<Record<SkillHubOperatorAction, SkillHubOperatorApprovalSummary>>>;
+  /** Candidate lineages whose skill was removed in this workspace; they stay as history and are never reused. */
+  removedCandidateIds: ReadonlySet<string>;
 }
 
 interface SnapshotContext {
@@ -212,6 +215,8 @@ interface SnapshotContext {
   sourceCandidates: CandidateSkillVersionRecord[];
   lineageCandidateId?: string;
   lineageAmbiguous: boolean;
+  /** How many earlier lineages of this source were removed; a new install starts lineage number n. */
+  lineageGeneration: number;
   latestCandidate?: CandidateSkillVersionRecord;
   activeCandidate?: CandidateSkillVersionRecord;
   referenceSnapshot?: SkillHubSnapshotRecord;
@@ -242,7 +247,10 @@ const OPERATOR_ACTIONS: readonly SkillHubOperatorAction[] = [
   "stage_rollback_candidate",
   "activate",
   "revoke",
+  "remove",
 ];
+
+export { TAKES_POWER_AWAY };
 
 export class SkillHubOperatorService {
   private readonly now: () => string;
@@ -313,7 +321,7 @@ export class SkillHubOperatorService {
       throw new NotFoundError({ entity: "Skill Hub snapshot", id: snapshotId });
     }
     assertSkillHubSnapshotNotFromPlugin(snapshot, options.pluginPass);
-    const pluginSource = input.operationKind === "revoke" ? undefined : pluginSkillSource(snapshot);
+    const pluginSource = takesPowerAway(input.operationKind) ? undefined : pluginSkillSource(snapshot);
     const pluginInstallPlanId = pluginSource ? options.pluginPass?.installPlanId : undefined;
     if (pluginSource && !pluginInstallPlanId) throw new PluginSkillNeedsInstallError(pluginSource.pluginId);
     const context = await this.contextFor(snapshot, await this.loadInventory(workspaceId));
@@ -466,6 +474,9 @@ export class SkillHubOperatorService {
       candidateInventoryTruncated: rawCandidates.length >= 500,
       catalogBySkillId,
       approvalsBySnapshot: await this.latestApprovalsBySnapshot(workspaceId),
+      removedCandidateIds: new Set(
+        await this.options.storage.skillHubOperations.listAppliedRemovalCandidateIds(workspaceId),
+      ),
     };
   }
 
@@ -493,8 +504,22 @@ export class SkillHubOperatorService {
     ).filter((item): item is { candidate: CandidateSkillVersionRecord; snapshot: SkillHubSnapshotRecord } =>
       Boolean(item.snapshot?.workspaceId === inventory.workspaceId),
     );
-    const sourceCandidates = candidatesWithSources
-      .filter((item) => item.snapshot.canonicalSourceKey === snapshot.canonicalSourceKey)
+    const removedCandidateIds = inventory.removedCandidateIds;
+    const sameSource = candidatesWithSources.filter(
+      (item) => item.snapshot.canonicalSourceKey === snapshot.canonicalSourceKey,
+    );
+    const lineageGeneration = nextLineageGeneration(
+      snapshot,
+      new Set(
+        sameSource
+          .filter((item) => removedCandidateIds.has(item.candidate.candidateId))
+          .map((item) => item.candidate.candidateId),
+      ).size,
+      removedCandidateIds,
+    );
+    // A removed lineage is history: it no longer counts as an installed source.
+    const sourceCandidates = sameSource
+      .filter((item) => !removedCandidateIds.has(item.candidate.candidateId))
       .map((item) => item.candidate);
     const sourceCandidateIds = [...new Set(sourceCandidates.map((candidate) => candidate.candidateId))];
     const lineageCandidateId = sourceCandidateIds.length === 1 ? sourceCandidateIds[0] : undefined;
@@ -537,7 +562,7 @@ export class SkillHubOperatorService {
     const candidateRevision = lineageCandidateId
       ? await this.options.storage.skillAggregateRevisions.get("candidate_skill", lineageCandidateId)
       : undefined;
-    const targetCandidateId = lineageCandidateId ?? candidateIdForSource(snapshot);
+    const targetCandidateId = lineageCandidateId ?? candidateIdForSource(snapshot, lineageGeneration);
     const activeVersion = Boolean(
       exactCandidate &&
       activeCandidate?.versionId === exactCandidate.versionId &&
@@ -561,6 +586,7 @@ export class SkillHubOperatorService {
       exactCandidate,
       sourceCandidates: lineageCandidates,
       lineageCandidateId,
+      lineageGeneration,
       lineageAmbiguous: sourceCandidateIds.length > 1 || exactCandidateIds.length > 1 || candidateTitles.length > 1,
       latestCandidate,
       activeCandidate,
@@ -676,7 +702,7 @@ export class SkillHubOperatorService {
     if (!context.skillId) blockers.push("SKILL_ID_UNRESOLVED");
     if (!context.artifact) blockers.push("ARTIFACT_NOT_RETAINED");
     if (context.lineageAmbiguous) blockers.push("CANDIDATE_LINEAGE_AMBIGUOUS");
-    if (action !== "revoke") {
+    if (!takesPowerAway(action)) {
       if (context.snapshot.trustDisposition !== "candidate") blockers.push("SNAPSHOT_NOT_CANDIDATE");
       blockers.push(...context.snapshot.blockerCodes);
     }
@@ -684,8 +710,10 @@ export class SkillHubOperatorService {
     if (runtimeExists && !context.runtimeRevision) blockers.push("RUNTIME_REVISION_MISSING");
     if (!runtimeExists && context.runtimeRevision) blockers.push("RUNTIME_REVISION_ORPHANED");
 
-    let targetCandidateId = context.lineageCandidateId ?? candidateIdForSource(context.snapshot);
-    let targetVersionId = context.exactCandidate?.versionId ?? versionIdForSnapshot(context.snapshot);
+    let targetCandidateId =
+      context.lineageCandidateId ?? candidateIdForSource(context.snapshot, context.lineageGeneration);
+    let targetVersionId =
+      context.exactCandidate?.versionId ?? versionIdForSnapshot(context.snapshot, context.lineageGeneration);
     let supersedesVersionId: string | undefined;
     let expectedCandidateRevision: number | undefined;
     let expectedRuntimeRevision = runtimeExists ? context.runtimeRevision?.revision : undefined;
@@ -735,6 +763,27 @@ export class SkillHubOperatorService {
       targetVersionId = context.exactCandidate?.versionId ?? targetVersionId;
       supersedesVersionId = context.exactCandidate?.supersedesVersionId;
       expectedCandidateRevision = context.candidateRevision?.revision;
+    } else if (action === "remove") {
+      if (!context.exactCandidate) blockers.push("CANDIDATE_VERSION_MISSING");
+      if (context.runtimeLifecycle?.lifecycleState !== "revoked") blockers.push("RUNTIME_NOT_REVOKED");
+      // The folder on disk is checked against this check's files, so the runtime record must name this very check.
+      const runtimeSource = context.runtimeLifecycle?.provenance;
+      if (
+        context.runtimeLifecycle &&
+        (runtimeSource?.sourceRef !== context.snapshot.snapshotId ||
+          runtimeSource?.contentIntegrity?.treeSha256 !== context.snapshot.contentTreeSha256)
+      ) {
+        blockers.push("RUNTIME_NOT_FROM_THIS_CHECK");
+      }
+      if (context.sourceCandidates.some((candidate) => candidate.lifecycleState !== "revoked")) {
+        blockers.push("CANDIDATE_NOT_REVOKED");
+      }
+      if (!context.lineageCandidateId || !context.candidateRevision) blockers.push("CANDIDATE_REVISION_MISSING");
+      targetCandidateId = context.exactCandidate?.candidateId ?? targetCandidateId;
+      targetVersionId = context.exactCandidate?.versionId ?? targetVersionId;
+      supersedesVersionId = context.exactCandidate?.supersedesVersionId;
+      expectedCandidateRevision = context.candidateRevision?.revision;
+      expectedRuntimeAbsent = false;
     } else {
       if (!context.exactCandidate || !context.activeVersion) blockers.push("VERSION_NOT_ACTIVE");
       if (!context.runtimeLifecycle || context.runtimeLifecycle.lifecycleState === "revoked") {
@@ -865,7 +914,10 @@ function isOperatorIntentTemplate(
   ) {
     return false;
   }
-  return readSkillHubOperationFingerprint(value as unknown as SkillHubOperationIntentTemplate, pluginInstallPlanId) !== undefined;
+  return (
+    readSkillHubOperationFingerprint(value as unknown as SkillHubOperationIntentTemplate, pluginInstallPlanId) !==
+    undefined
+  );
 }
 
 function isCanonicalIntentString(value: unknown, maxLength: number): value is string {
@@ -959,12 +1011,29 @@ function isCanonicalSkillName(value: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,127}$/iu.test(value) && value === value.normalize("NFKC").trim();
 }
 
-function candidateIdForSource(snapshot: SkillHubSnapshotRecord): string {
-  return `skill-hub-candidate-${hashParts(snapshot.workspaceId, snapshot.canonicalSourceKey).slice(0, 32)}`;
+/** Generation 0 keeps the id every earlier install used; each later lineage of the same source appends `-r<n>`. */
+function candidateIdForSource(snapshot: SkillHubSnapshotRecord, generation = 0): string {
+  const base = `skill-hub-candidate-${hashParts(snapshot.workspaceId, snapshot.canonicalSourceKey).slice(0, 32)}`;
+  return generation === 0 ? base : `${base}-r${generation}`;
 }
 
-function versionIdForSnapshot(snapshot: SkillHubSnapshotRecord): string {
-  return `skill-hub-version-${hashParts(snapshot.workspaceId, snapshot.snapshotId, snapshot.contentTreeSha256).slice(0, 32)}`;
+function versionIdForSnapshot(snapshot: SkillHubSnapshotRecord, generation = 0): string {
+  const base = `skill-hub-version-${hashParts(snapshot.workspaceId, snapshot.snapshotId, snapshot.contentTreeSha256).slice(0, 32)}`;
+  return generation === 0 ? base : `${base}-r${generation}`;
+}
+
+/**
+ * The generation a new install of this source starts at: the number of removed lineages found, moved past any
+ * generation whose deterministic candidate id is itself a removed one, so a new lineage never reuses an old id.
+ */
+function nextLineageGeneration(
+  snapshot: SkillHubSnapshotRecord,
+  removedLineages: number,
+  removedCandidateIds: ReadonlySet<string>,
+): number {
+  let generation = removedLineages;
+  while (removedCandidateIds.has(candidateIdForSource(snapshot, generation))) generation += 1;
+  return generation;
 }
 
 function hashParts(...parts: Array<string | number | boolean | undefined>): string {

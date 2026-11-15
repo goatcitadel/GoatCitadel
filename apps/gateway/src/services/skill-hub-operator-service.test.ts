@@ -482,6 +482,140 @@ describe("SkillHubOperatorService", () => {
     expect(live.createApproval).toHaveBeenCalledTimes(1);
   });
 
+  it("allows remove only for a revoked skill whose versions are all revoked", async () => {
+    const checked = snapshot({ snapshotId: "snapshot-v1" });
+    const version = (lifecycleState: CandidateSkillVersionRecord["lifecycleState"]) =>
+      candidateVersion({
+        versionId: "version-v1",
+        upstreamSnapshotId: "snapshot-v1",
+        sourceFingerprint: checked.contentTreeSha256,
+        lifecycleState,
+      });
+    const revokedRuntime = { ...activeLifecycle(checked), lifecycleState: "revoked" as const };
+
+    const live = createHarness({
+      snapshots: [checked],
+      candidates: [version("approved")],
+      lifecycle: activeLifecycle(checked),
+    });
+    const liveItem = (await live.service.list({ workspaceId: "workspace-1" })).items[0]!;
+    expect(liveItem.actions.remove.allowed).toBe(false);
+    expect(liveItem.actions.remove.blockers).toEqual(
+      expect.arrayContaining(["CANDIDATE_NOT_REVOKED", "RUNTIME_NOT_REVOKED"]),
+    );
+
+    const halfRevoked = createHarness({
+      snapshots: [checked],
+      candidates: [version("revoked"), candidateVersion({ versionId: "version-other", lifecycleState: "approved" })],
+      lifecycle: revokedRuntime,
+    });
+    const halfItem = (await halfRevoked.service.list({ workspaceId: "workspace-1" })).items[0]!;
+    expect(halfItem.actions.remove.blockers).toContain("CANDIDATE_NOT_REVOKED");
+
+    const revoked = createHarness({
+      snapshots: [checked],
+      candidates: [version("revoked")],
+      lifecycle: revokedRuntime,
+    });
+    const revokedItem = (await revoked.service.list({ workspaceId: "workspace-1" })).items[0]!;
+    expect(revokedItem.actions.remove).toEqual({ allowed: true, blockers: [] });
+    const intent = await createIntent(revoked, "snapshot-v1", "remove");
+    expect(intent).toMatchObject({
+      operationKind: "remove",
+      skillId: "extra:demo",
+      targetCandidateId: "candidate-demo",
+      targetVersionId: "version-v1",
+      expectedCandidateRevision: 3,
+      expectedRuntimeRevision: 2,
+      expectedCandidateAbsent: false,
+      expectedRuntimeAbsent: false,
+    });
+
+    const otherCheck = snapshot({
+      snapshotId: "snapshot-v2",
+      contentTreeSha256: "2".repeat(64),
+      declaredVersion: "2.0.0",
+    });
+    const elsewhere = createHarness({
+      snapshots: [checked],
+      candidates: [version("revoked")],
+      lifecycle: { ...activeLifecycle(otherCheck), lifecycleState: "revoked" },
+    });
+    const elsewhereItem = (await elsewhere.service.list({ workspaceId: "workspace-1" })).items[0]!;
+    expect(elsewhereItem.actions.remove.blockers).toContain("RUNTIME_NOT_FROM_THIS_CHECK");
+
+    const never = createHarness({ snapshots: [checked], candidates: [version("revoked")] });
+    const neverItem = (await never.service.list({ workspaceId: "workspace-1" })).items[0]!;
+    expect(neverItem.actions.remove.blockers).toContain("RUNTIME_NOT_REVOKED");
+  });
+
+  it("lets the same source install again after a removal, on a new lineage", async () => {
+    const checked = snapshot({ snapshotId: "snapshot-v1" });
+    const removed = candidateVersion({
+      versionId: "version-v1",
+      upstreamSnapshotId: "snapshot-v1",
+      sourceFingerprint: checked.contentTreeSha256,
+      lifecycleState: "revoked",
+    });
+    const harness = createHarness({
+      snapshots: [checked],
+      candidates: [removed],
+      removedCandidateIds: ["candidate-demo"],
+    });
+    const item = (await harness.service.list({ workspaceId: "workspace-1" })).items[0]!;
+    expect(item.actions.install_inactive).toEqual({ allowed: true, blockers: [] });
+    expect(item.candidate).toBeUndefined();
+    expect(item.actions.remove.allowed).toBe(false);
+
+    const intent = await createIntent(harness, "snapshot-v1", "install_inactive");
+    expect(intent.targetCandidateId).toMatch(/^skill-hub-candidate-[0-9a-f]{32}-r1$/u);
+    expect(intent.targetVersionId).toMatch(/^skill-hub-version-[0-9a-f]{32}-r1$/u);
+  });
+
+  it("never reuses the old version id when the very same check is installed again", async () => {
+    const checked = snapshot({ snapshotId: "snapshot-v1" });
+    const first = createHarness({ snapshots: [checked] });
+    const firstIntent = await createIntent(first, "snapshot-v1", "install_inactive");
+
+    const removed = candidateVersion({
+      candidateId: firstIntent.targetCandidateId!,
+      versionId: firstIntent.targetVersionId!,
+      upstreamSnapshotId: "snapshot-v1",
+      sourceFingerprint: checked.contentTreeSha256,
+      lifecycleState: "revoked",
+    });
+    const again = createHarness({
+      snapshots: [checked],
+      candidates: [removed],
+      removedCandidateIds: [firstIntent.targetCandidateId!],
+    });
+    const secondIntent = await createIntent(again, "snapshot-v1", "install_inactive");
+    expect(secondIntent.targetVersionId).not.toBe(removed.versionId);
+    expect(secondIntent.targetVersionId).toBe(`${removed.versionId}-r1`);
+    expect(secondIntent.targetCandidateId).toBe(`${removed.candidateId}-r1`);
+  });
+
+  it("starts the third lineage at generation two", async () => {
+    const checked = snapshot({ snapshotId: "snapshot-v1" });
+    const first = await createIntent(createHarness({ snapshots: [checked] }), "snapshot-v1", "install_inactive");
+    const base = first.targetCandidateId!;
+    const old = (candidateId: string, versionId: string) =>
+      candidateVersion({
+        candidateId,
+        versionId,
+        upstreamSnapshotId: "snapshot-v1",
+        sourceFingerprint: checked.contentTreeSha256,
+        lifecycleState: "revoked",
+      });
+    const harness = createHarness({
+      snapshots: [checked],
+      candidates: [old(base, "version-a"), old(`${base}-r1`, "version-b")],
+      removedCandidateIds: [base, `${base}-r1`],
+    });
+    const intent = await createIntent(harness, "snapshot-v1", "install_inactive");
+    expect(intent.targetCandidateId).toBe(`${base}-r2`);
+  });
+
   it("rejects turn lineage without a parent session before creating an approval", async () => {
     const current = snapshot({ snapshotId: "snapshot-install" });
     const harness = createHarness({ snapshots: [current] });
@@ -673,6 +807,7 @@ function createHarness(input: {
   candidates?: CandidateSkillVersionRecord[];
   lifecycle?: SkillLifecycleRecord;
   approvals?: ApprovalRequest[];
+  removedCandidateIds?: string[];
   catalogEntry?: CapabilityCatalogEntry;
   beforeCreateApproval?: () => Promise<void>;
   transformCreatedApproval?: (approval: ApprovalRequest) => ApprovalRequest;
@@ -726,7 +861,10 @@ function createHarness(input: {
         return found ? artifact(found) : undefined;
       }),
     },
-    skillHubOperations: { findSettlementByOperationId: vi.fn(async () => undefined) },
+    skillHubOperations: {
+      findSettlementByOperationId: vi.fn(async () => undefined),
+      listAppliedRemovalCandidateIds: vi.fn(async () => input.removedCandidateIds ?? []),
+    },
     skillLifecycle: { find: vi.fn(async () => input.lifecycle) },
     skillAggregateRevisions: {
       get: vi.fn(async (kind: "candidate_skill" | "runtime_skill", aggregateId: string) => {
