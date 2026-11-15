@@ -1,12 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { describeChatUiError, formatChatUiError, isChatErrorAlreadyShownByTurn } from "./chat-error-copy";
+import {
+  describeChatUiError,
+  formatChatUiError,
+  isChatErrorAlreadyShownByTurn,
+  isGatewayUnreachableChatError,
+} from "./chat-error-copy";
+
+describe("isGatewayUnreachableChatError", () => {
+  it("is true for exactly the texts that read as the gateway being unreachable", () => {
+    expect(isGatewayUnreachableChatError("Network error: Failed to fetch")).toBe(true);
+    expect(isGatewayUnreachableChatError("TypeError: failed to fetch")).toBe(true);
+    expect(isGatewayUnreachableChatError("Run data refresh failed")).toBe(false);
+    expect(isGatewayUnreachableChatError("The run is waiting for approval; failed to fetch")).toBe(false);
+    expect(isGatewayUnreachableChatError("ECONNREFUSED")).toBe(false);
+    expect(isGatewayUnreachableChatError(null)).toBe(false);
+    expect(isGatewayUnreachableChatError(undefined)).toBe(false);
+  });
+});
 
 describe("recorded Chat failure copy", () => {
   it("hides only a matching host error already visible in a failed turn", () => {
     const answer = "This turn failed before completion. Retry once, or narrow the request.";
     const error = `${answer} More detail follows.`;
     expect(isChatErrorAlreadyShownByTurn({ error, turnStatus: "failed", assistantContent: answer })).toBe(true);
-    expect(isChatErrorAlreadyShownByTurn({ error: "A different error", turnStatus: "failed", assistantContent: answer })).toBe(false);
+    expect(
+      isChatErrorAlreadyShownByTurn({ error: "A different error", turnStatus: "failed", assistantContent: answer }),
+    ).toBe(false);
     expect(isChatErrorAlreadyShownByTurn({ error, turnStatus: "completed", assistantContent: answer })).toBe(false);
     expect(isChatErrorAlreadyShownByTurn({ error, turnStatus: "failed", assistantContent: "Failed" })).toBe(false);
   });
