@@ -87,9 +87,7 @@ export function useChatRoutePreflight(input: {
     workspaceSnapshot,
   } = input;
   const cacheRef = useRef(new Map<string, { fetchedAt: number; result: RoutingPreflightResult }>());
-  const [result, setResult] = useState<RoutingPreflightResult | null>(null);
-  // The session the held result was read for; a result never carries over to another session.
-  const resultSessionIdRef = useRef<string | null>(null);
+  const [held, setHeld] = useState<{ scope: string; value: RoutingPreflightResult } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const displayRequest = useMemo(
@@ -106,6 +104,11 @@ export function useChatRoutePreflight(input: {
           })
         : null,
     [content, displayAction, displayTurnId, fullWebAccess, prefs, sessionId, surfaceMode, workspaceSnapshot],
+  );
+  const displayScope = useMemo(
+    () =>
+      sessionId && displayRequest ? `${sessionId}:${stableHash({ ...displayRequest, content: undefined })}` : null,
+    [displayRequest, sessionId],
   );
   const displayKey = useMemo(
     () => (sessionId && displayRequest ? `${sessionId}:${stableHash(displayRequest)}` : null),
@@ -132,18 +135,13 @@ export function useChatRoutePreflight(input: {
 
   useEffect(() => {
     const displaySessionId = sessionId;
-    if (!displayRequest || !displayKey || !enabled || !displaySessionId) {
-      resultSessionIdRef.current = null;
-      setResult(null);
+    if (!displayRequest || !displayKey || !displayScope || !enabled || !displaySessionId) {
+      setHeld(null);
       setError(null);
       setLoading(false);
       return;
     }
     let cancelled = false;
-    if (resultSessionIdRef.current !== displaySessionId) {
-      resultSessionIdRef.current = null;
-      setResult(null);
-    }
     // A new draft in the same session keeps the last result on screen while loading is true.
     setError(null);
     setLoading(true);
@@ -153,8 +151,7 @@ export function useChatRoutePreflight(input: {
           if (cancelled) {
             return;
           }
-          resultSessionIdRef.current = displaySessionId;
-          setResult(next);
+          setHeld({ scope: displayScope, value: next });
           setError(null);
         })
         .catch((cause) => {
@@ -162,8 +159,7 @@ export function useChatRoutePreflight(input: {
             return;
           }
           // A failed check must not leave the previous result standing as if it were current.
-          resultSessionIdRef.current = null;
-          setResult(null);
+          setHeld(null);
           setError(describeApiError(cause).summary);
         })
         .finally(() => {
@@ -182,7 +178,7 @@ export function useChatRoutePreflight(input: {
         clearTimeout(debounce);
       }
     };
-  }, [displayKey, displayRequest, enabled, fetchPreflight, sessionId]);
+  }, [displayKey, displayRequest, displayScope, enabled, fetchPreflight, sessionId]);
 
   const ensureFreshPreflight = useCallback(
     async (override: {
@@ -212,16 +208,18 @@ export function useChatRoutePreflight(input: {
       const cached = cacheRef.current.get(cacheKey);
       const stale = !cached || Date.now() - cached.fetchedAt >= PREFLIGHT_TTL_MS;
       const next = await fetchPreflight(request, { force: override.force || stale, sessionId: targetSessionId });
-      if (displayKey === cacheKey) {
-        resultSessionIdRef.current = targetSessionId;
-        setResult(next);
+      if (displayScope && displayKey === cacheKey) {
+        setHeld({ scope: displayScope, value: next });
         setError(null);
       }
       return next;
     },
-    [displayKey, fetchPreflight, fullWebAccess, prefs, sessionId, surfaceMode, workspaceSnapshot],
+    [displayKey, displayScope, fetchPreflight, fullWebAccess, prefs, sessionId, surfaceMode, workspaceSnapshot],
   );
 
+  // What the held result was read for: the session and everything in the request except the draft text.
+  // It is shown across draft text changes only, never for a different model, tools or session.
+  const result = held && held.scope === displayScope ? held.value : null;
   const resultHash = useMemo(() => (result ? stableHash(result) : null), [result]);
 
   return {

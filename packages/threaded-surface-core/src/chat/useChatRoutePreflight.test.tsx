@@ -198,6 +198,53 @@ describe("useChatRoutePreflight", () => {
     act(() => renderer.unmount());
   });
 
+  it("clears the result when anything but the draft text changes, so the check shows as pending", async () => {
+    vi.useFakeTimers();
+    let latest: ReturnType<typeof useChatRoutePreflight> | null = null;
+    function Harness(props: { prefs: typeof CHAT_PREFS }) {
+      latest = useChatRoutePreflight({
+        sessionId: "session-1",
+        prefs: props.prefs,
+        content: "same text",
+        surfaceMode: "chat",
+        displayAction: "send",
+      });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness prefs={CHAT_PREFS} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+    });
+    expect(latest!.result).not.toBeNull();
+
+    let release!: (value: unknown) => void;
+    preflightChatRoute.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    await act(async () => {
+      renderer.update(<Harness prefs={{ ...CHAT_PREFS, providerId: "anthropic", model: "claude-next" }} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+    });
+    expect(latest!.loading).toBe(true);
+    expect(latest!.result).toBeNull();
+    expect(latest!.resultHash).toBeNull();
+
+    await act(async () => {
+      release({ selectionSource: "turn", effectiveModel: "claude-next" });
+      await Promise.resolve();
+    });
+    expect(latest!.loading).toBe(false);
+    expect(latest!.result?.effectiveModel).toBe("claude-next");
+    act(() => renderer.unmount());
+  });
+
   it("uses the locked Cowork surface when session prefs still say Chat", async () => {
     let latest: ReturnType<typeof useChatRoutePreflight> | null = null;
     function Harness() {
