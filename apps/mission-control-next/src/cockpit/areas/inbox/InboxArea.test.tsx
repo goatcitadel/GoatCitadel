@@ -1127,6 +1127,78 @@ describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN
     expect(container.querySelectorAll("[data-inbox-announcer]")).toHaveLength(1);
   });
 
+  const itemInAddress = () => new URLSearchParams(window.location.search).get("item");
+  const details = (id: string) =>
+    container.querySelector<HTMLButtonElement>(`[data-inbox-row="${CSS.escape(id)}"] [data-inbox-detail]`)!;
+
+  it("puts the opened item in the address and keeps J/K from stacking history (U-IN-006)", async () => {
+    show([first, second], { needs_decision: { known: 2, complete: true } });
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    expect(itemInAddress()).toBeNull();
+    const before = window.history.length;
+    await act(async () => details("approval:test").click());
+    expect(itemInAddress()).toBe("approval:test");
+    expect(new URLSearchParams(window.location.search).get("workspaceId")).toBe("default");
+    expect(window.location.search).not.toContain("Review");
+    expect(window.history.length).toBe(before + 1);
+    expect(container.querySelectorAll('[aria-label^="Inspector:"]')).toHaveLength(1);
+    // Moving the open item with J/K replaces the entry: arrowing never stacks history.
+    await press("j");
+    expect(itemInAddress()).toBe("approval:second");
+    expect(window.history.length).toBe(before + 1);
+    expect(container.querySelectorAll('[aria-label^="Inspector:"]')).toHaveLength(1);
+  });
+
+  it("clears the item from the address when the inspector is closed", async () => {
+    show([first, second], { needs_decision: { known: 2, complete: true } });
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    await act(async () => details("approval:test").click());
+    expect(itemInAddress()).toBe("approval:test");
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Close inspector"]')!.click());
+    expect(itemInAddress()).toBeNull();
+  });
+
+  it("returns to the list with nothing selected when Back leaves the item", async () => {
+    show([first, second], { needs_decision: { known: 2, complete: true } });
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    await act(async () => details("approval:test").click());
+    expect(container.querySelector('[data-selected="true"]')).not.toBeNull();
+    await act(async () => {
+      window.history.replaceState(null, "", "/inbox?workspaceId=default");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(container.querySelector('[data-selected="true"]')).toBeNull();
+    expect(container.querySelector('[aria-label^="Inspector:"]')).toBeNull();
+    // Forward to an item opens it again.
+    await act(async () => {
+      window.history.replaceState(null, "", "/inbox?workspaceId=default&item=approval%3Asecond");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(container.querySelector('[aria-label="Inspector: Second write"]')).not.toBeNull();
+    expect(container.querySelector('[data-inbox-item][data-selected="true"] h3')?.textContent).toBe("Second write");
+  });
+
+  it("leaves a link to an item that is gone as it is (U-IN-006)", async () => {
+    show([first]);
+    window.history.replaceState(null, "", "/inbox?workspaceId=default&item=change_plan%3Agone");
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    expect(container.textContent).toContain("The linked item is no longer in the current Inbox.");
+    expect(container.querySelector('[aria-label^="Inspector:"]')).toBeNull();
+    expect(container.querySelector('[data-selected="true"]')).toBeNull();
+    expect(window.location.search).toBe("?workspaceId=default&item=change_plan%3Agone");
+  });
+
+  it("keeps the workspace and other parameters in the address of an opened item", async () => {
+    show([first]);
+    window.history.replaceState(null, "", "/inbox?workspaceId=default&shell=cockpit");
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    await act(async () => details("approval:test").click());
+    const search = new URLSearchParams(window.location.search);
+    expect(search.get("workspaceId")).toBe("default");
+    expect(search.get("shell")).toBe("cockpit");
+    expect(search.get("item")).toBe("approval:test");
+  });
+
   it("moves the open inspector with J/K and says when A or D do not apply", async () => {
     show([first, update], { updates: { known: 1, complete: true } });
     await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));

@@ -40,6 +40,7 @@ import { useInboxShortcutsPreference } from "./inbox-shortcuts-preference";
 import { InboxInspectorBody } from "./InboxInspectorBody";
 import { InboxItemCard } from "./InboxItemCard";
 import { useInboxLinkedItem } from "./use-inbox-linked-item";
+import { useInboxSelection, type InboxOpenArguments } from "./use-inbox-selection";
 import { inboxUpdateVersion, markInboxUpdateViewed, useInboxViewedUpdates } from "./inbox-viewed-updates";
 
 export function InboxArea() {
@@ -158,13 +159,14 @@ export function InboxArea() {
   if (hasOpenDecisions && bulkRejectScope !== scopeKey) setBulkRejectScope(scopeKey);
   const showBulkReject = hasOpenDecisions || bulkRejectScope === scopeKey;
   const { announce, region: announcer } = useInboxAnnouncer();
+  const openNowRef = useRef<(...args: InboxOpenArguments) => void>(() => undefined);
+  const { selectedId, selectItem, inspect, takePending } = useInboxSelection(workspaceId, openNowRef);
   const [contextSelection, setContextSelection] = useState<{ scope: string; id: string } | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [shortcutsEnabled, setShortcutsEnabled] = useInboxShortcutsPreference();
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const priorItems = useRef<OperatorInboxItem[]>([]);
   const listHandles = useRef(new Map<string, WindowedRecordListHandle>());
-  const decisionFocus = useInboxDecisionFocus({ orderedItems, groupOf, listHandles, select: setSelectedId, announce });
+  const decisionFocus = useInboxDecisionFocus({ orderedItems, groupOf, listHandles, select: selectItem, announce });
   useEffect(() => {
     const previous = priorItems.current;
     priorItems.current = orderedItems;
@@ -172,13 +174,13 @@ export function InboxArea() {
     if (previous.find((item) => item.id === selectedId)?.group !== "needs_decision") return;
     const next = orderedItems.find((item) => groupOf(item) === "needs_decision");
     if (!next) return;
-    setSelectedId(next.id);
+    selectItem(next.id);
     // A decision made here moves focus through its own owner; this only recovers focus lost with a removed row.
     const active = document.activeElement;
     const lost = !active || active === document.body || !active.isConnected;
     if (lost && !decisionFocus.focusPending() && !document.querySelector('[role="dialog"]'))
       listHandles.current.get(groupOf(next))?.focusRecord(next.id, "[data-inbox-detail]");
-  }, [orderedItems, selectedId, inbox.isFetching, projection, groupOf, decisionFocus]);
+  }, [orderedItems, selectedId, inbox.isFetching, projection, groupOf, decisionFocus, selectItem]);
   const mounted = useRef(true);
   const current = useRef({ installation, workspaceId, projection, fetching: inbox.isFetching });
   current.current = { installation, workspaceId, projection, fetching: inbox.isFetching };
@@ -216,7 +218,7 @@ export function InboxArea() {
   // The inspector body is a snapshot; it reaches the current decision owner through this ref.
   const decisionRef = useRef(decisionFocus.onDecision);
   decisionRef.current = decisionFocus.onDecision;
-  const inspect = useCallback(
+  const openNow = useCallback(
     (item: OperatorInboxItem, focusAction?: "approve" | "deny", explicitDetails = false) =>
       inspector.open({
         source: `inbox:${item.id}`,
@@ -236,6 +238,7 @@ export function InboxArea() {
     [inspector, installation, workspaceId, recordOpenedUpdate],
   );
 
+  openNowRef.current = openNow;
   useInboxLinkedItem({
     installation,
     activeCitadelId,
@@ -245,14 +248,15 @@ export function InboxArea() {
     items: projection?.items,
     isFetching: inbox.isFetching,
     inspect,
-    select: setSelectedId,
+    select: selectItem,
+    takePending,
   });
 
   useInboxShortcuts({
     enabled: shortcutsEnabled,
     orderedItems,
     selectedId,
-    select: setSelectedId,
+    select: selectItem,
     inspect,
     inspectorShowsInboxItem: Boolean(inspector.content?.source?.startsWith("inbox:")),
     groupOf,
@@ -382,7 +386,7 @@ export function InboxArea() {
                     contextOpen={contextSelection?.scope === scopeKey && contextSelection.id === item.id}
                     onDecision={(message, settled) => decisionRef.current(item, message, settled)}
                     onDetails={() => {
-                      setSelectedId(item.id);
+                      selectItem(item.id);
                       inspect(item, undefined, true);
                     }}
                     onToggleContext={() =>
