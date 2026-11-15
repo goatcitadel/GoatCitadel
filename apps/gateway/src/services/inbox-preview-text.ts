@@ -1,112 +1,96 @@
-import { redactSecretText, SECRET_REDACTION_MARKER } from "@goatcitadel/contracts";
-import { withoutControls } from "./plugin-plain-text.js";
-import { redactLocalHomePaths } from "./user-facing-failure-text.js";
+/*
+ * What an Inbox row says about a shell command or a code run it asks to approve. The row never shows the command's
+ * arguments or the code's text: a model wrote them, they can carry a credential in forms no filter lists completely, and
+ * partly hiding a shell line can hide its tail. The row names the kind of thing (the program, how many lines) and the
+ * approval detail shows the full text. Nothing here uses a regular expression on that text: each scan is bounded.
+ */
 
-/** The most of a command's or code's first line an Inbox row names, counted in characters a reader sees. */
-const MAX_PREVIEW_LINE = 180;
-/** The most of a command the credential check reads; a longer command is treated as carrying one. */
-const MAX_SCANNED_COMMAND = 4000;
-/** The most of a command's first word a withheld row names. */
-const MAX_FIRST_WORD = 40;
-const WITHHELD_NOTE = "(open it to see the full command)";
+/** The most of a command or code text counted for lines; a longer text is said to have many lines. */
+const MAX_COUNTED_TEXT = 10_000;
+/** The most of a command's start read for its program name. */
+const MAX_PROGRAM_SCAN = 256;
+const MAX_PROGRAM_NAME = 40;
 
-const INVISIBLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
-const SPACE_SEPARATORS = /\p{Zs}/gu;
+const SPACE = 32;
+const LINE_FEED = 10;
+const CARRIAGE_RETURN = 13;
+const LINE_SEPARATOR = 0x2028;
+const PARAGRAPH_SEPARATOR = 0x2029;
 
-const SECRET_FLAGS =
-  /(?<![\w-])--(?:password|passwd|pass|token|secret|body|auth|apikey|api-key|key|credential|credentials)(?![\w-])/iu;
-/** `-u` or `--user` whose value holds a colon: a `name:password` pair, quoted or not. */
-const USER_WITH_PASSWORD = /(?<![\w-])(?:-u|--user)[\s"']*=?[\s"']*[^\s"']*:/iu;
-const CREDENTIAL_COMMANDS = /sshpass|htpasswd|docker\s+login/iu;
-const DATABASE_COMMANDS =
-  /(?<![\w-])(?:mysql|mysqldump|mysqladmin|mariadb|mongo|mongosh|redis-cli|psql|pg_dump)(?:\.exe)?(?![\w-])/iu;
-const PASSWORD_SHORT_FLAG = /(?<![\w-])-[pa]/iu;
-const ASSIGNMENT_NAME = /(?<![\w.-])[A-Za-z_]\w*(?==)/gu;
-const URL_USERINFO = /:\/\/[^\s/?#]*@/u;
-const SENSITIVE_SEGMENTS = new Set([
-  "PASS",
-  "PASSWORD",
-  "PASSWD",
-  "PWD",
-  "SECRET",
-  "TOKEN",
-  "KEY",
-  "APIKEY",
-  "AUTH",
-  "CREDENTIAL",
-  "CREDENTIALS",
-  "PAT",
-]);
-const HARMLESS_LAST_SEGMENTS = new Set(["COUNT", "ID", "LEN", "LENGTH", "MAX", "MIN"]);
-const SENSITIVE_ENDINGS = ["PASSWORD", "PASSWD", "PWD"];
+function isWhitespace(code: number): boolean {
+  return code <= SPACE;
+}
 
-function sensitiveAssignmentName(name: string): boolean {
-  const upper = name.toUpperCase();
-  if (upper === "PWD") return false;
-  const segments = upper.split("_");
-  if (HARMLESS_LAST_SEGMENTS.has(segments[segments.length - 1]!)) return false;
+function isLineBreak(code: number): boolean {
+  return code === LINE_FEED || code === CARRIAGE_RETURN || code === LINE_SEPARATOR || code === PARAGRAPH_SEPARATOR;
+}
+
+function isProgramCharacter(code: number): boolean {
   return (
-    segments.some((segment) => SENSITIVE_SEGMENTS.has(segment)) || SENSITIVE_ENDINGS.some((end) => upper.endsWith(end))
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 46 || // .
+    code === 95 || // _
+    code === 43 || // +
+    code === 45 || // -
+    code === 47 || // /
+    code === 92 // backslash
   );
 }
 
-/**
- * Whether a shell command looks as if it carries a credential. It only answers yes or no and edits nothing: a row that
- * says yes withholds the command's arguments instead of masking them, because partially masking a shell line (deleting
- * the part that looks secret) can hide the rest of the command, and without a shell parser that cannot be made safe. The
- * full command is one click away in the approval detail, redacted as before. The check is liberal on purpose: a false yes
- * only withholds detail and says so, a false no would show a password. It reads every line of the text after the shared
- * redaction, scans at most 4000 characters, and answers yes for a longer text. Each test below is one simple scan.
- */
-export function shellLineLooksSecret(text: string): boolean {
-  if (text.length > MAX_SCANNED_COMMAND) return true;
-  if (text.includes(SECRET_REDACTION_MARKER)) return true;
-  if (
-    SECRET_FLAGS.test(text) ||
-    USER_WITH_PASSWORD.test(text) ||
-    CREDENTIAL_COMMANDS.test(text) ||
-    URL_USERINFO.test(text)
-  )
-    return true;
-  if (DATABASE_COMMANDS.test(text) && PASSWORD_SHORT_FLAG.test(text)) return true;
-  return [...text.matchAll(ASSIGNMENT_NAME)].some((match) => sensitiveAssignmentName(match[0]));
-}
-
-/** Text with invisible and format characters removed and every kind of space made a plain one. */
-function visibleText(line: string): string {
-  return withoutControls(line.replace(INVISIBLE, "").replace(SPACE_SEPARATORS, " "));
-}
-
-/** The first word of a command for a withheld row: no directory, no quotes, plain characters only, else nothing. */
-function firstWord(line: string): string {
-  const token = (line.split(" ")[0] ?? "").replace(/^["']+|["']+$/gu, "");
-  const word = token.split(/[/\\]/u).pop() ?? "";
-  return /^[\w.+-]+$/u.test(word) ? [...word].slice(0, MAX_FIRST_WORD).join("") : "";
-}
-
-function firstLinesOf(text: string): string[] {
-  const breaks = new RegExp(`\r\n|[\r\n${String.fromCharCode(0x2028)}${String.fromCharCode(0x2029)}]`, "u");
-  return redactLocalHomePaths(redactSecretText(text).value).split(breaks).map(visibleText).filter(Boolean);
-}
-
-/**
- * One safe line of text a model wrote as a command or as code: secrets and the home folder taken out first (so a cut
- * can never leave half a token), invisible characters removed (so they cannot push the rest of a command past the cut),
- * then the first non-empty line, capped, with whether it was cut and how many lines were left out. With `shell`, a
- * command that looks as if it carries a credential shows only its first word. Counted in code points, so the words that
- * say a line was cut or longer are never the part that is lost.
- */
-export function previewLine(label: string, text: string, options: { shell?: boolean } = {}): string | undefined {
-  const lines = firstLinesOf(text);
-  const [first, ...rest] = lines;
-  if (!first) return undefined;
-  if (options.shell && (text.length > MAX_SCANNED_COMMAND || shellLineLooksSecret(lines.join(" ")))) {
-    const word = firstWord(first);
-    return `${label}:${word ? ` ${word}` : ""} ${WITHHELD_NOTE}`;
+/** How many non-empty lines the text has, or "many" when it is longer than the counted part. */
+function countLines(text: string): number | "many" {
+  if (text.length > MAX_COUNTED_TEXT) return "many";
+  let lines = 0;
+  let lineHasText = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (isLineBreak(code)) {
+      if (lineHasText) lines += 1;
+      lineHasText = false;
+    } else if (!isWhitespace(code)) {
+      lineHasText = true;
+    }
   }
-  const characters = [...first];
-  const cut = characters.length > MAX_PREVIEW_LINE;
-  const line = cut ? `${characters.slice(0, MAX_PREVIEW_LINE).join("").trimEnd()} (cut short)` : first;
-  const more = rest.length ? ` (and ${rest.length} more ${rest.length === 1 ? "line" : "lines"})` : "";
-  return `${label}: ${line}${more}`;
+  return lineHasText ? lines + 1 : lines;
+}
+
+/**
+ * The program a command starts with: its first word, when that word is plain letters, digits and . _ + - / and
+ * backslash, read from the first 256 characters only. A word with a quote, a dollar sign or an equals sign (a quoted
+ * path, a variable, an assignment that may hold a password) names no program. Any directory is dropped.
+ */
+function programName(command: string): string | undefined {
+  const limit = Math.min(command.length, MAX_PROGRAM_SCAN);
+  let start = 0;
+  while (start < limit && isWhitespace(command.charCodeAt(start))) start += 1;
+  let end = start;
+  while (end < limit && !isWhitespace(command.charCodeAt(end))) end += 1;
+  // A word that was still going when the scan stopped is not a program name.
+  if (end === start || (end === limit && command.length > limit)) return undefined;
+  const token = command.slice(start, end);
+  if (token.charCodeAt(0) === 45) return undefined;
+  for (let index = 0; index < token.length; index += 1) {
+    if (!isProgramCharacter(token.charCodeAt(index))) return undefined;
+  }
+  const name = token.slice(Math.max(token.lastIndexOf("/"), token.lastIndexOf(String.fromCharCode(92))) + 1);
+  return name && name.length <= MAX_PROGRAM_NAME ? name : undefined;
+}
+
+/** The summary of a shell command approval, or undefined when the command holds no text. */
+export function shellCommandSummary(command: string): string | undefined {
+  const lines = countLines(command);
+  if (lines === 0) return undefined;
+  const program = programName(command);
+  const count = lines === 1 ? "" : lines === "many" ? ", many lines" : `, ${lines} lines`;
+  return `Command${program ? `: ${program}` : ""}${count} (open it to see the full command)`;
+}
+
+/** The summary of a code run approval, or undefined when the code holds no text. */
+export function codeRunSummary(code: string): string | undefined {
+  const lines = countLines(code);
+  if (lines === 0) return undefined;
+  const count = lines === "many" ? "many lines" : lines === 1 ? "1 line" : `${lines} lines`;
+  return `Code to run, ${count} (open it to see the code)`;
 }

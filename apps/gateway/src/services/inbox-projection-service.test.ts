@@ -297,17 +297,17 @@ describe("Gateway inbox projection", () => {
     } as never);
     const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
     const summary = (id: string) => projection.items.find((entry) => entry.id === `approval:${id}`)?.summary;
-    expect(summary("plain")).toBe("Command: pnpm test --filter api");
-    expect(summary("notool")).toBe("Command: pnpm test");
+    expect(summary("plain")).toBe("Command: pnpm (open it to see the full command)");
+    expect(summary("notool")).toBe("Command: pnpm (open it to see the full command)");
     expect(summary("secret")).toBe("Command: curl (open it to see the full command)");
-    expect(summary("codesecret")).toContain("[REDACTED]");
+    expect(summary("codesecret")).toBe("Code to run, 1 line (open it to see the code)");
     expect(JSON.stringify(projection)).not.toContain(token);
-    expect(summary("lines")).toBe("Command: echo one (and 2 more lines)");
-    expect(summary("oneextra")).toBe("Command: echo one (and 1 more line)");
-    expect(summary("long")).toBe(`Command: echo ${"x".repeat(175)} (cut short)`);
-    expect(summary("bidi")).toBe("Command: echo gnp.exe ok (and 1 more line)");
-    expect(summary("home")).toBe("Command: cat ~\\notes.txt");
-    expect(summary("code")).toBe('Code: const text = await docs.extract_text({ path: "saturday-plan.pdf" });');
+    expect(summary("lines")).toBe("Command: echo, 3 lines (open it to see the full command)");
+    expect(summary("oneextra")).toBe("Command: echo, 2 lines (open it to see the full command)");
+    expect(summary("long")).toBe("Command: echo (open it to see the full command)");
+    expect(summary("bidi")).toBe("Command: echo, 2 lines (open it to see the full command)");
+    expect(summary("home")).toBe("Command: cat (open it to see the full command)");
+    expect(summary("code")).toBe("Code to run, 1 line (open it to see the code)");
     expect(summary("other")).not.toContain("do-not-project-command");
     // The Cockpit keeps a summary that names a command or code out of a toast, by this flag.
     const named = (id: string) => projection.items.find((entry) => entry.id === `approval:${id}`)?.summaryNamesCommand;

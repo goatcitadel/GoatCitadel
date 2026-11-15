@@ -8,7 +8,7 @@ import type {
   OperatorInboxSourceCoverage,
 } from "@goatcitadel/contracts";
 import { isInstallWideApproval, NotFoundError } from "@goatcitadel/contracts";
-import { previewLine } from "./inbox-preview-text.js";
+import { codeRunSummary, shellCommandSummary } from "./inbox-preview-text.js";
 import { redactUrlForError } from "@goatcitadel/policy-engine";
 import { redactLocalHomePaths } from "./user-facing-failure-text.js";
 import type { AsyncStorage } from "@goatcitadel/storage";
@@ -131,7 +131,7 @@ function approvalTargetSummary(preview: unknown, kind: string): { summary: strin
     };
   const knowledge = knowledgeTargetSummary(record);
   if (knowledge) return { summary: bounded(knowledge) };
-  // A tool approval's preview (policy-engine buildApprovalPreview) names its path or target. A command shows only for the two shell tools, as one redacted line or, when it looks as if it carries a credential, as its first word.
+  // A tool approval's preview (policy-engine buildApprovalPreview) names its path or target. A command shows only for the two shell tools, as its program name only; a code run as its line count. Neither shows its text.
   if (typeof record.toolName === "string") {
     if (typeof record.path === "string" && record.path.trim())
       return { summary: bounded(`Path: ${record.path.trim()}`) };
@@ -142,11 +142,11 @@ function approvalTargetSummary(preview: unknown, kind: string): { summary: strin
   // A shell approval's kind is its tool name; a preview that carries no tool name still names its command.
   const shellTool = SHELL_TOOLS.has(kind) || (typeof record.toolName === "string" && SHELL_TOOLS.has(record.toolName));
   if (shellTool && typeof record.command === "string") {
-    const command = previewLine("Command", record.command, { shell: true });
+    const command = shellCommandSummary(record.command);
     if (command) return { summary: command, namesCommand: true };
   }
   if (kind === "code_mode.run" && typeof record.codePreview === "string") {
-    const code = previewLine("Code", record.codePreview);
+    const code = codeRunSummary(record.codePreview);
     if (code) return { summary: code, namesCommand: true };
   }
   return {
