@@ -467,6 +467,18 @@ describe("useConnectorInstall", () => {
     expect(servers.fetchMcpServer).toHaveBeenCalledWith("srv-1");
   });
 
+  it("signs a requester-scoped server in and stops there: it never runs the global switch-on or connect", async () => {
+    await render({ ...SAVED, requesterScoped: true, state: "sign_in_expired", reason: "sign_in_expired" });
+    await act(async () => latest.resume("sign_in_only"));
+    await flush();
+    expect(latest.state).toMatchObject({ phase: "signing_in" });
+    await returnFromProvider("state-1");
+    expect(latest.state).toEqual({ phase: "done", serverId: "srv-1" });
+    expect(calls).toEqual(["read server", "sign in: start", "sign in: complete"]);
+    expect(wrappers.commitMcpServerUpdate).not.toHaveBeenCalled();
+    expect(wrappers.commitMcpConnection).not.toHaveBeenCalled();
+  });
+
   it("Try again connects a saved server without signing in or switching on", async () => {
     await render({ ...SAVED, state: "broken", reason: "error" });
     await act(async () => latest.resume("connect"));

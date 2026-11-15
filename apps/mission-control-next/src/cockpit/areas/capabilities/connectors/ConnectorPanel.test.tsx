@@ -210,6 +210,22 @@ describe("resumeActionFor", () => {
     // A requester-scoped server connects per chat, so it never gets a Connect that would always fail.
     expect(resumeActionFor({ ...LINEAR, requesterScoped: true, state: "connected", reason: "ready" })).toBeUndefined();
     expect(resumeActionFor({ ...saved, requesterScoped: true })).toBeUndefined();
+    // Its sign-in is still needed, and that runs the sign-in step only, never the global connect.
+    const perChat = { ...saved, requesterScoped: true };
+    expect(resumeActionFor({ ...perChat, reason: "sign_in_needed" })).toEqual({
+      label: "Connect",
+      from: "sign_in_only",
+    });
+    expect(resumeActionFor({ ...perChat, state: "sign_in_expired", reason: "sign_in_expired" })).toEqual({
+      label: "Reconnect",
+      from: "sign_in_only",
+    });
+    expect(resumeActionFor({ ...perChat, state: "broken", reason: "error" })).toBeUndefined();
+    // Static servers keep the full flow.
+    expect(resumeActionFor({ ...saved, state: "sign_in_expired", reason: "sign_in_expired" })).toEqual({
+      label: "Reconnect",
+      from: "sign_in",
+    });
   });
 });
 

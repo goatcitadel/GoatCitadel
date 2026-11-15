@@ -6,7 +6,8 @@ import { connectedAnnouncement } from "./connector-view";
 import { useConnectorInstall } from "./use-connector-install";
 import { usePanelFocus } from "./use-panel-focus";
 
-type ResumeFrom = "sign_in" | "connect";
+/** "sign_in_only" is for a requester-scoped server: it signs in and stops, since it never joins the global connection. */
+type ResumeFrom = "sign_in" | "connect" | "sign_in_only";
 
 /** The button a saved server's state calls for, and where its flow starts (R72). Other states have none. */
 const RESUME: Readonly<Partial<Record<CapabilityConnectorState, { label: string; from: ResumeFrom }>>> = {
@@ -26,8 +27,14 @@ const signInFailed = (state: ConnectorInstallState) =>
 
 /** The button a row calls for. A saved server that never connected only connects: its sign-in is already ready. */
 export function resumeActionFor(item: CapabilityConnectorItem): { label: string; from: ResumeFrom } | undefined {
-  // A requester-scoped server connects per chat and a connecting one is already on its way: neither has a button.
-  if (item.requesterScoped === true || item.reason === "connecting") return undefined;
+  // A requester-scoped server connects per chat: only its sign-in has a button, and it runs the sign-in step alone.
+  if (item.requesterScoped === true) {
+    if (item.reason === "sign_in_needed") return { label: "Connect", from: "sign_in_only" };
+    if (item.reason === "sign_in_expired") return { label: "Reconnect", from: "sign_in_only" };
+    return undefined;
+  }
+  // A server that is connecting is already on its way.
+  if (item.reason === "connecting") return undefined;
   if (item.reason === "not_connected" && item.state === "needs_sign_in") return { label: "Connect", from: "connect" };
   return RESUME[item.state];
 }
@@ -35,6 +42,7 @@ export function resumeActionFor(item: CapabilityConnectorItem): { label: string;
 const STEPS: Readonly<Record<ResumeFrom, readonly InstallStepId[]>> = {
   sign_in: ["sign_in", "switch_on", "connect"],
   connect: ["connect"],
+  sign_in_only: ["sign_in"],
 };
 
 /**
