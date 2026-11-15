@@ -5,7 +5,7 @@ import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/a
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
 import type { OutboundQueueItem } from "../useChatSurfaceOrchestration";
 import { useChatSessionRestoration } from "./useChatSessionRestoration";
-import { createDraftStorageKey } from "../useChatLocalPersistence";
+import { createAttachmentStorageKey, createDraftStorageKey } from "../useChatLocalPersistence";
 import {
   beginChatSessionCreation,
   chatSessionCreationKey,
@@ -24,7 +24,12 @@ vi.mock("@goatcitadel/mission-control-shared/state/dev-diagnostics-store", () =>
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const noop = () => undefined;
 let renderer: ReactTestRenderer | undefined;
-let observed: { draft: string; setDraft: (text: string) => void };
+let observed: {
+  draft: string;
+  setDraft: (text: string) => void;
+  attachments: ChatAttachmentRecord[];
+  setAttachments: (items: ChatAttachmentRecord[]) => void;
+};
 const originalWindow = globalThis.window;
 const values = new Map<string, string>();
 function Harness({ workspace = "a", session = "s1" as string | null, unstable = 0 }) {
@@ -56,7 +61,7 @@ function Harness({ workspace = "a", session = "s1" as string | null, unstable = 
     threadController: { selectedSession: null },
     setRenameTitle: noop,
   } as unknown as Parameters<typeof useChatSessionRestoration>[0]);
-  observed = { draft, setDraft };
+  observed = { draft, setDraft, attachments, setAttachments };
   return null;
 }
 beforeEach(() => {
@@ -104,10 +109,10 @@ it("keeps text typed while New creates the conversation, for the same caller and
     renderer = create(<Harness />);
   });
   const attempt = await pressNew();
-  await act(async () => observed.setDraft("eview typed early"));
+  await act(async () => observed.setDraft("review typed early"));
   await confirm(attempt, "s-new");
   await act(async () => renderer!.update(<Harness session="s-new" />));
-  expect(observed.draft).toBe("eview typed early");
+  expect(observed.draft).toBe("review typed early");
   // The old conversation does not keep a copy of text that now belongs to the new one.
   await act(async () => new Promise((resolve) => setTimeout(resolve, 5)));
   expect(values.get(createDraftStorageKey("a", "s1"))).toBeUndefined();
@@ -123,6 +128,9 @@ it("does not carry a draft the box already held when New started", async () => {
   await confirm(attempt, "s-new");
   await act(async () => renderer!.update(<Harness session="s-new" />));
   expect(observed.draft).toBe("");
+  // The previous conversation keeps its own draft.
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 5)));
+  expect(values.get(createDraftStorageKey("a", "s1"))).toBe("older draft and more");
 });
 
 it("drops typed text when the workspace changes", async () => {
@@ -170,4 +178,95 @@ it("never overwrites newer typing with a stored value when only another dependen
   values.set(createDraftStorageKey("a", "s1"), "stored again");
   await act(async () => renderer!.update(<Harness unstable={1} />));
   expect(observed.draft).toBe("newer typing");
+});
+
+const attachment = (id: string, session = "s1"): ChatAttachmentRecord => ({
+  attachmentId: id,
+  sessionId: session,
+  workspaceId: "a",
+  fileName: id + ".txt",
+  mimeType: "text/plain",
+  mediaType: "text",
+  sizeBytes: 3,
+  sha256: "a".repeat(64),
+  storageRelPath: "chat/a/attachments/" + id + ".txt",
+  extractStatus: "ready",
+  createdAt: "2026-10-05T00:00:00.000Z",
+});
+
+it("does not carry text to a conversation opened later, after New's conversation was never opened (A)", async () => {
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  const attempt = await pressNew();
+  await act(async () => renderer!.update(<Harness session="w" />));
+  await confirm(attempt, "s-new");
+  await act(async () => renderer!.update(<Harness session="s1" />));
+  await act(async () => observed.setDraft("note for X"));
+  await act(async () => renderer!.update(<Harness session="s-new" />));
+  expect(observed.draft).toBe("");
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 5)));
+  expect(values.get(createDraftStorageKey("a", "s1"))).toBe("note for X");
+});
+
+it("does not carry text typed in the same conversation after New confirmed and was never opened (A)", async () => {
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  const attempt = await pressNew();
+  await confirm(attempt, "s-new");
+  await act(async () => observed.setDraft("note for X"));
+  await act(async () => renderer!.update(<Harness session="s-new" />));
+  expect(observed.draft).toBe("");
+});
+
+it("gives no carry to an attempt that started before the draft was hydrated (B)", async () => {
+  values.set(createDraftStorageKey("a", "s1"), "real");
+  const attempt = await pressNew();
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  expect(observed.draft).toBe("real");
+  await confirm(attempt, "s-new");
+  await act(async () => renderer!.update(<Harness session="s-new" />));
+  expect(observed.draft).toBe("");
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 5)));
+  expect(values.get(createDraftStorageKey("a", "s1"))).toBe("real");
+});
+
+it.each(["unknown", "error"] as const)("does not carry after an attempt ends as %s", async (state) => {
+  values.set(createDraftStorageKey("a", "s3"), "own");
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  const attempt = await pressNew();
+  await act(async () => observed.setDraft("typed"));
+  await act(async () => {
+    attempt.state = state;
+    publishChatSessionCreation(creationKey(), attempt);
+  });
+  await act(async () => renderer!.update(<Harness session="s3" />));
+  expect(observed.draft).toBe("own");
+});
+
+it("keeps an attachment added during creation with the conversation it was added in", async () => {
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  const attempt = await pressNew();
+  await act(async () => observed.setAttachments([attachment("att-1")]));
+  await confirm(attempt, "s-new");
+  await act(async () => renderer!.update(<Harness session="s-new" />));
+  expect(observed.attachments).toEqual([]);
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 5)));
+  expect(values.get(createAttachmentStorageKey("a", "s1"))).toContain("att-1");
+});
+
+it("never replaces an attachment added since with the stored copy when only another dependency changed (E)", async () => {
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  await act(async () => observed.setAttachments([attachment("att-2")]));
+  await act(async () => renderer!.update(<Harness unstable={1} />));
+  expect(observed.attachments.map((item) => item.attachmentId)).toEqual(["att-2"]);
 });
