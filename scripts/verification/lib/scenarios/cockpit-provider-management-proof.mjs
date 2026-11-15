@@ -491,6 +491,17 @@ export async function runCockpitProviderManagementProof({ context, browser, stac
               create ? "POST" : "PATCH",
               create ? "/api/v1/change-plans" : "/api/v1/settings",
             );
+            // A new profile's plan is one the Gateway marks safe, so the page confirms it itself once Apply is pressed.
+            // The confirmation is waited for before the click, because it follows the plan's creation at once.
+            const pageConfirmation = create
+              ? observeProviderResponse(
+                  page.waitForResponse(
+                    (candidate) =>
+                      candidate.request().method() === "POST" &&
+                      /^\/api\/v1\/change-plans\/[^/]+\/confirmations$/u.test(new URL(candidate.url()).pathname),
+                  ),
+                )
+              : undefined;
             await dialog.getByRole("button", { name: "Apply reviewed provider profile", exact: true }).click();
             const result = await response;
             assert.equal(result.status(), create ? 201 : 200);
@@ -512,13 +523,26 @@ export async function runCockpitProviderManagementProof({ context, browser, stac
                 : { expectedRevision: before.revision, llm: { upsertProvider: input } },
             );
             const receipt = await result.json();
-            let plan = await readPlan(create ? receipt.planId : receipt.changePlanReceipt.planId);
+            let plan = create ? receipt : await readPlan(receipt.changePlanReceipt.planId);
             await recordPlan(plan);
             if (create) {
               assert.equal(plan.status, "awaiting_confirmation");
+              assert.equal(plan.risk, "safe", "Only a plan the Gateway marks safe is confirmed by the page itself.");
               assert.equal(plan.target.expectedRevision, before.revision);
-              assertSavedSettingsUnchanged(before, await readConfig());
-              plan = await confirmNative(plan, "awaiting_input");
+              const confirmedByPage = await pageConfirmation;
+              assert.equal(
+                new URL(confirmedByPage.url()).pathname,
+                `/api/v1/change-plans/${encodeURIComponent(plan.planId)}/confirmations`,
+              );
+              assert.equal(confirmedByPage.status(), 200);
+              const confirmBody = confirmedByPage.request().postDataJSON();
+              assert.equal(confirmBody.expectedRevision, plan.revision);
+              assert.equal(confirmBody.actionNonce, plan.requiredAction.actionNonce);
+              const confirmedPlan = await confirmedByPage.json();
+              await recordPlan(confirmedPlan);
+              assert.equal(confirmedPlan.planId, plan.planId);
+              assert.equal(confirmedPlan.status, "awaiting_input");
+              plan = confirmedPlan;
               assert.equal(plan.requiredAction.kind, "secure_input");
               assert.equal(plan.requiredAction.targetId, providerId);
               assert.equal(plan.result.providerProfileCheckpoint.originalRevision, before.revision);
