@@ -125,7 +125,7 @@ export function createRealtimeAttention({
           const item = resolveInboxNotificationItem(projection, event, notification, scopeWorkspaceId);
           if (!item || delivered.has(item.id)) return;
           const approvalId = item.kind === "approval" ? item.source.approvalId : undefined;
-          if (approvalId && (settledApprovalIds.has(approvalId) || isApprovalHandledInPlace(approvalId))) return;
+          if (approvalId && settledApprovalIds.has(approvalId)) return;
           const focused = pageFocused();
           const preferences = readPreferences();
           const deliveryDecision = decideNotificationDelivery(notification, {
@@ -141,7 +141,9 @@ export function createRealtimeAttention({
           };
           const id = `inbox:${scopeWorkspaceId}:${item.id}`;
           if (approvalId) approvalToastIds.set(approvalId, id);
-          if (preferences.toastsEnabled)
+          // Only the toast is held back for an approval a dialog is already showing; the sound and the desktop
+          // notification still say something new needs the operator.
+          if (preferences.toastsEnabled && !(approvalId && isApprovalHandledInPlace(approvalId)))
             requestCockpitToast(
               (toast) => {
                 const show =

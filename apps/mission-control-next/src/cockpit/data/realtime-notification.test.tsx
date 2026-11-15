@@ -534,13 +534,33 @@ describe("cockpit owner-backed notifications", () => {
 });
 describe("approval notifications for an approval a dialog is already offering", () => {
   afterEach(() => __resetApprovalsHandledInPlaceForTests());
-  it("shows no Inbox toast on top of a dialog that is deciding the approval, and shows it once that dialog is gone", async () => {
-    const release = registerApprovalHandledInPlace("a");
+  it("holds back only the toast: the sound and the desktop notification still come", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    registerApprovalHandledInPlace("a");
+    await render({
+      notificationPreferences: { ...defaultPreferences, soundMode: "subtle", desktopEnabled: true },
+    });
+    await emit();
+    expect(mocks.warning).not.toHaveBeenCalled();
+    expect(mocks.sound).toHaveBeenCalledWith("waiting", "subtle");
+    expect(mocks.desktop).toHaveBeenCalledWith(
+      item.title,
+      "warning",
+      expect.objectContaining({ tag: "inbox:w:approval:a" }),
+    );
+  });
+  it("shows no Inbox toast on top of a dialog that is showing the approval", async () => {
+    registerApprovalHandledInPlace("a");
     await render();
     await emit();
     expect(mocks.warning).not.toHaveBeenCalled();
+  });
+  it("shows the toast when no dialog is showing the approval", async () => {
+    const release = registerApprovalHandledInPlace("a");
     release();
-    await emit({ ...event, eventId: "later", sequence: 3 });
+    await render();
+    await emit();
     expect(mocks.warning).toHaveBeenCalledOnce();
   });
 });
