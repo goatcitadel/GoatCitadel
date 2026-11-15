@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   humanizeToken,
+  isFinishedRunStatus,
   presentApprovalOutcome,
   presentApprovalStatus,
   presentChangePlanStatus,
@@ -22,6 +23,13 @@ describe("status vocabulary", () => {
     });
     expect(presentRunStatus("dead_lettered")).toEqual({ label: "Failed · needs recovery", tone: "failed" });
     expect(presentChatTurnStatus("waiting_for_approval")).toEqual({ label: "Waiting on you", tone: "waiting" });
+  });
+
+  it("names the run statuses that can no longer change", () => {
+    for (const status of ["completed", "failed", "cancelled", "dead_lettered"] as const)
+      expect(isFinishedRunStatus(status)).toBe(true);
+    for (const status of ["queued", "running", "waiting", "paused"] as const)
+      expect(isFinishedRunStatus(status)).toBe(false);
   });
 
   it("maps decision, change, and risk states", () => {

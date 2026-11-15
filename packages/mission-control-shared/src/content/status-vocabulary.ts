@@ -143,6 +143,11 @@ export function presentRunStatus(
   return value === "waiting" && options.waitingOnOperator ? status("Waiting on you", "waiting") : runStatuses[value];
 }
 
+/** A run that can no longer change on its own: Done, Failed, Cancelled, or Failed and needing recovery. */
+export function isFinishedRunStatus(value: DurableRunStatus): boolean {
+  return value === "completed" || value === "failed" || value === "cancelled" || value === "dead_lettered";
+}
+
 export function presentChatTurnStatus(value: ChatTurnLifecycleStatus | string): StatusPresentation {
   return chatTurnStatuses[value as ChatTurnLifecycleStatus] ?? status(humanizeToken(value), "neutral");
 }

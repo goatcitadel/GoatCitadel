@@ -2,10 +2,20 @@ import { infiniteQueryOptions } from "@tanstack/react-query";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { fetchDurableRunHistory } from "@goatcitadel/mission-control-shared/api/durable";
 import { fetchTasks } from "@goatcitadel/mission-control-shared/api/tasks";
+import { getEventStreamStatus } from "@goatcitadel/mission-control-shared/state/event-stream-status-store";
 import { queryKeys } from "../../data/query-keys";
 
 /** A fallback only: realtime `tasks` and `durable` events refresh these histories. */
 export const WORK_HISTORY_FALLBACK_MS = 120_000;
+
+/**
+ * With the live connection open and more than one page loaded, the full refetch is replaced by a check of the first
+ * page (see work-history-head-poll.ts). Otherwise every loaded page is refetched on the timer, as before.
+ */
+export function workHistoryFallbackInterval(query: { state: { data?: { pages: unknown[] } } }): number | false {
+  const pages = query.state.data?.pages.length ?? 0;
+  return getEventStreamStatus().state === "open" && pages > 1 ? false : WORK_HISTORY_FALLBACK_MS;
+}
 
 export function workspaceDurableRunsOptions(workspaceId: string) {
   const installation = getGatewayApiBaseUrl();
@@ -23,7 +33,7 @@ export function workspaceDurableRunsOptions(workspaceId: string) {
       return page;
     },
     getNextPageParam: (last) => last.nextCursor,
-    refetchInterval: WORK_HISTORY_FALLBACK_MS,
+    refetchInterval: workHistoryFallbackInterval,
   });
 }
 
@@ -40,6 +50,6 @@ export function workspaceTasksOptions(workspaceId: string) {
       return page;
     },
     getNextPageParam: (last) => last.nextCursor,
-    refetchInterval: WORK_HISTORY_FALLBACK_MS,
+    refetchInterval: workHistoryFallbackInterval,
   });
 }

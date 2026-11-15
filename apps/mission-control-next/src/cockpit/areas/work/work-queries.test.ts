@@ -1,14 +1,24 @@
 import { QueryClient } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { WORK_HISTORY_FALLBACK_MS, workspaceDurableRunsOptions, workspaceTasksOptions } from "./work-queries";
+import {
+  WORK_HISTORY_FALLBACK_MS,
+  workHistoryFallbackInterval,
+  workspaceDurableRunsOptions,
+  workspaceTasksOptions,
+} from "./work-queries";
 
 const api = vi.hoisted(() => ({ fetchTasks: vi.fn(), fetchDurableRunHistory: vi.fn() }));
+const stream = vi.hoisted(() => ({ state: "closed" as string }));
+vi.mock("@goatcitadel/mission-control-shared/state/event-stream-status-store", () => ({
+  getEventStreamStatus: () => ({ state: stream.state, reconnectAttempts: 0 }),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/tasks", () => ({ fetchTasks: api.fetchTasks }));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({
   fetchDurableRunHistory: api.fetchDurableRunHistory,
 }));
 
 beforeEach(() => {
+  stream.state = "closed";
   api.fetchTasks.mockReset().mockResolvedValue({ items: [] });
   api.fetchDurableRunHistory.mockReset().mockResolvedValue({ items: [] });
 });
@@ -16,11 +26,21 @@ beforeEach(() => {
 describe("Work history queries (WK-13)", () => {
   it("poll only as a fallback and keep every loaded page", () => {
     for (const options of [workspaceTasksOptions("w"), workspaceDurableRunsOptions("w")]) {
-      expect(options.refetchInterval).toBe(WORK_HISTORY_FALLBACK_MS);
+      expect(options.refetchInterval).toBe(workHistoryFallbackInterval);
       // No backward cursor exists, so a page cap would drop the newest page (the first one loaded).
       expect(options.maxPages).toBeUndefined();
     }
     expect(WORK_HISTORY_FALLBACK_MS).toBe(120_000);
+  });
+
+  it("polls every page only when the live connection is not open or one page is loaded (U-WK-008)", () => {
+    const twoPages = { state: { data: { pages: [{}, {}] } } };
+    stream.state = "open";
+    expect(workHistoryFallbackInterval(twoPages)).toBe(false);
+    expect(workHistoryFallbackInterval({ state: { data: { pages: [{}] } } })).toBe(WORK_HISTORY_FALLBACK_MS);
+    expect(workHistoryFallbackInterval({ state: {} })).toBe(WORK_HISTORY_FALLBACK_MS);
+    stream.state = "retrying";
+    expect(workHistoryFallbackInterval(twoPages)).toBe(WORK_HISTORY_FALLBACK_MS);
   });
 
   it("forwards the query's abort signal to the task read", async () => {

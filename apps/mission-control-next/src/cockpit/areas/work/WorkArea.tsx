@@ -1,3 +1,4 @@
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { EmptyState } from "../../ui/EmptyState";
 import { AreaTabsProvider } from "../../ui/AreaHeader";
@@ -10,11 +11,14 @@ import { WorkKanban, WorkArchive } from "./WorkKanban";
 import { WorkAutomation } from "./WorkAutomation";
 import { OLDER_KANBAN_VIEW } from "./WorkMoreViews";
 import { WORK_VIEWS as VIEWS } from "./work-views";
+import { useWorkHistoryHeadPoll } from "./work-history-head-poll";
 
 const ROUTED_VIEWS: readonly string[] = [...VIEWS.map((item) => item.id), OLDER_KANBAN_VIEW.id];
 
 export function WorkArea() {
   const { rest, navigate } = useCockpitRoute();
+  const { activeWorkspaceId } = useUiPreferences();
+  useWorkHistoryHeadPoll(activeWorkspaceId ?? "default");
   if (rest[0] === "tasks" && rest[1]) {
     try {
       return <WorkTaskDetail taskId={decodeURIComponent(rest[1])} />;
