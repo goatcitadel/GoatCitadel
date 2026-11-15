@@ -373,7 +373,7 @@ describe("Plugin panel", () => {
     ]);
     expect(dialog()?.textContent).toContain("This can't be undone here.");
     expect(dialog()?.textContent).toContain(
-      "This can't be undone here. It added a skill, and skills can't be removed yet, so you won't be able to install this plugin again.",
+      "This can't be undone here. A skill it added stays until you remove it in Capabilities › Skills. Until then it can't be installed again.",
     );
     expect(dialog()?.textContent).not.toContain("Installing it again adds its pieces back.");
     await press(button("Keep it", dialog()));

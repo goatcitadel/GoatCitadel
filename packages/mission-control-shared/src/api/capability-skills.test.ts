@@ -8,6 +8,7 @@ import {
   fetchCapabilitySkills,
   fetchCapabilitySkillUsage,
   requestCapabilitySkillOperation,
+  requestCapabilitySkillRemoval,
   reviewCapabilitySkill,
   setCapabilitySkillState,
 } from "./capability-skills.js";
@@ -138,4 +139,15 @@ it("sends an install step as a JSON POST and returns the Gateway's outcome", asy
     body: JSON.stringify(input),
   });
   expect(outcome).toEqual({ status: "waiting", approvalId: "ap-2" });
+});
+
+it("sends a removal as a JSON POST of the workspace and the skill and returns the Gateway's outcome", async () => {
+  request.mockResolvedValueOnce({ status: "waiting", approvalId: "ap-3", workspaceId: "ws-1" } as never);
+  const input = { workspaceId: "ws-1", skillId: "extra:meeting-notes" };
+  const outcome = await requestCapabilitySkillRemoval(input);
+  expect(request).toHaveBeenCalledWith("/api/v1/capabilities/skills/removals", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  expect(outcome).toEqual({ status: "waiting", approvalId: "ap-3", workspaceId: "ws-1" });
 });

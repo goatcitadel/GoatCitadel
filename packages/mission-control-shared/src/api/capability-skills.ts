@@ -5,6 +5,8 @@ import type {
   CapabilitySkillInstall,
   CapabilitySkillInstallsResponse,
   CapabilitySkillOperationRequest,
+  CapabilitySkillRemovalOutcome,
+  CapabilitySkillRemovalRequest,
   CapabilitySkillReviewRequest,
   CapabilitySkillStateRequest,
   CapabilitySkillsResponse,
@@ -122,6 +124,20 @@ export async function requestCapabilitySkillOperation(
   input: CapabilitySkillOperationRequest,
 ): Promise<CapabilitySkillActionOutcome> {
   return request<CapabilitySkillActionOutcome>("/api/v1/capabilities/skills/operations", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * Asks to remove one revoked skill a plugin left behind. The outcome says whether the removal's approval was granted
+ * already or waits for the operator, and the workspace that approval belongs to. No field chooses the operator's skip;
+ * the Gateway decides it.
+ */
+export async function requestCapabilitySkillRemoval(
+  input: CapabilitySkillRemovalRequest,
+): Promise<CapabilitySkillRemovalOutcome> {
+  return request<CapabilitySkillRemovalOutcome>("/api/v1/capabilities/skills/removals", {
     method: "POST",
     body: JSON.stringify(input),
   });

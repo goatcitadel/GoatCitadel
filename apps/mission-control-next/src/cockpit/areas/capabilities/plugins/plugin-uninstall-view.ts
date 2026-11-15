@@ -24,9 +24,16 @@ const ADDED_STATES: ReadonlySet<CapabilityPluginPieceState> = new Set([
   "removing",
 ]);
 
-/** The confirmation's opening when the plugin added a skill: skills can't be removed yet, so it can't be installed again. */
+/** The confirmation's opening when the plugin added a skill: it stays until it is removed, and the plugin can't come back before. */
 export const UNINSTALL_SKILL_STAYS =
-  "This can't be undone here. It added a skill, and skills can't be removed yet, so you won't be able to install this plugin again.";
+  "This can't be undone here. A skill it added stays until you remove it in Capabilities › Skills. Until then it can't be installed again.";
+
+/**
+ * The confirmation's opening when the only skills it added were never switched on: the uninstall leaves them installed,
+ * and they have no row in Capabilities › Skills to remove them from.
+ */
+export const UNINSTALL_SKILL_NEVER_ON =
+  "This can't be undone here. A skill it added was never switched on, so it stays and GoatCitadel can't remove it. You won't be able to install this plugin again.";
 
 /** The confirmation's opening when nothing the plugin added is a skill. */
 export const UNINSTALL_REINSTALLABLE = "This can't be undone here. Installing it again adds its pieces back.";
@@ -41,7 +48,7 @@ export const FINISH_UNINSTALL_RETRY_LINE =
 
 /** The confirmation's opening when a skill's state can't be read: no reinstall is promised on missing evidence. */
 export const UNINSTALL_SKILL_UNKNOWN =
-  "This can't be undone here. GoatCitadel can't tell whether a skill it added is still there. If one is, you won't be able to install this plugin again, because skills can't be removed yet.";
+  "This can't be undone here. GoatCitadel can't tell whether a skill it added is still there. If one is, it stays until you remove it in Capabilities › Skills, and until then this plugin can't be installed again.";
 
 /** A skill the plugin itself brought, as opposed to one that was already there. */
 function ownSkills(pieces: readonly CapabilityPluginDetailPiece[]): CapabilityPluginDetailPiece[] {
@@ -51,7 +58,9 @@ function ownSkills(pieces: readonly CapabilityPluginDetailPiece[]): CapabilityPl
 /** The confirmation's description: it says up front whether the plugin can be installed again. */
 export function uninstallConfirmDescription(pieces: readonly CapabilityPluginDetailPiece[]): string {
   const skills = ownSkills(pieces);
-  if (skills.some((piece) => ADDED_STATES.has(piece.state))) return UNINSTALL_SKILL_STAYS;
+  if (skills.some((piece) => ADDED_STATES.has(piece.state) && piece.state !== "installed_off"))
+    return UNINSTALL_SKILL_STAYS;
+  if (skills.some((piece) => piece.state === "installed_off")) return UNINSTALL_SKILL_NEVER_ON;
   return skills.some((piece) => piece.state === "unknown") ? UNINSTALL_SKILL_UNKNOWN : UNINSTALL_REINSTALLABLE;
 }
 

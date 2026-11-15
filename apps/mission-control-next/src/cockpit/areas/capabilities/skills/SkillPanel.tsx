@@ -13,6 +13,7 @@ import { StatusBadge } from "../../../ui/StatusBadge";
 import { FromPluginLink } from "../plugins/FromPluginLink";
 import { SkillPanelDetail } from "./SkillPanelDetail";
 import { SkillPanelSwitch } from "./SkillPanelSwitch";
+import { SkillRemoval } from "./SkillRemoval";
 import { presentSkillState, presentSkillUses, skillCategoryLabel, SKILL_TONE_TEXT } from "./skill-view";
 import { useSkillSwitch } from "./use-skill-switch";
 
@@ -72,6 +73,7 @@ function SkillDetails({
       </div>
       <p className="text-sm text-fg-secondary">{item.description}</p>
       <SkillPanelSwitch item={item} sw={sw} state={state} announce={announce} />
+      <SkillRemoval item={item} workspaceId={activeWorkspaceId} />
       <Section title="Uses" headingLevel={3}>
         <UsesLine skillId={item.skillId} />
       </Section>

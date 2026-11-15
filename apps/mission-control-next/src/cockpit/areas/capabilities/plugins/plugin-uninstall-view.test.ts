@@ -5,6 +5,7 @@ import {
   FINISH_UNINSTALL_SKILL_LINE,
   finishUninstallLine,
   UNINSTALL_REINSTALLABLE,
+  UNINSTALL_SKILL_NEVER_ON,
   UNINSTALL_SKILL_UNKNOWN,
   UNINSTALL_SKILL_STAYS,
   uninstallApproval,
@@ -44,8 +45,20 @@ function uninstalling(piece: CapabilityPluginDetailPiece): CapabilityPluginDetai
 }
 
 describe("uninstallConfirmDescription", () => {
-  it("says up front that a plugin which added a skill can't come back", () => {
+  it("says up front that a skill it added stays until you remove it, and the plugin can't come back before", () => {
     expect(uninstallConfirmDescription([{ ...NOTES, state: "added" }])).toBe(UNINSTALL_SKILL_STAYS);
+    expect(UNINSTALL_SKILL_STAYS).toBe(
+      "This can't be undone here. A skill it added stays until you remove it in Capabilities › Skills. Until then it can't be installed again.",
+    );
+  });
+  it("does not promise a removal for a skill that was never switched on", () => {
+    expect(uninstallConfirmDescription([{ ...NOTES, state: "installed_off" }])).toBe(UNINSTALL_SKILL_NEVER_ON);
+    expect(
+      uninstallConfirmDescription([
+        { ...NOTES, state: "installed_off" },
+        { ...NOTES, pieceId: "b", state: "added" },
+      ]),
+    ).toBe(UNINSTALL_SKILL_STAYS);
   });
   it("keeps the reinstall promise when no skill of its own is left", () => {
     const pack = { ...NOTES, pieceId: "pack", kind: "prompt_pack", state: "added" } as const;

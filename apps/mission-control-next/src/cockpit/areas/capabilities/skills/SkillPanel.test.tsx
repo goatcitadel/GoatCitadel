@@ -33,6 +33,7 @@ const api = vi.hoisted(() => ({
   fetchCapabilitySkillUsage: vi.fn(),
   fetchCapabilitySkillDetail: vi.fn(),
   setCapabilitySkillState: vi.fn(),
+  requestCapabilitySkillRemoval: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/capability-skills", () => api);
 const approvals = vi.hoisted(() => ({ fetchApproval: vi.fn() }));
@@ -273,6 +274,7 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(async (_workspaceId: string, skillId: string) => detailOf(skillId));
   api.setCapabilitySkillState.mockReset();
+  api.requestCapabilitySkillRemoval.mockReset();
   stored = skillApproval();
   approvals.fetchApproval.mockReset().mockImplementation(async () => stored);
   decisions.resolveApproval.mockReset().mockImplementation(async (_id: string, decision: "approve" | "reject") => {
@@ -812,6 +814,161 @@ describe("Opening the skill panel", () => {
       await vi.waitFor(() => expect(inspectorNamed("Writer")).not.toBeNull());
       expect(inspectorNamed("Another panel")).toBeNull();
     });
+  });
+});
+
+describe("Skill panel removal", () => {
+  const LEFT_BEHIND = skill({
+    skillId: "extra:meeting-notes",
+    name: "Meeting notes",
+    state: "off",
+    callable: false,
+    switchable: false,
+    lifecycleState: "revoked",
+    removedWithPlugin: { name: "Meeting tools" },
+    removable: true,
+  });
+  const WITHOUT_REMOVAL: CapabilitySkillItem = { ...LEFT_BEHIND, removable: undefined };
+  const DESCRIPTION =
+    "Removes Meeting notes from this install. Its plugin was uninstalled, so the AI can't use it. GoatCitadel keeps its check and its records, so you can install it again later. This can't be undone here.";
+
+  /** The removal's approval as the Gateway makes it: danger, never expiring, linked to the workspace that asked. */
+  function removalApproval(): ApprovalRequest {
+    const intent = {
+      operationId: "operation-remove",
+      idempotencyKey: "key-1",
+      workspaceId: "ws-1",
+      operationKind: "remove",
+      snapshotId: "check-1",
+      contentTreeSha256: "b".repeat(64),
+      skillId: "extra:meeting-notes",
+      targetCandidateId: "skill-hub-candidate-1",
+      targetVersionId: "skill-hub-version-1",
+      expectedCandidateRevision: 3,
+      expectedRuntimeRevision: 2,
+      expectedCandidateAbsent: false,
+      expectedRuntimeAbsent: false,
+      actorId: "operator",
+      createdAt: "2026-10-30T10:00:00.000Z",
+    };
+    return {
+      approvalId: APPROVAL_ID,
+      kind: "skill_hub.lifecycle",
+      riskLevel: "danger",
+      status: "pending",
+      payload: { ...intent, requestSha256: "a".repeat(64) },
+      preview: { schemaVersion: "goatcitadel.skill-hub-operation-intent.v1", intent },
+      linkage: { workspaceId: "ws-1" },
+      createdAt: "2026-10-30T10:00:00.000Z",
+      explanationStatus: "not_requested",
+    } as unknown as ApprovalRequest;
+  }
+
+  async function openLeftBehind(item: CapabilitySkillItem = LEFT_BEHIND) {
+    api.fetchCapabilitySkills.mockResolvedValue(listOf([...ITEMS, item]));
+    await renderTab();
+    await openPanel("Meeting notes");
+  }
+
+  it("offers Remove skill only for a skill GoatCitadel can remove", async () => {
+    await openLeftBehind(WITHOUT_REMOVAL);
+    expect(buttonIn(body(), "Remove skill")).toBeUndefined();
+    await press(buttonIn(document.body, "Close inspector"));
+    await press(buttonIn(rowOf("Planner"), "View Planner"));
+    await vi.waitFor(() => expect(inspectorNamed("Planner")).not.toBeNull());
+    expect(buttonIn(body(), "Remove skill")).toBeUndefined();
+  });
+
+  it("asks before it removes, and keeps the skill when you keep it", async () => {
+    await openLeftBehind();
+    expect(panelText()).toContain("Removed with Meeting tools");
+
+    await press(buttonIn(body(), "Remove skill"));
+    expect(dialog()?.textContent).toContain("Remove this skill?");
+    expect(dialog()?.textContent).toContain(DESCRIPTION);
+    await press(buttonIn(dialog(), "Keep it"));
+
+    expect(dialog()).toBeUndefined();
+    expect(api.requestCapabilitySkillRemoval).not.toHaveBeenCalled();
+  });
+
+  it("asks for the removal and opens its danger approval in place", async () => {
+    stored = removalApproval();
+    api.requestCapabilitySkillRemoval.mockResolvedValue({
+      status: "waiting",
+      approvalId: APPROVAL_ID,
+      workspaceId: "ws-1",
+    });
+    await openLeftBehind();
+
+    await press(buttonIn(body(), "Remove skill"));
+    await press(buttonIn(dialog(), "Remove skill"));
+
+    expect(api.requestCapabilitySkillRemoval).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "ws-1",
+      skillId: "extra:meeting-notes",
+    });
+    await vi.waitFor(() => expect(dialog()?.textContent).toContain("Approve removing this skill?"));
+    // The approval is read in the workspace the Gateway names, and the red two-step review stays.
+    expect(approvals.fetchApproval.mock.calls.some(([, options]) => options?.workspaceId === "ws-1")).toBe(true);
+    expect(buttonIn(dialog(), "Review danger approval")).toBeDefined();
+    expect(buttonIn(dialog(), "Approve once")).toBeUndefined();
+    expect(decisions.resolveApproval).not.toHaveBeenCalled();
+    // While it waits there is nothing to ask for again.
+    await press(buttonIn(dialog(), "Close dialog"));
+    expect(buttonIn(body(), "Remove skill")).toBeUndefined();
+    expect(buttonIn(body(), "Review the removal")).toBeDefined();
+  });
+
+  it("says it is removing once approved, until the list no longer holds the skill", async () => {
+    api.requestCapabilitySkillRemoval.mockResolvedValue({
+      status: "approved",
+      approvalId: APPROVAL_ID,
+      workspaceId: "ws-1",
+    });
+    await openLeftBehind();
+    await press(buttonIn(body(), "Remove skill"));
+    await press(buttonIn(dialog(), "Remove skill"));
+
+    expect(panelText()).toContain("Removing Meeting notes…");
+    expect(buttonIn(body(), "Remove skill")).toBeUndefined();
+
+    // The next read of the list no longer holds it.
+    api.fetchCapabilitySkills.mockResolvedValue(listOf(ITEMS));
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: skillListQuery("ws-1").queryKey });
+    });
+    await settle();
+    expect(panelText()).toContain("This skill isn't in the list anymore.");
+  });
+
+  it("puts the plain refusal under the button and lets you ask again", async () => {
+    api.requestCapabilitySkillRemoval.mockRejectedValueOnce(
+      Object.assign(new Error("This skill can't be removed."), { status: 409 }),
+    );
+    await openLeftBehind();
+    await press(buttonIn(body(), "Remove skill"));
+    await press(buttonIn(dialog(), "Remove skill"));
+
+    expect(panelText()).toContain("This skill can't be removed.");
+    expect(buttonIn(body(), "Remove skill")).toBeDefined();
+  });
+
+  it("says a declined removal was declined", async () => {
+    stored = removalApproval();
+    api.requestCapabilitySkillRemoval.mockResolvedValue({
+      status: "waiting",
+      approvalId: APPROVAL_ID,
+      workspaceId: "ws-1",
+    });
+    await openLeftBehind();
+    await press(buttonIn(body(), "Remove skill"));
+    await press(buttonIn(dialog(), "Remove skill"));
+    await vi.waitFor(() => expect(dialog()?.textContent).toContain("Approve removing this skill?"));
+
+    await press(buttonIn(dialog(), "Deny"));
+    await vi.waitFor(() => expect(panelText()).toContain("Not removed. The request was declined."));
+    expect(buttonIn(body(), "Remove skill")).toBeDefined();
   });
 });
 
