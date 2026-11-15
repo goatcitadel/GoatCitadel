@@ -277,6 +277,25 @@ it("pauses decisions while GoatCitadel is unreachable and resumes them by itself
   expect(button("Approve once")).toBeDefined();
   expect(api.resolveApproval).not.toHaveBeenCalled();
 });
+it("pauses the danger confirmation dialog opened before the connection dropped (U-CH-027)", async () => {
+  record = { ...record, riskLevel: "danger", preview: { commands: ["pnpm test"] } };
+  await act(async () => renderDirect());
+  await act(async () => {
+    await Promise.all([...bodyLoads]);
+  });
+  await vi.waitFor(() => expect(button("Review danger approval")).toBeDefined());
+  await act(async () => button("Review danger approval").click());
+  await vi.waitFor(() => expect(button("Approve once")).toBeDefined());
+  expect(button("Approve once").disabled).toBe(false);
+  await act(async () => renderDirect({ connectionLost: true }));
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  expect(button("Approve once").disabled).toBe(true);
+  expect(document.body.textContent).toContain("GoatCitadel is unreachable, so this decision can");
+  await act(async () => renderDirect({ connectionLost: false }));
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  expect(button("Approve once").disabled).toBe(false);
+  expect(api.resolveApproval).not.toHaveBeenCalled();
+});
 it("loads grant code when current pending candidates are valid", async () => {
   record = {
     ...record,

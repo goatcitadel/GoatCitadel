@@ -5,7 +5,6 @@ import {
 import {
   useCallback,
   useEffect,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -25,6 +24,7 @@ import { readCockpitHistory, subscribeCockpitHistory } from "../../app/cockpit-h
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { DeferredOutsideRootWriteGrantOptions } from "./DeferredOutsideRootWriteGrantOptions";
+import { ChatApprovalPausedFieldset } from "./ChatApprovalPausedFieldset";
 import { importChatApprovalRendererBody, importChatApprovalSettlement } from "./load-chat-approval-renderer";
 
 type DecisionCode = Awaited<ReturnType<typeof importChatApprovalRendererBody>>;
@@ -112,7 +112,6 @@ export function ChatApprovalRenderer({
   connectionLost,
   ...decisionProps
 }: ChatApprovalRendererProps) {
-  const pausedNoteId = useId();
   const callerRevision = useSyncExternalStore(
     subscribeGatewayCallerScope,
     getGatewayCallerScopeRevision,
@@ -238,17 +237,7 @@ export function ChatApprovalRenderer({
               {record.status === "pending" ? "Loading approval controls…" : "Loading follow-on work…"}
             </p>
           ) : code.kind === "decision" ? (
-            <fieldset
-              disabled={connectionLost}
-              aria-describedby={connectionLost ? pausedNoteId : undefined}
-              className="m-0 min-w-0 border-0 p-0"
-            >
-              {connectionLost ? (
-                <p id={pausedNoteId} className="mb-2 text-fg-secondary">
-                  GoatCitadel is unreachable, so this decision can't be sent. Approve and Deny come back when the
-                  connection returns.
-                </p>
-              ) : null}
+            <ChatApprovalPausedFieldset paused={connectionLost}>
               <code.ApprovalDecisionBar key={scope} {...decisionProps} approval={record} />
               {decisionProps.sessionId ? (
                 <DeferredOutsideRootWriteGrantOptions
@@ -259,7 +248,7 @@ export function ChatApprovalRenderer({
                   onResolved={decisionProps.onResolved}
                 />
               ) : null}
-            </fieldset>
+            </ChatApprovalPausedFieldset>
           ) : (
             <code.ApprovalSettlement
               key={scope}

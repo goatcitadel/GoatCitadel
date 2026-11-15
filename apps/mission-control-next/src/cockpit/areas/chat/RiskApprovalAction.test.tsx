@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ChatApprovalPausedFieldset } from "./ChatApprovalPausedFieldset";
 import { RiskApprovalAction } from "./RiskApprovalAction";
 import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
 import { refuseNetwork } from "../../../test/refuse-network";
@@ -57,15 +58,15 @@ const dialogButton = (label: string) =>
   [...document.body.querySelectorAll("button")].find((button) => button.textContent === label)!;
 
 async function openConfirmation(opener?: HTMLButtonElement) {
-  const button = opener ?? (await vi.waitFor(() => {
-    const candidate = container.querySelector<HTMLButtonElement>("button");
-    expect(candidate).not.toBeNull();
-    return candidate!;
-  }));
+  const button =
+    opener ??
+    (await vi.waitFor(() => {
+      const candidate = container.querySelector<HTMLButtonElement>("button");
+      expect(candidate).not.toBeNull();
+      return candidate!;
+    }));
   await act(async () => button.click());
-  await vi.waitFor(() =>
-    expect(document.querySelector('[aria-label="Approval action details"]')).not.toBeNull(),
-  );
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="Approval action details"]')).not.toBeNull());
 }
 
 async function typeConfirmation(value: string) {
@@ -471,6 +472,45 @@ describe("risk approval action", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     expect(confirm().disabled).toBe(false);
+    await act(async () => confirm().click());
+    expect(onApprove).toHaveBeenCalledOnce();
+  });
+
+  it("pauses an open nuclear confirmation while GoatCitadel is unreachable, without closing it or losing what was typed", async () => {
+    const onApprove = vi.fn();
+    const renderAction = (connectionLost: boolean) =>
+      act(async () =>
+        root.render(
+          <ChatApprovalPausedFieldset paused={connectionLost}>
+            <RiskApprovalAction
+              approval={approval("nuclear")}
+              reviewedApproval={{ ...reviewedApproval, riskLevel: "nuclear" }}
+              pending={false}
+              onApprove={onApprove}
+            />
+          </ChatApprovalPausedFieldset>,
+        ),
+      );
+    await renderAction(false);
+    await openConfirmation();
+    const input = document.body.querySelector<HTMLInputElement>('[role="dialog"] input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "approve");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const confirm = () =>
+      [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Approve once")!;
+    expect(confirm().disabled).toBe(false);
+    await renderAction(true);
+    expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(confirm().disabled).toBe(true);
+    expect(document.body.textContent).toContain("GoatCitadel is unreachable, so this decision can");
+    expect(document.body.querySelector<HTMLInputElement>('[role="dialog"] input')!.value).toBe("approve");
+    await act(async () => confirm().click());
+    expect(onApprove).not.toHaveBeenCalled();
+    await renderAction(false);
+    expect(confirm().disabled).toBe(false);
+    expect(document.body.textContent).not.toContain("GoatCitadel is unreachable");
     await act(async () => confirm().click());
     expect(onApprove).toHaveBeenCalledOnce();
   });
