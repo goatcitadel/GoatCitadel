@@ -70,9 +70,6 @@ export function BrowserErrandsControl({ workspaceId = "default" }: { workspaceId
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">{LABEL?.description}</p>
         </div>
-        <Button size="sm" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>
-          Refresh
-        </Button>
       </div>
       <GovernedSettingLoadState
         governed={governed}

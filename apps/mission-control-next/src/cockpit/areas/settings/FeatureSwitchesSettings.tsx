@@ -71,9 +71,6 @@ export function FeatureSwitchesSettings() {
             unless you&apos;ve chosen to apply Settings changes without asking.
           </p>
         </div>
-        <Button size="sm" disabled={settings.isFetching} onClick={() => void settings.refetch()}>
-          Refresh
-        </Button>
       </div>
       {FEATURE_SWITCHES.map((definition) => (
         <FeatureSwitchControl key={definition.flag} definition={definition} settings={settings} />

@@ -68,9 +68,6 @@ export function ClaudeCliWarmContinuationControl() {
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">{COPY}</p>
         </div>
-        <Button size="sm" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>
-          Refresh
-        </Button>
       </div>
       <GovernedSettingLoadState
         governed={governed}

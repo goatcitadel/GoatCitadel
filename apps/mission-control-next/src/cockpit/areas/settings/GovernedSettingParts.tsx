@@ -153,6 +153,7 @@ export function GovernedSettingChangeStatus<T extends GovernedSettingValue>({
           waiting={governed.waiting}
           onResolved={governed.clearWaiting}
           showSentence={false}
+          onCheckAgain={governed.refresh}
         />
       ) : null}
       {governed.outcomeUncertain ? (

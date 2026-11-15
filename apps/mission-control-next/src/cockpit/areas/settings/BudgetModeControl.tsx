@@ -65,9 +65,6 @@ export function BudgetModeControl() {
             A saved preference for how much to spend on models. This is not a dollar limit.
           </p>
         </div>
-        <Button size="sm" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>
-          Refresh
-        </Button>
       </div>
       <GovernedSettingLoadState
         governed={governed}

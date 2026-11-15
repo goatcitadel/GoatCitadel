@@ -70,9 +70,6 @@ export function ChatThinkingStreamControl() {
             model thinks, its newest line shows next to that label; the full text stays shut unless you open it.
           </p>
         </div>
-        <Button size="sm" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>
-          Refresh
-        </Button>
       </div>
       <GovernedSettingLoadState
         governed={governed}

@@ -530,7 +530,7 @@ describe("cockpit Claude Code CLI tool setting", () => {
       }
     });
 
-    it("clears the waiting notice on Refresh once the change was decided elsewhere, and saving works again", async () => {
+    it("clears the waiting notice on Check again once the change was decided elsewhere, and saving works again", async () => {
       api.fetchSettings.mockResolvedValue(settingsAt(4, true));
       api.patchSettings.mockRejectedValue(planConflict);
       api.fetchChangePlan.mockResolvedValue(waitingPlan("plan-waiting", "approval-waiting", false));
@@ -550,7 +550,7 @@ describe("cockpit Claude Code CLI tool setting", () => {
         });
         await act(async () =>
           buttons(container)
-            .find((entry) => entry.textContent === "Refresh")!
+            .find((entry) => entry.textContent === "Check again")!
             .click(),
         );
         await vi.waitFor(() => expect(container.textContent).not.toContain("already waiting"));

@@ -76,9 +76,6 @@ export function SettingsApprovalSkipControl() {
             from Capabilities, and skills you switch on there apply right away instead of waiting for your approval.
           </p>
         </div>
-        <Button size="sm" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>
-          Refresh
-        </Button>
       </div>
       <GovernedSettingLoadState
         governed={governed}

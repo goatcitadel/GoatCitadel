@@ -75,9 +75,6 @@ export function ClaudeCliToolBridgeControl() {
             tools. Turn it off to stop offering GoatCitadel tools to the Claude Code CLI.
           </p>
         </div>
-        <Button size="sm" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>
-          Refresh
-        </Button>
       </div>
       <GovernedSettingLoadState
         governed={governed}
