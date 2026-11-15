@@ -289,6 +289,10 @@ function serverVerdict(server: McpServerRecord): Verdict {
   if (server.status === "error") {
     return { state: "broken", reason: "error" };
   }
+  // Saved but never connected (or still connecting) is not the same as connected.
+  if (server.status !== "connected") {
+    return { state: "needs_sign_in", reason: "not_connected" };
+  }
   return { state: "connected", reason: "ready" };
 }
 
