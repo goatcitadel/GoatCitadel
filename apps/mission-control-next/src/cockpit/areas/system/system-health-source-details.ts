@@ -4,6 +4,7 @@ import {
   fetchChannelRuntimeStatus,
   fetchLlamaCppStatus,
   fetchNpuStatus,
+  fetchOnboardingState,
 } from "@goatcitadel/mission-control-shared/api/client";
 import {
   loadHealthSummarySource,
@@ -34,17 +35,19 @@ function mapSource<T, U>(source: HealthSource<T>, map: (value: T) => U): HealthS
 }
 
 export async function loadDetailedHealthDigest(previous?: SystemHealthSources): Promise<SystemHealthSources> {
-  const [summary, llama, npu, connections] = await Promise.all([
+  const [summary, llama, npu, connections, onboarding] = await Promise.all([
     loadHealthSummarySource(previous?.summary),
     readHealthSource(() => fetchLlamaCppStatus(), previous?.llama),
     readHealthSource(() => fetchNpuStatus(), previous?.npu),
     readHealthSource(() => fetchIntegrationConnections(), connectionResponse(previous?.connections)),
+    readHealthSource(() => fetchOnboardingState(), previous?.onboarding),
   ]);
   return {
     summary,
     llama,
     npu,
     connections: connectionItems(connections),
+    onboarding,
     channels: { state: "deferred" },
     workers: { state: "deferred" },
   };
@@ -55,7 +58,7 @@ export async function loadDetailedHealthSources(
   workspaceId: string,
   previous?: SystemHealthSources,
 ): Promise<SystemHealthSources> {
-  const [summary, llama, npu, connectionsResponse, workers] = await Promise.all([
+  const [summary, llama, npu, connectionsResponse, workers, onboarding] = await Promise.all([
     loadHealthSummarySource(previous?.summary),
     readHealthSource(() => fetchLlamaCppStatus(), previous?.llama),
     readHealthSource(() => fetchNpuStatus(), previous?.npu),
@@ -68,6 +71,7 @@ export async function loadDetailedHealthSources(
         ),
       previous?.workers,
     ),
+    readHealthSource(() => fetchOnboardingState(), previous?.onboarding),
   ]);
   const connections = connectionItems(connectionsResponse);
   if (connections.state !== "current")
@@ -77,6 +81,7 @@ export async function loadDetailedHealthSources(
       npu,
       connections,
       workers,
+      onboarding,
       channels: {
         state: "unavailable",
         detail: "Channel connections could not be listed.",
@@ -115,6 +120,7 @@ export async function loadDetailedHealthSources(
     npu,
     connections,
     workers,
+    onboarding,
     channels: { state: "current", value: { enabledCount: enabled.length, checked }, observedAt: Date.now() },
   };
 }

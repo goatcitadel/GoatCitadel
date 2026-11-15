@@ -356,4 +356,76 @@ describe("shared guided model setup", () => {
     expect(onNoticeChange).toHaveBeenCalledWith("Change applied and verified.");
     expect(container.querySelector('[role="status"]')).toBeNull();
   });
+  it("does not say the saved defaults changed when only the suggested provider moved", async () => {
+    onboarding.settings.llm.activeProviderId = "";
+    onboarding.settings.llm.activeModel = "";
+    catalog("missing");
+    await mount();
+    await act(async () => {
+      const select = container.querySelector("select")!;
+      select.value = "test";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    catalog("ready"); // the provider's check finished; it is now the suggested default
+    await mount();
+    expect(container.textContent).not.toContain("Saved model defaults changed");
+  });
+  it("does not say the saved defaults changed after its own save lands while a newer choice is kept", async () => {
+    catalog("ready");
+    mocks.models.mockResolvedValue(["test-model", "other-model", "third-model"]);
+    let finish: (plan: object) => void = () => undefined;
+    let submitted: object = {};
+    mocks.create.mockImplementation(
+      (input: { request: object }) =>
+        new Promise((resolve) => {
+          submitted = input.request;
+          finish = resolve;
+        }),
+    );
+    await mount();
+    const pick = async (value: string) =>
+      act(async () => {
+        const select = container.querySelectorAll("select")[1]!;
+        select.value = value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    await pick("other-model");
+    await act(async () => button("Confirm model")!.click());
+    // A newer choice made while the first save is still out stays as the draft.
+    await pick("third-model");
+    await act(async () =>
+      finish({
+        planId: "plan-1",
+        status: "completed",
+        revision: 1,
+        origin: { workspaceId: "default", surface: "settings" },
+        request: submitted,
+        result: { summary: "Change applied and verified." },
+      }),
+    );
+    // The refreshed defaults are exactly what that save wrote.
+    onboarding = {
+      ...onboarding,
+      settings: { ...onboarding.settings, llm: { ...onboarding.settings.llm, activeModel: "other-model" } },
+    };
+    await mount();
+    expect(container.textContent).not.toContain("Saved model defaults changed");
+    // The newer choice survives the acknowledgement.
+    expect(container.querySelectorAll("select")[1]!.value).toBe("third-model");
+  });
+  it("says the saved defaults changed once they really changed", async () => {
+    catalog("ready");
+    await mount();
+    await act(async () => {
+      const select = container.querySelectorAll("select")[1]!;
+      select.value = "other-model";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    onboarding = {
+      ...onboarding,
+      settings: { ...onboarding.settings, llm: { ...onboarding.settings.llm, activeModel: "third-model" } },
+    };
+    await mount();
+    expect(container.textContent).toContain("Saved model defaults changed");
+  });
 });

@@ -1,10 +1,11 @@
-import { __resetSessionDraftsForTests, hasSessionDraft } from "../../library/session-drafts";
+import { __resetSessionDraftsForTests, hasSessionDraft, useSessionDraft } from "../../library/session-drafts";
 // @vitest-environment happy-dom
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChangePlanRecord, OnboardingState } from "@goatcitadel/contracts";
 import { GuidedModelSetup } from "./GuidedModelSetup";
+import { guidedSavedDefaultsRevision } from "./guided-model-setup-support";
 import { onboardingFixture } from "../onboarding.test-support";
 import { __resetOnboardingAttemptsForTests } from "../onboarding-completion-state";
 
@@ -312,6 +313,34 @@ describe("guided first model setup", () => {
         },
       }),
     );
+  });
+  it("keeps its draft comparable with the Cockpit setup that shares the draft key", async () => {
+    const view = await mount();
+    const effort = [...view.host.querySelectorAll("select")].find((select) => select.value === "standard")!;
+    await act(async () => {
+      effort.value = "extended";
+      effort.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    let remote: boolean | undefined;
+    const Probe = () => {
+      const draft = useSessionDraft(
+        "onboarding:default:model",
+        { providerId: "test", model: "test-model", thinkingLevel: "standard" },
+        guidedSavedDefaultsRevision({
+          activeProviderId: "test",
+          activeModel: "test-model",
+          defaultThinkingLevel: "standard",
+        }),
+        { label: "First Chat model", available: true },
+      );
+      remote = draft.hasRemoteChanges;
+      return null;
+    };
+    const probeHost = document.createElement("div");
+    const probeRoot = createRoot(probeHost);
+    roots.push(probeRoot);
+    await act(async () => probeRoot.render(<Probe />));
+    expect(remote).toBe(false);
   });
   it("submits Off effort and guides setup for a local runtime without reasoning support", async () => {
     mocks.models.mockResolvedValue(["gemma-4-local"]);

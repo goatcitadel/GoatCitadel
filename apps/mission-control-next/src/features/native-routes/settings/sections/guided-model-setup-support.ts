@@ -537,3 +537,40 @@ export const withHeldPlan = (held: readonly ChangePlanRecord[], plan: ChangePlan
   ...held.filter((candidate) => candidate.planId !== plan.planId),
   ...mergePlansByRevision([plan], held),
 ];
+
+/**
+ * The revision a guided model draft compares against: only what is saved. The suggested fallback provider moves as
+ * provider checks finish, and that is not a change to the saved defaults.
+ */
+export function guidedSavedDefaultsRevision(saved: {
+  activeProviderId: string;
+  activeModel: string;
+  defaultThinkingLevel: ChatThinkingLevel | undefined;
+}): string {
+  return JSON.stringify([saved.activeProviderId, saved.activeModel, saved.defaultThinkingLevel ?? null]);
+}
+
+/** What a default-model save wrote, as the selection the draft holds; a save that named no thinking level means standard. */
+export function guidedSavedSelection(request: {
+  providerId: string;
+  model: string;
+  thinkingLevel?: ChatThinkingLevel;
+}): {
+  providerId: string;
+  model: string;
+  thinkingLevel: ChatThinkingLevel;
+} {
+  return { providerId: request.providerId, model: request.model, thinkingLevel: request.thinkingLevel ?? "standard" };
+}
+
+/** The same revision for a default-model save that just landed: what it wrote, with the thinking level it left alone. */
+export function guidedSaveRevision(
+  request: { providerId: string; model: string; thinkingLevel?: ChatThinkingLevel },
+  unchangedThinkingLevel: ChatThinkingLevel | undefined,
+): string {
+  return guidedSavedDefaultsRevision({
+    activeProviderId: request.providerId,
+    activeModel: request.model,
+    defaultThinkingLevel: request.thinkingLevel ?? unchangedThinkingLevel,
+  });
+}

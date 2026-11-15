@@ -1,4 +1,4 @@
-import type { ChatSessionRecord } from "@goatcitadel/contracts";
+import type { ChatSessionRecord, OnboardingState } from "@goatcitadel/contracts";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
@@ -9,6 +9,7 @@ import { ChatSessionOverflow, ChatSessionTitle } from "./ChatSessionControls";
 import { SelectedThreadActivity } from "./SelectedThreadActivity";
 import { useModelLabel } from "../../data/use-model-label";
 import { presentDelegationRunStatus } from "./chat-vocabulary";
+import { projectFirstRunState } from "../settings/first-run-state";
 import type { ChannelConversationContext } from "./channel-conversation";
 
 type ActiveSession = MissionThreadedRenderSurfaceInput["activeSessionSurfaceProps"];
@@ -195,15 +196,58 @@ export function ChatHeaderSubtitle({
   return text ? <p className="hidden truncate text-xs text-fg-muted md:block">{text}</p> : null;
 }
 
-/** Advisory only: sending works before setup is finished, so the copy must not read as a block. */
-export function ChatSetupBanner({ onReturnToSetup }: { onReturnToSetup: () => void }) {
+/**
+ * Advisory once a model is ready: sending works before setup is finished, so that copy must not read as a block.
+ * Without a model nothing can answer, so the banner says so and sends the operator to choose one.
+ */
+export function ChatSetupBanner({
+  modelReady,
+  providerNotReady = false,
+  onReturnToSetup,
+}: {
+  modelReady: boolean;
+  /** A model is chosen and its provider reported that it is not ready: a different fix from choosing a model. */
+  providerNotReady?: boolean;
+  onReturnToSetup: () => void;
+}) {
+  const sentence = modelReady
+    ? "You can chat now. Finish setup to verify your first answer."
+    : providerNotReady
+      ? "Your model's provider is not ready. Check its connection before you send your first message."
+      : "Connect a model before you send your first message.";
+  const action = modelReady ? "Return to setup" : providerNotReady ? "Check model setup" : "Set up a model";
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-subtle bg-sunken px-3 py-2 text-sm text-fg-secondary">
-      <p>You can chat now. Finish setup to verify your first answer.</p>
+      <p>{sentence}</p>
       <Button size="sm" onClick={onReturnToSetup}>
-        Return to setup
+        {action}
       </Button>
     </div>
+  );
+}
+
+/** The setup banner, shown while setup is unfinished and the setup state could be read. */
+export function ChatSetupGate({
+  onboarding,
+  hidden,
+  onSetup,
+}: {
+  onboarding: { data?: OnboardingState; isError: boolean };
+  hidden: boolean;
+  onSetup: () => void;
+}) {
+  const state = onboarding.data;
+  if (!state || onboarding.isError || state.completed || hidden) return null;
+  const progress = projectFirstRunState(state);
+  // A chosen model whose readiness was not reported, or was reported as unknown, is not known: no instruction.
+  const provider = state.setupReadiness?.items.find((item) => item.id === "provider");
+  if (progress.modelConfigured && (!provider || provider.status === "unknown")) return null;
+  return (
+    <ChatSetupBanner
+      modelReady={progress.modelReady}
+      providerNotReady={progress.modelConfigured && !progress.providerReady}
+      onReturnToSetup={onSetup}
+    />
   );
 }
 
