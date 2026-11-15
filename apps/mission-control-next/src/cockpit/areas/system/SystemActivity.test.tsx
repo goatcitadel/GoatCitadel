@@ -13,6 +13,11 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useEventStreamStatus", () => 
   useEventStreamStatus: () => ({ state: stream.state, reconnectAttempts: 0 }),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/system", () => ({ fetchRealtimeEvents: api.fetchRealtimeEvents }));
+const prefs = vi.hoisted(() => ({ workspace: "workspace-a" }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@goatcitadel/mission-control-shared/state/ui-preferences")>();
+  return { ...actual, useUiPreferences: () => ({ ...actual.useUiPreferences(), activeWorkspaceId: prefs.workspace }) };
+});
 vi.mock("./RecentSessions", () => ({ RecentSessions: () => <p>Recent sessions owner</p> }));
 
 let root: Root, container: HTMLDivElement, client: QueryClient;
@@ -33,6 +38,7 @@ const signal = (id: string, kind: string, at: string, extra: Record<string, unkn
 });
 
 beforeEach(() => {
+  prefs.workspace = "workspace-a";
   window.sessionStorage.clear();
   api.fetchRealtimeEvents.mockReset().mockResolvedValue({ items: [] });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -182,6 +188,62 @@ describe("System activity older signals and counts (22.4)", () => {
     expect(container.textContent).toContain("That is everything this installation keeps.");
     expect(container.textContent).toContain("Open Work history");
     expect(container.textContent).not.toContain("Load older signals");
+  });
+
+  it("drops loaded older pages when the workspace changes, and ignores a late answer for the old one", async () => {
+    const first = signal("n1", "approval_created", "2026-10-05T10:00:00.000Z", { eventClass: "domain_fact" });
+    const old = signal("o1", "chat_message", "2026-10-04T10:00:00.000Z", {
+      eventClass: "domain_fact",
+      payload: { title: "Old thread" },
+    });
+    const late = signal("o2", "chat_message", "2026-10-03T10:00:00.000Z", {
+      eventClass: "domain_fact",
+      payload: { title: "Late thread" },
+    });
+    let answerLate!: (value: unknown) => void;
+    api.fetchRealtimeEvents
+      .mockResolvedValueOnce({ items: [first], nextCursor: "c1" })
+      .mockResolvedValueOnce({ items: [old], nextCursor: "c2" })
+      .mockImplementationOnce(() => new Promise((resolve) => (answerLate = resolve)));
+    await render();
+    await settle();
+    const loadButton = () =>
+      [...container.querySelectorAll("button")].find((node) => node.textContent?.includes("Load older signals"))!;
+    await act(async () => loadButton().click());
+    await settle();
+    expect(container.textContent).toContain("Old thread");
+    await act(async () => loadButton().click());
+    await settle();
+    prefs.workspace = "workspace-b";
+    await render();
+    await settle();
+    expect(container.textContent).not.toContain("Old thread");
+    await act(async () => answerLate({ items: [late] }));
+    await settle();
+    expect(container.textContent).not.toContain("Late thread");
+    expect(container.querySelectorAll("ol > li")).toHaveLength(1);
+  });
+
+  it("drops loaded older pages when the operator refreshes the list", async () => {
+    const first = signal("n1", "approval_created", "2026-10-05T10:00:00.000Z", { eventClass: "domain_fact" });
+    const old = signal("o1", "chat_message", "2026-10-04T10:00:00.000Z", {
+      eventClass: "domain_fact",
+      payload: { title: "Old thread" },
+    });
+    api.fetchRealtimeEvents
+      .mockResolvedValueOnce({ items: [first], nextCursor: "c1" })
+      .mockResolvedValueOnce({ items: [old] })
+      .mockResolvedValue({ items: [first], nextCursor: "c1" });
+    await render();
+    await settle();
+    const byText = (text: string) =>
+      [...container.querySelectorAll("button")].find((node) => node.textContent?.includes(text))!;
+    await act(async () => byText("Load older signals").click());
+    await settle();
+    expect(container.textContent).toContain("Old thread");
+    await act(async () => byText("Refresh").click());
+    await settle();
+    expect(container.textContent).not.toContain("Old thread");
   });
 
   it("shows the Work history link when no older signals exist from the start", async () => {
