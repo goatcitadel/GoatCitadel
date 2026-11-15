@@ -265,6 +265,7 @@ describe("Gateway inbox projection", () => {
     vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
       items: [
         shell("plain", "pnpm test --filter api"),
+        { ...base, approvalId: "notool", kind: "shell.exec", preview: { command: "pnpm test" } },
         shell("secret", `curl -H "Authorization: Bearer ${token}" https://example.invalid`),
         shell("lines", "echo one\necho two\necho three", "shell.exec_background"),
         shell("oneextra", "echo one\r\n\r\necho two"),
@@ -297,6 +298,7 @@ describe("Gateway inbox projection", () => {
     const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
     const summary = (id: string) => projection.items.find((entry) => entry.id === `approval:${id}`)?.summary;
     expect(summary("plain")).toBe("Command: pnpm test --filter api");
+    expect(summary("notool")).toBe("Command: pnpm test");
     expect(summary("secret")).toContain("[REDACTED]");
     expect(summary("codesecret")).toContain("[REDACTED]");
     expect(JSON.stringify(projection)).not.toContain(token);

@@ -153,10 +153,12 @@ function approvalTargetSummary(preview: unknown, kind: string): string {
     // A URL target can carry credentials in its userinfo, path or query, so only its scheme and host are shown.
     if (typeof record.target === "string" && record.target.trim())
       return bounded(`Target: ${redactUrlForError(record.target)}`);
-    if (SHELL_TOOLS.has(record.toolName) && typeof record.command === "string") {
-      const command = previewLine("Command", record.command);
-      if (command) return command;
-    }
+  }
+  // A shell approval's kind is its tool name; a preview that carries no tool name still names its command.
+  const shellTool = SHELL_TOOLS.has(kind) || (typeof record.toolName === "string" && SHELL_TOOLS.has(record.toolName));
+  if (shellTool && typeof record.command === "string") {
+    const command = previewLine("Command", record.command);
+    if (command) return command;
   }
   if (kind === "code_mode.run" && typeof record.codePreview === "string") {
     const code = previewLine("Code", record.codePreview);
