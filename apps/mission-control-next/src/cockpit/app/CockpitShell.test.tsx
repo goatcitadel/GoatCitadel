@@ -422,6 +422,36 @@ describe("CockpitShell", () => {
     expect(document.title).toBe("Before");
     client.clear();
   });
+  it("moves focus to the main region when the area changes and focus is outside it (U-GL-025)", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <CockpitShell />
+        </QueryClientProvider>,
+      ),
+    );
+    container.querySelector<HTMLElement>('nav[aria-label="Areas"] a[href]')!.focus();
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "g" }));
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "l" }));
+    });
+    expect(window.location.pathname).toBe("/library");
+    expect(document.activeElement?.id).toBe("main-content");
+    client.clear();
+  });
+  it("does not move focus on the first page of a visit", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <CockpitShell />
+        </QueryClientProvider>,
+      ),
+    );
+    expect(document.activeElement).toBe(document.body);
+    client.clear();
+  });
   it("collapses to an accessible rail with Ctrl+B and preserves the route", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     await act(async () =>

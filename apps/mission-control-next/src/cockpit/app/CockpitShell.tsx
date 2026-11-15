@@ -116,6 +116,16 @@ function CockpitShellContent({
     };
   }, [documentTitle]);
 
+  // A new area is a new page: bring keyboard and screen reader focus to it, unless the page already focused
+  // something inside main. The first page of a visit keeps the browser's own starting point.
+  const previousArea = useRef(area);
+  useEffect(() => {
+    if (previousArea.current === area) return;
+    previousArea.current = area;
+    const main = document.getElementById("main-content");
+    if (main && !main.contains(document.activeElement)) main.focus({ preventScroll: true });
+  }, [area]);
+
   useLayoutEffect(() => {
     applyCockpitAppearance(theme, density);
     document.documentElement.dataset.shell = "cockpit";
