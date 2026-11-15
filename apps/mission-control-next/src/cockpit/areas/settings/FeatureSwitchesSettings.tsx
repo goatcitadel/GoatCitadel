@@ -25,12 +25,29 @@ const onOff = (value: boolean) => (value ? "On" : "Off");
 /** The Features section of Settings › Advanced: one governed switch per feature that ships turned off. */
 export function FeatureSwitchesSettings() {
   const { hash } = useCockpitRoute();
-  // A "Turn it on" link from another screen arrives at the top of Advanced; bring its switch into view.
+  // A "Turn it on" link from another screen arrives at the top of Advanced; bring its switch into view. The sections
+  // above it fill in after this one mounts and push it down, so it is aligned again until the operator scrolls.
   useEffect(() => {
     const id = hash.replace(/^#/u, "");
     if (!isFeatureSwitchHash(id)) return;
-    const frame = requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView?.({ block: "start" }));
-    return () => cancelAnimationFrame(frame);
+    const align = () => document.getElementById(id)?.scrollIntoView?.({ block: "start" });
+    let operatorScrolled = false;
+    const stop = () => {
+      operatorScrolled = true;
+    };
+    const events = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+    for (const name of events) window.addEventListener(name, stop, { passive: true });
+    const frame = requestAnimationFrame(align);
+    const timers = [300, 800, 1600, 3000].map((ms) =>
+      window.setTimeout(() => {
+        if (!operatorScrolled) align();
+      }, ms),
+    );
+    return () => {
+      cancelAnimationFrame(frame);
+      for (const timer of timers) window.clearTimeout(timer);
+      for (const name of events) window.removeEventListener(name, stop);
+    };
   }, [hash]);
   const settings = useQuery({
     queryKey: ["system", "settings-feature-switches"],
