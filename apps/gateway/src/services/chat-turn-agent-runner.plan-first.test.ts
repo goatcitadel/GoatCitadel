@@ -164,4 +164,33 @@ describe("ChatTurnAgentRunner Plan first turn", () => {
 
     expect(result.assistantContent).toBe(plan);
   });
+  it("never offers or resolves a delegation under Plan first, and still does when it is off", async () => {
+    const prompt = "Research the best bookshelf designs then implement the build plan.";
+    const build = (resolveConfirmedDelegation: ReturnType<typeof vi.fn>) =>
+      new ChatTurnAgentRunner({
+        storage: createMockStorage() as never,
+        listToolCatalog: () => createToolCatalog(["browser.search", "agent.fanout"]),
+        createChatCompletion: vi.fn(async () => ({
+          model: "glm-5",
+          choices: [
+            { index: 0, finish_reason: "stop", message: { role: "assistant", content: "1. Research. 2. Build." } },
+          ],
+        })) as never,
+        invokeTool: vi.fn() as never,
+        resolveConfirmedDelegation: resolveConfirmedDelegation as never,
+      });
+    const resolveAdvisory = vi.fn(async () => ({ prompt: { promptId: "p", question: "Delegate this task?" } }));
+    const advisory = await build(resolveAdvisory).run({
+      ...planFirstInput(prompt),
+      subagentPolicy: "ask_when_useful",
+      planningMode: "advisory",
+    });
+
+    expect(resolveAdvisory).not.toHaveBeenCalled();
+    expect(advisory.assistantContent).toBe("1. Research. 2. Build.");
+
+    const resolveOff = vi.fn(async () => undefined);
+    await build(resolveOff).run({ ...planFirstInput(prompt), subagentPolicy: "ask_when_useful", planningMode: "off" });
+    expect(resolveOff).toHaveBeenCalledTimes(1);
+  });
 });

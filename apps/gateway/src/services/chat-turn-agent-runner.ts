@@ -2356,7 +2356,8 @@ export class ChatTurnAgentRunner {
     };
 
     const conversationMessages = projectHistoryMessagesForModel(input.historyMessages);
-    const confirmedDelegation = await this.deps.resolveConfirmedDelegation?.(input);
+    // Plan first runs nothing: no delegation is offered or started for it, the model just writes the plan.
+    const confirmedDelegation = planFirstNoTools ? undefined : await this.deps.resolveConfirmedDelegation?.(input);
     if (confirmedDelegation) {
       const delegationTrace = await this.patchTurnTrace(
         input,
