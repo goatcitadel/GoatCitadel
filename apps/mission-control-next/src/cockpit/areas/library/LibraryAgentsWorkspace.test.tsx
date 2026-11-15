@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, useEffect, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -27,15 +27,34 @@ vi.mock("@goatcitadel/mission-control-shared/api/operators-agents-files", () => 
         isBuiltin: true,
         sessionCount: 0,
       },
+      {
+        agentId: "broken-agent",
+        name: "Broken Goat",
+        title: "QA",
+        roleId: "qa",
+        summary: "",
+        lifecycleStatus: "active",
+        isBuiltin: false,
+        sessionCount: 0,
+      },
     ],
   }),
 }));
+// The real editor reads the profile first: its heading appears after it mounts, and a failed read never shows one.
 vi.mock("./LibraryAgentEditor", () => ({
-  LibraryAgentEditor: ({ agentId }: { agentId?: string }) => (
-    <section aria-label="Agent profile editor">
-      <h2 tabIndex={-1}>{agentId}</h2>
-    </section>
-  ),
+  LibraryAgentEditor: function Editor({ agentId, onLoadFailed }: { agentId?: string; onLoadFailed?: () => void }) {
+    const [ready, setReady] = useState(false);
+    useEffect(() => {
+      if (agentId === "broken-agent") onLoadFailed?.();
+      const timer = setTimeout(() => setReady(true), 30);
+      return () => clearTimeout(timer);
+    }, [agentId, onLoadFailed]);
+    return (
+      <section aria-label="Agent profile editor">
+        {ready ? <h2 tabIndex={-1}>{agentId}</h2> : <p>Reading agent profile…</p>}
+      </section>
+    );
+  },
 }));
 vi.mock("./LibraryImportedAgents", () => ({ LibraryImportedAgents: () => null }));
 
@@ -85,6 +104,40 @@ it("focuses the opened profile's heading after an Open click", async () => {
 });
 
 it("leaves focus alone when the profile arrives by address", async () => {
+  route.search = "?agentId=builtin-qa";
+  await rerender();
+  await vi.waitFor(() =>
+    expect(host.querySelector('[aria-label="Agent profile editor"] h2')?.textContent).toBe("builtin-qa"),
+  );
+  expect(document.activeElement?.textContent).not.toBe("builtin-qa");
+  expect(scroll).not.toHaveBeenCalled();
+});
+
+it("takes no focus when the load fails, even if a heading shows up later", async () => {
+  await rerender();
+  const open = await vi.waitFor(() => {
+    const found = [...host.querySelectorAll("button")].find((button) => button.textContent === "Open Broken Goat");
+    if (!found) throw new Error("not loaded");
+    return found;
+  });
+  await act(async () => open.click());
+  await vi.waitFor(() =>
+    expect(host.querySelector('[aria-label="Agent profile editor"] h2')?.textContent).toBe("broken-agent"),
+  );
+  expect(document.activeElement?.textContent).not.toBe("broken-agent");
+  expect(scroll).not.toHaveBeenCalled();
+});
+
+it("takes no focus after an Open click the leave review cancelled", async () => {
+  await rerender();
+  const open = await vi.waitFor(() => {
+    const found = [...host.querySelectorAll("button")].find((button) => button.textContent === "Open QA Goat");
+    if (!found) throw new Error("not loaded");
+    return found;
+  });
+  route.requestTransition = (run) => run({ isCurrent: () => false, navigate: () => undefined });
+  await act(async () => open.click());
+  // Later the same profile arrives by address, as it would from a deep link: focus stays put.
   route.search = "?agentId=builtin-qa";
   await rerender();
   await vi.waitFor(() =>

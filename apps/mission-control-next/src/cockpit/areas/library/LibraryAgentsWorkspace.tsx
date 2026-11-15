@@ -38,6 +38,8 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
     const holder = editorRef.current;
     if (!agentId || !holder || revealRequested.current !== agentId) return;
     const reveal = () => {
+      // A request that was cleared (the profile failed to load) is over: stop waiting and take nothing.
+      if (revealRequested.current !== agentId) return true;
       if (!revealTarget(holder.querySelector("h2"), "self")) return false;
       revealRequested.current = null;
       return true;
@@ -56,7 +58,6 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
     staleTime: 0,
   });
   function select(id?: string) {
-    revealRequested.current = id ?? null;
     const next = new URLSearchParams(route.search);
     if (id) next.set("agentId", id);
     else next.delete("agentId");
@@ -64,6 +65,8 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
     next.set("shell", "cockpit");
     route.requestTransition((review) => {
       if (review.isCurrent()) {
+        // Asked for only once the move is going ahead: a click the leave review cancels takes nothing later.
+        revealRequested.current = id ?? null;
         review.navigate(`/library/agents?${next}`);
       }
     });
@@ -159,7 +162,14 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
             <LibraryAgentEditor key="new" workspaceId={workspaceId} onClose={() => select()} />
           ) : agentId ? (
             <div ref={editorRef}>
-              <LibraryAgentEditor key={`${workspaceId}:${agentId}`} workspaceId={workspaceId} agentId={agentId} />
+              <LibraryAgentEditor
+                key={`${workspaceId}:${agentId}`}
+                workspaceId={workspaceId}
+                agentId={agentId}
+                onLoadFailed={() => {
+                  revealRequested.current = null;
+                }}
+              />
             </div>
           ) : null}
         </>

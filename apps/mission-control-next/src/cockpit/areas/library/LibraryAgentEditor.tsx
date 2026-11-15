@@ -1,5 +1,5 @@
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { canonicalJsonString, type AgentProfileRecord } from "@goatcitadel/contracts";
 import {
@@ -54,8 +54,11 @@ export function LibraryAgentEditor({
   agentId,
   workspaceId,
   onClose,
+  onLoadFailed,
 }: {
   agentId?: string;
+  /** Said once when the profile could not be read, so an "open" that waits to focus it gives up. */
+  onLoadFailed?: () => void;
   workspaceId: string;
   onClose?: () => void;
 }) {
@@ -66,6 +69,10 @@ export function LibraryAgentEditor({
     enabled: Boolean(agentId),
     staleTime: 0,
   });
+  const loadFailed = query.isError;
+  useEffect(() => {
+    if (loadFailed) onLoadFailed?.();
+  }, [loadFailed, onLoadFailed]);
   if (agentId && !query.data)
     return (
       <Callout tone={query.isError ? "error" : "info"}>
