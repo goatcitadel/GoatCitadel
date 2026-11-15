@@ -70,7 +70,8 @@ export function requestDesktopUpdate(
   options: Pick<DesktopUpdateRequest, "channel" | "releaseTag"> = {},
 ): Promise<void> {
   connect();
-  if (!connected) return Promise.reject(new Error("Open the installed Windows app to manage updates."));
+  const host = connected;
+  if (!host) return Promise.reject(new Error("Open the installed Windows app to manage updates."));
   const requestId = crypto.randomUUID();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
@@ -81,6 +82,12 @@ export function requestDesktopUpdate(
       action === "download" ? 16 * 60 * 1000 : 90_000,
     );
     pending.set(requestId, { resolve, reject, timer });
-    connected!.postMessage({ type: "goatcitadel.updates.request", requestId, action, ...options });
+    try {
+      host.postMessage({ type: "goatcitadel.updates.request", requestId, action, ...options });
+    } catch (error) {
+      clearTimeout(timer);
+      pending.delete(requestId);
+      reject(error);
+    }
   });
 }
