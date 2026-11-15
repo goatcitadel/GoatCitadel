@@ -919,6 +919,8 @@ export async function prepareAgentChatTurn(
     userMessage = existingUserMessage;
   }
 
+  const resolveGuidance = () => host.resolveRuntimeGuidance(workspaceId);
+  const resolveThreadKnowledge = () => host.resolveThreadKnowledgeContext(sessionId, content);
   let resolvedGuidancePromise = quickWebTurn
     ? Promise.resolve({
         workspaceId,
@@ -926,11 +928,11 @@ export async function prepareAgentChatTurn(
         workspaceFilesUsed: [],
         truncated: false,
       } satisfies Partial<ResolvedRuntimeGuidance>)
-    : host.resolveRuntimeGuidance(workspaceId);
+    : resolveGuidance();
   let threadKnowledgeContextPromise: Promise<ResolvedThreadKnowledgeContext> =
     quickWebTurn || options?.skipProviderPreparation
       ? Promise.resolve({ systemInstruction: undefined, citations: [], attachments: [] })
-      : host.resolveThreadKnowledgeContext(sessionId, content);
+      : resolveThreadKnowledge();
   const sideChatSystemInstructionPromise = input.sideChatContext
     ? buildSideChatSystemInstruction(host, sessionId, input.sideChatContext)
     : Promise.resolve(undefined);
@@ -998,10 +1000,10 @@ export async function prepareAgentChatTurn(
           ...normalizeAgentInputFromSend({ ...input, content, normalizationProfile: "live" }),
           subagentPolicy: "off",
         };
-    resolvedGuidancePromise = host.resolveRuntimeGuidance(workspaceId);
+    resolvedGuidancePromise = resolveGuidance();
     threadKnowledgeContextPromise = options?.skipProviderPreparation
       ? Promise.resolve({ systemInstruction: undefined, citations: [], attachments: [] })
-      : host.resolveThreadKnowledgeContext(sessionId, content);
+      : resolveThreadKnowledge();
   }
   const effectiveProviderRoute = boundCapabilityProfile
     ? undefined
