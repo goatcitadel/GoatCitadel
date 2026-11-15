@@ -14,6 +14,7 @@ import { EmptyState } from "../../ui/EmptyState";
 import { taskMatchesWorkspace } from "./work-tasks";
 import { TaskAssignmentControl } from "./TaskAssignmentControl";
 import { TaskDetailsEditor } from "./TaskDetailsEditor";
+import { taskConversationId, taskRunHref } from "./task-run-link";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TimeText } from "../../ui/TimeText";
@@ -34,8 +35,8 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
     !taskQuery.isError && taskQuery.data && taskMatchesWorkspace(taskQuery.data, workspaceId)
       ? taskQuery.data
       : undefined;
-  const taskSessionId =
-    task?.proactiveContext?.sessionId ?? task?.agenticContext?.childSessionId ?? task?.agenticContext?.parentSessionId;
+  const taskSessionId = task ? taskConversationId(task) : undefined;
+  const taskRunLink = task ? taskRunHref(task) : undefined;
   const activities = useQuery({
     queryKey: ["tasks", "work-task-activities", workspaceId, taskId],
     queryFn: () => fetchTaskActivities(taskId, workspaceId),
@@ -114,11 +115,8 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
               This task is blocked. No blocker reason was recorded; review its activity.
             </p>
           ) : null}
-          {task.proactiveContext?.durableRunId || task.agenticContext?.durableRunId ? (
-            <NativeOwnerLink
-              scope={[workspaceId, taskId]}
-              href={`/work/runs/${encodeURIComponent((task.proactiveContext?.durableRunId ?? task.agenticContext?.durableRunId)!)}`}
-            >
+          {taskRunLink ? (
+            <NativeOwnerLink scope={[workspaceId, taskId]} href={taskRunLink}>
               Open linked run
             </NativeOwnerLink>
           ) : null}

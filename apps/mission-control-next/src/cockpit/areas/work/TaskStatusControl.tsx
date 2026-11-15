@@ -13,6 +13,7 @@ import { readCockpitLocation } from "../../app/cockpit-back-guard";
 import { TASK_DELIVERABLE_TITLE_ID } from "./TaskDeliverableForm";
 import { TASK_STATUSES } from "./work-tasks";
 import { NOTICE_TONE_CLASS } from "./work-vocabulary";
+import { TaskOwnerNotice } from "./TaskOwnerNotice";
 
 export function TaskStatusControl({
   task,
@@ -58,7 +59,7 @@ export function TaskStatusControl({
       <h2 className="text-base font-semibold text-fg">Task status</h2>
       {executionOwned ? (
         <p className="mt-2 text-sm text-fg-secondary">
-          A run is handling this task. Review its run before changing execution state.
+          <TaskOwnerNotice task={task} workspaceId={workspaceId} before="changing execution state" />
         </p>
       ) : (
         <p className="mt-2 text-sm text-fg-secondary">
