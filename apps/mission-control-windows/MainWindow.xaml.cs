@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using GoatCitadel.MissionControl.Windows.Models;
@@ -35,6 +36,7 @@ public sealed partial class MainWindow : Window
     private AppWindow? _appWindow;
     private DesktopRuntimeStatus? _lastRuntime;
     private DispatcherQueueTimer? _pollTimer;
+    private DispatcherQueueTimer? _startingTimer;
     private DispatcherQueueTimer? _toastTimer;
     private CancellationTokenSource? _eventStreamCts;
     private Task? _webViewInitializationTask;
@@ -323,7 +325,17 @@ public sealed partial class MainWindow : Window
         RenderStarting();
         try
         {
-            var result = await _runtimeStatusService.LaunchAsync(observation.Token);
+            DesktopRuntimeStatus result;
+            StartStartingTimer(observation);
+            try
+            {
+                result = await _runtimeStatusService.LaunchAsync(observation.Token);
+            }
+            finally
+            {
+                StopStartingTimer();
+            }
+
             if (!_runtimeLifecycle.IsCurrent(observation)) return;
             _lastRuntime = result;
             if (result.IsReady)
@@ -334,29 +346,29 @@ public sealed partial class MainWindow : Window
             {
                 _deferredRoutes.MarkUnavailable();
                 RenderRuntime(result);
-                RenderRecovery($"Runtime is {result.Status}. Gateway and Mission Control did not both become ready.");
+                RenderRecovery(DesktopStartupCopy.RecoveryMessage(result));
                 StartRuntimeStatusPolling();
             }
         }
         catch (InvalidOperationException error)
         {
-            RenderRuntimeRecovery(error, observation);
+            await RenderRuntimeRecoveryAsync(error, observation);
         }
         catch (Win32Exception error)
         {
-            RenderRuntimeRecovery(error, observation);
+            await RenderRuntimeRecoveryAsync(error, observation);
         }
         catch (IOException error)
         {
-            RenderRuntimeRecovery(error, observation);
+            await RenderRuntimeRecoveryAsync(error, observation);
         }
         catch (UnauthorizedAccessException error)
         {
-            RenderRuntimeRecovery(error, observation);
+            await RenderRuntimeRecoveryAsync(error, observation);
         }
         catch (OperationCanceledException error)
         {
-            RenderRuntimeRecovery(error, observation);
+            await RenderRuntimeRecoveryAsync(error, observation);
         }
     }
 
@@ -598,12 +610,34 @@ public sealed partial class MainWindow : Window
         _pollTimer = null;
     }
 
+    // While the launcher runs, say how long the host has waited; it knows nothing more until the launcher answers.
+    private void StartStartingTimer(DesktopRuntimeObservation observation)
+    {
+        StopStartingTimer();
+        var elapsed = Stopwatch.StartNew();
+        var timer = DispatcherQueue.CreateTimer();
+        timer.Interval = TimeSpan.FromSeconds(1);
+        timer.Tick += (_, _) =>
+        {
+            if (_cleanedUp || !_runtimeLifecycle.IsCurrent(observation)) return;
+            StatusCopy.Text = DesktopStartupCopy.StartingMessage(elapsed.Elapsed);
+        };
+        _startingTimer = timer;
+        timer.Start();
+    }
+
+    private void StopStartingTimer()
+    {
+        _startingTimer?.Stop();
+        _startingTimer = null;
+    }
+
     private void RenderStarting()
     {
         StartupPanel.Visibility = Visibility.Visible;
         MissionWebView.Visibility = Visibility.Collapsed;
         RecoveryActions.Visibility = Visibility.Collapsed;
-        StatusCopy.Text = "Starting the local runtime...";
+        StatusCopy.Text = DesktopStartupCopy.StartingMessage(TimeSpan.Zero);
         ProgressBar.Visibility = Visibility.Visible;
         ProgressBar.IsIndeterminate = true;
         RuntimeMeta.Text = "Gateway and Mission Control will stay warm while the desktop app is open.";
@@ -707,6 +741,7 @@ public sealed partial class MainWindow : Window
         _runtimeLifecycle.Dispose();
         StopEventStream();
         StopRuntimeStatusPolling();
+        StopStartingTimer();
         _notificationService.Dispose();
         StopUpdates();
         _trayService.Dispose();
@@ -755,12 +790,34 @@ public sealed partial class MainWindow : Window
         RenderRecovery($"WebView2 initialization failed: {error.Message}");
     }
 
-    private void RenderRuntimeRecovery(Exception error, DesktopRuntimeObservation observation)
+    private async Task RenderRuntimeRecoveryAsync(Exception error, DesktopRuntimeObservation observation)
     {
         if (!_runtimeLifecycle.IsCurrent(observation)) return;
         _startupDiagnostics?.RecordPhase("runtime-failed", error);
         _deferredRoutes.MarkUnavailable();
-        RenderRecovery(error.Message);
+        // The launcher's own error is a raw exit message. When the Gateway recorded why it could not
+        // start, the status carries that reason; read it once and fall back to the launcher error.
+        var status = await TryReadStartupFailureStatusAsync(observation);
+        if (!_runtimeLifecycle.IsCurrent(observation)) return;
+        RenderRecovery(DesktopStartupCopy.LaunchFailureMessage(status, error.Message));
+    }
+
+    private async Task<DesktopRuntimeStatus?> TryReadStartupFailureStatusAsync(DesktopRuntimeObservation observation)
+    {
+        try
+        {
+            return await _runtimeStatusService.ReadStatusAsync(observation.Token);
+        }
+        catch (Exception statusError) when (
+            statusError is InvalidOperationException
+                or Win32Exception
+                or IOException
+                or UnauthorizedAccessException
+                or OperationCanceledException)
+        {
+            // The status read only adds the recorded reason; without it the launcher error is shown.
+            return null;
+        }
     }
 
     private void RenderRuntimeStatusFailure(Exception error, bool notify, bool syncShell, DesktopRuntimeObservation observation)
