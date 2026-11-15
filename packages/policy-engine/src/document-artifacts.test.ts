@@ -67,6 +67,16 @@ describe("createDocumentArtifact plain text", () => {
     expect(artifact.data).toBe("  hello\n");
   });
 
+  it("ends a body that ends in blank lines with exactly one newline", async () => {
+    const artifact = await createDocumentArtifact("txt", { title: "note.txt", body: "hello\n\n", sections: [] });
+    expect(artifact.data).toBe("hello\n");
+  });
+
+  it("keeps the carriage returns of a CRLF body", async () => {
+    const artifact = await createDocumentArtifact("txt", { title: "note.txt", body: "one\r\ntwo\r\n", sections: [] });
+    expect(artifact.data).toBe("one\r\ntwo\n");
+  });
+
   it("falls back to the title when the body is empty", async () => {
     const artifact = await createDocumentArtifact("txt", { title: "note.txt", body: "  ", sections: [] });
     expect(artifact.data).toBe("note.txt\n");
