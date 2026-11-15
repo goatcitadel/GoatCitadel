@@ -220,12 +220,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Types]
 Name: "full"; Description: "Full installation"
+Name: "everything"; Description: "Full installation with local voice"
 Name: "custom"; Description: "Custom installation"; Flags: iscustom
 
 [Components]
-Name: "core"; Description: "Core runtime"; Types: full custom; Flags: fixed
-Name: "chromium"; Description: "Chromium runtime for browser errands (downloaded during setup; needs internet)"; Types: full custom
-Name: "voice"; Description: "Local voice runtime for transcribing voice messages (downloaded during setup; needs internet; you can add it later in Settings)"; Types: full custom
+Name: "core"; Description: "Core runtime"; Types: full everything custom; Flags: fixed
+Name: "chromium"; Description: "Chromium runtime for browser errands (downloaded during setup; needs internet)"; Types: full everything custom
+Name: "voice"; Description: "Local voice runtime for transcribing voice messages (downloaded during setup; needs internet; you can add it later in Settings)"; Types: everything
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "Shortcuts:"; Flags: unchecked
