@@ -10,6 +10,7 @@ import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
 import { formatAbsoluteTime, formatBytes } from "@goatcitadel/mission-control-shared/content/format";
+import { readTextFileForUpload } from "./library-file-read";
 
 const EMPTY = { path: "", content: "" };
 const INPUT = "w-full rounded-md border border-line bg-raised p-2 text-fg";
@@ -62,6 +63,19 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
     undefined,
   );
   const [busy, setBusy] = useState(false);
+  const [chooserKey, setChooserKey] = useState(0);
+  const [chooserError, setChooserError] = useState<string | undefined>();
+  async function chooseFile(file: File | undefined) {
+    if (!file) return;
+    const read = await readTextFileForUpload(file);
+    setChooserKey((key) => key + 1);
+    if (!read.ok) {
+      setChooserError(read.message);
+      return;
+    }
+    setChooserError(undefined);
+    draft.setValue({ path: draft.value.path.trim() ? draft.value.path : read.name, content: read.content });
+  }
   const target = review ? splitUploadPath(review.path) : undefined;
   // A truncated listing cannot prove absence, so it reads as a failed check rather than a new file.
   const existing = useQuery({
@@ -147,6 +161,20 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
             UTF-8 text in the installation shared file root. All workspaces share this destination. GoatCitadel path and
             size limits apply.
           </p>
+          <Field label="Choose a text file">
+            {(props) => (
+              <input
+                {...props}
+                key={chooserKey}
+                type="file"
+                accept=".txt,.md,.markdown,.json,.csv,.log,.yaml,.yml,text/*"
+                className={INPUT}
+                onChange={(event) => void chooseFile(event.target.files?.[0])}
+              />
+            )}
+          </Field>
+          {chooserError ? <Callout tone="error">{chooserError}</Callout> : null}
+          <p className="text-sm text-fg-secondary">Or type the path and paste the text below.</p>
           <Field label="Relative file path">
             {(props) => (
               <input
@@ -211,15 +239,21 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
           )}
           {result ? <Callout tone={result.error ? "error" : "info"}>{result.message}</Callout> : null}
           {busy ? <p role="status">Uploading text file…</p> : null}
-          <Button
-            variant={existing.data === null ? "primary" : "danger"}
-            loading={checking}
-            loadingLabel="Checking file…"
-            disabled={busy || operation.locked || Boolean(result)}
-            onClick={() => void submit()}
-          >
-            {replaces ? "Replace file" : existing.data === null ? "Upload file" : "Upload or replace file"}
-          </Button>
+          {result && !result.error ? (
+            <Button variant="secondary" onClick={() => setReview(undefined)}>
+              Close
+            </Button>
+          ) : (
+            <Button
+              variant={existing.data === null ? "primary" : "danger"}
+              loading={checking}
+              loadingLabel="Checking file…"
+              disabled={busy || operation.locked || Boolean(result)}
+              onClick={() => void submit()}
+            >
+              {replaces ? "Replace file" : existing.data === null ? "Upload file" : "Upload or replace file"}
+            </Button>
+          )}
         </div>
       </Dialog>
     </>
