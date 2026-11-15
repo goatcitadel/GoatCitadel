@@ -15,9 +15,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchChangePlan: api.fetchChangePlan,
   isApiRequestError: () => false,
 }));
-vi.mock("@goatcitadel/mission-control-shared/api/web-search-settings", () => ({
-  checkFirecrawlConnection: vi.fn(),
-}));
+const check = vi.hoisted(() => ({ checkFirecrawlConnection: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/web-search-settings", () => check);
 // The dialog itself is covered in SettingsApprovalDialog.test.tsx; here it only reports a decision.
 vi.mock("./SettingsApprovalDialog", () => ({
   SettingsApprovalDialog: ({ onResolved }: { onResolved: (status: ApprovalStatus) => void }) => (
@@ -144,4 +143,55 @@ it("reports an approved change that failed to apply as not added", async () => {
   await vi.waitFor(() => expect(container.textContent).toContain("192.168.0.199:3002 was not added."));
   expect(container.textContent).toContain("The owner write failed.");
   expect(container.textContent).not.toContain("is now in the outbound allowlist");
+});
+
+const renderPage = () =>
+  act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <CockpitNavigationProvider>
+          <Harness />
+        </CockpitNavigationProvider>
+      </QueryClientProvider>,
+    ),
+  );
+
+it("stops showing a blocked test result once the settings change, until a new test says otherwise", async () => {
+  // The settings read says allowed, but the test finds the host blocked and it is not listed yet.
+  const first = settingsWith(["localhost"], 3);
+  first.web.firecrawl.baseUrlAllowlisted = true;
+  api.fetchSettings.mockResolvedValue(first);
+  check.checkFirecrawlConnection.mockResolvedValue({
+    status: "blocked",
+    baseUrl: "http://192.168.0.199:3002",
+    checkedAt: "2026-11-15T00:00:00Z",
+    keySource: "none",
+    message: "Not allowlisted.",
+  });
+  await renderPage();
+  await vi.waitFor(() => expect(button("Test connection")).toBeDefined());
+  await act(async () => button("Test connection")!.click());
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain("192.168.0.199:3002 is not in the outbound allowlist, so tools can't"),
+  );
+  // The host was added elsewhere: the settings revision moves and the Gateway now says allowed.
+  api.fetchSettings.mockResolvedValue(settingsWith(["192.168.0.199:3002"], 4));
+  await act(async () => client.invalidateQueries());
+  await vi.waitFor(() => expect(container.textContent).not.toContain("is not in the outbound allowlist, so tools"));
+  expect(container.textContent).not.toContain("Not allowlisted.");
+});
+
+it("offers no add button for a listed address the Gateway still refuses as private or reserved", async () => {
+  const refused = settingsWith(["127.0.0.1:9"], 3);
+  refused.web.firecrawl.baseUrl = "http://127.0.0.1:9";
+  refused.web.firecrawl.baseUrlAllowlisted = false;
+  api.fetchSettings.mockResolvedValue(refused);
+  await renderPage();
+  await vi.waitFor(() => expect(container.textContent).toContain("127.0.0.1:9 can't be used for Firecrawl."));
+  expect(container.textContent).toContain("private or reserved address");
+  expect(
+    [...container.querySelectorAll("button")].some((element) =>
+      /Add .* to the outbound allowlist/u.test(element.textContent ?? ""),
+    ),
+  ).toBe(false);
 });

@@ -10,16 +10,29 @@ import { NETWORK_ALLOWLIST_LINK } from "../capabilities/connectors/connector-lin
 export function FirecrawlAllowlistGap({
   host,
   source,
+  cause,
   disabled,
   busy,
   onAdd,
 }: {
   host: string;
   source: "draft" | "gateway";
+  cause: "not_listed" | "refused";
   disabled: boolean;
   busy: boolean;
   onAdd: () => void;
 }) {
+  if (cause === "refused") {
+    // Listing it again changes nothing: the address itself is one GoatCitadel never allows for this service.
+    return (
+      <Callout tone="warning" announce={false}>
+        <p>
+          {host} can't be used for Firecrawl. It is a private or reserved address that GoatCitadel does not allow for
+          this service, even when it is on the outbound allowlist.
+        </p>
+      </Callout>
+    );
+  }
   return (
     <Callout tone="warning" announce={false}>
       <p>

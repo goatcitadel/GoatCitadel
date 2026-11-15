@@ -10,10 +10,10 @@ import type {
 import { fetchChangePlan, fetchSettings, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
-import { checkFirecrawlConnection } from "@goatcitadel/mission-control-shared/api/web-search-settings";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { FirecrawlAllowlistGap } from "./FirecrawlAllowlistGap";
+import { useFirecrawlCheck } from "./use-firecrawl-check";
 import { Field } from "../../ui/Field";
 import { cockpitInputClass } from "../../ui/input-class";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -103,9 +103,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
   const [allowlistMessage, setAllowlistMessage] = useState<{ tone: "info" | "error"; text: string }>();
   const [allowlistApproval, setAllowlistApproval] = useState<{ approvalId: string; planId: string; host: string }>();
   const [rebaseAfterRevision, setRebaseAfterRevision] = useState<number>();
-  const [check, setCheck] = useState<FirecrawlConnectionCheck>();
-  const [checkError, setCheckError] = useState<string>();
-  const [checking, setChecking] = useState(false);
+  const { check, checkError, checking, runCheck } = useFirecrawlCheck(`${settings.data?.revision}|${saved?.baseUrl}`);
   // Where the Gateway refuses the address: the unsaved draft by this page's preview, or the saved one by the Gateway's own verdict.
   const gap = firecrawlAllowlistGap({
     draft: value,
@@ -129,7 +127,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
   };
 
   async function addHostToAllowlist() {
-    const gapHost = gap?.host;
+    const gapHost = gap?.cause === "not_listed" ? gap.host : undefined;
     if (!gapHost) return;
     setAllowlistBusy(true);
     setAllowlistMessage(undefined);
@@ -209,19 +207,6 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
         tone: "info",
         text: `The allowlist change has not finished yet${plan ? ` (${presentChangeStatusLabel(plan.status).toLowerCase()})` : ""}. Check Inbox or try again shortly.`,
       });
-    }
-  }
-
-  async function runCheck() {
-    setChecking(true);
-    setCheckError(undefined);
-    try {
-      setCheck(await checkFirecrawlConnection());
-    } catch (error) {
-      setCheck(undefined);
-      setCheckError(describeApiError(error).summary);
-    } finally {
-      setChecking(false);
     }
   }
 

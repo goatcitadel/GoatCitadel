@@ -172,6 +172,8 @@ export function isBaseUrlAllowlisted(
   if (isLocalHost(parsed.hostname) && parsed.port === "3002") return true;
   const host = parsed.host.toLowerCase();
   const hostname = parsed.hostname.toLowerCase();
+  // The Gateway always refuses these for a service address, listed or not (a channel bridge keeps its own reading).
+  if (!options.hostOnlyEntriesCoverPrivate && isReservedHost(hostname)) return false;
   if (!options.hostOnlyEntriesCoverPrivate && (isLocalHost(hostname) || isLanIpv4(hostname))) {
     return allowlist.some((raw) => raw.trim().toLowerCase() === host);
   }
@@ -182,28 +184,70 @@ export function isBaseUrlAllowlisted(
   });
 }
 
-/** Where the Firecrawl page says the Gateway refuses the address, and which host the add button would add. */
+/** Whether this exact host and port is already an entry in the allowlist. */
+function isListedExactly(host: string, allowlist: readonly string[]): boolean {
+  return allowlist.some((raw) => raw.trim().toLowerCase() === host);
+}
+
+/**
+ * Where the Firecrawl page says the Gateway refuses the address, and which host the add button would add. The cause is
+ * "refused" when adding cannot help: the host is already listed, or it is a private or reserved address the Gateway
+ * does not allow for this service.
+ */
 export function firecrawlAllowlistGap(input: {
   draft: FirecrawlDraft;
   saved?: { enabled: boolean; baseUrl: string; baseUrlAllowlisted?: boolean };
   allowlist: readonly string[];
   draftDirty: boolean;
   lastCheck?: "ok" | "reachable" | "unauthorized" | "unreachable" | "blocked";
-}): { host: string; source: "draft" | "gateway" } | undefined {
+}): { host: string; source: "draft" | "gateway"; cause: "not_listed" | "refused" } | undefined {
   const { draft, saved, allowlist, draftDirty, lastCheck } = input;
+  const causeOf = (baseUrl: string, host: string) =>
+    isListedExactly(host, allowlist) || isReservedHost(hostnameOf(baseUrl)) ? "refused" : "not_listed";
   if (draftDirty) {
     const host = hostOf(draft.baseUrl);
-    return host &&
-      draft.enabled &&
-      !firecrawlUrlProblem(draft.baseUrl) &&
-      !isBaseUrlAllowlisted(draft.baseUrl, allowlist)
-      ? { host, source: "draft" }
-      : undefined;
+    if (!host || !draft.enabled || firecrawlUrlProblem(draft.baseUrl)) return undefined;
+    return isBaseUrlAllowlisted(draft.baseUrl, allowlist)
+      ? undefined
+      : { host, source: "draft", cause: causeOf(draft.baseUrl, host) };
   }
   if (!saved?.enabled) return undefined;
   const refused = saved.baseUrlAllowlisted === false || lastCheck === "blocked";
   const host = hostOf(saved.baseUrl);
-  return refused && host ? { host, source: "gateway" } : undefined;
+  return refused && host ? { host, source: "gateway", cause: causeOf(saved.baseUrl, host) } : undefined;
+}
+
+function hostnameOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Addresses the Gateway never allows for a service address, whatever the allowlist says: localhost and any 127.x (the
+ * canonical local port is accepted before this is asked), IPv6 loopback, link-local and private ranges, `.local`
+ * names, 169.254.x, the cloud-metadata address and other reserved IPv4 ranges.
+ */
+function isReservedHost(hostname: string): boolean {
+  if (!hostname || hostname === "localhost" || hostname.endsWith(".local")) return true;
+  if (hostname.startsWith("[")) {
+    const inner = hostname.slice(1, -1);
+    return inner === "::1" || inner === "::" || /^(fe[89ab]|f[cd])/u.test(inner) || inner.startsWith("::ffff:");
+  }
+  const parts = hostname.split(".");
+  if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/u.test(part) && Number(part) <= 255)) return false;
+  const [a = -1, b = -1, c = -1] = parts.map(Number);
+  return (
+    hostname === "100.100.100.200" ||
+    a === 0 ||
+    a === 127 ||
+    a >= 224 ||
+    (a === 169 && b === 254) ||
+    (a === 192 && b === 0 && c === 0) ||
+    (a === 198 && (b === 18 || b === 19))
+  );
 }
 
 function isLocalHost(hostname: string): boolean {

@@ -34,12 +34,23 @@ describe("firecrawlUrlProblem", () => {
 });
 
 describe("allowlist preview matches the Gateway", () => {
-  it("needs host and port for a loopback or LAN address", () => {
-    expect(isBaseUrlAllowlisted("http://127.0.0.1:9", ["127.0.0.1"])).toBe(false);
-    expect(isBaseUrlAllowlisted("http://127.0.0.1:9", ["127.0.0.1:9"])).toBe(true);
+  it("needs host and port for a LAN address", () => {
     expect(isBaseUrlAllowlisted("http://192.168.0.199:3002", ["192.168.0.199"])).toBe(false);
     expect(isBaseUrlAllowlisted("http://192.168.0.199:3002", ["192.168.0.199:3002"])).toBe(true);
     expect(isBaseUrlAllowlisted("http://127.0.0.1:3002", [])).toBe(true);
+    expect(isBaseUrlAllowlisted("http://localhost:3002", [])).toBe(true);
+  });
+  it("refuses loopback on another port and reserved addresses even when listed, as the Gateway does", () => {
+    expect(isBaseUrlAllowlisted("http://127.0.0.1:9", ["127.0.0.1:9"])).toBe(false);
+    expect(isBaseUrlAllowlisted("http://localhost:9", ["localhost:9", "localhost"])).toBe(false);
+    expect(isBaseUrlAllowlisted("http://[::1]:3002", ["[::1]:3002"])).toBe(false);
+    expect(isBaseUrlAllowlisted("http://printer.local:3002", ["printer.local:3002", "*.local"])).toBe(false);
+    expect(isBaseUrlAllowlisted("http://169.254.1.1:3002", ["169.254.1.1:3002"])).toBe(false);
+    expect(isBaseUrlAllowlisted("http://100.100.100.200:80", ["100.100.100.200:80"])).toBe(false);
+  });
+  it("keeps the channel check's looser reading of host-only entries", () => {
+    const options = { hostOnlyEntriesCoverPrivate: true };
+    expect(isBaseUrlAllowlisted("https://127.0.0.1:9/", ["127.0.0.1"], options)).toBe(true);
   });
   it("keeps hostname and wildcard entries for public hosts", () => {
     expect(isBaseUrlAllowlisted("https://api.firecrawl.dev", ["api.firecrawl.dev"])).toBe(true);
@@ -48,51 +59,70 @@ describe("allowlist preview matches the Gateway", () => {
 });
 
 describe("firecrawlAllowlistGap", () => {
-  const draft = {
+  const lan = {
     enabled: true,
-    baseUrl: "http://127.0.0.1:9",
+    baseUrl: "http://192.168.0.199:3002",
     defaultReadBackend: "native",
     fallbackToNative: true,
     timeoutMs: 20_000,
   } as const;
-  it("offers the saved host when the Gateway refuses it", () => {
+  const loopback = { ...lan, baseUrl: "http://127.0.0.1:9" } as const;
+  it("offers the saved host when the Gateway refuses it and it is not listed", () => {
     expect(
       firecrawlAllowlistGap({
-        draft,
+        draft: lan,
         draftDirty: false,
-        allowlist: ["127.0.0.1:9"],
-        saved: { enabled: true, baseUrl: "http://127.0.0.1:9", baseUrlAllowlisted: false },
+        allowlist: [],
+        saved: { enabled: true, baseUrl: lan.baseUrl, baseUrlAllowlisted: false },
       }),
-    ).toEqual({ host: "127.0.0.1:9", source: "gateway" });
+    ).toEqual({ host: "192.168.0.199:3002", source: "gateway", cause: "not_listed" });
   });
   it("offers it after a blocked test even when the settings read says allowed", () => {
     expect(
       firecrawlAllowlistGap({
-        draft,
+        draft: lan,
         draftDirty: false,
-        allowlist: ["127.0.0.1:9"],
+        allowlist: [],
         lastCheck: "blocked",
-        saved: { enabled: true, baseUrl: "http://127.0.0.1:9", baseUrlAllowlisted: true },
+        saved: { enabled: true, baseUrl: lan.baseUrl, baseUrlAllowlisted: true },
       })?.source,
     ).toBe("gateway");
   });
-  it("uses the draft preview while the form has unsaved edits", () => {
-    expect(firecrawlAllowlistGap({ draft, draftDirty: true, allowlist: ["127.0.0.1"] })).toEqual({
-      host: "127.0.0.1:9",
-      source: "draft",
-    });
-  });
-  it("is silent when everything is allowed or Firecrawl is off", () => {
-    expect(
-      firecrawlAllowlistGap({ draft: { ...draft, enabled: false }, draftDirty: true, allowlist: [] }),
-    ).toBeUndefined();
+  it("is silent after the host was added and no new test says otherwise", () => {
     expect(
       firecrawlAllowlistGap({
-        draft,
+        draft: lan,
+        draftDirty: false,
+        allowlist: ["192.168.0.199:3002"],
+        saved: { enabled: true, baseUrl: lan.baseUrl, baseUrlAllowlisted: true },
+      }),
+    ).toBeUndefined();
+  });
+  it("offers no add for a host that is already listed but refused as private or reserved", () => {
+    expect(
+      firecrawlAllowlistGap({
+        draft: loopback,
         draftDirty: false,
         allowlist: ["127.0.0.1:9"],
-        saved: { enabled: true, baseUrl: "http://127.0.0.1:9", baseUrlAllowlisted: true },
+        saved: { enabled: true, baseUrl: loopback.baseUrl, baseUrlAllowlisted: false },
       }),
+    ).toEqual({ host: "127.0.0.1:9", source: "gateway", cause: "refused" });
+    expect(firecrawlAllowlistGap({ draft: loopback, draftDirty: true, allowlist: ["127.0.0.1:9"] })).toEqual({
+      host: "127.0.0.1:9",
+      source: "draft",
+      cause: "refused",
+    });
+  });
+  it("uses the draft preview while the form has unsaved edits", () => {
+    expect(firecrawlAllowlistGap({ draft: lan, draftDirty: true, allowlist: ["192.168.0.199"] })).toEqual({
+      host: "192.168.0.199:3002",
+      source: "draft",
+      cause: "not_listed",
+    });
+  });
+  it("is silent when Firecrawl is off", () => {
+    expect(
+      firecrawlAllowlistGap({ draft: { ...lan, enabled: false }, draftDirty: true, allowlist: [] }),
     ).toBeUndefined();
   });
 });
