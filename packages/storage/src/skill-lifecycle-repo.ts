@@ -20,6 +20,7 @@ export class SkillLifecycleRepository {
   private readonly upsertStmt;
   private readonly getStmt;
   private readonly listStmt;
+  private readonly deleteStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
@@ -38,6 +39,7 @@ export class SkillLifecycleRepository {
     `);
     this.getStmt = db.prepare("SELECT * FROM skill_lifecycle WHERE skill_id = ?");
     this.listStmt = db.prepare("SELECT * FROM skill_lifecycle ORDER BY updated_at DESC, skill_id ASC");
+    this.deleteStmt = db.prepare("DELETE FROM skill_lifecycle WHERE skill_id = ?");
   }
 
   public upsert(input: SkillLifecycleRecord): SkillLifecycleRecord {
@@ -65,6 +67,11 @@ export class SkillLifecycleRepository {
   public find(skillId: string): SkillLifecycleRecord | undefined {
     const row = toSkillLifecycleRow(this.getStmt.get(skillId));
     return row ? mapSkillLifecycleRow(row) : undefined;
+  }
+
+  /** Removes the runtime record of one skill. Only the governed Skill Hub removal calls this. */
+  public delete(skillId: string): boolean {
+    return this.deleteStmt.run(skillId).changes > 0;
   }
 
   public list(): SkillLifecycleRecord[] {
