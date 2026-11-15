@@ -115,8 +115,8 @@ export function higherApprovalRisk(
   const rankA = approvalRiskOrder.indexOf(a);
   const rankB = approvalRiskOrder.indexOf(b);
   // A level this build does not know is kept as it is: it is never swapped for a known, possibly weaker one.
-  if (rankA < 0) return a;
-  if (rankB < 0) return b;
+  // Nor is the approval's own risk dropped for a rating it cannot place (a newer shell level has no mapping).
+  if (rankA < 0 || rankB < 0) return a;
   return rankB > rankA ? b : a;
 }
 
