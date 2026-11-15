@@ -24,6 +24,21 @@ function focusPageStart(): void {
   target.focus();
 }
 
+/** Long enough for a closing layer's own focus handling (it hands focus to the body) to finish first. */
+const AFTER_CLOSE_MS = 30;
+
+/**
+ * Restores focus once, shortly after a layer closed, and only if focus is then on the body or nowhere: an element the
+ * operator moved to is never taken from them. The timer belongs to no component, so unmounting the layer's owner (the
+ * usual thing after a decision) does not cancel it.
+ */
+export function restoreFocusAfterClose(preferred: HTMLElement | null, region: HTMLElement | null): void {
+  window.setTimeout(() => {
+    const active = document.activeElement;
+    if (!active || active === document.body) restoreFocus(preferred, region);
+  }, AFTER_CLOSE_MS);
+}
+
 /**
  * Hands keyboard focus back after a layer closed or its opener went away. Goes to the control that opened it when it
  * is still on the page and can take focus; otherwise to the first control in the region around it that can; otherwise

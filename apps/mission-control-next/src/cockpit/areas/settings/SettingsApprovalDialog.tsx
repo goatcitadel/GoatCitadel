@@ -12,7 +12,7 @@ import { ApprovalReviewSummary } from "../inbox/ApprovalReviewSummary";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
-import { restoreFocus } from "../../ui/focus-return";
+import { restoreFocusAfterClose } from "../../ui/focus-return";
 import { StatusBadge } from "../../ui/StatusBadge";
 
 // Approvals already offered in this app session, so a re-render or remount never reopens one the operator closed.
@@ -107,16 +107,19 @@ export function SettingsApprovalDialog({
   const [message, setMessage] = useState<string>();
   // Where focus was when the dialog opened, so a decision (which removes the Review button) hands it back to the setting.
   const origin = useRef<{ opener: HTMLElement | null; region: HTMLElement | null }>({ opener: null, region: null });
-  const focusTimer = useRef<number | undefined>(undefined);
-  const mounted = useRef(true);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      window.clearTimeout(focusTimer.current);
-    };
-  }, []);
+  // A decision was made and focus has not been handed back yet. The owner often drops this dialog from its own
+  // `onResolved`, so the unmount hands focus back too; whichever comes first does it, once.
+  const owed = useRef(false);
+  const returnFocus = () => {
+    if (!owed.current) return;
+    owed.current = false;
+    restoreFocusAfterClose(origin.current.opener, origin.current.region);
+  };
+  const returnFocusRef = useRef(returnFocus);
+  returnFocusRef.current = returnFocus;
+  useEffect(() => () => returnFocusRef.current(), []);
   const rememberOrigin = () => {
+    owed.current = false;
     const active = document.activeElement;
     const opener = active instanceof HTMLElement && active !== document.body ? active : null;
     origin.current = { opener, region: opener?.closest("section") ?? null };
@@ -147,17 +150,6 @@ export function SettingsApprovalDialog({
     setMessage(text);
     void queryClient.resetQueries({ queryKey, exact: true });
     void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(scope) });
-  };
-
-  // Only when the decision left focus on nothing: focus the operator already moved is never taken back.
-  const returnFocus = () => {
-    if (!mounted.current) return;
-    const { opener, region } = origin.current;
-    window.clearTimeout(focusTimer.current);
-    focusTimer.current = window.setTimeout(() => {
-      const active = document.activeElement;
-      if (!active || active === document.body) restoreFocus(opener, region);
-    }, 0);
   };
 
   // Not a live region: the cockpit live-region budget only goes down, and this sits under the change's own status.
@@ -205,6 +197,7 @@ export function SettingsApprovalDialog({
             approval={approval}
             workspaceId={workspaceId}
             onResolved={() => {
+              owed.current = true;
               setOpen(false);
               settle();
               void fetchApproval(approvalId, readScope)

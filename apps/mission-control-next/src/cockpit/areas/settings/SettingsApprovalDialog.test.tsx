@@ -306,20 +306,53 @@ it("hands focus back to the setting after the approval is decided (U-GL-047)", a
   expect(document.activeElement?.getAttribute("aria-label")).toBe("Show model reasoning in Chat");
 });
 
-it("does not move focus after the dialog left the page", async () => {
-  // Earlier tests' own focus timers have run out before this one starts counting.
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  await render();
-  await act(async () => button("Approve once")!.click());
-  act(() => root.unmount());
-  // Only a control still on the page counts: the dialog's own parts leave the page with it.
-  const focused: boolean[] = [];
-  const focus = vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement) {
-    // The dialog's own focus scope hands focus to the body as it unmounts; that is not this component.
-    focused.push(this.isConnected && this !== document.body);
+const withSetting = (dialog: boolean, saveDisabled = false) => (
+  <QueryClientProvider client={client}>
+    <section>
+      <input type="checkbox" aria-label="Show model reasoning in Chat" />
+      <input aria-label="Elsewhere" />
+      <button type="button" disabled={saveDisabled}>
+        Save setting
+      </button>
+      {dialog ? <SettingsApprovalDialog approvalId="approval-1" onResolved={vi.fn()} /> : null}
+    </section>
+  </QueryClientProvider>
+);
+const settle = async (ms: number) => {
+  for (let tick = 0; tick < 5; tick += 1)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    });
+};
+
+it("restores focus when the dialog unmounts after a decision", async () => {
+  await act(async () => root.render(withSetting(false)));
+  button("Save setting")!.focus();
+  await act(async () => root.render(withSetting(true)));
+  await settle(0);
+  expect(dialog()).not.toBeNull();
+  // The owner drops the dialog from its own onResolved, so it is gone before the decision settles.
+  await act(async () => {
+    button("Approve once")!.click();
+    // The setting saved and its button is off until the next change: the opener cannot take focus back.
+    root.render(withSetting(false, true));
   });
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  expect(focused).not.toContain(true);
-  focus.mockRestore();
-  root = createRoot(container);
+  await settle(15);
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Show model reasoning in Chat");
+});
+
+it("does not take focus from an element the operator moved to", async () => {
+  await act(async () => root.render(withSetting(false)));
+  document.querySelector<HTMLInputElement>('[aria-label="Show model reasoning in Chat"]')!.focus();
+  await act(async () => root.render(withSetting(true)));
+  await settle(0);
+  await act(async () => {
+    button("Approve once")!.click();
+    root.render(withSetting(false));
+  });
+  // The dialog's own scope has handed focus back by now; the operator then moves on before the restore runs.
+  await settle(0);
+  document.querySelector<HTMLInputElement>('[aria-label="Elsewhere"]')!.focus();
+  await settle(15);
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Elsewhere");
 });
