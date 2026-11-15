@@ -2212,6 +2212,16 @@ export async function cancelChatTurn(
       durableCancellation.status === "failed" ||
       durableCancellation.status === "dead_lettered");
   if (durableCancellationError && !durableTerminalWinner && durableCancellation?.status !== "cancelled") {
+    // The answer can finish while the durable run still reads "running". Stop is then a quiet no-op.
+    let latest: ChatTurnTraceRecord | undefined;
+    try {
+      latest = await storage.chatTurnTraces.get(turnId);
+    } catch {
+      // Without canonical turn truth, keep the original cancellation error.
+    }
+    if (latest && isChatTurnTerminalStatus(latest.status) && latest.status !== "cancelled") {
+      return { sessionId, turnId, cancelled: false, trace: latest };
+    }
     throw durableCancellationError;
   }
   const trace = await (durableTerminalWinner
