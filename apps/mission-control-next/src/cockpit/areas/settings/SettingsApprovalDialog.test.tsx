@@ -305,3 +305,14 @@ it("hands focus back to the setting after the approval is decided (U-GL-047)", a
     });
   expect(document.activeElement?.getAttribute("aria-label")).toBe("Show model reasoning in Chat");
 });
+
+it("does not move focus after the dialog left the page", async () => {
+  await render();
+  await act(async () => button("Approve once")!.click());
+  act(() => root.unmount());
+  const focus = vi.spyOn(HTMLElement.prototype, "focus");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(focus).not.toHaveBeenCalled();
+  focus.mockRestore();
+  root = createRoot(container);
+});

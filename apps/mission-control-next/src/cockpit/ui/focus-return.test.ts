@@ -20,8 +20,18 @@ it("falls back to the first usable control in the region when the opener is disa
   expect(document.activeElement).toBe(toggle);
 });
 
-it("does nothing when neither the opener nor the region is still on the page", () => {
-  const orphan = document.createElement("button");
-  restoreFocus(orphan, null);
-  expect(document.activeElement).toBe(document.body);
+it("skips hidden controls and controls inside a closed disclosure", () => {
+  document.body.innerHTML = `<section><button hidden>Hidden</button><button style="display: none">None</button><details><div><button>Inside</button></div></details><input aria-label="Reachable"></section>`;
+  restoreFocus(null, document.querySelector("section"));
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Reachable");
+});
+
+it("falls back to the page heading, never the body, when nothing in the region can take focus", () => {
+  document.body.innerHTML = `<main><h1>Settings</h1><section><button disabled>Save</button></section></main>`;
+  const save = document.querySelector("button")!;
+  restoreFocus(save, save.closest("section"));
+  expect(document.activeElement?.tagName).toBe("H1");
+  document.body.innerHTML = `<main><p>No heading</p></main>`;
+  restoreFocus(document.createElement("button"), null);
+  expect(document.activeElement?.tagName).toBe("MAIN");
 });

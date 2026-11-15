@@ -107,6 +107,15 @@ export function SettingsApprovalDialog({
   const [message, setMessage] = useState<string>();
   // Where focus was when the dialog opened, so a decision (which removes the Review button) hands it back to the setting.
   const origin = useRef<{ opener: HTMLElement | null; region: HTMLElement | null }>({ opener: null, region: null });
+  const focusTimer = useRef<number>();
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      window.clearTimeout(focusTimer.current);
+    };
+  }, []);
   const rememberOrigin = () => {
     const active = document.activeElement;
     const opener = active instanceof HTMLElement && active !== document.body ? active : null;
@@ -142,8 +151,10 @@ export function SettingsApprovalDialog({
 
   // Only when the decision left focus on nothing: focus the operator already moved is never taken back.
   const returnFocus = () => {
+    if (!mounted.current) return;
     const { opener, region } = origin.current;
-    window.setTimeout(() => {
+    window.clearTimeout(focusTimer.current);
+    focusTimer.current = window.setTimeout(() => {
       const active = document.activeElement;
       if (!active || active === document.body) restoreFocus(opener, region);
     }, 0);
