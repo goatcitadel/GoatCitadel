@@ -5,7 +5,10 @@ import type { ChatModelOptionsControls as Controls } from "./ChatComposerControl
 import { useProviderLabelLookup } from "../../data/use-model-label";
 import { PLAN_HELP, REVIEW_HELP, presentThinkingLevel } from "./chat-vocabulary";
 import { useChatModelLabels } from "./use-chat-model-labels";
-import { GUIDED_THINKING_LEVELS } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
+import {
+  GUIDED_THINKING_LEVELS,
+  clampGuidedThinkingLevel,
+} from "../../../features/native-routes/settings/sections/guided-model-setup-support";
 
 /** Every effort stays selectable while the catalog records no reasoning metadata; the Gateway still gates the send. */
 const ALL_THINKING_LEVELS: readonly Controls["currentThinkingLevel"][] = GUIDED_THINKING_LEVELS.map(
@@ -17,6 +20,21 @@ interface ModelDraft {
   providerId?: string;
   model?: string;
   thinkingLevel?: Controls["currentThinkingLevel"];
+}
+
+const THINKING_LEVEL_FOR_EFFORT: Readonly<Record<ChatCompletionReasoningEffort, Controls["currentThinkingLevel"]>> = {
+  none: "off",
+  low: "minimal",
+  medium: "standard",
+  high: "extended",
+  xhigh: "deep",
+  max: "max",
+  ultra: "ultra",
+};
+
+/** The levels a list of efforts allows, or null when no list is known (every level stays offered, marked unverified). */
+function levelsForEfforts(efforts: readonly ChatCompletionReasoningEffort[] | undefined) {
+  return efforts?.length ? [...new Set(efforts.map((effort) => THINKING_LEVEL_FOR_EFFORT[effort]))] : null;
 }
 
 /** The model a provider starts with when it is picked: its default when it lists it, else its first. */
@@ -52,27 +70,6 @@ export function ChatModelOptionsPopover({
   props: Controls;
   reasoningEfforts?: ChatCompletionReasoningEffort[];
 }) {
-  const supported = reasoningEfforts?.length
-    ? [
-        ...new Set<Controls["currentThinkingLevel"]>([
-          ...reasoningEfforts.map(
-            (effort) =>
-              (
-                ({
-                  none: "off",
-                  low: "minimal",
-                  medium: "standard",
-                  high: "extended",
-                  xhigh: "deep",
-                  max: "max",
-                  ultra: "ultra",
-                }) as const
-              )[effort],
-          ),
-        ]),
-      ]
-    : null;
-  const thinkingLevels = supported ?? ALL_THINKING_LEVELS;
   // A pick is collected here and sent as one change when the popover closes, so arrowing through a select applies
   // nothing on the way and one deliberate choice makes one change.
   const [draft, setDraft] = useState<ModelDraft>({});
@@ -83,7 +80,22 @@ export function ChatModelOptionsPopover({
   }, [open]);
   const shownProviderId = draft.providerId ?? props.selectedProviderId;
   const shownModel = draft.model ?? props.selectedModel;
-  const shownThinkingLevel = draft.thinkingLevel ?? props.currentThinkingLevel;
+  // The effort choices belong to the model that would be sent: the one in use reads the list the Chat already holds;
+  // a held model reads the catalog for that model, and an unknown one is shown as unverified, never as the other
+  // model's list.
+  const heldAnotherModel = shownProviderId !== props.selectedProviderId || shownModel !== props.selectedModel;
+  const supported = levelsForEfforts(
+    heldAnotherModel
+      ? shownProviderId && shownModel
+        ? props.reasoningEffortsFor?.(shownProviderId, shownModel)
+        : undefined
+      : reasoningEfforts,
+  );
+  const thinkingLevels = supported ?? ALL_THINKING_LEVELS;
+  // An effort the held model does not offer is replaced by the nearest one it does, so Done never sends an invalid pair.
+  const pickedThinkingLevel = draft.thinkingLevel ?? props.currentThinkingLevel;
+  const shownThinkingLevel =
+    heldAnotherModel && supported ? clampGuidedThinkingLevel(pickedThinkingLevel, supported) : pickedThinkingLevel;
   const selectedProvider = props.providerOptions.find((provider) => provider.providerId === shownProviderId);
   const commitDraft = () => {
     const providerId =
@@ -94,10 +106,7 @@ export function ChatModelOptionsPopover({
       draft.model !== undefined && (providerId !== undefined || draft.model !== (props.selectedModel ?? ""))
         ? draft.model
         : undefined;
-    const thinkingLevel =
-      draft.thinkingLevel !== undefined && draft.thinkingLevel !== props.currentThinkingLevel
-        ? draft.thinkingLevel
-        : undefined;
+    const thinkingLevel = shownThinkingLevel !== props.currentThinkingLevel ? shownThinkingLevel : undefined;
     setDraft({});
     if (providerId === undefined && model === undefined && thinkingLevel === undefined) return;
     if (props.onRequestModelChoice) {

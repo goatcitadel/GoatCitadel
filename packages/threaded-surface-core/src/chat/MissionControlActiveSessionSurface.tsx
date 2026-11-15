@@ -1,5 +1,6 @@
 import type {
   ChatAttachmentRecord,
+  ChatCompletionReasoningEffort,
   ChatCapabilityUpgradeSuggestion,
   ChatDelegationSuggestionRecord,
   ChatGeneratedArtifactRecord,
@@ -120,6 +121,12 @@ export interface MissionControlActiveSessionSurfaceProps {
    * single-field callbacks above are used one by one.
    */
   onRequestModelChoice?: (choice: ModelChoice) => void;
+  /**
+   * The efforts a provider and model pair can be sent with, from the same catalog as the selected model's own list.
+   * Undefined when the catalog does not know them. A surface that holds a pick before sending it reads it for the held
+   * pair, so its effort choices match the model it is about to send.
+   */
+  reasoningEffortsFor?: (providerId: string, model: string) => ChatCompletionReasoningEffort[] | undefined;
   loading: boolean;
   historicalWindow: ChatHistoryWindowResponse | null;
   historicalWindowLoading: boolean;

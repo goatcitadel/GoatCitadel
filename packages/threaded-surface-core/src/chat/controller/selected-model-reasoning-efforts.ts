@@ -23,3 +23,19 @@ export function selectedModelReasoningEfforts(
   if (declared?.length) return ["none", ...declared.filter((effort) => effort !== "none")];
   return undefined;
 }
+
+/**
+ * The efforts a provider and model pair can be sent with, read from the catalog the committed model's list comes from
+ * (a model id may carry its provider as a prefix). Undefined when the catalog does not know them, so the caller shows
+ * the effort as unverified rather than offering another model's list.
+ */
+export function reasoningEffortsForSelection(
+  providers: ReadonlyArray<ProviderReasoningSource & { providerId: string }>,
+  providerId: string,
+  model: string,
+): ChatCompletionReasoningEffort[] | undefined {
+  return selectedModelReasoningEfforts(
+    providers.find((provider) => provider.providerId === providerId),
+    model.replace(`${providerId}/`, ""),
+  );
+}
