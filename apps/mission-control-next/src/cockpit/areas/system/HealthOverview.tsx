@@ -100,8 +100,8 @@ function HealthCard({
       </SystemOwnerLink>
       {check.id === "remote_workers" ? (
         <p className="mt-2 text-xs text-fg-muted">
-          The workers page shows worker records, assignments and spending budgets. Enrollment and containment recovery
-          keep their existing runtime controls.
+          Held back from this release. The workers page shows worker records, assignments and spending budgets.
+          Enrollment and containment recovery keep their existing runtime controls.
         </p>
       ) : null}
       {check.id === "backups" ? <HealthBackupAction readAvailable={backupReadAvailable} onRefresh={onRefresh} /> : null}
