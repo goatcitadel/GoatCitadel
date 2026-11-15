@@ -988,6 +988,21 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(vi.mocked(harness.host.buildLlmMessagesFromBranchPath).mock.calls[0]?.[1]).toEqual(["turn-prior"]);
   });
 
+  it("gives a Plan first coding-shaped turn on a local provider the standard profile, and keeps sustained coding otherwise", async () => {
+    const content = "Implement a sorting module in sorter.ts and run tests";
+    const planFirst = createHost("chat", { planningMode: "advisory", providerId: "ollama", toolAutonomy: "safe_auto" });
+    planFirst.host.isDurableChatExecutionEnabled = vi.fn(async () => true);
+    const normal = createHost("chat", { planningMode: "off", providerId: "ollama", toolAutonomy: "safe_auto" });
+    normal.host.isDurableChatExecutionEnabled = vi.fn(async () => true);
+
+    const advisoryPrepared = await prepareAgentChatTurn(planFirst.host, "session-1", { content });
+    const normalPrepared = await prepareAgentChatTurn(normal.host, "session-1", { content });
+
+    // The coding-completion checks need tool receipts a no-tools plan can never have.
+    expect(advisoryPrepared.executionProfile).toBe("standard");
+    expect(normalPrepared.executionProfile).toBe("sustained_local_coding");
+  });
+
   it("ingests attachment references and applies autonomy overrides after code inputs normalize to Chat", async () => {
     const harness = createHost("code", { mode: "code", toolAutonomy: "safe_auto" });
     vi.mocked(harness.host.storage.chatAttachments.listByIds).mockReturnValue([
