@@ -64,6 +64,11 @@ export function CockpitGuidedModelSetup({
             ? "Checking connection…"
             : "Check connection"
           : (setup.connectionHint?.connectLabel ?? "Connect provider");
+  // What the last check found, shown on every surface once the provider is not ready. Not while a check runs
+  // (the button says so) and not once ready. It shares the one status line with the notice, so the page gains
+  // no extra live region.
+  const checkResult = !providerReady && readiness.state !== "checking" ? readiness.description : null;
+  const statusText = [checkResult, notice].filter(Boolean).join(" ");
   const PrimaryIcon = setup.primary.kind === "enter" ? Play : PlugZap;
   // Offer the better-supported provider as a one-click switch, only when the list has it.
   const alternative = setup.providers.some(
@@ -224,6 +229,11 @@ export function CockpitGuidedModelSetup({
           </Button>
         ) : null}
       </div>
+      {statusText ? (
+        <p role="status" className="text-sm text-fg-secondary">
+          {statusText}
+        </p>
+      ) : null}
       {setup.actionError && !setup.dialogPlan ? <Callout tone="error">{setup.actionError}</Callout> : null}
       {setup.latestPlan ? (
         <ChatChangePlanCard
@@ -237,11 +247,6 @@ export function CockpitGuidedModelSetup({
         />
       ) : null}
       <GuidedModelPlanDialog control={setup} workspaceId={workspaceId} />
-      {notice ? (
-        <p role="status" className="text-sm text-fg-secondary">
-          {notice}
-        </p>
-      ) : null}
     </div>
   );
 }

@@ -96,6 +96,40 @@ afterEach(() => {
 });
 
 describe("shared guided model setup", () => {
+  it("says on first run that a local runtime did not answer after Check connection", async () => {
+    catalog("ready", {
+      providerId: "test",
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "fallback",
+      modelProbeWarning: "fetch failed",
+      modelRefreshStatus: "fresh",
+    });
+    await mount({ showSteps: false });
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(
+      "LM Studio has not answered at http://127.0.0.1:1234/v1 (fetch failed). Start it, then check the connection again.",
+    );
+  });
+  it("shows no check result while a check has not run, and none once the runtime answered", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "not_checked",
+    });
+    await mount({ showSteps: false });
+    expect(container.querySelector('[role="status"]')).toBeNull();
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "ready",
+      modelProbeSource: "live",
+    });
+    await mount({ showSteps: false });
+    expect(container.querySelector('[role="status"]')).toBeNull();
+  });
   it("numbers every step, marks the current one and states each step in words", async () => {
     onboarding.settings.llm.activeModel = "";
     catalog("ready");
