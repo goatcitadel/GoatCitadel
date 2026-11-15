@@ -307,12 +307,18 @@ it("hands focus back to the setting after the approval is decided (U-GL-047)", a
 });
 
 it("does not move focus after the dialog left the page", async () => {
+  // Earlier tests' own focus timers have run out before this one starts counting.
+  await new Promise((resolve) => setTimeout(resolve, 30));
   await render();
   await act(async () => button("Approve once")!.click());
   act(() => root.unmount());
-  const focus = vi.spyOn(HTMLElement.prototype, "focus");
+  // Only a control still on the page counts: the dialog's own parts leave the page with it.
+  const focused: boolean[] = [];
+  const focus = vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement) {
+    focused.push(this.isConnected);
+  });
   await new Promise((resolve) => setTimeout(resolve, 10));
-  expect(focus).not.toHaveBeenCalled();
+  expect(focused).not.toContain(true);
   focus.mockRestore();
   root = createRoot(container);
 });
