@@ -97,11 +97,13 @@ export function ChatFeatureSettings({ dock }: { dock: MissionThreadedContextDock
             "Review each proposed plan before starting its subagents. Automatic delegation requires an active grant for this project."
           ) : subagentsSwitchOn === true ? (
             "Subagents in Chat needs resumable runs, which are turned off on this installation. Your saved preference is kept."
-          ) : (
+          ) : subagentsSwitchOn === false ? (
             <>
               Subagents in Chat is turned off on this installation. Your saved preference is kept.{" "}
               <FeatureOffLink flag="chatDelegationControlsV1Enabled" />
             </>
+          ) : (
+            "Supervised delegation is not enabled for this runtime. Your saved preference remains available."
           )}
         </p>
         {dock.automaticFanout?.unavailableReason ? <p>{dock.automaticFanout.unavailableReason}</p> : null}

@@ -52,7 +52,9 @@ const button = (label: string) =>
 
 beforeEach(() => {
   api.inspectMcpServer.mockReset().mockResolvedValue(inspection);
-  api.fetchSettings.mockReset().mockResolvedValue({ chatFeatureAvailability: { staticMcp: false } });
+  api.fetchSettings
+    .mockReset()
+    .mockResolvedValue({ chatFeatureAvailability: { staticMcp: false }, features: { chatStaticMcpV1Enabled: false } });
   api.fetchMcpServerTestEvidence.mockReset().mockResolvedValue({
     serverId: "server-a",
     workspaceId: "w",

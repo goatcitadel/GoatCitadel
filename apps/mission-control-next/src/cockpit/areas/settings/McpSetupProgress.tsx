@@ -84,7 +84,9 @@ export function McpSetupProgress({
               : staticMcpAvailable === false
                 ? staticMcpSwitchOn === true
                   ? "Chat can't use this yet: it needs resumable runs, which are turned off on this installation. "
-                  : "Connectors in Chat is turned off. "
+                  : staticMcpSwitchOn === false
+                    ? "Connectors in Chat is turned off. "
+                    : "Static MCP in Chat is disabled for this runtime. "
                 : "Static MCP availability in Chat is unverified. "
             : null}
           Evaluated by GoatCitadel for the actual Chat request and its current grants. This inspection does not
@@ -133,10 +135,16 @@ export function McpSetupProgress({
                 Once resumable runs are turned on, refresh this status, review the server connection controls below, and
                 start a new Chat turn.
               </p>
-            ) : (
+            ) : staticMcpSwitchOn === false ? (
               <p>
                 Turn on Connectors in Chat, then refresh this status, review the server connection controls below, and
                 start a new Chat turn. <FeatureOffLink flag="chatStaticMcpV1Enabled" />
+              </p>
+            ) : (
+              <p>
+                Ask the runtime operator to enable static MCP in Chat through a reviewed settings change, with resumable
+                runs enabled. Then refresh this status, review the server connection controls below, and start a new
+                Chat turn.
               </p>
             )
           ) : staticMcpAvailable === undefined ? (

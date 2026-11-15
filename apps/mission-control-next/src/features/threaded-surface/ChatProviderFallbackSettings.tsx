@@ -85,11 +85,13 @@ export function ChatProviderFallbackSettings(props: Props) {
             "Provider fallback is not enabled for this runtime. You can save a preference for later."
           ) : props.switchOn === true ? (
             "Provider fallback needs resumable runs, which are turned off on this installation. You can save a preference for later."
-          ) : (
+          ) : props.switchOn === false ? (
             <>
               Provider fallback is turned off on this installation. You can save a preference for later.{" "}
               {props.featureOffLink}
             </>
+          ) : (
+            "Provider fallback is not enabled for this runtime. You can save a preference for later."
           )
         ) : props.routePreflight?.fallbackPolicy === "armed" && target ? (
           `Available fallback: ${target.providerId} / ${target.model}. Rechecked before use.`

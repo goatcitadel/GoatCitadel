@@ -69,6 +69,15 @@ describe("integration connection details when diagnostics are off", () => {
     expect(markup).toContain("feature-switch-connector-diagnostics");
     expect(markup).not.toContain("not enabled in Runtime settings");
   });
+  it("says nothing about the switch when the settings read failed", () => {
+    const failed = {
+      ...owner,
+      data: { connectorDiagnosticsEnabled: false, issues: [{ label: "Runtime settings", message: "failed" }] },
+    } as unknown as IntegrationSettingsOwner;
+    const markup = renderToStaticMarkup(<IntegrationConnectionDetails owner={failed} />);
+    expect(markup).not.toContain("turned off");
+    expect(markup).not.toContain("feature-switch-connector-diagnostics");
+  });
   it("says nothing about the switch until settings have been read", () => {
     const unread = { ...owner, data: undefined } as unknown as IntegrationSettingsOwner;
     expect(renderToStaticMarkup(<IntegrationConnectionDetails owner={unread} />)).not.toContain("turned off");

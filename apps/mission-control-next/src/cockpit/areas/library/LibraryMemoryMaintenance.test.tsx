@@ -54,6 +54,18 @@ it("says resumable runs are the cause, with no link, when maintenance is on but 
   expect(links()).toHaveLength(0);
 });
 
+it("does not claim maintenance is turned off when the settings read failed", async () => {
+  await render({
+    memoryAdminState: "unknown",
+    maintenanceEnabled: false,
+    maintenanceDurableReady: false,
+    maintenanceRuns: [],
+  });
+  expect(container.textContent).toContain("Couldn't read whether memory maintenance is on.");
+  expect(container.textContent).not.toContain("turned off");
+  expect(links()).toHaveLength(0);
+});
+
 it("does not claim maintenance is turned off before memory has been read", async () => {
   await render(null);
   expect(container.textContent).not.toContain("turned off");

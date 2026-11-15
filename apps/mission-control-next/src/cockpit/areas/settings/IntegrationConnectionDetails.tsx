@@ -73,7 +73,7 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
         </Button>
       </div>
       {!s.data?.connectorDiagnosticsEnabled ? (
-        s.data ? (
+        s.data && !s.data.issues?.some((issue) => issue.label === "Runtime settings") ? (
           <p className="text-sm text-fg-muted">
             Connector diagnostics are turned off on this installation.{" "}
             <FeatureOffLink flag="connectorDiagnosticsV1Enabled" />

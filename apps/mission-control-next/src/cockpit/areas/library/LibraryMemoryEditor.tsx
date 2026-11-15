@@ -88,12 +88,18 @@ function MemoryEditor({
   const enabled =
     settings.data?.features.memoryLifecycleAdminV1Enabled === true && !settings.isError && !settings.isFetching;
   const settingsView = recordView(settings);
+  const administrationOff =
+    !settings.isError &&
+    settingsView.phase !== "loading" &&
+    settingsView.phase !== "checking" &&
+    settings.data?.features.memoryLifecycleAdminV1Enabled === false;
   const administrationMessage = settings.isError
     ? "Memory administration settings are unavailable."
     : settingsView.phase === "loading" || settingsView.phase === "checking"
       ? "Checking memory administration settings…"
-      : "Memory administration is turned off on this installation.";
-  const administrationOff = !settings.isError && settingsView.phase !== "loading" && settingsView.phase !== "checking";
+      : administrationOff
+        ? "Memory administration is turned off on this installation."
+        : "Memory administration is disabled.";
   const [historyOpen, setHistoryOpen] = useState(false),
     [busy, setBusy] = useState(false);
   const [review, setReview] = useSessionViewState<

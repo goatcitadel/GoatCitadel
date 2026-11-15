@@ -60,6 +60,15 @@ describe("Cockpit execution settings", () => {
     expect(json).not.toContain("feature-switch-subagents-in-chat");
     switchState.on = false;
   });
+  it("does not claim Subagents in Chat is turned off while the switch has not been read", async () => {
+    switchState.on = undefined;
+    await render(fixture());
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain("Supervised delegation is not enabled for this runtime.");
+    expect(json).not.toContain("Subagents in Chat is turned off");
+    expect(json).not.toContain("feature-switch-subagents-in-chat");
+    switchState.on = false;
+  });
   it("keeps default-off capabilities visible without activating anything", async () => {
     const dock = fixture();
     await render(dock);

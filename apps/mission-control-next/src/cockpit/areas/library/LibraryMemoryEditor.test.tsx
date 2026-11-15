@@ -260,6 +260,15 @@ it("keeps administration disabled when the feature flag is false", async () => {
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(forgetMemoryItem).not.toHaveBeenCalled();
 });
+it("does not claim administration is turned off when the switch was not reported", async () => {
+  vi.mocked(fetchSettings).mockResolvedValue({ features: {} } as Awaited<ReturnType<typeof fetchSettings>>);
+  await render();
+  expect(container.textContent).toContain("Memory administration is disabled. Changes remain locked.");
+  expect(container.textContent).not.toContain("turned off");
+  expect(
+    [...container.querySelectorAll("a")].some((node) => node.textContent === "Turn it on in Settings › Advanced"),
+  ).toBe(false);
+});
 
 const canonicalApproval: ApprovalRequest = {
   approvalId: "approval-a",

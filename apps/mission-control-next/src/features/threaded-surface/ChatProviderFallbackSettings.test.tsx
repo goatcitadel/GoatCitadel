@@ -57,6 +57,20 @@ describe("Chat fallback preference", () => {
     await act(async () => tree.unmount());
   });
 
+  it("does not claim fallback is turned off while its switch has not been read", async () => {
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(
+        <ChatProviderFallbackSettings {...fixture()} providerFallbackAvailable={false} featureOffLink={link} />,
+      );
+    });
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain("Provider fallback is not enabled for this runtime.");
+    expect(json).not.toContain("turned off");
+    expect(json).not.toContain("Turn it on in Settings");
+    await act(async () => tree.unmount());
+  });
+
   it("starts off, never defaults to hosted consent, and saves one exact target", async () => {
     const props = fixture();
     const tree = await render(props);

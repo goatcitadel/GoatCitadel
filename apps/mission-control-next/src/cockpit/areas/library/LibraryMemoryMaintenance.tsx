@@ -45,7 +45,11 @@ export function MemoryMaintenanceView({
   return (
     <>
       {!data?.maintenanceEnabled || !data.maintenanceDurableReady ? (
-        data && !data.maintenanceEnabled ? (
+        data && !data.maintenanceEnabled && data.memoryAdminState === "unknown" ? (
+          <Callout announce={false}>
+            Couldn't read whether memory maintenance is on. Refresh to try again. Controls stay locked.
+          </Callout>
+        ) : data && !data.maintenanceEnabled ? (
           <FeatureOffNotice flag="memoryMaintenanceV1Enabled" />
         ) : data ? (
           <Callout announce={false}>

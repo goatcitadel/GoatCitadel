@@ -118,7 +118,13 @@ it("distinguishes disabled, unknown, and enabled static Chat availability withou
   const refresh = vi.fn();
   await act(async () =>
     root.render(
-      <McpSetupProgress server={server} stale={false} staticMcpAvailable={false} refreshAvailability={refresh} />,
+      <McpSetupProgress
+        server={server}
+        stale={false}
+        staticMcpAvailable={false}
+        staticMcpSwitchOn={false}
+        refreshAvailability={refresh}
+      />,
     ),
   );
   expect(container.textContent).toContain("Connectors in Chat is turned off.");
@@ -162,6 +168,15 @@ it.each([
     expect(container.textContent).toContain("does not establish callability");
   },
 );
+
+it("does not claim Connectors in Chat is turned off when its switch was not read", async () => {
+  await act(async () => root.render(<McpSetupProgress server={server} stale={false} staticMcpAvailable={false} />));
+  expect(container.textContent).toContain("Static MCP in Chat is disabled for this runtime.");
+  expect(container.textContent).not.toContain("turned off");
+  expect(
+    [...container.querySelectorAll("a")].some((entry) => entry.textContent === "Turn it on in Settings › Advanced"),
+  ).toBe(false);
+});
 
 it("names resumable runs, with no link, when Connectors in Chat is on but Chat still can't use it", async () => {
   await act(async () =>
