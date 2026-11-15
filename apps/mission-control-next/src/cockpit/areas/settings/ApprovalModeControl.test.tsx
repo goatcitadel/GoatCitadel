@@ -7,7 +7,8 @@ import type { ToolApprovalMode } from "@goatcitadel/contracts";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
 import { __resetApprovalModeUncertaintyForTests } from "./approval-mode-state";
-import { ApprovalModeControl } from "./ApprovalModeControl";
+import { ApprovalModeControl, ApprovalModeEditor } from "./ApprovalModeControl";
+import { useApprovalModeControl } from "./use-approval-mode-control";
 import { SHELL_HISTORY_POSITION } from "../../../app/shell-transition";
 import { resetSettingsAttempt } from "./settings-attempt.test-support";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
@@ -69,6 +70,22 @@ async function render() {
       <QueryClientProvider client={client}>
         <CockpitNavigationProvider>
           <ApprovalModeControl />
+        </CockpitNavigationProvider>
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).not.toContain("Loading approval settings"));
+}
+function SafeOnly() {
+  const control = useApprovalModeControl({ scope: "first-run", safeOnly: true });
+  return <ApprovalModeEditor control={control} safeOnly />;
+}
+async function renderSafeOnly() {
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <CockpitNavigationProvider>
+          <SafeOnly />
         </CockpitNavigationProvider>
       </QueryClientProvider>,
     ),
@@ -348,6 +365,32 @@ describe("cockpit tool approval rule", () => {
     expect(described).toContain(
       "Skip normal prompts is unavailable here. Remote Hardened keeps normal prompt skipping unavailable.",
     );
+  });
+
+  it("explains Skip normal prompts on first run instead of only saying it is unavailable", async () => {
+    await renderSafeOnly();
+    expect(container.textContent).toContain(
+      "Skip normal prompts lets allowed tools run without normal prompts. Setup keeps it off, so normal prompts stay on. You can turn it on later in Settings › Safety.",
+    );
+    expect(container.textContent).not.toContain("Guided setup requires an approval rule");
+  });
+
+  it("does not say normal prompts stay on when the saved rule already skips them", async () => {
+    owner.toolApprovalMode = "bypass";
+    await renderSafeOnly();
+    expect(container.textContent).toContain(
+      "Skip normal prompts lets allowed tools run without normal prompts. It is already the saved rule, and setup cannot choose it. Change it in Settings › Safety.",
+    );
+    expect(container.textContent).not.toContain("normal prompts stay on");
+  });
+
+  it("does not promise a later switch on first run under Remote Hardened", async () => {
+    owner.deploymentProfile = "remote_hardened";
+    await renderSafeOnly();
+    expect(container.textContent).toContain(
+      "Setup keeps it off, so normal prompts stay on. Remote Hardened keeps normal prompt skipping unavailable.",
+    );
+    expect(container.textContent).not.toContain("You can turn it on later");
   });
 
   it("fails closed when the owner profile is missing", async () => {

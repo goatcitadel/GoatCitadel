@@ -8,7 +8,7 @@ import {
   type MissionThreadedRenderSurfaceInput,
 } from "@goatcitadel/threaded-surface-core";
 import { ChatConversationsSheet } from "./ChatConversationsSheet";
-import { ChatEmptyState, ChatSessionHeader, ChatSetupBanner } from "./ChatAreaChrome";
+import { ChatEmptyState, ChatSessionHeader, ChatSetupGate } from "./ChatAreaChrome";
 import { ChatTranscript } from "./ChatTranscript";
 import { ChatNoticeText } from "./ChatNoticeText";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
@@ -335,10 +335,10 @@ export function ChatAreaView({
           onInspect={() => (inspectorContent?.source === "chat" ? close() : openInspector())}
           onFork={active && latestTurnId ? () => active.onStartNewThreadFromTurn(latestTurnId) : undefined}
         />
-        {active ? <DeferredProjectAssignmentReview active={active} search={search} identity={inspectorIdentity} /> : null}
-        {onboarding.data && !onboarding.isError && !onboarding.data.completed && !buildOpen ? (
-          <ChatSetupBanner onReturnToSetup={() => navigate("/settings/first-run")} />
+        {active ? (
+          <DeferredProjectAssignmentReview active={active} search={search} identity={inspectorIdentity} />
         ) : null}
+        <ChatSetupGate onboarding={onboarding} hidden={buildOpen} onSetup={() => navigate("/settings/first-run")} />
         {buildOpen && active?.streamError ? (
           <ChatStreamErrorNotice
             error={active.streamError}

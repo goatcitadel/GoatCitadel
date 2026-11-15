@@ -58,6 +58,8 @@ export interface ProviderModelCatalogOption {
   modelProbeSource?: ProviderModelProbeSource;
   modelProbeCheckedAt?: string;
   modelProbeWarning?: string;
+  /** The last refresh of a list that had answered live failed, so the old list is kept only as a record. */
+  modelRefreshFailed?: boolean;
 }
 
 export interface ProviderModelCacheEntry {
@@ -70,6 +72,8 @@ export interface ProviderModelCacheEntry {
   source?: ProviderModelProbeSource;
   checkedAt?: string;
   warning?: string;
+  /** Set when the last refresh failed and this entry keeps the earlier live list; a refresh that answers replaces the entry. */
+  refreshFailed?: boolean;
 }
 
 interface ProviderModelLoadResult {
@@ -104,6 +108,7 @@ function preserveLiveCatalogAfterRefreshFailure(providerId: string, warning?: st
     expiresAt: Date.now() - 1,
     retryAfter: Date.now() + PROVIDER_MODELS_NEGATIVE_TTL_MS,
     state: "fallback",
+    refreshFailed: true,
     checkedAt: new Date().toISOString(),
     warning: warning ?? "Live model refresh failed; showing the last known catalog.",
   });
@@ -170,6 +175,7 @@ function buildProviderCatalog(
       modelProbeSource: cached?.source,
       modelProbeCheckedAt: cached?.checkedAt,
       modelProbeWarning: cached?.warning,
+      modelRefreshFailed: cached?.refreshFailed === true ? true : undefined,
     } satisfies ProviderModelCatalogOption;
   });
 }

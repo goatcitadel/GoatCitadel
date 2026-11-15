@@ -36,7 +36,9 @@ const ChatChangePlanCard = lazy(async () => ({
   default: (await import("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard")).ChatChangePlanCard,
 }));
 const ChatContinueAction = lazy(async () => ({ default: (await import("./ChatContinueAction")).ChatContinueAction }));
-const ChatTurnFailureCard = lazy(async () => ({ default: (await import("./ChatTurnFailureCard")).ChatTurnFailureCard }));
+const ChatTurnFailureCard = lazy(async () => ({
+  default: (await import("./ChatTurnFailureCard")).ChatTurnFailureCard,
+}));
 const ChatTurnThinking = lazy(async () => ({ default: (await import("./ChatTurnAnnotations")).ChatTurnThinking }));
 const TurnReceipt = lazy(async () => ({ default: (await import("./ChatTurnAnnotations")).TurnReceipt }));
 
@@ -218,7 +220,11 @@ export const Turn = memo(function Turn({
             <DeferredChatLeaf
               label="Continue"
               identity={turn.turnId}
-              fallback={<p aria-busy="true" className="mt-2 text-xs text-fg-muted">Loading continuation controls…</p>}
+              fallback={
+                <p aria-busy="true" className="mt-2 text-xs text-fg-muted">
+                  Loading continuation controls…
+                </p>
+              }
             >
               <ChatContinueAction turn={turn} isLatest={isLatest} actions={continueActions} />
             </DeferredChatLeaf>
@@ -240,13 +246,18 @@ export const Turn = memo(function Turn({
         <DeferredChatLeaf
           label="Response recovery"
           identity={turn.turnId}
-          fallback={<p aria-busy="true" className="text-sm text-fg-muted">Loading response recovery…</p>}
+          fallback={
+            <p aria-busy="true" className="text-sm text-fg-muted">
+              Loading response recovery…
+            </p>
+          }
         >
           <ChatTurnFailureCard
             failed={failed}
             answered={Boolean(assistantText)}
             failureClass={turn.trace.failure?.failureClass}
             hint={recoveryHint(turn, resendable)}
+            providerId={turn.trace.routing?.effectiveProviderId}
             onNewConversation={actions.historicalReadOnly ? undefined : onNewConversation}
           />
         </DeferredChatLeaf>

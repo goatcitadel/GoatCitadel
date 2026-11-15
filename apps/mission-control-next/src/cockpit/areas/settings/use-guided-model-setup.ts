@@ -9,6 +9,9 @@ import {
   clampGuidedThinkingLevel,
   GUIDED_CATALOG_LOADING_READINESS,
   GUIDED_THINKING_LEVELS,
+  guidedSavedDefaultsRevision,
+  guidedSaveRevision,
+  guidedSavedSelection,
   guidedConnectionHint,
   localRuntimeSetupGuide,
   pendingPlanForSelection,
@@ -56,15 +59,16 @@ export function useGuidedModelSetup({
   const activeProviderId = onboarding.settings?.llm?.activeProviderId ?? "";
   const activeModel = onboarding.settings?.llm?.activeModel ?? "";
   const fallbackProvider = pickDefaultGuidedProvider(providers, activeProviderId);
+  const defaultThinkingLevel = catalog.config?.defaultThinkingLevel;
   const canonicalSelection = {
     providerId: activeProviderId || fallbackProvider?.providerId || "",
     model: activeModel || fallbackProvider?.defaultModel || "",
-    thinkingLevel: catalog.config?.defaultThinkingLevel ?? ("standard" as ChatThinkingLevel),
+    thinkingLevel: defaultThinkingLevel ?? ("standard" as ChatThinkingLevel),
   };
   const modelDraft = useSessionDraft(
     "onboarding:" + workspaceId + ":model",
     canonicalSelection,
-    JSON.stringify(canonicalSelection),
+    guidedSavedDefaultsRevision({ activeProviderId, activeModel, defaultThinkingLevel }),
     { label: "First Chat model", available: !catalog.loading },
   );
   const { providerId, model, thinkingLevel: requestedThinkingLevel } = modelDraft.value;
@@ -224,18 +228,15 @@ export function useGuidedModelSetup({
       setDialogPlan(updated.requiredAction && !TERMINAL_CHANGE_PLAN_STATUSES.has(updated.status) ? updated : null);
       if (updated.status === "completed") {
         if (updated.request.kind === "installation_default_model") {
-          const saved = {
-            providerId: updated.request.providerId,
-            model: updated.request.model,
-            thinkingLevel: updated.request.thinkingLevel ?? ("standard" as ChatThinkingLevel),
-          };
+          const saved = guidedSavedSelection(updated.request);
           const savedProvider = providers.find((provider) => provider.providerId === saved.providerId);
           const submitted = submittedGuidedSelection(
             submittedDraftRef.current,
             saved,
             supportedGuidedThinkingLevels(savedProvider?.capabilities),
           );
-          modelDraft.acceptSaved(saved, JSON.stringify(saved), submitted);
+          // Same revision as the saved defaults use, so a newer draft is compared with what this save wrote.
+          modelDraft.acceptSaved(saved, guidedSaveRevision(updated.request, defaultThinkingLevel), submitted);
         }
         setNotice(updated.result?.summary ?? "Change applied and verified.");
         await Promise.all([catalog.reload(), reloadOnboarding()]);
@@ -245,7 +246,7 @@ export function useGuidedModelSetup({
       }
       return updated;
     },
-    [catalog, providers, reloadOnboarding, setNotice, modelDraft],
+    [catalog, providers, reloadOnboarding, setNotice, modelDraft, defaultThinkingLevel],
   );
 
   const runAction = useCallback(

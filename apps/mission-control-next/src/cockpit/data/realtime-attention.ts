@@ -9,7 +9,7 @@ import type { UiNotificationPreferences } from "@goatcitadel/mission-control-sha
 import { showBrowserNotification } from "../../app/browser-notification";
 import { requestCockpitToast } from "../ui/toast-runtime";
 import { isApprovalHandledInPlace } from "./approvals-handled-in-place";
-import { inboxItemLocation, resolveInboxNotificationItem } from "./inbox-notification";
+import { inboxItemLocation, inboxToastDescription, resolveInboxNotificationItem } from "./inbox-notification";
 import { queryKeys } from "./query-keys";
 
 /**
@@ -150,7 +150,7 @@ export function createRealtimeAttention({
                   notification.tone === "error" ? toast.error : notification.tone === "warning" ? toast.warning : toast;
                 show(item.title, {
                   id,
-                  description: item.summary,
+                  description: inboxToastDescription(item),
                   duration: inboxToastDuration(notification.tone),
                   action: { label: "Open Inbox item", onClick: open },
                 });

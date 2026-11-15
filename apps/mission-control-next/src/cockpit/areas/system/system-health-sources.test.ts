@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSystemHealthDigest, loadSystemHealthSources } from "./system-health-sources";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { deriveSystemHealthChecks } from "./system-health";
+import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 
 const api = vi.hoisted(() => ({
   fetchHealthSummary: vi.fn(),
@@ -10,6 +11,7 @@ const api = vi.hoisted(() => ({
   fetchIntegrationConnections: vi.fn(),
   fetchChannelRuntimeStatus: vi.fn(),
   fetchRemoteWorkerRegistry: vi.fn(),
+  fetchOnboardingState: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchHealthSummary: api.fetchHealthSummary,
@@ -17,6 +19,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchNpuStatus: api.fetchNpuStatus,
   fetchIntegrationConnections: api.fetchIntegrationConnections,
   fetchChannelRuntimeStatus: api.fetchChannelRuntimeStatus,
+  fetchOnboardingState: api.fetchOnboardingState,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/remote-workers", () => ({
   fetchRemoteWorkerRegistry: api.fetchRemoteWorkerRegistry,
@@ -32,6 +35,7 @@ beforeEach(() => {
   api.fetchIntegrationConnections.mockResolvedValue({ items: [channel] });
   api.fetchChannelRuntimeStatus.mockResolvedValue({ ready: true });
   api.fetchRemoteWorkerRegistry.mockResolvedValue({ items: [] });
+  api.fetchOnboardingState.mockResolvedValue(onboardingFixture());
 });
 
 describe("system health reads", () => {
@@ -84,15 +88,22 @@ describe("system health reads", () => {
       expect(check?.status.tone).not.toBe("failed");
     });
   });
-  it("the digest makes exactly four reads and defers channels and workers", async () => {
+  it("the digest makes exactly five reads and defers channels and workers", async () => {
     const digest = await loadSystemHealthDigest();
     const calls = Object.values(api).reduce((total, mock) => total + mock.mock.calls.length, 0);
-    expect(calls).toBe(4);
+    expect(calls).toBe(5);
+    expect(digest.onboarding).toMatchObject({ state: "current", observedAt: expect.any(Number) });
     expect(api.fetchChannelRuntimeStatus).not.toHaveBeenCalled();
     expect(api.fetchRemoteWorkerRegistry).not.toHaveBeenCalled();
     expect(digest.channels).toEqual({ state: "deferred" });
     expect(digest.workers).toEqual({ state: "deferred" });
     expect(digest.connections).toMatchObject({ state: "current", value: [channel], observedAt: expect.any(Number) });
+  });
+
+  it("the summary-only digest leaves model setup deferred and makes no onboarding read", async () => {
+    const digest = await loadSystemHealthDigest(undefined, { deferOptionalSources: true });
+    expect(digest.onboarding).toEqual({ state: "deferred" });
+    expect(api.fetchOnboardingState).not.toHaveBeenCalled();
   });
 
   it("the digest keeps partial truth when one read fails", async () => {

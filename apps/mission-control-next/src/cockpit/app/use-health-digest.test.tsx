@@ -11,6 +11,7 @@ import { healthQueryScope } from "../data/health-query-scope";
 import { queryKeys } from "../data/query-keys";
 import { deriveSystemHealthChecks } from "../areas/system/system-health";
 import type { OperatorInboxResponse } from "@goatcitadel/contracts";
+import { onboardingFixture } from "../../features/native-routes/settings/onboarding.test-support";
 const inboxState = vi.hoisted(() => ({
   isError: false,
   data: {
@@ -25,6 +26,7 @@ const api = vi.hoisted(() => ({
   fetchNpuStatus: vi.fn(),
   fetchIntegrationConnections: vi.fn(),
   fetchChannelRuntimeStatus: vi.fn(),
+  fetchOnboardingState: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
 vi.mock("../../features/desktop-updates/desktop-update-bridge", () => ({ useDesktopUpdates: () => null }));
@@ -50,6 +52,7 @@ beforeEach(() => {
   api.fetchLlamaCppStatus.mockResolvedValue({ enabled: false });
   api.fetchNpuStatus.mockResolvedValue({ enabled: false });
   api.fetchIntegrationConnections.mockResolvedValue({ items: [] });
+  api.fetchOnboardingState.mockResolvedValue(onboardingFixture());
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -201,7 +204,7 @@ it.each([401, 403])(
   },
 );
 
-it("shares the four-read digest between consumers and freshly revalidates a scope ABA once", async () => {
+it("shares the five-read digest between consumers and freshly revalidates a scope ABA once", async () => {
   vi.useFakeTimers();
   api.fetchNpuStatus.mockRejectedValue(
     new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/npu/status", status: 403 }),
@@ -212,7 +215,7 @@ it("shares the four-read digest between consumers and freshly revalidates a scop
     });
   await render("workspace-a", 2);
   await tick();
-  expect(Object.values(api).reduce((total, mock) => total + mock.mock.calls.length, 0)).toBe(4);
+  expect(Object.values(api).reduce((total, mock) => total + mock.mock.calls.length, 0)).toBe(5);
   await render("workspace-b", 2);
   await tick();
   expect(api.fetchNpuStatus).toHaveBeenCalledTimes(2);
@@ -247,10 +250,13 @@ it("shares one core health read across shell consumers and explicitly defers opt
     api.fetchNpuStatus,
     api.fetchIntegrationConnections,
     api.fetchChannelRuntimeStatus,
+    api.fetchOnboardingState,
   ])
     expect(read).not.toHaveBeenCalled();
   expect(status.label).not.toContain("·");
-  expect(status.title).toContain("Managed local runtimes, integrations, channels and workers are checked on System");
+  expect(status.title).toContain(
+    "The default model, managed local runtimes, integrations, channels and workers are checked on System",
+  );
   const scope = healthQueryScope(client, "workspace-a", getGatewayAccessRevision());
   const sources = client.getQueryData<SystemHealthSources>(healthDigestKey("workspace-a", scope[1], scope[2], true))!;
   expect(sources.npu.state).toBe("deferred");
@@ -325,4 +331,34 @@ it("retains inspected runtime failures without extra reads and fences them on wo
   expect(status.label).not.toContain("Earlier");
   expect(api.fetchNpuStatus).not.toHaveBeenCalled();
   expect(api.fetchLlamaCppStatus).not.toHaveBeenCalled();
+});
+it("shows a current core failure instead of an earlier default-model result", async () => {
+  const scope = healthQueryScope(client, "workspace-a", getGatewayAccessRevision());
+  const noModel = onboardingFixture();
+  noModel.settings.llm.activeProviderId = "";
+  noModel.settings.llm.activeModel = "";
+  client.setQueryData([...queryKeys.health("workspace-a"), ...scope], {
+    summary: { state: "unavailable", detail: "Not read in this retained fixture" },
+    llama: { state: "deferred" },
+    npu: { state: "deferred" },
+    connections: { state: "deferred" },
+    channels: { state: "deferred" },
+    workers: { state: "deferred" },
+    onboarding: { state: "current", value: noModel, observedAt: 1760000000000 },
+  } satisfies SystemHealthSources);
+  api.fetchHealthSummary.mockResolvedValue({ ...summary, database: { reachable: false, issues: [] } });
+  function CoreProbe() {
+    status = useHealthDigestStatus("workspace-a", true, true);
+    return <p>{status.label}</p>;
+  }
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <CoreProbe />
+      </QueryClientProvider>,
+    ),
+  );
+  await settle();
+  expect(status.label).not.toBe("Earlier check needs review");
+  expect(status.tone).toBe("failed");
 });

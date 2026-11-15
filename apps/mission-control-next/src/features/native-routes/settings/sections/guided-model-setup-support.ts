@@ -91,6 +91,7 @@ type GuidedReadinessProvider = Pick<ProviderModelCatalogOption, "providerId" | "
       | "modelProbeSource"
       | "modelProbeWarning"
       | "modelRefreshStatus"
+      | "modelRefreshFailed"
     >
   >;
 
@@ -99,6 +100,8 @@ export interface GuidedProviderReadiness {
   /** Short status for the card summary. */
   label: string;
   description: string;
+  /** The raw reason a check gave, for the Technical details disclosure only; never ordinary text. */
+  detail?: string;
   /** Which existing Gateway evidence proved readiness; null until something did. */
   evidence: "credential" | "local_endpoint" | "local_login" | null;
 }
@@ -114,8 +117,9 @@ function readiness(
   state: GuidedProviderReadiness["state"],
   description: string,
   evidence: GuidedProviderReadiness["evidence"] = null,
+  detail?: string,
 ): GuidedProviderReadiness {
-  return { state, label: READINESS_LABELS[state], description, evidence };
+  return { state, label: READINESS_LABELS[state], description, evidence, ...(detail ? { detail } : {}) };
 }
 
 /**
@@ -178,17 +182,31 @@ function resolveLocalLoginReadiness(provider: GuidedReadinessProvider): GuidedPr
 
 function resolveLocalEndpointReadiness(provider: GuidedReadinessProvider): GuidedProviderReadiness {
   const endpoint = provider.baseUrl;
+  // What the last check found decides readiness; how old the cached list is does not.
+  if (provider.modelProbeState === "ready" && provider.modelProbeSource === "live") {
+    return readiness("ready", `${provider.label} answered at ${endpoint}.`, "local_endpoint");
+  }
+  const warning = provider.modelProbeWarning?.trim();
+  // A check that is running (or none yet) comes first: it must read as checking, whatever an earlier refresh did.
+  if (!provider.modelProbeState || provider.modelProbeState === "not_checked") {
+    return readiness("checking", `Checking ${provider.label} at ${endpoint}…`);
+  }
+  // The last refresh failed, even if an earlier one answered: that is a failure, not an old list.
+  if (provider.modelRefreshFailed) return unreachableReadiness(provider, warning);
+  if (provider.modelProbeState === "error") {
+    // The check itself failed (a failed read, a refused request): the server was never shown to be down.
+    return readiness(
+      "not_verified",
+      "The connection check could not be completed. Check the address, then check the connection again.",
+      null,
+      warning,
+    );
+  }
   if (provider.modelRefreshStatus === "stale") {
     return readiness(
       "not_verified",
       `The last check of ${provider.label} at ${endpoint} is stale. Check the connection again.`,
     );
-  }
-  if (provider.modelProbeState === "ready" && provider.modelProbeSource === "live") {
-    return readiness("ready", `${provider.label} answered at ${endpoint}.`, "local_endpoint");
-  }
-  if (!provider.modelProbeState || provider.modelProbeState === "not_checked") {
-    return readiness("checking", `Checking ${provider.label} at ${endpoint}…`);
   }
   if (provider.modelProbeState === "empty") {
     return readiness(
@@ -196,10 +214,15 @@ function resolveLocalEndpointReadiness(provider: GuidedReadinessProvider): Guide
       `${provider.label} answered at ${endpoint} but reported no models. Load a model, then check the connection again.`,
     );
   }
-  const warning = provider.modelProbeWarning?.trim();
+  return unreachableReadiness(provider, warning);
+}
+
+function unreachableReadiness(provider: GuidedReadinessProvider, warning: string | undefined): GuidedProviderReadiness {
   return readiness(
     "not_verified",
-    `${provider.label} has not answered at ${endpoint}${warning ? ` (${warning})` : ""}. Start it, then check the connection again.`,
+    `${provider.label} has not answered at ${provider.baseUrl}. Start it, then check the connection again.`,
+    null,
+    warning,
   );
 }
 
@@ -537,3 +560,40 @@ export const withHeldPlan = (held: readonly ChangePlanRecord[], plan: ChangePlan
   ...held.filter((candidate) => candidate.planId !== plan.planId),
   ...mergePlansByRevision([plan], held),
 ];
+
+/**
+ * The revision a guided model draft compares against: only what is saved. The suggested fallback provider moves as
+ * provider checks finish, and that is not a change to the saved defaults.
+ */
+export function guidedSavedDefaultsRevision(saved: {
+  activeProviderId: string;
+  activeModel: string;
+  defaultThinkingLevel: ChatThinkingLevel | undefined;
+}): string {
+  return JSON.stringify([saved.activeProviderId, saved.activeModel, saved.defaultThinkingLevel ?? null]);
+}
+
+/** What a default-model save wrote, as the selection the draft holds; a save that named no thinking level means standard. */
+export function guidedSavedSelection(request: {
+  providerId: string;
+  model: string;
+  thinkingLevel?: ChatThinkingLevel;
+}): {
+  providerId: string;
+  model: string;
+  thinkingLevel: ChatThinkingLevel;
+} {
+  return { providerId: request.providerId, model: request.model, thinkingLevel: request.thinkingLevel ?? "standard" };
+}
+
+/** The same revision for a default-model save that just landed: what it wrote, with the thinking level it left alone. */
+export function guidedSaveRevision(
+  request: { providerId: string; model: string; thinkingLevel?: ChatThinkingLevel },
+  unchangedThinkingLevel: ChatThinkingLevel | undefined,
+): string {
+  return guidedSavedDefaultsRevision({
+    activeProviderId: request.providerId,
+    activeModel: request.model,
+    defaultThinkingLevel: request.thinkingLevel ?? unchangedThinkingLevel,
+  });
+}

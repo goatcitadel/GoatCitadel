@@ -6,6 +6,7 @@ import type { ApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/
 import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { useApprovalConnectionLost } from "./ChatApprovalPausedFieldset";
 import { DeferredChatLeaf } from "./DeferredChatLeaves";
 import { useApprovalReviewEvidence } from "../inbox/use-approval-review-evidence";
 
@@ -60,8 +61,11 @@ export function RiskApprovalAction({
   loadingLabel?: string;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // GoatCitadel is unreachable: approving waits, including inside the confirmation dialog, which stays open.
+  const connectionLost = useApprovalConnectionLost();
   const confirmAction = confirmLabel ?? "Approve once";
-  const disabled = pending || Boolean(approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now());
+  const disabled =
+    pending || connectionLost || Boolean(approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now());
   const reviewed =
     reviewedApproval?.approvalId === approval.approvalId &&
     reviewedApproval.status === "pending" &&
@@ -135,6 +139,7 @@ export function RiskApprovalAction({
                 hasActionPreview={hasActionPreview}
                 critical={critical}
                 disabled={disabled}
+                connectionLost={connectionLost}
                 riskName={riskName}
                 confirmAction={confirmAction}
                 specialistReview={specialistReview}

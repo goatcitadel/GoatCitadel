@@ -29,6 +29,8 @@ export interface OperatorInboxItem {
   group: OperatorInboxGroup;
   title: string;
   summary: string;
+  /** The summary names a program or a line count, so an unprompted notification must not repeat it. */
+  summaryNamesCommand?: true;
   createdAt: string;
   updatedAt?: string;
   expiresAt?: string;
@@ -89,6 +91,7 @@ export interface OperatorInboxResponse {
   generatedAt: string;
   items: OperatorInboxItem[];
   coverage: OperatorInboxSourceCoverage[];
+  /** `needs_decision` counts only decisions still open at `generatedAt`; an expired one stays listed but is not counted. */
   counts: Record<OperatorInboxGroup, OperatorInboxCount>;
 }
 
