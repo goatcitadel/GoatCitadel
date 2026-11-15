@@ -693,6 +693,8 @@ export interface ChatTurnAgentRunnerInput {
   /** Server-owned profile chosen before the capability catalog is frozen. */
   executionProfile?: ChatTurnExecutionProfile;
   toolAutonomy: "safe_auto" | "manual";
+  /** Plan first: the model writes the plan with no tools, so the tool-settings conflict answer does not apply. */
+  planningMode?: "off" | "advisory";
   /** Server-authored intent signal; attached bytes are resolved only after capability freeze. */
   routedContextRequested?: boolean;
   operatorId?: string;
@@ -813,7 +815,10 @@ async function toolSchemaFromCapabilityProfile(
   assertExact("thinking level", profile.selection.thinkingLevel, input.thinkingLevel);
   assertExact("speed mode", profile.selection.speedMode, input.speedMode ?? "standard");
   assertExact("subagent policy", profile.selection.subagentPolicy, input.subagentPolicy ?? "ask_when_useful");
-  assertExact("tool autonomy", profile.selection.toolAutonomy, input.toolAutonomy);
+  // Plan first runs under manual autonomy whatever autonomy the profile froze; every other check still applies.
+  if (input.planningMode !== "advisory") {
+    assertExact("tool autonomy", profile.selection.toolAutonomy, input.toolAutonomy);
+  }
   assertExact("operator identity", profile.identity.operatorId, input.operatorId);
   assertExact("auth actor identity", profile.identity.authActorId, input.authActorId);
   assertExact("auth actor source", profile.identity.authActorSource, input.authActorSource);
@@ -846,6 +851,10 @@ async function toolSchemaFromCapabilityProfile(
     }
     return tool.providerDefinition;
   });
+  if (input.planningMode === "advisory") {
+    // Verified like any turn, but Plan first is offered no tools.
+    return { tools: [], modelToCanonical: new Map(), canonicalToModel: new Map(), policyDecisions: [] };
+  }
   return {
     tools,
     modelToCanonical,
@@ -1333,7 +1342,11 @@ export class ChatTurnAgentRunner {
         !presentationArtifactIntent &&
         detectDocumentArtifactIntent(input.content),
     };
-    if ((input.toolAutonomy === "manual" && !quickWebProfile) || promptLabContract.toolUseSuppressed) {
+    if (
+      input.planningMode === "advisory" ||
+      (input.toolAutonomy === "manual" && !quickWebProfile) ||
+      promptLabContract.toolUseSuppressed
+    ) {
       return {
         tools: [],
         modelToCanonical: new Map(),
@@ -2213,8 +2226,13 @@ export class ChatTurnAgentRunner {
       extractPrimaryUserTaskContent(executionIntentContent) ||
       executionIntentContent;
     const localResearchContinuation = resolveLocalResearchContinuation(input.content, input.historyMessages);
+    // Plan first offers the model no tools on any path, whatever autonomy or frozen profile the turn carries, and
+    // asks for a plan rather than the artifact, so no "file or artifact was not produced" guard applies to it.
+    const planFirstNoTools = input.planningMode === "advisory";
     const presentationArtifactIntent =
-      !suppressPromptLabCodeArtifactTools && detectPresentationArtifactIntent(executionIntentContent);
+      !planFirstNoTools &&
+      !suppressPromptLabCodeArtifactTools &&
+      detectPresentationArtifactIntent(executionIntentContent);
     const intents = {
       liveData:
         detectLiveDataIntent(intentDetectionContent) ||
@@ -2236,6 +2254,7 @@ export class ChatTurnAgentRunner {
       presentationArtifact: presentationArtifactIntent,
       presentationPdf: presentationArtifactIntent && detectPresentationPdfOutputIntent(executionIntentContent),
       documentArtifact:
+        !planFirstNoTools &&
         !suppressPromptLabCodeArtifactTools &&
         executionProfile !== "sustained_local_coding" &&
         !presentationArtifactIntent &&
@@ -2337,7 +2356,8 @@ export class ChatTurnAgentRunner {
     };
 
     const conversationMessages = projectHistoryMessagesForModel(input.historyMessages);
-    const confirmedDelegation = await this.deps.resolveConfirmedDelegation?.(input);
+    // Plan first runs nothing: no delegation is offered or started for it, the model just writes the plan.
+    const confirmedDelegation = planFirstNoTools ? undefined : await this.deps.resolveConfirmedDelegation?.(input);
     if (confirmedDelegation) {
       const delegationTrace = await this.patchTurnTrace(
         input,
@@ -2452,16 +2472,24 @@ export class ChatTurnAgentRunner {
       input.capabilityProfile && this.deps.listCapabilityCatalog
         ? await this.deps.listCapabilityCatalog("callable", input.capabilityProfile.identity.workspaceId)
         : undefined;
-    const admittedToolSchema = input.capabilityProfile
-      ? await toolSchemaFromCapabilityProfile(
-          input,
-          input.capabilityProfile,
-          storage,
-          liveCallableEntries,
-          this.deps.revalidateRequesterTool,
-          this.deps.revalidateMeshTool,
-        )
-      : await this.resolveCapabilityToolSchema(input);
+    const admittedToolSchema =
+      planFirstNoTools && !input.capabilityProfile
+        ? ({
+            tools: [],
+            modelToCanonical: new Map(),
+            canonicalToModel: new Map(),
+            policyDecisions: [],
+          } satisfies ResolvedChatTurnToolSchema)
+        : input.capabilityProfile
+          ? await toolSchemaFromCapabilityProfile(
+              input,
+              input.capabilityProfile,
+              storage,
+              liveCallableEntries,
+              this.deps.revalidateRequesterTool,
+              this.deps.revalidateMeshTool,
+            )
+          : await this.resolveCapabilityToolSchema(input);
     const routedContextToolSchema = await this.filterRoutedContextCapabilityToolSchema(input, admittedToolSchema);
     const filteredToolSchema = await this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema);
     if (
@@ -2989,11 +3017,13 @@ export class ChatTurnAgentRunner {
       };
     };
 
-    if (intents.missingLogPayload) {
+    // Plan first skips the canned answers below: each would replace the plan the model is asked to write.
+    if (intents.missingLogPayload && !planFirstNoTools) {
       assistantContent = buildMissingLogInputTemplate();
     }
     if (
       !assistantContent &&
+      !planFirstNoTools &&
       localFileIntent &&
       detectLocalFileAccessCheckIntent(input.content) &&
       !hasAvailableLocalFileTools(toolSchema.canonicalToModel)
@@ -3084,13 +3114,13 @@ export class ChatTurnAgentRunner {
       }
     }
     const delegatedOrchestrationPrompt = looksLikeDelegatedOrchestrationPrompt(input.content);
-    if (!assistantContent && !promptLabHarnessTurn && !delegatedOrchestrationPrompt) {
+    if (!assistantContent && !planFirstNoTools && !promptLabHarnessTurn && !delegatedOrchestrationPrompt) {
       const clarificationFollowUp = buildClarificationFollowUpIfNeeded(input.content, input.historyMessages);
       if (clarificationFollowUp) {
         assistantContent = clarificationFollowUp;
       }
     }
-    if (!assistantContent && !promptLabHarnessTurn && !delegatedOrchestrationPrompt) {
+    if (!assistantContent && !planFirstNoTools && !promptLabHarnessTurn && !delegatedOrchestrationPrompt) {
       const clarificationPrompt = buildClarificationPromptIfNeeded(input.content);
       if (clarificationPrompt) {
         assistantContent = clarificationPrompt;
@@ -3106,7 +3136,13 @@ export class ChatTurnAgentRunner {
       await persistCodingProgress("Reconcile uncertain mutation effects before retrying.");
     }
 
-    if (!assistantContent && !approvalPayload && !pendingUserInput && !durableFanoutWaiting) {
+    if (
+      !assistantContent &&
+      !approvalPayload &&
+      !pendingUserInput &&
+      !durableFanoutWaiting &&
+      input.planningMode !== "advisory"
+    ) {
       const settingsConflict = buildLiveDataSettingsConflictMessage({
         mode: input.mode,
         webLookupIntent: intents.webLookup,
@@ -4924,7 +4960,11 @@ export class ChatTurnAgentRunner {
             );
             break;
           }
-          if ((toolCalls.length === 0 && toolCallRepairFeedback.length === 0) || input.toolAutonomy === "manual") {
+          if (
+            (toolCalls.length === 0 && toolCallRepairFeedback.length === 0) ||
+            input.toolAutonomy === "manual" ||
+            planFirstNoTools
+          ) {
             // A reply received during the final provider request gets a further
             // bounded model boundary when the normal turn budget permits one.
             if (
@@ -7536,6 +7576,10 @@ export class ChatTurnAgentRunner {
     chunk?: ChatStreamChunkDraft;
     userInputPrompt?: ChatUserInputPromptRecord;
   }> {
+    // Last gate: a Plan first turn never dispatches a tool, whatever reached this point.
+    if (input.input.planningMode === "advisory") {
+      throw new Error("A Plan first turn does not run tools.");
+    }
     const res = await this.executeToolCallInternal(input);
     const delegatedScopeApprovalId = readDelegatedScopeExpansionApprovalId(res.record);
     if (delegatedScopeApprovalId) {

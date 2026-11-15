@@ -184,6 +184,7 @@ export function SystemActivity() {
       ) : null}
       {events.isError ? (
         <EmptyState
+          tone="error"
           title="Activity unavailable"
           description={describeApiError(events.error).summary}
           action={<Button onClick={() => void events.refetch()}>Try again</Button>}

@@ -30,6 +30,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", async (original) => ({
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeCitadelId: "default", activeWorkspaceId: "ws-1" }),
 }));
+// The in-place approval dialog has its own tests (SettingsApprovalDialog.test.tsx).
+vi.mock("../../settings/SettingsApprovalDialog", () => ({
+  SettingsApprovalDialog: (props: { approvalId: string }) => <section data-in-place-approval={props.approvalId} />,
+  reopenSettingsApproval: vi.fn(),
+}));
 // The panel and the address have their own tests (ToolGroupPanel.test.tsx); here only the hand-off is checked.
 const route = vi.hoisted(() => ({ search: "", navigate: vi.fn() }));
 vi.mock("../../../app/use-cockpit-route", () => ({ useCockpitRoute: () => route }));

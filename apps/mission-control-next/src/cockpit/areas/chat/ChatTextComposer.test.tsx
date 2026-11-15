@@ -411,6 +411,11 @@ describe("cockpit text composer", () => {
       select.value = "model-b";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
+    expect(props.onRequestModelChange).not.toHaveBeenCalled();
+    // The choice is sent when the popover is closed.
+    await act(async () =>
+      [...document.body.querySelectorAll("button")].find((node) => node.textContent === "Done")!.click(),
+    );
     expect(props.onRequestModelChange).toHaveBeenCalledWith("model-b");
   });
 

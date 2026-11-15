@@ -1,15 +1,27 @@
-import { useCallback } from "react";
+import { useCallback, useRef, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type {
   ChangePlanRecord,
   ChatSessionPrefsPatch,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
 } from "@goatcitadel/contracts";
-import { cancelChangePlan, createChangePlan } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  cancelChangePlan,
+  confirmChangePlan,
+  createChangePlan,
+  fetchChangePlan,
+  fetchChatSessionPrefs,
+} from "@goatcitadel/mission-control-shared/api/client";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { ChatThreadNotice } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives";
 import { runWithSelectedSession } from "./mission-threaded-controller-helpers";
-import { isTerminalChangePlanStatus } from "./change-plan-controller-helpers";
+import {
+  changePlanClientContext,
+  isSafeSessionModelConfirmation,
+  isTerminalChangePlanStatus,
+} from "./change-plan-controller-helpers";
+import { useCommitRefValue } from "./retained-reload";
 import type { ChatChangePlanState } from "./useChatChangePlanState";
 
 type Input = Pick<
@@ -19,6 +31,8 @@ type Input = Pick<
   workspaceId: string;
   selectedSession: ChatSessionRecord | null;
   prefs: ChatSessionPrefsRecord | null;
+  prefsRef: RefObject<ChatSessionPrefsRecord | null>;
+  setPrefs: Dispatch<SetStateAction<ChatSessionPrefsRecord | null>>;
   selectedProviderId: string | undefined;
   selectedModel: string | undefined;
   setUiError: (value: string | null) => void;
@@ -29,6 +43,8 @@ export function useChatModelChangePlans({
   workspaceId,
   selectedSession,
   prefs,
+  prefsRef,
+  setPrefs,
   selectedProviderId,
   selectedModel,
   setUiError,
@@ -38,6 +54,86 @@ export function useChatModelChangePlans({
   setLinkedDefaultChangePlan,
   setChangePlanActionError,
 }: Input) {
+  // The Chat and workspace shown now, synced at commit. A change confirms against the Gateway for the Chat it was
+  // started in; what it learns is published only while that Chat is still the one shown (the same rule as the
+  // Chat's own state loads). A Chat opened later reads its own settings.
+  const shownScope = useRef({ workspaceId, sessionId: selectedSession?.sessionId ?? null });
+  useCommitRefValue(shownScope, { workspaceId, sessionId: selectedSession?.sessionId ?? null });
+  const isShown = useCallback(
+    (scopeWorkspaceId: string, sessionId: string | null | undefined) =>
+      Boolean(sessionId) &&
+      shownScope.current.sessionId === sessionId &&
+      shownScope.current.workspaceId === scopeWorkspaceId,
+    [],
+  );
+  const recordChangePlanResult = useCallback(
+    (updated: ChangePlanRecord) => {
+      setChatChangePlanSnapshot((current) => {
+        const ownerSessionId = updated.origin.sessionId ?? null;
+        if (current.ownerSessionId !== ownerSessionId) return current;
+        return {
+          ownerSessionId,
+          items: [updated, ...current.items.filter((item) => item.planId !== updated.planId)].slice(0, 12),
+        };
+      });
+      if (updated.requiredAction && !isTerminalChangePlanStatus(updated.status)) {
+        setActiveChangePlan(updated);
+      } else {
+        setActiveChangePlan((current) => (current?.planId === updated.planId ? null : current));
+      }
+      return updated;
+    },
+    [setActiveChangePlan, setChatChangePlanSnapshot],
+  );
+  const applySafeModelChange = useCallback(
+    async (plan: ChangePlanRecord, actionNonce: string) => {
+      const context = changePlanClientContext(workspaceId, plan);
+      // Records what the Gateway says about the plan. An applied change is shown as applied and the Chat's own
+      // settings are read again, so the composer matches what the Chat now uses.
+      const sessionId = plan.origin.sessionId;
+      const stillShown = () => isShown(workspaceId, sessionId);
+      const settle = async (answer: ChangePlanRecord) => {
+        if (!stillShown()) return;
+        const updated = recordChangePlanResult(answer);
+        if (updated.status !== "completed" && updated.status !== "applied") return;
+        pushLocalNotice(updated.result?.summary ?? "Change applied and verified.", "success");
+        if (!sessionId) return;
+        try {
+          const refreshed = await fetchChatSessionPrefs(sessionId);
+          if (!stillShown()) return;
+          prefsRef.current = refreshed;
+          setPrefs(refreshed);
+        } catch {
+          if (!stillShown()) return;
+          setUiError("The change was applied, but this Chat's settings could not be read again. Reload the Chat.");
+        }
+      };
+      try {
+        await settle(await confirmChangePlan(plan.planId, context, { expectedRevision: plan.revision, actionNonce }));
+        return;
+      } catch (error) {
+        if (!stillShown()) return;
+        const refusal = describeApiError(error, "Unable to apply this model change.").summary;
+        // The answer may have been lost after the Gateway applied the change, so what it holds now is read again
+        // (never joining an older read) before anything is said about the outcome.
+        let current: ChangePlanRecord;
+        try {
+          current = await withFreshReads(() => fetchChangePlan(plan.planId, context));
+        } catch {
+          if (stillShown()) setUiError(refusal);
+          return;
+        }
+        if (!stillShown()) return;
+        if (current.status === "awaiting_confirmation" && current.revision === plan.revision) {
+          // Still waiting: the review card stays, so "Review and confirm" still works.
+          setUiError(refusal);
+          return;
+        }
+        await settle(current);
+      }
+    },
+    [isShown, prefsRef, pushLocalNotice, recordChangePlanResult, setPrefs, setUiError, workspaceId],
+  );
   const requestThreadModelPatch = useCallback(
     (patch: ChatSessionPrefsPatch) => {
       void runWithSelectedSession(selectedSession, async (session) => {
@@ -70,7 +166,9 @@ export function useChatModelChangePlans({
             },
           });
           if (plan.status !== "awaiting_confirmation") {
-            setUiError(plan.result?.summary ?? "This change needs additional setup before it can be confirmed.");
+            if (isShown(workspaceId, session.sessionId)) {
+              setUiError(plan.result?.summary ?? "This change needs additional setup before it can be confirmed.");
+            }
             return;
           }
           setChatChangePlanSnapshot((current) => {
@@ -80,9 +178,16 @@ export function useChatModelChangePlans({
               items: [plan, ...current.items.filter((item) => item.planId !== plan.planId)].slice(0, 12),
             };
           });
+          // A change the Gateway marked safe and that asks only for a confirmation is applied now: pressing Done was
+          // the confirmation. Any other plan keeps its review card.
+          if (isSafeSessionModelConfirmation(plan) && plan.requiredAction?.kind === "confirmation") {
+            await applySafeModelChange(plan, plan.requiredAction.actionNonce);
+          }
         } catch (error) {
           // A refused effort or model comes back as a 422 whose sentence says what to choose; never show the raw body.
-          setUiError(describeApiError(error, "Unable to prepare this model change.").summary);
+          if (isShown(workspaceId, session.sessionId)) {
+            setUiError(describeApiError(error, "Unable to prepare this model change.").summary);
+          }
         }
       });
     },
@@ -93,8 +198,10 @@ export function useChatModelChangePlans({
       prefs?.thinkingLevel,
       prefs?.revision,
       workspaceId,
+      isShown,
       setChatChangePlanSnapshot,
       setUiError,
+      applySafeModelChange,
     ],
   );
   const reviewChatChangePlan = useCallback(
@@ -196,25 +303,6 @@ export function useChatModelChangePlans({
       setUiError,
       workspaceId,
     ],
-  );
-  const recordChangePlanResult = useCallback(
-    (updated: ChangePlanRecord) => {
-      setChatChangePlanSnapshot((current) => {
-        const ownerSessionId = updated.origin.sessionId ?? null;
-        if (current.ownerSessionId !== ownerSessionId) return current;
-        return {
-          ownerSessionId,
-          items: [updated, ...current.items.filter((item) => item.planId !== updated.planId)].slice(0, 12),
-        };
-      });
-      if (updated.requiredAction && !isTerminalChangePlanStatus(updated.status)) {
-        setActiveChangePlan(updated);
-      } else {
-        setActiveChangePlan((current) => (current?.planId === updated.planId ? null : current));
-      }
-      return updated;
-    },
-    [setActiveChangePlan, setChatChangePlanSnapshot],
   );
   return {
     requestThreadModelPatch,

@@ -309,11 +309,14 @@ export function useChatSurfaceOrchestration(input: {
           throw new Error("Cancellation response did not match the active turn. Refresh its status before retrying.");
         }
         const confirmed = result.cancelled && result.trace.status === "cancelled";
+        const alreadyFinished = !result.cancelled && result.trace.status === "completed";
         input.pushLocalNoticeRef.current?.(
           confirmed
             ? "You stopped this reply. What was written so far is kept."
-            : "Cancellation was not confirmed. Refreshing the turn status.",
-          confirmed ? "neutral" : "warning",
+            : alreadyFinished
+              ? "The reply had already finished, so there was nothing to stop."
+              : "Cancellation was not confirmed. Refreshing the turn status.",
+          confirmed || alreadyFinished ? "neutral" : "warning",
         );
         const reloadSession = input.loadSessionCoreStateRef.current;
         if (reloadSession) {

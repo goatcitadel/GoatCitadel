@@ -219,6 +219,8 @@ export function useChatGovernedActionComposition({
     workspaceId,
     selectedSession: session.threadController.selectedSession,
     prefs: session.sessionData.prefs,
+    prefsRef: execution.outbound.prefsRef,
+    setPrefs: session.sessionData.setPrefs,
     selectedProviderId: submission.providerRouting.selectedProviderId,
     selectedModel: submission.providerRouting.selectedModel,
     setUiError: setUiError,

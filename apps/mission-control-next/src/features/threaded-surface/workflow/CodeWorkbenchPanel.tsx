@@ -37,10 +37,12 @@ import {
 } from "react";
 
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 
 import { useOptionalStableHandler, useStableHandler } from "../useStableHandler";
 import { WorkbenchFileActionForm } from "./WorkbenchFileActionForm";
 import { WorkbenchFilePicker } from "./WorkbenchFilePicker";
+import { describeWorkbenchError } from "./workbench-error-copy";
 import { DEFAULT_VALIDATION_COMMAND } from "./WorkbenchValidationControls";
 import { WorkbenchFileTree } from "@goatcitadel/mission-control-shared/components/WorkbenchFileTree";
 import { WorkbenchMonacoEditor } from "@goatcitadel/mission-control-shared/components/WorkbenchMonacoEditor";
@@ -109,6 +111,9 @@ function ReadyCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     [selectedTurn?.assistantMessage?.content],
   );
   const readyForRepoOps = workbenchState?.worktreeStatus === "ready";
+  const workbenchError = error
+    ? describeWorkbenchError(error, { worktreeCreation: !needsProjectBinding && !readyForRepoOps })
+    : null;
   const compactWorkbench = useMediaQuery("(max-width: 639px)");
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const changedFiles = workbenchTree?.changedFiles ?? diff?.changedFiles ?? EMPTY_CHANGED_FILES;
@@ -461,7 +466,17 @@ function ReadyCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
         filePanePercent={filePanePercent}
         setFilePanePercent={setFilePanePercent}
       />
-      {error ? <div className="mc-next-panel-banner warning">{error}</div> : null}
+      {workbenchError ? (
+        <div className="mc-next-panel-banner warning">
+          {workbenchError.summary}
+          {workbenchError.technical ? (
+            <details className="mc-next-chat-evidence">
+              <summary>Technical details</summary>
+              <p className="font-mono">{workbenchError.technical}</p>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="mc-next-workbench-body" style={workbenchBodyStyle}>
         <aside className="mc-next-workbench-sidebar">
@@ -780,7 +795,7 @@ function ReadyCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
       <ConfirmModal
         open={confirmRevertAllOpen}
         title="Revert all worktree changes?"
-        message="This will discard every visible worktree change in this session. Review the repo diff before confirming."
+        message={`This discards the changes to ${plural(changedFiles.length, "file")} in this conversation's worktree. You can't undo this here.`}
         confirmLabel="Revert all changes"
         danger
         pending={busy}

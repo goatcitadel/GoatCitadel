@@ -3,6 +3,8 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { ChannelSetupDraft, SlackSetupCheckResult } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { SLACK_NO_KEY_STORE } from "./no-key-store";
 import { SETUP_CODE_TTL_MS } from "./setup-code";
 import {
   SLACK_APP_TOKEN_FAILED,
@@ -92,6 +94,10 @@ function checkResult(overrides: Partial<SlackSetupCheckResult> = {}): SlackSetup
     appToken: "ok",
     ...overrides,
   };
+}
+
+function httpFailure(status: number, body: unknown): ApiRequestError {
+  return new ApiRequestError(`API error ${status}`, { kind: "http", method: "POST", path: "/x", status, body });
 }
 
 let root: Root;
@@ -1066,5 +1072,18 @@ describe("useSlackSetup, installation identity", () => {
     await run(() => current.newCode());
     expect(api.updateChannelSetupDraft.mock.calls.length).toBeGreaterThanOrEqual(3);
     expect(protectedKeysWritten()).toEqual([]);
+  });
+  it("says the page needs secure storage when this computer has none, and still gives the plain sentence for a 400", async () => {
+    arrangeCheck();
+    api.submitChannelSetupDraftSecrets.mockRejectedValueOnce(
+      httpFailure(422, { error: "Secure channel credential storage is unavailable." }),
+    );
+    await mount();
+    await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
+    expect(current.error).toBe(SLACK_NO_KEY_STORE);
+
+    api.submitChannelSetupDraftSecrets.mockRejectedValueOnce(httpFailure(400, { error: "Bad value." }));
+    await run(() => current.checkTokens(BOT_TOKEN, APP_TOKEN));
+    expect(current.error).toBe(SLACK_BOT_TOKEN_FAILED);
   });
 });

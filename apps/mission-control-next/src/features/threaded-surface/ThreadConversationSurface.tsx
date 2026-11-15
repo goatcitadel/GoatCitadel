@@ -1,4 +1,5 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
+import { HeldChoiceNotice, useHeldChoice } from "./use-held-choice";
 import { Info, Menu, PanelRight } from "lucide-react";
 import type { ChatMode } from "@goatcitadel/contracts";
 import type {
@@ -108,6 +109,8 @@ export function ThreadConversationSurface({
             disabled={props.modelSwitchDisabled}
             onChangeProvider={props.onRequestProviderChange}
             onChangeModel={props.onRequestModelChange}
+            onChoose={props.onRequestModelChoice}
+            scope={props.selectedSessionId}
           />
           <details className="mc-next-chat-details">
             <summary aria-label="Chat details">
@@ -243,14 +246,26 @@ export function ThreadConversationSurface({
   );
 }
 
+/** The model a provider starts with when it is picked: its default when it lists it, else its first. */
+function startingModel(provider: { models: string[]; defaultModel?: string } | undefined): string {
+  if (!provider) return "";
+  return provider.defaultModel && provider.models.includes(provider.defaultModel)
+    ? provider.defaultModel
+    : (provider.models[0] ?? "");
+}
+
+type ModelChoice = Parameters<NonNullable<MissionThreadedActiveSessionSurfaceProps["onRequestModelChoice"]>>[0];
+
 export function CompactModelControl({
   providerModelSummary,
   providers,
-  providerId,
-  model,
+  providerId: providerIdProp,
+  model: modelProp,
   disabled,
   onChangeProvider,
   onChangeModel,
+  onChoose,
+  scope,
 }: {
   providerModelSummary: string;
   providers: MissionThreadedActiveSessionSurfaceProps["providerOptions"];
@@ -259,29 +274,68 @@ export function CompactModelControl({
   disabled: MissionThreadedActiveSessionSurfaceProps["modelSwitchDisabled"];
   onChangeProvider: MissionThreadedActiveSessionSurfaceProps["onRequestProviderChange"];
   onChangeModel: MissionThreadedActiveSessionSurfaceProps["onRequestModelChange"];
+  /** Sends the provider and model picked here as one change. Without it each pick is sent as it is made. */
+  onChoose?: MissionThreadedActiveSessionSurfaceProps["onRequestModelChoice"];
+  /** The conversation: a pick held for another one is dropped, never applied to this one. */
+  scope?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const controlsId = useId();
+  const body = useRef<HTMLDivElement>(null);
+  // With `onChoose` a pick is held until it is applied (Apply, focus leaving, closing the control), so arrowing
+  // through a select sends nothing on the way. Escape discards it.
+  const held = useHeldChoice<{ providerId?: string; model?: string }, ModelChoice>({
+    resolve: (draft) => {
+      const providerId =
+        draft.providerId !== undefined && draft.providerId !== (providerIdProp ?? "") ? draft.providerId : undefined;
+      const model =
+        draft.model !== undefined && (providerId !== undefined || draft.model !== (modelProp ?? ""))
+          ? draft.model
+          : undefined;
+      return providerId === undefined && model === undefined
+        ? null
+        : { ...(providerId !== undefined ? { providerId } : {}), ...(model !== undefined ? { model } : {}) };
+    },
+    send: (choice) => onChoose?.(choice),
+    scope: scope ?? null,
+  });
+  const choosing = Boolean(onChoose);
 
   return (
     <details
       className="mc-next-threaded-model-control"
       open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      onToggle={(event) => {
+        const next = event.currentTarget.open;
+        setOpen(next);
+        if (!next && choosing) held.apply();
+      }}
+      {...(choosing ? held.wrapperProps : {})}
     >
       <summary aria-expanded={open} aria-controls={controlsId} title="View or change the model for this chat">
         <span>Model</span>
         <strong>{providerModelSummary}</strong>
       </summary>
-      <div id={controlsId} className="mc-next-threaded-model-control-body">
+      <div id={controlsId} ref={body} className="mc-next-threaded-model-control-body">
         <ChatModelPicker
           providers={providers}
-          providerId={providerId}
-          model={model}
+          providerId={held.draft.providerId ?? providerIdProp}
+          model={held.draft.model ?? modelProp}
           disabled={disabled}
-          onChangeProvider={onChangeProvider}
-          onChangeModel={onChangeModel}
+          onChangeProvider={
+            choosing
+              ? (next) =>
+                  held.hold(() => ({
+                    providerId: next,
+                    model: startingModel(providers.find((item) => item.providerId === next)),
+                  }))
+              : onChangeProvider
+          }
+          onChangeModel={choosing ? (next) => held.hold((current) => ({ ...current, model: next })) : onChangeModel}
         />
+        {choosing && held.dirty ? (
+          <HeldChoiceNotice onApply={held.apply} focusTarget={() => body.current?.querySelector("select") ?? null} />
+        ) : null}
       </div>
     </details>
   );

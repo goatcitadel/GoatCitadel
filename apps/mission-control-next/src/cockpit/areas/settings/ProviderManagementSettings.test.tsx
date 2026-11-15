@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   fetchLlmConfig: vi.fn(),
   patchSettings: vi.fn(),
   createChangePlan: vi.fn(),
+  confirmChangePlan: vi.fn(),
   updateProviderTransport: vi.fn(),
   fetchSettings: vi.fn(),
   fetchProviderSecretStatus: vi.fn(),
@@ -177,6 +178,120 @@ describe("native provider owner composition", () => {
     expect(button("Add provider profile").disabled).toBe(true);
     expect(api.createChangePlan).toHaveBeenCalledOnce();
   });
+  describe("a new provider profile's governed plan", () => {
+    const prepared = (input: { request: unknown }, risk?: string) => ({
+      planId: "new-plan",
+      revision: 1,
+      status: "awaiting_confirmation",
+      kind: "provider_connection",
+      intentHash: "a".repeat(64),
+      origin: { workspaceId: "default", surface: "settings" },
+      request: input.request,
+      target: { ownerId: "provider_connection", resourceId: "new-fixture", expectedRevision: 7 },
+      requiredAction: { kind: "confirmation", actionId: "confirm", actionNonce: "nonce", title: "Confirm profile" },
+      summary: "Review public profile",
+      ...(risk ? { risk } : {}),
+    });
+    async function addProfile() {
+      await render();
+      await click("Add provider profile");
+      await fill("Provider ID", "new-fixture");
+      await fill("Provider label", "New fixture");
+      await fill("Provider base URL", "http://127.0.0.1:9999/v1");
+      await click("Review provider profile");
+      await click("Apply reviewed provider profile");
+    }
+    it("is confirmed by the one press of Apply when the Gateway marks it safe, and says what is left", async () => {
+      let plan: Record<string, unknown>;
+      api.createChangePlan.mockImplementation(async (input) => (plan = prepared(input, "safe")));
+      api.confirmChangePlan.mockImplementation(async () => ({
+        ...plan,
+        revision: 2,
+        status: "awaiting_input",
+        requiredAction: {
+          kind: "secure_input",
+          actionId: "key",
+          actionNonce: "nonce-2",
+          title: "Enter the API key",
+          targetId: "new-fixture",
+        },
+        evidenceRefs: [],
+      }));
+      api.fetchChangePlan.mockImplementation(async () => plan);
+      await addProfile();
+      expect(api.createChangePlan).toHaveBeenCalledOnce();
+      expect(api.confirmChangePlan).toHaveBeenCalledExactlyOnceWith(
+        "new-plan",
+        expect.objectContaining({ workspaceId: "default" }),
+        { expectedRevision: 1, actionNonce: "nonce" },
+      );
+      expect(api.patchSettings).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Provider saved and confirmed");
+    });
+    it("keeps the review step and confirms nothing when the plan is not marked safe", async () => {
+      let plan: Record<string, unknown>;
+      api.createChangePlan.mockImplementation(async (input) => (plan = prepared(input, "caution")));
+      api.fetchChangePlan.mockImplementation(async () => plan);
+      await addProfile();
+      expect(api.confirmChangePlan).not.toHaveBeenCalled();
+      expect(button("Review required step")).toBeTruthy();
+    });
+    it("hands a plan back for review when the Gateway refuses its confirmation, never calling it a settings change", async () => {
+      let plan: Record<string, unknown>;
+      api.createChangePlan.mockImplementation(async (input) => (plan = prepared(input, "safe")));
+      api.confirmChangePlan.mockRejectedValue({ status: 409, body: { code: "STATE_CONFLICT" } });
+      api.fetchChangePlan.mockImplementation(async () => plan);
+      await addProfile();
+      expect(api.confirmChangePlan).toHaveBeenCalledOnce();
+      expect(api.fetchChangePlan).toHaveBeenCalledWith("new-plan", { workspaceId: "default" });
+      expect(container.textContent).not.toContain("Provider settings changed elsewhere");
+      expect(container.textContent).not.toContain("Provider saved and confirmed");
+      expect(button("Review required step")).toBeTruthy();
+    });
+    it("tells the operator the refusal itself when the plan cannot be read again", async () => {
+      api.createChangePlan.mockImplementation(async (input) => prepared(input, "safe"));
+      api.confirmChangePlan.mockRejectedValue(
+        Object.assign(new Error("The Gateway refused this profile."), { status: 422 }),
+      );
+      api.fetchChangePlan.mockRejectedValue(new Error("offline"));
+      await addProfile();
+      expect(api.fetchChangePlan).toHaveBeenCalled();
+      expect(container.textContent).toContain("The Gateway refused this profile.");
+      expect(container.textContent).not.toContain("offline");
+      expect(container.textContent).not.toContain("Provider saved and confirmed");
+    });
+    it("finishes the profile when the confirmation answers completed", async () => {
+      let plan: Record<string, unknown>;
+      api.createChangePlan.mockImplementation(async (input) => (plan = prepared(input, "safe")));
+      api.confirmChangePlan.mockImplementation(async () => {
+        config = {
+          ...config,
+          revision: 8,
+          providers: [
+            ...config.providers,
+            { ...saved, providerId: "new-fixture", hasApiKey: false, apiKeySource: "none" as const },
+          ],
+          providerConfigs: [...(config.providerConfigs ?? []), { ...saved, providerId: "new-fixture" }],
+        };
+        return { ...plan, revision: 2, status: "completed", requiredAction: undefined, evidenceRefs: [] };
+      });
+      api.fetchChangePlan.mockImplementation(async () => ({ ...plan, revision: 2, status: "completed" }));
+      await addProfile();
+      expect(api.confirmChangePlan).toHaveBeenCalledOnce();
+      expect(button("Review required step")).toBeUndefined();
+    });
+    it("keeps the owner locked and says so when the confirmation is lost", async () => {
+      let plan: Record<string, unknown>;
+      api.createChangePlan.mockImplementation(async (input) => (plan = prepared(input, "safe")));
+      api.confirmChangePlan.mockRejectedValue(new Error("Connection lost"));
+      api.fetchChangePlan.mockImplementation(async () => plan);
+      await addProfile();
+      expect(api.confirmChangePlan).toHaveBeenCalledOnce();
+      expect(container.textContent).toContain("Connection lost");
+      expect(container.textContent).not.toContain("Provider saved and confirmed");
+      expect(button("Add provider profile").disabled).toBe(true);
+    });
+  });
   it("retains explicit plaintext custody across remount and submits only the reviewed public plan", async () => {
     let prepared: Record<string, unknown>;
     api.createChangePlan.mockImplementation(async (input) => {
@@ -249,6 +364,20 @@ describe("native provider owner composition", () => {
     expect(container.querySelector("[aria-label='Provider connection']")?.textContent).toContain(
       "Remove saved API credential",
     );
+  });
+  it("reports a chosen provider to its host and shows the host's choice when it is given one", async () => {
+    const onSelectedProviderChange = vi.fn();
+    await act(async () => {
+      root.render(
+        <ProviderManagementSettings selectedProviderId="other" onSelectedProviderChange={onSelectedProviderChange} />,
+      );
+    });
+    const radio = container.querySelector<HTMLInputElement>("input[type=radio][value=fixture]")!;
+    expect(radio.checked).toBe(false);
+    await act(async () => radio.click());
+    expect(onSelectedProviderChange).toHaveBeenCalledWith("fixture");
+    // The host owns the choice: nothing moves until it passes the new one back.
+    expect(container.querySelector<HTMLInputElement>("input[type=radio][value=fixture]")!.checked).toBe(false);
   });
   it("says why blocked provider actions are disabled and ties each reason to its control", async () => {
     api.fetchProviderSecretStatus.mockResolvedValue({ providerId: "fixture", hasSecret: false, source: "none" });

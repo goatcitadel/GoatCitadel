@@ -30,13 +30,20 @@ export function AccessSection({ activeWorkspaceName, route, navigate }: Settings
   const load = useCallback(async () => {
     const [settings, grants, daemon] = await Promise.all([
       fetchSettings(),
-      nativeLoad("Device grants", fetchDeviceAccessGrants("all"), { items: [] }),
+      nativeLoad(
+        "Device grants",
+        fetchDeviceAccessGrants("all").then((response) => {
+          if (!Array.isArray(response?.items)) throw new Error("Device grant list is missing.");
+          return response.items;
+        }),
+        null,
+      ),
       nativeLoad("Daemon status", fetchDaemonStatus(), null),
     ]);
     return {
       settings,
       issues: nativeLoadIssues([grants, daemon]),
-      grants: grants.data.items,
+      grants: grants.data,
       daemon: daemon.data,
     };
   }, []);
@@ -47,7 +54,7 @@ export function AccessSection({ activeWorkspaceName, route, navigate }: Settings
       data
         ? deriveDesktopMobileContinuityItems({
             settings: data.settings,
-            grants: data.grants ?? [],
+            grants: data.grants,
             daemon: data.daemon,
           })
         : [],
@@ -103,7 +110,7 @@ export function AccessSection({ activeWorkspaceName, route, navigate }: Settings
                 { label: "Desktop", value: data.daemon?.state ?? "unknown" },
                 {
                   label: "Active devices",
-                  value: String((data.grants ?? []).filter((grant) => !grant.revokedAt).length),
+                  value: data.grants ? String(data.grants.filter((grant) => !grant.revokedAt).length) : "Unavailable",
                 },
               ]}
             >
@@ -125,7 +132,7 @@ export function AccessSection({ activeWorkspaceName, route, navigate }: Settings
             className="mc-next-settings-panel"
             title="Approved devices"
             subtitle="View and revoke device grants that can access the gateway."
-            stats={[{ label: "Grants", value: String(data.grants?.length ?? 0) }]}
+            stats={[{ label: "Grants", value: data.grants ? String(data.grants.length) : "Unavailable" }]}
           >
             <SettingsActionList
               ariaLabel="Approved device grants"
@@ -140,7 +147,7 @@ export function AccessSection({ activeWorkspaceName, route, navigate }: Settings
                 onClick: !deviceGrantCanBeRevoked(grant) || deviceRevocation.attemptFor(grant.grantId) ? undefined : () => deviceRevocation.review(grant),
                 actionLabel: deviceRevocation.attemptFor(grant.grantId)?.message ?? (grant.revokedAt ? "Revoked" : "Revoke"),
               }))}
-              emptyLabel="No device grants found."
+              emptyLabel={data.grants ? "No device grants found." : "Device grants could not be loaded."}
             />
           </NativeCard>
         </SettingsStack>

@@ -61,7 +61,6 @@ export function FirstRunModelStep({
             reloadOnboarding={onReload}
             onEnterChat={onModelReady}
             enterChatLabel="Continue to safety"
-            showSteps={false}
           />
           <Button variant="ghost" size="sm" onClick={() => leave.request(() => navigate("/settings/models#providers"))}>
             Advanced: edit provider profiles

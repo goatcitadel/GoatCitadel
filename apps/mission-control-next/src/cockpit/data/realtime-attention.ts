@@ -8,6 +8,7 @@ import { playOperatorAttentionSound } from "@goatcitadel/mission-control-shared/
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { showBrowserNotification } from "../../app/browser-notification";
 import { requestCockpitToast } from "../ui/toast-runtime";
+import { isApprovalHandledInPlace } from "./approvals-handled-in-place";
 import { inboxItemLocation, inboxToastDescription, resolveInboxNotificationItem } from "./inbox-notification";
 import { queryKeys } from "./query-keys";
 
@@ -140,7 +141,9 @@ export function createRealtimeAttention({
           };
           const id = `inbox:${scopeWorkspaceId}:${item.id}`;
           if (approvalId) approvalToastIds.set(approvalId, id);
-          if (preferences.toastsEnabled)
+          // Only the toast is held back for an approval a dialog is already showing; the sound and the desktop
+          // notification still say something new needs the operator.
+          if (preferences.toastsEnabled && !(approvalId && isApprovalHandledInPlace(approvalId)))
             requestCockpitToast(
               (toast) => {
                 const show =
@@ -156,7 +159,7 @@ export function createRealtimeAttention({
                 const currentPreferences = readPreferences();
                 return (
                   isCurrentWorkspace() &&
-                  !(approvalId && settledApprovalIds.has(approvalId)) &&
+                  !(approvalId && (settledApprovalIds.has(approvalId) || isApprovalHandledInPlace(approvalId))) &&
                   currentPreferences.toastsEnabled &&
                   !(currentPreferences.onlyWhenUnfocused && pageFocused()) &&
                   decideNotificationDelivery(notification, {

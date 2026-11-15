@@ -48,6 +48,7 @@ const flows = vi.hoisted(() => {
     submitManualCode: vi.fn(),
     restartSignIn: vi.fn(),
     cancel: vi.fn(),
+    checkApproval: vi.fn(),
     keyOf,
     read: (item: { source: string; templateId?: string; serverId?: string }) => entries.get(keyOf(item)) ?? IDLE,
     set(key: string, entry: Entry | undefined) {
@@ -79,6 +80,7 @@ vi.mock("./use-connector-install", async () => {
         submitManualCode: (code: string, state: string) => flows.submitManualCode(code, state),
         restartSignIn: () => flows.restartSignIn(item.id),
         cancel: () => flows.cancel(item.id),
+        checkApproval: () => flows.checkApproval(item.id),
       };
     },
     useConnectorInstallStatus: (item: CapabilityConnectorItem) =>
@@ -86,6 +88,21 @@ vi.mock("./use-connector-install", async () => {
     useRecoveredInstalls: () => undefined,
   };
 });
+
+// The in-place approval dialog has its own tests (SettingsApprovalDialog.test.tsx).
+vi.mock("../../settings/SettingsApprovalDialog", () => ({
+  SettingsApprovalDialog: (props: {
+    approvalId: string;
+    dangerReview?: boolean;
+    onResolved: (status: undefined) => void;
+  }) => (
+    <section data-in-place-approval={props.approvalId} data-danger-review={String(props.dangerReview === true)}>
+      <button type="button" onClick={() => props.onResolved(undefined)}>
+        Resolve in place
+      </button>
+    </section>
+  ),
+}));
 
 const REVISION = "a".repeat(64);
 const KEY = queryKeys.capabilityConnectors("ws-1");
@@ -256,6 +273,7 @@ beforeEach(() => {
   mcp.fetchMcpServer.mockResolvedValue(savedServer());
   route.search = "";
   prefs.showTechnicalDetails = false;
+  prefs.activeWorkspaceId = "ws-1";
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.append(container);
@@ -385,6 +403,8 @@ describe("Install progress", () => {
 
   it("shows Waiting on you in Inbox with a link", async () => {
     await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    // The panel's own list stays as it was read; only where the approval is decided changes.
+    prefs.activeWorkspaceId = "default";
     setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
     expect(text()).toContain("Waiting on you in Inbox");
     expect(text()).toContain("This request expires after 15 minutes.");
@@ -393,19 +413,47 @@ describe("Install progress", () => {
     expect(target.searchParams.get("approvalId")).toBe("approval-1");
     expect(target.searchParams.get("workspaceId")).toBe("default");
     expect(steps()).toEqual([
-      "Approve in Inbox · Waiting",
+      "Approve · Waiting",
       "Allow and save · Not started",
       "Switch on · Not started",
       "Connect · Not started",
     ]);
     expect(status()).toBe("Waiting on you in Inbox");
     expect(text()).not.toContain("Installed");
+    expect(body().querySelector("[data-in-place-approval]")?.getAttribute("data-in-place-approval")).toBe("approval-1");
+    expect(body().querySelector('button[aria-busy="true"]')?.textContent).toBe("Waiting on your approval…");
     await act(async () => button("Stop")?.click());
     expect(flows.cancel).toHaveBeenCalledExactlyOnceWith(EXAMPLE.id);
 
     // Approved: the step it waited on stays in the list, done.
     setFlow(EXAMPLE, { phase: "working", step: "plan" });
-    expect(steps().slice(0, 2)).toEqual(["Approve in Inbox · Done", "Allow and save · In progress"]);
+    expect(steps().slice(0, 2)).toEqual(["Approve · Done", "Allow and save · In progress"]);
+    expect(body().querySelector("[data-in-place-approval]")).toBeNull();
+  });
+
+  it("does not open the approval in the panel from another workspace, and says where it is", async () => {
+    // The Gateway makes every install in the Default workspace, so another workspace's dialog could only dead-end.
+    await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
+    expect(body().querySelector("[data-in-place-approval]")).toBeNull();
+    expect(text()).toContain("This approval is in the Default workspace's Inbox.");
+    const target = href(link("Open in Inbox"));
+    expect(target.searchParams.get("approvalId")).toBe("approval-1");
+    expect(target.searchParams.get("workspaceId")).toBe("default");
+  });
+
+  it("opens the approval in the panel and reads the plan again once it is decided there", async () => {
+    await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    // The panel's own list stays as it was read; only where the approval is decided changes.
+    prefs.activeWorkspaceId = "default";
+    setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
+    expect(text()).toContain("Waiting on your approval…");
+    // A connector install is always danger, so its dialog keeps the two-step review.
+    expect(body().querySelector("[data-in-place-approval]")?.getAttribute("data-danger-review")).toBe("true");
+    expect(link("Open in Inbox")).toBeDefined();
+    expect(flows.checkApproval).not.toHaveBeenCalled();
+    await act(async () => button("Resolve in place")?.click());
+    expect(flows.checkApproval).toHaveBeenCalledExactlyOnceWith(EXAMPLE.id);
   });
 
   it("asks to finish signing in in the browser, with the pasted code behind a disclosure", async () => {
@@ -699,7 +747,7 @@ describe("Install progress", () => {
     setFlow(EXAMPLE, {
       phase: "failed",
       step: "approval",
-      message: "You declined this install in Inbox. Nothing was changed.",
+      message: "You declined this install. Nothing was changed.",
       changed: [],
     });
     expect(text()).toContain("Nothing was changed.");
@@ -853,6 +901,37 @@ describe("Saved server sign-in and connect", () => {
     await act(async () => button(label)?.click());
     expect(flows.resume).toHaveBeenCalledExactlyOnceWith(row.id, from);
     expect(flows.start).not.toHaveBeenCalled();
+  });
+
+  it("runs only the connect step for a saved server that never connected", async () => {
+    const saved = { ...SAVED_LINEAR, state: "needs_sign_in", reason: "not_connected", auth: "none" } as const;
+    await renderPanel(saved.id, [saved]);
+    await act(async () => button("Connect")?.click());
+    expect(flows.resume).toHaveBeenCalledExactlyOnceWith(saved.id, "connect");
+    expect(steps().some((step) => step.startsWith("Sign in"))).toBe(false);
+  });
+
+  it("runs only the sign-in step for a requester-scoped server whose sign-in expired", async () => {
+    const perChat = {
+      ...SAVED_LINEAR,
+      requesterScoped: true,
+      state: "sign_in_expired",
+      reason: "sign_in_expired",
+    } as const;
+    await renderPanel(perChat.id, [perChat]);
+    await act(async () => button("Reconnect")?.click());
+    expect(flows.resume).toHaveBeenCalledExactlyOnceWith(perChat.id, "sign_in_only");
+    expect(steps().some((step) => step.startsWith("Connect"))).toBe(false);
+  });
+
+  it("offers no Connect while a saved server is connecting, and none for a requester-scoped one", async () => {
+    const connecting = { ...SAVED_LINEAR, state: "needs_sign_in", reason: "connecting" } as const;
+    await renderPanel(connecting.id, [connecting]);
+    expect(button("Connect")).toBeUndefined();
+    const perChat = { ...SAVED_LINEAR, state: "connected", reason: "ready", requesterScoped: true } as const;
+    await renderPanel(perChat.id, [perChat]);
+    expect(button("Connect")).toBeUndefined();
+    expect(button("Try again")).toBeUndefined();
   });
 
   it("leaves a service that isn't a saved server to its Advanced setup link", async () => {

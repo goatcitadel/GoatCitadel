@@ -60,6 +60,7 @@ export function RuntimeOverview({ workspaceId, sessionId }: { workspaceId: strin
       {runtime.loading && !data ? <p className="text-sm text-fg-muted">Loading runtime…</p> : null}
       {runtime.error && !data ? (
         <EmptyState
+          tone="error"
           title="Runtime unavailable"
           description={runtime.error}
           action={<Button onClick={() => void runtime.reload()}>Try again</Button>}

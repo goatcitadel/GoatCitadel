@@ -37,7 +37,17 @@ export function manifestRefusalLines(code: string, fallback: string): string[] {
   const line = Object.hasOwn(PLUGIN_REFUSAL_COPY, code)
     ? PLUGIN_REFUSAL_COPY[code as PluginManifestRefusalCode]
     : fallback;
-  return [line, CANT_BE_INSTALLED];
+  const id = code === "DUPLICATE_PIECE_ID" ? repeatedPieceId(fallback) : undefined;
+  return [id ? `Two of its pieces have the same id, ${id}. Give each piece its own id.` : line, CANT_BE_INSTALLED];
+}
+
+/**
+ * The id the Gateway names in `Two pieces share the id "skill-2".`. It is the plugin author's own manifest key, shown
+ * because it is what they must change; an id too long to be one is left out.
+ */
+function repeatedPieceId(fallback: string): string | undefined {
+  const id = /"([^"]+)"/u.exec(fallback)?.[1];
+  return id && id.length <= 80 ? id : undefined;
 }
 
 /** The route's own plain line for a refusal, read first; a plain summary when it has none, or never answered. */

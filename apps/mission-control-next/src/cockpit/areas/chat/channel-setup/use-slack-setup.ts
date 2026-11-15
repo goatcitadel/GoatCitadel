@@ -24,6 +24,7 @@ import {
   type SlackPosting,
 } from "./slack-setup-model";
 import { listenForHi } from "./listen-for-hi";
+import { isNoKeyStoreFailure, SLACK_NO_KEY_STORE } from "./no-key-store";
 import { createSetupCode } from "./setup-code";
 import { CHAT_SETUP_PAGE, chatSetupToResume, latestDraft, markedChatSetupDraft } from "./setup-draft-session";
 import { useSetupState } from "./use-setup-state";
@@ -308,10 +309,14 @@ export function useSlackSetup(workspaceId: string, resumeDraftId?: string): Slac
           draft: draftAsMadeHere(stored.draft),
         });
         set({ draft: saved, workspace: check.workspace, bot: check.bot, busy: false });
-      } catch {
+      } catch (cause) {
         // The tokens may have been stored before the failure, which moved the draft's version on.
         const latest = draft ? await latestDraft(draft.draftId) : null;
-        set({ ...(latest ? { draft: latest } : {}), busy: false, error: SLACK_BOT_TOKEN_FAILED });
+        set({
+          ...(latest ? { draft: latest } : {}),
+          busy: false,
+          error: isNoKeyStoreFailure(cause) ? SLACK_NO_KEY_STORE : SLACK_BOT_TOKEN_FAILED,
+        });
       }
     },
     [begin, current, invalidate],

@@ -319,7 +319,7 @@ describe("useToolGroupSwitch", () => {
       checked: false,
       pending: false,
       waiting: false,
-      failure: { message: "Not switched on. The change was declined in Inbox.", conflict: false },
+      failure: { message: "Not switched on. The change was declined.", conflict: false },
     });
     expect(sw("git").waitingApprovalId).toBeUndefined();
     expect(cachedState("git")).toBe("off");
