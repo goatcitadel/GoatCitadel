@@ -110,26 +110,61 @@ async function playSoundAsset(cue: OperatorAttentionSoundCue, mode: OperatorAtte
   }
 }
 
+const SYNTH_RESUME_TIMEOUT_MS = 1000;
+const SYNTH_PLAYBACK_WINDOW_MS = 900;
+
 async function playSynthFallback(cue: OperatorAttentionSoundCue, mode: OperatorAttentionSoundMode): Promise<boolean> {
   const AudioContextCtor = getAudioContextConstructor();
   if (!AudioContextCtor) {
     return false;
   }
 
+  let contextToRelease: AudioContext | undefined;
   try {
     const context = new AudioContextCtor();
-    if (context.state === "suspended") {
-      await context.resume();
+    contextToRelease = context;
+    if (context.state === "suspended" && !(await resumeSynthContext(context))) {
+      return false;
     }
     const volume = mode === "normal" ? 0.09 : 0.045;
     const now = context.currentTime;
     for (const note of SOUND_PATTERNS[cue]) {
       playNote(context, now + note.startMs / 1000, note.frequency, note.durationMs / 1000, volume);
     }
-    window.setTimeout(() => void context.close(), 900);
+    window.setTimeout(() => void closeSynthContext(context), SYNTH_PLAYBACK_WINDOW_MS);
+    contextToRelease = undefined;
     return true;
   } catch {
     return false;
+  } finally {
+    if (contextToRelease) {
+      void closeSynthContext(contextToRelease);
+    }
+  }
+}
+
+async function resumeSynthContext(context: AudioContext): Promise<boolean> {
+  // Autoplay restrictions can leave resume pending until a user gesture.
+  let timeout: number | undefined;
+  try {
+    return await Promise.race([
+      context.resume().then(() => true),
+      new Promise<boolean>((resolve) => {
+        timeout = window.setTimeout(() => resolve(false), SYNTH_RESUME_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      window.clearTimeout(timeout);
+    }
+  }
+}
+
+async function closeSynthContext(context: AudioContext): Promise<void> {
+  try {
+    await context.close();
+  } catch {
+    // Closing can reject when the browser has already closed the context.
   }
 }
 

@@ -39,6 +39,8 @@ class FakeAudioContext {
 
 describe("operator attention", () => {
   afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
     FakeAudioContext.created = 0;
     Reflect.deleteProperty(globalThis, "window");
   });
@@ -63,6 +65,58 @@ describe("operator attention", () => {
 
     await expect(playOperatorAttentionSound("waiting", "subtle")).resolves.toBe(true);
     expect(FakeAudioContext.created).toBe(1);
+  });
+
+  it("closes the fallback context when resuming audio rejects", async () => {
+    const close = vi.fn(async () => undefined);
+    class RejectedAudioContext {
+      readonly state = "suspended";
+      readonly resume = vi.fn().mockRejectedValue(new Error("resume denied"));
+      readonly close = close;
+    }
+    vi.stubGlobal("window", { AudioContext: RejectedAudioContext, setTimeout, clearTimeout });
+    await expect(playOperatorAttentionSound("done", "normal")).resolves.toBe(false);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a pending resume and ignores a late resume after cleanup", async () => {
+    vi.useFakeTimers();
+    const close = vi.fn(async () => undefined);
+    const createOscillator = vi.fn();
+    let resolveResume!: () => void;
+    class SuspendedAudioContext {
+      readonly state = "suspended";
+      readonly resume = () =>
+        new Promise<void>((resolve) => {
+          resolveResume = resolve;
+        });
+      readonly close = close;
+      readonly createOscillator = createOscillator;
+    }
+    vi.stubGlobal("window", { AudioContext: SuspendedAudioContext, setTimeout, clearTimeout });
+    const playback = playOperatorAttentionSound("done", "normal");
+    const settled = vi.fn();
+    void playback.then(settled);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(settled).toHaveBeenCalledWith(false);
+    expect(close).toHaveBeenCalledTimes(1);
+    resolveResume();
+    await playback;
+    expect(createOscillator).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("closes the context when note setup throws and tolerates a rejected close", async () => {
+    const close = vi.fn().mockRejectedValue(new Error("already closed"));
+    class BrokenAudioContext extends FakeAudioContext {
+      override readonly close = close;
+      override createOscillator(): never {
+        throw new Error("oscillator unavailable");
+      }
+    }
+    vi.stubGlobal("window", { AudioContext: BrokenAudioContext, setTimeout, clearTimeout });
+    await expect(playOperatorAttentionSound("done", "normal")).resolves.toBe(false);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("prefers real sound assets when audio playback is available", async () => {
