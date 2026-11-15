@@ -4,10 +4,14 @@ import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surf
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ChatProviderFallbackSettings } from "../../../features/threaded-surface/ChatProviderFallbackSettings";
 import { ContextDisclosure } from "../../../features/threaded-surface/ThreadedContextDisclosure";
+import { FeatureOffLink } from "../settings/FeatureOffLink";
+import { useFeatureSwitchOn } from "../settings/feature-switches";
 import "./chat-feature-settings.css";
 
 /** Presentation only: existing session controllers and Gateway checks own every action. */
 export function ChatFeatureSettings({ dock }: { dock: MissionThreadedContextDockProps }) {
+  const fallbackSwitchOn = useFeatureSwitchOn("chatProviderFallbackV1Enabled");
+  const subagentsSwitchOn = useFeatureSwitchOn("chatDelegationControlsV1Enabled");
   const [confirmAutomatic, setConfirmAutomatic] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
@@ -65,7 +69,12 @@ export function ChatFeatureSettings({ dock }: { dock: MissionThreadedContextDock
           : "Applies to this conversation only. Tool policy and approvals still decide each call."}
       </p>
       <fieldset disabled={busy} className="min-w-0 border-0 p-0">
-        <ChatProviderFallbackSettings {...dock} sending={busy} />
+        <ChatProviderFallbackSettings
+          {...dock}
+          sending={busy}
+          switchOn={fallbackSwitchOn}
+          featureOffLink={<FeatureOffLink flag="chatProviderFallbackV1Enabled" />}
+        />
       </fieldset>
       <ContextDisclosure summary="Subagents and coding delegates">
         <label className="mc-next-context-field">
@@ -84,9 +93,18 @@ export function ChatFeatureSettings({ dock }: { dock: MissionThreadedContextDock
           </select>
         </label>
         <p role="status">
-          {dock.supervisedDelegationAvailable
-            ? "Review each proposed plan before starting its subagents. Automatic delegation requires an active grant for this project."
-            : "Supervised delegation is not enabled for this runtime. Your saved preference remains available."}
+          {dock.supervisedDelegationAvailable ? (
+            "Review each proposed plan before starting its subagents. Automatic delegation requires an active grant for this project."
+          ) : subagentsSwitchOn === true ? (
+            "Subagents in Chat needs resumable runs, which are turned off on this installation. Your saved preference is kept."
+          ) : subagentsSwitchOn === false ? (
+            <>
+              Subagents in Chat is turned off on this installation. Your saved preference is kept.{" "}
+              <FeatureOffLink flag="chatDelegationControlsV1Enabled" />
+            </>
+          ) : (
+            "Supervised delegation is not enabled for this runtime. Your saved preference remains available."
+          )}
         </p>
         {dock.automaticFanout?.unavailableReason ? <p>{dock.automaticFanout.unavailableReason}</p> : null}
         {dock.supervisedDelegationAvailable ? (

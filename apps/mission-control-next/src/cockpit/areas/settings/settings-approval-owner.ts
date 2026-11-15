@@ -1,4 +1,5 @@
 import { canonicalJsonString, type ChangePlanRecord } from "@goatcitadel/contracts";
+import { isFeatureSwitchFlag } from "./feature-switches";
 
 export type SettingsApprovalOwner =
   | "gateway-auth"
@@ -16,6 +17,7 @@ export type SettingsApprovalOwner =
   | "settings-approval-skip"
   | "browser-errands"
   | "browser-errand-approvals"
+  | "feature-switch"
   | "firecrawl"
   | "search-engine-order"
   | "public-web-address";
@@ -165,6 +167,19 @@ export function settingsApprovalOwnerBinding(
       plan.request.kind === "runtime_configuration" &&
       plan.request.change.operation === "feature_flag" &&
       plan.request.change.flag === flag &&
+      plan.target.ownerId === "runtime_settings" &&
+      plan.target.resourceId === `feature:${flag}` &&
+      plan.adapter.adapterId === "runtime-configuration" &&
+      plan.adapter.version === 2 &&
+      plan.scope === "runtime";
+  } else if (owner === "feature-switch") {
+    // The Features section: any one of its listed flags, never another.
+    expectedWorkspace = "default";
+    const change = plan.request.kind === "runtime_configuration" ? plan.request.change : undefined;
+    const flag = change?.operation === "feature_flag" ? change.flag : undefined;
+    matches =
+      plan.kind === "runtime_configuration" &&
+      isFeatureSwitchFlag(flag) &&
       plan.target.ownerId === "runtime_settings" &&
       plan.target.resourceId === `feature:${flag}` &&
       plan.adapter.adapterId === "runtime-configuration" &&

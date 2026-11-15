@@ -15,6 +15,11 @@ vi.mock("../../data/use-model-label", () => ({
   useProviderAuthMode: () => undefined,
 }));
 vi.mock("./use-chat-model-labels", () => ({ useChatModelLabels: () => (modelId: string) => modelId }));
+// The feature switches read Settings through the query cache, which these tests do not provide; not yet read stands in.
+vi.mock("../settings/feature-switches", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../settings/feature-switches")>()),
+  useFeatureSwitchOn: () => undefined,
+}));
 
 const { documentsPanel } = vi.hoisted(() => ({ documentsPanel: vi.fn() }));
 vi.mock("../../../features/threaded-surface/ThreadedDocumentsPanel", () => ({

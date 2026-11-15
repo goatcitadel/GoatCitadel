@@ -286,7 +286,8 @@ describe("CommandPalette", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     const headings = [...document.querySelectorAll("[cmdk-group-heading]")].map((node) => node.textContent);
-    expect(headings).toEqual(["Go to", "Capabilities"]);
+    // "sched" also finds Settings › Advanced, where the Scheduler review switch lives.
+    expect(headings).toEqual(["Go to", "Settings", "Capabilities"]);
     expect(document.body.textContent).toContain("Go to Work › Schedules");
     expect(document.body.textContent).not.toContain("Go to Chat");
     expect(document.body.textContent).toContain("Schedules capability");

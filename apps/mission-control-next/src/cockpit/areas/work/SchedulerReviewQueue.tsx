@@ -7,6 +7,7 @@ import { humanizeToken, presentRunStatus } from "@goatcitadel/mission-control-sh
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
+import { FeatureOffNotice, listedFeatureFlag } from "../settings/FeatureOffNotice";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
@@ -118,19 +119,24 @@ export function SchedulerReviewQueue({
         </Callout>
       ) : null}
       {settings.isSuccess && !enabled ? (
-        <Callout announce={false} tone="warning">
-          Scheduler review is switched off in runtime settings on this installation. No review items can be shown.
-        </Callout>
+        <FeatureOffNotice flag="cronReviewQueueV1Enabled" tone="warning">
+          Scheduler review is turned off on this installation, so no review items can be shown.
+        </FeatureOffNotice>
       ) : null}
       {enabled && queue.isPending ? (
         <p role="status" className="text-sm text-fg-muted">
           Reading the review queue…
         </p>
       ) : null}
-      {enabled && queue.isError ? (
+      {enabled && queue.isError && listedFeatureFlag(queue.error) === "cronReviewQueueV1Enabled" ? (
+        <FeatureOffNotice flag="cronReviewQueueV1Enabled" tone="warning">
+          Scheduler review is turned off on this installation, so no review items can be shown.
+        </FeatureOffNotice>
+      ) : null}
+      {enabled && queue.isError && listedFeatureFlag(queue.error) !== "cronReviewQueueV1Enabled" ? (
         <Callout tone={statusOf(queue.error) === 409 ? "warning" : "error"}>
           {statusOf(queue.error) === 409
-            ? "Scheduler review is unavailable on this installation; it is usually switched off in runtime settings. No review items can be shown."
+            ? "Scheduler review is unavailable on this installation, so no review items can be shown."
             : describeApiError(queue.error).summary}
         </Callout>
       ) : null}

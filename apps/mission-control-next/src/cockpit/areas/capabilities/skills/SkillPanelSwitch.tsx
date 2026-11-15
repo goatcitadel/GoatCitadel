@@ -2,11 +2,15 @@ import { useId, useRef } from "react";
 import type { CapabilitySkillItem } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { Switch } from "../../../ui/Switch";
+import { FeatureOffLink } from "../../settings/FeatureOffLink";
+import { useFeatureSwitchOn } from "../../settings/feature-switches";
 import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
 import { CANT_SWITCH_NOTE, PINNED_NOTE, presentSkillChange, type SkillStatePresentation } from "./skill-view";
 import type { SkillSwitch } from "./use-skill-switch";
 
 const ON_NOTE = "Takes effect in new chats.";
+/** Said under the On or Paused note while the Skills in Chat switch is off, because Chat then reads no skill. */
+export const SKILLS_IN_CHAT_OFF_LINE = "Chat can't use skills yet: Skills in Chat is turned off.";
 // Chat always loads a paused skill it's asked for by name. It picks one for a close match on its own only when the
 // activation policy doesn't ask before a paused skill's first use (`chat-skill-selection-runtime.ts`).
 const PAUSED_NOTE =
@@ -54,6 +58,7 @@ export function SkillPanelSwitch({
   announce: boolean;
 }) {
   const noteId = useId();
+  const skillsInChatOn = useFeatureSwitchOn("chatSkillInstructionsV1Enabled");
   // A failure the store kept from before the panel opened was read out when it happened (see SkillRow).
   const mountedWith = useRef(sw.failure);
   if (!item.switchable) {
@@ -86,6 +91,11 @@ export function SkillPanelSwitch({
           <p>{ON_NOTE}</p>
         ) : state.kind === "paused" ? (
           <p>{PAUSED_NOTE}</p>
+        ) : null}
+        {skillsInChatOn === false && (state.kind === "on" || state.kind === "paused") ? (
+          <p>
+            {SKILLS_IN_CHAT_OFF_LINE} <FeatureOffLink flag="chatSkillInstructionsV1Enabled" />
+          </p>
         ) : null}
         {item.pinned ? <p>{PINNED_NOTE}</p> : null}
       </div>

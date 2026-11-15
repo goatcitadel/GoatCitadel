@@ -8,6 +8,7 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
+import { FeatureOffLink } from "./FeatureOffLink";
 import {
   CONNECTOR_CHECK_STATUS_LABELS,
   CONNECTOR_DIAGNOSTIC_STATUS_LABELS,
@@ -72,7 +73,12 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
         </Button>
       </div>
       {!s.data?.connectorDiagnosticsEnabled ? (
-        <p className="text-sm text-fg-muted">Connector diagnostics are not enabled in Runtime settings.</p>
+        s.data && !s.data.issues?.some((issue) => issue.label === "Runtime settings") ? (
+          <p className="text-sm text-fg-muted">
+            Connector diagnostics are turned off on this installation.{" "}
+            <FeatureOffLink flag="connectorDiagnosticsV1Enabled" />
+          </p>
+        ) : null
       ) : (
         <p className="text-xs text-fg-muted">
           Diagnostics may contact this connection's service. They do not send a test message.

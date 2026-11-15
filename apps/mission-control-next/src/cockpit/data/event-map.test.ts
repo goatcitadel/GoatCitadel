@@ -170,6 +170,10 @@ describe("resolveRealtimeEvent", () => {
     });
   });
 
+  it("re-reads the feature switches when a Settings change settles", () => {
+    expect(SETTINGS_READER_KEYS).toContainEqual(["system", "settings-feature-switches"]);
+  });
+
   it("refreshes the tool list when a runtime settings change plan moves, because a switch saves through Settings", () => {
     // A group's switch is a Settings change plan, so its settling re-reads the list that shows the switch.
     expect(SETTINGS_READER_KEYS).toContainEqual(["tools", "capability-tools"]);

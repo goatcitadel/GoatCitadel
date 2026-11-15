@@ -1,6 +1,12 @@
+// @vitest-environment happy-dom
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surface-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+const switchState = vi.hoisted(() => ({ on: false as boolean | undefined }));
+vi.mock("../settings/feature-switches", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useFeatureSwitchOn: () => switchState.on,
+}));
 import { ChatFeatureSettings } from "./ChatFeatureSettings";
 
 vi.mock("@goatcitadel/mission-control-shared/components/ConfirmModal", () => ({
@@ -37,6 +43,32 @@ async function render(dock: MissionThreadedContextDockProps) {
   });
 }
 describe("Cockpit execution settings", () => {
+  it("says Subagents in Chat is turned off and links to its switch", async () => {
+    switchState.on = false;
+    await render(fixture());
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain("Subagents in Chat is turned off on this installation.");
+    expect(json).toContain("Your saved preference is kept.");
+    expect(json).toContain("feature-switch-subagents-in-chat");
+    expect(json).not.toContain("not enabled for this runtime");
+  });
+  it("names resumable runs, with no link, when the switch is on but delegation is still unavailable", async () => {
+    switchState.on = true;
+    await render(fixture());
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain("Subagents in Chat needs resumable runs");
+    expect(json).not.toContain("feature-switch-subagents-in-chat");
+    switchState.on = false;
+  });
+  it("does not claim Subagents in Chat is turned off while the switch has not been read", async () => {
+    switchState.on = undefined;
+    await render(fixture());
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain("Supervised delegation is not enabled for this runtime.");
+    expect(json).not.toContain("Subagents in Chat is turned off");
+    expect(json).not.toContain("feature-switch-subagents-in-chat");
+    switchState.on = false;
+  });
   it("keeps default-off capabilities visible without activating anything", async () => {
     const dock = fixture();
     await render(dock);

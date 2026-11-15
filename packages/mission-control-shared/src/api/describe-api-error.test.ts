@@ -30,6 +30,11 @@ describe("describeApiError", () => {
     });
     expect(describeApiError(httpError(401))).toMatchObject({ category: "authentication", retryable: false });
     expect(describeApiError(httpError(503))).toMatchObject({ category: "transient", retryable: true });
+    expect(
+      describeApiError(httpError(409, { code: "FEATURE_DISABLED", details: { flag: "memoryLifecycleAdminV1Enabled" } }))
+        .featureFlag,
+    ).toBe("memoryLifecycleAdminV1Enabled");
+    expect(describeApiError(httpError(503)).featureFlag).toBeUndefined();
   });
   it("turns request failures into plain copy while retaining technical details", () => {
     const error = new ApiRequestError("Network error POST /api/v1/chat/sessions/s/route-preflight: Failed to fetch", {

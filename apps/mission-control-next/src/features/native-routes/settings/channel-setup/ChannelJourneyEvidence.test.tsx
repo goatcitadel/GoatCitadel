@@ -184,3 +184,25 @@ describe("platform-unsupported actions", () => {
     renderer.unmount();
   });
 });
+
+describe("diagnostics turned off", () => {
+  const rendered = (offLink?: React.ReactNode) => {
+    let tree!: ReactTestRenderer;
+    act(() => {
+      tree = create(<ChannelJourneyEvidence diagnosticsAvailability="disabled" diagnosticsOffLink={offLink} />);
+    });
+    return JSON.stringify(tree.toJSON());
+  };
+  it("says Connector diagnostics are turned off, with the link, when the Cockpit passes one", () => {
+    const json = rendered(
+      <a href="/settings/advanced#feature-switch-connector-diagnostics">Turn it on in Settings › Advanced</a>,
+    );
+    expect(json).toContain("Connector diagnostics are turned off on this installation.");
+    expect(json).toContain("feature-switch-connector-diagnostics");
+  });
+  it("keeps the old wording and no link for Classic, which passes none", () => {
+    const json = rendered();
+    expect(json).toContain("Diagnostics are disabled in runtime settings.");
+    expect(json).not.toContain("Turn it on in Settings");
+  });
+});

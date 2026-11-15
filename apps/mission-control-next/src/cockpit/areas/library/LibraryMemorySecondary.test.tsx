@@ -278,3 +278,41 @@ it("retains full long maintenance evidence inside shrinkable wrapping regions", 
     false,
   );
 });
+
+const switchHash = () => {
+  const link = [...document.querySelectorAll("a")].find(
+    (entry) => entry.textContent === "Turn it on in Settings › Advanced",
+  );
+  return link ? new URL(link.getAttribute("href")!, "http://cockpit.invalid").hash : undefined;
+};
+it("says memory administration is turned off, with a link, when a reviewed batch is refused for that", async () => {
+  await render(batch());
+  await click("Review forget selected memory");
+  mocks.settings.mockResolvedValue({ features: { memoryLifecycleAdminV1Enabled: false } });
+  await click("Request batch memory approval");
+  expect(mocks.batch).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain("Memory administration is turned off on this installation.");
+  expect(document.body.textContent).not.toContain("is disabled");
+  expect(switchHash()).toBe("#feature-switch-memory-administration");
+});
+it("says memory administration is turned off, with a link, on the diagnostics page", async () => {
+  const snapshot = mocks.snapshot();
+  mocks.snapshot.mockReturnValue({
+    ...snapshot,
+    data: { ...snapshot.data, memoryAdminEnabled: false, memoryAdminState: "disabled" },
+  });
+  await render(<LibraryMemoryDiagnostics workspaceId="one" />);
+  expect(document.body.textContent).toContain(
+    "Memory administration is turned off on this installation. Changes stay locked.",
+  );
+  expect(switchHash()).toBe("#feature-switch-memory-administration");
+});
+it("names the switch that refused a reviewed operation, and names resumable runs with no link", async () => {
+  await render(<LibraryMemoryDiagnostics workspaceId="one" />);
+  await click("Review quality scan");
+  mocks.settings.mockResolvedValue({ features: { memoryLifecycleAdminV1Enabled: false } });
+  await click("Confirm memory operation");
+  expect(document.body.textContent).toContain("Memory administration is turned off on this installation.");
+  expect(document.body.textContent).not.toContain("Current runtime settings do not permit");
+  expect(switchHash()).toBe("#feature-switch-memory-administration");
+});

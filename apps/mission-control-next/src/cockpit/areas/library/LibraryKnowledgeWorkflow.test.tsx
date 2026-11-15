@@ -106,7 +106,9 @@ it("does not promote a disabled Engineering deep link into reads or actions", as
     ReturnType<typeof fetchSettings>
   >);
   await render(<LibraryEngineeringLearnings workspaceId="one" />);
-  await vi.waitFor(() => expect(container.textContent).toContain("disabled in this runtime"));
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain("Engineering learnings is turned off on this installation."),
+  );
   expect(fetchEngineeringLearning).not.toHaveBeenCalled();
   expect(fetchEngineeringLearnings).not.toHaveBeenCalled();
   expect(requestEngineeringLearningAction).not.toHaveBeenCalled();

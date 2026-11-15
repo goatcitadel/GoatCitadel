@@ -19,6 +19,8 @@ import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { Callout } from "../../ui/Callout";
+import { FeatureOffLink } from "../settings/FeatureOffLink";
+import { FeatureOffError, featureOffErrorOf } from "../settings/feature-switches";
 import { memoryNamespaceLabel } from "./library-vocabulary";
 export function LibraryMemoryBatch({
   workspaceId,
@@ -43,6 +45,7 @@ export function LibraryMemoryBatch({
     undefined,
   );
   const [error, setError] = useState<string>(),
+    [errorOff, setErrorOff] = useState(false),
     [busy, setBusy] = useState(false);
   async function submit() {
     if (!review || !available || busy || receipt || operation.locked) return;
@@ -53,7 +56,11 @@ export function LibraryMemoryBatch({
         review.action,
         async () => {
           const settings = await fetchSettings();
-          if (!settings.features.memoryLifecycleAdminV1Enabled) throw new Error("Memory administration is disabled.");
+          if (!settings.features.memoryLifecycleAdminV1Enabled)
+            throw new FeatureOffError(
+              "Memory administration is turned off on this installation.",
+              "memoryLifecycleAdminV1Enabled",
+            );
           for (const item of review.items) {
             const fresh = await readLibraryMemoryItem(item.itemId, workspaceId);
             if (!fresh || !sameMemoryItem(item, fresh) || fresh.workspaceId !== workspaceId)
@@ -87,7 +94,10 @@ export function LibraryMemoryBatch({
         onClear();
       }
     } catch (cause) {
-      if (operation.current()) setError(describeApiError(cause).summary);
+      if (operation.current()) {
+        setError(describeApiError(cause).summary);
+        setErrorOff(featureOffErrorOf(cause) !== undefined);
+      }
     } finally {
       setBusy(false);
     }
@@ -126,7 +136,11 @@ export function LibraryMemoryBatch({
       {operation.locked && operation.attempt?.message ? (
         <Callout tone="warning">{operation.attempt.message}</Callout>
       ) : null}
-      {error ? <Callout tone="error">{error}</Callout> : null}
+      {error ? (
+        <Callout tone="error">
+          {error} {errorOff ? <FeatureOffLink flag="memoryLifecycleAdminV1Enabled" /> : null}
+        </Callout>
+      ) : null}
       <Dialog
         open={Boolean(review)}
         onOpenChange={(open) => {

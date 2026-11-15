@@ -1,7 +1,9 @@
+// @vitest-environment happy-dom
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
 import { ChatProviderFallbackSettings } from "./ChatProviderFallbackSettings";
 
+const link = <a href="/settings/advanced#feature-switch-provider-fallback">Turn it on in Settings › Advanced</a>;
 function fixture() {
   return {
     prefs: null,
@@ -28,6 +30,47 @@ async function render(props: ReturnType<typeof fixture>) {
 }
 
 describe("Chat fallback preference", () => {
+  it("renders with no query client, with the old wording and no link, as Classic does", async () => {
+    // No QueryClientProvider here: Classic has none, and this must not throw.
+    const tree = await render({ ...fixture(), providerFallbackAvailable: false });
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain("Provider fallback is not enabled for this runtime.");
+    expect(json).not.toContain("Turn it on in Settings");
+    await act(async () => tree.unmount());
+  });
+
+  it("names resumable runs, with no link, when the switch is on but fallback is still unavailable", async () => {
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(
+        <ChatProviderFallbackSettings
+          {...fixture()}
+          providerFallbackAvailable={false}
+          switchOn
+          featureOffLink={link}
+        />,
+      );
+    });
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain("needs resumable runs, which are turned off on this installation");
+    expect(json).not.toContain("Turn it on in Settings");
+    await act(async () => tree.unmount());
+  });
+
+  it("does not claim fallback is turned off while its switch has not been read", async () => {
+    let tree!: ReactTestRenderer;
+    await act(async () => {
+      tree = create(
+        <ChatProviderFallbackSettings {...fixture()} providerFallbackAvailable={false} featureOffLink={link} />,
+      );
+    });
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain("Provider fallback is not enabled for this runtime.");
+    expect(json).not.toContain("turned off");
+    expect(json).not.toContain("Turn it on in Settings");
+    await act(async () => tree.unmount());
+  });
+
   it("starts off, never defaults to hosted consent, and saves one exact target", async () => {
     const props = fixture();
     const tree = await render(props);
@@ -163,6 +206,8 @@ describe("Chat fallback preference", () => {
           <ChatProviderFallbackSettings
             {...props}
             providerFallbackAvailable={availability}
+            switchOn={false}
+            featureOffLink={link}
             routePreflight={
               {
                 fallbackPolicy: "armed",
@@ -172,7 +217,9 @@ describe("Chat fallback preference", () => {
           />,
         );
       });
-      expect(tree.root.findByProps({ role: "status" }).children.join("")).toContain("not enabled for this runtime");
+      expect(JSON.stringify(tree.toJSON())).toContain("Provider fallback is turned off on this installation.");
+      expect(JSON.stringify(tree.toJSON())).toContain("feature-switch-provider-fallback");
+      expect(JSON.stringify(tree.toJSON())).not.toContain("not enabled for this runtime");
       await act(async () => tree.unmount());
     },
   );

@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { fetchCronReviewQueue } from "@goatcitadel/mission-control-shared/api/cron";
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { SchedulerReviewQueue } from "./SchedulerReviewQueue";
 
 vi.mock("@goatcitadel/mission-control-shared/api/cron", () => ({ fetchCronReviewQueue: vi.fn() }));
@@ -92,4 +93,68 @@ it("names a flagged run in plain words and keeps job and run ids out of the prim
   expect(container.textContent).toContain("Child run: Failed · needs recovery.");
   for (const raw of ["job-nightly-7f3a", "cron-run-9c1d", "durable-1234", "open", "2026-10-14T"])
     expect(container.textContent).not.toContain(raw);
+});
+
+async function renderQueue() {
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <SchedulerReviewQueue />
+      </QueryClientProvider>,
+    ),
+  );
+}
+const switchLink = () =>
+  [...container.querySelectorAll("a")].find((entry) => entry.textContent === "Turn it on in Settings › Advanced");
+const hashOf = (link: Element | undefined) => new URL(link!.getAttribute("href")!, "http://cockpit.invalid").hash;
+
+it("says scheduler review is off and links to its switch", async () => {
+  vi.mocked(fetchSettings).mockResolvedValue({ revision: 2, features: { cronReviewQueueV1Enabled: false } } as never);
+  await renderQueue();
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain(
+      "Scheduler review is turned off on this installation, so no review items can be shown.",
+    ),
+  );
+  expect(hashOf(switchLink())).toBe("#feature-switch-scheduler-review");
+  expect(fetchCronReviewQueue).not.toHaveBeenCalled();
+});
+
+it("links the switch when the Gateway refuses the queue because the feature is off", async () => {
+  vi.mocked(fetchSettings).mockResolvedValue({ features: { cronReviewQueueV1Enabled: true } } as never);
+  vi.mocked(fetchCronReviewQueue).mockRejectedValue(
+    new ApiRequestError("off", {
+      kind: "http",
+      method: "GET",
+      path: "/api/v1/cron/review-queue",
+      status: 409,
+      body: { code: "FEATURE_DISABLED", details: { flag: "cronReviewQueueV1Enabled" } },
+    }),
+  );
+  await renderQueue();
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain(
+      "Scheduler review is turned off on this installation, so no review items can be shown.",
+    ),
+  );
+  expect(hashOf(switchLink())).toBe("#feature-switch-scheduler-review");
+});
+
+it("does not blame the switch when a 409 is not about the feature being off", async () => {
+  vi.mocked(fetchSettings).mockResolvedValue({ features: { cronReviewQueueV1Enabled: true } } as never);
+  vi.mocked(fetchCronReviewQueue).mockRejectedValue(
+    new ApiRequestError("conflict", {
+      kind: "http",
+      method: "GET",
+      path: "/api/v1/cron/review-queue",
+      status: 409,
+      body: { code: "STATE_CONFLICT" },
+    }),
+  );
+  await renderQueue();
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain("Scheduler review is unavailable on this installation"),
+  );
+  expect(container.textContent).not.toContain("turned off");
+  expect(switchLink()).toBeUndefined();
 });
