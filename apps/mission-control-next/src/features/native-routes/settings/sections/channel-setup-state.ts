@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { ChannelSetupDraft } from "@goatcitadel/contracts";
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
+import { classifySettingsSaveFailure } from "../settings-save-outcome";
 import { dispatchTrackedMutation, settleTrackedAttempt, type TrackedAttempt } from "../mutation-attempt-tracking";
 
 /** `transport` identifies a lost write (key, method, route; never its body or credentials) so it can be settled. */
@@ -63,14 +64,25 @@ export function beginChannelOperation() {
       expectedRevision?: number,
     ): Promise<T> {
       let transport: TrackedAttempt | undefined;
+      // Only the write's own rejection can be a refusal; a failed check after it says nothing about the write.
+      let refused = false;
       try {
-        const result = await dispatchTrackedMutation(CHANNEL_ROUTE_PATTERNS, dispatch, (tracked) => {
-          transport = tracked;
-        });
+        const result = await dispatchTrackedMutation(
+          CHANNEL_ROUTE_PATTERNS,
+          () =>
+            dispatch().catch((cause: unknown) => {
+              refused = classifySettingsSaveFailure(cause).kind === "refused";
+              throw cause;
+            }),
+          (tracked) => {
+            transport = tracked;
+          },
+        );
         await validate(result);
         return result;
       } catch (cause) {
-        if (!isChannelPrecommitConflict(cause, draftId, connectionId, expectedRevision))
+        // A plain Gateway refusal applied nothing: the caller shows its reason and the page stays usable.
+        if (!isChannelPrecommitConflict(cause, draftId, connectionId, expectedRevision) && !refused)
           publish({
             pending: true,
             uncertain: transport
@@ -106,7 +118,12 @@ export async function checkChannelOutcome(readback: () => Promise<unknown>) {
   publish(result.settled ? idle : { ...current, uncertain: result.message });
   return result.settled ? result.message : undefined;
 }
-export function isChannelPrecommitConflict(cause: unknown, draftId?: string, connectionId?: string, expectedRevision?: number) {
+export function isChannelPrecommitConflict(
+  cause: unknown,
+  draftId?: string,
+  connectionId?: string,
+  expectedRevision?: number,
+) {
   if (!draftId || !isApiRequestError(cause) || cause.status !== 409 || !cause.body || typeof cause.body !== "object")
     return false;
   const body = cause.body as Record<string, unknown>;
@@ -114,9 +131,12 @@ export function isChannelPrecommitConflict(cause: unknown, draftId?: string, con
   return (
     body.code === "WRITE_CONFLICT" &&
     ((details?.draftId === draftId && details.reason === "CHANNEL_DRAFT_REVISION_CONFLICT") ||
-      (Boolean(connectionId) && Number.isSafeInteger(expectedRevision) &&
-        details?.mutationPhase === "before_side_effects" && details.draftId === draftId &&
-        details.draftRevision === expectedRevision && details.connectionId === connectionId &&
+      (Boolean(connectionId) &&
+        Number.isSafeInteger(expectedRevision) &&
+        details?.mutationPhase === "before_side_effects" &&
+        details.draftId === draftId &&
+        details.draftRevision === expectedRevision &&
+        details.connectionId === connectionId &&
         details.reason === "CHANNEL_CONNECTION_REVIEW_REQUIRED")) &&
     body.committed !== true &&
     body.mutationCommitted !== true &&

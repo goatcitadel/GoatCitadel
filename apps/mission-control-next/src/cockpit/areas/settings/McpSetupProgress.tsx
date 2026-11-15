@@ -10,6 +10,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { isGatewayMcpServer } from "../../../features/native-routes/settings/mcp-server-mutation";
 import { TimeText } from "../../ui/TimeText";
+import { FeatureOffLink } from "./FeatureOffLink";
 
 /** A readable projection of the existing inspection, never a second readiness owner. */
 export function McpSetupProgress({
@@ -17,6 +18,7 @@ export function McpSetupProgress({
   tools,
   stale,
   staticMcpAvailable,
+  staticMcpSwitchOn,
   refreshAvailability,
   availabilityChecking = false,
   testEvidence,
@@ -25,6 +27,8 @@ export function McpSetupProgress({
   tools?: McpToolRecord[];
   stale: boolean;
   staticMcpAvailable?: boolean;
+  /** Whether the Connectors in Chat switch itself is on; when it is, Chat is blocked by something else. */
+  staticMcpSwitchOn?: boolean;
   refreshAvailability?: () => void;
   availabilityChecking?: boolean;
   testEvidence?: McpServerTestEvidence;
@@ -78,7 +82,11 @@ export function McpSetupProgress({
             ? staticMcpAvailable === true
               ? "Static MCP in Chat is enabled. "
               : staticMcpAvailable === false
-                ? "Static MCP in Chat is disabled for this runtime. "
+                ? staticMcpSwitchOn === true
+                  ? "Chat can't use this yet: it needs resumable runs, which are turned off on this installation. "
+                  : staticMcpSwitchOn === false
+                    ? "Connectors in Chat is turned off. "
+                    : "Static MCP in Chat is disabled for this runtime. "
                 : "Static MCP availability in Chat is unverified. "
             : null}
           Evaluated by GoatCitadel for the actual Chat request and its current grants. This inspection does not
@@ -122,11 +130,23 @@ export function McpSetupProgress({
       {staticServer ? (
         <div className="space-y-2">
           {staticMcpAvailable === false ? (
-            <p>
-              Ask the runtime operator to enable static MCP in Chat through a reviewed settings change, with resumable
-              runs enabled. Then refresh this status, review the server connection controls below, and start a new Chat
-              turn.
-            </p>
+            staticMcpSwitchOn === true ? (
+              <p>
+                Once resumable runs are turned on, refresh this status, review the server connection controls below, and
+                start a new Chat turn.
+              </p>
+            ) : staticMcpSwitchOn === false ? (
+              <p>
+                Turn on Connectors in Chat, then refresh this status, review the server connection controls below, and
+                start a new Chat turn. <FeatureOffLink flag="chatStaticMcpV1Enabled" />
+              </p>
+            ) : (
+              <p>
+                Ask the runtime operator to enable static MCP in Chat through a reviewed settings change, with resumable
+                runs enabled. Then refresh this status, review the server connection controls below, and start a new
+                Chat turn.
+              </p>
+            )
           ) : staticMcpAvailable === undefined ? (
             <p>
               Refresh runtime availability before preparing a Chat test. Missing or stale availability does not mean
@@ -138,15 +158,6 @@ export function McpSetupProgress({
               and approvals still apply.
             </p>
           )}
-          {staticMcpAvailable === false ? (
-            <details>
-              <summary className="cursor-pointer text-fg">Runtime operator setting</summary>
-              <p className="mt-2">
-                The reviewed settings change uses <code>features.chatStaticMcpV1Enabled</code>. This view does not
-                change runtime settings or tool permissions.
-              </p>
-            </details>
-          ) : null}
           {refreshAvailability ? (
             <Button size="sm" disabled={availabilityChecking} onClick={refreshAvailability}>
               Refresh Chat availability

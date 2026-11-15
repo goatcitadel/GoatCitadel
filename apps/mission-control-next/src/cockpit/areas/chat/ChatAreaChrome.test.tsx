@@ -3,9 +3,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
-import type { ChatSessionRecord } from "@goatcitadel/contracts";
+import type { ChatSessionRecord, OnboardingState } from "@goatcitadel/contracts";
+import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
-import { ChatHeaderSubtitle, ChatSessionHeader } from "./ChatAreaChrome";
+import { ChatHeaderSubtitle, ChatSessionHeader, ChatSetupBanner, ChatSetupGate } from "./ChatAreaChrome";
 import type { ChannelConversationContext } from "./channel-conversation";
 
 const media = vi.hoisted(() => ({ phone: false }));
@@ -13,6 +14,9 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({
   useMediaQuery: (query: string) =>
     media.phone && (query === RESPONSIVE_QUERIES.phone || query === RESPONSIVE_QUERIES.belowDesktop),
 }));
+
+const outage = vi.hoisted(() => ({ recover: vi.fn() }));
+vi.mock("./use-chat-outage-recovery", () => ({ useChatOutageRecovery: outage.recover }));
 
 vi.mock("../../data/use-model-label", () => ({
   useModelLabel: (providerId?: string, modelId?: string) =>
@@ -89,6 +93,31 @@ function renderHeader(build = false) {
 }
 
 describe("ChatSessionHeader", () => {
+  it("hands the active conversation's error and refresh to the outage recovery (U-CH-026)", () => {
+    const onDismissError = vi.fn();
+    const onRefreshThread = vi.fn();
+    const active = { streamError: "Network error: Failed to fetch", onDismissError, onRefreshThread };
+    act(() =>
+      root.render(
+        <ChatSessionHeader
+          input={input()}
+          active={active as unknown as Parameters<typeof ChatSessionHeader>[0]["active"]}
+          session={session}
+          selectedSessionId="session-1"
+          buildEditor={null}
+          onOpenProjects={vi.fn()}
+          onOpenConversations={vi.fn()}
+          onInspect={vi.fn()}
+        />,
+      ),
+    );
+    expect(outage.recover).toHaveBeenLastCalledWith({
+      streamError: "Network error: Failed to fetch",
+      onDismissError,
+      onRefreshThread,
+    });
+  });
+
   it("keeps the way back from an open build editor as a visible header button", () => {
     const view = input();
     const onToggle = vi.fn();
@@ -292,5 +321,95 @@ describe("ChatSessionHeader for a channel conversation", () => {
     const labels = items.map((item) => item.textContent);
     expect(labels).not.toContain("Continue in a new chat");
     expect(labels).not.toContain("New conversation from latest message");
+  });
+});
+
+describe("ChatSetupBanner", () => {
+  it("does not promise chat before a model exists and links to setup", async () => {
+    const onReturn = vi.fn();
+    await act(async () => root.render(<ChatSetupBanner modelReady={false} onReturnToSetup={onReturn} />));
+    expect(container.textContent).toContain("Connect a model before you send your first message.");
+    expect(container.textContent).not.toContain("You can chat now");
+    const action = [...container.querySelectorAll("button")].find((item) => item.textContent === "Set up a model")!;
+    await act(async () => action.click());
+    expect(onReturn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the advisory wording once a model is ready", async () => {
+    await act(async () => root.render(<ChatSetupBanner modelReady onReturnToSetup={vi.fn()} />));
+    expect(container.textContent).toContain("You can chat now. Finish setup to verify your first answer.");
+    expect(container.textContent).toContain("Return to setup");
+  });
+});
+
+describe("ChatSetupGate", () => {
+  const withModel = onboardingFixture();
+  const withoutModel = {
+    ...withModel,
+    settings: { ...withModel.settings, llm: { ...withModel.settings.llm, activeProviderId: "", activeModel: "" } },
+  };
+  const gate = async (onboarding: { data?: OnboardingState; isError: boolean }, hidden = false) =>
+    act(async () => root.render(<ChatSetupGate onboarding={onboarding} hidden={hidden} onSetup={vi.fn()} />));
+
+  it("shows nothing while the setup read is loading", async () => {
+    await gate({ data: undefined, isError: false });
+    expect(container.textContent).toBe("");
+  });
+
+  it("shows nothing when the setup read failed, even with an earlier result", async () => {
+    await gate({ data: withoutModel, isError: true });
+    expect(container.textContent).toBe("");
+  });
+
+  it("shows nothing when setup is complete or the build editor is open", async () => {
+    await gate({ data: { ...withoutModel, completed: true }, isError: false });
+    expect(container.textContent).toBe("");
+    await gate({ data: withoutModel, isError: false }, true);
+    expect(container.textContent).toBe("");
+  });
+
+  it("asks for a model when the read succeeded and no model is ready", async () => {
+    await gate({ data: withoutModel, isError: false });
+    expect(container.textContent).toContain("Connect a model before you send your first message.");
+  });
+
+  it("shows no setup instruction when a model is chosen and only its readiness was not reported", async () => {
+    await gate({ data: { ...withModel, setupReadiness: undefined }, isError: false });
+    expect(container.textContent).toBe("");
+  });
+
+  it("says the chosen model's provider is not ready, not that a model is missing", async () => {
+    const readiness = withModel.setupReadiness!;
+    const notReady = {
+      ...withModel,
+      setupReadiness: {
+        ...readiness,
+        items: readiness.items.map((item) => (item.id === "provider" ? { ...item, status: "blocked" as const } : item)),
+      },
+    };
+    await gate({ data: notReady, isError: false });
+    expect(container.textContent).toContain(
+      "Your model's provider is not ready. Check its connection before you send your first message.",
+    );
+    expect(container.textContent).toContain("Check model setup");
+    expect(container.textContent).not.toContain("Connect a model");
+  });
+
+  it("shows no setup instruction when the provider's readiness was reported as unknown", async () => {
+    const readiness = withModel.setupReadiness!;
+    const unknown = {
+      ...withModel,
+      setupReadiness: {
+        ...readiness,
+        items: readiness.items.map((item) => (item.id === "provider" ? { ...item, status: "unknown" as const } : item)),
+      },
+    };
+    await gate({ data: unknown, isError: false });
+    expect(container.textContent).toBe("");
+  });
+
+  it("keeps the advisory wording when a model is ready", async () => {
+    await gate({ data: withModel, isError: false });
+    expect(container.textContent).toContain("You can chat now.");
   });
 });

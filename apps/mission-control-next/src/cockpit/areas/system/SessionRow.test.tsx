@@ -35,11 +35,11 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
 });
-const render = (onDetails?: (id: string) => void) =>
+const render = (onDetails?: (id: string) => void, row: SessionMeta = item) =>
   act(() =>
     root.render(
       <ul>
-        <SessionRow item={item} onDetails={onDetails} />
+        <SessionRow item={row} onDetails={onDetails} />
       </ul>,
     ),
   );
@@ -82,4 +82,9 @@ it("offers Details only when the page can open a session", () => {
   expect(details.textContent).toBe("Details");
   act(() => details.click());
   expect(onDetails).toHaveBeenCalledExactlyOnceWith("session-0123");
+});
+
+it("links Open in Chat to the session's own workspace when the session names one", () => {
+  render(undefined, { ...item, workspaceId: "verification" });
+  expect(host.querySelector("a")?.getAttribute("href")).toBe("/chat?sessionId=session-0123&workspaceId=verification");
 });

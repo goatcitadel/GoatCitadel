@@ -337,6 +337,7 @@ describe("Install panel", () => {
     expect(checkbox()?.closest("label")?.textContent).toBe("Also let Chat use connectors");
     // The checkbox is the way forward, so the sentence that only explains the block is left out.
     expect(text()).not.toContain("Chat can't use connectors yet");
+    expect(link("Turn it on in Settings › Advanced")).toBeUndefined();
     await act(async () => button("Install")?.click());
     expect(flows.start).toHaveBeenLastCalledWith(blocked.id, { enableChatConnectors: true });
 

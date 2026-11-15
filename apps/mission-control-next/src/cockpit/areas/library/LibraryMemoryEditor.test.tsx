@@ -115,7 +115,8 @@ async function click(name: string, { expectDisabled = false }: { expectDisabled?
 it("inspects the exact selected canonical memory among same-title records without requesting a write", async () => {
   vi.mocked(fetchMemoryItems).mockResolvedValue({
     items: [{ ...item, itemId: "foreign-id", title: item.title, content: "Other same-title memory" }, item],
-    total: 2, snapshotAt: "now",
+    total: 2,
+    snapshotAt: "now",
   });
   await render();
   expect(container.querySelector("textarea")?.value).toBe(item.content);
@@ -127,10 +128,18 @@ it("inspects the exact selected canonical memory among same-title records withou
 });
 
 it("refuses a selected memory naming a foreign workspace without exposing an editable substitute or writing", async () => {
-  vi.mocked(fetchMemoryItems).mockResolvedValue({ items: [{ ...item, workspaceId: "foreign" }], total: 1, snapshotAt: "now" });
-  await act(async () => root.render(
-    <QueryClientProvider client={client}><LibraryMemoryEditor itemId="m-a" workspaceId="one" /></QueryClientProvider>,
-  ));
+  vi.mocked(fetchMemoryItems).mockResolvedValue({
+    items: [{ ...item, workspaceId: "foreign" }],
+    total: 1,
+    snapshotAt: "now",
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <LibraryMemoryEditor itemId="m-a" workspaceId="one" />
+      </QueryClientProvider>,
+    ),
+  );
   await vi.waitFor(() => expect(container.textContent).toContain("Changes are locked."));
   expect(container.querySelector("textarea")).toBeNull();
   expect(patchMemoryItem).not.toHaveBeenCalled();
@@ -240,10 +249,25 @@ it("keeps administration disabled when the feature flag is false", async () => {
     ReturnType<typeof fetchSettings>
   >);
   await render();
-  expect(container.textContent).toContain("Memory administration is disabled");
+  expect(container.textContent).toContain("Memory administration is turned off on this installation.");
+  const turnOn = [...container.querySelectorAll("a")].find(
+    (node) => node.textContent === "Turn it on in Settings › Advanced",
+  );
+  expect(new URL(turnOn!.getAttribute("href")!, "http://cockpit.invalid").hash).toBe(
+    "#feature-switch-memory-administration",
+  );
   await click("Review forget", { expectDisabled: true });
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(forgetMemoryItem).not.toHaveBeenCalled();
+});
+it("does not claim administration is turned off when the switch was not reported", async () => {
+  vi.mocked(fetchSettings).mockResolvedValue({ features: {} } as Awaited<ReturnType<typeof fetchSettings>>);
+  await render();
+  expect(container.textContent).toContain("Memory administration is disabled. Changes remain locked.");
+  expect(container.textContent).not.toContain("turned off");
+  expect(
+    [...container.querySelectorAll("a")].some((node) => node.textContent === "Turn it on in Settings › Advanced"),
+  ).toBe(false);
 });
 
 const canonicalApproval: ApprovalRequest = {

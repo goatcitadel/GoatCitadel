@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   reload: vi.fn(),
   plans: vi.fn(),
   create: vi.fn(),
+  prefs: { showTechnicalDetails: false },
 }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
   useProviderModelCatalog: mocks.catalog,
@@ -35,7 +36,7 @@ vi.mock("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard"
   ChatChangePlanCard: (props: { plan: { status: string } }) => <p>Plan card: {props.plan.status}</p>,
 }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
-  useUiPreferences: () => ({ activeWorkspaceId: undefined }),
+  useUiPreferences: () => ({ activeWorkspaceId: undefined, showTechnicalDetails: mocks.prefs.showTechnicalDetails }),
 }));
 vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: vi.fn() }) }));
 
@@ -72,6 +73,7 @@ const mount = (props: Partial<Parameters<typeof CockpitGuidedModelSetup>[0]> = {
   });
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.prefs.showTechnicalDetails = false;
   __resetSessionDraftsForTests();
   onboarding = onboardingFixture();
   onboarding.settings.llm.activeProviderId = "test";
@@ -96,6 +98,185 @@ afterEach(() => {
 });
 
 describe("shared guided model setup", () => {
+  it("says on first run that a local runtime did not answer after Check connection", async () => {
+    catalog("ready", {
+      providerId: "test",
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "fallback",
+      modelProbeWarning: "fetch failed",
+      modelRefreshStatus: "fresh",
+    });
+    await mount();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(
+      "LM Studio has not answered at http://127.0.0.1:1234/v1. Start it, then check the connection again.",
+    );
+  });
+  it("keeps one always-mounted status line, so a result added later is announced", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "not_checked",
+    });
+    await mount();
+    const line = container.querySelector('[role="status"]');
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "fallback",
+    });
+    await mount();
+    expect(container.querySelector('[role="status"]')).toBe(line);
+    expect(line?.textContent).toContain("has not answered");
+    expect(line?.className).not.toContain("sr-only");
+    expect(line?.className).not.toContain("hidden");
+  });
+  it("keeps the empty status line in the accessibility tree, out of the layout", async () => {
+    catalog("ready");
+    await mount();
+    const line = container.querySelector('[role="status"]');
+    expect(line?.textContent).toBe("");
+    expect(line?.className).toContain("sr-only");
+    expect(line?.className).not.toMatch(/(^|s)(empty:)?hidden/u);
+  });
+  it("reads as checking during a re-check of a runtime whose last refresh failed", async () => {
+    const failed = {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "fallback",
+      modelProbeSource: "live",
+      modelRefreshStatus: "stale",
+      modelRefreshFailed: true,
+    };
+    catalog("ready", failed);
+    await mount();
+    let resolveLoad: (models: string[]) => void = () => {};
+    mocks.models.mockReturnValue(new Promise<string[]>((resolve) => (resolveLoad = resolve)));
+    await act(async () => void button("Check connection")!.click());
+    expect(button("Checking connection…")).toBeDefined();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
+    catalog("ready", failed);
+    await act(async () => resolveLoad([]));
+    await mount();
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("has not answered");
+  });
+  it("does not repeat the result under the button where the readiness note already shows it", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "fallback",
+    });
+    await mount({ showReadinessNote: true });
+    const sentence =
+      "LM Studio has not answered at http://127.0.0.1:1234/v1. Start it, then check the connection again.";
+    expect(container.textContent?.split(sentence)).toHaveLength(2);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
+  });
+  it("keeps the raw reason out of the sentence and inside Technical details", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "fallback",
+      modelProbeWarning: "fetch failed",
+    });
+    await mount();
+    expect(container.textContent).not.toContain("fetch failed");
+    mocks.prefs.showTechnicalDetails = true;
+    await mount();
+    expect([...container.querySelectorAll("details")].map((item) => item.textContent).join(" ")).toContain(
+      "fetch failed",
+    );
+    expect(container.querySelector('[role="status"]')?.textContent).not.toContain("fetch failed");
+  });
+  it("keeps a ready result Ready after its list has gone stale", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "ready",
+      modelProbeSource: "live",
+      modelRefreshStatus: "stale",
+    });
+    await mount();
+    expect(container.textContent).toContain("Ready");
+    expect(container.textContent).not.toContain("stale");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
+  });
+  it("says a refresh that failed after the runtime had answered did not answer, not that the list is stale", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "fallback",
+      modelProbeSource: "live",
+      modelRefreshStatus: "stale",
+      modelRefreshFailed: true,
+      modelProbeWarning: "fetch failed",
+    });
+    await mount();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(
+      "LM Studio has not answered at http://127.0.0.1:1234/v1. Start it, then check the connection again.",
+    );
+    expect(container.textContent).not.toContain("stale");
+  });
+  it("says a check that could not be completed is not a server that is down", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "error",
+      modelProbeSource: "error_fallback",
+    });
+    await mount();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(
+      "The connection check could not be completed. Check the address, then check the connection again.",
+    );
+  });
+  it("shows the result and the notice together on first run", async () => {
+    catalog("missing");
+    await mount();
+    await act(async () => button("Connect provider")!.click());
+    const text = container.querySelector('[role="status"]')?.textContent;
+    expect(text).toContain("Test provider needs a credential.");
+    expect(text).toContain("Change applied and verified.");
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
+  });
+  it("never says a runtime is not running before any check has run", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "not_checked",
+    });
+    await mount();
+    expect(container.textContent).not.toMatch(/not running|has not answered|stale/u);
+  });
+  it("shows no check result while a check has not run, and none once the runtime answered", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "not_checked",
+    });
+    await mount();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "ready",
+      modelProbeSource: "live",
+    });
+    await mount();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
+  });
   it("is built from cockpit fields: each select is labelled and described, with no Classic classes", async () => {
     catalog("ready");
     await mount();
@@ -349,6 +530,78 @@ describe("shared guided model setup", () => {
     await mount({ onNoticeChange });
     await act(async () => button("Confirm model")!.click());
     expect(onNoticeChange).toHaveBeenCalledWith("Change applied and verified.");
-    expect(container.querySelector('[role="status"]')).toBeNull();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
+  });
+  it("does not say the saved defaults changed when only the suggested provider moved", async () => {
+    onboarding.settings.llm.activeProviderId = "";
+    onboarding.settings.llm.activeModel = "";
+    catalog("missing");
+    await mount();
+    await act(async () => {
+      const select = container.querySelector("select")!;
+      select.value = "test";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    catalog("ready"); // the provider's check finished; it is now the suggested default
+    await mount();
+    expect(container.textContent).not.toContain("Saved model defaults changed");
+  });
+  it("does not say the saved defaults changed after its own save lands while a newer choice is kept", async () => {
+    catalog("ready");
+    mocks.models.mockResolvedValue(["test-model", "other-model", "third-model"]);
+    let finish: (plan: object) => void = () => undefined;
+    let submitted: object = {};
+    mocks.create.mockImplementation(
+      (input: { request: object }) =>
+        new Promise((resolve) => {
+          submitted = input.request;
+          finish = resolve;
+        }),
+    );
+    await mount();
+    const pick = async (value: string) =>
+      act(async () => {
+        const select = container.querySelectorAll("select")[1]!;
+        select.value = value;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    await pick("other-model");
+    await act(async () => button("Confirm model")!.click());
+    // A newer choice made while the first save is still out stays as the draft.
+    await pick("third-model");
+    await act(async () =>
+      finish({
+        planId: "plan-1",
+        status: "completed",
+        revision: 1,
+        origin: { workspaceId: "default", surface: "settings" },
+        request: submitted,
+        result: { summary: "Change applied and verified." },
+      }),
+    );
+    // The refreshed defaults are exactly what that save wrote.
+    onboarding = {
+      ...onboarding,
+      settings: { ...onboarding.settings, llm: { ...onboarding.settings.llm, activeModel: "other-model" } },
+    };
+    await mount();
+    expect(container.textContent).not.toContain("Saved model defaults changed");
+    // The newer choice survives the acknowledgement.
+    expect(container.querySelectorAll("select")[1]!.value).toBe("third-model");
+  });
+  it("says the saved defaults changed once they really changed", async () => {
+    catalog("ready");
+    await mount();
+    await act(async () => {
+      const select = container.querySelectorAll("select")[1]!;
+      select.value = "other-model";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    onboarding = {
+      ...onboarding,
+      settings: { ...onboarding.settings, llm: { ...onboarding.settings.llm, activeModel: "third-model" } },
+    };
+    await mount();
+    expect(container.textContent).toContain("Saved model defaults changed");
   });
 });

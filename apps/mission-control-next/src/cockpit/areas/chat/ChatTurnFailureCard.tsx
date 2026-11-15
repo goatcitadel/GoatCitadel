@@ -1,6 +1,7 @@
 import type { ChatTurnFailureClass } from "@goatcitadel/contracts";
 import { CircleAlert, TriangleAlert } from "lucide-react";
 import { Button } from "../../ui/Button";
+import { useProviderLabelLookup } from "../../data/use-model-label";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { presentFailureClass } from "./chat-vocabulary";
 
@@ -30,6 +31,22 @@ const FAILURE_TITLES: Partial<Record<ChatTurnFailureClass, string>> = {
 /** Failure kinds whose fix lives with the provider account, so the card links to where providers are set up. */
 const PROVIDER_ACCOUNT_FAILURES = new Set<ChatTurnFailureClass>(["auth_required", "provider_billing"]);
 
+/** Failure kinds where the provider itself did not answer, so the card names it when the turn recorded which one. */
+const PROVIDER_REACH_FAILURES = new Set<ChatTurnFailureClass>(["network_interrupted", "provider_timeout"]);
+
+/**
+ * The words for a failure to reach the provider. The Cockpit cannot tell a provider that dropped from another
+ * network error the Gateway classed the same way, so a drop is worded as "couldn't reach", not as the provider's fault.
+ * The recovery sentence is the hint the card was given, since only the caller knows whether the turn can be resent.
+ */
+function describeReachFailure(failureClass: ChatTurnFailureClass | undefined, label: string | undefined, hint: string) {
+  const name = label ?? "the model provider";
+  const lead = label ?? "The model provider";
+  return failureClass === "provider_timeout"
+    ? { title: `${lead} took too long to answer`, body: `${lead} did not answer in time. ${hint}` }
+    : { title: `Couldn't reach ${name}`, body: `The connection to ${name} dropped before it answered. ${hint}` };
+}
+
 /**
  * The card under a failed or partial answer: what went wrong, what to do next, and the one action that fixes it when
  * the fix is not a retry (Retry stays with the turn's own actions below). A partial answer keeps the softer heading.
@@ -39,6 +56,7 @@ export function ChatTurnFailureCard({
   answered,
   failureClass,
   hint,
+  providerId,
   onNewConversation,
 }: {
   failed: boolean;
@@ -47,14 +65,23 @@ export function ChatTurnFailureCard({
   failureClass?: ChatTurnFailureClass;
   /** What to do next, already fitted to whether this turn can be resent. */
   hint: string;
+  /** The provider the turn was routed to, so a failure to reach it can name it. */
+  providerId?: string;
   onNewConversation?: () => void;
 }) {
+  const providerLabel = useProviderLabelLookup(Boolean(providerId));
   const known = failureClass && failureClass !== "unknown" ? failureClass : undefined;
-  const title = !failed
-    ? "This answer may be incomplete"
-    : ((known && FAILURE_TITLES[known]) ?? (answered ? null : "This response failed"));
+  const reach = Boolean(known && providerId && PROVIDER_REACH_FAILURES.has(known));
+  const reachWords = describeReachFailure(known, providerLabel(providerId), hint);
+  const title =
+    reach && failed
+      ? reachWords.title
+      : !failed
+        ? "This answer may be incomplete"
+        : ((known && FAILURE_TITLES[known]) ?? (answered ? null : "This response failed"));
   // A partial answer's heading does not name the cause, so the cause goes in the sentence instead.
   const cause = !failed && known ? `Cause: ${presentFailureClass(known)}. ` : "";
+  const body = reach && failed ? reachWords.body : `${cause}${hint}`;
   const Icon = failed ? CircleAlert : TriangleAlert;
   return (
     <div
@@ -69,11 +96,8 @@ export function ChatTurnFailureCard({
       />
       <div className="min-w-0 space-y-2">
         {title ? <p className="font-medium text-fg">{title}</p> : null}
-        <p>
-          {cause}
-          {hint}
-        </p>
-        {known && PROVIDER_ACCOUNT_FAILURES.has(known) ? (
+        <p>{body}</p>
+        {known && (PROVIDER_ACCOUNT_FAILURES.has(known) || (reach && failed)) ? (
           <NativeOwnerLink href={MODEL_SETTINGS_HREF} scope="chat-turn-failure" className="text-sm">
             Open model providers
           </NativeOwnerLink>

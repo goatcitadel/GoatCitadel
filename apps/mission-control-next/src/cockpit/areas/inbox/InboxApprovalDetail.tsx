@@ -236,8 +236,12 @@ export function InboxApprovalDetail({
                   ))}
                 </ul>
               ) : null}
-              {evidence.commands.length ? (
-                <ApprovalShellExplanations commands={evidence.commands} explanations={approval.shellExplanations} />
+              {evidence.commandPreviews?.length ? (
+                <ApprovalShellExplanations
+                  commands={evidence.commandPreviews}
+                  explanations={approval.shellExplanations}
+                  approvalRisk={approval.riskLevel}
+                />
               ) : null}
               {support.visible.length ? (
                 <ul className="list-disc space-y-1 pl-5 text-fg-secondary">

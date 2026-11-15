@@ -8,17 +8,37 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
+import {
+  classifySettingsSaveFailure,
+  findActiveSettingsChange,
+  describeWaitingChange,
+  findWaitingSettingsChange,
+  sendTrackedSettingsSave,
+  settingsSaveFinished,
+  waitingNoticeFor,
+  type WaitingSettingsNotice,
+} from "../../../features/native-routes/settings/settings-save-outcome";
+import type { TrackedAttempt } from "../../../features/native-routes/settings/mutation-attempt-tracking";
 import { useSettingsChange } from "../../../features/native-routes/settings/use-settings-change";
 import {
   APPROVAL_MODE_DRAFT_KEY,
+  clearApprovalModeUncertainty,
+  currentApprovalModeUncertainty,
   hasApprovalSettings,
   isApprovalMode,
   isApprovalRevisionConflict,
   matchesApprovalModePlan,
   retainApprovalModeUncertainty,
+  settleApprovalModeUncertainty,
   useApprovalModeUncertainty,
+  type ApprovalModeUncertainty,
 } from "./approval-mode-state";
+
+const CHECKING_MESSAGE = "Checking whether your approval rule was saved…";
+const UNCONFIRMED_MESSAGE =
+  "GoatCitadel didn't answer, so this save isn't confirmed yet. Saving stays paused until the saved rule can be checked.";
 
 export interface ApprovalReview {
   mode: ToolApprovalMode;
@@ -49,12 +69,14 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     acceptSaved: draft.acceptSaved,
     reload: () => settings.refetch(),
   });
-  const uncertain = useApprovalModeUncertainty();
+  const installation = getGatewayApiBaseUrl();
+  // Each Gateway keeps its own record of an unconfirmed save; another installation's record locks nothing here.
+  const uncertain = useApprovalModeUncertainty(installation);
   const [busy, setBusy] = useState(false);
   const [review, setReview] = useState<ApprovalReview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [waiting, setWaiting] = useState<WaitingSettingsNotice | null>(null);
   const restricted = safeOnly || settings.data?.deploymentProfile === "remote_hardened";
-  const installation = getGatewayApiBaseUrl();
   const identity = JSON.stringify([
     installation,
     scope,
@@ -88,6 +110,7 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     ready &&
     !settings.isFetching &&
     !locked &&
+    !waiting &&
     draft.isDirty &&
     !draft.hasRemoteChanges &&
     !(draft.value === "bypass" && restricted);
@@ -124,6 +147,7 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     setNotice(null);
     setReview(null);
     let mutationAttempted = false;
+    let transport: TrackedAttempt | undefined;
     try {
       const latest = await fetchSettings();
       if (!isCurrent(intent.generation)) return false;
@@ -145,7 +169,12 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
         return false;
       }
       mutationAttempted = true;
-      const response = await patchSettings({ expectedRevision: intent.revision, toolApprovalMode: intent.mode });
+      const response = await sendTrackedSettingsSave(
+        () => patchSettings({ expectedRevision: intent.revision, toolApprovalMode: intent.mode }),
+        (tracked) => {
+          transport = tracked;
+        },
+      );
       if (getGatewayApiBaseUrl() !== installation)
         throw new Error("You switched to a different GoatCitadel installation, so the save could not be confirmed.");
       // Retain the dispatched origin result even after its editor unmounts.
@@ -164,9 +193,31 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
         setNotice("Not saved: the settings changed since your draft started. Your draft is kept for review.");
         await settings.refetch();
       } else if (mutationAttempted) {
-        retainApprovalModeUncertainty(
-          "Save outcome is uncertain. Further saves are locked in this app session; inspect Settings activity before continuing.",
-        );
+        const failure = classifySettingsSaveFailure(error);
+        if (failure.kind === "waiting") {
+          // An earlier change to this rule is still open: lead to its approval and keep the draft.
+          await settings.refetch();
+          if (isCurrent(intent.generation)) await followWaiting(failure.planId);
+        } else if (failure.kind === "conflict") {
+          if (isCurrent(intent.generation)) {
+            setNotice("Not saved: the settings changed since your draft started. Your draft is kept for review.");
+            await settings.refetch();
+          }
+        } else if (failure.kind === "refused") {
+          if (isCurrent(intent.generation)) setNotice(`Not saved. ${failure.reason}`);
+        } else {
+          const record: ApprovalModeUncertainty = {
+            message: CHECKING_MESSAGE,
+            submitted: intent.mode,
+            baseRevision: intent.revision,
+            previous: current,
+            installation,
+            ...(transport ? { transport } : {}),
+            checking: true,
+          };
+          retainApprovalModeUncertainty(record);
+          void reconcileRecord(record);
+        }
       } else if (isCurrent(intent.generation)) {
         setNotice(`Could not confirm current approval settings. ${describeApiError(error).summary}`);
       }
@@ -174,6 +225,75 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     } finally {
       change.endSave();
       if (live.current.mounted) setBusy(false);
+    }
+  }
+  /**
+   * After a save whose answer was lost: reads the saved rule and the open changes again. The lock lifts once either
+   * says what happened, and holds only while neither can be read; a failed read is never reported as "not saved".
+   */
+  async function reconcileRecord(start: ApprovalModeUncertainty): Promise<void> {
+    try {
+      await settleRecord(start);
+    } catch {
+      // Whatever went wrong, the write is still unconfirmed: keep saving paused rather than guess.
+      retainApprovalModeUncertainty({ ...start, message: UNCONFIRMED_MESSAGE, checking: false });
+    }
+  }
+  /**
+   * First asks the Gateway whether that very request has finished: a request still running can apply after any read,
+   * so the rule is called "not saved" only once it has (without an attempt identity it never is). Then reads the open
+   * changes first and the saved rule second, so a change that finishes in between shows up as the saved rule. All
+   * reads are made after the write, never joined to an older one. A failed read keeps the lock.
+   */
+  async function settleRecord(start: ApprovalModeUncertainty): Promise<void> {
+    const record = { ...start, message: CHECKING_MESSAGE, checking: true };
+    retainApprovalModeUncertainty(record);
+    const keepLocked = () =>
+      retainApprovalModeUncertainty({ ...record, message: UNCONFIRMED_MESSAGE, checking: false });
+    // Another Gateway cannot say whether this one applied the write.
+    if (getGatewayApiBaseUrl() !== record.installation) return keepLocked();
+    const finished = record.transport ? await settingsSaveFinished(record.transport) : false;
+    if (record.transport && !finished) return keepLocked();
+    const active = await findActiveSettingsChange((plan) => matchesApprovalModePlan(plan, record.submitted));
+    if (active === "unreadable") return keepLocked();
+    const latest = await withFreshReads(() => fetchSettings()).catch(() => undefined);
+    if (!latest || !hasApprovalSettings(latest) || getGatewayApiBaseUrl() !== record.installation) return keepLocked();
+    const outcome = settleApprovalModeUncertainty(record, latest, Boolean(active));
+    if (outcome === "not_saved" && !finished) return keepLocked();
+    clearApprovalModeUncertainty(record.installation);
+    if (live.current.mounted) {
+      if (outcome === "saved") {
+        draft.acceptSaved(latest.toolApprovalMode, latest.revision, record.submitted);
+        setNotice("Tool approval rule saved and confirmed by GoatCitadel.");
+      } else if (outcome === "waiting" && active) {
+        setWaiting(active);
+        setNotice(describeWaitingChange(active, "rule"));
+      } else setNotice("Your approval rule was not saved. Your draft is kept, so you can save it again.");
+    } else if (outcome === "saved") draft.acceptSaved(latest.toolApprovalMode, latest.revision, record.submitted);
+    await settings.refetch();
+  }
+  const reconcile = async () => {
+    const record = currentApprovalModeUncertainty(getGatewayApiBaseUrl());
+    if (record && !record.checking) await reconcileRecord(record);
+  };
+  /**
+   * Looks at the earlier change a conflict (or a refresh) names: still open (shown), finished (nothing to show; the
+   * saved rule speaks), not a Settings change (the ordinary conflict copy) or unreadable (kept, with its Inbox link).
+   */
+  async function followWaiting(planId: string): Promise<void> {
+    const lookup = await findWaitingSettingsChange(planId);
+    if (!live.current.mounted || getGatewayApiBaseUrl() !== installation) return;
+    if (lookup.kind === "unreadable" && waiting && !("unreadable" in waiting)) return;
+    const held = waitingNoticeFor(lookup, planId);
+    setWaiting(held);
+    if (held) setNotice(describeWaitingChange(held, "rule"));
+    else {
+      setNotice(
+        lookup.kind === "foreign"
+          ? "Not saved: the settings changed since your draft started. Your draft is kept for review."
+          : null,
+      );
+      await settings.refetch();
     }
   }
   const reviewCurrent = Boolean(
@@ -192,6 +312,20 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     draft,
     change,
     uncertain,
+    waiting,
+    /** Called once the waiting change was decided: the saved rule is read again. */
+    clearWaiting: () => {
+      // The waiting sentence goes with the change; a notice set since stays.
+      const sentence = waiting ? describeWaitingChange(waiting, "rule") : undefined;
+      setNotice((shown) => (shown === sentence ? null : shown));
+      setWaiting(null);
+      void settings.refetch();
+    },
+    reconcile,
+    /** Looks at a held waiting change again and clears it once it is no longer open. */
+    recheckWaiting: async () => {
+      if (waiting) await followWaiting(waiting.planId);
+    },
     busy,
     review,
     setReview,

@@ -6,13 +6,18 @@ import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { lazy, useEffect, useRef, useState } from "react";
+import { lazy, useEffect, useId, useRef, useState } from "react";
 import { AttachmentImage } from "../../ui/AttachmentImage";
 import { ChatApprovalRenderer } from "./ChatApprovalRenderer";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
+import { useGatewayUnavailable } from "../../app/gateway-unavailable-context";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
+import { approvalExpiredUnresolved } from "../inbox/approval-settlement";
+import { hasExpired, useMinuteClock } from "../inbox/use-minute-clock";
+import { useApprovalDeadlineCheck } from "./use-approval-deadline-check";
 import { DeferredChatLeaf } from "./DeferredChatLeaves";
 import { presentApprovalAction } from "./chat-vocabulary";
+import { approvalTargetLine } from "../inbox/approval-target";
 import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
@@ -40,7 +45,7 @@ type Blockers = Pick<
   | "onSubmitUserInput"
   | "onRefreshThread"
 > &
-  Partial<Pick<MissionThreadedActiveSessionSurfaceProps, "composerRef">>;
+  Partial<Pick<MissionThreadedActiveSessionSurfaceProps, "composerRef" | "thread" | "onDraftChange" | "draft">>;
 
 function errandScreenshotAttachmentId(preview: Record<string, unknown> | undefined): string | undefined {
   const id = preview?.screenshotAttachmentId;
@@ -48,6 +53,8 @@ function errandScreenshotAttachmentId(preview: Record<string, unknown> | undefin
 }
 
 export function ChatBlockers({ props }: { props: Blockers }) {
+  // The Gateway cannot be reached, so decisions cannot be sent.
+  const gatewayUnavailable = useGatewayUnavailable();
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
   const { search, hash } = useCockpitRoute();
@@ -141,8 +148,41 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   const questionScope = input ? JSON.stringify([workspaceId, props.selectedSessionId, input.promptId]) : "";
   // The persisted record outranks the retained prompt: once it is decided, the card reports the decision
   // instead of asking for one while Chat waits for the queue to clear it.
+  const targetLine = approvalTargetLine(reviewedApproval?.kind, reviewedApproval?.preview);
   const decided = reviewedApproval && reviewedApproval.status !== "pending" ? reviewedApproval : undefined;
   const expiry = decided ? null : approvalExpiryLabel(approval?.expiresAt);
+  // An approval that ran out of time leaves the action undone: the way forward is to ask again.
+  const expiresAt = reviewedApproval?.expiresAt ?? approval?.expiresAt;
+  const now = useMinuteClock(expiresAt);
+  // The expiry sweep records an expired approval as a rejection with an expired outcome; it is still expired.
+  const sweptExpired = Boolean(
+    decided && (decided.resolutionOutcome === "expired" || approvalExpiredUnresolved(decided)),
+  );
+  const expired = Boolean(approval) && sweptExpired;
+  // The deadline passed on this clock but the record still reads pending: the approval may have been decided elsewhere,
+  // so nothing says the action did not run until a fresh read of the record does.
+  const lapsed = Boolean(approval) && !decided && hasExpired(expiresAt, now);
+  const deadlineCheck = useApprovalDeadlineCheck({ approvalId, lapsed, read: () => recordQuery.refetch() });
+  const [askBlocked, setAskBlocked] = useState(false);
+  // The text Ask again itself put in the box: it is the request, not something the operator typed.
+  const restored = useRef<string | undefined>(undefined);
+  const blockedNoteId = useId();
+  const draftHasText = Boolean(props.draft?.trim()) && props.draft !== restored.current;
+  const originalRequest = props.thread?.turns.find((turn) => turn.turnId === reviewedApproval?.linkage?.turnId)
+    ?.userMessage.content;
+  function askAgain() {
+    // Never replace what the operator has already typed.
+    if (draftHasText) {
+      setAskBlocked(true);
+      return;
+    }
+    setAskBlocked(false);
+    if (originalRequest && props.draft !== originalRequest) {
+      restored.current = originalRequest;
+      props.onDraftChange?.(originalRequest);
+    }
+    props.composerRef?.current?.focus();
+  }
   function continuationHref(destination: "/inbox", selectedApprovalId?: string) {
     const parameters = new URLSearchParams(search);
     parameters.set("workspaceId", workspaceId);
@@ -171,9 +211,16 @@ export function ChatBlockers({ props }: { props: Blockers }) {
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <h3 className="font-semibold text-fg">
-                {decided ? `Approval decided: ${presentApprovalStatus(decided.status).label}` : "Approval needed"}
+                {sweptExpired
+                  ? "Approval expired"
+                  : decided
+                    ? `Approval decided: ${presentApprovalStatus(decided.status).label}`
+                    : lapsed
+                      ? "Approval time has passed"
+                      : "Approval needed"}
               </h3>
               <p className="mt-1 text-fg-secondary">{presentApprovalAction(approval.toolName, approval.kind)}</p>
+              {targetLine ? <p className="mt-1 text-xs text-fg-secondary wrap-anywhere">{targetLine}</p> : null}
             </div>
             {approval.riskLevel ? <RiskBadge risk={approval.riskLevel} /> : null}
           </div>
@@ -259,7 +306,44 @@ export function ChatBlockers({ props }: { props: Blockers }) {
               props.onRefreshThread();
             }}
             onFollowOnChange={props.onRefreshThread}
+            connectionLost={gatewayUnavailable}
           />
+          {lapsed ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p>
+                {deadlineCheck.checking
+                  ? "The time for this approval has passed. Checking whether it was decided…"
+                  : "The time for this approval has passed. What happened to it is not confirmed yet."}
+              </p>
+              {deadlineCheck.checking ? null : (
+                <Button type="button" size="sm" variant="secondary" onClick={deadlineCheck.check}>
+                  Check again
+                </Button>
+              )}
+            </div>
+          ) : null}
+          {expired ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p>
+                The action did not run.
+                {originalRequest ? " Ask again to put your request back in the message box." : ""}
+                {askBlocked && draftHasText ? (
+                  <span id={blockedNoteId}> Your message box already has text. Clear it to ask again.</span>
+                ) : null}
+              </p>
+              {originalRequest ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  aria-describedby={askBlocked && draftHasText ? blockedNoteId : undefined}
+                  onClick={askAgain}
+                >
+                  Ask again
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
           <NativeOwnerLink
             href={continuationHref("/inbox", approval.approvalId)}
             scope={noticeScope}
@@ -276,16 +360,15 @@ export function ChatBlockers({ props }: { props: Blockers }) {
           identity={questionScope}
           label="Answer controls"
           fallback={
-            <section
-              aria-label="Pending question"
-              className="mt-3 border-l-2 border-status-waiting pl-3 text-sm"
-            >
+            <section aria-label="Pending question" className="mt-3 border-l-2 border-status-waiting pl-3 text-sm">
               <h3 className="font-semibold text-fg">{input.title || "Your input is needed"}</h3>
               {isBackgroundChatUserInputPrompt(input) ? (
                 <p className="mt-1 text-xs text-fg-muted">Optional · Work continues</p>
               ) : null}
               <p className="mt-1 text-fg-secondary">{input.question}</p>
-              <p aria-busy="true" className="mt-2 text-xs text-fg-muted">Loading answer controls…</p>
+              <p aria-busy="true" className="mt-2 text-xs text-fg-muted">
+                Loading answer controls…
+              </p>
             </section>
           }
         >

@@ -5,6 +5,8 @@ import { useDraftLeave } from "../../../features/native-routes/library/DraftLeav
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { FeatureOffLink } from "./FeatureOffLink";
+import { useFeatureSwitchOn } from "./feature-switches";
 import { McpDraftLeave } from "./McpDraftLeave";
 import { presentDemoStatus } from "./settings-vocabulary";
 
@@ -12,6 +14,7 @@ export function FirstRunDemo({ workspaceId }: { workspaceId: string }) {
   const control = useDemoBootstrap(workspaceId),
     leave = useDraftLeave();
   const { navigate } = useCockpitRoute();
+  const memoryAdminOn = useFeatureSwitchOn("memoryLifecycleAdminV1Enabled");
   const { setActiveWorkspaceId, setActiveCitadelId } = useUiPreferences();
   const open = () =>
     leave.request(
@@ -49,6 +52,11 @@ export function FirstRunDemo({ workspaceId }: { workspaceId: string }) {
               </li>
             ))}
           </ul>
+          {control.receipt.created.memorySeed === false && memoryAdminOn === false ? (
+            <p className="mt-2">
+              <FeatureOffLink flag="memoryLifecycleAdminV1Enabled" />
+            </p>
+          ) : null}
         </div>
       ) : null}
       <ul className="grid gap-2 text-sm text-fg-secondary">

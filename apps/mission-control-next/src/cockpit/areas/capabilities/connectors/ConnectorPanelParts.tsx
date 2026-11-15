@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { CapabilityConnectorItem } from "@goatcitadel/contracts";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../../ui/StatusBadge";
+import { FeatureOffLink } from "../../settings/FeatureOffLink";
 import { FromPluginLink } from "../plugins/FromPluginLink";
 import { CHAT_CONNECTORS_SETTINGS_HREF, WORKSPACE_CAPABILITIES_HREF } from "./connector-links";
 import {
@@ -72,6 +73,14 @@ export function ConnectionLines({ item, children }: { item: CapabilityConnectorI
 
 /** Why Chat can't use connectors, with the way to Advanced setup. */
 export function ChatBlockNote({ item }: { item: CapabilityConnectorItem }) {
+  const blockedBy = item.chat.blockedBy;
+  if (blockedBy !== "background_runs_off")
+    return (
+      <p className="text-sm text-fg-secondary">
+        Chat can't use connectors yet: Connectors in Chat is turned off.{" "}
+        <FeatureOffLink flag="chatStaticMcpV1Enabled" />
+      </p>
+    );
   return (
     <p className="text-sm text-fg-secondary">
       {chatBlockLine(item.chat.blockedBy)}{" "}

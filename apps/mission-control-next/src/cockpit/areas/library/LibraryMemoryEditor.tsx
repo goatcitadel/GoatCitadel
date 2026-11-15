@@ -17,6 +17,7 @@ import { LibraryApproval } from "./LibraryApproval";
 import { LibraryMemoryReceipt } from "./LibraryMemoryReceipt";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
+import { FeatureOffLink } from "../settings/FeatureOffLink";
 import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
@@ -87,11 +88,18 @@ function MemoryEditor({
   const enabled =
     settings.data?.features.memoryLifecycleAdminV1Enabled === true && !settings.isError && !settings.isFetching;
   const settingsView = recordView(settings);
+  const administrationOff =
+    !settings.isError &&
+    settingsView.phase !== "loading" &&
+    settingsView.phase !== "checking" &&
+    settings.data?.features.memoryLifecycleAdminV1Enabled === false;
   const administrationMessage = settings.isError
     ? "Memory administration settings are unavailable."
     : settingsView.phase === "loading" || settingsView.phase === "checking"
       ? "Checking memory administration settings…"
-      : "Memory administration is disabled.";
+      : administrationOff
+        ? "Memory administration is turned off on this installation."
+        : "Memory administration is disabled.";
   const [historyOpen, setHistoryOpen] = useState(false),
     [busy, setBusy] = useState(false);
   const [review, setReview] = useSessionViewState<
@@ -186,7 +194,8 @@ function MemoryEditor({
       ) : null}
       {!enabled ? (
         <Callout announce={false} tone="warning">
-          {administrationMessage} Changes remain locked.
+          {administrationMessage} Changes remain locked.{" "}
+          {administrationOff ? <FeatureOffLink flag="memoryLifecycleAdminV1Enabled" /> : null}
         </Callout>
       ) : null}
       {stale ? (

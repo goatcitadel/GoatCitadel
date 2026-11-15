@@ -554,3 +554,46 @@ describe("ChatTurnDetails older-turn actions", () => {
     expect(buttons).toEqual(expect.arrayContaining(["Copy answer", "More"]));
   });
 });
+
+describe("ChatTurnDetails approved calls awaiting their receipt (U-CH-047)", () => {
+  const approvedUncertain = {
+    ...toolRun({}),
+    approvalId: "approval-1",
+    effectOutcomeKind: "uncertain",
+    effectEvidence: {
+      version: "goatcitadel.tool-effect.v1",
+      outcomeKind: "uncertain",
+      reason: "completed_without_canonical_effect_receipt",
+      refs: [],
+    },
+  } as unknown as ChatToolRunRecord;
+  const turnIn = (status: string) =>
+    ({ ...turnWith([approvedUncertain]), trace: { status } }) as unknown as ChatThreadTurnRecord;
+
+  const renderWithClient = async (turn: ChatThreadTurnRecord) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    act(() =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChatTurnDetails turn={turn} streaming={false} readOnly={false} actions={actions} />
+        </QueryClientProvider>,
+      ),
+    );
+    await openToolRows();
+  };
+
+  it.each(["queued", "running", "waiting_for_tool"])("says it is finishing while the turn is %s", async (status) => {
+    await renderWithClient(turnIn(status));
+    expect(container.textContent).toContain("Finishing after your approval.");
+    expect(container.textContent).not.toContain("Outcome uncertain");
+  });
+
+  it.each(["waiting_for_approval", "waiting_for_user_input", "completed", "failed"])(
+    "shows the recorded uncertain outcome while the turn is %s",
+    async (status) => {
+      await renderWithClient(turnIn(status));
+      expect(container.textContent).toContain("Outcome uncertain");
+      expect(container.textContent).not.toContain("Finishing after your approval.");
+    },
+  );
+});

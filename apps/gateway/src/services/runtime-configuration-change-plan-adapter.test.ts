@@ -318,6 +318,39 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
     expect(applied.result?.summary).toBe("Claude Code CLI: reuse one process between tool steps is now on.");
   });
 
+  it("names the Features switches in plain words in their approval", async () => {
+    const adapter = new RuntimeConfigurationChangePlanAdapter({
+      ...authCredentialDeps,
+      getSettings: vi.fn(async () => settings()),
+      updateSettings: vi.fn(async () => settings({ revision: 8 })),
+    });
+    const request = {
+      kind: "runtime_configuration" as const,
+      change: { operation: "feature_flag" as const, flag: "memoryLifecycleAdminV1Enabled" as const, enabled: true },
+    };
+    const prepared = await adapter.prepare(context, request);
+    expect(prepared.title).toBe("Turn on Memory administration");
+    expect(prepared.summary).toBe(
+      "When on, Library › Memory lists what GoatCitadel remembers and lets you edit, forget and review it. This turns it on.",
+    );
+    expect(prepared.risk).toBe("caution");
+    expect(`${prepared.title} ${prepared.summary} ${prepared.impact}`).not.toContain("memoryLifecycleAdminV1Enabled");
+    for (const flag of [
+      "memoryMaintenanceV1Enabled",
+      "chatSkillInstructionsV1Enabled",
+      "chatStaticMcpV1Enabled",
+      "connectorDiagnosticsV1Enabled",
+      "cronReviewQueueV1Enabled",
+      "engineeringLearningsV1Enabled",
+      "chatProviderFallbackV1Enabled",
+      "chatDelegationControlsV1Enabled",
+      "utilityModelRoutingV1Enabled",
+    ] as const) {
+      const named = await adapter.prepare(context, { ...request, change: { ...request.change, flag } });
+      expect(named.title).not.toContain(flag);
+    }
+  });
+
   it("maps a typed memory group without exposing arbitrary setting keys", async () => {
     const current = settings({
       memory: {

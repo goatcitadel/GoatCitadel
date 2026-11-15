@@ -144,13 +144,24 @@ export function progressLine(flow: InstallFlowView, name: string): string {
 }
 
 /** The approval dialog's words for each step. */
-export function approvalWords(step: "waiting_install" | "waiting_switch_on", name: string) {
+export function approvalWords(
+  step: "waiting_install" | "waiting_switch_on",
+  name: string,
+  /** Whether Chat reads skills at all; `false` adds that the switch-on takes effect once that is on. */
+  skillsInChatOn?: boolean,
+) {
   return step === "waiting_install"
     ? {
         title: `Approve installing ${name}?`,
         summary: `Installs ${name} switched off. It can't be used until you switch it on.`,
       }
-    : { title: `Approve switching on ${name}?`, summary: `Lets the AI use ${name} in new chats.` };
+    : {
+        title: `Approve switching on ${name}?`,
+        summary:
+          skillsInChatOn === false
+            ? `Lets the AI use ${name} in new chats once Skills in Chat is turned on in Settings › Advanced.`
+            : `Lets the AI use ${name} in new chats.`,
+      };
 }
 
 export function sameSource(left: CapabilitySkillSource | undefined, right: CapabilitySkillSource): boolean {

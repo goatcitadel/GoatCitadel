@@ -8,7 +8,7 @@ import { playOperatorAttentionSound } from "@goatcitadel/mission-control-shared/
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { showBrowserNotification } from "../../app/browser-notification";
 import { requestCockpitToast } from "../ui/toast-runtime";
-import { inboxItemLocation, resolveInboxNotificationItem } from "./inbox-notification";
+import { inboxItemLocation, inboxToastDescription, resolveInboxNotificationItem } from "./inbox-notification";
 import { queryKeys } from "./query-keys";
 
 /**
@@ -144,14 +144,10 @@ export function createRealtimeAttention({
             requestCockpitToast(
               (toast) => {
                 const show =
-                  notification.tone === "error"
-                    ? toast.error
-                    : notification.tone === "warning"
-                      ? toast.warning
-                      : toast;
+                  notification.tone === "error" ? toast.error : notification.tone === "warning" ? toast.warning : toast;
                 show(item.title, {
                   id,
-                  description: item.summary,
+                  description: inboxToastDescription(item),
                   duration: inboxToastDuration(notification.tone),
                   action: { label: "Open Inbox item", onClick: open },
                 });

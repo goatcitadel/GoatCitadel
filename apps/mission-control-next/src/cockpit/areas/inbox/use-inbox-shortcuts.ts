@@ -48,7 +48,11 @@ export function useInboxShortcuts({
       if (dialogs.some((dialog) => !dialog.querySelector('[data-inspector-body="true"]'))) return;
       const key = event.key.toLowerCase();
       if (!KEYS.includes(key)) return;
-      const currentIndex = orderedItems.findIndex((item) => item.id === selectedId);
+      // With nothing selected (after a decision) the keys continue from the row that has focus, not the first row.
+      const focusedRow = document.activeElement?.closest("[data-inbox-row]")?.getAttribute("data-inbox-row");
+      const selectedIndex = orderedItems.findIndex((item) => item.id === selectedId);
+      const currentIndex =
+        selectedIndex >= 0 ? selectedIndex : orderedItems.findIndex((item) => item.id === focusedRow);
       const nextIndex =
         currentIndex < 0
           ? 0

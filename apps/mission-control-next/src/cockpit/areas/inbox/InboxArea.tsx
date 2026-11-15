@@ -1,8 +1,6 @@
 import { LinkedApproval } from "./LinkedApproval";
 import { InboxApprovalHistory } from "./InboxApprovalHistory";
 import { InboxBulkRejectZone } from "./InboxBulkRejectZone";
-import { markOperatorInboxUpdatesRead } from "@goatcitadel/mission-control-shared/api/operator-inbox";
-import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { WindowedRecordListHandle } from "../../ui/WindowedRecordList";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
@@ -40,7 +38,9 @@ import { useInboxShortcutsPreference } from "./inbox-shortcuts-preference";
 import { InboxInspectorBody } from "./InboxInspectorBody";
 import { InboxItemCard } from "./InboxItemCard";
 import { useInboxLinkedItem } from "./use-inbox-linked-item";
-import { inboxUpdateVersion, markInboxUpdateViewed, useInboxViewedUpdates } from "./inbox-viewed-updates";
+import { useInboxSelection, type InboxOpenArguments } from "./use-inbox-selection";
+import { inboxUpdateVersion, useInboxViewedUpdates } from "./inbox-viewed-updates";
+import { useInboxAcknowledge } from "./use-inbox-acknowledge";
 
 export function InboxArea() {
   const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
@@ -54,8 +54,6 @@ export function InboxArea() {
   const installation = getGatewayApiBaseUrl();
   const scopeKey = JSON.stringify([installation, workspaceId]);
   const localReads = useInboxViewedUpdates(installation, workspaceId);
-  const [readNotice, setReadNotice] = useState("");
-  const [reading, setReading] = useState(false);
   const accessRevision = getGatewayAccessRevision();
   const actorScope = inbox.data?.readStatus?.scopeId;
   const readScope = inbox.data?.readStatus?.scope ?? "unavailable";
@@ -65,56 +63,14 @@ export function InboxArea() {
       readScope === "operator" ? item.read === true : readScope === "browser_local" && isLocallyViewed(item),
     [readScope, isLocallyViewed],
   );
-  async function acknowledge(items: OperatorInboxItem[]) {
-    if (reading) return;
-    const updates = items.filter((item) => inboxUpdateVersion(item, workspaceId) && !isViewed(item));
-    if (!updates.length) return;
-    setReading(true);
-    setReadNotice("");
-    try {
-      if (readScope === "browser_local") {
-        const saved = await Promise.all(
-          updates.map((item) =>
-            markInboxUpdateViewed(
-              installation,
-              workspaceId,
-              item,
-              () =>
-                current.current.workspaceId === workspaceId &&
-                getGatewayApiBaseUrl() === installation &&
-                getGatewayAccessRevision() === accessRevision,
-            ),
-          ),
-        );
-        const failed = saved.some((value) => !value);
-        if (failed) setReadNotice("Read storage unavailable. Unacknowledged updates remain unread.");
-      } else if (readScope === "operator") {
-        let skipped = 0;
-        for (let offset = 0; offset < updates.length; offset += 200) {
-          if (
-            getGatewayAccessRevision() !== accessRevision ||
-            getGatewayApiBaseUrl() !== installation ||
-            current.current.workspaceId !== workspaceId
-          )
-            break;
-          const result = await markOperatorInboxUpdatesRead(
-            workspaceId,
-            updates.slice(offset, offset + 200).map((item) => ({ id: item.id, version: item.version! })),
-          );
-          skipped += result.skipped.length;
-        }
-        if (skipped)
-          setReadNotice(
-            `${plural(skipped, "update was", "updates were")} not acknowledged. Changed or unavailable updates remain unread.`,
-          );
-        await inbox.refetch();
-      } else setReadNotice("Read storage unavailable. Unacknowledged updates remain unread.");
-    } catch {
-      setReadNotice("Read status could not be saved. Refresh to check current receipts.");
-    } finally {
-      setReading(false);
-    }
-  }
+  const { acknowledge, readNotice, reading } = useInboxAcknowledge({
+    workspaceId,
+    installation,
+    accessRevision,
+    readScope,
+    isViewed,
+    refetch: inbox.refetch,
+  });
   const [showViewedScope, setShowViewedScope] = useState<string | null>(null);
   const showViewed = showViewedScope === scopeKey;
   const scopeMatches = inboxMatchesWorkspace(inbox.data, workspaceId);
@@ -138,14 +94,19 @@ export function InboxArea() {
     [visibleItems, groupOf, filters],
   );
   // Empty groups are hidden; a group shows once it has a shown or read item or a known count (IN-10).
-  const expiredCount = projection?.items.filter((item) => groupOf(item) === "expired").length ?? 0;
+  // The Gateway already left out decisions that had expired when it read them; only later expiries are subtracted here.
+  const generatedAt = projection ? Date.parse(projection.generatedAt) : Number.NaN;
+  const expiredSinceReadCount =
+    projection?.items.filter(
+      (item) => groupOf(item) === "expired" && item.expiresAt && Date.parse(item.expiresAt) > generatedAt,
+    ).length ?? 0;
   const shownGroups = projection
     ? INBOX_VIEW_GROUPS.map((group) => {
         const allItems = projection.items.filter((item) => groupOf(item) === group.id);
         if (group.id === "expired") return { group, allItems, known: allItems.length, complete: true };
         const count = projection.counts[group.id];
         // Expired decisions are listed under Expired, so Needs decision counts only those still open (IN-05).
-        const known = group.id === "needs_decision" ? Math.max(0, count.known - expiredCount) : count.known;
+        const known = group.id === "needs_decision" ? Math.max(0, count.known - expiredSinceReadCount) : count.known;
         return { group, allItems, known, complete: count.complete };
       }).filter(({ allItems, known }) => allItems.length > 0 || known > 0)
     : [];
@@ -158,27 +119,32 @@ export function InboxArea() {
   if (hasOpenDecisions && bulkRejectScope !== scopeKey) setBulkRejectScope(scopeKey);
   const showBulkReject = hasOpenDecisions || bulkRejectScope === scopeKey;
   const { announce, region: announcer } = useInboxAnnouncer();
+  const openNowRef = useRef<(...args: InboxOpenArguments) => void>(() => undefined);
+  const { selectedId, selectItem, highlight, inspect, takePending, clearAddress } = useInboxSelection(
+    workspaceId,
+    openNowRef,
+  );
   const [contextSelection, setContextSelection] = useState<{ scope: string; id: string } | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [shortcutsEnabled, setShortcutsEnabled] = useInboxShortcutsPreference();
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const priorItems = useRef<OperatorInboxItem[]>([]);
   const listHandles = useRef(new Map<string, WindowedRecordListHandle>());
-  const decisionFocus = useInboxDecisionFocus({ orderedItems, groupOf, listHandles, select: setSelectedId, announce });
+  const decisionFocus = useInboxDecisionFocus({ orderedItems, groupOf, listHandles, select: selectItem, announce });
   useEffect(() => {
     const previous = priorItems.current;
     priorItems.current = orderedItems;
     if (inbox.isFetching || !projection || !selectedId || orderedItems.some((item) => item.id === selectedId)) return;
     if (previous.find((item) => item.id === selectedId)?.group !== "needs_decision") return;
+    // A decided item leaves the list: nothing else is marked Selected, and focus goes to the next row (U-IN-008).
+    selectItem(null);
     const next = orderedItems.find((item) => groupOf(item) === "needs_decision");
     if (!next) return;
-    setSelectedId(next.id);
     // A decision made here moves focus through its own owner; this only recovers focus lost with a removed row.
     const active = document.activeElement;
     const lost = !active || active === document.body || !active.isConnected;
     if (lost && !decisionFocus.focusPending() && !document.querySelector('[role="dialog"]'))
       listHandles.current.get(groupOf(next))?.focusRecord(next.id, "[data-inbox-detail]");
-  }, [orderedItems, selectedId, inbox.isFetching, projection, groupOf, decisionFocus]);
+  }, [orderedItems, selectedId, inbox.isFetching, projection, groupOf, decisionFocus, selectItem]);
   const mounted = useRef(true);
   const current = useRef({ installation, workspaceId, projection, fetching: inbox.isFetching });
   current.current = { installation, workspaceId, projection, fetching: inbox.isFetching };
@@ -216,7 +182,7 @@ export function InboxArea() {
   // The inspector body is a snapshot; it reaches the current decision owner through this ref.
   const decisionRef = useRef(decisionFocus.onDecision);
   decisionRef.current = decisionFocus.onDecision;
-  const inspect = useCallback(
+  const openNow = useCallback(
     (item: OperatorInboxItem, focusAction?: "approve" | "deny", explicitDetails = false) =>
       inspector.open({
         source: `inbox:${item.id}`,
@@ -236,6 +202,7 @@ export function InboxArea() {
     [inspector, installation, workspaceId, recordOpenedUpdate],
   );
 
+  openNowRef.current = openNow;
   useInboxLinkedItem({
     installation,
     activeCitadelId,
@@ -245,14 +212,15 @@ export function InboxArea() {
     items: projection?.items,
     isFetching: inbox.isFetching,
     inspect,
-    select: setSelectedId,
+    select: selectItem,
+    takePending,
   });
 
   useInboxShortcuts({
     enabled: shortcutsEnabled,
     orderedItems,
     selectedId,
-    select: setSelectedId,
+    select: highlight,
     inspect,
     inspectorShowsInboxItem: Boolean(inspector.content?.source?.startsWith("inbox:")),
     groupOf,
@@ -294,10 +262,15 @@ export function InboxArea() {
       !inbox.isFetching &&
       !linkedItem.startsWith("approval:") &&
       !projection.items.some((item) => item.id === linkedItem) ? (
-        <p role="status" className="text-sm text-fg-muted">
-          The linked item is no longer in the current Inbox. It may have been resolved or moved outside this view’s
-          coverage.
-        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <p role="status" className="text-sm text-fg-muted">
+            The linked item is no longer in the current Inbox. It may have been resolved or moved outside this view’s
+            coverage.
+          </p>
+          <Button size="sm" onClick={clearAddress}>
+            Dismiss
+          </Button>
+        </div>
       ) : null}
       {inbox.isLoading ? (
         <p role="status" className="text-sm text-fg-muted">
@@ -382,7 +355,6 @@ export function InboxArea() {
                     contextOpen={contextSelection?.scope === scopeKey && contextSelection.id === item.id}
                     onDecision={(message, settled) => decisionRef.current(item, message, settled)}
                     onDetails={() => {
-                      setSelectedId(item.id);
                       inspect(item, undefined, true);
                     }}
                     onToggleContext={() =>

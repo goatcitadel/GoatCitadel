@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { StrictMode } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -34,6 +35,8 @@ const report: ConnectorDiagnosticReport = {
   checks: [{ key: "enabled", status: "warn", message: "Server is disabled." }],
 };
 let root: ReactTestRenderer | undefined;
+// The Cockpit passes the link to the switch; Classic does not.
+let withLink = true;
 async function render(scope = "workspace", record = server) {
   await act(async () => {
     const element = (
@@ -41,6 +44,11 @@ async function render(scope = "workspace", record = server) {
         <McpConfigurationReport
           server={record}
           scope={scope}
+          featureOffLink={
+            withLink ? (
+              <a href="/settings/advanced#feature-switch-connector-diagnostics">Turn it on in Settings › Advanced</a>
+            ) : undefined
+          }
           button={(label, click, disabled) => (
             <button type="button" onClick={click} disabled={disabled}>
               {label}
@@ -56,6 +64,7 @@ async function render(scope = "workspace", record = server) {
 const content = () => JSON.stringify(root!.toJSON());
 const click = () => act(async () => root!.root.findByType("button").props.onClick());
 beforeEach(() => {
+  withLink = true;
   vi.resetAllMocks();
   __resetMcpConfigurationReportsForTests();
   api.fetchMcpServer.mockResolvedValue(server);
@@ -134,5 +143,28 @@ it.each([false, true])("classifies the exact disabled owner gate only when uncom
   await render();
   await click();
   expect(root!.root.findByType("button").props.disabled).toBe(committed);
-  expect(content()).toContain(committed ? "outcome is unconfirmed" : "No configuration report was recorded");
+  expect(content()).toContain(committed ? "outcome is unconfirmed" : "no configuration report was recorded");
+  if (!committed) {
+    expect(content()).toContain("Connector diagnostics are turned off on this installation");
+    expect(content()).toContain("Turn it on in Settings › Advanced");
+    expect(content()).toContain("feature-switch-connector-diagnostics");
+  } else {
+    expect(content()).not.toContain("Turn it on in Settings › Advanced");
+  }
+});
+it("says diagnostics are turned off with no link when the caller passes none (Classic)", async () => {
+  withLink = false;
+  api.runMcpServerHealthCheck.mockRejectedValue(
+    new ApiRequestError("disabled", {
+      kind: "http",
+      method: "POST",
+      path: "/api/v1/mcp/servers/server/health-check",
+      status: 409,
+      body: { code: "STATE_CONFLICT", details: { flag: "connectorDiagnosticsV1Enabled" } },
+    }),
+  );
+  await render();
+  await click();
+  expect(content()).toContain("Connector diagnostics are turned off on this installation");
+  expect(content()).not.toContain("Turn it on in Settings › Advanced");
 });

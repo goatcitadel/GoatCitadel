@@ -52,7 +52,7 @@ describe("MobileStatusStrip", () => {
     await vi.waitFor(() => expect(strip.textContent).toContain("unverified"));
     const healthDot = strip.querySelector<HTMLElement>("[data-health-tone]")!;
     expect(healthDot.title).toContain(
-      "Managed local runtimes, integrations, channels and workers are checked on System › Health.",
+      "The default model, managed local runtimes, integrations, channels and workers are checked on System › Health.",
     );
     expect(healthDot.textContent).toMatch(/^\d+ checks? unverified$/);
     expect(healthDot.querySelector("svg")).not.toBeNull();

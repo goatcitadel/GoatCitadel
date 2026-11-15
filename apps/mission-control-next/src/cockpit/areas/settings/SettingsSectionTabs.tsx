@@ -5,6 +5,7 @@ import type { SettingsIndexEntry, SettingsIndexPage } from "./settings-index";
 import { preloadSettingsSection } from "./settings-controls";
 import { describeReleaseSurfaceStatus } from "../../../app/route-model";
 import { useOverflowEdges } from "./use-overflow-edges";
+import { isFeatureSwitchHash } from "./feature-switches";
 import { isMcpOAuthReturnFragment } from "../../../features/native-routes/settings/mcp-oauth-return";
 import { isGoogleOAuthReturnFragment } from "../../../features/native-routes/settings/google-oauth-return";
 
@@ -44,14 +45,17 @@ export function selectedSettingsSection(page: SettingsIndexPage, routeSection: s
             hash === "claude-cli-warm-continuation" ||
             hash === "chat-thinking-stream"
           ? "providers"
-          : // A provider sign-in lands on Capabilities › Connectors › Advanced setup; the MCP section must mount so it
-            // can hand the result back.
-            isMcpOAuthReturnFragment(hash)
-            ? "mcp"
-            : // Google sign-in lands there too; Integrations mounts the saved connection that finishes it.
-              isGoogleOAuthReturnFragment(hash)
-              ? "integrations"
-              : hash;
+          : // A "turned off" link lands on one feature switch, which lives in the Advanced page's runtime section.
+            isFeatureSwitchHash(hash)
+            ? "runtime"
+            : // A provider sign-in lands on Capabilities › Connectors › Advanced setup; the MCP section must mount so it
+              // can hand the result back.
+              isMcpOAuthReturnFragment(hash)
+              ? "mcp"
+              : // Google sign-in lands there too; Integrations mounts the saved connection that finishes it.
+                isGoogleOAuthReturnFragment(hash)
+                ? "integrations"
+                : hash;
   return (
     page.entries.find((entry) => entry.anchor === aliasedHash || entry.section === aliasedHash)?.section ??
     page.entries.find((entry) => entry.section === routeSection)?.section ??

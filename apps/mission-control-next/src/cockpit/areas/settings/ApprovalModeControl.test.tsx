@@ -7,15 +7,22 @@ import type { ToolApprovalMode } from "@goatcitadel/contracts";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
 import { __resetApprovalModeUncertaintyForTests } from "./approval-mode-state";
-import { ApprovalModeControl } from "./ApprovalModeControl";
+import { ApprovalModeControl, ApprovalModeEditor } from "./ApprovalModeControl";
+import { useApprovalModeControl } from "./use-approval-mode-control";
 import { SHELL_HISTORY_POSITION } from "../../../app/shell-transition";
+import { resetSettingsAttempt } from "./settings-attempt.test-support";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import {
   awaitingLlamaApproval,
   llamaPlanFixture,
 } from "../../../features/native-routes/settings/llama-setup.test-support";
 
-const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), fetchChangePlan: vi.fn() }));
+const api = vi.hoisted(() => ({
+  fetchSettings: vi.fn(),
+  patchSettings: vi.fn(),
+  fetchChangePlan: vi.fn(),
+  fetchChangePlans: vi.fn(),
+}));
 const switchShellMock = vi.hoisted(() => vi.fn<typeof import("../../../shell-preference").switchShell>());
 vi.mock("../../../shell-preference", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../shell-preference")>()),
@@ -52,6 +59,22 @@ async function render() {
   );
   await vi.waitFor(() => expect(container.textContent).not.toContain("Loading approval settings"));
 }
+function SafeOnly() {
+  const control = useApprovalModeControl({ scope: "first-run", safeOnly: true });
+  return <ApprovalModeEditor control={control} safeOnly />;
+}
+async function renderSafeOnly() {
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <CockpitNavigationProvider>
+          <SafeOnly />
+        </CockpitNavigationProvider>
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).not.toContain("Loading approval settings"));
+}
 async function choose(mode: string) {
   await act(async () => {
     const select = container.querySelector("select")!;
@@ -77,8 +100,19 @@ function pending(mode: ToolApprovalMode) {
   api.fetchChangePlan.mockResolvedValue(canonical);
   return canonical;
 }
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) =>
+  (await import("./settings-attempt.test-support")).withTrackedSettingsSave(
+    await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>(),
+  ),
+);
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) =>
+  (await import("./settings-attempt.test-support")).withSettingsAttemptRead(
+    await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/mutation-attempts")>(),
+  ),
+);
 beforeEach(() => {
   vi.resetAllMocks();
+  resetSettingsAttempt();
   switchShellMock.mockResolvedValue("cancelled");
   window.history.replaceState(
     { retained: true },
@@ -296,6 +330,32 @@ describe("cockpit tool approval rule", () => {
     );
   });
 
+  it("explains Skip normal prompts on first run instead of only saying it is unavailable", async () => {
+    await renderSafeOnly();
+    expect(container.textContent).toContain(
+      "Skip normal prompts lets allowed tools run without normal prompts. Setup keeps it off, so normal prompts stay on. You can turn it on later in Settings › Safety.",
+    );
+    expect(container.textContent).not.toContain("Guided setup requires an approval rule");
+  });
+
+  it("does not say normal prompts stay on when the saved rule already skips them", async () => {
+    owner.toolApprovalMode = "bypass";
+    await renderSafeOnly();
+    expect(container.textContent).toContain(
+      "Skip normal prompts lets allowed tools run without normal prompts. It is already the saved rule, and setup cannot choose it. Change it in Settings › Safety.",
+    );
+    expect(container.textContent).not.toContain("normal prompts stay on");
+  });
+
+  it("does not promise a later switch on first run under Remote Hardened", async () => {
+    owner.deploymentProfile = "remote_hardened";
+    await renderSafeOnly();
+    expect(container.textContent).toContain(
+      "Setup keeps it off, so normal prompts stay on. Remote Hardened keeps normal prompt skipping unavailable.",
+    );
+    expect(container.textContent).not.toContain("You can turn it on later");
+  });
+
   it("fails closed when the owner profile is missing", async () => {
     delete owner.deploymentProfile;
     await render();
@@ -309,11 +369,12 @@ describe("cockpit tool approval rule", () => {
     await render();
     await choose("approve_risky");
     await click("Save approval rule");
-    expect(container.textContent).toContain("Save outcome is uncertain");
+    await vi.waitFor(() => expect(container.textContent).toContain("this save isn't confirmed yet"));
+    expect(container.textContent).not.toContain("was not saved");
     await act(async () => root.render(null));
     await render();
     await click("Refresh approval settings");
-    expect(container.textContent).toContain("Save outcome is uncertain");
+    expect(container.textContent).toContain("this save isn't confirmed yet");
     expect(button("Save approval rule").disabled).toBe(true);
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
     const recovery = [...container.querySelectorAll("a")].find(
@@ -327,12 +388,50 @@ describe("cockpit tool approval rule", () => {
     expect(container.querySelector('a[href*="shell=classic"]')).toBeNull();
   });
 
+  it("unlocks from Check saved rule once the saved rule and open changes can be read", async () => {
+    api.patchSettings.mockRejectedValue(new Error("Network error"));
+    api.fetchChangePlans.mockRejectedValue(new Error("Network error"));
+    await render();
+    await choose("approve_risky");
+    await click("Save approval rule");
+    await vi.waitFor(() => expect(button("Check saved rule")).toBeDefined());
+    expect(button("Save approval rule").disabled).toBe(true);
+    // The Gateway answers: the rule was never saved, so the draft stays and saving works again.
+    api.fetchChangePlans.mockResolvedValue({ items: [] });
+    await click("Check saved rule");
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain(
+        "Your approval rule was not saved. Your draft is kept, so you can save it again.",
+      ),
+    );
+    expect(button("Check saved rule")).toBeUndefined();
+    expect(button("Save approval rule").disabled).toBe(false);
+    expect(api.patchSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("leads to an earlier change that is still waiting instead of saying settings changed", async () => {
+    api.patchSettings.mockRejectedValue({
+      status: 409,
+      body: { code: "WRITE_CONFLICT", details: { resourceKind: "change_plan", resourceId: "plan-waiting" } },
+    });
+    api.fetchChangePlan.mockRejectedValue(new Error("offline"));
+    await render();
+    await choose("approve_risky");
+    await click("Save approval rule");
+    await vi.waitFor(() => expect(container.textContent).toContain("One change to this rule is already waiting."));
+    expect(container.textContent).toContain("Open Inbox to approve it.");
+    expect(container.textContent).not.toContain("changed since your draft started");
+    expect(button("Save approval rule").disabled).toBe(true);
+    expect(container.textContent).toContain("Unsaved approval rule draft");
+    expect(api.patchSettings).toHaveBeenCalledTimes(1);
+  });
+
   it("locks mismatched completed settings instead of claiming success", async () => {
     api.patchSettings.mockResolvedValue({ ...owner, revision: 3 });
     await render();
     await choose("approve_risky");
     await click("Save approval rule");
-    expect(container.textContent).toContain("Save outcome is uncertain");
+    await vi.waitFor(() => expect(container.textContent).toContain("this save isn't confirmed yet"));
     expect(container.textContent).not.toContain("Tool approval rule saved");
   });
 

@@ -240,12 +240,13 @@ describe("Connector panel", () => {
     expect(target.hash).toBe("#mcp-servers");
   });
 
-  it("explains when Chat can't use connectors yet, with a link to Advanced setup", async () => {
+  it("explains when Chat can't use connectors yet, with a link to its switch", async () => {
     const blocked = { ...LINEAR, chat: { available: false, blockedBy: "mcp_in_chat_off" } } as const;
     await renderPanel(LINEAR.id, [blocked]);
-    expect(text()).toContain("Chat can't use connectors yet");
-    const target = new URL(link("See Chat access in Advanced setup")!.getAttribute("href")!, "http://cockpit.invalid");
-    expect(target.pathname + target.hash).toBe("/capabilities/connectors/advanced#mcp-servers");
+    expect(text()).toContain("Chat can't use connectors yet: Connectors in Chat is turned off.");
+    const target = new URL(link("Turn it on in Settings › Advanced")!.getAttribute("href")!, "http://cockpit.invalid");
+    expect(target.hash).toBe("#feature-switch-connectors-in-chat");
+    expect(link("See Chat access in Advanced setup")).toBeUndefined();
   });
 
   it("says why Chat can't use connectors when background runs are off, with the same link", async () => {
@@ -254,6 +255,7 @@ describe("Connector panel", () => {
     expect(text()).toContain("Chat can't use connectors while background runs are off");
     // The other cause's sentence would send the operator to the wrong switch.
     expect(text()).not.toContain("Chat can't use connectors yet");
+    expect(link("Turn it on in Settings › Advanced")).toBeUndefined();
     const target = new URL(link("See Chat access in Advanced setup")!.getAttribute("href")!, "http://cockpit.invalid");
     expect(target.pathname + target.hash).toBe("/capabilities/connectors/advanced#mcp-servers");
   });
@@ -261,8 +263,8 @@ describe("Connector panel", () => {
   it("keeps the general Chat sentence when the Gateway names no cause", async () => {
     const blocked = { ...LINEAR, chat: { available: false } } as const;
     await renderPanel(LINEAR.id, [blocked]);
-    expect(text()).toContain("Chat can't use connectors yet");
-    expect(link("See Chat access in Advanced setup")).toBeDefined();
+    expect(text()).toContain("Chat can't use connectors yet: Connectors in Chat is turned off.");
+    expect(link("Turn it on in Settings › Advanced")).toBeDefined();
   });
 
   it("stays quiet about Chat when Chat can use it", async () => {

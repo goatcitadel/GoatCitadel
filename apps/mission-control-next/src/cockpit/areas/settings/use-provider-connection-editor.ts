@@ -11,6 +11,7 @@ import {
   fetchMutationAttempt,
 } from "@goatcitadel/mission-control-shared/api/mutation-attempts";
 import { confirmSavedProviderConnection } from "./provider-connection-verify";
+import { useProviderCreateFailure } from "./use-provider-create-failure";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
 import {
   dispatchTrackedMutation,
@@ -28,9 +29,10 @@ import {
   CHECKABLE_MESSAGE,
   CONNECTION_ROUTE_PATTERNS,
   canReviewConnectionPlan,
-  providerSettingsChanged,
+  staleProviderCreate,
+  ENDPOINT_HINT,
+  ENV_VAR_NAME_HINT,
   matchesCurrentProviderConnectionPlan,
-  providerCredentialRegistrationChanged,
   connectionPlanCompleted,
   connectionPlanStopped,
   getProviderConnectionCustody,
@@ -54,6 +56,7 @@ export function useProviderConnectionEditor(
   const currentCustody = () => getProviderConnectionCustody() === custody;
   const attempt = useProviderConnectionAttempt(id);
   const [error, setError] = useState("");
+  const createFailure = useProviderCreateFailure(reload, currentCustody, setError);
   const [dialog, setDialog] = useState<ChangePlanRecord | null>(null);
   const reading = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -105,22 +108,16 @@ export function useProviderConnectionEditor(
     let transport: TrackedAttempt | undefined;
     setProviderConnectionAttempt(id, pending);
     setError("");
+    createFailure.begin();
     let submitted = false;
     try {
       const latest = await fetchLlmConfig();
       if (!currentCustody()) return;
-      if (providerSettingsChanged(latest, baseRevision, id, provider.baseUrl)) {
+      const stale = staleProviderCreate(latest, baseRevision, id, provider.baseUrl, request);
+      if (stale) {
         setProviderConnectionAttempt(id, undefined);
-        await withFreshReads(reload);
-        if (currentCustody())
-          setError("Provider settings changed. Review the latest version before creating a change.");
-        return;
-      }
-      if (providerCredentialRegistrationChanged(latest, id, request)) {
-        setProviderConnectionAttempt(id, undefined);
-        await reload();
-        if (currentCustody())
-          setError("The registered credential environment variable changed. Refresh and review it before continuing.");
+        await (stale.fresh ? withFreshReads(reload) : reload());
+        if (currentCustody()) setError(stale.message);
         return;
       }
       submitted = true;
@@ -131,7 +128,7 @@ export function useProviderConnectionEditor(
         (tracked) => {
           transport = tracked;
         },
-      );
+      ).catch(createFailure.record);
       if (!currentCustody()) return;
       if (!matchesConnectionAttempt(plan, pending))
         throw new Error("The returned plan does not match the reviewed provider and settings version.");
@@ -146,8 +143,11 @@ export function useProviderConnectionEditor(
       setProviderConnectionAttempt(id, { ...next, busy: false, verified: connectionPlanCompleted(plan) });
       if (canReviewConnectionPlan(plan)) setDialog(plan);
     } catch {
+      // A refusal or an earlier change still waiting created nothing, so neither leaves an uncertain lock.
+      const settled = currentCustody() && (await createFailure.settle());
       if (!currentCustody()) return;
-      if (submitted)
+      if (settled) setProviderConnectionAttempt(id, undefined);
+      else if (submitted)
         setProviderConnectionAttempt(id, {
           ...readProviderConnectionAttempt(id)!,
           busy: false,
@@ -166,6 +166,7 @@ export function useProviderConnectionEditor(
 
   async function refresh() {
     if (!currentCustody()) return;
+    void createFailure.panel.recheck();
     const current = readProviderConnectionAttempt(id);
     if (!current?.plan || current.busy || reading.current) return;
     reading.current = true;
@@ -387,7 +388,7 @@ export function useProviderConnectionEditor(
     if (!currentCustody()) return;
     const request = providerEndpointRequest(id, draft.value);
     if (!request) {
-      setError("Enter an HTTP or HTTPS endpoint without credentials, query parameters, or a fragment.");
+      setError(ENDPOINT_HINT);
       return;
     }
     if (!draft.isDirty) return;
@@ -398,9 +399,7 @@ export function useProviderConnectionEditor(
     if (!currentCustody()) return;
     const request = providerCredentialRequest(id, storage, envVar);
     if (!request) {
-      setError(
-        "Enter an environment variable name of up to 128 letters, numbers, or underscores, starting with a letter or underscore.",
-      );
+      setError(ENV_VAR_NAME_HINT);
       return;
     }
     void create(request);
@@ -411,6 +410,7 @@ export function useProviderConnectionEditor(
     attempt,
     blocked,
     error,
+    waitingPanel: createFailure.panel,
     dialog,
     setDialog,
     refreshing,

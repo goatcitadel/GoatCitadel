@@ -52,16 +52,16 @@ const button = (label: string) =>
 
 beforeEach(() => {
   api.inspectMcpServer.mockReset().mockResolvedValue(inspection);
-  api.fetchSettings.mockReset().mockResolvedValue({ chatFeatureAvailability: { staticMcp: false } });
-  api.fetchMcpServerTestEvidence
+  api.fetchSettings
     .mockReset()
-    .mockResolvedValue({
-      serverId: "server-a",
-      workspaceId: "w",
-      state: "unverified",
-      historyLimit: 32,
-      toolLimitPerTurn: 32,
-    });
+    .mockResolvedValue({ chatFeatureAvailability: { staticMcp: false }, features: { chatStaticMcpV1Enabled: false } });
+  api.fetchMcpServerTestEvidence.mockReset().mockResolvedValue({
+    serverId: "server-a",
+    workspaceId: "w",
+    state: "unverified",
+    historyLimit: 32,
+    toolLimitPerTurn: 32,
+  });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.append(container);
@@ -83,7 +83,7 @@ describe("MCP server inspection", () => {
       ),
     );
     await vi.waitFor(() => expect(container.textContent).toContain("Files server"));
-    expect(container.textContent).toContain("Static MCP in Chat is disabled");
+    expect(container.textContent).toContain("Connectors in Chat is turned off.");
     expect(button("Test connection").disabled).toBe(false);
     let release!: () => void;
     api.inspectMcpServer.mockImplementationOnce(
@@ -121,11 +121,11 @@ describe("MCP server inspection", () => {
         </QueryClientProvider>,
       ),
     );
-    await vi.waitFor(() => expect(container.textContent).toContain("Static MCP in Chat is disabled"));
+    await vi.waitFor(() => expect(container.textContent).toContain("Connectors in Chat is turned off."));
     api.fetchSettings.mockRejectedValueOnce(new Error("Settings unavailable"));
     await act(async () => button("Refresh Chat availability").click());
     await vi.waitFor(() => expect(container.textContent).toContain("Could not refresh Chat availability"));
-    expect(container.textContent).toContain("Static MCP in Chat is disabled");
+    expect(container.textContent).toContain("Connectors in Chat is turned off.");
     expect(container.textContent).toContain("Refresh before relying on the last recorded status");
     expect(container.textContent).toContain("Files server");
     expect(button("Copy sample task").disabled).toBe(true);

@@ -10,6 +10,8 @@ import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
+import { FeatureOffLink } from "../settings/FeatureOffLink";
+import { FeatureOffError, featureOffErrorOf, type FeatureSwitchFlag } from "../settings/feature-switches";
 import { ADMIN_STATE } from "./memory-diagnostics-vocabulary";
 import { readableValues, type Review } from "./memory-diagnostics-shared";
 import { MemoryQualityView } from "./LibraryMemoryQuality";
@@ -33,7 +35,8 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
   });
   const [review, setReview] = useState<Review>(),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState<string>();
+    [error, setError] = useState<string>(),
+    [errorFlag, setErrorFlag] = useState<FeatureSwitchFlag>();
   const [receipt, setReceipt] = useSessionViewState<string | undefined>(
     operation.presentationScope + ":receipt",
     undefined,
@@ -62,12 +65,20 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
         review.revision,
         async () => {
           const settings = await fetchSettings();
-          if (
-            !settings.features.memoryLifecycleAdminV1Enabled ||
-            (review.maintenance &&
-              (!settings.features.memoryMaintenanceV1Enabled || !settings.features.durableKernelV1Enabled))
-          )
-            throw new Error("Current runtime settings do not permit this operation.");
+          if (!settings.features.memoryLifecycleAdminV1Enabled)
+            throw new FeatureOffError(
+              "Memory administration is turned off on this installation.",
+              "memoryLifecycleAdminV1Enabled",
+            );
+          if (review.maintenance && !settings.features.memoryMaintenanceV1Enabled)
+            throw new FeatureOffError(
+              "Memory maintenance is turned off on this installation.",
+              "memoryMaintenanceV1Enabled",
+            );
+          if (review.maintenance && !settings.features.durableKernelV1Enabled)
+            throw new FeatureOffError(
+              "Memory maintenance needs resumable runs, which are turned off on this installation.",
+            );
           await review.check();
         },
         review.apply,
@@ -78,7 +89,10 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
         await memory.reload();
       }
     } catch (cause) {
-      if (operation.current()) setError(describeApiError(cause).summary);
+      if (operation.current()) {
+        setError(describeApiError(cause).summary);
+        setErrorFlag(featureOffErrorOf(cause)?.flag);
+      }
     } finally {
       setBusy(false);
     }
@@ -107,7 +121,14 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
       {memory.error ? <Callout tone="error">{memory.error}</Callout> : null}
       {data && !data.memoryAdminEnabled ? (
         <Callout announce={false}>
-          Memory administration is {ADMIN_STATE[data.memoryAdminState]}. Changes stay locked.
+          {data.memoryAdminState === "disabled" ? (
+            <>
+              Memory administration is turned off on this installation. Changes stay locked.{" "}
+              <FeatureOffLink flag="memoryLifecycleAdminV1Enabled" />
+            </>
+          ) : (
+            <>Memory administration is {ADMIN_STATE[data.memoryAdminState]}. Changes stay locked.</>
+          )}
         </Callout>
       ) : null}
       {Object.entries(data?.sectionErrors ?? {})
@@ -118,7 +139,11 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
           </Callout>
         ))}
       {receipt ? <Callout>{receipt}</Callout> : null}
-      {error ? <Callout tone="error">{error}</Callout> : null}
+      {error ? (
+        <Callout tone="error">
+          {error} {errorFlag ? <FeatureOffLink flag={errorFlag} /> : null}
+        </Callout>
+      ) : null}
       {operation.locked && operation.attempt?.message ? (
         <Callout tone="warning">{operation.attempt.message}</Callout>
       ) : null}
@@ -171,7 +196,11 @@ function MemoryDiagnostics({ workspaceId }: { workspaceId: string }) {
               ))}
             </dl>
           ) : null}
-          {error ? <Callout tone="error">{error}</Callout> : null}
+          {error ? (
+            <Callout tone="error">
+              {error} {errorFlag ? <FeatureOffLink flag={errorFlag} /> : null}
+            </Callout>
+          ) : null}
           <Button disabled={disabled} onClick={() => void submit()}>
             Confirm memory operation
           </Button>

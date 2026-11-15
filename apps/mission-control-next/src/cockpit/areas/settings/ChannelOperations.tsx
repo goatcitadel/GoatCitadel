@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { DiscordPairingRecord, IntegrationConnection } from "@goatcitadel/contracts";
 import { useChannelJourney } from "../../../features/native-routes/settings/channel-setup/use-channel-journey";
 import { useDiscordOperations } from "../../../features/native-routes/settings/channel-setup/use-discord-operations";
+import { FeatureOffLink } from "./FeatureOffLink";
 import { ChannelJourneyEvidence } from "../../../features/native-routes/settings/channel-setup/ChannelJourneyEvidence";
 import { TelegramPairingPanel } from "../../../features/native-routes/settings/channel-setup/TelegramPairingPanel";
 import { Button } from "../../ui/Button";
@@ -67,6 +68,7 @@ export function ChannelOperations({
             journey={journey.result?.journey}
             diagnostics={journey.result?.diagnostics}
             diagnosticsAvailability={journey.result?.diagnosticsAvailability}
+            diagnosticsOffLink={<FeatureOffLink flag="connectorDiagnosticsV1Enabled" />}
           />
           <p className="text-fg-muted">
             A sent receipt records provider acceptance; it does not confirm that a person read the message.

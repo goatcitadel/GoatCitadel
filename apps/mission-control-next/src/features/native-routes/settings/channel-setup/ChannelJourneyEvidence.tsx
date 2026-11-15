@@ -1,4 +1,5 @@
 import type { ChannelSetupJourney, ConnectorDiagnosticReport } from "@goatcitadel/contracts";
+import type { ReactNode } from "react";
 import { plainCheckName } from "../diagnostic-check-names";
 const timestamp = (value?: string, fallback = "Not observed") =>
   value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString() : fallback;
@@ -24,10 +25,13 @@ export function ChannelJourneyEvidence({
   journey,
   diagnostics,
   diagnosticsAvailability,
+  diagnosticsOffLink,
 }: {
   journey?: ChannelSetupJourney;
   diagnostics?: ConnectorDiagnosticReport;
   diagnosticsAvailability?: "enabled" | "disabled" | "unavailable";
+  /** The way to turn Connector diagnostics on. Only the Cockpit passes it (Classic has no such page and no query client). */
+  diagnosticsOffLink?: ReactNode;
 }) {
   const latestReplyState =
     journey?.latestReplyState ?? (journey?.states.reply === "unsupported" ? "unsupported" : "unknown");
@@ -166,9 +170,15 @@ export function ChannelJourneyEvidence({
         <section aria-label="Connection diagnostics" className="space-y-1 rounded-md border border-line p-3">
           <h4 className="font-semibold">Connection diagnostics</h4>
           <p role="status">
-            {diagnosticsAvailability === "disabled"
-              ? "Diagnostics are disabled in runtime settings."
-              : "Diagnostics are unavailable because their runtime setting could not be verified."}{" "}
+            {diagnosticsAvailability === "disabled" ? (
+              diagnosticsOffLink ? (
+                <>Connector diagnostics are turned off on this installation. {diagnosticsOffLink}</>
+              ) : (
+                "Diagnostics are disabled in runtime settings."
+              )
+            ) : (
+              "Diagnostics are unavailable because their runtime setting could not be verified."
+            )}{" "}
             Journey and delivery evidence are shown independently.
           </p>
         </section>

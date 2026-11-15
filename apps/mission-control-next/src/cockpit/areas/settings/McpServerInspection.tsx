@@ -9,6 +9,7 @@ import { Sheet } from "../../ui/Sheet";
 import { McpConfigurationReport } from "../../../features/native-routes/settings/McpConfigurationReport";
 import { McpConnectionControls } from "../../../features/native-routes/settings/McpConnectionControls";
 import { McpOAuthControls } from "../../../features/native-routes/settings/McpOAuthControls";
+import { FeatureOffLink } from "./FeatureOffLink";
 import { McpSetupProgress } from "./McpSetupProgress";
 
 const readable = (value: string | undefined) => value?.replaceAll("_", " ") ?? "Unavailable";
@@ -113,6 +114,7 @@ export function McpServerInspection({
               stale={setupStale}
               testEvidence={evidenceView.record}
               staticMcpAvailable={availabilityView.record}
+              staticMcpSwitchOn={settings.data?.features?.chatStaticMcpV1Enabled}
               availabilityChecking={settings.isFetching}
               refreshAvailability={() => void settings.refetch()}
             />
@@ -187,6 +189,7 @@ export function McpServerInspection({
               )}
             </section>
             <McpConfigurationReport
+              featureOffLink={<FeatureOffLink flag="connectorDiagnosticsV1Enabled" />}
               server={data.server}
               scope={workspaceId}
               button={(label, click, disabled) => (

@@ -2,6 +2,7 @@ import type { CapabilitySkillInstall } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { Section } from "../../../ui/Section";
 import { StatusBadge } from "../../../ui/StatusBadge";
+import { useFeatureSwitchOn } from "../../settings/feature-switches";
 import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
 import {
   approvalWords,
@@ -31,7 +32,7 @@ function waitingInstall(flow: SkillInstall): WaitingInstall | undefined {
  * screen now. A decision is read back at once rather than at the next check.
  */
 function ApprovalInPlace({ flow, install }: { flow: SkillInstall; install: WaitingInstall }) {
-  const words = approvalWords(install.step, install.name);
+  const words = approvalWords(install.step, install.name, useFeatureSwitchOn("chatSkillInstructionsV1Enabled"));
   return (
     <SettingsApprovalDialog
       approvalId={install.approvalId}

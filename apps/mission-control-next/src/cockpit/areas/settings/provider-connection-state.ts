@@ -172,6 +172,28 @@ export function providerCredentialRegistrationChanged(
   );
 }
 
+export const ENDPOINT_HINT = "Enter an HTTP or HTTPS endpoint without credentials, query parameters, or a fragment.";
+export const ENV_VAR_NAME_HINT =
+  "Enter an environment variable name of up to 128 letters, numbers, or underscores, starting with a letter or underscore.";
+
+/** Why a reviewed create request no longer fits the current provider, and whether the reload must bypass caches. */
+export function staleProviderCreate(
+  latest: CurrentProviderSettings,
+  baseRevision: number,
+  id: string,
+  baseUrl: string,
+  request: ChangePlanProviderConnectionRequest,
+): { message: string; fresh: boolean } | undefined {
+  if (providerSettingsChanged(latest, baseRevision, id, baseUrl))
+    return { message: "Provider settings changed. Review the latest version before creating a change.", fresh: true };
+  if (providerCredentialRegistrationChanged(latest, id, request))
+    return {
+      message: "The registered credential environment variable changed. Refresh and review it before continuing.",
+      fresh: false,
+    };
+  return undefined;
+}
+
 export function matchesCurrentProviderConnectionPlan(
   plan: ChangePlanRecord,
   previous: ChangePlanRecord,

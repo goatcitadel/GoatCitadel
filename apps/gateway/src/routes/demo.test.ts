@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import { FeatureDisabledError } from "@goatcitadel/contracts";
 import { demoRoutes } from "./demo.js";
 
 describe("demo routes", () => {
@@ -287,6 +288,23 @@ describe("demo routes", () => {
       nextRoute: "/settings/onboarding",
       notes: ["Demo state is read-only until you press Start demo."],
     });
+  });
+
+  it("says in plain words that the memory sample was skipped because memory administration is off", async () => {
+    const services = createDemoServices();
+    services.memory.listItems.mockRejectedValueOnce(new FeatureDisabledError("memoryLifecycleAdminV1Enabled"));
+    app = Fastify();
+    app.decorate("services", services as never);
+    await app.register(demoRoutes);
+
+    const response = await app.inject({ method: "POST", url: "/api/v1/demo/bootstrap" });
+
+    expect(response.json().status).toBe("partial");
+    expect(response.json().notes).toContain(
+      "Memory sample skipped: memory administration is turned off on this installation.",
+    );
+    expect(JSON.stringify(response.json().notes)).not.toContain("memoryLifecycleAdminV1Enabled");
+    expect(services.knowledge.knowledgeMemoryWrite).not.toHaveBeenCalled();
   });
 
   it("returns partial bootstrap status when optional demo memory seeding fails", async () => {

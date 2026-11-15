@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";

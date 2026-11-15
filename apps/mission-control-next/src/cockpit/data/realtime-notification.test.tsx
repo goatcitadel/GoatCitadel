@@ -130,7 +130,12 @@ it("keeps replay silent and drops a live attention read if access changes while 
   await emit(event, true);
   expect(mocks.loadAttention).not.toHaveBeenCalled();
   let release!: () => void;
-  mocks.loadAttention.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+  mocks.loadAttention.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
   await act(async () => {
     onEvent(event, { replayed: false });
     await vi.waitFor(() => expect(mocks.loadAttention).toHaveBeenCalledOnce());
@@ -317,6 +322,16 @@ describe("cockpit owner-backed notifications", () => {
     expect(options.duration).toBe(15_000);
     options.action.onClick();
     expect(mocks.navigate).toHaveBeenCalledWith("/inbox?approvalId=a&workspaceId=w");
+  });
+  it("does not pop a shell command or code into the toast description", async () => {
+    mocks.read.mockResolvedValue({
+      ...projection,
+      items: [{ ...item, summary: "Command: pnpm (open it to see the full command)", summaryNamesCommand: true }],
+    });
+    await render();
+    await emit();
+    expect(mocks.warning).toHaveBeenCalledTimes(1);
+    expect(mocks.warning.mock.calls[0]![1].description).toBeUndefined();
   });
   it("uses current reviewed navigation without reconnecting the stream or replaying a shown toast", async () => {
     await render();

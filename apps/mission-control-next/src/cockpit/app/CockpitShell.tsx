@@ -1,3 +1,4 @@
+import { GatewayUnavailableContext } from "./gateway-unavailable-context";
 import { EmbeddedPageHeaderProvider } from "../../features/native-routes/embedded-page-header";
 import { Skeleton } from "../ui/Skeleton";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
@@ -194,10 +195,12 @@ function CockpitShellContent({
                 <Activity key={chatScope} mode={conversationVisible ? "visible" : "hidden"}>
                   {/* A new route query, such as the palette's New chat, retries a failed Chat. */}
                   <AreaErrorBoundary label="Chat" resetKey={chatScope + search}>
-                    <ChatArea
-                      gatewayUnavailable={gatewayReachability?.unavailable}
-                      onVisibleSessionChange={onVisibleSessionChange}
-                    />
+                    <GatewayUnavailableContext.Provider value={Boolean(gatewayReachability?.unavailable)}>
+                      <ChatArea
+                        gatewayUnavailable={gatewayReachability?.unavailable}
+                        onVisibleSessionChange={onVisibleSessionChange}
+                      />
+                    </GatewayUnavailableContext.Provider>
                   </AreaErrorBoundary>
                 </Activity>
               ) : null}
@@ -269,12 +272,7 @@ function CockpitShellContent({
           </EmbeddedPageHeaderProvider>
           <InspectorPanel />
         </div>
-        {!firstRun && !wide ? (
-          <MobileNavigationSlot
-            onOpenPalette={openPaletteFrom}
-            streamState={streamState}
-          />
-        ) : null}
+        {!firstRun && !wide ? <MobileNavigationSlot onOpenPalette={openPaletteFrom} streamState={streamState} /> : null}
       </div>
       {Palette ? <Palette open={paletteOpen} onOpenChange={requestPalette} /> : null}
       <ShortcutHelp open={helpOpen} onOpenChange={setHelpOpen} />

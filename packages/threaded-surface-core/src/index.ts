@@ -19,6 +19,7 @@ export {
 export {
   describeChatUiError,
   formatChatUiError,
+  isGatewayUnreachableChatError,
   type ChatErrorSource,
   type ChatUiErrorDescriptor,
 } from "./chat/chat-error-copy";

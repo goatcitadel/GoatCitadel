@@ -54,6 +54,7 @@ vi.mock("../areas/library/LibraryArea", () => ({
 vi.mock("../areas/capabilities/CapabilitiesArea", () => ({
   CapabilitiesArea: () => <p>Capabilities content</p>,
 }));
+import { useGatewayUnavailable } from "./gateway-unavailable-context";
 // No other test here visits Chat, so a stub keeps the failure test off the network.
 const chatArea = vi.hoisted(() => ({ failure: null as Error | null, effects: 0 }));
 vi.mock("../areas/chat/ChatArea", () => ({
@@ -68,6 +69,7 @@ vi.mock("../areas/chat/ChatArea", () => ({
     return (
       <>
         <p>Chat content</p>
+        <p data-chat-gateway-unavailable>{String(useGatewayUnavailable())}</p>
         <input aria-label="Retained conversation draft" defaultValue="Draft" />
       </>
     );
@@ -201,7 +203,9 @@ describe("CockpitShell", () => {
       );
       expect(paletteCode.evaluated).not.toHaveBeenCalled();
       expect(palette()).toBeNull();
-      await act(async () => { await vi.dynamicImportSettled(); });
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
       const more = container.querySelector<HTMLButtonElement>('button[aria-label="More areas and settings"]')!;
       more.focus();
       await act(async () => {
@@ -230,9 +234,7 @@ describe("CockpitShell", () => {
       expect(palette()).toBeNull();
       expect(document.activeElement).toBe(more);
 
-      await act(async () =>
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true })),
-      );
+      await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true })));
       await vi.waitFor(() => expect(palette()).not.toBeNull());
       expect(paletteCode.evaluated).toHaveBeenCalledOnce();
     } finally {
@@ -621,7 +623,9 @@ describe("CockpitShell", () => {
       );
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }));
     });
-    await act(async () => { await vi.dynamicImportSettled(); });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
     expect(document.body.textContent).toContain("Unsaved changes");
     expect(document.querySelector('[aria-label="Command palette"]')).toBeNull();
@@ -807,6 +811,26 @@ describe("CockpitShell", () => {
   });
 });
 
+it("tells Chat whether GoatCitadel is unreachable, so its decision buttons can pause (U-CH-027)", async () => {
+  window.history.replaceState(null, "", "/chat?shell=cockpit");
+  const unreachable = { unavailable: true, lastConfirmedAt: null, checking: false, lastCheckedAt: null };
+  const render = (gatewayReachability?: typeof unreachable) =>
+    act(async () =>
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <CockpitShell streamState="retrying" gatewayReachability={gatewayReachability} />
+        </QueryClientProvider>,
+      ),
+    );
+  const seen = () => container.querySelector("[data-chat-gateway-unavailable]")?.textContent;
+  await render();
+  expect(seen()).toBe("false");
+  await render(unreachable);
+  expect(seen()).toBe("true");
+  await render({ ...unreachable, unavailable: false });
+  expect(seen()).toBe("false");
+});
+
 // `/ops/runtime` now redirects natively to System › Health (cockpit-compatibility), so it no longer belongs here.
 it.each(["/missing", "/system/missing", "/library/knowledge"])("does not show Chat or Health for %s", async (path) => {
   window.history.replaceState(null, "", path + "?workspaceId=w#record");
@@ -848,7 +872,7 @@ it("routes the legacy sessions bookmark to its exact native session owner after 
   try {
     await act(async () => shellPreferences.setActiveScope({ citadelId: "personal", workspaceId: "default" }));
     expect(container.querySelector('[aria-label="Linked scope review"]')?.textContent).toContain(
-      "This link requests a different Citadel or workspace",
+      "This link is for a workspace that isn't in your list.",
     );
     expect(shellPreferences.activeWorkspaceId).toBe("default");
     // Trusted fixture selection represents a directory-reviewed scope; the URL never selects it.
