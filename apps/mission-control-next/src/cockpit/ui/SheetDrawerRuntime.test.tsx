@@ -74,3 +74,26 @@ it("draws a drag handle on the bottom sheet only", async () => {
   await renderSheet({ side: true });
   expect(document.querySelector("[data-vaul-handle]")).toBeNull();
 });
+
+it("does not close the sheet when its drag handle is tapped", async () => {
+  const onOpenChange = vi.fn();
+  await act(async () => {
+    root.render(
+      <SheetDrawerRuntime
+        open
+        onOpenChange={onOpenChange}
+        onOpenAutoFocus={undefined}
+        onCloseAutoFocus={undefined}
+        sdkClose={createRef<HTMLButtonElement>()}
+        closeLabel="Close"
+        title="Filters"
+        side={false}
+      >
+        <p>Body</p>
+      </SheetDrawerRuntime>,
+    );
+  });
+  await act(async () => document.querySelector<HTMLElement>("[data-vaul-handle]")!.click());
+  await act(async () => new Promise((done) => setTimeout(done, 400)));
+  expect(onOpenChange).not.toHaveBeenCalled();
+});
