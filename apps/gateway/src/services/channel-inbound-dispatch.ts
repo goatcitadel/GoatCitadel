@@ -152,6 +152,12 @@ export type IntegrationWebhookRouteLike = {
     message: string;
   }>;
   emitChannelActivity: (input: ChannelActivityInput) => Promise<ChannelActivityResult>;
+  /**
+   * Remembers, briefly and in memory, a sender this connection turned away, so channel setup can offer to allow them.
+   * Optional-typed so route-level test harnesses keep compiling, but a REQUIRED member of the integration-webhook
+   * route port, so the real gateway composition cannot drop it.
+   */
+  recordDroppedSender?: (input: { connectionId: string; senderId: string }) => void;
   recordDevDiagnostic?: (input: {
     level: "info" | "warn" | "error";
     category: string;
@@ -352,7 +358,7 @@ const CHANNEL_NAMES_BY_KEY: ReadonlyMap<string, string> = new Map(
 /** A sender id comes from outside, so the message keeps it to one line of a length a person can read. */
 const MAX_SENDER_ID_CHARS = 256;
 
-function readableSenderId(actorId: string | undefined): string {
+export function readableSenderId(actorId: string | undefined): string {
   const oneLine = (actorId ?? "").replace(/\p{Cc}+/gu, " ").trim();
   return oneLine.length > MAX_SENDER_ID_CHARS ? `${oneLine.slice(0, MAX_SENDER_ID_CHARS)}…` : oneLine;
 }
@@ -378,7 +384,10 @@ export function describeDroppedSender(channel: string, actorId: string | undefin
  * media download or transcription subprocess.
  */
 function evaluateInboundWebhookAccess(
-  integrationWebhooks: Pick<IntegrationWebhookRouteLike, "acceptInboundChannelEvent" | "recordDevDiagnostic">,
+  integrationWebhooks: Pick<
+    IntegrationWebhookRouteLike,
+    "acceptInboundChannelEvent" | "recordDevDiagnostic" | "recordDroppedSender"
+  >,
   options: InboundWebhookDispatchOptions,
 ) {
   const inboundAccess = evaluateChannelInboundAccess({
@@ -426,6 +435,10 @@ function evaluateInboundWebhookAccess(
         allowedSenderCount: inboundAccess.allowedSenders.length,
       },
     });
+    const droppedSenderId = readableSenderId(options.message.actorId);
+    if (!hasInvalidConfig && options.connectionId && droppedSenderId) {
+      integrationWebhooks.recordDroppedSender?.({ connectionId: options.connectionId, senderId: droppedSenderId });
+    }
     return {
       allowed: false as const,
       response: {

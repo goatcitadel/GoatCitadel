@@ -147,7 +147,9 @@ describe("integration webhook security routes", () => {
 
   it("names the sender in the diagnostic when generic inbound is dropped for an empty allowed list", async () => {
     const diagnostics = new GatewayDevDiagnosticsService(true, undefined, false, 10);
+    const recordDroppedSender = vi.fn();
     app = buildApp({
+      recordDroppedSender,
       ingestChannelMessage: vi.fn(),
       recordDevDiagnostic: (input: Parameters<GatewayDevDiagnosticsService["record"]>[0]) => diagnostics.record(input),
       getIntegrationConnection: vi.fn(() =>
@@ -163,6 +165,7 @@ describe("integration webhook security routes", () => {
       content: "hello",
     });
 
+    expect(recordDroppedSender).toHaveBeenCalledWith({ connectionId, senderId: "user-1" });
     expect(response.statusCode).toBe(200);
     const [item] = diagnostics.list({ limit: 5 }).items;
     expect(item?.event).toBe("channel.inbound_allowlist_empty");
@@ -174,7 +177,9 @@ describe("integration webhook security routes", () => {
 
   it("names the sender in the diagnostic when generic inbound is dropped for a sender not on the list", async () => {
     const diagnostics = new GatewayDevDiagnosticsService(true, undefined, false, 10);
+    const recordDroppedSender = vi.fn();
     app = buildApp({
+      recordDroppedSender,
       ingestChannelMessage: vi.fn(),
       recordDevDiagnostic: (input: Parameters<GatewayDevDiagnosticsService["record"]>[0]) => diagnostics.record(input),
       getIntegrationConnection: vi.fn(() =>
@@ -194,6 +199,7 @@ describe("integration webhook security routes", () => {
       content: "hello",
     });
 
+    expect(recordDroppedSender).toHaveBeenCalledWith({ connectionId, senderId: "user-intruder" });
     expect(response.statusCode).toBe(200);
     const [item] = diagnostics.list({ limit: 5 }).items;
     expect(item?.event).toBe("channel.sender_not_allowlisted");
@@ -205,7 +211,9 @@ describe("integration webhook security routes", () => {
 
   it("reads cleanly in the generic diagnostic when the sender id is blank", async () => {
     const diagnostics = new GatewayDevDiagnosticsService(true, undefined, false, 10);
+    const recordDroppedSender = vi.fn();
     app = buildApp({
+      recordDroppedSender,
       ingestChannelMessage: vi.fn(),
       recordDevDiagnostic: (input: Parameters<GatewayDevDiagnosticsService["record"]>[0]) => diagnostics.record(input),
       getIntegrationConnection: vi.fn(() =>
@@ -225,6 +233,7 @@ describe("integration webhook security routes", () => {
       content: "hello",
     });
 
+    expect(recordDroppedSender).not.toHaveBeenCalled();
     expect(response.statusCode).toBe(200);
     const [item] = diagnostics.list({ limit: 5 }).items;
     expect(item?.message).toBe(

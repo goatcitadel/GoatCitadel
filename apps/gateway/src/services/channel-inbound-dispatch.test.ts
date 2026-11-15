@@ -119,6 +119,43 @@ describe("channel-inbound-dispatch shared sender-allowlist gate", () => {
     );
   });
 
+  it("remembers the sender it turned away so setup can offer to allow them", async () => {
+    const gateway = createGateway();
+    const recordDroppedSender = vi.fn();
+    await dispatchInboundWebhookMessage(
+      { ...gateway, recordDroppedSender },
+      {
+        channel: "slack",
+        connectionId: CONNECTION_ID,
+        idempotencyKey: "slack:event-dropped",
+        eventType: "message",
+        bindingTarget: "C1",
+        inboundAccessConfig: { inboundAccessMode: "allowlist", allowedSenders: ["U-Owner"] },
+        allowedSenders: ["U-Owner"],
+        message: { eventId: "event-dropped", account: CONNECTION_ID, room: "C1", actorId: "U-Stranger", content: "hi" },
+      },
+    );
+    expect(recordDroppedSender).toHaveBeenCalledWith({ connectionId: CONNECTION_ID, senderId: "U-Stranger" });
+  });
+
+  it("does not remember a message that came with no sender id", async () => {
+    const gateway = createGateway();
+    const recordDroppedSender = vi.fn();
+    await dispatchInboundWebhookMessage(
+      { ...gateway, recordDroppedSender },
+      {
+        channel: "slack",
+        connectionId: CONNECTION_ID,
+        idempotencyKey: "slack:event-blank",
+        eventType: "message",
+        bindingTarget: "C1",
+        inboundAccessConfig: { inboundAccessMode: "allowlist" },
+        message: { eventId: "event-blank", account: CONNECTION_ID, room: "C1", actorId: " ", content: "hi" },
+      },
+    );
+    expect(recordDroppedSender).not.toHaveBeenCalled();
+  });
+
   it("allows a matching sender and commits it through durable acceptance", async () => {
     const gateway = createGateway();
 

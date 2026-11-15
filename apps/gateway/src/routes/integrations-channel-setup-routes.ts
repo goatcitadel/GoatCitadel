@@ -65,6 +65,25 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       reply.header("pragma", "no-cache");
     }
   });
+  // The senders a connection's inbound gate turned away lately: a short in-memory list, so it is never cached.
+  fastify.get(
+    "/api/v1/channels/connections/:connectionId/dropped-senders",
+    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const params = z
+        .object({ connectionId: z.string().trim().min(1).max(200) })
+        .strict()
+        .safeParse(request.params);
+      if (!params.success) return reply.code(400).send({ error: "A connection ID is required." });
+      try {
+        const items = await fastify.services.integrations.listChannelDroppedSenders(params.data.connectionId);
+        reply.header("cache-control", "no-store");
+        return reply.send({ connectionId: params.data.connectionId, items });
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
   fastify.post(
     "/api/v1/channels/telegram/discover-targets",
     { logLevel: "silent", config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },

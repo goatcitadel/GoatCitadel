@@ -86,7 +86,7 @@ describe("WhatsApp setup guide: what it says up front (item 7)", () => {
       "To receive messages: a public HTTPS address with a trusted certificate, the app secret, and a verify token you choose.",
     ]);
     expect(paragraphs("first-message")).toEqual([
-      "Check the test message arrived. To receive: in Meta's App Dashboard open WhatsApp › Configuration, paste this connection's webhook address and your verify token, verify, and subscribe to messages. Allow your number (digits only, no plus) under Who may message this bot, then send a message and check the reply. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a WhatsApp message from …\", and add that id under Who may message this bot with Edit setup.",
+      "Check the test message arrived. To receive: in Meta's App Dashboard open WhatsApp › Configuration, paste this connection's webhook address and your verify token, verify, and subscribe to messages. Allow your number (digits only, no plus) under Who may message this bot, then send a message and check the reply. If the bot doesn't answer your message, open Edit setup and go to Who may message this bot: the sender it turned away is listed there with a button to allow them.",
     ]);
   });
 
@@ -227,7 +227,7 @@ describe("WhatsApp setup guide: who may message the bot (item 4, A7, A8)", () =>
     const allowed = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
     expect(allowed?.explanation).toBe(
-      'Your WhatsApp number with country code, digits only, no plus (for example 15551234567). Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
+      "Your WhatsApp number with country code, digits only, no plus (for example 15551234567). Don't know the id? Finish setup and message the bot once. Then open Edit setup and come back to this step: the sender it turned away is listed here with a button to allow them.",
     );
   });
 

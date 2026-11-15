@@ -559,13 +559,29 @@ describe("isStepComplete: the sender step", () => {
     id: "access",
     kind: "instruction",
     title: "Who may message this bot?",
-    fields: [{ key: "allowedSenders", label: "Allowed sender identities", type: "sender-list", required: false }],
+    fields: [
+      {
+        key: "allowedSenders",
+        label: "Allowed sender identities",
+        type: "sender-list",
+        required: false,
+        explanation: "Who may start a conversation.",
+      },
+    ],
   };
   const receiveStep: ChannelSetupStepDefinition = {
     id: "receive",
     kind: "instruction",
     title: "Receive messages",
-    fields: [{ key: "webhookPath", label: "Webhook path", type: "text", required: false }],
+    fields: [
+      {
+        key: "webhookPath",
+        label: "Webhook path",
+        type: "text",
+        required: false,
+        explanation: "Where messages arrive.",
+      },
+    ],
   };
   const complete = (
     step: ChannelSetupStepDefinition,
