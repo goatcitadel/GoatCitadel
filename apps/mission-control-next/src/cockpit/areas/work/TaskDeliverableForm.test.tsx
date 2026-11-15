@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { onlineManager, QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import type { TaskRecord } from "@goatcitadel/mission-control-shared/api/types";
 import { addTaskDeliverable } from "@goatcitadel/mission-control-shared/api/tasks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -74,6 +74,15 @@ async function click(name: string) {
   await act(async () => buttonNamed(name).click());
 }
 
+/** Stands in for the task page, which reads the deliverables list the form asks to be read again. */
+function DeliverablesReader({ read }: { read: () => Promise<{ items: unknown[] }> }) {
+  useQuery({ queryKey: ["tasks", "work-task-deliverables", "workspace-a", "task-a"], queryFn: read });
+  return null;
+}
+
+const NOT_REFRESHED =
+  "Deliverable recorded, but the list couldn't be refreshed. Reload the page to see it and mark the task Done.";
+
 describe("TaskDeliverableForm", () => {
   it("records a deliverable for the task in its workspace and says Done is now available", async () => {
     vi.mocked(addTaskDeliverable).mockResolvedValue({
@@ -83,7 +92,17 @@ describe("TaskDeliverableForm", () => {
       title: "Report",
       createdAt: "2026-11-15T00:00:00Z",
     });
-    await render(<TaskDeliverableForm task={task()} workspaceId="workspace-a" />);
+    const read = vi
+      .fn<() => Promise<{ items: unknown[] }>>()
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValue({ items: [{ deliverableId: "d-1" }] });
+    await render(
+      <>
+        <DeliverablesReader read={read} />
+        <TaskDeliverableForm task={task()} workspaceId="workspace-a" />
+      </>,
+    );
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
     await type(field("Title"), "  Report  ");
     await choose(field("Kind"), "url");
     await type(field("File path or link (optional)"), "https://example.com/report");
@@ -121,7 +140,7 @@ describe("TaskDeliverableForm", () => {
         createdAt: "2026-11-15T00:00:00Z",
       }),
     );
-    await vi.waitFor(() => expect(container.textContent).toContain("Deliverable recorded."));
+    await vi.waitFor(() => expect(container.textContent).toContain("Deliverable recorded"));
     expect(addTaskDeliverable).toHaveBeenCalledWith("task-a", expect.objectContaining({ title: "Report A" }));
     expect((field("Title") as HTMLInputElement).value).toBe("Report B");
     expect((field("Note (optional)") as HTMLInputElement).value).toBe("");
@@ -136,14 +155,13 @@ describe("TaskDeliverableForm", () => {
       createdAt: "2026-11-15T00:00:00Z",
     });
     // The task page reads the deliverables list; here the first read works and the one after recording fails.
-    const read = vi.fn<() => Promise<never[]>>().mockResolvedValueOnce([]).mockRejectedValue(new Error("offline"));
-    function DeliverablesReader() {
-      useQuery({ queryKey: ["tasks", "work-task-deliverables", "workspace-a", "task-a"], queryFn: read });
-      return null;
-    }
+    const read = vi
+      .fn<() => Promise<{ items: unknown[] }>>()
+      .mockResolvedValueOnce({ items: [] })
+      .mockRejectedValue(new Error("offline"));
     await render(
       <>
-        <DeliverablesReader />
+        <DeliverablesReader read={read} />
         <TaskDeliverableForm task={task()} workspaceId="workspace-a" />
       </>,
     );
@@ -156,6 +174,59 @@ describe("TaskDeliverableForm", () => {
       ),
     );
     expect(container.textContent).not.toContain("You can now mark the task Done.");
+  });
+
+  it("does not promise Done when nothing is reading the list, or the read came back empty", async () => {
+    vi.mocked(addTaskDeliverable).mockResolvedValue({
+      deliverableId: "d-1",
+      taskId: "task-a",
+      deliverableType: "artifact",
+      title: "Report",
+      createdAt: "2026-11-15T00:00:00Z",
+    });
+    await render(<TaskDeliverableForm task={task()} workspaceId="workspace-a" />);
+    await type(field("Title"), "Report");
+    await click("Record deliverable");
+    await vi.waitFor(() => expect(container.textContent).toContain(NOT_REFRESHED));
+    expect(container.textContent).not.toContain("You can now mark the task Done.");
+  });
+
+  it("does not promise Done while the read of the list is paused", async () => {
+    let finish: (value: Awaited<ReturnType<typeof addTaskDeliverable>>) => void = () => undefined;
+    vi.mocked(addTaskDeliverable).mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const read = vi.fn<() => Promise<{ items: unknown[] }>>().mockResolvedValue({ items: [] });
+    await render(
+      <>
+        <DeliverablesReader read={read} />
+        <TaskDeliverableForm task={task()} workspaceId="workspace-a" />
+      </>,
+    );
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    await type(field("Title"), "Report");
+    await click("Record deliverable");
+    // The connection drops after the request went out: the list's next read pauses instead of running.
+    onlineManager.setOnline(false);
+    try {
+      await act(async () =>
+        finish({
+          deliverableId: "d-1",
+          taskId: "task-a",
+          deliverableType: "artifact",
+          title: "Report",
+          createdAt: "2026-11-15T00:00:00Z",
+        }),
+      );
+      await vi.waitFor(() => expect(container.textContent).toContain(NOT_REFRESHED));
+      expect(container.textContent).not.toContain("You can now mark the task Done.");
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(buttonNamed("Record deliverable")).toBeDefined();
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   it("keeps Record deliverable off until the title has text", async () => {

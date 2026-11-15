@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TaskDeliverableRecord, TaskRecord } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { addTaskDeliverable } from "@goatcitadel/mission-control-shared/api/tasks";
@@ -25,25 +25,31 @@ export function TaskDeliverableForm({ task, workspaceId }: { task: TaskRecord; w
   const [kind, setKind] = useState<DeliverableKind>("artifact");
   const [path, setPath] = useState("");
   const [note, setNote] = useState("");
-  // What the last recording came to: the list was read again (Done can show), or it could not be.
-  const [recorded, setRecorded] = useState<"refreshed" | "not-refreshed" | undefined>(undefined);
+  const [recorded, setRecorded] = useState(false);
+  const deliverablesKey = ["tasks", "work-task-deliverables", workspaceId, task.taskId];
+  // The task page owns this read; the form only watches it, because Done is offered from that list.
+  const list = useQuery<{ items?: readonly unknown[] }>({ queryKey: deliverablesKey, enabled: false });
+  const listed = list.isSuccess && (list.data?.items?.length ?? 0) > 0;
   const mutation = useMutation({
     mutationFn: (input: Parameters<typeof addTaskDeliverable>[1]) => addTaskDeliverable(task.taskId, input),
-    onSuccess: async (_record, sent) => {
+    onSuccess: (_record, sent) => {
       // Only what was sent is cleared: anything typed while the request was out stays.
       setTitle((current) => (current.trim() === sent.title ? "" : current));
       setKind((current) => (current === sent.deliverableType ? "artifact" : current));
       setPath((current) => (current.trim() === (sent.path ?? "") ? "" : current));
       setNote((current) => (current.trim() === (sent.description ?? "") ? "" : current));
-      const deliverablesKey = ["tasks", "work-task-deliverables", workspaceId, task.taskId];
-      await Promise.allSettled([
-        queryClient.invalidateQueries({ queryKey: deliverablesKey }),
-        queryClient.invalidateQueries({ queryKey: ["tasks", "work-task", workspaceId, task.taskId] }),
-      ]);
-      // Done is offered from the deliverables list, so it is promised only once that list was read again.
-      setRecorded(queryClient.getQueryState(deliverablesKey)?.status === "error" ? "not-refreshed" : "refreshed");
+      setRecorded(true);
+      // Not waited for: a read that fails or pauses must not leave the button busy.
+      void queryClient.invalidateQueries({ queryKey: deliverablesKey });
+      void queryClient.invalidateQueries({ queryKey: ["tasks", "work-task", workspaceId, task.taskId] });
     },
   });
+  // Done is promised only once a finished read of the list holds a deliverable; a failed or paused read promises none.
+  const recordedLine = listed
+    ? "Deliverable recorded. You can now mark the task Done."
+    : list.isFetching
+      ? "Deliverable recorded."
+      : "Deliverable recorded, but the list couldn't be refreshed. Reload the page to see it and mark the task Done.";
   const trimmedTitle = title.trim();
   const trimmedPath = path.trim();
   const trimmedNote = note.trim();
@@ -51,7 +57,7 @@ export function TaskDeliverableForm({ task, workspaceId }: { task: TaskRecord; w
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!trimmedTitle || mutation.isPending) return;
-    setRecorded(undefined);
+    setRecorded(false);
     mutation.mutate({
       workspaceId,
       title: trimmedTitle,
@@ -127,9 +133,7 @@ export function TaskDeliverableForm({ task, workspaceId }: { task: TaskRecord; w
         >
           {mutation.isError
             ? `Couldn't record the deliverable. ${describeApiError(mutation.error).summary}`
-            : recorded === "not-refreshed"
-              ? "Deliverable recorded, but the list couldn't be refreshed. Reload the page to see it and mark the task Done."
-              : "Deliverable recorded. You can now mark the task Done."}
+            : recordedLine}
         </p>
       ) : null}
     </form>
