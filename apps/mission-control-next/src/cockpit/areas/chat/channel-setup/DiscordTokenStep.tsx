@@ -1,6 +1,7 @@
 import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
-import { DISCORD_DEVELOPER_PORTAL, DISCORD_INTENT_OFF } from "./discord-setup-model";
+import { ChannelFailureText } from "./ChannelFailureText";
+import { DISCORD_CATALOG_ID, DISCORD_DEVELOPER_PORTAL, DISCORD_INTENT_OFF } from "./discord-setup-model";
 import { TokenField } from "./TokenField";
 
 export function PortalLink() {
@@ -25,6 +26,7 @@ export function BotToken({
   intentOff,
   busy,
   error,
+  workspaceId,
   value,
   onChange,
   checking,
@@ -35,6 +37,7 @@ export function BotToken({
   intentOff: boolean;
   busy: boolean;
   error?: string;
+  workspaceId: string;
   value: string;
   onChange: (value: string) => void;
   checking: boolean;
@@ -45,7 +48,14 @@ export function BotToken({
     <>
       {error ? (
         <Callout tone="error" announce={false}>
-          <p>{error}</p>
+          <p>
+            <ChannelFailureText
+              error={error}
+              channelName="Discord"
+              catalogId={DISCORD_CATALOG_ID}
+              workspaceId={workspaceId}
+            />
+          </p>
         </Callout>
       ) : null}
       {intentOff ? (

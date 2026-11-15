@@ -10,6 +10,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { SKILL_BLOCKER_COPY, blockerSentence } from "../skills/skill-check-copy";
 import { approvalWords } from "../skills/skill-install-view";
 import type { PluginInstallEntry, PluginInstallState, PluginSkillStepKind } from "./plugin-install-store";
 
@@ -51,10 +52,18 @@ export function skipOffNext(skills: number): string {
   return `Asks you ${asks}: once for the plugin and twice for ${skills === 1 ? "its skill" : "each skill"}.`;
 }
 
+/** The Gateway's generic line for a blocked skill (`SKILL_BLOCKED_MESSAGE` in its plugin inspection service). */
+const GATEWAY_SKILL_BLOCKED = "This skill didn't pass GoatCitadel's checks.";
+
 /** A piece's check, in plain words. A blocked check's message is the Gateway's own plain sentence. */
 export function checkLine(check: CapabilityPluginPieceCheck, kind: PluginPieceKind): string {
   if (check.status === "ready") return "Passed GoatCitadel's checks";
-  if (check.status === "blocked") return check.message;
+  if (check.status === "blocked") {
+    // The Gateway's one generic skill line hides which check failed: the Skills tab's own sentence for the code says it.
+    return kind === "skill" && check.message === GATEWAY_SKILL_BLOCKED && Object.hasOwn(SKILL_BLOCKER_COPY, check.code)
+      ? blockerSentence(check.code)
+      : check.message;
+  }
   // A group already off is the operator's own switch, never "installed"; its line above already says it is off.
   return kind === "tool_group_off" ? "Stays off when you uninstall." : "Already installed. Stays when you uninstall.";
 }

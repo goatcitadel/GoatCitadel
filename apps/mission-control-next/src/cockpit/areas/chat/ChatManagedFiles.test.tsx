@@ -269,3 +269,23 @@ it("names a local signed-in connection, not sign-in, when the caller is signed i
   expect(container.querySelector('a[href="/settings/access?shell=cockpit"]')?.textContent).toBe("Review access");
   expect(button("Retry")).toBeUndefined();
 });
+
+it("says what actually failed when the managed files list cannot load", async () => {
+  vi.mocked(api.fetchChatManagedFiles).mockRejectedValue(
+    new ApiRequestError("API error 500", {
+      kind: "http",
+      method: "GET",
+      path: "/api/v1/chat/sessions/session/managed-files",
+      status: 500,
+    }),
+  );
+  await render();
+  await click("Managed files");
+  await vi.waitFor(() =>
+    expect(document.body.textContent).toContain(
+      "Managed files couldn't load. The gateway hit an error. Try again, or check System health.",
+    ),
+  );
+  expect(document.body.textContent).not.toContain("config/tool-policy.json");
+  expect(button("Refresh managed files")).toBeDefined();
+});

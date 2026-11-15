@@ -81,6 +81,7 @@ export function SpendDetails() {
       ) : null}
       {costs.isError && !summary ? (
         <EmptyState
+          tone="error"
           title="Spend unavailable"
           description={describeApiError(costs.error).summary}
           action={<Button onClick={() => void costs.refetch()}>Try again</Button>}

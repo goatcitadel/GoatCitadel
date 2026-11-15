@@ -220,6 +220,7 @@ export function SlackSetupPage({
           busy={busy}
           checking={checking}
           error={setup.error}
+          workspaceId={workspaceId}
           onCheck={() => void checkTokens()}
         />
       ),

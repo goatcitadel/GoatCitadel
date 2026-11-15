@@ -43,9 +43,17 @@ describe("formatAnswerReviewLabel", () => {
         review({ ...base, depth: "strict", action: "noted_in_answer", outcome: "issues_found", issues: ["a"] }),
       ),
     ).toBe("Reviewed: 1 issue, noted in the answer");
-    expect(formatAnswerReviewLabel(review({ ...base, outcome: "unavailable", issues: [], reason: "timeout" }))).toBe(
-      "Review unavailable",
-    );
+    expect(formatAnswerReviewLabel(review({ ...base, outcome: "unavailable", issues: [] }))).toBe("Review unavailable");
+    expect(
+      formatAnswerReviewLabel(
+        review({ ...base, outcome: "unavailable", issues: [], reason: "The reviewer call timed out." }),
+      ),
+    ).toBe("Review unavailable: the reviewer call timed out");
+    expect(
+      formatAnswerReviewLabel(
+        review({ ...base, outcome: "unavailable", issues: [], reason: "The reviewer call failed" }),
+      ),
+    ).toBe("Review unavailable: the reviewer call failed");
   });
 });
 

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LlmProviderConfig } from "@goatcitadel/contracts";
 import type { LlmRuntimeConfigResponse } from "@goatcitadel/mission-control-shared/api/client";
 import { request } from "@goatcitadel/mission-control-shared/api/client-core";
+import { SECRET_STORE_SAVE_UNAVAILABLE_SUMMARY } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { useProviderProfileEditor } from "./use-provider-profile-editor";
 import { useProviderRouting } from "./use-provider-routing";
 import { useProviderCredentials } from "./use-provider-credentials";
@@ -298,6 +300,25 @@ describe("shared provider mutation ownership", () => {
     expect(fetch).toHaveBeenCalledOnce();
     expect(profile.mutation).toMatchObject({ checkable: true });
     expect(profile.mutation.uncertain).toBeTruthy();
+  });
+  it("says this computer has no secure key storage, with the way around it, when saving a credential", async () => {
+    view = "trust";
+    await render();
+    await act(async () => credentials.setSecretValue("synthetic-fixture-value"));
+    api.saveProviderSecret.mockRejectedValue(
+      new ApiRequestError("API error 503", {
+        kind: "http",
+        method: "POST",
+        path: "/api/v1/secrets/providers/fixture",
+        status: 503,
+        body: { error: "OS keychain backend is unavailable on this host", code: "SECRET_STORE_UNAVAILABLE" },
+      }),
+    );
+    setNotice.mockClear();
+    await act(async () => {
+      await credentials.handleSaveSecret();
+    });
+    expect(setNotice).toHaveBeenCalledWith({ tone: "error", message: SECRET_STORE_SAVE_UNAVAILABLE_SUMMARY });
   });
   it("does not dispatch credential deletion using a revision newer than the reviewed removal", async () => {
     view = "trust";
