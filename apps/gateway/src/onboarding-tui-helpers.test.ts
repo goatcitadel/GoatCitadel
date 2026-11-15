@@ -5,10 +5,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildWindowsCommand,
   clampOption,
+  isPromptCancellation,
   parseCommaSeparated,
+  providerKeyMissing,
   quoteWindowsCommandArg,
+  redactSecret,
   resolvePnpmCommandForPlatform,
   safeHostnameFromUrl,
+  validateHttpUrl,
+  validateRequired,
 } from "./onboarding-tui-helpers.js";
 
 const tempDirs: string[] = [];
@@ -83,5 +88,38 @@ describe("onboarding TUI helpers", () => {
     ]);
     expect(safeHostnameFromUrl("https://api.example.test/v1")).toBe("api.example.test");
     expect(safeHostnameFromUrl("not a url")).toBeUndefined();
+  });
+
+  it("recognises a closed prompt and validates answers (U-FR-008, U-FR-009)", () => {
+    expect(
+      isPromptCancellation(
+        Object.assign(new Error("User force closed the prompt with SIGINT"), { name: "ExitPromptError" }),
+      ),
+    ).toBe(true);
+    expect(isPromptCancellation(new Error("boom"))).toBe(false);
+    expect(isPromptCancellation("ExitPromptError")).toBe(false);
+    expect(validateHttpUrl("http://127.0.0.1:9")).toBe(true);
+    expect(validateHttpUrl("https://api.example.com/v1")).toBe(true);
+    const urlMessage = "Enter a full address that starts with http:// or https://.";
+    expect(validateHttpUrl("")).toBe(urlMessage);
+    expect(validateHttpUrl("127.0.0.1:8787")).toBe(urlMessage);
+    expect(validateHttpUrl("ftp://example.com")).toBe(urlMessage);
+    expect(validateRequired("a model id")("  ")).toBe("Enter a model id.");
+    expect(validateRequired("a model id")("glm-5")).toBe(true);
+  });
+
+  it("says a provider key is missing only when nothing supplies it", () => {
+    expect(providerKeyMissing({ apiKey: "", apiKeyEnv: "GLM_API_KEY", env: {} })).toBe(true);
+    expect(providerKeyMissing({ apiKey: "", apiKeyEnv: "GLM_API_KEY", env: { GLM_API_KEY: "  " } })).toBe(true);
+    expect(providerKeyMissing({ apiKey: "", apiKeyEnv: "GLM_API_KEY", env: { GLM_API_KEY: "k" } })).toBe(false);
+    expect(providerKeyMissing({ apiKey: "typed", apiKeyEnv: "GLM_API_KEY", env: {} })).toBe(false);
+    expect(providerKeyMissing({ apiKey: "", apiKeyEnv: "", env: {} })).toBe(false);
+  });
+
+  it("hides a secret that appears in a message", () => {
+    expect(redactSecret("failed for sk-abc123 twice: sk-abc123", "sk-abc123")).toBe(
+      "failed for [hidden] twice: [hidden]",
+    );
+    expect(redactSecret("nothing to hide", "")).toBe("nothing to hide");
   });
 });
