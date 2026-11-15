@@ -126,6 +126,7 @@ function BoardIndex({
       ) : null}
       {boards.isError ? (
         <EmptyState
+          tone="error"
           title="Dashboards unavailable"
           description={access.summary}
           action={<BoardReadRecovery error={boards.error} retry={() => void boards.refetch()} navigate={navigate} />}
@@ -282,6 +283,7 @@ function BoardDetail({
       ) : null}
       {board.isError ? (
         <EmptyState
+          tone="error"
           title="Board unavailable"
           description={describeApiError(board.error).summary}
           action={<BoardReadRecovery error={board.error} retry={() => void board.refetch()} navigate={navigate} />}
