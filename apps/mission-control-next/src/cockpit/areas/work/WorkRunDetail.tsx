@@ -17,6 +17,7 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { Button } from "../../ui/Button";
+import { Callout } from "../../ui/Callout";
 import { MetricList } from "../../ui/MetricList";
 import { EmptyState } from "../../ui/EmptyState";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -161,6 +162,14 @@ export function WorkRunDetail({ runId }: { runId: string }) {
             </NativeOwnerLink>{" "}
             to inspect host runtime status. Run controls and recorded errors are available here.
           </p>
+          {pendingApproval ? (
+            <Callout tone="warning" announce={false}>
+              This run is waiting for your approval.{" "}
+              <NativeOwnerLink className="font-medium text-accent" href={approvalHistoryHref} scope={ownerScope}>
+                Open in Inbox
+              </NativeOwnerLink>
+            </Callout>
+          ) : null}
           <WorkRunControls runId={runId} />
           {run.lastError || run.recoverySummary ? (
             <div className="grid gap-2">
@@ -170,6 +179,23 @@ export function WorkRunDetail({ runId }: { runId: string }) {
               </p>
               <RecordedErrorDetails error={run.lastError} />
             </div>
+          ) : null}
+          {data.errors.items.length ? (
+            <section
+              aria-label="Recorded run errors"
+              className="rounded-md border border-status-failed p-3 text-sm text-fg"
+            >
+              <h2 className="text-base font-semibold text-fg">Recorded run errors</h2>
+              {plural(data.errors.items.length, "recorded error")} {data.errors.items.length === 1 ? "needs" : "need"}{" "}
+              review.
+              <ul className="mt-3 space-y-2">
+                {data.errors.items.map((error) => (
+                  <li key={`${error.source}:${error.id}`} className="break-words">
+                    <strong>{RUN_ERROR_SOURCES[error.source] ?? "Run"}:</strong> {error.message}
+                  </li>
+                ))}
+              </ul>
+            </section>
           ) : null}
           <div className="grid gap-2">
             <p className="text-sm text-fg-secondary">
@@ -273,23 +299,6 @@ export function WorkRunDetail({ runId }: { runId: string }) {
           </section>
           <RunArtifacts trace={data} workspaceId={workspaceId} />
           <RunWorkspaceContext trace={data} workspaceId={workspaceId} />
-          {data.errors.items.length ? (
-            <section
-              aria-label="Recorded run errors"
-              className="rounded-md border border-status-failed p-3 text-sm text-fg"
-            >
-              <h2 className="text-base font-semibold text-fg">Recorded run errors</h2>
-              {plural(data.errors.items.length, "recorded error")} {data.errors.items.length === 1 ? "needs" : "need"}{" "}
-              review.
-              <ul className="mt-3 space-y-2">
-                {data.errors.items.map((error) => (
-                  <li key={`${error.source}:${error.id}`} className="break-words">
-                    <strong>{RUN_ERROR_SOURCES[error.source] ?? "Run"}:</strong> {error.message}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
         </>
       ) : null}
     </section>
