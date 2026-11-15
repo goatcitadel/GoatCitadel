@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { MemoryItemRecord } from "@goatcitadel/contracts";
 import {
@@ -34,6 +34,12 @@ import {
   noApprovalNeededMessage,
   TextWithInboxLink,
 } from "./LibraryMemoryEditorParts";
+
+type MemoryReview = {
+  item: MemoryItemRecord;
+  action: "save" | "forget";
+  draft: { title: string; content: string; pinned: boolean; ttl: string };
+};
 
 export function LibraryMemoryEditor({ itemId, workspaceId }: { itemId: string; workspaceId: string }) {
   const access = useLibraryOperation(JSON.stringify(["memory-item", workspaceId, itemId]));
@@ -104,9 +110,11 @@ function MemoryEditor({
         : "Memory administration is disabled.";
   const [historyOpen, setHistoryOpen] = useState(false),
     [busy, setBusy] = useState(false);
-  const [review, setReview] = useSessionViewState<
-    { item: MemoryItemRecord; action: "save" | "forget"; draft: typeof draft.value } | undefined
-  >(operation.presentationScope + ":review", undefined);
+  const requesting = useRef(false);
+  const [review, setReview] = useSessionViewState<MemoryReview | undefined>(
+    operation.presentationScope + ":review",
+    undefined,
+  );
   const [outcome, setOutcome] = useSessionViewState<
     { error: boolean; text: string; request?: MemoryLifecyclePendingApproval } | undefined
   >(operation.presentationScope + ":outcome", undefined);
@@ -121,8 +129,8 @@ function MemoryEditor({
   async function refresh() {
     await client.invalidateQueries({ queryKey: ["library"] });
   }
-  async function submit() {
-    if (!review || !available || !enabled || operation.locked || outcome || reviewStale) return;
+  async function submit(review: MemoryReview) {
+    if (!available || !enabled || operation.locked || !sameMemoryItem(review.item, item)) return;
     setBusy(true);
     try {
       const result = await operation.run(
@@ -175,10 +183,17 @@ function MemoryEditor({
       setBusy(false);
     }
   }
-  function start(action: "save" | "forget") {
-    if (operation.locked || !operation.current()) return;
+  async function requestChange(action: "save" | "forget") {
+    if (operation.locked || !operation.current() || busy || requesting.current) return;
+    requesting.current = true;
+    const next: MemoryReview = { action, item, draft: { ...draft.value } };
     setOutcome(undefined);
-    setReview({ action, item, draft: { ...draft.value } });
+    setReview(next);
+    try {
+      await submit(next);
+    } finally {
+      requesting.current = false;
+    }
   }
   const scope = memoryScopeLabel(item, workspaceId);
   const provenance = describeMemoryProvenance(item.metadata);
@@ -246,6 +261,7 @@ function MemoryEditor({
       </label>
       <div className="flex flex-wrap gap-2">
         <Button
+          variant="primary"
           disabled={
             globalItem ||
             !enabled ||
@@ -255,16 +271,16 @@ function MemoryEditor({
             item.status !== "active" ||
             !draft.value.title.trim()
           }
-          onClick={() => start("save")}
+          onClick={() => void requestChange("save")}
         >
-          Review memory changes
+          Request edit approval
         </Button>
         <Button
           variant="danger"
           disabled={globalItem || !enabled || !available || busy || item.status !== "active"}
-          onClick={() => start("forget")}
+          onClick={() => void requestChange("forget")}
         >
-          Review forget
+          Request forget approval
         </Button>
         <Button disabled={busy} variant="ghost" onClick={draft.discard}>
           Discard memory changes
@@ -325,8 +341,8 @@ function MemoryEditor({
         onOpenChange={(open) => {
           if (!open && !busy) setReview(undefined);
         }}
-        title={review?.action === "forget" ? "Forget memory" : "Request memory changes"}
-        description="This requests a governed approval; submission is not a completed memory write."
+        title={review?.action === "forget" ? "Forget requested" : "Memory change requested"}
+        description="Nothing changes until it is approved."
       >
         <div className="grid gap-3">
           <p className="break-words">
@@ -358,17 +374,7 @@ function MemoryEditor({
           {outcome?.request ? (
             <LibraryApproval approvalId={outcome.request.approvalId} workspaceId={workspaceId} onRefresh={refresh} />
           ) : null}
-          <Button
-            variant={review?.action === "forget" ? "danger" : "primary"}
-            disabled={busy || Boolean(outcome) || reviewStale || !available || !enabled}
-            onClick={() => void submit()}
-          >
-            {busy
-              ? "Requesting approval…"
-              : review?.action === "forget"
-                ? "Request forget approval"
-                : "Request edit approval"}
-          </Button>
+          {busy ? <p>Requesting approval…</p> : null}
         </div>
       </Dialog>
     </>

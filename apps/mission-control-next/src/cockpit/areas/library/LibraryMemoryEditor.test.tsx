@@ -157,17 +157,15 @@ it("treats a 202 memory request as pending, retains the draft and persists the r
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "My retained memory");
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  await click("Review memory changes");
-  expect(document.querySelector('[aria-label="Proposed memory changes"]')?.textContent).toContain("My retained memory");
-  expect(document.querySelector('[aria-label="Proposed memory changes"]')?.textContent).toContain(
-    "Requested pinned state: unpinned",
-  );
-  expect(patchMemoryItem).not.toHaveBeenCalled();
   expect(
     [...document.querySelectorAll<HTMLButtonElement>("button")].find((n) => n.textContent === "Request edit approval")!
       .className,
   ).toContain("bg-accent");
   await click("Request edit approval");
+  expect(document.querySelector('[aria-label="Proposed memory changes"]')?.textContent).toContain("My retained memory");
+  expect(document.querySelector('[aria-label="Proposed memory changes"]')?.textContent).toContain(
+    "Requested pinned state: unpinned",
+  );
   await act(async () => {
     await client.invalidateQueries({ queryKey: ["library", "memory-item"] });
   });
@@ -183,9 +181,26 @@ it("treats a 202 memory request as pending, retains the draft and persists the r
   await click("Close dialog");
   expect(container.querySelector("textarea")?.value).toBe("My retained memory");
 });
+it("requests an edit once with one click and opens the requested change", async () => {
+  vi.mocked(patchMemoryItem).mockResolvedValue({ pendingApproval });
+  await render();
+  const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (node) => node.textContent === "Request edit approval",
+  )!;
+  await act(async () => {
+    button.click();
+    button.click();
+  });
+  const dialog = () => document.querySelector('[role="dialog"]')!;
+  await vi.waitFor(() => expect(dialog().textContent).toContain("Memory change requested"));
+  expect(dialog().textContent).toContain("Nothing changes until it is approved.");
+  const names = [...dialog().querySelectorAll("button")].map((node) => node.textContent);
+  expect(names).not.toContain("Review memory changes");
+  expect(names.filter((name) => name === "Request edit approval")).toHaveLength(0);
+  expect(patchMemoryItem).toHaveBeenCalledTimes(1);
+});
 it("withholds stale writes and keeps the error through settled canonical refresh", async () => {
   await render();
-  await click("Review memory changes");
   vi.mocked(fetchMemoryItems).mockResolvedValue({
     items: [{ ...item, content: "Changed", updatedAt: "2026-10-02" }],
     total: 1,
@@ -211,13 +226,13 @@ it("governs forget and reads bounded history separately from item content", asyn
   await vi.waitFor(() =>
     expect(document.querySelector('[aria-label="Memory history"] h3')?.textContent).toBe("Created"),
   );
-  await click("Review forget");
   const named = (name: string) =>
     [...document.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name)!;
-  expect(named("Review forget").className).toContain("border-status-failed");
   expect(named("Request forget approval").className).toContain("border-status-failed");
-  expect(document.body.textContent).toContain("A forgotten item can't be restored from the cockpit.");
   await click("Request forget approval");
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Forget requested");
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Nothing changes until it is approved.");
+  expect(document.body.textContent).toContain("A forgotten item can't be restored from the cockpit.");
   expect(forgetMemoryItem).toHaveBeenCalledExactlyOnceWith("m-a");
   expect(patchMemoryItem).not.toHaveBeenCalled();
 });
@@ -257,8 +272,8 @@ it("keeps global memory read-only here because the Gateway only mutates exact wo
   expect(container.textContent).toContain("Shared across workspaces");
   const button = (name: string) =>
     [...container.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === name)!;
-  expect(button("Review memory changes").disabled).toBe(true);
-  expect(button("Review forget").disabled).toBe(true);
+  expect(button("Request edit approval").disabled).toBe(true);
+  expect(button("Request forget approval").disabled).toBe(true);
   expect(button("Memory history").disabled).toBe(false);
 });
 it("keeps administration disabled when the feature flag is false", async () => {
@@ -273,7 +288,7 @@ it("keeps administration disabled when the feature flag is false", async () => {
   expect(new URL(turnOn!.getAttribute("href")!, "http://cockpit.invalid").hash).toBe(
     "#feature-switch-memory-administration",
   );
-  await click("Review forget", { expectDisabled: true });
+  await click("Request forget approval", { expectDisabled: true });
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(forgetMemoryItem).not.toHaveBeenCalled();
 });
@@ -354,7 +369,6 @@ async function requestReview(action: "save" | "forget" = "save") {
   vi.mocked(patchMemoryItem).mockResolvedValue({ pendingApproval });
   vi.mocked(forgetMemoryItem).mockResolvedValue({ pendingApproval: { ...pendingApproval, action: "items_forgotten" } });
   await render();
-  await click(action === "save" ? "Review memory changes" : "Review forget");
   await click(action === "save" ? "Request edit approval" : "Request forget approval");
   await vi.waitFor(() =>
     expect(document.querySelector('[aria-label="Memory request receipt"]')?.textContent).toContain(
@@ -606,11 +620,10 @@ it("captures a custom expiry duration as reviewed TTL seconds in the governed pa
   await act(async () => setControl(labelled<HTMLInputElement>("Custom expiry amount"), "2"));
   expect(labelled<HTMLSelectElement>("Custom expiry unit").value).toBe("hours");
   expect(container.textContent).toContain("Expires 2 h after it is saved.");
-  await click("Review memory changes");
+  await click("Request edit approval");
   expect(document.querySelector('[aria-label="Proposed memory changes"]')?.textContent).toContain(
     "Requested expiry: 2 h",
   );
-  await click("Request edit approval");
   expect(patchMemoryItem).toHaveBeenCalledExactlyOnceWith("m-a", {
     title: "A memory",
     content: "Original",
@@ -631,7 +644,7 @@ it("offers expiry presets instead of raw seconds (LB-11)", async () => {
   ]);
   expect(container.textContent).not.toContain("seconds");
   await act(async () => setControl(select, "604800"));
-  await click("Review memory changes");
+  await click("Request edit approval");
   expect(document.querySelector('[aria-label="Proposed memory changes"]')?.textContent).toContain(
     "Requested expiry: 7 d",
   );
@@ -642,7 +655,6 @@ it("withholds an out-of-range expiry before the mutation owner", async () => {
   await act(async () => setControl(labelled<HTMLSelectElement>("Custom expiry unit"), "days"));
   await act(async () => setControl(labelled<HTMLInputElement>("Custom expiry amount"), "400"));
   expect(container.textContent).toContain("Choose an expiry between 1 minute and 365 days.");
-  await click("Review memory changes");
   await click("Request edit approval");
   expect(patchMemoryItem).not.toHaveBeenCalled();
   expect(document.body.textContent).toContain("Choose the default expiry or a duration between 1 minute and 365 days.");
@@ -650,7 +662,6 @@ it("withholds an out-of-range expiry before the mutation owner", async () => {
 it("says what a response without an approval means for each action (LB-11)", async () => {
   vi.mocked(patchMemoryItem).mockResolvedValue({ pendingApproval: null } as never);
   await render();
-  await click("Review memory changes");
   await click("Request edit approval");
   expect(document.body.textContent).toContain("No approval request came back for these changes");
   expect(document.body.textContent).not.toContain("already forgotten");
