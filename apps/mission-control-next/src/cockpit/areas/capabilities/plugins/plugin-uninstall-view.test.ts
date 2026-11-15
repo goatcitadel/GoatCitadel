@@ -1,6 +1,9 @@
 import type { CapabilityPluginDetail, CapabilityPluginDetailPiece } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  FINISH_UNINSTALL_RETRY_LINE,
+  FINISH_UNINSTALL_SKILL_LINE,
+  finishUninstallLine,
   UNINSTALL_REINSTALLABLE,
   UNINSTALL_SKILL_STAYS,
   uninstallApproval,
@@ -50,6 +53,22 @@ describe("uninstallConfirmDescription", () => {
       UNINSTALL_REINSTALLABLE,
     );
     expect(uninstallConfirmDescription([{ ...NOTES, state: "failed" }])).toBe(UNINSTALL_REINSTALLABLE);
+  });
+});
+
+describe("finishUninstallLine", () => {
+  it("names the skill approval only while a skill the plugin added is still there", () => {
+    expect(finishUninstallLine([{ ...NOTES, state: "added" }])).toBe(FINISH_UNINSTALL_SKILL_LINE);
+    expect(finishUninstallLine([{ ...NOTES, state: "waiting_for_approval" }])).toBe(FINISH_UNINSTALL_SKILL_LINE);
+  });
+  it("says only that the rest is removed when no skill of its own is left", () => {
+    const pack = { ...NOTES, pieceId: "pack", kind: "prompt_pack", state: "added" } as const;
+    expect(finishUninstallLine([pack])).toBe(FINISH_UNINSTALL_RETRY_LINE);
+    expect(finishUninstallLine([{ ...NOTES, state: "removed" }])).toBe(FINISH_UNINSTALL_RETRY_LINE);
+    expect(finishUninstallLine([{ ...NOTES, check: { status: "already_there" }, state: "kept" }])).toBe(
+      FINISH_UNINSTALL_RETRY_LINE,
+    );
+    expect(finishUninstallLine([])).toBe(FINISH_UNINSTALL_RETRY_LINE);
   });
 });
 

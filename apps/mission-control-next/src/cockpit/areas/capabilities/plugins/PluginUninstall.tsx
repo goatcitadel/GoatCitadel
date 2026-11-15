@@ -4,7 +4,7 @@ import { Button } from "../../../ui/Button";
 import { Dialog } from "../../../ui/Dialog";
 import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
 import type { PluginUninstallEntry } from "./plugin-uninstall-store";
-import { FINISH_UNINSTALL_LINE, uninstallConfirmDescription, uninstallConfirmLines } from "./plugin-uninstall-view";
+import { finishUninstallLine, uninstallConfirmDescription, uninstallConfirmLines } from "./plugin-uninstall-view";
 import { usePluginUninstall } from "./use-plugin-uninstall";
 
 /**
@@ -39,7 +39,7 @@ export function PluginUninstall({ detail }: { detail: CapabilityPluginDetail }) 
       {current.state === "uninstalling" ? (
         // It goes on removing what the first pass left, so it is red like Uninstall; it asks no confirmation again.
         <>
-          <p className="text-sm text-fg-secondary">{FINISH_UNINSTALL_LINE}</p>
+          <p className="text-sm text-fg-secondary">{finishUninstallLine(current.pieces)}</p>
           <Button variant="danger" loading={asking} loadingLabel="Asking…" onClick={flow.start}>
             Finish uninstalling
           </Button>

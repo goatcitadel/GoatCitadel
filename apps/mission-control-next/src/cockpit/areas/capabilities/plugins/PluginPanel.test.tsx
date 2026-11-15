@@ -568,6 +568,22 @@ describe("Plugin panel", () => {
     );
   });
 
+  it("promises no skill approval when the uninstall stopped on something else", async () => {
+    plugin.state = "uninstalling";
+    plugin.pieces = [
+      { ...CALENDAR, state: "added" },
+      { ...NOTES, state: "removed", href: undefined },
+    ];
+    list = { ...list, installed: [{ ...ROW, state: "uninstalling" }] };
+    await renderTab(`/capabilities/plugins?shell=cockpit&item=plugin%3A${PLUGIN_ID}`);
+
+    expect(button("Finish uninstalling", body())).toBeDefined();
+    expect(body()?.textContent).toContain(
+      "Almost done. Something this plugin added couldn't be removed the first time. Finish uninstalling removes what is left, picking up where it stopped.",
+    );
+    expect(body()?.textContent).not.toContain("takes its own approval");
+  });
+
   it("shows GoatCitadel's own words when an uninstall is refused", async () => {
     api.uninstallCapabilityPlugin.mockRejectedValue(
       httpError(409, { error: "Another change to Meeting tools is under way. Try again once it ends." }),

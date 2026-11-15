@@ -32,15 +32,28 @@ export const UNINSTALL_SKILL_STAYS =
 export const UNINSTALL_REINSTALLABLE = "This can't be undone here. Installing it again adds its pieces back.";
 
 /** Said above "Finish uninstalling" while a skill the plugin added still has to be switched off. */
-export const FINISH_UNINSTALL_LINE =
+export const FINISH_UNINSTALL_SKILL_LINE =
   "Almost done. A skill this plugin added still has to be switched off, and that takes its own approval. Finish uninstalling asks for it, then removes what is left, picking up where it stopped.";
+
+/** Said above "Finish uninstalling" when the first pass stopped for another reason: no skill approval is promised. */
+export const FINISH_UNINSTALL_RETRY_LINE =
+  "Almost done. Something this plugin added couldn't be removed the first time. Finish uninstalling removes what is left, picking up where it stopped.";
+
+/** Whether a skill the plugin itself added is still there: it is what an uninstall cannot take away yet. */
+function hasAddedSkill(pieces: readonly CapabilityPluginDetailPiece[]): boolean {
+  return pieces.some(
+    (piece) => piece.kind === "skill" && piece.check.status !== "already_there" && ADDED_STATES.has(piece.state),
+  );
+}
 
 /** The confirmation's description: it says up front whether the plugin can be installed again. */
 export function uninstallConfirmDescription(pieces: readonly CapabilityPluginDetailPiece[]): string {
-  const addedSkill = pieces.some(
-    (piece) => piece.kind === "skill" && piece.check.status !== "already_there" && ADDED_STATES.has(piece.state),
-  );
-  return addedSkill ? UNINSTALL_SKILL_STAYS : UNINSTALL_REINSTALLABLE;
+  return hasAddedSkill(pieces) ? UNINSTALL_SKILL_STAYS : UNINSTALL_REINSTALLABLE;
+}
+
+/** The line above "Finish uninstalling": it names the skill approval only when a skill of the plugin's is still there. */
+export function finishUninstallLine(pieces: readonly CapabilityPluginDetailPiece[]): string {
+  return hasAddedSkill(pieces) ? FINISH_UNINSTALL_SKILL_LINE : FINISH_UNINSTALL_RETRY_LINE;
 }
 
 /**
