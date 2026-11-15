@@ -7,6 +7,7 @@ import { Button } from "../../../ui/Button";
 import { Section } from "../../../ui/Section";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { CapabilityPolicyEvidence, CapabilitySourceEvidence } from "../../library/CapabilityEvidence";
+import { SkillEvaluationLink } from "./SkillEvaluationLink";
 import { SkillInstructions } from "./SkillInstructions";
 import { presentSkillReview, presentSkillSource } from "./skill-source";
 
@@ -113,6 +114,7 @@ export function SkillPanelDetail({ item, query }: { item: CapabilitySkillItem; q
       <Section title="Instructions" headingLevel={3}>
         <Instructions query={query} />
       </Section>
+      <SkillEvaluationLink skillId={item.skillId} />
       <Section title="Where it came from" headingLevel={3}>
         <p className="text-sm text-fg-secondary">{review ? `${source} · ${review}` : source}</p>
       </Section>
