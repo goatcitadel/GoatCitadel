@@ -46,4 +46,15 @@ describe("Chat stream error notice", () => {
     await act(async () => reload!.click());
     expect(onReload).toHaveBeenCalledTimes(1);
   });
+
+  it("links a missing-model failure to setup instead of offering a reload that cannot help", async () => {
+    await act(async () =>
+      root.render(<ChatStreamErrorNotice error="No model provider is configured." source="send" onReload={vi.fn()} />),
+    );
+    expect(container.textContent).toContain("The run cannot start because no provider is configured.");
+    expect(container.querySelector('a[href^="/settings/first-run"]')?.textContent).toBe("Set up a model");
+    expect([...container.querySelectorAll("button")].some((item) => item.textContent === "Reload conversation")).toBe(
+      false,
+    );
+  });
 });

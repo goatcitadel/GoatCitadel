@@ -1,4 +1,5 @@
-import type { ChatSessionRecord } from "@goatcitadel/contracts";
+import type { ChatSessionRecord, OnboardingState } from "@goatcitadel/contracts";
+import type { UseQueryResult } from "@tanstack/react-query";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
@@ -9,6 +10,7 @@ import { ChatSessionOverflow, ChatSessionTitle } from "./ChatSessionControls";
 import { SelectedThreadActivity } from "./SelectedThreadActivity";
 import { useModelLabel } from "../../data/use-model-label";
 import { presentDelegationRunStatus } from "./chat-vocabulary";
+import { projectFirstRunState } from "../settings/first-run-state";
 import type { ChannelConversationContext } from "./channel-conversation";
 
 type ActiveSession = MissionThreadedRenderSurfaceInput["activeSessionSurfaceProps"];
@@ -195,16 +197,38 @@ export function ChatHeaderSubtitle({
   return text ? <p className="hidden truncate text-xs text-fg-muted md:block">{text}</p> : null;
 }
 
-/** Advisory only: sending works before setup is finished, so the copy must not read as a block. */
-export function ChatSetupBanner({ onReturnToSetup }: { onReturnToSetup: () => void }) {
+/**
+ * Advisory once a model is ready: sending works before setup is finished, so that copy must not read as a block.
+ * Without a model nothing can answer, so the banner says so and sends the operator to choose one.
+ */
+export function ChatSetupBanner({ modelReady, onReturnToSetup }: { modelReady: boolean; onReturnToSetup: () => void }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-subtle bg-sunken px-3 py-2 text-sm text-fg-secondary">
-      <p>You can chat now. Finish setup to verify your first answer.</p>
+      <p>
+        {modelReady
+          ? "You can chat now. Finish setup to verify your first answer."
+          : "Connect a model before you send your first message."}
+      </p>
       <Button size="sm" onClick={onReturnToSetup}>
-        Return to setup
+        {modelReady ? "Return to setup" : "Set up a model"}
       </Button>
     </div>
   );
+}
+
+/** The setup banner, shown while setup is unfinished and the setup state could be read. */
+export function ChatSetupGate({
+  onboarding,
+  hidden,
+  onSetup,
+}: {
+  onboarding: Pick<UseQueryResult<OnboardingState>, "data" | "isError">;
+  hidden: boolean;
+  onSetup: () => void;
+}) {
+  const state = onboarding.data;
+  if (!state || onboarding.isError || state.completed || hidden) return null;
+  return <ChatSetupBanner modelReady={projectFirstRunState(state).modelReady} onReturnToSetup={onSetup} />;
 }
 
 export function ChatEmptyState({

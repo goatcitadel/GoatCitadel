@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
-import { ChatHeaderSubtitle, ChatSessionHeader } from "./ChatAreaChrome";
+import { ChatHeaderSubtitle, ChatSessionHeader, ChatSetupBanner } from "./ChatAreaChrome";
 import type { ChannelConversationContext } from "./channel-conversation";
 
 const media = vi.hoisted(() => ({ phone: false }));
@@ -292,5 +292,23 @@ describe("ChatSessionHeader for a channel conversation", () => {
     const labels = items.map((item) => item.textContent);
     expect(labels).not.toContain("Continue in a new chat");
     expect(labels).not.toContain("New conversation from latest message");
+  });
+});
+
+describe("ChatSetupBanner", () => {
+  it("does not promise chat before a model exists and links to setup", async () => {
+    const onReturn = vi.fn();
+    await act(async () => root.render(<ChatSetupBanner modelReady={false} onReturnToSetup={onReturn} />));
+    expect(container.textContent).toContain("Connect a model before you send your first message.");
+    expect(container.textContent).not.toContain("You can chat now");
+    const action = [...container.querySelectorAll("button")].find((item) => item.textContent === "Set up a model")!;
+    await act(async () => action.click());
+    expect(onReturn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the advisory wording once a model is ready", async () => {
+    await act(async () => root.render(<ChatSetupBanner modelReady onReturnToSetup={vi.fn()} />));
+    expect(container.textContent).toContain("You can chat now. Finish setup to verify your first answer.");
+    expect(container.textContent).toContain("Return to setup");
   });
 });
