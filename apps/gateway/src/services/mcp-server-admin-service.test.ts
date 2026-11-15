@@ -670,6 +670,21 @@ describe("mcp-server-admin-service", () => {
     );
   });
 
+  it("redacts a secret in an unreviewed connection error before storing it", async () => {
+    const host = createHost({
+      servers: [createServer({ serverId: "server-1" })],
+      resolveConnectedMcpTools: vi.fn(async () => {
+        throw new Error("fetch failed for https://mcp.example.test/sse?token=url-secret-value");
+      }),
+    });
+
+    await expect(connectMcpServer(host, "server-1")).rejects.toThrow("fetch failed");
+
+    expect(host.servers[0]?.status).toBe("error");
+    expect(host.servers[0]?.lastError).toContain("fetch failed for https://mcp.example.test/sse");
+    expect(host.servers[0]?.lastError).not.toContain("url-secret-value");
+  });
+
   it("stores OAuth handshake state and completes it through the connect path", async () => {
     const host = createHost({
       servers: [

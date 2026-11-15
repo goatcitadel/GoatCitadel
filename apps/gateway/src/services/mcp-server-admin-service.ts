@@ -369,7 +369,7 @@ export async function connectMcpServer(
         serverId,
         {
           status: "error",
-          lastError: expected ? reviewedConnectFailure(cause) : (cause as Error).message,
+          lastError: expected ? reviewedConnectFailure(cause) : redactSecretText((cause as Error).message).value,
         },
         connecting!,
       );

@@ -39,21 +39,29 @@ export const FINISH_UNINSTALL_SKILL_LINE =
 export const FINISH_UNINSTALL_RETRY_LINE =
   "Almost done. Something this plugin added couldn't be removed the first time. Finish uninstalling removes what is left, picking up where it stopped.";
 
-/** Whether a skill the plugin itself added is still there: it is what an uninstall cannot take away yet. */
-function hasAddedSkill(pieces: readonly CapabilityPluginDetailPiece[]): boolean {
-  return pieces.some(
-    (piece) => piece.kind === "skill" && piece.check.status !== "already_there" && ADDED_STATES.has(piece.state),
-  );
+/** The confirmation's opening when a skill's state can't be read: no reinstall is promised on missing evidence. */
+export const UNINSTALL_SKILL_UNKNOWN =
+  "This can't be undone here. GoatCitadel can't tell whether a skill it added is still there. If one is, you won't be able to install this plugin again, because skills can't be removed yet.";
+
+/** A skill the plugin itself brought, as opposed to one that was already there. */
+function ownSkills(pieces: readonly CapabilityPluginDetailPiece[]): CapabilityPluginDetailPiece[] {
+  return pieces.filter((piece) => piece.kind === "skill" && piece.check.status !== "already_there");
 }
 
 /** The confirmation's description: it says up front whether the plugin can be installed again. */
 export function uninstallConfirmDescription(pieces: readonly CapabilityPluginDetailPiece[]): string {
-  return hasAddedSkill(pieces) ? UNINSTALL_SKILL_STAYS : UNINSTALL_REINSTALLABLE;
+  const skills = ownSkills(pieces);
+  if (skills.some((piece) => ADDED_STATES.has(piece.state))) return UNINSTALL_SKILL_STAYS;
+  return skills.some((piece) => piece.state === "unknown") ? UNINSTALL_SKILL_UNKNOWN : UNINSTALL_REINSTALLABLE;
 }
 
-/** The line above "Finish uninstalling": it names the skill approval only when a skill of the plugin's is still there. */
+/**
+ * The line above "Finish uninstalling": it names the skill approval only while a skill of the plugin's still needs
+ * one. A skill already being removed has its approval, so nothing more is asked for it.
+ */
 export function finishUninstallLine(pieces: readonly CapabilityPluginDetailPiece[]): string {
-  return hasAddedSkill(pieces) ? FINISH_UNINSTALL_SKILL_LINE : FINISH_UNINSTALL_RETRY_LINE;
+  const needsApproval = ownSkills(pieces).some((piece) => ADDED_STATES.has(piece.state) && piece.state !== "removing");
+  return needsApproval ? FINISH_UNINSTALL_SKILL_LINE : FINISH_UNINSTALL_RETRY_LINE;
 }
 
 /**

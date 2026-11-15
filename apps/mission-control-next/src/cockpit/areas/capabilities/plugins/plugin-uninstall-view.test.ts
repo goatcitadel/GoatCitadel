@@ -5,6 +5,7 @@ import {
   FINISH_UNINSTALL_SKILL_LINE,
   finishUninstallLine,
   UNINSTALL_REINSTALLABLE,
+  UNINSTALL_SKILL_UNKNOWN,
   UNINSTALL_SKILL_STAYS,
   uninstallApproval,
   uninstallConfirmDescription,
@@ -54,6 +55,15 @@ describe("uninstallConfirmDescription", () => {
     );
     expect(uninstallConfirmDescription([{ ...NOTES, state: "failed" }])).toBe(UNINSTALL_REINSTALLABLE);
   });
+  it("does not promise a reinstall when a skill's state can't be read", () => {
+    expect(uninstallConfirmDescription([{ ...NOTES, state: "unknown" }])).toBe(UNINSTALL_SKILL_UNKNOWN);
+    expect(
+      uninstallConfirmDescription([
+        { ...NOTES, state: "unknown" },
+        { ...NOTES, pieceId: "b", state: "added" },
+      ]),
+    ).toBe(UNINSTALL_SKILL_STAYS);
+  });
 });
 
 describe("finishUninstallLine", () => {
@@ -65,6 +75,8 @@ describe("finishUninstallLine", () => {
     const pack = { ...NOTES, pieceId: "pack", kind: "prompt_pack", state: "added" } as const;
     expect(finishUninstallLine([pack])).toBe(FINISH_UNINSTALL_RETRY_LINE);
     expect(finishUninstallLine([{ ...NOTES, state: "removed" }])).toBe(FINISH_UNINSTALL_RETRY_LINE);
+    // Its removal was approved and is still applying: no second approval is asked for.
+    expect(finishUninstallLine([{ ...NOTES, state: "removing" }])).toBe(FINISH_UNINSTALL_RETRY_LINE);
     expect(finishUninstallLine([{ ...NOTES, check: { status: "already_there" }, state: "kept" }])).toBe(
       FINISH_UNINSTALL_RETRY_LINE,
     );
