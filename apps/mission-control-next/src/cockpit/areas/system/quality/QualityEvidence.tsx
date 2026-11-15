@@ -21,7 +21,7 @@ export function QualitySource({
   state: OpsQualityAvailabilityState;
   error?: string;
   warnings?: readonly string[];
-  /** Said after "none recorded yet" when nothing was ever recorded for this source (state `not_available`, no error). */
+  /** Only for a source that records results: "none recorded yet", then this, when nothing was ever recorded (`not_available`, no error). */
   emptyHint?: string;
   children: ReactNode;
 }) {
@@ -51,7 +51,8 @@ function sourceStatusSentence(
   error: string | undefined,
   emptyHint: string | undefined,
 ): string {
-  if (state === "not_available" && !error) return `${title}: none recorded yet.${emptyHint ? ` ${emptyHint}` : ""}`;
+  // Only a source that records results passes a hint; for shipped definitions or computed coverage "none recorded" is untrue.
+  if (state === "not_available" && !error && emptyHint) return `${title}: none recorded yet. ${emptyHint}`;
   const lead = `${title}: ${state === "unknown" ? "availability unknown" : "unavailable"}.`;
   return error
     ? `${lead} ${describeApiError(new Error(error)).summary}`

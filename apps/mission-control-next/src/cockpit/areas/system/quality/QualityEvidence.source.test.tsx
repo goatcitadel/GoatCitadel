@@ -49,3 +49,13 @@ it("still reads unavailable for an unknown state and for an error", () => {
     ),
   ).toContain("Model evaluations: unavailable.");
 });
+
+it("keeps the unavailable wording for a source that passes no hint (shipped definitions, computed coverage)", () => {
+  const text = show(
+    <QualitySource title="Security execution coverage" state="not_available">
+      <p>body</p>
+    </QualitySource>,
+  );
+  expect(text).toContain("Security execution coverage: unavailable. No results are available for this source.");
+  expect(text).not.toContain("none recorded yet");
+});
