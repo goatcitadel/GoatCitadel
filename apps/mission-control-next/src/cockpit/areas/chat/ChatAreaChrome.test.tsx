@@ -16,7 +16,7 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({
     media.phone && (query === RESPONSIVE_QUERIES.phone || query === RESPONSIVE_QUERIES.belowDesktop),
 }));
 
-vi.mock("../../data/use-citadel-name", () => ({ useCitadelName: () => "Personal" }));
+vi.mock("../../data/use-citadel-name", () => ({ useCitadelNameRead: () => ({ phase: "ready", name: "Personal" }) }));
 vi.mock("../../data/use-workspace-name", () => ({
   useWorkspaceNameRead: () => ({ phase: "ready", name: "Sandbox" }),
 }));

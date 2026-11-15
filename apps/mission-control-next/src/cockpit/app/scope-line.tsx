@@ -2,7 +2,7 @@ import { createContext, useContext, type ReactNode } from "react";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { useCitadelName } from "../data/use-citadel-name";
+import { useCitadelNameRead } from "../data/use-citadel-name";
 import { useWorkspaceNameRead } from "../data/use-workspace-name";
 
 /** The Citadel and workspace the page belongs to, in the wording the More sheet uses. */
@@ -24,24 +24,23 @@ export function ScopeLineProvider({ children }: { children: ReactNode }) {
   return <ScopeLineContext.Provider value={small}>{children}</ScopeLineContext.Provider>;
 }
 
-/** What the page line says: loading until both names are read, unavailable if either read failed, else the names. */
-export function pageScopeLine(
-  citadelName: string,
-  workspace: { phase: "loading" | "failed" | "ready"; name?: string },
-): string {
-  if (citadelName === "Citadel unavailable" || workspace.phase === "failed") return "Workspace unavailable";
-  if (citadelName.startsWith("Reading Citadel") || workspace.phase === "loading" || !workspace.name)
+type Read = { phase: "loading" | "failed" | "ready"; name?: string };
+
+/** What the page line says: loading until both names are read, unavailable if either read failed, else the names. Branches on the read phase, never on the name text. */
+export function pageScopeLine(citadel: Read, workspace: Read): string {
+  if (citadel.phase === "failed" || workspace.phase === "failed") return "Workspace unavailable";
+  if (citadel.phase === "loading" || workspace.phase === "loading" || !citadel.name || !workspace.name)
     return "Loading workspace…";
-  return `In ${citadelName} / ${workspace.name}`;
+  return `In ${citadel.name} / ${workspace.name}`;
 }
 
 function ScopeLineText() {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
   const workspace = useWorkspaceNameRead(activeCitadelId, activeWorkspaceId);
-  const citadelName = useCitadelName(activeCitadelId, true);
+  const citadel = useCitadelNameRead(activeCitadelId, true);
   return (
     <p data-cockpit-page-scope="" className="mt-1 truncate text-xs text-fg-muted">
-      {pageScopeLine(citadelName, workspace)}
+      {pageScopeLine(citadel, workspace)}
     </p>
   );
 }
