@@ -139,6 +139,49 @@ afterEach(() => {
 });
 
 describe("Inbox approval detail", () => {
+  it("explains the recorded commands individually and avoids classifying a shortened command", async () => {
+    const longCommand = "echo " + "sample ".repeat(24) + "end marker";
+    api.fetchApproval.mockResolvedValue({
+      ...approval,
+      preview: { commands: ["echo first", "echo second", longCommand] },
+      shellExplanations: [
+        {
+          command: "echo second",
+          parsed: true,
+          program: "echo",
+          summary: "Stored second",
+          details: [],
+          risks: [],
+          highestRisk: "info",
+        },
+        {
+          command: "echo first",
+          parsed: true,
+          program: "echo",
+          summary: "Stored first",
+          details: [],
+          risks: [],
+          highestRisk: "info",
+        },
+      ],
+    } satisfies ApprovalRequest);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <InboxApprovalDetail item={item} workspaceId="default" />
+        </QueryClientProvider>,
+      ),
+    );
+    const explanations = () => container.querySelector('[aria-label="Command explanations"]');
+    await settleUntil(() => Boolean(explanations()));
+    expect([...explanations()!.querySelectorAll("summary")].map((entry) => entry.textContent)).toEqual([
+      "Stored first · Safe",
+      "Stored second · Safe",
+      "Command preview is shortened",
+    ]);
+    expect(explanations()?.textContent).not.toContain("end marker");
+  });
+
   it.each(["llama_cpp_setup", "llama_cpp_configuration", "unrelated"])(
     "exposes the native setup return only for the supported %s target",
     async (targetResourceId) => {

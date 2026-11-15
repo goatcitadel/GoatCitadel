@@ -16,7 +16,7 @@ it("shows shell risk on the shared Safe/Caution/Danger scale instead of raw risk
   };
   const host = document.createElement("div");
   host.innerHTML = renderToStaticMarkup(
-    <ApprovalShellExplanations commands={["rm -rf build"]} explanations={[explanation]} />,
+    <ApprovalShellExplanations commands={[{ text: explanation.command }]} explanations={[explanation]} />,
   );
   expect(host.querySelector("summary")?.textContent).toBe("Deletes the build folder · Danger");
   expect(host.textContent).toContain("Caution: Recursive delete. Removes every file below the folder.");
