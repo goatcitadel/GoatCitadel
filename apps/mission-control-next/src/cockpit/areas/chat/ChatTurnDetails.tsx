@@ -209,7 +209,7 @@ export function ChatTurnDetails({
           </summary>
           {toolBodyMounted || toolDisclosure.open ? (
             <DeferredChatLeaf label="Tool activity" identity={turn.turnId}>
-              <ChatToolActivityBody turn={turn} showTechnicalDetails={showTechnicalDetails} />
+              <ChatToolActivityBody turn={turn} showTechnicalDetails={showTechnicalDetails} live={turnLive} />
             </DeferredChatLeaf>
           ) : null}
           <button

@@ -1,6 +1,6 @@
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
-import { summarizeTurnToolRuns, toolRunTarget } from "./chat-tool-run-summary";
+import { isAwaitingApprovedReceipt, summarizeTurnToolRuns, toolRunTarget } from "./chat-tool-run-summary";
 import { summarizeShellCommand } from "./summarize-shell-command";
 import {
   countLineChanges,
@@ -53,7 +53,39 @@ describe("toolRunTarget", () => {
   });
 });
 
+const approvedUncertain = {
+  ...run("documents.create"),
+  approvalId: "approval-1",
+  effectOutcomeKind: "uncertain",
+  effectEvidence: {
+    version: "goatcitadel.tool-effect.v1",
+    outcomeKind: "uncertain",
+    reason: "completed_without_canonical_effect_receipt",
+    refs: [],
+  },
+} as unknown as ChatToolRunRecord;
+
 describe("summarizeTurnToolRuns", () => {
+  it("reads an approved call whose receipt is still due as in progress while the turn runs (U-CH-047)", () => {
+    expect(summarizeTurnToolRuns([approvedUncertain], true)).toMatch(/^Creating 1 document/);
+    expect(isAwaitingApprovedReceipt(approvedUncertain, true)).toBe(true);
+  });
+
+  it("shows the recorded uncertain outcome once the turn is no longer running (U-CH-047)", () => {
+    expect(summarizeTurnToolRuns([approvedUncertain], false)).toMatch(/^May have created 1 document/);
+    expect(isAwaitingApprovedReceipt(approvedUncertain, false)).toBe(false);
+  });
+
+  it("keeps a different uncertain reason, or a call nobody approved, uncertain while the turn runs", () => {
+    const otherReason = {
+      ...approvedUncertain,
+      effectEvidence: { ...approvedUncertain.effectEvidence, reason: "dispatch_interrupted" },
+    } as unknown as ChatToolRunRecord;
+    const unapproved = { ...approvedUncertain, approvalId: undefined } as ChatToolRunRecord;
+    expect(isAwaitingApprovedReceipt(otherReason, true)).toBe(false);
+    expect(isAwaitingApprovedReceipt(unapproved, true)).toBe(false);
+  });
+
   it("names a single target and counts the rest, in a fixed order", () => {
     const runs = [
       run("shell.exec", { command: "pnpm test" }),

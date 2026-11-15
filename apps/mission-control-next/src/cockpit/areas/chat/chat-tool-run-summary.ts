@@ -46,8 +46,24 @@ type Outcome = "done" | "running" | "uncertain" | "awaiting" | "tried";
 const OUTCOME_ORDER: readonly Outcome[] = ["done", "running", "uncertain", "awaiting", "tried"];
 const EFFECT_CATEGORIES: ReadonlySet<ToolCategory> = new Set(["edit", "send", "create"]);
 
+/**
+ * An approved call the Gateway has settled as executed, whose effect receipt has not been recorded yet, while its turn
+ * is still running. The Gateway's record stays as it is ("outcome uncertain"); this only says the turn is not over, so
+ * the row does not read as a final uncertain result. Once the turn is no longer running, the recorded state shows.
+ */
+export function isAwaitingApprovedReceipt(run: ChatToolRunRecord, live: boolean): boolean {
+  return (
+    live &&
+    Boolean(run.approvalId) &&
+    run.status === "executed" &&
+    run.effectOutcomeKind === "uncertain" &&
+    run.effectEvidence?.reason === "completed_without_canonical_effect_receipt"
+  );
+}
+
 function outcomeOf(run: ChatToolRunRecord, live: boolean): Outcome {
   if (run.status === "started" && live) return "running";
+  if (isAwaitingApprovedReceipt(run, live)) return "running";
   if (EFFECT_CATEGORIES.has(toolCategory(run.toolName)) && projectChatToolEffectTruth(run)?.tone === "uncertain") {
     return "uncertain";
   }

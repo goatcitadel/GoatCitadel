@@ -9,7 +9,7 @@ import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { ChatToolRunSummary } from "./ChatToolRunSummary";
 import { ChatToolApprovalLine } from "./ChatToolApprovalLine";
 import { groupToolRunRetries } from "./chat-tool-run-groups";
-import { toolRunTarget, type ToolRunTarget } from "./chat-tool-run-summary";
+import { isAwaitingApprovedReceipt, toolRunTarget, type ToolRunTarget } from "./chat-tool-run-summary";
 import { toolRunDuration, toolRunLineChanges } from "./chat-tool-run-change-stats";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { failureLine, failureReason } from "./code-mode-request-copy";
@@ -98,9 +98,12 @@ function EarlierTries({ tries }: { tries: ChatToolRunRecord[] }) {
 export function ChatToolActivityBody({
   turn,
   showTechnicalDetails,
+  live,
 }: {
   turn: ChatThreadTurnRecord;
   showTechnicalDetails: boolean;
+  /** The turn is still running, so an approved call's receipt may not be recorded yet. */
+  live: boolean;
 }) {
   return (
     <ul className="mt-1 divide-y divide-line-subtle">
@@ -112,6 +115,7 @@ export function ChatToolActivityBody({
         const changes = toolRunLineChanges(tool);
         const duration = toolRunDuration(tool);
         const requestError = failedRequestError(tool);
+        const finishing = isAwaitingApprovedReceipt(tool, live);
         return (
           <li key={key} data-tool-run-id={tool.toolRunId} className="flex flex-wrap justify-between gap-2 py-2">
             <span className="min-w-0 text-fg-secondary">
@@ -132,10 +136,13 @@ export function ChatToolActivityBody({
                 </span>
               ) : null}
               {duration ? <span>{duration}</span> : null}
-              <span>{activityLabel(tool)}</span>
+              <span>
+                {finishing ? presentToolRunStatus({ ...tool, status: "started" }).label : activityLabel(tool)}
+              </span>
             </span>
             {tool.approvalId ? <ChatToolApprovalLine tool={tool} /> : null}
-            {diagnostics.summary || tool.error || tool.failureGuidance ? (
+            {finishing ? <p className="w-full">Finishing after your approval.</p> : null}
+            {!finishing && (diagnostics.summary || tool.error || tool.failureGuidance) ? (
               <ChatToolRunSummary text={toolRunSummaryText(tool)} />
             ) : null}
             {earlier.length ? <EarlierTries tries={earlier} /> : null}
@@ -152,7 +159,7 @@ export function ChatToolActivityBody({
                 </TechnicalDetails>
               </div>
             ) : null}
-            {effect && !isQuietWebLookupEffect(tool, effect.tone) ? (
+            {!finishing && effect && !isQuietWebLookupEffect(tool, effect.tone) ? (
               <p className="w-full">{effect.plainSummary}</p>
             ) : null}
             {/* The row names the tool; its registry name stays reachable for technical review. */}
