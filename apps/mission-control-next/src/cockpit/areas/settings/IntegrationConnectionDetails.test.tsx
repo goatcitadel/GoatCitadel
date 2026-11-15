@@ -48,7 +48,8 @@ const owner = {
 describe("integration connection details", () => {
   it("presents statuses, workspace and times in plain words and keeps raw evidence out of view", () => {
     const markup = renderToStaticMarkup(<IntegrationConnectionDetails owner={owner} />);
-    expect(markup).toContain("Configured status: Connected");
+    expect(markup).toContain("Saved status: Set up, not checked");
+    expect(markup).not.toContain("Connected");
     expect(markup).toContain("Bound workspace: Research.");
     expect(markup).toContain("Passed with warnings");
     expect(markup).toContain("Failed · Token expired");

@@ -903,6 +903,37 @@ describe("Saved server sign-in and connect", () => {
     expect(flows.start).not.toHaveBeenCalled();
   });
 
+  it("runs only the connect step for a saved server that never connected", async () => {
+    const saved = { ...SAVED_LINEAR, state: "needs_sign_in", reason: "not_connected", auth: "none" } as const;
+    await renderPanel(saved.id, [saved]);
+    await act(async () => button("Connect")?.click());
+    expect(flows.resume).toHaveBeenCalledExactlyOnceWith(saved.id, "connect");
+    expect(steps().some((step) => step.startsWith("Sign in"))).toBe(false);
+  });
+
+  it("runs only the sign-in step for a requester-scoped server whose sign-in expired", async () => {
+    const perChat = {
+      ...SAVED_LINEAR,
+      requesterScoped: true,
+      state: "sign_in_expired",
+      reason: "sign_in_expired",
+    } as const;
+    await renderPanel(perChat.id, [perChat]);
+    await act(async () => button("Reconnect")?.click());
+    expect(flows.resume).toHaveBeenCalledExactlyOnceWith(perChat.id, "sign_in_only");
+    expect(steps().some((step) => step.startsWith("Connect"))).toBe(false);
+  });
+
+  it("offers no Connect while a saved server is connecting, and none for a requester-scoped one", async () => {
+    const connecting = { ...SAVED_LINEAR, state: "needs_sign_in", reason: "connecting" } as const;
+    await renderPanel(connecting.id, [connecting]);
+    expect(button("Connect")).toBeUndefined();
+    const perChat = { ...SAVED_LINEAR, state: "connected", reason: "ready", requesterScoped: true } as const;
+    await renderPanel(perChat.id, [perChat]);
+    expect(button("Connect")).toBeUndefined();
+    expect(button("Try again")).toBeUndefined();
+  });
+
   it("leaves a service that isn't a saved server to its Advanced setup link", async () => {
     const gmail = item({
       id: "integration:conn-gmail",

@@ -145,6 +145,44 @@ function only(items: readonly CapabilityConnectorItem[]): CapabilityConnectorIte
 }
 
 describe("buildCapabilityConnectors", () => {
+  it("says a saved server that never connected is not connected yet", () => {
+    const row = only(buildCapabilityConnectors(input({ servers: [server({ status: "disconnected" })] })));
+    expect(row.state).toBe("needs_sign_in");
+    expect(row.reason).toBe("not_connected");
+  });
+
+  it("keeps a requester-scoped server connected: it never joins the global connection and works per chat", () => {
+    for (const status of ["disconnected", "connecting"] as const) {
+      const row = only(
+        buildCapabilityConnectors(input({ servers: [server({ status, connectionMode: "requester_scoped" })] })),
+      );
+      expect(row, status).toMatchObject({ state: "connected", reason: "ready", requesterScoped: true });
+    }
+  });
+
+  it("says a server that is connecting is connecting, not that it never connected", () => {
+    const row = only(buildCapabilityConnectors(input({ servers: [server({ status: "connecting" })] })));
+    expect(row).toMatchObject({ state: "needs_sign_in", reason: "connecting" });
+  });
+
+  it("keeps Connected for a server whose last connection worked", () => {
+    const row = only(buildCapabilityConnectors(input({ servers: [server({ status: "connected" })] })));
+    expect(row).toMatchObject({ state: "connected", reason: "ready" });
+  });
+
+  it("lets sign-in and switch states win over the connection status", () => {
+    const off = only(
+      buildCapabilityConnectors(input({ servers: [server({ status: "disconnected", enabled: false })] })),
+    );
+    expect(off.state).toBe("turned_off");
+    const signIn = only(
+      buildCapabilityConnectors(
+        input({ servers: [server({ status: "disconnected", authState: { readiness: "needs_auth" } as never })] }),
+      ),
+    );
+    expect(signIn.reason).toBe("sign_in_needed");
+  });
+
   it("drops internal and duplicate-of-builtin templates", () => {
     const items = buildCapabilityConnectors(input({ templates: MCP_SERVER_TEMPLATES }));
     const templateIds = new Set(items.map((item) => item.templateId));
@@ -965,9 +1003,9 @@ describe("buildCapabilityConnectors", () => {
       },
       {
         condition: "saved server that is disconnected with ready sign-in",
-        expected: "connected / ready",
-        state: "connected",
-        reason: "ready",
+        expected: "needs_sign_in / not_connected",
+        state: "needs_sign_in",
+        reason: "not_connected",
         build: () =>
           input({
             servers: [server({ status: "disconnected", authState: { authType: "oauth2", readiness: "ready" } })],
@@ -975,19 +1013,19 @@ describe("buildCapabilityConnectors", () => {
       },
       {
         condition: "saved server that is connecting with ready sign-in",
-        expected: "connected / ready",
-        state: "connected",
-        reason: "ready",
+        expected: "needs_sign_in / connecting",
+        state: "needs_sign_in",
+        reason: "connecting",
         build: () =>
           input({
             servers: [server({ status: "connecting", authState: { authType: "oauth2", readiness: "ready" } })],
           }),
       },
       {
-        condition: "saved server that is idle with no problem",
-        expected: "connected / ready",
-        state: "connected",
-        reason: "ready",
+        condition: "saved server that never connected, with no other problem",
+        expected: "needs_sign_in / not_connected",
+        state: "needs_sign_in",
+        reason: "not_connected",
         build: () => input({ servers: [server({ status: "disconnected" })] }),
       },
       {
