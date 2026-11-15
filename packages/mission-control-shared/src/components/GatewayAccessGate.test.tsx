@@ -93,6 +93,10 @@ function findButtonById(root: ReturnType<typeof create>["root"], id: string) {
   return root.findAllByType("button").find((button) => button.props.id === id);
 }
 
+function submitConnect(root: ReturnType<typeof create>["root"]) {
+  return root.findByProps({ id: "gateway-access-form" }).props.onSubmit({ preventDefault: vi.fn() });
+}
+
 function pendingDeviceApproval(overrides: Record<string, unknown> = {}) {
   return {
     requestId: "request-1",
@@ -231,7 +235,7 @@ describe("GatewayAccessGate", () => {
     const tokenInput = renderer.root.findByProps({ id: "gateway-access-token" });
     await act(async () => {
       tokenInput.props.onChange({ target: { value: "" } });
-      findButtonByText(renderer.root, "Connect to gateway")!.props.onClick();
+      submitConnect(renderer.root);
     });
     expect(renderer.root.findAllByProps({ className: "error gateway-access-error" })[0]?.children.join("")).toBe(
       "Enter the gateway token before retrying.",
@@ -242,7 +246,7 @@ describe("GatewayAccessGate", () => {
       findButtonById(renderer.root, "gateway-access-remember")!.props.onClick();
     });
     await act(async () => {
-      findButtonByText(renderer.root, "Connect to gateway")!.props.onClick();
+      submitConnect(renderer.root);
     });
 
     expect(shellMocks.persistGatewayAuthState).toHaveBeenCalledWith(
@@ -250,6 +254,68 @@ describe("GatewayAccessGate", () => {
       "session",
     );
     expect(onRetry).toHaveBeenCalled();
+  });
+
+  it("submits the token on Enter (U-GL-052)", async () => {
+    const onRetry = vi.fn();
+    const renderer = create(
+      <GatewayAccessGate
+        gatewayBaseUrl="http://localhost:8787"
+        access={needsAuthAccess()}
+        busy={false}
+        onRetry={onRetry}
+      />,
+    );
+    await flushAsync();
+    await act(async () => {
+      renderer.root.findByProps({ id: "gateway-access-token" }).props.onChange({ target: { value: "abc" } });
+    });
+    const preventDefault = vi.fn();
+    await act(async () => {
+      renderer.root.findByProps({ id: "gateway-access-form" }).props.onSubmit({ preventDefault });
+    });
+    expect(preventDefault).toHaveBeenCalled();
+    expect(shellMocks.persistGatewayAuthState).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "token", token: "abc" }),
+      "session",
+    );
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(findButtonByText(renderer.root, "Connect to gateway")!.props.type).toBe("submit");
+    expect(findButtonByText(renderer.root, "Request approval from another device")!.props.type).toBe("button");
+  });
+
+  it("does not submit twice while a connection attempt is in flight", async () => {
+    let finish: () => void = () => undefined;
+    const onRetry = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const renderer = create(
+      <GatewayAccessGate
+        gatewayBaseUrl="http://localhost:8787"
+        access={needsAuthAccess()}
+        busy={false}
+        onRetry={onRetry}
+      />,
+    );
+    await flushAsync();
+    await act(async () => {
+      renderer.root.findByProps({ id: "gateway-access-token" }).props.onChange({ target: { value: "abc" } });
+    });
+    await act(async () => {
+      void submitConnect(renderer.root);
+      void submitConnect(renderer.root);
+    });
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      finish();
+    });
+    await act(async () => {
+      void submitConnect(renderer.root);
+    });
+    expect(onRetry).toHaveBeenCalledTimes(2);
   });
 
   it("supports basic credentials when requested by the gateway", async () => {
@@ -265,7 +331,7 @@ describe("GatewayAccessGate", () => {
     await flushAsync();
 
     await act(async () => {
-      findButtonByText(renderer.root, "Connect to gateway")!.props.onClick();
+      submitConnect(renderer.root);
     });
     expect(renderer.root.findAllByProps({ className: "error gateway-access-error" })[0]?.children.join("")).toBe(
       "Enter both username and password before retrying.",
@@ -277,7 +343,7 @@ describe("GatewayAccessGate", () => {
       findButtonById(renderer.root, "gateway-access-remember")!.props.onClick();
     });
     await act(async () => {
-      findButtonByText(renderer.root, "Connect to gateway")!.props.onClick();
+      submitConnect(renderer.root);
     });
 
     expect(shellMocks.persistGatewayAuthState).toHaveBeenCalledWith(

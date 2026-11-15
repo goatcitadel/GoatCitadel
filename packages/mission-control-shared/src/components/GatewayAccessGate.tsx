@@ -1,5 +1,5 @@
 import { isApiRequestError } from "../api/http-internal";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   clearGatewayAuthState,
   createGatewayDeviceAccessRequest,
@@ -94,6 +94,8 @@ export function GatewayAccessGate({
   const [deviceApprovalError, setDeviceApprovalError] = useState<string | null>(null);
   const [deviceApprovalBusy, setDeviceApprovalBusy] = useState(false);
   const [pendingDeviceApproval, setPendingDeviceApproval] = useState<PendingDeviceApprovalRequest | null>(null);
+  // One connect attempt at a time: Enter and the button both submit the same form.
+  const connectInFlightRef = useRef(false);
 
   useEffect(() => {
     const stored = readStoredGatewayAuthState();
@@ -198,6 +200,18 @@ export function GatewayAccessGate({
       "Mission Control is waiting for a verified gateway session before it starts live data and control surfaces.");
 
   const handleConnect = async () => {
+    if (busy || deviceApprovalBusy || connectInFlightRef.current) {
+      return;
+    }
+    connectInFlightRef.current = true;
+    try {
+      await submitCredentials();
+    } finally {
+      connectInFlightRef.current = false;
+    }
+  };
+
+  const submitCredentials = async () => {
     setFormError(null);
     if (authMode === "token") {
       if (!token.trim()) {
@@ -338,7 +352,14 @@ export function GatewayAccessGate({
         {deviceApprovalError ? <p className="error gateway-access-error">{deviceApprovalError}</p> : null}
 
         {needsAuth ? (
-          <div className="gateway-access-form">
+          <form
+            id="gateway-access-form"
+            className="gateway-access-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleConnect();
+            }}
+          >
             <div className="controls-row gateway-access-row">
               <label htmlFor="gateway-access-mode">Credential type</label>
               <GCSelect
@@ -410,7 +431,7 @@ export function GatewayAccessGate({
                 autoComplete="off"
               />
             </div>
-          </div>
+          </form>
         ) : null}
 
         {needsAuth && pendingDeviceApproval ? (
@@ -426,9 +447,9 @@ export function GatewayAccessGate({
           {needsAuth ? (
             <>
               <button
-                type="button"
+                type="submit"
+                form="gateway-access-form"
                 className="gc-button active"
-                onClick={() => void handleConnect()}
                 disabled={busy || deviceApprovalBusy}
               >
                 {busy ? "Connecting..." : "Connect to gateway"}
