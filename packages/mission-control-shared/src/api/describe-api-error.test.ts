@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ApiRequestError } from "./http-internal";
-import { describeApiError, describeApiErrorText, GATEWAY_UNREACHABLE_SUMMARY } from "./describe-api-error";
+import {
+  describeApiError,
+  describeApiErrorText,
+  GATEWAY_UNREACHABLE_SUMMARY,
+  SECRET_STORE_UNAVAILABLE_SUMMARY,
+} from "./describe-api-error";
 
 function httpError(status: number, body?: unknown): ApiRequestError {
   return new ApiRequestError(`API error ${status}: {}`, {
@@ -104,5 +109,21 @@ describe("describeApiError", () => {
       "This chat changed elsewhere. Retry.",
     );
     expect(describeApiErrorText("TypeError: x is undefined", "Unable to load.").summary).toBe("Unable to load.");
+  });
+});
+
+describe("describeApiError secret store", () => {
+  it("says plainly that this computer has no secure storage for keys, at any status", () => {
+    for (const status of [422, 503]) {
+      const described = describeApiError(
+        httpError(status, {
+          error: "OS keychain backend is unavailable on this host",
+          code: "SECRET_STORE_UNAVAILABLE",
+        }),
+      );
+      expect(described.summary).toBe(SECRET_STORE_UNAVAILABLE_SUMMARY);
+      expect(described.retryable).toBe(false);
+      expect(described.technical).toContain(String(status));
+    }
   });
 });

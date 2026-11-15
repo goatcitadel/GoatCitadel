@@ -11,6 +11,8 @@ export interface ApiErrorDescription {
 
 export const GATEWAY_UNREACHABLE_SUMMARY =
   "Can't reach the GoatCitadel gateway. Check that it's running, then try again.";
+export const SECRET_STORE_UNAVAILABLE_SUMMARY =
+  "This computer has no secure storage for keys, so GoatCitadel can't save this one here. Set it as an environment variable on the computer running GoatCitadel instead.";
 const DEFAULT_FALLBACK = "Something went wrong. Try again.";
 
 export function describeEvidenceReceiptError(error: unknown): string {
@@ -36,6 +38,9 @@ export function describeApiError(error: unknown, fallback = DEFAULT_FALLBACK): A
     }
     if (error.kind === "protocol") {
       return { summary: "The gateway sent a response Mission Control couldn't read. Try again.", technical };
+    }
+    if (readBodyCode(error.body) === "SECRET_STORE_UNAVAILABLE") {
+      return { summary: SECRET_STORE_UNAVAILABLE_SUMMARY, technical, retryable: false };
     }
     if (error.status === 401) {
       return { summary: summaryForStatus(401, undefined), technical, category: "authentication", retryable: false };
@@ -131,6 +136,12 @@ function readBodyMessage(body: unknown): string | undefined {
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return undefined;
+}
+
+function readBodyCode(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const code = (body as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
 }
 
 /** Accept the public contract and older Gateways' flagged conflicts. */

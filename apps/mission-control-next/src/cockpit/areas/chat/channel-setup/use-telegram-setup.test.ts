@@ -3,6 +3,8 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { ChannelSetupDiscoveryResult, ChannelSetupDraft } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { TELEGRAM_NO_KEY_STORE } from "./no-key-store";
 import { SAY_HI_POLL_MS, SETUP_CODE_TTL_MS } from "./setup-code";
 import { useTelegramSetup, type TelegramSetupState } from "./use-telegram-setup";
 
@@ -49,6 +51,10 @@ function discovery(overrides: Partial<ChannelSetupDiscoveryResult> = {}): Channe
     botIdentity: { id: "42", username: "MyGoatBot", label: "My Goat Bot" },
     ...overrides,
   };
+}
+
+function httpFailure(status: number, body: unknown): ApiRequestError {
+  return new ApiRequestError(`API error ${status}`, { kind: "http", method: "POST", path: "/x", status, body });
 }
 
 let root: Root;
@@ -920,5 +926,19 @@ describe("saying hi", () => {
       });
       expect(api.updateChannelSetupDraft).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("says the page needs secure storage when this computer has none, and still gives the plain sentence for a 400", async () => {
+    arrangeCheck();
+    api.submitChannelSetupDraftSecrets.mockRejectedValueOnce(
+      httpFailure(422, { error: "Secure channel credential storage is unavailable." }),
+    );
+    await mount();
+    await run(() => current.checkKey(TOKEN));
+    expect(current.error).toBe(TELEGRAM_NO_KEY_STORE);
+
+    api.submitChannelSetupDraftSecrets.mockRejectedValueOnce(httpFailure(400, { error: "Bad key." }));
+    await run(() => current.checkKey(TOKEN));
+    expect(current.error).toBe(KEY_FAILED);
   });
 });

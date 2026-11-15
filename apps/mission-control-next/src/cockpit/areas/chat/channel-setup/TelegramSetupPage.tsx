@@ -14,6 +14,7 @@ import { SetupSteps, type SetupStepView } from "./SetupSteps";
 import { TurnOnStep, turnOnChanges, turnOnStatus } from "./TurnOnStep";
 import { useChannelRequiredHosts } from "./use-channel-picker-groups";
 import { useConnectedTelegramBot, useNewTelegramHref } from "./use-new-connection-href";
+import { ChannelFailureText } from "./ChannelFailureText";
 import { TELEGRAM_CATALOG_ID, useTelegramSetup, type TelegramSetupState } from "./use-telegram-setup";
 import { useTurnOn, type TurnOnState } from "./use-turn-on";
 
@@ -106,7 +107,14 @@ function BotKey({
       ) : null}
       {error ? (
         <Callout tone="error" announce={false}>
-          <p>{error}</p>
+          <p>
+            <ChannelFailureText
+              error={error}
+              channelName="Telegram"
+              catalogId={TELEGRAM_CATALOG_ID}
+              workspaceId={workspaceId}
+            />
+          </p>
         </Callout>
       ) : null}
       <p className="text-sm text-fg-secondary">
@@ -295,7 +303,14 @@ export function TelegramSetupPage({
           failure of something else (Start over) would be heard but not seen, so it shows here instead. Never both. */}
       {ready && setup.error ? (
         <Callout tone="error" announce={false}>
-          <p>{setup.error}</p>
+          <p>
+            <ChannelFailureText
+              error={setup.error}
+              channelName="Telegram"
+              catalogId={TELEGRAM_CATALOG_ID}
+              workspaceId={workspaceId}
+            />
+          </p>
         </Callout>
       ) : null}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line-subtle pt-4">
