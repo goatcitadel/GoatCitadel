@@ -69,6 +69,10 @@ export function InspectorResizeHandle({
                   : null;
         if (next !== null) {
           event.preventDefault();
+          // A keyboard step ends any drag in progress without committing it, so the drag cannot overwrite this value.
+          const current = drag.current;
+          drag.current = null;
+          if (current?.element.hasPointerCapture(current.id)) current.element.releasePointerCapture(current.id);
           onChange(clampInspectorWidth(next));
           onCommit?.(clampInspectorWidth(next));
         }
