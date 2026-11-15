@@ -121,6 +121,10 @@ function addTarget(
   if (!collector.targetEntries.has(line)) collector.targetEntries.set(line, { label, value });
 }
 
+function isMemorySubjectKind(kind: unknown): boolean {
+  return kind === "memory_item" || kind === "memory_item_batch";
+}
+
 // Memory lifecycle review summaries are sentences the Gateway already labels ("Requested TTL: 600 seconds",
 // "Unpin item"); a generated key label in front of them would only repeat it ("Ttl Summary: Requested TTL: …").
 function isMemoryLifecycleSummaryKey(reviewKind: unknown, key: string): boolean {
@@ -196,7 +200,17 @@ function collectApprovalEvidence(
       });
       continue;
     }
+    const memorySubject = isMemorySubjectKind(record.subjectKind);
     for (const [key, value] of Object.entries(record)) {
+      if (memorySubject && (key === "subjectId" || key === "subjectKind") && typeof value === "string") {
+        // A memory review names its subject by the count below; the id and kind are for the exact review only.
+        if (collector.exact) collector.supporting.add(`${humanizeKey(key)}: ${value}`);
+        continue;
+      }
+      if (memorySubject && key === "itemCount" && typeof value === "number") {
+        addTarget(collector, "Memory items", String(value));
+        continue;
+      }
       if (
         typeof record.reviewKind === "string" &&
         record.reviewKind.startsWith("memory.lifecycle.") &&
