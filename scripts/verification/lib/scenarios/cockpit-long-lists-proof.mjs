@@ -175,12 +175,12 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
             const last = page.locator('[data-inbox-item][data-selected="true"]');
             const selectedApproval = decisions.find((item) => item.id === visited.at(-1));
             assert.equal(selectedApproval.kind, "approval");
-            const ownerLink = last.getByRole("link", { name: "Open approval", exact: true });
+            const ownerLink = last.getByRole("link", { name: "Open in Chat", exact: true });
             await page.waitForFunction(() => document.activeElement?.matches('[data-inbox-item][data-selected="true"] [data-inbox-owner]'));
             const ownerUrl = new URL(await ownerLink.getAttribute("href"), stack.uiUrl);
             assert.equal(ownerUrl.origin, new URL(stack.uiUrl).origin);
-            assert.equal(ownerUrl.pathname, "/inbox");
-            assert.equal(ownerUrl.searchParams.get("approvalId"), selectedApproval.source.approvalId);
+            assert.equal(ownerUrl.pathname, "/chat");
+            assert.equal(ownerUrl.searchParams.has("approvalId"), false);
             assert.equal(ownerUrl.searchParams.get("workspaceId"), workspaceId);
             assert.equal(ownerUrl.searchParams.get("sessionId"), sessionId);
             assert.equal(ownerUrl.searchParams.get("shell"), "cockpit");

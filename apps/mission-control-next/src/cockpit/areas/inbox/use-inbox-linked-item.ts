@@ -1,6 +1,7 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { readCockpitHistory, subscribeCockpitHistory } from "../../app/cockpit-history";
+import type { InboxOpenArguments } from "./use-inbox-selection";
 
 /**
  * The Inbox item an exact link names: the projected item, or for an approval outside the projection a placeholder.
@@ -36,8 +37,10 @@ export function useInboxLinkedItem(input: {
   linkedItem: string | null;
   items: readonly OperatorInboxItem[] | undefined;
   isFetching: boolean;
-  inspect: (item: OperatorInboxItem) => void;
+  inspect: (...args: InboxOpenArguments) => void;
   select: (id: string) => void;
+  /** How the operator asked for this item (Details, a shortcut), when the address change was theirs. */
+  takePending: (id: string) => InboxOpenArguments | null;
 }): void {
   const {
     installation,
@@ -49,6 +52,7 @@ export function useInboxLinkedItem(input: {
     isFetching,
     inspect,
     select,
+    takePending,
   } = input;
   const history = useSyncExternalStore(subscribeCockpitHistory, readCockpitHistory, () => "server");
   const handledLink = useRef<string | null>(null);
@@ -67,12 +71,13 @@ export function useInboxLinkedItem(input: {
     if (!item) return;
     handledLink.current = key;
     select(item.id);
-    inspect(item);
+    inspect(...(takePending(item.id) ?? [item]));
   }, [
     items,
     isFetching,
     inspect,
     select,
+    takePending,
     installation,
     activeCitadelId,
     workspaceId,

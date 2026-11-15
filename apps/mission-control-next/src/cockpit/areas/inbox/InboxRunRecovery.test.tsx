@@ -167,6 +167,30 @@ describe("Inbox run recovery", () => {
     expect(api.recoverDurableDeadLetter).not.toHaveBeenCalled();
   });
 
+  it("shows the run inside the recovery dialog (U-IN-003)", async () => {
+    await renderRecovery();
+    await act(async () => button("Retry run").click());
+    const dialog = document.body.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain(
+      "This can run steps again, and their effects outside GoatCitadel. Check what the run did before you continue.",
+    );
+    expect(dialog.textContent).toContain("Workflow: Background work. Status: Failed. Attempts: 1 of 3.");
+    const link = [...dialog.querySelectorAll("a")].find((entry) => entry.textContent === "Open run");
+    expect(link?.getAttribute("href")).toContain("/work/runs/run-a");
+  });
+
+  it("does not colour a failed outcome as done", async () => {
+    api.retryDurableRun.mockResolvedValueOnce({ ...run, status: "failed", version: 5 });
+    await renderRecovery();
+    await act(async () => button("Retry run").click());
+    await act(async () => button("Confirm retry run").click());
+    const notice = [...container.querySelectorAll('[role="status"]')].find((node) =>
+      node.textContent?.startsWith("Recovery requested."),
+    );
+    expect(notice?.className).toContain("text-status-failed");
+    expect(notice?.className).not.toContain("text-status-done");
+  });
+
   it("refuses a changed run after review", async () => {
     api.fetchDurableRun.mockResolvedValueOnce(run).mockResolvedValueOnce({ ...run, version: 5, updatedAt: "later" });
     await renderRecovery();
