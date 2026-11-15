@@ -11,6 +11,7 @@ import { healthQueryScope } from "../data/health-query-scope";
 import { queryKeys } from "../data/query-keys";
 import { deriveSystemHealthChecks } from "../areas/system/system-health";
 import type { OperatorInboxResponse } from "@goatcitadel/contracts";
+import { onboardingFixture } from "../../features/native-routes/settings/onboarding.test-support";
 const inboxState = vi.hoisted(() => ({
   isError: false,
   data: {
@@ -25,6 +26,7 @@ const api = vi.hoisted(() => ({
   fetchNpuStatus: vi.fn(),
   fetchIntegrationConnections: vi.fn(),
   fetchChannelRuntimeStatus: vi.fn(),
+  fetchOnboardingState: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
 vi.mock("../../features/desktop-updates/desktop-update-bridge", () => ({ useDesktopUpdates: () => null }));
@@ -50,6 +52,7 @@ beforeEach(() => {
   api.fetchLlamaCppStatus.mockResolvedValue({ enabled: false });
   api.fetchNpuStatus.mockResolvedValue({ enabled: false });
   api.fetchIntegrationConnections.mockResolvedValue({ items: [] });
+  api.fetchOnboardingState.mockResolvedValue(onboardingFixture());
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -201,7 +204,7 @@ it.each([401, 403])(
   },
 );
 
-it("shares the four-read digest between consumers and freshly revalidates a scope ABA once", async () => {
+it("shares the five-read digest between consumers and freshly revalidates a scope ABA once", async () => {
   vi.useFakeTimers();
   api.fetchNpuStatus.mockRejectedValue(
     new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/npu/status", status: 403 }),
@@ -212,7 +215,7 @@ it("shares the four-read digest between consumers and freshly revalidates a scop
     });
   await render("workspace-a", 2);
   await tick();
-  expect(Object.values(api).reduce((total, mock) => total + mock.mock.calls.length, 0)).toBe(4);
+  expect(Object.values(api).reduce((total, mock) => total + mock.mock.calls.length, 0)).toBe(5);
   await render("workspace-b", 2);
   await tick();
   expect(api.fetchNpuStatus).toHaveBeenCalledTimes(2);
@@ -247,6 +250,7 @@ it("shares one core health read across shell consumers and explicitly defers opt
     api.fetchNpuStatus,
     api.fetchIntegrationConnections,
     api.fetchChannelRuntimeStatus,
+    api.fetchOnboardingState,
   ])
     expect(read).not.toHaveBeenCalled();
   expect(status.label).not.toContain("·");
