@@ -118,6 +118,12 @@ describe("native MCP saved-state control", () => {
       enabled: true,
     });
   });
+  it("calls the inspect button Connect and inspect (U-ST-009)", async () => {
+    await render();
+    const connect = container.querySelector<HTMLButtonElement>('button[aria-label="Connect and inspect Fixture MCP"]');
+    expect(connect?.textContent).toBe("Connect and inspect");
+    expect(container.textContent).not.toContain("Connections, tools and transport");
+  });
   it("keeps a revisionless caller-owned record inspectable without offering mutation", async () => {
     saved.revision = undefined;
     await render();
