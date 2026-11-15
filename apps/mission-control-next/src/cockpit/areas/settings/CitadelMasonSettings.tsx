@@ -15,7 +15,14 @@ import {
   presentRiskPosture,
 } from "./citadel-vocabulary";
 
-export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
+export function CitadelMasonSettings({
+  citadelId,
+  embeddedHeading = false,
+}: {
+  citadelId: string;
+  /** True when the page header already shows the same title, so the section draws no heading of its own. */
+  embeddedHeading?: boolean;
+}) {
   const control = useMasonEditor(citadelId),
     messageId = useId();
   const stage = useMasonStaging(citadelId, control.review, control.identity);
@@ -29,7 +36,7 @@ export function CitadelMasonSettings({ citadelId }: { citadelId: string }) {
   return (
     <section id="citadel-mason" aria-label="Citadel Mason" className="space-y-4">
       <header>
-        <h3 className="text-md font-semibold text-fg">{CITADEL_PAGE_LABELS.citadel}</h3>
+        {embeddedHeading ? null : <h3 className="text-md font-semibold text-fg">{CITADEL_PAGE_LABELS.citadel}</h3>}
         <p className="mt-1 text-sm text-fg-secondary">
           Collect the purpose, priorities and boundaries, then review a Blueprint before staging its Charter and
           Chambers.
