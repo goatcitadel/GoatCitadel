@@ -87,6 +87,7 @@ export function createChatSessionHeaderProps({
   | "modeOverridePending"
   | "onRequestProviderChange"
   | "onRequestModelChange"
+  | "onRequestModelChoice"
 > {
   const { handleToggleArchiveSession } = sessionControls;
   const { setModeOverride } = selection;
@@ -132,6 +133,15 @@ export function createChatSessionHeaderProps({
     },
     onRequestModelChange: (model) => {
       if (!blockHistoricalMutation()) requestThreadModelPatch({ model });
+    },
+    onRequestModelChoice: (choice) => {
+      if (blockHistoricalMutation()) return;
+      if (choice.providerId) void loadModelsForProvider(choice.providerId);
+      requestThreadModelPatch({
+        ...(choice.providerId !== undefined ? { providerId: choice.providerId } : {}),
+        ...(choice.model !== undefined ? { model: choice.model } : {}),
+        ...(choice.thinkingLevel ? { thinkingLevel: choice.thinkingLevel } : {}),
+      });
     },
   };
 }

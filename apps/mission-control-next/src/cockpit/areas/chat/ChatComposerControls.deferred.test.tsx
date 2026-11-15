@@ -167,6 +167,63 @@ async function key(node: HTMLElement, key: string) {
   });
 }
 
+const doneButton = () =>
+  [...dialog()!.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === "Done")!;
+
+describe("a model choice is sent once, when the popover is closed", () => {
+  const three = {
+    providerOptions: [
+      {
+        providerId: "fixture",
+        label: "Fixture",
+        models: ["fixture-chat", "fixture-large", "fixture-xl"],
+        disabled: false,
+      },
+      { providerId: "other", label: "Other", models: ["other-a", "other-b"], defaultModel: "other-b", disabled: false },
+    ],
+  };
+  it("sends one change for the last model after arrowing through three, and none on the way", async () => {
+    const input = controls({ ...three, onRequestModelChoice: vi.fn() });
+    await render(input);
+    await open();
+    await change(model(), "fixture-large");
+    await change(model(), "fixture-xl");
+    await change(model(), "fixture-large");
+    expect(input.onRequestModelChoice).not.toHaveBeenCalled();
+    await act(async () => doneButton().click());
+    expect(input.onRequestModelChoice).toHaveBeenCalledExactlyOnceWith({ model: "fixture-large" });
+    expect(input.onRequestModelChange).not.toHaveBeenCalled();
+    expect(input.onRequestProviderChange).not.toHaveBeenCalled();
+  });
+  it("sends nothing when the popover closes with the choice back where it started", async () => {
+    const input = controls({ ...three, onRequestModelChoice: vi.fn() });
+    await render(input);
+    await open();
+    await change(model(), "fixture-xl");
+    await change(model(), "fixture-chat");
+    await act(async () => doneButton().click());
+    expect(input.onRequestModelChoice).not.toHaveBeenCalled();
+    await open();
+    await act(async () => doneButton().click());
+    expect(input.onRequestModelChoice).not.toHaveBeenCalled();
+  });
+  it("shows the provider's starting model before anything is sent, then sends provider, model and effort together", async () => {
+    const input = controls({ ...three, onRequestModelChoice: vi.fn() });
+    await render(input);
+    await open();
+    await change(provider(), "other");
+    expect(model().value).toBe("other-b");
+    expect(input.onRequestModelChoice).not.toHaveBeenCalled();
+    await change(effort(), "extended");
+    await act(async () => doneButton().click());
+    expect(input.onRequestModelChoice).toHaveBeenCalledExactlyOnceWith({
+      providerId: "other",
+      model: "other-b",
+      thinkingLevel: "extended",
+    });
+  });
+});
+
 describe("deferred public model options Popover", () => {
   it("keeps mandatory controls usable without loading the closed optional renderer", async () => {
     const input = controls();
@@ -206,12 +263,14 @@ describe("deferred public model options Popover", () => {
     expect(native.textContent).toBe(label);
     expect(native.getAttribute("aria-controls")).toBe(dialog()?.id);
     await change(model(), "fixture-large");
-    expect(input.onRequestModelChange).toHaveBeenCalledExactlyOnceWith("fixture-large");
+    // Nothing is sent while the choice is being made; Done sends it.
+    expect(input.onRequestModelChange).not.toHaveBeenCalled();
     const done = [...dialog()!.querySelectorAll<HTMLButtonElement>("button")].find(
       (node) => node.textContent === "Done",
     )!;
     done.focus();
     await act(async () => done.click());
+    expect(input.onRequestModelChange).toHaveBeenCalledExactlyOnceWith("fixture-large");
     await vi.waitFor(() => expect(dialog()).toBeNull());
     await vi.waitFor(() => expect(document.activeElement).toBe(native));
     expect(trigger()).toBe(native);

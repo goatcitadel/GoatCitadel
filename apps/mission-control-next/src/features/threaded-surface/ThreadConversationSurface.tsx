@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState, type SetStateAction } from "react";
 import { Info, Menu, PanelRight } from "lucide-react";
 import type { ChatMode } from "@goatcitadel/contracts";
 import type {
@@ -108,6 +108,7 @@ export function ThreadConversationSurface({
             disabled={props.modelSwitchDisabled}
             onChangeProvider={props.onRequestProviderChange}
             onChangeModel={props.onRequestModelChange}
+            onChoose={props.onRequestModelChoice}
           />
           <details className="mc-next-chat-details">
             <summary aria-label="Chat details">
@@ -243,14 +244,23 @@ export function ThreadConversationSurface({
   );
 }
 
+/** The model a provider starts with when it is picked: its default when it lists it, else its first. */
+function startingModel(provider: { models: string[]; defaultModel?: string } | undefined): string {
+  if (!provider) return "";
+  return provider.defaultModel && provider.models.includes(provider.defaultModel)
+    ? provider.defaultModel
+    : (provider.models[0] ?? "");
+}
+
 export function CompactModelControl({
   providerModelSummary,
   providers,
-  providerId,
-  model,
+  providerId: providerIdProp,
+  model: modelProp,
   disabled,
   onChangeProvider,
   onChangeModel,
+  onChoose,
 }: {
   providerModelSummary: string;
   providers: MissionThreadedActiveSessionSurfaceProps["providerOptions"];
@@ -259,15 +269,39 @@ export function CompactModelControl({
   disabled: MissionThreadedActiveSessionSurfaceProps["modelSwitchDisabled"];
   onChangeProvider: MissionThreadedActiveSessionSurfaceProps["onRequestProviderChange"];
   onChangeModel: MissionThreadedActiveSessionSurfaceProps["onRequestModelChange"];
+  /** Sends the provider and model picked here as one change when the control is closed. Without it each pick is sent. */
+  onChoose?: MissionThreadedActiveSessionSurfaceProps["onRequestModelChoice"];
 }) {
   const [open, setOpen] = useState(false);
   const controlsId = useId();
+  // With `onChoose` a pick is held until the control closes, so arrowing through a select sends nothing on the way.
+  const [draft, setDraftState] = useState<{ providerId?: string; model?: string }>({});
+  // The same pick is also kept in a ref, so a close that is reported twice sends it once.
+  const held = useRef(draft);
+  const setDraft = (next: SetStateAction<{ providerId?: string; model?: string }>) => {
+    held.current = typeof next === "function" ? next(held.current) : next;
+    setDraftState(held.current);
+  };
+  const close = (next: boolean) => {
+    setOpen(next);
+    if (next || !onChoose) return;
+    const draft = held.current;
+    const providerId =
+      draft.providerId !== undefined && draft.providerId !== (providerIdProp ?? "") ? draft.providerId : undefined;
+    const model =
+      draft.model !== undefined && (providerId !== undefined || draft.model !== (modelProp ?? ""))
+        ? draft.model
+        : undefined;
+    setDraft({});
+    if (providerId !== undefined || model !== undefined)
+      onChoose({ ...(providerId !== undefined ? { providerId } : {}), ...(model !== undefined ? { model } : {}) });
+  };
 
   return (
     <details
       className="mc-next-threaded-model-control"
       open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      onToggle={(event) => close(event.currentTarget.open)}
     >
       <summary aria-expanded={open} aria-controls={controlsId} title="View or change the model for this chat">
         <span>Model</span>
@@ -276,11 +310,19 @@ export function CompactModelControl({
       <div id={controlsId} className="mc-next-threaded-model-control-body">
         <ChatModelPicker
           providers={providers}
-          providerId={providerId}
-          model={model}
+          providerId={draft.providerId ?? providerIdProp}
+          model={draft.model ?? modelProp}
           disabled={disabled}
-          onChangeProvider={onChangeProvider}
-          onChangeModel={onChangeModel}
+          onChangeProvider={
+            onChoose
+              ? (next) =>
+                  setDraft({
+                    providerId: next,
+                    model: startingModel(providers.find((item) => item.providerId === next)),
+                  })
+              : onChangeProvider
+          }
+          onChangeModel={onChoose ? (next) => setDraft((current) => ({ ...current, model: next })) : onChangeModel}
         />
       </div>
     </details>

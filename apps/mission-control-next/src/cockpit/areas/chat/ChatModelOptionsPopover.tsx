@@ -1,5 +1,5 @@
 import { Root, Anchor, Portal, Content, Close } from "@radix-ui/react-popover";
-import { useMemo, type RefObject } from "react";
+import { useEffect, useMemo, useState, type RefObject } from "react";
 import type { ChatCompletionReasoningEffort } from "@goatcitadel/contracts";
 import type { ChatModelOptionsControls as Controls } from "./ChatComposerControls";
 import { useProviderLabelLookup } from "../../data/use-model-label";
@@ -11,6 +11,21 @@ import { GUIDED_THINKING_LEVELS } from "../../../features/native-routes/settings
 const ALL_THINKING_LEVELS: readonly Controls["currentThinkingLevel"][] = GUIDED_THINKING_LEVELS.map(
   (option) => option.value,
 );
+
+/** What the operator has picked in the open popover and not yet sent. Nothing is sent until the popover closes. */
+interface ModelDraft {
+  providerId?: string;
+  model?: string;
+  thinkingLevel?: Controls["currentThinkingLevel"];
+}
+
+/** The model a provider starts with when it is picked: its default when it lists it, else its first. */
+function startingModel(provider: Controls["providerOptions"][number] | undefined): string {
+  if (!provider) return "";
+  return provider.defaultModel && provider.models.includes(provider.defaultModel)
+    ? provider.defaultModel
+    : (provider.models[0] ?? "");
+}
 
 export function ChatModelOptionsPopover({
   open,
@@ -58,27 +73,69 @@ export function ChatModelOptionsPopover({
       ]
     : null;
   const thinkingLevels = supported ?? ALL_THINKING_LEVELS;
-  const selectedProvider = props.providerOptions.find((provider) => provider.providerId === props.selectedProviderId);
+  // A pick is collected here and sent as one change when the popover closes, so arrowing through a select applies
+  // nothing on the way and one deliberate choice makes one change.
+  const [draft, setDraft] = useState<ModelDraft>({});
+  useEffect(() => {
+    if (open) setDraft({});
+  }, [open]);
+  const shownProviderId = draft.providerId ?? props.selectedProviderId;
+  const shownModel = draft.model ?? props.selectedModel;
+  const shownThinkingLevel = draft.thinkingLevel ?? props.currentThinkingLevel;
+  const selectedProvider = props.providerOptions.find((provider) => provider.providerId === shownProviderId);
+  const commitDraft = () => {
+    const providerId =
+      draft.providerId !== undefined && draft.providerId !== (props.selectedProviderId ?? "")
+        ? draft.providerId
+        : undefined;
+    const model =
+      draft.model !== undefined && (providerId !== undefined || draft.model !== (props.selectedModel ?? ""))
+        ? draft.model
+        : undefined;
+    const thinkingLevel =
+      draft.thinkingLevel !== undefined && draft.thinkingLevel !== props.currentThinkingLevel
+        ? draft.thinkingLevel
+        : undefined;
+    setDraft({});
+    if (providerId === undefined && model === undefined && thinkingLevel === undefined) return;
+    if (props.onRequestModelChoice) {
+      props.onRequestModelChoice({
+        ...(providerId !== undefined ? { providerId } : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+      });
+      return;
+    }
+    // A host without the combined callback gets the same choice one field at a time.
+    if (providerId !== undefined) props.onRequestProviderChange(providerId);
+    else if (model !== undefined) props.onRequestModelChange(model);
+    if (providerId !== undefined && model !== undefined && model !== startingModel(selectedProvider))
+      props.onRequestModelChange(model);
+    if (thinkingLevel !== undefined) props.onSetThinkingLevel(thinkingLevel);
+  };
   const disabled = props.historicalReadOnly || props.sending;
-  const providerLabel = useProviderLabelLookup(open && Boolean(props.selectedProviderId) && !selectedProvider);
-  const modelLabel = useChatModelLabels(props.selectedProviderId ?? undefined, open);
+  const providerLabel = useProviderLabelLookup(open && Boolean(shownProviderId) && !selectedProvider);
+  const modelLabel = useChatModelLabels(shownProviderId ?? undefined, open);
   const modelOptions = (
     <>
       <label className="flex items-center gap-1">
         Provider
         <select
           aria-label="Provider"
-          value={props.selectedProviderId ?? ""}
+          value={shownProviderId ?? ""}
           disabled={disabled || props.modelSwitchDisabled}
           onChange={(event) => {
-            if (event.target.value) props.onRequestProviderChange(event.target.value);
+            const providerId = event.target.value;
+            if (!providerId) return;
+            const next = props.providerOptions.find((provider) => provider.providerId === providerId);
+            setDraft((current) => ({ ...current, providerId, model: startingModel(next) }));
           }}
           className="max-w-32 rounded-md border border-line-control bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-full"
         >
           <option value="">Choose</option>
-          {props.selectedProviderId && !selectedProvider ? (
-            <option value={props.selectedProviderId}>
-              {providerLabel(props.selectedProviderId) ?? "Current provider"} · catalog unavailable
+          {shownProviderId && !selectedProvider ? (
+            <option value={shownProviderId}>
+              {providerLabel(shownProviderId) ?? "Current provider"} · catalog unavailable
             </option>
           ) : null}
           {props.providerOptions.map((provider) => (
@@ -93,16 +150,17 @@ export function ChatModelOptionsPopover({
         Model
         <select
           aria-label="Model"
-          value={props.selectedModel ?? ""}
+          value={shownModel ?? ""}
           disabled={disabled || props.modelSwitchDisabled || !selectedProvider}
           onChange={(event) => {
-            if (event.target.value) props.onRequestModelChange(event.target.value);
+            const model = event.target.value;
+            if (model) setDraft((current) => ({ ...current, model }));
           }}
           className="max-w-36 rounded-md border border-line-control bg-canvas px-1 py-1 text-fg max-sm:min-h-11 max-sm:max-w-full"
         >
           <option value="">Choose</option>
-          {props.selectedModel && !selectedProvider?.models.includes(props.selectedModel) ? (
-            <option value={props.selectedModel}>{modelLabel(props.selectedModel)} · current, unverified</option>
+          {shownModel && !selectedProvider?.models.includes(shownModel) ? (
+            <option value={shownModel}>{modelLabel(shownModel)} · current, unverified</option>
           ) : null}
           {selectedProvider?.models.map((model) => (
             <option key={model} value={model}>
@@ -115,17 +173,17 @@ export function ChatModelOptionsPopover({
         Effort
         <select
           aria-label="Effort"
-          value={props.currentThinkingLevel}
+          value={shownThinkingLevel}
           disabled={disabled}
           onChange={(event) => {
             const level = event.target.value as Controls["currentThinkingLevel"];
-            if (thinkingLevels.includes(level)) props.onSetThinkingLevel(level);
+            if (thinkingLevels.includes(level)) setDraft((current) => ({ ...current, thinkingLevel: level }));
           }}
           className="rounded-md border border-line-control bg-canvas px-1 py-1 text-fg max-sm:min-h-11"
         >
-          {supported && !supported.includes(props.currentThinkingLevel) ? (
-            <option value={props.currentThinkingLevel} disabled>
-              {presentThinkingLevel(props.currentThinkingLevel)} · current, unsupported by this model
+          {supported && !supported.includes(shownThinkingLevel) ? (
+            <option value={shownThinkingLevel} disabled>
+              {presentThinkingLevel(shownThinkingLevel)} · current, unsupported by this model
             </option>
           ) : null}
           {thinkingLevels.map((level) => (
@@ -168,7 +226,15 @@ export function ChatModelOptionsPopover({
     [trigger],
   );
   return (
-    <Root open={open} onOpenChange={onOpenChange}>
+    <Root
+      open={open}
+      onOpenChange={(next) => {
+        // Done, Escape and a click outside send the collected choice; a close the page asked for (the Chat changed
+        // underneath) sends nothing.
+        if (!next && isCurrent()) commitDraft();
+        onOpenChange(next);
+      }}
+    >
       <Anchor virtualRef={anchor} />
       <Portal>
         <Content
