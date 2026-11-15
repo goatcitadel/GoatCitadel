@@ -21,6 +21,7 @@ type GatewayAccessView =
       message: string;
       healthDetail?: string;
       authMode?: GatewayAuthState["mode"];
+      rejectedStoredAuth?: undefined;
     };
 
 interface GatewayAccessGateProps {
