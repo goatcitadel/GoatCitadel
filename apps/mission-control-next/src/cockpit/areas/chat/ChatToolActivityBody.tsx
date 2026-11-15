@@ -13,7 +13,9 @@ import { toolRunTarget, type ToolRunTarget } from "./chat-tool-run-summary";
 import { toolRunDuration, toolRunLineChanges } from "./chat-tool-run-change-stats";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { failureLine, failureReason } from "./code-mode-request-copy";
+import { toolHref } from "../capabilities/tools/tool-links";
 import { presentErrorText } from "../../lib/present-error";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 function activityLabel(tool: ChatToolRunRecord): string {
@@ -49,6 +51,15 @@ function toolRunSummaryText(tool: ChatToolRunRecord): string {
     getChatToolRunDiagnostics(tool).summary ||
     (tool.error ? presentErrorText(tool.error).summary : "")
   );
+}
+
+/** The outcomes of an approval you or the clock ended: the call was stopped by that decision, not by a rule. */
+const APPROVAL_ENDED_OUTCOMES = new Set(["denied", "withdrawn", "expired"]);
+
+/** A blocked call stopped by a rule (not by your own decision on its approval) can link to where that rule is. */
+function blockedByRule(tool: ChatToolRunRecord): boolean {
+  const outcome = tool.result?.approvalOutcome;
+  return tool.status === "blocked" && !(typeof outcome === "string" && APPROVAL_ENDED_OUTCOMES.has(outcome));
 }
 
 /** The failed tries before a tool's latest one: folded under its row, never dropped. */
@@ -137,6 +148,13 @@ export function ChatToolActivityBody({
             {tool.approvalId ? <ChatToolApprovalLine tool={tool} /> : null}
             {diagnostics.summary || tool.error || tool.failureGuidance ? (
               <ChatToolRunSummary text={toolRunSummaryText(tool)} />
+            ) : null}
+            {blockedByRule(tool) ? (
+              <div className="w-full">
+                <NativeOwnerLink href={toolHref(tool.toolName)} scope={turn.sessionId} className="text-sm">
+                  See why it's blocked
+                </NativeOwnerLink>
+              </div>
             ) : null}
             {earlier.length ? <EarlierTries tries={earlier} /> : null}
             {/* The row shows the summary; the recorded failure stays reachable for technical review. */}
