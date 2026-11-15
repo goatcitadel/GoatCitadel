@@ -107,7 +107,7 @@ export function useIntegrationConnectionReview(
       : {
           required: accessChanged,
           loading: false,
-          error: accessChanged ? "Gateway access changed. Reload the connection review before continuing." : null,
+          error: accessChanged ? "Your access changed. Reload the connection review before continuing." : null,
           missing: false,
         };
   return {

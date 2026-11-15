@@ -56,7 +56,7 @@ it("ignores an old caller's 404 and keeps the connection review blocked until a 
 
   expect(apply).not.toHaveBeenCalled();
   expect(review).toMatchObject({ required: true, loading: false, missing: false });
-  expect(review.error).toContain("Gateway access changed");
+  expect(review.error).toContain("Your access changed");
   act(() => review.accept());
   expect(review.required).toBe(true);
 
@@ -80,7 +80,7 @@ it("invalidates an already-loaded review when credentials change", async () => {
 
   expect(previousReview.isCurrent()).toBe(false);
   expect(review).toMatchObject({ required: true, loading: false, missing: false });
-  expect(review.error).toContain("Gateway access changed");
+  expect(review.error).toContain("Your access changed");
 });
 
 it("continues to report deletion for a 404 from the current caller", async () => {
