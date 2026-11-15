@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
-import { COCKPIT_LOCATION_EVENT } from "./cockpit-back-guard";
+import { COCKPIT_LOCATION_EVENT, samePage } from "./cockpit-back-guard";
 
 // App-session view state only. Key includes installation, caller, scope and exact URL.
 // How long a started navigation may take to replace this page before the page is taken to be staying.
@@ -42,7 +42,7 @@ export function useCockpitScroll(key: string) {
       leaving = true;
       clearTimeout(stay);
       stay = setTimeout(() => {
-        if (window.location.href === home) leaving = false;
+        if (samePage(home, window.location.href)) leaving = false;
       }, NAVIGATION_WAIT_MS);
     };
     window.addEventListener(COCKPIT_LOCATION_EVENT, leave);

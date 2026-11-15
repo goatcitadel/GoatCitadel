@@ -133,3 +133,31 @@ it("keeps the saved position through a navigation that takes two seconds to arri
     vi.useRealTimers();
   }
 });
+
+it("counts the page as back when the shell only added its own parameter to the address", async () => {
+  vi.useFakeTimers();
+  const element = document.createElement("div");
+  const root = createRoot(element);
+  const home = window.location.href;
+  try {
+    window.history.replaceState(null, "", "/work");
+    await act(async () => root.render(<Probe identity="caller-a:work:shell" />));
+    const main = element.querySelector("main")!;
+    main.dispatchEvent(new Event("wheel"));
+    window.dispatchEvent(new Event("popstate"));
+    // The shell normalises the address with a replace while the Back is swallowed.
+    window.history.replaceState(null, "", "/work?shell=cockpit");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    main.scrollTop = 275;
+    main.dispatchEvent(new Event("scroll"));
+    await act(async () => root.render(<Probe identity="caller-a:library:shell" />));
+    await act(async () => root.render(<Probe identity="caller-a:work:shell" />));
+    expect(main.scrollTop).toBe(275);
+  } finally {
+    await act(async () => root.unmount());
+    window.history.replaceState(null, "", home);
+    vi.useRealTimers();
+  }
+});
