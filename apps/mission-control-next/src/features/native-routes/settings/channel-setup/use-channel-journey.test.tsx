@@ -181,7 +181,12 @@ describe("feature-aware channel diagnostics", () => {
         connectionId: connection.connectionId,
         limit: 10,
       });
-      expect(text(view.root)).toContain("Diagnostics are disabled in runtime settings.");
+      // The Cockpit offers the link to the switch; Classic keeps its own wording and no link.
+      expect(text(view.root)).toContain(
+        shell === "cockpit"
+          ? "Connector diagnostics are turned off on this installation."
+          : "Diagnostics are disabled in runtime settings.",
+      );
       expect(text(view.root)).toContain(capabilities.runtimePosture.operatorSummary);
       expect(text(view.root)).toContain("provider receipt recorded");
       expect(text(view.root)).not.toContain("Diagnostics could not be loaded.");
@@ -230,7 +235,7 @@ describe("feature-aware channel diagnostics", () => {
       await act(async () => {
         await Promise.resolve();
       });
-    expect(text(view.root)).toContain("Diagnostics are disabled in runtime settings.");
+    expect(text(view.root)).toContain("Connector diagnostics are turned off on this installation.");
     await act(async () => {
       complete(diagnostics);
     });

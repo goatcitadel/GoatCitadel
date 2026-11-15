@@ -106,3 +106,25 @@ export function useRetryWhenSwitchTurnsOn(flag: FeatureSwitchFlag, waiting: bool
     if (waiting && on === true) latest.current();
   }, [waiting, on]);
 }
+
+/**
+ * A refusal made on this screen because a feature is turned off. `flag` is set when that switch is the cause, so the
+ * screen can link to it; it is left out when the cause is something with no switch of its own (resumable runs).
+ */
+export class FeatureOffError extends Error {
+  readonly flag: FeatureSwitchFlag | undefined;
+  constructor(message: string, flag?: FeatureSwitchFlag) {
+    super(message);
+    this.name = "FeatureOffError";
+    this.flag = flag;
+  }
+}
+
+/** The FeatureOffError behind a refusal, looking through the wrappers a scoped operation puts around it. */
+export function featureOffErrorOf(error: unknown): FeatureOffError | undefined {
+  for (let depth = 0, current = error; current && depth < 4; depth += 1) {
+    if (current instanceof FeatureOffError) return current;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return undefined;
+}
