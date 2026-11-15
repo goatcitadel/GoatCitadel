@@ -157,9 +157,9 @@ describe("Connectors tab", () => {
   it("renders groups with counts", async () => {
     api.fetchCapabilityConnectors.mockResolvedValue(response([SLACK, LINEAR, NOTION, AIRTABLE, ASANA]));
     await render();
-    await vi.waitFor(() => expect(text()).toContain("Connected 2"));
+    await vi.waitFor(() => expect(text()).toContain("Added 2"));
     expect(text()).toContain("Available 3");
-    expect(headings()).toEqual(["Connected 2", "Available 3"]);
+    expect(headings()).toEqual(["Added 2", "Available 3"]);
     expect(rowNames()).toEqual(["Slack", "Linear", "Notion", "Airtable", "Asana"]);
   });
 
