@@ -1,10 +1,17 @@
 import { ChevronRight } from "lucide-react";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
+import type { ChatDelegationStepStatus } from "@goatcitadel/contracts";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { presentDelegationRunStatus } from "./chat-vocabulary";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { useAutoOpenDisclosure } from "./use-auto-open-disclosure";
+
+/** A completed run in which no step ever started: a plan was written and nothing ran. */
+export function isPlanOnly(run: { status: string; steps: readonly { status: ChatDelegationStepStatus }[] }): boolean {
+  return run.status === "completed" && run.steps.length > 0 && run.steps.every((step) => step.status === "pending");
+}
 
 export function ChatRunCard({
   props,
@@ -23,7 +30,12 @@ export function ChatRunCard({
   const disclosure = useAutoOpenDisclosure(Boolean(props.hasActiveStream || (run && run.status !== "completed")));
   if (!run && !durableRunId) return null;
   const completed = run?.steps.filter((step) => step.status === "completed").length ?? 0;
-  const status = run ? presentDelegationRunStatus(run.status) : null;
+  const planOnly = run ? isPlanOnly(run) : false;
+  const status = run
+    ? planOnly
+      ? { label: "Plan only", tone: "neutral" as const }
+      : presentDelegationRunStatus(run.status)
+    : null;
   return (
     <details
       {...disclosure}
@@ -45,8 +57,14 @@ export function ChatRunCard({
       {run?.objective ? <p className="mt-2 line-clamp-2 text-fg-secondary">{run.objective}</p> : null}
       {run?.steps.length ? (
         <p className="mt-2 text-xs text-fg-muted">
-          {completed} of {run.steps.length} steps done · Latest:{" "}
-          {run.steps.at(-1)?.label ?? humanizeToken(run.steps.at(-1)?.role ?? "step")}
+          {planOnly ? (
+            `Plan written; none of its ${plural(run.steps.length, "step")} ran.`
+          ) : (
+            <>
+              {completed} of {run.steps.length} steps done · Latest:{" "}
+              {run.steps.at(-1)?.label ?? humanizeToken(run.steps.at(-1)?.role ?? "step")}
+            </>
+          )}
         </p>
       ) : null}
       <div className="mt-3 flex flex-wrap gap-3">
@@ -59,7 +77,7 @@ export function ChatRunCard({
             Inspect run
           </button>
         ) : null}
-        {durableRunId ? (
+        {durableRunId && !planOnly ? (
           <NativeOwnerLink
             scope={[props.selectedSessionId, turnId, durableRunId]}
             href={`/work/runs/${encodeURIComponent(durableRunId)}`}
