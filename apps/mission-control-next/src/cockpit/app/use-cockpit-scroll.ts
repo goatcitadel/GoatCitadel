@@ -2,6 +2,8 @@ import { useLayoutEffect, useRef } from "react";
 import { COCKPIT_LOCATION_EVENT } from "./cockpit-back-guard";
 
 // App-session view state only. Key includes installation, caller, scope and exact URL.
+// How long a started navigation may take to replace this page before the page is taken to be staying.
+const NAVIGATION_WAIT_MS = 600;
 const positions = new Map<string, number>();
 export function useCockpitScroll(key: string) {
   const ref = useRef<HTMLElement>(null);
@@ -29,9 +31,16 @@ export function useCockpitScroll(key: string) {
       if (!restoring || element.scrollTop === target) positions.set(key, element.scrollTop);
     };
     // Both fire before React renders the next page, so this is the last honest position of this one (U-GL-049).
+    // A navigation that never happens (a swallowed Back, a sheet that closes) leaves this page mounted under the same
+    // key, so after the wait below the page counts as current again and keeps saving its position.
+    let stay: ReturnType<typeof setTimeout> | undefined;
     const leave = () => {
       remember();
       leaving = true;
+      clearTimeout(stay);
+      stay = setTimeout(() => {
+        leaving = false;
+      }, NAVIGATION_WAIT_MS);
     };
     window.addEventListener(COCKPIT_LOCATION_EVENT, leave);
     window.addEventListener("popstate", leave);
@@ -41,6 +50,7 @@ export function useCockpitScroll(key: string) {
     element.addEventListener("keydown", interact);
     element.addEventListener("scroll", remember, { passive: true });
     return () => {
+      clearTimeout(stay);
       observer.disconnect();
       element.removeEventListener("wheel", interact);
       element.removeEventListener("touchstart", interact);

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { COCKPIT_LOCATION_EVENT } from "./cockpit-back-guard";
 import { useCockpitScroll } from "./use-cockpit-scroll";
 it("restores a route's scroll on return and keeps other scopes separate", async () => {
@@ -79,5 +79,28 @@ it("restores after keyboard scrolling and late content", async () => {
     expect(main.scrollTop).toBe(500);
   } finally {
     await act(async () => root.unmount());
+  }
+});
+
+it("keeps saving after a navigation that never happened (a swallowed Back)", async () => {
+  vi.useFakeTimers();
+  const element = document.createElement("div");
+  const root = createRoot(element);
+  try {
+    await act(async () => root.render(<Probe identity="caller-a:work:c" />));
+    const main = element.querySelector("main")!;
+    main.dispatchEvent(new Event("wheel"));
+    window.dispatchEvent(new Event("popstate"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    main.scrollTop = 320;
+    main.dispatchEvent(new Event("scroll"));
+    await act(async () => root.render(<Probe identity="caller-a:library:c" />));
+    await act(async () => root.render(<Probe identity="caller-a:work:c" />));
+    expect(main.scrollTop).toBe(320);
+  } finally {
+    await act(async () => root.unmount());
+    vi.useRealTimers();
   }
 });
