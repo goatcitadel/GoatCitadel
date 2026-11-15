@@ -1,6 +1,6 @@
 // After hermes-agent's run-summary (https://github.com/nousresearch/hermes-agent, MIT, Copyright (c) 2025 Nous
 // Research), keyed to GoatCitadel's own tool names and argument shapes.
-import type { ChatToolRunRecord } from "@goatcitadel/contracts";
+import type { ChatToolRunRecord, ChatTurnLifecycleStatus } from "@goatcitadel/contracts";
 import { isFailedCodeModeRequest } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
 import { projectChatToolEffectTruth } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-effect-truth";
 import { summarizeShellCommand } from "./summarize-shell-command";
@@ -47,13 +47,22 @@ const OUTCOME_ORDER: readonly Outcome[] = ["done", "running", "uncertain", "awai
 const EFFECT_CATEGORIES: ReadonlySet<ToolCategory> = new Set(["edit", "send", "create"]);
 
 /**
- * An approved call the Gateway has settled as executed, whose effect receipt has not been recorded yet, while its turn
- * is still running. The Gateway's record stays as it is ("outcome uncertain"); this only says the turn is not over, so
- * the row does not read as a final uncertain result. Once the turn is no longer running, the recorded state shows.
+ * Work is in progress in the turn itself: it is queued, running or waiting on a tool. A turn parked on the operator
+ * (another approval, an answer to a question) is not working, and nothing there is about to arrive on its own.
  */
-export function isAwaitingApprovedReceipt(run: ChatToolRunRecord, live: boolean): boolean {
+export function isTurnWorkingStatus(status: ChatTurnLifecycleStatus): boolean {
+  return status === "queued" || status === "running" || status === "waiting_for_tool";
+}
+
+/**
+ * An approved call the Gateway has settled as executed, whose effect receipt has not been recorded yet, while the turn
+ * is still working (see isTurnWorkingStatus). The Gateway's record stays as it is ("outcome uncertain"); this only says
+ * the turn is not over, so the row does not read as a final uncertain result. Once the turn is no longer working, or
+ * is waiting on the operator, the recorded state shows.
+ */
+export function isAwaitingApprovedReceipt(run: ChatToolRunRecord, working: boolean): boolean {
   return (
-    live &&
+    working &&
     Boolean(run.approvalId) &&
     run.status === "executed" &&
     run.effectOutcomeKind === "uncertain" &&
@@ -61,9 +70,9 @@ export function isAwaitingApprovedReceipt(run: ChatToolRunRecord, live: boolean)
   );
 }
 
-function outcomeOf(run: ChatToolRunRecord, live: boolean): Outcome {
+function outcomeOf(run: ChatToolRunRecord, live: boolean, working: boolean): Outcome {
   if (run.status === "started" && live) return "running";
-  if (isAwaitingApprovedReceipt(run, live)) return "running";
+  if (isAwaitingApprovedReceipt(run, working)) return "running";
   if (EFFECT_CATEGORIES.has(toolCategory(run.toolName)) && projectChatToolEffectTruth(run)?.tone === "uncertain") {
     return "uncertain";
   }
@@ -199,10 +208,14 @@ const lowerFirst = (text: string): string => text.charAt(0).toLowerCase() + text
  * calls read as done; a call in progress reads in the present tense ("running pnpm build"), and a failed, blocked or
  * unfinished one as tried ("tried to change important.txt"), so the line never claims an effect that did not happen.
  */
-export function summarizeTurnToolRuns(runs: readonly ChatToolRunRecord[], live: boolean): string {
+export function summarizeTurnToolRuns(
+  runs: readonly ChatToolRunRecord[],
+  live: boolean,
+  working: boolean = live,
+): string {
   const groups = new Map<string, ChatToolRunRecord[]>();
   for (const run of runs) {
-    const key = `${outcomeOf(run, live)}:${toolCategory(run.toolName)}`;
+    const key = `${outcomeOf(run, live, working)}:${toolCategory(run.toolName)}`;
     groups.set(key, [...(groups.get(key) ?? []), run]);
   }
   const clauses = OUTCOME_ORDER.flatMap((outcome) =>

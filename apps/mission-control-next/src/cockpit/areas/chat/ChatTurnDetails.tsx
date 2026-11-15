@@ -8,7 +8,7 @@ const ChatOpenCodeEvidence = lazy(async () => ({
 import { ChatTurnActions } from "./ChatTurnActions";
 import { DeferredChatLeaf } from "./DeferredChatLeaves";
 import { useAutoOpenDisclosure } from "./use-auto-open-disclosure";
-import { summarizeTurnToolRuns } from "./chat-tool-run-summary";
+import { isTurnWorkingStatus, summarizeTurnToolRuns } from "./chat-tool-run-summary";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useCoarsePointer } from "../../lib/use-coarse-pointer";
@@ -135,6 +135,8 @@ export function ChatTurnDetails({
   // A turn is live until its status is final. `streaming` alone is not enough: after an approval the Gateway resumes
   // the turn without a browser stream, and the turn is still working.
   const turnLive = streaming || !isChatTurnTerminalStatus(turn.trace.status);
+  // Narrower than live: a turn waiting on the operator is not about to record an approved call's receipt.
+  const turnWorking = streaming || isTurnWorkingStatus(turn.trace.status);
   // CH-39: opens while the turn is live or when a tool needs attention, and stays open once the operator opened it.
   // A list that only opened for a live turn folds shut when the turn settles cleanly. A Code Mode request is the
   // Code Mode card's: the card asks for it and states its outcome, so neither the request nor a turn parked on it
@@ -201,7 +203,7 @@ export function ChatTurnDetails({
       {turn.toolRuns.length ? (
         <details {...toolDisclosure} aria-label="Tool activity for this turn">
           <summary className="cursor-pointer text-accent">
-            {summarizeTurnToolRuns(turn.toolRuns, turnLive)}
+            {summarizeTurnToolRuns(turn.toolRuns, turnLive, turnWorking)}
             <span className="text-fg-muted">
               {" · "}
               {plural(turn.toolRuns.length, "tool call")} · {activitySummary}
@@ -209,7 +211,7 @@ export function ChatTurnDetails({
           </summary>
           {toolBodyMounted || toolDisclosure.open ? (
             <DeferredChatLeaf label="Tool activity" identity={turn.turnId}>
-              <ChatToolActivityBody turn={turn} showTechnicalDetails={showTechnicalDetails} live={turnLive} />
+              <ChatToolActivityBody turn={turn} showTechnicalDetails={showTechnicalDetails} live={turnWorking} />
             </DeferredChatLeaf>
           ) : null}
           <button
