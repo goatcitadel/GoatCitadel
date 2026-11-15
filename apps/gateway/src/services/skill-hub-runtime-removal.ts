@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { ConflictError } from "@goatcitadel/contracts";
 import type {
   CandidateSkillVersionRecord,
   SkillContentIntegrityManifest,
@@ -8,7 +7,6 @@ import type {
   SkillHubOperationSettlementDisposition,
   SkillLifecycleRecord,
 } from "@goatcitadel/contracts";
-import type { AsyncStorage } from "@goatcitadel/storage";
 import { isBundledSkillName } from "./plugin-skill-name-rules.js";
 import type { StoredPlugin } from "./capability-plugin-store.js";
 import type { SkillHubLifecycleFilesystem } from "./skill-hub-lifecycle-filesystem.js";
@@ -141,8 +139,8 @@ export async function restoreStagedRemoval(
 export interface RuntimeRemovalContext {
   intent: SkillHubOperationIntentRecord;
   candidate: CandidateSkillVersionRecord;
-  /** The skill's runtime record as it is now. */
-  runtime: SkillLifecycleRecord | undefined;
+  /** The skill's lifecycle record as it is now. */
+  record: SkillLifecycleRecord | undefined;
   manifest: SkillContentIntegrityManifest;
   skillName: string;
   signal: AbortSignal;
@@ -175,7 +173,7 @@ export async function runRuntimeRemoval(context: RuntimeRemovalContext): Promise
   if (!context.artifactVerifies) {
     return await context.settle("blocked", UNKNOWN_TREE_SHA256, { code: "artifact_tamper", boundaryCrossed: false });
   }
-  const recordBlock = removalRecordBlock(intent, context.runtime, context.candidate);
+  const recordBlock = removalRecordBlock(intent, context.record, context.candidate);
   if (recordBlock) {
     return await context.settle("blocked", intent.contentTreeSha256, { code: recordBlock, boundaryCrossed: false });
   }
@@ -220,15 +218,4 @@ export async function runRuntimeRemoval(context: RuntimeRemovalContext): Promise
     }
     throw error;
   }
-}
-
-/** Inside the committing transaction: deletes the skill's runtime record and its revision fence, or fails the commit. */
-export async function deleteRemovedRuntimeRecord(
-  storage: Pick<AsyncStorage, "skillLifecycle" | "skillAggregateRevisions">,
-  intent: SkillHubOperationIntentRecord,
-): Promise<void> {
-  if (!(await storage.skillLifecycle.delete(intent.skillId))) {
-    throw new ConflictError({ message: "Skill Hub runtime record is already gone." });
-  }
-  await storage.skillAggregateRevisions.deleteFence("runtime_skill", intent.skillId, intent.expectedRuntimeRevision!);
 }

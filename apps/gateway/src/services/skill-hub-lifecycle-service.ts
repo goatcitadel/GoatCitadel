@@ -32,7 +32,6 @@ import { CapabilityPluginStore } from "./capability-plugin-store.js";
 import { pluginSkillSource } from "./plugin-owned-refusal.js";
 import { takesPowerAway } from "./skill-hub-operation-power.js";
 import {
-  deleteRemovedRuntimeRecord,
   ownedSkillBlock,
   projectionScratch,
   runRuntimeRemoval,
@@ -164,19 +163,20 @@ export class SkillHubLifecycleService {
     requestSha256: string;
     signal?: AbortSignal;
   }): Promise<SkillHubLifecycleApplyResult> {
+    const storage = this.options.storage;
     const signal = input.signal ?? new AbortController().signal;
     signal.throwIfAborted();
-    const intent = await this.options.storage.skillHubOperations.getIntent(input.operationId);
+    const intent = await storage.skillHubOperations.getIntent(input.operationId);
     if (intent.approvalId !== input.approvalId || intent.requestSha256 !== input.requestSha256) {
       throw new ConflictError({ message: "Skill Hub lifecycle effect identity does not match its immutable intent." });
     }
     // Re-run parent validation against the exact current approval before any effect.
-    await this.options.storage.skillHubOperations.createIntent(intent);
-    const approval = await this.options.storage.approvals.get(intent.approvalId);
+    await storage.skillHubOperations.createIntent(intent);
+    const approval = await storage.approvals.get(intent.approvalId);
     if (approval.status !== "approved" || approval.kind !== SKILL_HUB_LIFECYCLE_APPROVAL_KIND) {
       throw new ConflictError({ message: "Skill Hub lifecycle approval is no longer executable." });
     }
-    const replay = await this.options.storage.skillHubOperations.findSettlementByOperationId(input.operationId);
+    const replay = await storage.skillHubOperations.findSettlementByOperationId(input.operationId);
     if (replay) {
       if (
         (intent.operationKind === "activate" || intent.operationKind === "remove") &&
@@ -188,8 +188,8 @@ export class SkillHubLifecycleService {
       return { settlement: replay, replayed: true };
     }
 
-    const snapshot = await this.options.storage.skillHubSnapshots.get(intent.snapshotId);
-    const artifact = await this.options.storage.skillHubArtifacts.findBySnapshot(intent.workspaceId, intent.snapshotId);
+    const snapshot = await storage.skillHubSnapshots.get(intent.snapshotId);
+    const artifact = await storage.skillHubArtifacts.findBySnapshot(intent.workspaceId, intent.snapshotId);
     if (
       !artifact ||
       snapshot.workspaceId !== intent.workspaceId ||
@@ -527,27 +527,28 @@ export class SkillHubLifecycleService {
     artifactId: string,
     runtimeProjected: boolean,
   ): Promise<SkillHubLifecycleApplyResult> {
+    const storage = this.options.storage;
     return await this.runTransaction(async () => {
-      const replay = await this.options.storage.skillHubOperations.findSettlementByOperationId(intent.operationId);
+      const replay = await storage.skillHubOperations.findSettlementByOperationId(intent.operationId);
       if (replay) return { settlement: replay, replayed: true };
       const now = this.now();
       let candidateRevision: number | undefined;
       let runtimeRevision: number | undefined;
 
       if (intent.operationKind === "install_inactive") {
-        const revision = await this.options.storage.skillAggregateRevisions.createInitialRevisionFence(
+        const revision = await storage.skillAggregateRevisions.createInitialRevisionFence(
           "candidate_skill",
           intent.targetCandidateId!,
           now,
         );
-        await this.options.storage.candidateSkillVersions.upsert(candidate);
+        await storage.candidateSkillVersions.upsert(candidate);
         candidateRevision = revision.revision;
       } else {
         await this.fenceExisting(intent, now);
         if (intent.operationKind === "stage_update_candidate" || intent.operationKind === "stage_rollback_candidate") {
-          await this.options.storage.candidateSkillVersions.upsert(candidate);
+          await storage.candidateSkillVersions.upsert(candidate);
           candidateRevision = (
-            await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+            await storage.skillAggregateRevisions.advanceExpectedRevision(
               "candidate_skill",
               intent.targetCandidateId!,
               intent.expectedCandidateRevision!,
@@ -556,19 +557,15 @@ export class SkillHubLifecycleService {
           ).revision;
           runtimeRevision = intent.expectedRuntimeRevision;
         } else if (intent.operationKind === "activate") {
-          const current = await this.options.storage.candidateSkillVersions.get(intent.targetVersionId!);
+          const current = await storage.candidateSkillVersions.get(intent.targetVersionId!);
           if (current.lifecycleState === "revoked") {
             throw new ConflictError({ message: "Revoked Skill Hub candidates cannot be activated." });
           }
           const candidateChanged = current.lifecycleState !== "approved";
-          await this.options.storage.candidateSkillVersions.updateLifecycleState(
-            intent.targetVersionId!,
-            "approved",
-            now,
-          );
+          await storage.candidateSkillVersions.updateLifecycleState(intent.targetVersionId!, "approved", now);
           candidateRevision = candidateChanged
             ? (
-                await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+                await storage.skillAggregateRevisions.advanceExpectedRevision(
                   "candidate_skill",
                   intent.targetCandidateId!,
                   intent.expectedCandidateRevision!,
@@ -576,7 +573,7 @@ export class SkillHubLifecycleService {
                 )
               ).revision
             : intent.expectedCandidateRevision;
-          const snapshotArtifact = await this.options.storage.skillHubArtifacts.findBySnapshot(
+          const snapshotArtifact = await storage.skillHubArtifacts.findBySnapshot(
             intent.workspaceId,
             intent.snapshotId,
           );
@@ -599,21 +596,21 @@ export class SkillHubLifecycleService {
                 verified: true,
               },
             },
-            createdAt: (await this.options.storage.skillLifecycle.find(intent.skillId))?.createdAt ?? now,
+            createdAt: (await storage.skillLifecycle.find(intent.skillId))?.createdAt ?? now,
             updatedAt: now,
           };
           if (intent.expectedRuntimeAbsent) {
-            const runtimeFence = await this.options.storage.skillAggregateRevisions.createInitialRevisionFence(
+            const runtimeFence = await storage.skillAggregateRevisions.createInitialRevisionFence(
               "runtime_skill",
               intent.skillId,
               now,
             );
-            await this.options.storage.skillLifecycle.upsert(lifecycle);
+            await storage.skillLifecycle.upsert(lifecycle);
             runtimeRevision = runtimeFence.revision;
           } else {
-            await this.options.storage.skillLifecycle.upsert(lifecycle);
+            await storage.skillLifecycle.upsert(lifecycle);
             runtimeRevision = (
-              await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+              await storage.skillAggregateRevisions.advanceExpectedRevision(
                 "runtime_skill",
                 intent.skillId,
                 intent.expectedRuntimeRevision!,
@@ -624,18 +621,21 @@ export class SkillHubLifecycleService {
         } else if (intent.operationKind === "remove") {
           // The candidate lineage is history: fenced above, never advanced. The runtime record and its fence go.
           candidateRevision = intent.expectedCandidateRevision;
-          await deleteRemovedRuntimeRecord(this.options.storage, intent);
-        } else {
-          const currentCandidate = await this.options.storage.candidateSkillVersions.get(intent.targetVersionId!);
-          const candidateChanged = currentCandidate.lifecycleState !== "revoked";
-          await this.options.storage.candidateSkillVersions.updateLifecycleState(
-            intent.targetVersionId!,
-            "revoked",
-            now,
+          if (!(await storage.skillLifecycle.delete(intent.skillId))) {
+            throw new ConflictError({ message: "Skill Hub runtime record is already gone." });
+          }
+          await storage.skillAggregateRevisions.deleteFence(
+            "runtime_skill",
+            intent.skillId,
+            intent.expectedRuntimeRevision!,
           );
+        } else {
+          const currentCandidate = await storage.candidateSkillVersions.get(intent.targetVersionId!);
+          const candidateChanged = currentCandidate.lifecycleState !== "revoked";
+          await storage.candidateSkillVersions.updateLifecycleState(intent.targetVersionId!, "revoked", now);
           candidateRevision = candidateChanged
             ? (
-                await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+                await storage.skillAggregateRevisions.advanceExpectedRevision(
                   "candidate_skill",
                   intent.targetCandidateId!,
                   intent.expectedCandidateRevision!,
@@ -643,9 +643,9 @@ export class SkillHubLifecycleService {
                 )
               ).revision
             : intent.expectedCandidateRevision;
-          const currentLifecycle = await this.options.storage.skillLifecycle.get(intent.skillId);
+          const currentLifecycle = await storage.skillLifecycle.get(intent.skillId);
           const runtimeChanged = currentLifecycle.lifecycleState !== "revoked";
-          await this.options.storage.skillLifecycle.upsert({
+          await storage.skillLifecycle.upsert({
             ...currentLifecycle,
             lifecycleState: "revoked",
             trustLabel: "Revoked",
@@ -654,7 +654,7 @@ export class SkillHubLifecycleService {
           });
           runtimeRevision = runtimeChanged
             ? (
-                await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+                await storage.skillAggregateRevisions.advanceExpectedRevision(
                   "runtime_skill",
                   intent.skillId,
                   intent.expectedRuntimeRevision!,
@@ -901,7 +901,7 @@ export class SkillHubLifecycleService {
     return await runRuntimeRemoval({
       intent,
       candidate,
-      runtime: await this.options.storage.skillLifecycle.find(intent.skillId),
+      record: await this.options.storage.skillLifecycle.find(intent.skillId),
       manifest: artifact.manifest,
       skillName,
       signal,

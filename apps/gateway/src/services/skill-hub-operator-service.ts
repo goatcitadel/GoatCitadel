@@ -449,7 +449,8 @@ export class SkillHubOperatorService {
   }
 
   private async loadInventory(workspaceId: string): Promise<OperatorInventory> {
-    const rawCandidates = await this.options.storage.candidateSkillVersions.list(500);
+    const storage = this.options.storage;
+    const rawCandidates = await storage.candidateSkillVersions.list(500);
     const candidates = rawCandidates.filter(
       (candidate) =>
         candidate.sourceKind === "upstream_hub" &&
@@ -459,7 +460,7 @@ export class SkillHubOperatorService {
     );
     const candidateSnapshots = new Map<string, SkillHubSnapshotRecord>();
     for (const candidate of candidates) {
-      const snapshot = await this.options.storage.skillHubSnapshots.find(candidate.upstreamSnapshotId!);
+      const snapshot = await storage.skillHubSnapshots.find(candidate.upstreamSnapshotId!);
       if (snapshot?.workspaceId === workspaceId) candidateSnapshots.set(candidate.versionId, snapshot);
     }
     const catalogBySkillId = new Map(
@@ -474,14 +475,13 @@ export class SkillHubOperatorService {
       candidateInventoryTruncated: rawCandidates.length >= 500,
       catalogBySkillId,
       approvalsBySnapshot: await this.latestApprovalsBySnapshot(workspaceId),
-      removedCandidateIds: new Set(
-        await this.options.storage.skillHubOperations.listAppliedRemovalCandidateIds(workspaceId),
-      ),
+      removedCandidateIds: new Set(await storage.skillHubOperations.listAppliedRemovalCandidateIds(workspaceId)),
     };
   }
 
   private async contextFor(snapshot: SkillHubSnapshotRecord, inventory: OperatorInventory): Promise<SnapshotContext> {
-    const deterministicVersion = await this.options.storage.candidateSkillVersions.find(versionIdForSnapshot(snapshot));
+    const storage = this.options.storage;
+    const deterministicVersion = await storage.candidateSkillVersions.find(versionIdForSnapshot(snapshot));
     const candidates = uniqueCandidates([
       ...inventory.candidates,
       ...(deterministicVersion &&
@@ -497,7 +497,7 @@ export class SkillHubOperatorService {
           snapshot:
             inventory.candidateSnapshots.get(candidate.versionId) ??
             (candidate.upstreamSnapshotId
-              ? await this.options.storage.skillHubSnapshots.find(candidate.upstreamSnapshotId)
+              ? await storage.skillHubSnapshots.find(candidate.upstreamSnapshotId)
               : undefined),
         })),
       )
@@ -526,7 +526,7 @@ export class SkillHubOperatorService {
     const lineageCandidates = lineageCandidateId
       ? uniqueCandidates([
           ...sourceCandidates,
-          ...(await this.options.storage.candidateSkillVersions.listByCandidateId(lineageCandidateId, 500)).filter(
+          ...(await storage.candidateSkillVersions.listByCandidateId(lineageCandidateId, 500)).filter(
             (candidate) =>
               candidate.sourceKind === "upstream_hub" &&
               candidate.workspaceId === inventory.workspaceId &&
@@ -547,7 +547,7 @@ export class SkillHubOperatorService {
     const candidateTitles = [...new Set(lineageCandidates.map((candidate) => candidate.title))];
     const skillId =
       candidateTitles.length === 1 ? skillIdForName(candidateTitles[0]!) : resolveSnapshotSkillId(snapshot);
-    const runtimeLifecycle = skillId ? await this.options.storage.skillLifecycle.find(skillId) : undefined;
+    const runtimeLifecycle = skillId ? await storage.skillLifecycle.find(skillId) : undefined;
     const activeCandidate = runtimeLifecycle?.provenance?.sourceRef
       ? lineageCandidates.find(
           (candidate) =>
@@ -557,10 +557,10 @@ export class SkillHubOperatorService {
       : undefined;
     const referenceCandidate = activeCandidate ?? latestCandidate;
     const referenceSnapshot = referenceCandidate?.upstreamSnapshotId
-      ? await this.options.storage.skillHubSnapshots.find(referenceCandidate.upstreamSnapshotId)
+      ? await storage.skillHubSnapshots.find(referenceCandidate.upstreamSnapshotId)
       : undefined;
     const candidateRevision = lineageCandidateId
-      ? await this.options.storage.skillAggregateRevisions.get("candidate_skill", lineageCandidateId)
+      ? await storage.skillAggregateRevisions.get("candidate_skill", lineageCandidateId)
       : undefined;
     const targetCandidateId = lineageCandidateId ?? candidateIdForSource(snapshot, lineageGeneration);
     const activeVersion = Boolean(
@@ -572,16 +572,16 @@ export class SkillHubOperatorService {
     return {
       snapshot,
       priorSnapshot: snapshot.priorSnapshotId
-        ? await this.options.storage.skillHubSnapshots.find(snapshot.priorSnapshotId)
+        ? await storage.skillHubSnapshots.find(snapshot.priorSnapshotId)
         : undefined,
-      driftSnapshot: await this.options.storage.skillHubSnapshots.findSameVersionByteDrift({
+      driftSnapshot: await storage.skillHubSnapshots.findSameVersionByteDrift({
         workspaceId: snapshot.workspaceId,
         canonicalSourceKey: snapshot.canonicalSourceKey,
         declaredVersion: snapshot.declaredVersion,
         resolvedVersion: snapshot.resolvedVersion,
         contentTreeSha256: snapshot.contentTreeSha256,
       }),
-      artifact: await this.options.storage.skillHubArtifacts.findBySnapshot(snapshot.workspaceId, snapshot.snapshotId),
+      artifact: await storage.skillHubArtifacts.findBySnapshot(snapshot.workspaceId, snapshot.snapshotId),
       skillId,
       exactCandidate,
       sourceCandidates: lineageCandidates,
@@ -592,14 +592,9 @@ export class SkillHubOperatorService {
       activeCandidate,
       referenceSnapshot,
       candidateRevision,
-      targetCandidateRevision: await this.options.storage.skillAggregateRevisions.get(
-        "candidate_skill",
-        targetCandidateId,
-      ),
+      targetCandidateRevision: await storage.skillAggregateRevisions.get("candidate_skill", targetCandidateId),
       runtimeLifecycle,
-      runtimeRevision: skillId
-        ? await this.options.storage.skillAggregateRevisions.get("runtime_skill", skillId)
-        : undefined,
+      runtimeRevision: skillId ? await storage.skillAggregateRevisions.get("runtime_skill", skillId) : undefined,
       catalogEntry: skillId ? inventory.catalogBySkillId.get(skillId) : undefined,
       activeVersion,
       candidateInventoryTruncated: inventory.candidateInventoryTruncated,
