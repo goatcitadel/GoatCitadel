@@ -10,9 +10,10 @@ import type {
 import { fetchChangePlan, fetchSettings, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
-import { checkFirecrawlConnection } from "@goatcitadel/mission-control-shared/api/web-search-settings";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
+import { FirecrawlAllowlistGap } from "./FirecrawlAllowlistGap";
+import { useFirecrawlCheck } from "./use-firecrawl-check";
 import { Field } from "../../ui/Field";
 import { cockpitInputClass } from "../../ui/input-class";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -31,7 +32,7 @@ import {
   firecrawlUrlProblem,
   hostOf,
   HOSTED_FIRECRAWL_BASE_URL,
-  isBaseUrlAllowlisted,
+  firecrawlAllowlistGap,
   LOCAL_FIRECRAWL_BASE_URL,
   matchesFirecrawlPlan,
   readFirecrawlDraft,
@@ -96,17 +97,21 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
   const value = decodeFirecrawlDraft(draft.value);
   const saved = settings.data?.web?.firecrawl;
   const allowlist = settings.data?.networkAllowlist ?? [];
-  const draftHost = hostOf(value.baseUrl);
   const urlProblem = firecrawlUrlProblem(value.baseUrl);
-  const needsAllowlist = value.enabled && !urlProblem && !isBaseUrlAllowlisted(value.baseUrl, allowlist);
   const hosted = value.baseUrl.replace(/\/+$/u, "") === HOSTED_FIRECRAWL_BASE_URL;
   const [allowlistBusy, setAllowlistBusy] = useState(false);
   const [allowlistMessage, setAllowlistMessage] = useState<{ tone: "info" | "error"; text: string }>();
   const [allowlistApproval, setAllowlistApproval] = useState<{ approvalId: string; planId: string; host: string }>();
   const [rebaseAfterRevision, setRebaseAfterRevision] = useState<number>();
-  const [check, setCheck] = useState<FirecrawlConnectionCheck>();
-  const [checkError, setCheckError] = useState<string>();
-  const [checking, setChecking] = useState(false);
+  const { check, checkError, checking, runCheck } = useFirecrawlCheck(`${settings.data?.revision}|${saved?.baseUrl}`);
+  // Where the Gateway refuses the address: the unsaved draft by this page's preview, or the saved one by the Gateway's own verdict.
+  const gap = firecrawlAllowlistGap({
+    draft: value,
+    saved,
+    allowlist,
+    draftDirty: draft.isDirty,
+    lastCheck: check?.status,
+  });
 
   // The allowlist save bumps the settings revision; carry the Firecrawl draft onto it.
   const revision = settings.data?.revision;
@@ -122,14 +127,15 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
   };
 
   async function addHostToAllowlist() {
-    if (!draftHost) return;
+    const gapHost = gap?.cause === "not_listed" ? gap.host : undefined;
+    if (!gapHost) return;
     setAllowlistBusy(true);
     setAllowlistMessage(undefined);
     try {
       const latest = await fetchSettings();
       const response = await patchSettings({
         expectedRevision: latest.revision,
-        networkAllowlist: [...latest.networkAllowlist, draftHost],
+        networkAllowlist: [...latest.networkAllowlist, gapHost],
       });
       const receipt = response.changePlanReceipt;
       const status = receipt?.status;
@@ -137,17 +143,17 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
       setRebaseAfterRevision(latest.revision);
       setAllowlistApproval(
         receipt && status === "awaiting_approval" && action?.kind === "approval" && action.approvalId
-          ? { approvalId: action.approvalId, planId: receipt.planId, host: draftHost }
+          ? { approvalId: action.approvalId, planId: receipt.planId, host: gapHost }
           : undefined,
       );
       setAllowlistMessage(
         !status || status === "completed"
-          ? { tone: "info", text: `${draftHost} is now in the outbound allowlist.` }
+          ? { tone: "info", text: `${gapHost} is now in the outbound allowlist.` }
           : {
               tone: "info",
               text:
                 status === "awaiting_approval"
-                  ? `Adding ${draftHost} needs your approval. Once approved, it is added and you can save Firecrawl.`
+                  ? `Adding ${gapHost} needs your approval. Once approved, it is added and you can save Firecrawl.`
                   : `The allowlist change is ${presentChangeStatusLabel(status).toLowerCase()}. Finish it, then save Firecrawl.`,
             },
       );
@@ -204,19 +210,6 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
     }
   }
 
-  async function runCheck() {
-    setChecking(true);
-    setCheckError(undefined);
-    try {
-      setCheck(await checkFirecrawlConnection());
-    } catch (error) {
-      setCheck(undefined);
-      setCheckError(describeApiError(error).summary);
-    } finally {
-      setChecking(false);
-    }
-  }
-
   return (
     <div className="mt-4 border-t border-line-subtle pt-4">
       <h4 className="text-sm font-semibold text-fg">Firecrawl</h4>
@@ -230,10 +223,13 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
       />
       {ready ? (
         <div className="mt-3 max-w-xl space-y-3">
-          {saved?.enabled && saved.baseUrlAllowlisted === false ? (
-            <Callout tone="warning" announce={false}>
-              The saved Firecrawl URL is not in the outbound allowlist, so tools skip Firecrawl and use native search.
-            </Callout>
+          {gap?.source === "gateway" ? (
+            <FirecrawlAllowlistGap
+              {...gap}
+              disabled={allowlistBusy || Boolean(allowlistApproval) || governed.locked}
+              busy={allowlistBusy}
+              onAdd={() => void addHostToAllowlist()}
+            />
           ) : null}
           <label className="flex items-center gap-2 text-sm text-fg">
             <input
@@ -326,21 +322,13 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
               />
             )}
           </Field>
-          {needsAllowlist ? (
-            <Callout tone="warning" announce={false}>
-              <p>
-                {draftHost} is not in the outbound allowlist. Tools cannot reach it, and GoatCitadel will not save
-                Firecrawl as on until the host is allowed.
-              </p>
-              <Button
-                size="sm"
-                className="mt-2"
-                disabled={allowlistBusy || Boolean(allowlistApproval) || governed.locked}
-                onClick={() => void addHostToAllowlist()}
-              >
-                {allowlistBusy ? "Adding…" : `Add ${draftHost} to the outbound allowlist`}
-              </Button>
-            </Callout>
+          {gap?.source === "draft" ? (
+            <FirecrawlAllowlistGap
+              {...gap}
+              disabled={allowlistBusy || Boolean(allowlistApproval) || governed.locked}
+              busy={allowlistBusy}
+              onAdd={() => void addHostToAllowlist()}
+            />
           ) : null}
           {allowlistMessage ? <Callout tone={allowlistMessage.tone}>{allowlistMessage.text}</Callout> : null}
           {allowlistApproval ? (
@@ -358,7 +346,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
           <div className="flex flex-wrap gap-2">
             <Button
               variant="primary"
-              disabled={!governed.canSave || Boolean(urlProblem) || needsAllowlist}
+              disabled={!governed.canSave || Boolean(urlProblem) || gap?.source === "draft"}
               onClick={() => void governed.save()}
             >
               {governed.busy ? "Saving…" : "Save Firecrawl"}
