@@ -49,6 +49,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
   fetchWorkspaces: vi.fn(async () => ({ items: [] })),
 }));
 
+const featureState = vi.hoisted(() => ({ skillsInChat: undefined as boolean | undefined }));
+vi.mock("../../settings/feature-switches", async (original) => ({
+  ...(await original<object>()),
+  useFeatureSwitchOn: () => featureState.skillsInChat,
+}));
+
 const LIST_KEY = skillListQuery("ws-1").queryKey;
 const APPROVAL_ID = "5f0b6d2e-6c1a-4d3e-9b7a-2f1e0c9d8b7a";
 const SOURCE_URL = "https://github.com/acme/writing-skills.git";
@@ -460,6 +466,32 @@ describe("Skill panel", () => {
 });
 
 describe("Skill panel switch", () => {
+  afterEach(() => {
+    featureState.skillsInChat = undefined;
+  });
+
+  it("says Chat can't use skills while Skills in Chat is off, with a link to its switch", async () => {
+    featureState.skillsInChat = false;
+    await renderTab();
+    await openPanel("Writer");
+    expect(panelText()).toContain("Takes effect in new chats.");
+    expect(panelText()).toContain("Chat can't use skills yet: Skills in Chat is turned off.");
+    const link = [...body()!.querySelectorAll("a")].find(
+      (entry) => entry.textContent === "Turn it on in Settings › Advanced",
+    );
+    expect(new URL(link!.getAttribute("href")!, "http://cockpit.invalid").hash).toBe("#feature-switch-skills-in-chat");
+  });
+
+  it("says nothing extra once Skills in Chat is on, or before it has been read", async () => {
+    for (const value of [true, undefined]) {
+      featureState.skillsInChat = value;
+      await renderTab();
+      await openPanel("Writer");
+      expect(panelText()).not.toContain("Skills in Chat is turned off");
+      await press(buttonIn(document.body, "Close inspector"));
+    }
+  });
+
   it("pauses and resumes from the panel", async () => {
     api.setCapabilitySkillState.mockReturnValue(new Promise(() => {}));
     await renderTab();
