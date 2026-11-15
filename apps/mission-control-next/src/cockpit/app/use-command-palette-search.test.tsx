@@ -226,6 +226,10 @@ describe("cancellable cached palette search (NV-12)", () => {
     const again = deferred<{ items: unknown[] }>();
     api.workspaces.mockReturnValueOnce(again.promise);
     await act(async () => owner.retry());
+    // The query notifies its observers on a timer, which the fake clock holds back.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
     expect(owner.retrying).toBe(true);
     await act(async () =>
       again.resolve({ items: [{ workspaceId: "a", citadelId: "citadel", lifecycleStatus: "active" }] }),
