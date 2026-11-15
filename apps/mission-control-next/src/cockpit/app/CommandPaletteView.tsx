@@ -175,7 +175,14 @@ export function CommandPaletteView({
           </p>
         ) : null}
         {search.error && !search.retrying ? (
-          <div role="alert" className="space-y-1 px-3 py-2 text-sm text-fg-secondary">
+          <div
+            role="alert"
+            className="space-y-1 px-3 py-2 text-sm text-fg-secondary"
+            // The palette runs its selected command on Enter; a key pressed on this button is the button's own.
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+            }}
+          >
             <p>Search didn't respond.</p>
             <Button size="sm" onClick={search.retry}>
               Try again

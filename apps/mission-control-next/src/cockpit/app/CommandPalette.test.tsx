@@ -221,6 +221,29 @@ describe("CommandPalette", () => {
     expect(dialog.querySelector("[role='alert']")).toBeNull();
   });
 
+  it("leaves Enter on Try again to the button instead of running the selected command", async () => {
+    controls.search = {
+      groups: [],
+      loading: false,
+      error: "Some owners are unavailable.",
+      retry: vi.fn(),
+      retrying: false,
+    };
+    act(() => {
+      root.render(<CommandPalette open onOpenChange={() => undefined} />);
+    });
+    await ready();
+    const retry = document.querySelector<HTMLButtonElement>('[role="dialog"] [role="alert"] button')!;
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    act(() => {
+      retry.focus();
+      retry.dispatchEvent(enter);
+    });
+    // cmdk prevents the default of an Enter it handles, which would stop the button's own activation.
+    expect(enter.defaultPrevented).toBe(false);
+    expect(controls.create).not.toHaveBeenCalled();
+  });
+
   it("keeps source evidence and live messages outside the selectable cmdk listbox", async () => {
     controls.search = {
       retry: vi.fn(),
