@@ -17,6 +17,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 }));
 // The dialog itself is covered in SettingsApprovalDialog.test.tsx; here it only reports a decision.
 vi.mock("./SettingsApprovalDialog", () => ({
+  reopenSettingsApproval: () => undefined,
   SettingsApprovalDialog: ({ onResolved }: { onResolved: (status: ApprovalStatus) => void }) => (
     <button type="button" onClick={() => onResolved("approved")}>
       Decide approved
@@ -223,5 +224,35 @@ describe("PublicWebAddressField", () => {
     expect(container.querySelector("input")).toBeNull();
     expect(container.textContent).toBe("Loading the public web address…");
     expect(container.querySelector('[role="status"], [role="alert"], [aria-live]')).toBeNull();
+  });
+
+  it("leads to the waiting change instead of saying settings changed elsewhere", async () => {
+    api.patchSettings.mockRejectedValue({
+      status: 409,
+      kind: "http",
+      body: {
+        code: "WRITE_CONFLICT",
+        details: { resourceKind: "change_plan", resourceId: "plan-1", currentRevision: 2 },
+      },
+    });
+    api.fetchChangePlan.mockResolvedValue({
+      ...planFor("awaiting_approval", "https://other.example.com"),
+      title: "Change the public web address",
+      requiredAction: { kind: "approval", approvalId: "approval-1" },
+    });
+    await show();
+    await vi.waitFor(() => expect(input().value).toBe("https://old.example.com"));
+    await type("https://goat.example.com");
+    await act(async () => button("Save address")!.click());
+
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("One change to this setting is already waiting for your approval."),
+    );
+    expect(container.textContent).not.toContain("Settings changed elsewhere");
+    // The existing approval opens in place (the mocked dialog shows its decide button).
+    expect(button("Decide approved")).toBeDefined();
+    // The draft stays, and nothing is applied a second time.
+    expect(input().value).toBe("https://goat.example.com");
+    expect(api.patchSettings).toHaveBeenCalledTimes(1);
   });
 });
