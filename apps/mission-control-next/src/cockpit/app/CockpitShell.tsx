@@ -36,6 +36,7 @@ import { applyCockpitAppearance } from "./cockpit-appearance";
 import { useAreaShortcuts } from "./use-area-shortcuts";
 import { ShortcutHelp } from "./ShortcutHelp";
 import { cockpitDocumentTitle } from "./cockpit-document-title";
+import { useFocusPageOnAreaChange } from "./use-focus-page-on-area-change";
 import { useCockpitTitleDetailValue } from "./cockpit-title-detail";
 import { useCockpitScroll } from "./use-cockpit-scroll";
 import { getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
@@ -122,15 +123,7 @@ function CockpitShellContent({
     };
   }, [documentTitle]);
 
-  // A new area is a new page: bring keyboard and screen reader focus to it, unless the page already focused
-  // something inside main. The first page of a visit keeps the browser's own starting point.
-  const previousArea = useRef(area);
-  useEffect(() => {
-    if (previousArea.current === area) return;
-    previousArea.current = area;
-    const main = document.getElementById("main-content");
-    if (main && !main.contains(document.activeElement)) main.focus({ preventScroll: true });
-  }, [area]);
+  useFocusPageOnAreaChange(area);
 
   useLayoutEffect(() => {
     applyCockpitAppearance(theme, density);
