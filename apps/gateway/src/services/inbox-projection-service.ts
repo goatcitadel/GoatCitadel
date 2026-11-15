@@ -119,42 +119,39 @@ function skillLifecycleApproval(
 }
 
 const SHELL_TOOLS = new Set(["shell.exec", "shell.exec_background"]);
-const SUMMARY_ONLY_KINDS = new Set([...SHELL_TOOLS, "code_mode.run"]);
 
-/**
- * The tool id an Inbox item carries. The two shell tools and a code run are named by their approval kind when the linkage
- * holds no tool, so the Cockpit knows to keep their command or code out of a toast.
- */
-function approvalToolName(linkedTool: string | undefined, kind: string): string | undefined {
-  return linkedTool || (SUMMARY_ONLY_KINDS.has(kind) ? kind : undefined);
-}
-
-function approvalTargetSummary(preview: unknown, kind: string): string {
+/** An approval row's summary, and whether it names a command or code (which an unprompted toast must not repeat). */
+function approvalTargetSummary(preview: unknown, kind: string): { summary: string; namesCommand?: true } {
   const record = preview && typeof preview === "object" ? (preview as Record<string, unknown>) : {};
   const value = record.targets;
   const targets = Array.isArray(value) ? value.filter((target): target is string => typeof target === "string") : [];
   if (targets.length)
-    return bounded(`Targets: ${targets.slice(0, 3).join(", ")}${targets.length > 3 ? "; more in review" : ""}`);
+    return {
+      summary: bounded(`Targets: ${targets.slice(0, 3).join(", ")}${targets.length > 3 ? "; more in review" : ""}`),
+    };
   const knowledge = knowledgeTargetSummary(record);
-  if (knowledge) return bounded(knowledge);
-  // A tool approval's preview (policy-engine buildApprovalPreview) names its path or target. A command shows only for the two shell tools, as one redacted line.
+  if (knowledge) return { summary: bounded(knowledge) };
+  // A tool approval's preview (policy-engine buildApprovalPreview) names its path or target. A command shows only for the two shell tools, as one redacted line or, when it looks as if it carries a credential, as its first word.
   if (typeof record.toolName === "string") {
-    if (typeof record.path === "string" && record.path.trim()) return bounded(`Path: ${record.path.trim()}`);
+    if (typeof record.path === "string" && record.path.trim())
+      return { summary: bounded(`Path: ${record.path.trim()}`) };
     // A URL target can carry credentials in its userinfo, path or query, so only its scheme and host are shown.
     if (typeof record.target === "string" && record.target.trim())
-      return bounded(`Target: ${redactUrlForError(record.target)}`);
+      return { summary: bounded(`Target: ${redactUrlForError(record.target)}`) };
   }
   // A shell approval's kind is its tool name; a preview that carries no tool name still names its command.
   const shellTool = SHELL_TOOLS.has(kind) || (typeof record.toolName === "string" && SHELL_TOOLS.has(record.toolName));
   if (shellTool && typeof record.command === "string") {
     const command = previewLine("Command", record.command, { shell: true });
-    if (command) return command;
+    if (command) return { summary: command, namesCommand: true };
   }
   if (kind === "code_mode.run" && typeof record.codePreview === "string") {
     const code = previewLine("Code", record.codePreview);
-    if (code) return code;
+    if (code) return { summary: code, namesCommand: true };
   }
-  return "Review the requested action and its policy reason. Target details are available in the approval record.";
+  return {
+    summary: "Review the requested action and its policy reason. Target details are available in the approval record.",
+  };
 }
 
 export interface InboxProjectionDependencies {
@@ -310,13 +307,15 @@ export class InboxProjectionService {
         items: page.items.map((approval): OperatorInboxItem => {
           const plan = changePlanApproval(approval.kind, approval.payload, approval.preview);
           const skill = skillLifecycleApproval(approval.kind, approval.preview);
+          const target = approvalTargetSummary(approval.preview, approval.kind);
           return {
             id: `approval:${approval.approvalId}`,
             kind: "approval",
             group: "needs_decision",
             title:
               plan?.title ?? skill?.title ?? `Review ${approvalKindWords(approval.linkage?.toolName ?? approval.kind)}`,
-            summary: plan?.summary ?? skill?.summary ?? approvalTargetSummary(approval.preview, approval.kind),
+            summary: plan?.summary ?? skill?.summary ?? target.summary,
+            ...(!plan?.summary && !skill?.summary && target.namesCommand ? { summaryNamesCommand: true as const } : {}),
             createdAt: approval.createdAt,
             expiresAt: approval.expiresAt,
             riskLevel: approval.riskLevel,
@@ -324,9 +323,7 @@ export class InboxProjectionService {
               workspaceId,
               approvalId: approval.approvalId,
               ...(isInstallWideApproval(approval) ? { installWide: true as const } : {}),
-              ...(!plan && approvalToolName(approval.linkage?.toolName, approval.kind)
-                ? { toolName: approvalToolName(approval.linkage?.toolName, approval.kind) }
-                : {}),
+              ...(!plan && approval.linkage?.toolName ? { toolName: approval.linkage.toolName } : {}),
               ...(plan?.planId ? { planId: plan.planId } : {}),
               ...(approval.linkage?.sessionId ? { sessionId: approval.linkage.sessionId } : {}),
               ...(approval.linkage?.turnId ? { turnId: approval.linkage.turnId } : {}),

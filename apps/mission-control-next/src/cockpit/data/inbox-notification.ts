@@ -53,14 +53,10 @@ export function inboxItemLocation(item: OperatorInboxItem): string {
   return `/inbox?${new URLSearchParams({ workspaceId: item.source.workspaceId, item: item.id })}`;
 }
 
-/** Tools whose approval summary names a command or code the operator wrote nothing of; it must not pop up by itself. */
-const TOAST_SUMMARY_WITHHELD_TOOLS = new Set(["shell.exec", "shell.exec_background", "code_mode.run"]);
-
 /**
- * The description an unprompted toast shows for an Inbox item: its summary, except for an approval of a shell command or
- * a code run, whose summary names the command or code and stays in the Inbox row and detail.
+ * The description an unprompted toast shows for an Inbox item: its summary, except when the Gateway says the summary names
+ * a command or a line of code, which stays in the Inbox row and detail.
  */
 export function inboxToastDescription(item: OperatorInboxItem): string | undefined {
-  const toolName = item.source.toolName;
-  return item.kind === "approval" && toolName && TOAST_SUMMARY_WITHHELD_TOOLS.has(toolName) ? undefined : item.summary;
+  return item.summaryNamesCommand ? undefined : item.summary;
 }

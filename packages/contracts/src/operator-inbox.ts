@@ -29,6 +29,8 @@ export interface OperatorInboxItem {
   group: OperatorInboxGroup;
   title: string;
   summary: string;
+  /** The summary names a command or a line of code, so an unprompted notification must not repeat it. */
+  summaryNamesCommand?: true;
   createdAt: string;
   updatedAt?: string;
   expiresAt?: string;

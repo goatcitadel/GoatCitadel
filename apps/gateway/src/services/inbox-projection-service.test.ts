@@ -299,7 +299,7 @@ describe("Gateway inbox projection", () => {
     const summary = (id: string) => projection.items.find((entry) => entry.id === `approval:${id}`)?.summary;
     expect(summary("plain")).toBe("Command: pnpm test --filter api");
     expect(summary("notool")).toBe("Command: pnpm test");
-    expect(summary("secret")).toContain("[REDACTED]");
+    expect(summary("secret")).toBe("Command: curl (open it to see the full command)");
     expect(summary("codesecret")).toContain("[REDACTED]");
     expect(JSON.stringify(projection)).not.toContain(token);
     expect(summary("lines")).toBe("Command: echo one (and 2 more lines)");
@@ -309,11 +309,11 @@ describe("Gateway inbox projection", () => {
     expect(summary("home")).toBe("Command: cat ~\\notes.txt");
     expect(summary("code")).toBe('Code: const text = await docs.extract_text({ path: "saturday-plan.pdf" });');
     expect(summary("other")).not.toContain("do-not-project-command");
-    // The Cockpit keeps these kinds out of a toast by their tool id, so it is carried even without a linkage tool.
-    const tool = (id: string) => projection.items.find((entry) => entry.id === `approval:${id}`)?.source.toolName;
-    expect(tool("notool")).toBe("shell.exec");
-    expect(tool("code")).toBe("code_mode.run");
-    expect(tool("other")).toBeUndefined();
+    // The Cockpit keeps a summary that names a command or code out of a toast, by this flag.
+    const named = (id: string) => projection.items.find((entry) => entry.id === `approval:${id}`)?.summaryNamesCommand;
+    expect(named("notool")).toBe(true);
+    expect(named("code")).toBe(true);
+    expect(named("other")).toBeUndefined();
   });
 
   it("counts only decisions still open and keeps expired ones listed (U-IN-011)", async () => {

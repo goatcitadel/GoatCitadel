@@ -326,7 +326,7 @@ describe("cockpit owner-backed notifications", () => {
   it("does not pop a shell command or code into the toast description", async () => {
     mocks.read.mockResolvedValue({
       ...projection,
-      items: [{ ...item, summary: "Command: pnpm test", source: { ...item.source, toolName: "shell.exec" } }],
+      items: [{ ...item, summary: "Command: pnpm test", summaryNamesCommand: true }],
     });
     await render();
     await emit();

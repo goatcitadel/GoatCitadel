@@ -111,19 +111,12 @@ describe("Inbox notification owner selection", () => {
 });
 
 describe("inboxToastDescription", () => {
-  const withTool = (toolName: string | undefined): OperatorInboxItem => ({
-    ...item,
-    summary: "Command: pnpm test",
-    source: { ...item.source, ...(toolName ? { toolName } : {}) },
+  const named: OperatorInboxItem = { ...item, summary: "Command: pnpm test", summaryNamesCommand: true };
+  it("keeps a summary that names a command or code out of a toast", () => {
+    expect(inboxToastDescription(named)).toBeUndefined();
   });
-  it("keeps the summary out of a toast for a shell command or a code run", () => {
-    for (const tool of ["shell.exec", "shell.exec_background", "code_mode.run"]) {
-      expect(inboxToastDescription(withTool(tool))).toBeUndefined();
-    }
-  });
-  it("keeps the summary for other approvals and other items", () => {
-    expect(inboxToastDescription(withTool("documents.create"))).toBe("Command: pnpm test");
-    expect(inboxToastDescription(withTool(undefined))).toBe("Command: pnpm test");
-    expect(inboxToastDescription({ ...withTool("shell.exec"), kind: "failed_run" })).toBe("Command: pnpm test");
+  it("keeps every other summary", () => {
+    expect(inboxToastDescription({ ...named, summaryNamesCommand: undefined })).toBe("Command: pnpm test");
+    expect(inboxToastDescription(item)).toBe(item.summary);
   });
 });
