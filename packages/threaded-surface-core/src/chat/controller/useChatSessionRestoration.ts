@@ -80,6 +80,9 @@ export function useChatSessionRestoration({
   const draftStorageKey = createDraftStorageKey(workspaceId, selection.selectedSessionId);
   const attachmentStorageKey = createAttachmentStorageKey(workspaceId, selection.selectedSessionId);
   const queueStorageKey = createQueueStorageKey(workspaceId, selection.selectedSessionId);
+  // The conversation whose draft was last hydrated: a storage key that settles later for the same conversation must
+  // not wipe what was typed meanwhile (the draft is saved 400 ms after typing).
+  const draftHydrationRef = useRef<{ sessionId: string | null | undefined }>({ sessionId: undefined });
   const queueHydrationTransitionRef = useRef<{
     key: string;
     baselineIds: ReadonlySet<string>;
@@ -171,10 +174,17 @@ export function useChatSessionRestoration({
       return;
     }
     const hydrationTransition = queueHydrationTransitionRef.current;
+    const sameConversation = draftHydrationRef.current.sessionId === selection.selectedSessionId;
+    draftHydrationRef.current = { sessionId: selection.selectedSessionId };
+    const keepTyped = (stored: string | null) => (current: string) => stored ?? (sameConversation ? current : "");
     try {
       const draftRaw = window.localStorage.getItem(draftStorageKey);
       setDraft(
-        draftRaw && isWithinStorageBudget(draftRaw) && draftRaw.length <= MAX_HYDRATED_MESSAGE_CHARS ? draftRaw : "",
+        keepTyped(
+          draftRaw && isWithinStorageBudget(draftRaw) && draftRaw.length <= MAX_HYDRATED_MESSAGE_CHARS
+            ? draftRaw
+            : null,
+        ),
       );
       const attachmentsRaw = window.localStorage.getItem(attachmentStorageKey);
       setPendingAttachments(
@@ -198,7 +208,7 @@ export function useChatSessionRestoration({
         }),
       );
     } catch {
-      setDraft("");
+      setDraft(keepTyped(null));
       setPendingAttachments([]);
       setQueuedOutbound((current) =>
         mergeHydratedOutboundQueue({
