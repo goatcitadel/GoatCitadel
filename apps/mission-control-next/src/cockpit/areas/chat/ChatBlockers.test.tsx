@@ -426,6 +426,57 @@ it("names the file a document approval would write (U-CH-046)", async () => {
   );
 });
 
+it("offers Ask again once a Chat approval expires (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValue({
+    approvalId: "approval/1",
+    kind: "documents.create",
+    status: "pending",
+    riskLevel: "caution",
+    payload: {},
+    preview: { toolName: "documents.create", path: "notes/note.txt" },
+    // Long enough to read the live card first, short enough to cross in the test.
+    expiresAt: new Date(Date.now() + 1500).toISOString(),
+    linkage: { turnId: "turn-1" },
+    createdAt: "2026-10-01T00:00:00Z",
+  });
+  const composer = document.createElement("textarea");
+  document.body.append(composer);
+  const onDraftChange = vi.fn();
+  try {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChatBlockers
+            props={blockerProps({
+              pendingApproval: { approvalId: "approval/1", kind: "documents.create", riskLevel: "caution" },
+              composerRef: { current: composer },
+              onDraftChange,
+              thread: {
+                turns: [
+                  { turnId: "turn-0", userMessage: { content: "Something else" } },
+                  { turnId: "turn-1", userMessage: { content: "Create the note" } },
+                ],
+              },
+            })}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(findButton("Approve once")).toBeDefined());
+    expect(findButton("Ask again")).toBeUndefined();
+    await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined(), { timeout: 5000 });
+    expect(container.textContent).toContain(
+      "The action did not run. Ask again to put your request back in the message box.",
+    );
+    expect(findButton("Approve once")).toBeUndefined();
+    await act(async () => findButton("Ask again")!.click());
+    expect(onDraftChange).toHaveBeenCalledExactlyOnceWith("Create the note");
+    expect(document.activeElement).toBe(composer);
+  } finally {
+    composer.remove();
+  }
+});
+
 it("shows a failed record read as an error with Try again and Deny, not as checking (CH-02)", async () => {
   api.fetchApproval.mockRejectedValue(new Error("fixture outage"));
   const onDenyPending = vi.fn();

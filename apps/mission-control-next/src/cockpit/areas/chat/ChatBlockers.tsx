@@ -11,6 +11,7 @@ import { AttachmentImage } from "../../ui/AttachmentImage";
 import { ChatApprovalRenderer } from "./ChatApprovalRenderer";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
+import { hasExpired, useMinuteClock } from "../inbox/use-minute-clock";
 import { DeferredChatLeaf } from "./DeferredChatLeaves";
 import { presentApprovalAction } from "./chat-vocabulary";
 import { approvalTargetLine } from "../inbox/approval-target";
@@ -41,7 +42,7 @@ type Blockers = Pick<
   | "onSubmitUserInput"
   | "onRefreshThread"
 > &
-  Partial<Pick<MissionThreadedActiveSessionSurfaceProps, "composerRef">>;
+  Partial<Pick<MissionThreadedActiveSessionSurfaceProps, "composerRef" | "thread" | "onDraftChange">>;
 
 function errandScreenshotAttachmentId(preview: Record<string, unknown> | undefined): string | undefined {
   const id = preview?.screenshotAttachmentId;
@@ -145,6 +146,16 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   const targetLine = approvalTargetLine(reviewedApproval?.kind, reviewedApproval?.preview);
   const decided = reviewedApproval && reviewedApproval.status !== "pending" ? reviewedApproval : undefined;
   const expiry = decided ? null : approvalExpiryLabel(approval?.expiresAt);
+  // An approval that ran out of time leaves the action undone: the way forward is to ask again.
+  const expiresAt = reviewedApproval?.expiresAt ?? approval?.expiresAt;
+  const now = useMinuteClock(expiresAt);
+  const expired = Boolean(approval) && !decided && hasExpired(expiresAt, now);
+  const originalRequest = props.thread?.turns.find((turn) => turn.turnId === reviewedApproval?.linkage?.turnId)
+    ?.userMessage.content;
+  function askAgain() {
+    if (originalRequest) props.onDraftChange?.(originalRequest);
+    props.composerRef?.current?.focus();
+  }
   function continuationHref(destination: "/inbox", selectedApprovalId?: string) {
     const parameters = new URLSearchParams(search);
     parameters.set("workspaceId", workspaceId);
@@ -263,6 +274,16 @@ export function ChatBlockers({ props }: { props: Blockers }) {
             }}
             onFollowOnChange={props.onRefreshThread}
           />
+          {expired ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p>The action did not run. Ask again to put your request back in the message box.</p>
+              {originalRequest ? (
+                <Button type="button" size="sm" variant="secondary" onClick={askAgain}>
+                  Ask again
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
           <NativeOwnerLink
             href={continuationHref("/inbox", approval.approvalId)}
             scope={noticeScope}
