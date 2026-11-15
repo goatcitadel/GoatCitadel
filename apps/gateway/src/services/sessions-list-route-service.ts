@@ -27,19 +27,21 @@ function withWorkspace(session: SessionMeta, workspaceId: string | undefined): S
 }
 
 export function createSessionsListRoutePort(deps: SessionsListRoutePortDependencies): SessionsListRoutePort {
+  // Read once: every method below goes through the same storage owner.
+  const storage = deps.storage;
   return {
     getSession: async (sessionId) => {
-      const session = await deps.storage.sessions.getBySessionId(sessionId);
+      const session = await storage.sessions.getBySessionId(sessionId);
       if (!session) return session;
-      return withWorkspace(session, (await deps.storage.chatSessionMeta.get(sessionId))?.workspaceId);
+      return withWorkspace(session, (await storage.chatSessionMeta.get(sessionId))?.workspaceId);
     },
     getSessionSummary: (sessionId) => deps.getSessionSummary(sessionId),
-    getTranscript: (sessionId) => deps.storage.transcripts.read(sessionId),
+    getTranscript: (sessionId) => storage.transcripts.read(sessionId),
     listSessionTimeline: (sessionId, limit) => deps.listSessionTimeline(sessionId, limit),
     listSessions: async (limit, cursor) => {
-      const sessions = await deps.storage.sessions.list(limit, cursor);
+      const sessions = await storage.sessions.list(limit, cursor);
       if (sessions.length === 0) return sessions;
-      const records = await deps.storage.chatSessionMeta.listBySessionIds(sessions.map((item) => item.sessionId));
+      const records = await storage.chatSessionMeta.listBySessionIds(sessions.map((item) => item.sessionId));
       return sessions.map((item) => withWorkspace(item, records.get(item.sessionId)?.workspaceId));
     },
   };
