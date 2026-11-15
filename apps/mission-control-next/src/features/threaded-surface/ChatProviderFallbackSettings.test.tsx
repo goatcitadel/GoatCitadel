@@ -1,7 +1,13 @@
+// @vitest-environment happy-dom
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vitest";
+vi.mock("../../cockpit/areas/settings/feature-switches", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useFeatureSwitchOn: () => switchState.on,
+}));
 import { ChatProviderFallbackSettings } from "./ChatProviderFallbackSettings";
 
+const switchState = vi.hoisted(() => ({ on: false as boolean | undefined }));
 function fixture() {
   return {
     prefs: null,
@@ -28,6 +34,16 @@ async function render(props: ReturnType<typeof fixture>) {
 }
 
 describe("Chat fallback preference", () => {
+  it("names resumable runs, with no link, when the switch is on but fallback is still unavailable", async () => {
+    switchState.on = true;
+    const tree = await render({ ...fixture(), providerFallbackAvailable: false });
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain("needs resumable runs, which are turned off on this installation");
+    expect(json).not.toContain("Turn it on in Settings");
+    switchState.on = false;
+    await act(async () => tree.unmount());
+  });
+
   it("starts off, never defaults to hosted consent, and saves one exact target", async () => {
     const props = fixture();
     const tree = await render(props);
@@ -172,7 +188,9 @@ describe("Chat fallback preference", () => {
           />,
         );
       });
-      expect(tree.root.findByProps({ role: "status" }).children.join("")).toContain("not enabled for this runtime");
+      expect(JSON.stringify(tree.toJSON())).toContain("Provider fallback is turned off on this installation.");
+      expect(JSON.stringify(tree.toJSON())).toContain("feature-switch-provider-fallback");
+      expect(JSON.stringify(tree.toJSON())).not.toContain("not enabled for this runtime");
       await act(async () => tree.unmount());
     },
   );

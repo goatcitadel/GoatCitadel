@@ -81,8 +81,13 @@ describe("ClaudeCliBackgroundJobsNotice", () => {
     expect(text).toContain("provider with an API key");
     expect(text).toContain("Chat can propose that change");
     // The sentence that points at Chat links there.
-    expect(view.querySelector("a")?.getAttribute("href")).toBe("/chat");
-    expect(view.querySelector("a")?.textContent).toBe("Open Chat");
+    const anchors = [...view.querySelectorAll("a")];
+    const chat = anchors.find((entry) => entry.textContent === "Open Chat");
+    expect(chat?.getAttribute("href")).toBe("/chat");
+    // The switch that is off is named and linked.
+    expect(text).toContain("and turn on Utility model for background jobs.");
+    const turnOn = anchors.find((entry) => entry.textContent === "Turn it on in Settings › Advanced");
+    expect(new URL(turnOn!.getAttribute("href")!, "http://cockpit.invalid").hash).toBe("#feature-switch-utility-model");
   });
 
   it("stays hidden when a utility model on a keyed provider runs the background jobs", async () => {
@@ -112,5 +117,10 @@ describe("ClaudeCliBackgroundJobsNotice", () => {
       }),
     );
     expect(view.querySelector("#claude-cli-background-jobs-title")).not.toBeNull();
+    // The switch is already on, so it is not named as the thing to turn on.
+    expect(view.textContent).not.toContain("turn on Utility model for background jobs");
+    expect(
+      [...view.querySelectorAll("a")].some((entry) => entry.textContent === "Turn it on in Settings › Advanced"),
+    ).toBe(false);
   });
 });

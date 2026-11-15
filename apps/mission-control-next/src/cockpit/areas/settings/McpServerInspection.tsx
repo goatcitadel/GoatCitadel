@@ -113,6 +113,7 @@ export function McpServerInspection({
               stale={setupStale}
               testEvidence={evidenceView.record}
               staticMcpAvailable={availabilityView.record}
+              staticMcpSwitchOn={settings.data?.features?.chatStaticMcpV1Enabled}
               availabilityChecking={settings.isFetching}
               refreshAvailability={() => void settings.refetch()}
             />

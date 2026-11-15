@@ -59,3 +59,18 @@ describe("integration connection details", () => {
       expect(markup).not.toContain(raw);
   });
 });
+
+describe("integration connection details when diagnostics are off", () => {
+  it("says diagnostics are turned off and links to the switch", () => {
+    const off = { ...owner, data: { connectorDiagnosticsEnabled: false } } as unknown as IntegrationSettingsOwner;
+    const markup = renderToStaticMarkup(<IntegrationConnectionDetails owner={off} />);
+    expect(markup).toContain("Connector diagnostics are turned off on this installation.");
+    expect(markup).toContain("Turn it on in Settings › Advanced");
+    expect(markup).toContain("feature-switch-connector-diagnostics");
+    expect(markup).not.toContain("not enabled in Runtime settings");
+  });
+  it("says nothing about the switch until settings have been read", () => {
+    const unread = { ...owner, data: undefined } as unknown as IntegrationSettingsOwner;
+    expect(renderToStaticMarkup(<IntegrationConnectionDetails owner={unread} />)).not.toContain("turned off");
+  });
+});

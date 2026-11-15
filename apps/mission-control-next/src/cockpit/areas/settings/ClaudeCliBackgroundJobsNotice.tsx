@@ -3,6 +3,7 @@ import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { useCockpitNavigation } from "../../app/cockpit-navigation-context";
 import { isModifiedClick } from "../../lib/modified-click";
+import { FeatureOffLink } from "./FeatureOffLink";
 
 const CHAT_HREF = "/chat";
 
@@ -33,6 +34,7 @@ export function ClaudeCliBackgroundJobsNotice() {
     refetchInterval: 60_000,
   });
   if (!backgroundJobsSkippedOnClaudeCli(query.data)) return null;
+  const switchOff = query.data?.features?.utilityModelRoutingV1Enabled !== true;
   return (
     <section aria-labelledby="claude-cli-background-jobs-title" className="mt-4 border-t border-line-subtle pt-4">
       <h3 id="claude-cli-background-jobs-title" className="text-md font-semibold text-fg">
@@ -41,8 +43,15 @@ export function ClaudeCliBackgroundJobsNotice() {
       <p className="mt-1 text-sm text-fg-secondary">
         While the Claude Code CLI is your Chat provider, GoatCitadel skips follow-up suggestions, learned facts about
         you, and procedure reviews. Each of these would start its own Claude Code process and count against your Claude
-        subscription. To turn them on, set a utility model on a provider with an API key. Chat can propose that change
-        for you:{" "}
+        subscription. To turn them on, set a utility model on a provider with an API key
+        {switchOff ? (
+          <>
+            , and turn on Utility model for background jobs. <FeatureOffLink flag="utilityModelRoutingV1Enabled" />
+          </>
+        ) : (
+          "."
+        )}{" "}
+        Chat can propose that change for you:{" "}
         <a
           href={CHAT_HREF}
           onClick={(event) => {

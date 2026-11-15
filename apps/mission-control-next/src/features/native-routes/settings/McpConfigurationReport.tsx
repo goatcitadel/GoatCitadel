@@ -6,10 +6,13 @@ import {
   isApiRequestError,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { hasMcpServerBinding } from "./mcp-server-mutation";
+import { FeatureOffLink } from "../../../cockpit/areas/settings/FeatureOffLink";
 
 type State = {
   phase: "idle" | "checking" | "sending" | "recorded" | "uncertain";
   message?: string;
+  /** The message says a feature switch is off, so the operator is offered the way to turn it on. */
+  featureOff?: true;
   report?: ConnectorDiagnosticReport;
   binding?: string;
 };
@@ -133,7 +136,9 @@ export function McpConfigurationReport({
       ) {
         write(id, {
           phase: "idle",
-          message: "Connector diagnostics are disabled in this Gateway. No configuration report was recorded.",
+          message:
+            "Connector diagnostics are turned off on this installation, so no configuration report was recorded.",
+          featureOff: true,
         });
         return;
       }
@@ -161,6 +166,12 @@ export function McpConfigurationReport({
           {state.phase === "recorded" && !report
             ? "Saved metadata changed. The previous report is withheld; record a new configuration check when ready."
             : state.message}
+          {state.featureOff ? (
+            <>
+              {" "}
+              <FeatureOffLink flag="connectorDiagnosticsV1Enabled" />
+            </>
+          ) : null}
         </p>
       ) : null}
       {report ? (

@@ -4,10 +4,13 @@ import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surf
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ChatProviderFallbackSettings } from "../../../features/threaded-surface/ChatProviderFallbackSettings";
 import { ContextDisclosure } from "../../../features/threaded-surface/ThreadedContextDisclosure";
+import { FeatureOffLink } from "../settings/FeatureOffLink";
+import { useFeatureSwitchOn } from "../settings/feature-switches";
 import "./chat-feature-settings.css";
 
 /** Presentation only: existing session controllers and Gateway checks own every action. */
 export function ChatFeatureSettings({ dock }: { dock: MissionThreadedContextDockProps }) {
+  const subagentsSwitchOn = useFeatureSwitchOn("chatDelegationControlsV1Enabled");
   const [confirmAutomatic, setConfirmAutomatic] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
@@ -84,9 +87,16 @@ export function ChatFeatureSettings({ dock }: { dock: MissionThreadedContextDock
           </select>
         </label>
         <p role="status">
-          {dock.supervisedDelegationAvailable
-            ? "Review each proposed plan before starting its subagents. Automatic delegation requires an active grant for this project."
-            : "Supervised delegation is not enabled for this runtime. Your saved preference remains available."}
+          {dock.supervisedDelegationAvailable ? (
+            "Review each proposed plan before starting its subagents. Automatic delegation requires an active grant for this project."
+          ) : subagentsSwitchOn === true ? (
+            "Subagents in Chat needs resumable runs, which are turned off on this installation. Your saved preference is kept."
+          ) : (
+            <>
+              Subagents in Chat is turned off on this installation. Your saved preference is kept.{" "}
+              <FeatureOffLink flag="chatDelegationControlsV1Enabled" />
+            </>
+          )}
         </p>
         {dock.automaticFanout?.unavailableReason ? <p>{dock.automaticFanout.unavailableReason}</p> : null}
         {dock.supervisedDelegationAvailable ? (

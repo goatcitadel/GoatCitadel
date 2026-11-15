@@ -1,5 +1,7 @@
 import { useEffect, useId, useState } from "react";
 import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surface-core";
+import { FeatureOffLink } from "../../cockpit/areas/settings/FeatureOffLink";
+import { useFeatureSwitchOn } from "../../cockpit/areas/settings/feature-switches";
 import { ContextDisclosure } from "./ThreadedContextDisclosure";
 
 type Props = Pick<
@@ -30,6 +32,7 @@ export function ChatProviderFallbackSettings(props: Props) {
     setModel(saved?.model ?? "");
     setAllowLocalToCloud(saved?.allowLocalToCloud ?? false);
   }, [saved?.providerId, saved?.model, saved?.allowLocalToCloud]);
+  const switchOn = useFeatureSwitchOn("chatProviderFallbackV1Enabled");
   const options = (props.providerOptions ?? []).filter((option) => option.providerId !== props.selectedProviderId);
   const provider = options.find((option) => option.providerId === providerId);
   useEffect(() => {
@@ -73,13 +76,22 @@ export function ChatProviderFallbackSettings(props: Props) {
   return (
     <ContextDisclosure summary="Provider fallback">
       <p role="status">
-        {!props.providerFallbackAvailable
-          ? "Provider fallback is not enabled for this runtime. You can save a preference for later."
-          : props.routePreflight?.fallbackPolicy === "armed" && target
-            ? `Available fallback: ${target.providerId} / ${target.model}. Rechecked before use.`
-            : saved
-              ? "Saved fallback is inactive for the current route or Gateway configuration."
-              : "Fallback is off."}
+        {!props.providerFallbackAvailable ? (
+          switchOn === true ? (
+            "Provider fallback needs resumable runs, which are turned off on this installation. You can save a preference for later."
+          ) : (
+            <>
+              Provider fallback is turned off on this installation. You can save a preference for later.{" "}
+              <FeatureOffLink flag="chatProviderFallbackV1Enabled" />
+            </>
+          )
+        ) : props.routePreflight?.fallbackPolicy === "armed" && target ? (
+          `Available fallback: ${target.providerId} / ${target.model}. Rechecked before use.`
+        ) : saved ? (
+          "Saved fallback is inactive for the current route or Gateway configuration."
+        ) : (
+          "Fallback is off."
+        )}
       </p>
       <p>
         Choose one backup provider for an initial response failure. It shares the turn’s deadline and budget, and stops
