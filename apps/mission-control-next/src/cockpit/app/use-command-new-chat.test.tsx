@@ -217,5 +217,15 @@ describe("explicit palette New chat", () => {
     expect(owner.attempt?.state).toBe("confirmed");
     expect(owner.attempt?.message).toBe("Conversation created, but it didn't open. Use Open created conversation.");
     expect(owner.attempt?.sessionId).toBe(created.sessionId);
+    // The palette reads this field, not the wording, to keep the recovery control after it is closed and reopened.
+    expect(owner.attempt?.openFailed).toBe(true);
+  });
+
+  it("does not mark a created conversation that opened as failed to open", async () => {
+    await act(async () => {
+      await owner.create();
+    });
+    expect(owner.attempt?.state).toBe("confirmed");
+    expect(owner.attempt?.openFailed).toBeUndefined();
   });
 });

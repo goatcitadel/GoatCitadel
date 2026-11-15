@@ -88,6 +88,7 @@ export function useCommandNewChat(scope: PaletteScope, open: boolean, onCreated:
         (review?.onCreated ?? onCreated)(pending.sessionId);
       } catch {
         // Presentation failure does not undo a creation the Gateway confirmed.
+        pending.openFailed = true;
         pending.message = "Conversation created, but it didn't open. Use Open created conversation.";
         publishChatSessionCreation(key, pending);
       }
