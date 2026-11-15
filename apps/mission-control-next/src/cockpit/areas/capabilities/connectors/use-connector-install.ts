@@ -420,6 +420,8 @@ export interface ConnectorInstall {
   /** While signing in: asks for a new sign-in request in place of the one waiting (R94). */
   restartSignIn(): void;
   cancel(): void;
+  /** Reads the install's plan now, for after its approval was decided in place. The poll goes on as before. */
+  checkApproval(): void;
 }
 
 /**
@@ -454,6 +456,9 @@ export function useConnectorInstall(item: CapabilityConnectorItem): ConnectorIns
     },
     cancel: () => {
       if (ownerCustody === custody && id !== undefined) cancelFlow(id);
+    },
+    checkApproval: () => {
+      if (ownerCustody === custody && id !== undefined) void readPlan(id);
     },
   };
 }

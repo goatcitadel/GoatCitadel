@@ -48,6 +48,7 @@ const flows = vi.hoisted(() => {
     submitManualCode: vi.fn(),
     restartSignIn: vi.fn(),
     cancel: vi.fn(),
+    checkApproval: vi.fn(),
     keyOf,
     read: (item: { source: string; templateId?: string; serverId?: string }) => entries.get(keyOf(item)) ?? IDLE,
     set(key: string, entry: Entry | undefined) {
@@ -79,6 +80,7 @@ vi.mock("./use-connector-install", async () => {
         submitManualCode: (code: string, state: string) => flows.submitManualCode(code, state),
         restartSignIn: () => flows.restartSignIn(item.id),
         cancel: () => flows.cancel(item.id),
+        checkApproval: () => flows.checkApproval(item.id),
       };
     },
     useConnectorInstallStatus: (item: CapabilityConnectorItem) =>
@@ -86,6 +88,15 @@ vi.mock("./use-connector-install", async () => {
     useRecoveredInstalls: () => undefined,
   };
 });
+
+// The in-place approval dialog has its own tests (SettingsApprovalDialog.test.tsx).
+vi.mock("../../settings/SettingsApprovalDialog", () => ({
+  SettingsApprovalDialog: (props: { approvalId: string; onResolved: (status: undefined) => void }) => (
+    <section data-in-place-approval={props.approvalId}>
+      <button onClick={() => props.onResolved(undefined)}>Resolve in place</button>
+    </section>
+  ),
+}));
 
 const REVISION = "a".repeat(64);
 const KEY = queryKeys.capabilityConnectors("ws-1");
@@ -393,19 +404,32 @@ describe("Install progress", () => {
     expect(target.searchParams.get("approvalId")).toBe("approval-1");
     expect(target.searchParams.get("workspaceId")).toBe("default");
     expect(steps()).toEqual([
-      "Approve in Inbox · Waiting",
+      "Approve · Waiting",
       "Allow and save · Not started",
       "Switch on · Not started",
       "Connect · Not started",
     ]);
     expect(status()).toBe("Waiting on you in Inbox");
     expect(text()).not.toContain("Installed");
+    expect(body().querySelector("[data-in-place-approval]")?.getAttribute("data-in-place-approval")).toBe("approval-1");
+    expect(body().querySelector('button[aria-busy="true"]')?.textContent).toBe("Waiting on your approval…");
     await act(async () => button("Stop")?.click());
     expect(flows.cancel).toHaveBeenCalledExactlyOnceWith(EXAMPLE.id);
 
     // Approved: the step it waited on stays in the list, done.
     setFlow(EXAMPLE, { phase: "working", step: "plan" });
-    expect(steps().slice(0, 2)).toEqual(["Approve in Inbox · Done", "Allow and save · In progress"]);
+    expect(steps().slice(0, 2)).toEqual(["Approve · Done", "Allow and save · In progress"]);
+    expect(body().querySelector("[data-in-place-approval]")).toBeNull();
+  });
+
+  it("opens the approval in the panel and reads the plan again once it is decided there", async () => {
+    await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
+    expect(text()).toContain("Waiting on your approval…");
+    expect(link("Open in Inbox")).toBeDefined();
+    expect(flows.checkApproval).not.toHaveBeenCalled();
+    await act(async () => button("Resolve in place")?.click());
+    expect(flows.checkApproval).toHaveBeenCalledExactlyOnceWith(EXAMPLE.id);
   });
 
   it("asks to finish signing in in the browser, with the pasted code behind a disclosure", async () => {

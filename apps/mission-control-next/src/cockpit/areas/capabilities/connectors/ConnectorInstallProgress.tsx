@@ -6,6 +6,7 @@ import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { cn } from "../../../lib/cn";
 import { ConnectorSignInStep, signInTimeWords, useSignInTimeLeft, type SignInTimeLeft } from "./ConnectorSignInStep";
+import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
 import { isActiveInstallState } from "./connector-install-store";
 import { inboxApprovalHref, type ConnectorNextLink } from "./connector-links";
 import type { ConnectorInstall, ConnectorInstallState, ConnectorInstallStep } from "./use-connector-install";
@@ -14,7 +15,7 @@ import type { ConnectorInstall, ConnectorInstallState, ConnectorInstallStep } fr
 export type InstallStepId = "approval" | "plan" | "sign_in" | "switch_on" | "connect";
 const STEP_ORDER: readonly InstallStepId[] = ["approval", "plan", "sign_in", "switch_on", "connect"];
 const STEP_TITLES: Readonly<Record<InstallStepId, string>> = {
-  approval: "Approve in Inbox",
+  approval: "Approve",
   plan: "Allow and save",
   sign_in: "Sign in",
   switch_on: "Switch on",
@@ -78,7 +79,7 @@ function currentStep(state: ConnectorInstallState): InstallStepId | undefined {
 /** What the flow's button says while it runs. */
 function busyLabel(state: ConnectorInstallState): string | undefined {
   if (state.phase === "working") return BUSY_WORDS[state.step];
-  if (state.phase === "waiting_inbox") return "Waiting on Inbox…";
+  if (state.phase === "waiting_inbox") return "Waiting on your approval…";
   if (state.phase === "signing_in") return "Waiting on sign-in…";
   return undefined;
 }
@@ -216,7 +217,14 @@ function PhaseBody({ install, scope, doneLine }: { install: ConnectorInstall; sc
   switch (state.phase) {
     case "waiting_inbox":
       return (
-        <div className="space-y-1 text-sm text-fg-secondary">
+        <div className="space-y-2 text-sm text-fg-secondary">
+          {/* The approval opens here; the Inbox copy stays one link away for whoever prefers it. */}
+          <SettingsApprovalDialog
+            approvalId={state.approvalId}
+            title="Approve this connector install?"
+            reviewLabel="Review the install"
+            onResolved={() => install.checkApproval()}
+          />
           <p>
             <span className="font-medium text-fg">{WAITING_INBOX}</span>{" "}
             <NativeOwnerLink scope={scope} href={inboxApprovalHref(state.approvalId)}>

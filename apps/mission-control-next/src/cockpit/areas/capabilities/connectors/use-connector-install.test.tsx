@@ -374,6 +374,31 @@ describe("useConnectorInstall", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("reads the plan at once when the approval was decided in place, without waiting for the poll", async () => {
+    vi.useFakeTimers();
+    install.installCapabilityConnector.mockResolvedValueOnce(
+      receipt({ status: "awaiting_approval", requiredAction: APPROVAL }),
+    );
+    plans.fetchChangePlan.mockResolvedValueOnce(plan({ status: "cancelled", requiredAction: undefined }));
+    await startInstall({ ...TEMPLATE, auth: "none" });
+    expect(latest.state).toMatchObject({ phase: "waiting_inbox", approvalId: "approval-1" });
+    expect(plans.fetchChangePlan).not.toHaveBeenCalled();
+
+    await act(async () => latest.checkApproval());
+    await flush();
+    expect(plans.fetchChangePlan).toHaveBeenCalledTimes(1);
+    // A refused or ended plan is shown as stopped, never as installed.
+    expect(latest.state.phase).not.toBe("waiting_inbox");
+    expect(latest.state.phase).not.toBe("done");
+  });
+
+  it("checkApproval reads nothing when no flow exists", async () => {
+    await render(TEMPLATE);
+    await act(async () => latest.checkApproval());
+    await flush();
+    expect(plans.fetchChangePlan).not.toHaveBeenCalled();
+  });
+
   it("ignores a sign-in return with a different state", async () => {
     await startInstall();
     await returnFromProvider("another-state");
