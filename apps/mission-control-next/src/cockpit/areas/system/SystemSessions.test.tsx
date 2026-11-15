@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SystemSessions } from "./SystemSessions";
 const fixture = vi.hoisted(() => ({
   search: "",
@@ -15,7 +16,12 @@ const fixture = vi.hoisted(() => ({
   unmounts: vi.fn(),
 }));
 vi.mock("../../app/use-cockpit-route", () => ({
-  useCockpitRoute: () => ({ search: fixture.search, hash: fixture.hash, navigate: fixture.navigate }),
+  useCockpitRoute: () => ({
+    pathname: "/system/sessions",
+    search: fixture.search,
+    hash: fixture.hash,
+    navigate: fixture.navigate,
+  }),
 }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({
@@ -43,6 +49,18 @@ vi.mock("../chat/SessionControlManager", async () => {
     },
   };
 });
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({
+    items: [
+      { workspaceId: "workspace-a", name: "Workspace A" },
+      { workspaceId: "verification", name: "Verification" },
+    ],
+  })),
+}));
+vi.mock("../../app/ScopeSwitcher", () => ({
+  ScopeSwitcher: ({ open, destination }: { open?: boolean; destination?: string }) =>
+    open ? <p>switcher for {destination}</p> : null,
+}));
 vi.mock("./SystemOwnerLink", () => ({
   SystemOwnerLink: ({ href, children }: { href: string; children: string }) => <a href={href}>{children}</a>,
 }));
@@ -183,3 +201,29 @@ it.each(["?view=run-detail", "?runId=%20padded%20", "?runId=..", "?runId=.", "?r
     expect(fixture.navigate).not.toHaveBeenCalled();
   },
 );
+
+it("names another workspace's session, offers to switch to it, and mounts no controls for it", async () => {
+  const data = fixture.value.data as { sessions: Array<Record<string, unknown>> };
+  data.sessions = data.sessions.map((entry) => ({ ...entry, workspaceId: "verification" }));
+  fixture.search += "&sessionId=session-a";
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <SystemSessions />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() =>
+    expect(host.textContent).toContain("This conversation is in the Verification workspace. Its controls work there."),
+  );
+  const switchButton = [...host.querySelectorAll("button")].find(
+    (entry) => entry.textContent === "Switch to Verification",
+  );
+  expect(switchButton).toBeDefined();
+  expect(host.textContent).not.toContain("Session control");
+  expect(fixture.control).not.toHaveBeenCalled();
+  await act(async () => switchButton!.click());
+  expect(host.textContent).toContain(
+    "switcher for /system/sessions?workspaceId=verification&extra=keep&sessionId=session-a#control",
+  );
+});

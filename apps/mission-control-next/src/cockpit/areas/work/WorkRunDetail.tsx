@@ -21,6 +21,7 @@ import { MetricList } from "../../ui/MetricList";
 import { EmptyState } from "../../ui/EmptyState";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { WorkspaceSwitchOffer } from "../../app/WorkspaceSwitchOffer";
 import { workRunTitle } from "./work-board";
 import { RunEvidenceSections } from "./RunEvidenceSections";
 import { RunSignedReceipt } from "./RunSignedReceipt";
@@ -116,11 +117,19 @@ export function WorkRunDetail({ runId }: { runId: string }) {
       ) : null}
       {data?.run && !run ? (
         <EmptyState
-          title={recordedWorkspaceId ? "Run outside this workspace" : "Run workspace unknown"}
+          title={recordedWorkspaceId ? "Run in another workspace" : "Run workspace unknown"}
           description={
             recordedWorkspaceId
-              ? "This run belongs to another workspace. Choose its workspace or return to Work."
-              : "GoatCitadel could not confirm this run's workspace. Return to Work to choose a run."
+              ? undefined
+              : "GoatCitadel has no workspace recorded for this run, so Work can't show or recover it. Its record is kept."
+          }
+          action={
+            recordedWorkspaceId ? (
+              <WorkspaceSwitchOffer
+                workspaceId={recordedWorkspaceId}
+                sentence={(name) => `This run is in the ${name} workspace.`}
+              />
+            ) : undefined
           }
         />
       ) : null}

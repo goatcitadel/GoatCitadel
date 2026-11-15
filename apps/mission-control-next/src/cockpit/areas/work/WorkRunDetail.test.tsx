@@ -13,8 +13,12 @@ vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "workspace-a" }),
 }));
 vi.mock("../../app/use-cockpit-route", () => ({
-  useCockpitRoute: () => ({ navigate: vi.fn(), search: route.search, hash: route.hash }),
+  useCockpitRoute: () => ({ navigate: vi.fn(), pathname: "/work/runs/run-a", search: route.search, hash: route.hash }),
 }));
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [{ workspaceId: "workspace-other", name: "Build box" }] })),
+}));
+vi.mock("../../app/ScopeSwitcher", () => ({ ScopeSwitcher: () => null }));
 vi.mock("./RunEvidenceSections", () => ({ RunEvidenceSections: () => null }));
 vi.mock("./RunLineage", () => ({ RunLineage: () => <p>Lineage evidence</p> }));
 vi.mock("./RunSignedReceipt", () => ({
@@ -142,44 +146,46 @@ it("keeps the signed evidence receipt reachable while technical details are hidd
 });
 it.each([
   { name: "selected", workspaceId: "workspace-a", metadata: {}, heading: "Recorded run errors" },
-  { name: "other", workspaceId: "workspace-other", metadata: {}, heading: "Run outside this workspace" },
+  { name: "other", workspaceId: "workspace-other", metadata: {}, heading: "Run in another workspace" },
   { name: "missing", workspaceId: undefined, metadata: {}, heading: "Run workspace unknown" },
-  { name: "conflicting", workspaceId: "workspace-a", metadata: { workspaceId: "workspace-other" }, heading: "Run workspace unknown" },
-])(
-  "renders the recorded workspace state and gates errors ($name)",
-  async ({ workspaceId, metadata, heading }) => {
-    document.body.appendChild(container);
-    root = createRoot(container);
-    api.fetch.mockResolvedValue({
-      run: {
-        runId: "run-a",
-        workflowKey: "chat.turn.execute",
-        status: "failed",
-        updatedAt: "2026-10-05T00:00:00Z",
-        payload: { workspaceId },
-        metadata,
-      },
-      durable: { checkpoints: { state: "available", items: [] }, timeline: { state: "available", items: [] } },
-      toolCalls: { state: "available", items: [] },
-      providerUsage: { state: "unknown", items: [] },
-      approvals: { state: "available", items: [] },
-      errors: {
-        state: "available",
-        items: [{ source: "tool", id: "error-a", message: "Owner-reported tool failure" }],
-      },
-    });
-    await act(async () =>
-      root.render(
-        <QueryClientProvider client={client}>
-          <WorkRunDetail runId="run-a" />
-        </QueryClientProvider>,
-      ),
-    );
-    await vi.waitFor(() => expect(container.textContent).toContain(heading));
-    expect(container.textContent?.includes("Owner-reported tool failure")).toBe(heading === "Recorded run errors");
-    expect(container.querySelector('[aria-label="Recorded run errors"] a')).toBeNull();
+  {
+    name: "conflicting",
+    workspaceId: "workspace-a",
+    metadata: { workspaceId: "workspace-other" },
+    heading: "Run workspace unknown",
   },
-);
+])("renders the recorded workspace state and gates errors ($name)", async ({ workspaceId, metadata, heading }) => {
+  document.body.appendChild(container);
+  root = createRoot(container);
+  api.fetch.mockResolvedValue({
+    run: {
+      runId: "run-a",
+      workflowKey: "chat.turn.execute",
+      status: "failed",
+      updatedAt: "2026-10-05T00:00:00Z",
+      payload: { workspaceId },
+      metadata,
+    },
+    durable: { checkpoints: { state: "available", items: [] }, timeline: { state: "available", items: [] } },
+    toolCalls: { state: "available", items: [] },
+    providerUsage: { state: "unknown", items: [] },
+    approvals: { state: "available", items: [] },
+    errors: {
+      state: "available",
+      items: [{ source: "tool", id: "error-a", message: "Owner-reported tool failure" }],
+    },
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <WorkRunDetail runId="run-a" />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).toContain(heading));
+  expect(container.textContent?.includes("Owner-reported tool failure")).toBe(heading === "Recorded run errors");
+  expect(container.querySelector('[aria-label="Recorded run errors"] a')).toBeNull();
+});
 it("shows a recorded zero provider cost instead of Unknown", async () => {
   document.body.appendChild(container);
   root = createRoot(container);
@@ -245,4 +251,58 @@ it("WK-10: says how much of the run history is shown and offers the rest", async
   expect(history.querySelectorAll("li")).toHaveLength(15);
   expect(container.textContent).toContain("Showing all 15 events.");
   expect(document.activeElement?.textContent).toBe("Show fewer");
+});
+
+it("names the workspace of a run in another workspace and offers to switch to it", async () => {
+  document.body.appendChild(container);
+  root = createRoot(container);
+  api.fetch.mockResolvedValue({
+    run: {
+      runId: "run-a",
+      workflowKey: "chat.turn.execute",
+      status: "failed",
+      payload: { workspaceId: "workspace-other" },
+      metadata: {},
+    },
+    durable: { checkpoints: { state: "available", items: [] }, timeline: { state: "available", items: [] } },
+    toolCalls: { state: "available", items: [] },
+    providerUsage: { state: "unknown", items: [] },
+    approvals: { state: "available", items: [] },
+    errors: { state: "available", items: [] },
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <WorkRunDetail runId="run-a" />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).toContain("This run is in the Build box workspace."));
+  expect(container.textContent).toContain("Run in another workspace");
+  expect([...container.querySelectorAll("button")].some((entry) => entry.textContent === "Switch to Build box")).toBe(
+    true,
+  );
+});
+it("says a run with no recorded workspace can't be shown or recovered, and that its record is kept", async () => {
+  document.body.appendChild(container);
+  root = createRoot(container);
+  api.fetch.mockResolvedValue({
+    run: { runId: "run-a", workflowKey: "chat.turn.execute", status: "failed", payload: {}, metadata: {} },
+    durable: { checkpoints: { state: "available", items: [] }, timeline: { state: "available", items: [] } },
+    toolCalls: { state: "available", items: [] },
+    providerUsage: { state: "unknown", items: [] },
+    approvals: { state: "available", items: [] },
+    errors: { state: "available", items: [] },
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <WorkRunDetail runId="run-a" />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).toContain("Run workspace unknown"));
+  expect(container.textContent).toContain(
+    "GoatCitadel has no workspace recorded for this run, so Work can't show or recover it. Its record is kept.",
+  );
 });

@@ -792,6 +792,28 @@ describe("Gateway inbox projection", () => {
     expect(JSON.stringify(projection)).not.toContain("Foreign workspace");
   });
 
+  it("says a stopped run with no workspace recorded can't be listed, and still omits it", async () => {
+    const deps = dependencies();
+    vi.mocked(deps.durable.listDeadLetters).mockResolvedValue([
+      {
+        deadLetterId: "dead-x",
+        runId: "run-x",
+        reason: "Needs recovery",
+        payload: {},
+        createdAt: "2026-09-28T12:00:00.000Z",
+      },
+    ] as never);
+    vi.mocked(deps.durable.getRun).mockResolvedValue({ runId: "run-x", payload: {}, metadata: {} } as never);
+
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+
+    expect(projection.items).toEqual([]);
+    expect(projection.coverage.find((entry) => entry.source === "dead_letters")).toMatchObject({
+      state: "partial",
+      detail: "A stopped run has no workspace recorded, so no Inbox can list it. Its record is kept.",
+    });
+  });
+
   it("shows recent scoped task deliverables without exposing paths or treating updates as complete", async () => {
     const deps = dependencies();
     const recent = new Date(Date.now() - 60_000).toISOString();
