@@ -116,8 +116,8 @@ describe("native integration management", () => {
     });
     expect(api.fetchIntegrationConnection).toHaveBeenCalledWith(saved.connectionId);
     expect(text(view.root)).toContain("Connection Reviewed fixture created.");
-    expect(text(view.root)).toContain("Configured status: Connected");
-    expect(text(view.root)).toContain("Connectivity unverified");
+    expect(text(view.root)).toContain("Saved status: Set up, not checked");
+    expect(text(view.root)).toContain("Not checked yet");
   });
   it("offers no plugin trust view", async () => {
     await act(async () => {

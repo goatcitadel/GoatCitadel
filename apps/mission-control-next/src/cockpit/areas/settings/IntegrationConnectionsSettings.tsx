@@ -18,7 +18,7 @@ import { IntegrationManagementSettings, type IntegrationManagementSelection } fr
 import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { McpDraftLeave } from "./McpDraftLeave";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { INTEGRATION_CONNECTION_STATUS_LABELS } from "./settings-vocabulary";
+import { SAVED_CONNECTION_STATUS_LABELS } from "./settings-vocabulary";
 import { consumeGoogleOAuthReturnFragment } from "../../../features/native-routes/settings/google-oauth-return";
 import { Callout } from "../../ui/Callout";
 
@@ -209,11 +209,11 @@ function IntegrationRow({
         <div className="min-w-0 flex-1">
           <h4 className="break-words text-sm font-semibold text-fg">{connection.label}</h4>
           <p className="mt-1 text-sm text-fg-secondary">
-            {connection.enabled ? "Enabled" : "Disabled"} · Connectivity unverified
+            {connection.enabled ? "Enabled" : "Disabled"} · Not checked yet
           </p>
           <p className="text-xs text-fg-muted">
-            Configured status: {INTEGRATION_CONNECTION_STATUS_LABELS[connection.status] ?? "Unknown"}. A saved status
-            does not verify connectivity; choose Manage to run diagnostics.
+            Saved status: {SAVED_CONNECTION_STATUS_LABELS[connection.status] ?? "Unknown"}. Choose Manage to run
+            diagnostics.
           </p>
           <p className="mt-1 break-words text-xs text-fg-muted">
             {connection.workspaceId ? "Workspace-bound connection" : "Unbound · Personal Citadel policy"}
