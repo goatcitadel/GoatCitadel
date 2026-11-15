@@ -36,4 +36,19 @@ describe("Cockpit accessible controls", () => {
     expect(css).toContain("@media (prefers-reduced-motion: reduce)");
     expect(css).toContain("@media (forced-colors: active)");
   });
+
+  it("draws a boundary on every button, tab and target in forced colours (U-GL-001)", () => {
+    const forced = css.slice(css.indexOf("@media (forced-colors: active)"));
+    expect(forced).toMatch(
+      /:is\(button, \[role="tab"\], summary, \.cockpit-target\):not\([^)]*\) \{\s*outline: 1px solid ButtonText;/,
+    );
+    expect(forced).toMatch(/:is\(:disabled, \[aria-disabled="true"\]\) \{\s*outline-color: GrayText;/);
+    expect(forced).toMatch(
+      /\[data-status-dot="running"\] \{\s*forced-color-adjust: none;\s*background-color: CanvasText;/,
+    );
+  });
+
+  it("gives standalone links a 24 px target that Compact density does not shrink (U-GL-006, U-IN-005)", () => {
+    expect(unlayered(css)).toMatch(/\.cockpit-target \{[^}]*min-height: 1\.5rem;/);
+  });
 });

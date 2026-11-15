@@ -31,6 +31,12 @@ html[data-shell="cockpit"] .cockpit-deferred-recovery-control {
     min-width: 44px;
   }
 }
+/* Standalone links keep a 24 px target that Compact density does not rescale. */
+html[data-shell="cockpit"] .cockpit-target {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+}
 @layer base {
   html[data-shell="cockpit"] :is([role="tab"][aria-selected="true"], [data-cockpit-tabbar] [aria-current="page"]) {
     box-shadow: inset 0 -2px var(--cockpit-accent);
@@ -101,5 +107,21 @@ html[data-shell="cockpit"] .cockpit-menu-item:is([data-disabled], [aria-disabled
     color: GrayText;
     border-color: GrayText;
     opacity: 1;
+  }
+  html[data-shell="cockpit"]
+    :is(button, [role="tab"], summary, .cockpit-target):not(
+      [aria-current="page"],
+      [aria-selected="true"],
+      [aria-pressed="true"]
+    ) {
+    outline: 1px solid ButtonText;
+    outline-offset: -1px;
+  }
+  html[data-shell="cockpit"] :is(button, [role="tab"], summary, .cockpit-target):is(:disabled, [aria-disabled="true"]) {
+    outline-color: GrayText;
+  }
+  html[data-shell="cockpit"] [data-status-dot="running"] {
+    forced-color-adjust: none;
+    background-color: CanvasText;
   }
 }
