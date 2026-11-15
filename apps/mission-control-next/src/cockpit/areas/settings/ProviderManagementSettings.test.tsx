@@ -255,8 +255,11 @@ describe("native provider owner composition", () => {
         config = {
           ...config,
           revision: 8,
-          providers: [...config.providers, { ...saved, providerId: "new-fixture", hasApiKey: false }],
-          providerConfigs: [...config.providerConfigs, { ...saved, providerId: "new-fixture" }],
+          providers: [
+            ...config.providers,
+            { ...saved, providerId: "new-fixture", hasApiKey: false, apiKeySource: "none" as const },
+          ],
+          providerConfigs: [...(config.providerConfigs ?? []), { ...saved, providerId: "new-fixture" }],
         };
         return { ...plan, revision: 2, status: "completed", requiredAction: undefined, evidenceRefs: [] };
       });
