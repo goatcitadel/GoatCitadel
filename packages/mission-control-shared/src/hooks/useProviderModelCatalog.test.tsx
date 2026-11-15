@@ -364,7 +364,21 @@ describe("useProviderModelCatalog", () => {
       modelProbeState: "fallback",
       modelProbeSource: "live",
       modelProbeWarning: "503",
+      modelRefreshFailed: true,
     });
+
+    // A refresh that fails again says so again, and one that answers clears the marker.
+    apiMocks.fetchLlmModels.mockRejectedValueOnce(new Error("down"));
+    await act(async () => {
+      await hook.result.loadModelsForProvider("openai", { force: true });
+    });
+    expect(hook.result.providers[0]).toMatchObject({ modelRefreshFailed: true, modelProbeWarning: "down" });
+    apiMocks.fetchLlmModels.mockResolvedValueOnce({ source: "live", items: [{ id: "gpt-remote" }] });
+    await act(async () => {
+      await hook.result.loadModelsForProvider("openai", { force: true });
+    });
+    expect(hook.result.providers[0]).toMatchObject({ modelProbeState: "ready", modelRefreshStatus: "fresh" });
+    expect(hook.result.providers[0]?.modelRefreshFailed).toBeUndefined();
 
     hook.renderer.unmount();
   });
@@ -447,6 +461,7 @@ describe("useProviderModelCatalog", () => {
       state: "fallback",
       source: "live",
     });
+    expect(hook.result.providers[0]?.modelRefreshFailed).toBeUndefined();
     hook.renderer.unmount();
   });
 
