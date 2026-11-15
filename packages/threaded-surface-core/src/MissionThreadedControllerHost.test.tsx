@@ -443,7 +443,6 @@ vi.mock("./chat/useExternalSourceAttachments", () => ({
   useExternalSourceAttachments: (...args: unknown[]) => useExternalSourceAttachmentsMock(...args),
 }));
 
-
 vi.mock("./chat/useMissionControlSurfaceState", () => ({
   formatSessionLabel: (session: any) => session?.title ?? session?.sessionId ?? "Session",
   looksMachineSessionLabel: (value: string) => value.startsWith("sess_"),
@@ -550,7 +549,8 @@ function setupMocks() {
       title: "Review model change",
       summary: "Review the exact model change.",
       impact: "No mutation occurs before confirmation.",
-      risk: "safe",
+      // Not "safe": a safe Chat model plan is applied as soon as it is made, and these tests exercise the review card.
+      risk: "caution",
       requiredAction: {
         kind: "confirmation",
         actionId: "action-1",
@@ -1439,11 +1439,19 @@ describe("MissionThreadedControllerHost", () => {
 
   it("reaches current context and supervised delegation owners only when the Gateway reports effective availability", async () => {
     const data = useChatSessionDataMock();
-    useChatSessionDataMock.mockReturnValue({ ...data, projects: { items: [{ ...selectedProject, workspaceId: "workspace-1" }] }, settings: { ...data.settings,
-      chatFeatureAvailability: { explicitContext: true, supervisedDelegation: true } } });
-    const external = buildExternalSourceAttachmentsState({ supported: true, canMutate: true, selectedAttachmentIds: ["attachment-1"] });
+    useChatSessionDataMock.mockReturnValue({
+      ...data,
+      projects: { items: [{ ...selectedProject, workspaceId: "workspace-1" }] },
+      settings: { ...data.settings, chatFeatureAvailability: { explicitContext: true, supervisedDelegation: true } },
+    });
+    const external = buildExternalSourceAttachmentsState({
+      supported: true,
+      canMutate: true,
+      selectedAttachmentIds: ["attachment-1"],
+    });
     useExternalSourceAttachmentsMock.mockReturnValue(external);
-    await renderHost(); await selectDefaultSession();
+    await renderHost();
+    await selectDefaultSession();
     const actions = useChatContextActionsMock.mock.results.at(-1)?.value as any;
     await act(async () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onDraftChange("Use the source");
@@ -1620,306 +1628,312 @@ describe("MissionThreadedControllerHost", () => {
     expect(useMediaQueryMock).toHaveBeenCalledWith("(width < 1180px)");
   });
 
-  it.each(projectionAdapters)("fails closed across direct mutation callbacks while an exact historical window is active ($label)", async ({ factory }) => {
-    const baseSessionData = useChatSessionDataMock();
-    useChatSessionDataMock.mockReturnValue({
-      ...baseSessionData,
-      historicalWindowTarget: { workspaceId: "workspace-1", sessionId: "session-1" },
-      historicalWindow: {
-        anchor: {
-          state: "found",
-          workspaceId: "workspace-1",
-          sessionId: "session-1",
-          messageId: "message-user",
-          sequence: 1,
-        },
-        items: [
-          {
+  it.each(projectionAdapters)(
+    "fails closed across direct mutation callbacks while an exact historical window is active ($label)",
+    async ({ factory }) => {
+      const baseSessionData = useChatSessionDataMock();
+      useChatSessionDataMock.mockReturnValue({
+        ...baseSessionData,
+        historicalWindowTarget: { workspaceId: "workspace-1", sessionId: "session-1" },
+        historicalWindow: {
+          anchor: {
+            state: "found",
+            workspaceId: "workspace-1",
+            sessionId: "session-1",
+            messageId: "message-user",
             sequence: 1,
-            isAnchor: true,
-            message: {
-              messageId: "message-user",
-              sessionId: "session-1",
-              role: "user",
-              content: "Build the launch plan",
-              timestamp: "2026-05-01T00:00:00.000Z",
-            },
           },
-        ],
-        snapshotMaxSequence: 2,
-        snapshotMessageCount: 2,
-        hasOlder: false,
-        hasNewer: true,
-        newerCursor: { messageId: "message-user", sequence: 1, snapshotMaxSequence: 2 },
-        truncated: false,
-        droppedItems: 0,
-        byteLength: 256,
-      },
-    });
-
-    await renderHost({ coworkViewModelFactory: factory, lockSurface: true, surface: "chat" });
-    await act(async () => {
-      latestSurfaceInput?.sessionRail.onSelectSession("session-1", {
-        searchHit: {
-          workspaceId: "workspace-1",
-          sessionId: "session-1",
-          messageId: "message-user",
-          sequence: 1,
-          excerpt: "Build the launch plan",
-          score: 10,
+          items: [
+            {
+              sequence: 1,
+              isAnchor: true,
+              message: {
+                messageId: "message-user",
+                sessionId: "session-1",
+                role: "user",
+                content: "Build the launch plan",
+                timestamp: "2026-05-01T00:00:00.000Z",
+              },
+            },
+          ],
+          snapshotMaxSequence: 2,
+          snapshotMessageCount: 2,
+          hasOlder: false,
+          hasNewer: true,
+          newerCursor: { messageId: "message-user", sequence: 1, snapshotMaxSequence: 2 },
+          truncated: false,
+          droppedItems: 0,
+          byteLength: 256,
         },
       });
-      await flushEffects(8);
-    });
 
-    const surface = latestSurfaceInput?.activeSessionSurfaceProps;
-    const dock = latestSurfaceInput?.contextDockProps;
-    const sessionControls = useChatSessionControlsMock.mock.results.at(-1)?.value as any;
-    const orchestration = useChatSurfaceOrchestrationMock.mock.results.at(-1)?.value as any;
-    const contextActions = useChatContextActionsMock.mock.results.at(-1)?.value as any;
-    const outbound = useChatOutboundExecutionMock.mock.results.at(-1)?.value as any;
-    const composer = useChatComposerInteractionsMock.mock.results.at(-1)?.value as any;
-    const multimodal = useChatMultimodalControlsMock.mock.results.at(-1)?.value as any;
-    const rail = latestSurfaceInput?.sessionRail;
-    const dropTarget = latestSurfaceInput?.dropTargetProps;
-    vi.clearAllMocks();
+      await renderHost({ coworkViewModelFactory: factory, lockSurface: true, surface: "chat" });
+      await act(async () => {
+        latestSurfaceInput?.sessionRail.onSelectSession("session-1", {
+          searchHit: {
+            workspaceId: "workspace-1",
+            sessionId: "session-1",
+            messageId: "message-user",
+            sequence: 1,
+            excerpt: "Build the launch plan",
+            score: 10,
+          },
+        });
+        await flushEffects(8);
+      });
 
-    expect(surface?.historicalReadOnly).toBe(true);
-    expect(surface?.canSend).toBe(false);
+      const surface = latestSurfaceInput?.activeSessionSurfaceProps;
+      const dock = latestSurfaceInput?.contextDockProps;
+      const sessionControls = useChatSessionControlsMock.mock.results.at(-1)?.value as any;
+      const orchestration = useChatSurfaceOrchestrationMock.mock.results.at(-1)?.value as any;
+      const contextActions = useChatContextActionsMock.mock.results.at(-1)?.value as any;
+      const outbound = useChatOutboundExecutionMock.mock.results.at(-1)?.value as any;
+      const composer = useChatComposerInteractionsMock.mock.results.at(-1)?.value as any;
+      const multimodal = useChatMultimodalControlsMock.mock.results.at(-1)?.value as any;
+      const rail = latestSurfaceInput?.sessionRail;
+      const dropTarget = latestSurfaceInput?.dropTargetProps;
+      vi.clearAllMocks();
 
-    await act(async () => {
-      // Conversation and approval mutations.
-      surface?.onSend();
-      surface?.onRetryTurn("turn-1");
-      surface?.onSwitchBranch("turn-1");
-      surface?.onEditTurn("turn-1");
-      surface?.onStartNewThreadFromTurn("turn-1");
-      surface?.onRequestProviderChange("anthropic");
-      surface?.onRequestModelChange("claude-4");
-      surface?.onToggleArchiveSession();
-      surface?.onApprovePending("once");
-      surface?.onDenyPending();
-      surface?.onSubmitUserInput({ kind: "text", text: "continue" });
-      surface?.onResumeAll();
-      surface?.onRemoveQueuedItem("queue-1");
-      surface?.onCreateGeneratedArtifact("turn-1");
-      surface?.onCreateGeneratedArtifactVersion("turn-1");
-      await surface?.onAcceptDelegation();
+      expect(surface?.historicalReadOnly).toBe(true);
+      expect(surface?.canSend).toBe(false);
 
-      // Composer, upload, knowledge, planning, and research mutations.
-      surface?.onComposerKeyDown({ preventDefault: vi.fn() } as any);
-      surface?.onComposerPaste({ preventDefault: vi.fn() } as any);
-      surface?.onDrop({ preventDefault: vi.fn() } as any);
-      surface?.onTogglePlanningMode();
-      surface?.onToggleResearchMode();
-      surface?.onToggleReviewMode();
-      surface?.onSetDeepMode();
-      surface?.onSetThinkingLevel("deep");
-      surface?.onSetSpeedMode("fast");
-      surface?.onSetSubagentPolicy("auto_when_useful");
-      surface?.onApplyDraftCommand("/plan on");
-      surface?.onSetAttachmentMode?.("knowledge-1", "full_text");
-      surface?.onRemoveThreadKnowledgeAttachment?.("knowledge-1");
-      surface?.onAttachKnowledgeUrl?.();
-      surface?.onRemoveAttachment("attachment-1");
-      surface?.onUploadFiles(null);
-      dropTarget?.onUploadFiles(null);
-      surface?.onRunQuickResearch();
+      await act(async () => {
+        // Conversation and approval mutations.
+        surface?.onSend();
+        surface?.onRetryTurn("turn-1");
+        surface?.onSwitchBranch("turn-1");
+        surface?.onEditTurn("turn-1");
+        surface?.onStartNewThreadFromTurn("turn-1");
+        surface?.onRequestProviderChange("anthropic");
+        surface?.onRequestModelChange("claude-4");
+        surface?.onToggleArchiveSession();
+        surface?.onApprovePending("once");
+        surface?.onDenyPending();
+        surface?.onSubmitUserInput({ kind: "text", text: "continue" });
+        surface?.onResumeAll();
+        surface?.onRemoveQueuedItem("queue-1");
+        surface?.onCreateGeneratedArtifact("turn-1");
+        surface?.onCreateGeneratedArtifactVersion("turn-1");
+        await surface?.onAcceptDelegation();
 
-      // Voice, image, goal, and steering mutations.
-      surface?.onRequestImageProviderChange?.("openai");
-      surface?.onRequestImageModelChange?.("gpt-image-2");
-      surface?.onToggleLiveVoice?.();
-      surface?.onToggleLiveVoiceMute?.();
-      surface?.onToggleVoiceTalk?.();
-      surface?.onOpenAudioTranscribe?.();
-      surface?.onAudioFileSelected?.(null);
-      surface?.onToggleSpeakResponses?.();
-      surface?.onGenerateImage?.();
-      surface?.onEditImage?.();
-      await surface?.onSteerMidTurn?.("continue safely");
-      await surface?.onSetGoal?.("Ship safely", 4);
-      await surface?.onClearGoal?.();
+        // Composer, upload, knowledge, planning, and research mutations.
+        surface?.onComposerKeyDown({ preventDefault: vi.fn() } as any);
+        surface?.onComposerPaste({ preventDefault: vi.fn() } as any);
+        surface?.onDrop({ preventDefault: vi.fn() } as any);
+        surface?.onTogglePlanningMode();
+        surface?.onToggleResearchMode();
+        surface?.onToggleReviewMode();
+        surface?.onSetDeepMode();
+        surface?.onSetThinkingLevel("deep");
+        surface?.onSetSpeedMode("fast");
+        surface?.onSetSubagentPolicy("auto_when_useful");
+        surface?.onApplyDraftCommand("/plan on");
+        surface?.onSetAttachmentMode?.("knowledge-1", "full_text");
+        surface?.onRemoveThreadKnowledgeAttachment?.("knowledge-1");
+        surface?.onAttachKnowledgeUrl?.();
+        surface?.onRemoveAttachment("attachment-1");
+        surface?.onUploadFiles(null);
+        dropTarget?.onUploadFiles(null);
+        surface?.onRunQuickResearch();
 
-      // Drawer preferences, orchestration, memory, and session organization.
-      await dock?.onPrefPatch({ model: "claude-4" });
-      await dock?.onSuggestDelegation();
-      await dock?.onTriggerProactive();
-      await dock?.onProactivePolicyPatch({ mode: "suggest" } as any);
-      await dock?.onRunCodeDelegation("implement");
-      dock?.onCapabilitySuggestionAction(dock.capabilitySuggestions[0]);
-      await dock?.onCreateSpecialistDraft(dock.specialistSuggestions[0]);
-      await dock?.onActivateCatalogSpecialist(dock.specialistSuggestions[0]);
-      await dock?.onSpecialistCandidatePatch("candidate-1", { title: "Blocked" }, "blocked");
-      await dock?.onAcceptDelegation();
-      await dock?.onRebuildLearnedMemory();
-      await dock?.onUpdateMemoryStatus("memory-1", "disabled");
-      await dock?.onRenameSession();
-      await dock?.onSaveOrganization();
-      await dock?.onTogglePinSession();
-      await dock?.onToggleArchiveSession();
-      dock?.onDeleteSession();
-      await dock?.onAssignProject("project-2");
-      await dock?.onSaveExternalBinding();
+        // Voice, image, goal, and steering mutations.
+        surface?.onRequestImageProviderChange?.("openai");
+        surface?.onRequestImageModelChange?.("gpt-image-2");
+        surface?.onToggleLiveVoice?.();
+        surface?.onToggleLiveVoiceMute?.();
+        surface?.onToggleVoiceTalk?.();
+        surface?.onOpenAudioTranscribe?.();
+        surface?.onAudioFileSelected?.(null);
+        surface?.onToggleSpeakResponses?.();
+        surface?.onGenerateImage?.();
+        surface?.onEditImage?.();
+        await surface?.onSteerMidTurn?.("continue safely");
+        await surface?.onSetGoal?.("Ship safely", 4);
+        await surface?.onClearGoal?.();
 
-      // Rail-level creation and archive entry points are also locked.
-      rail?.onCreateSession();
-      rail?.onCreateProject();
-      rail?.onArchiveWorkspace();
-      await rail?.onConfirmArchiveWorkspace();
+        // Drawer preferences, orchestration, memory, and session organization.
+        await dock?.onPrefPatch({ model: "claude-4" });
+        await dock?.onSuggestDelegation();
+        await dock?.onTriggerProactive();
+        await dock?.onProactivePolicyPatch({ mode: "suggest" } as any);
+        await dock?.onRunCodeDelegation("implement");
+        dock?.onCapabilitySuggestionAction(dock.capabilitySuggestions[0]);
+        await dock?.onCreateSpecialistDraft(dock.specialistSuggestions[0]);
+        await dock?.onActivateCatalogSpecialist(dock.specialistSuggestions[0]);
+        await dock?.onSpecialistCandidatePatch("candidate-1", { title: "Blocked" }, "blocked");
+        await dock?.onAcceptDelegation();
+        await dock?.onRebuildLearnedMemory();
+        await dock?.onUpdateMemoryStatus("memory-1", "disabled");
+        await dock?.onRenameSession();
+        await dock?.onSaveOrganization();
+        await dock?.onTogglePinSession();
+        await dock?.onToggleArchiveSession();
+        dock?.onDeleteSession();
+        await dock?.onAssignProject("project-2");
+        await dock?.onSaveExternalBinding();
 
-      // Stop and cancel are the only safety exceptions while reading history.
-      surface?.onStopActiveTurn();
-      surface?.onCoworkStopRun?.({ action: "pause", enabled: true, label: "Pause" } as any);
-      surface?.onCoworkStopRun?.({ action: "cancel", enabled: true, label: "Cancel" } as any);
-      await flushEffects(8);
-    });
+        // Rail-level creation and archive entry points are also locked.
+        rail?.onCreateSession();
+        rail?.onCreateProject();
+        rail?.onArchiveWorkspace();
+        await rail?.onConfirmArchiveWorkspace();
 
-    expect(handleSendMock).not.toHaveBeenCalled();
-    expect(sessionControls.handleCreateProject).not.toHaveBeenCalled();
-    expect(sessionControls.handleToggleArchiveSession).not.toHaveBeenCalled();
-    expect(sessionControls.handleRenameSession).not.toHaveBeenCalled();
-    expect(sessionControls.handleSaveOrganization).not.toHaveBeenCalled();
-    expect(sessionControls.handleTogglePinSession).not.toHaveBeenCalled();
-    expect(sessionControls.handleDeleteSession).not.toHaveBeenCalled();
-    expect(sessionControls.handleAssignProject).not.toHaveBeenCalled();
-    expect(sessionControls.handleSaveExternalBinding).not.toHaveBeenCalled();
-    expect(orchestration.handleRetryTurn).not.toHaveBeenCalled();
-    expect(orchestration.handleBeginEditTurn).not.toHaveBeenCalled();
-    expect(orchestration.handleResumeQueue).not.toHaveBeenCalled();
-    expect(orchestration.handleRemoveQueuedItem).not.toHaveBeenCalled();
-    expect(contextActions.handleAcceptDelegation).not.toHaveBeenCalled();
-    expect(contextActions.handleRunQuickResearch).not.toHaveBeenCalled();
-    expect(contextActions.handleSuggestDelegation).not.toHaveBeenCalled();
-    expect(contextActions.handleTriggerProactive).not.toHaveBeenCalled();
-    expect(contextActions.handleProactivePolicyPatch).not.toHaveBeenCalled();
-    expect(contextActions.handleRunCodeDelegation).not.toHaveBeenCalled();
-    expect(contextActions.handleCreateSpecialistDraft).not.toHaveBeenCalled();
-    expect(contextActions.handleActivateCatalogSpecialist).not.toHaveBeenCalled();
-    expect(contextActions.handleSpecialistCandidatePatch).not.toHaveBeenCalled();
-    expect(contextActions.handleRebuildLearnedMemory).not.toHaveBeenCalled();
-    expect(contextActions.handleMemoryStatusUpdate).not.toHaveBeenCalled();
-    expect(outbound.handleSelectBranchTurn).not.toHaveBeenCalled();
-    expect(outbound.handleApprovePending).not.toHaveBeenCalled();
-    expect(outbound.handleDenyPending).not.toHaveBeenCalled();
-    expect(outbound.handleSubmitUserInput).not.toHaveBeenCalled();
-    expect(composer.handleCreateCurrentModeSession).not.toHaveBeenCalled();
-    expect(composer.handleArchiveWorkspace).not.toHaveBeenCalled();
-    expect(composer.handleConfirmArchiveWorkspace).not.toHaveBeenCalled();
-    expect(composer.handleComposerKeyDown).not.toHaveBeenCalled();
-    expect(composer.handleComposerPaste).not.toHaveBeenCalled();
-    expect(composer.handleDrop).not.toHaveBeenCalled();
-    expect(composer.handleSetDeepMode).not.toHaveBeenCalled();
-    expect(composer.handleApplyDraftCommand).not.toHaveBeenCalled();
-    expect(composer.handleRemoveAttachment).not.toHaveBeenCalled();
-    expect(composer.handleUploadFiles).not.toHaveBeenCalled();
-    expect(multimodal.handleToggleLiveVoice).not.toHaveBeenCalled();
-    expect(multimodal.handleToggleLiveVoiceMute).not.toHaveBeenCalled();
-    expect(multimodal.handleToggleVoiceTalk).not.toHaveBeenCalled();
-    expect(multimodal.handleOpenAudioTranscribe).not.toHaveBeenCalled();
-    expect(multimodal.handleAudioFileSelected).not.toHaveBeenCalled();
-    expect(multimodal.setSpeakResponsesEnabled).not.toHaveBeenCalled();
-    expect(multimodal.handleGenerateImage).not.toHaveBeenCalled();
-    expect(multimodal.handleEditImage).not.toHaveBeenCalled();
-    expect(updateChatSessionPrefsMock).not.toHaveBeenCalled();
-    expect(createChatSessionMock).not.toHaveBeenCalled();
-    expect(createChatGeneratedArtifactMock).not.toHaveBeenCalled();
-    expect(attachThreadKnowledgeAttachmentMock).not.toHaveBeenCalled();
-    expect(removeThreadKnowledgeAttachmentMock).not.toHaveBeenCalled();
-    expect(setChatSessionGoalMock).not.toHaveBeenCalled();
-    expect(clearChatSessionGoalMock).not.toHaveBeenCalled();
-    expect(steerChatSessionMock).not.toHaveBeenCalled();
-    expect(loadModelsForProviderMock).not.toHaveBeenCalled();
-    expect(orchestration.handleStopActiveTurn).toHaveBeenCalledTimes(1);
-    expect(controlAgenticRunMock).toHaveBeenCalledTimes(1);
-    expect(controlAgenticRunMock).toHaveBeenCalledWith(
-      "agentic-run-1",
-      expect.objectContaining({ action: "cancel", expectedRevision: 12 }),
-      { workspaceId: "workspace-1" },
-    );
-  });
+        // Stop and cancel are the only safety exceptions while reading history.
+        surface?.onStopActiveTurn();
+        surface?.onCoworkStopRun?.({ action: "pause", enabled: true, label: "Pause" } as any);
+        surface?.onCoworkStopRun?.({ action: "cancel", enabled: true, label: "Cancel" } as any);
+        await flushEffects(8);
+      });
 
-  it.each(projectionAdapters)("fails closed across code-workbench mutation callbacks while historical context is active ($label)", async ({ factory, native }) => {
-    mockSurfaceMode = native ? "chat" : "code";
-    const baseSessionData = useChatSessionDataMock();
-    useChatSessionDataMock.mockReturnValue({
-      ...baseSessionData,
-      historicalWindowTarget: { workspaceId: "workspace-1", sessionId: "session-1" },
-      historicalWindow: {
-        anchor: {
-          state: "found",
-          workspaceId: "workspace-1",
-          sessionId: "session-1",
-          messageId: "message-user",
-          sequence: 1,
-        },
-        items: [],
-        snapshotMaxSequence: 2,
-        snapshotMessageCount: 2,
-        hasOlder: false,
-        hasNewer: false,
-        truncated: false,
-        droppedItems: 0,
-        byteLength: 2,
-      },
-    });
+      expect(handleSendMock).not.toHaveBeenCalled();
+      expect(sessionControls.handleCreateProject).not.toHaveBeenCalled();
+      expect(sessionControls.handleToggleArchiveSession).not.toHaveBeenCalled();
+      expect(sessionControls.handleRenameSession).not.toHaveBeenCalled();
+      expect(sessionControls.handleSaveOrganization).not.toHaveBeenCalled();
+      expect(sessionControls.handleTogglePinSession).not.toHaveBeenCalled();
+      expect(sessionControls.handleDeleteSession).not.toHaveBeenCalled();
+      expect(sessionControls.handleAssignProject).not.toHaveBeenCalled();
+      expect(sessionControls.handleSaveExternalBinding).not.toHaveBeenCalled();
+      expect(orchestration.handleRetryTurn).not.toHaveBeenCalled();
+      expect(orchestration.handleBeginEditTurn).not.toHaveBeenCalled();
+      expect(orchestration.handleResumeQueue).not.toHaveBeenCalled();
+      expect(orchestration.handleRemoveQueuedItem).not.toHaveBeenCalled();
+      expect(contextActions.handleAcceptDelegation).not.toHaveBeenCalled();
+      expect(contextActions.handleRunQuickResearch).not.toHaveBeenCalled();
+      expect(contextActions.handleSuggestDelegation).not.toHaveBeenCalled();
+      expect(contextActions.handleTriggerProactive).not.toHaveBeenCalled();
+      expect(contextActions.handleProactivePolicyPatch).not.toHaveBeenCalled();
+      expect(contextActions.handleRunCodeDelegation).not.toHaveBeenCalled();
+      expect(contextActions.handleCreateSpecialistDraft).not.toHaveBeenCalled();
+      expect(contextActions.handleActivateCatalogSpecialist).not.toHaveBeenCalled();
+      expect(contextActions.handleSpecialistCandidatePatch).not.toHaveBeenCalled();
+      expect(contextActions.handleRebuildLearnedMemory).not.toHaveBeenCalled();
+      expect(contextActions.handleMemoryStatusUpdate).not.toHaveBeenCalled();
+      expect(outbound.handleSelectBranchTurn).not.toHaveBeenCalled();
+      expect(outbound.handleApprovePending).not.toHaveBeenCalled();
+      expect(outbound.handleDenyPending).not.toHaveBeenCalled();
+      expect(outbound.handleSubmitUserInput).not.toHaveBeenCalled();
+      expect(composer.handleCreateCurrentModeSession).not.toHaveBeenCalled();
+      expect(composer.handleArchiveWorkspace).not.toHaveBeenCalled();
+      expect(composer.handleConfirmArchiveWorkspace).not.toHaveBeenCalled();
+      expect(composer.handleComposerKeyDown).not.toHaveBeenCalled();
+      expect(composer.handleComposerPaste).not.toHaveBeenCalled();
+      expect(composer.handleDrop).not.toHaveBeenCalled();
+      expect(composer.handleSetDeepMode).not.toHaveBeenCalled();
+      expect(composer.handleApplyDraftCommand).not.toHaveBeenCalled();
+      expect(composer.handleRemoveAttachment).not.toHaveBeenCalled();
+      expect(composer.handleUploadFiles).not.toHaveBeenCalled();
+      expect(multimodal.handleToggleLiveVoice).not.toHaveBeenCalled();
+      expect(multimodal.handleToggleLiveVoiceMute).not.toHaveBeenCalled();
+      expect(multimodal.handleToggleVoiceTalk).not.toHaveBeenCalled();
+      expect(multimodal.handleOpenAudioTranscribe).not.toHaveBeenCalled();
+      expect(multimodal.handleAudioFileSelected).not.toHaveBeenCalled();
+      expect(multimodal.setSpeakResponsesEnabled).not.toHaveBeenCalled();
+      expect(multimodal.handleGenerateImage).not.toHaveBeenCalled();
+      expect(multimodal.handleEditImage).not.toHaveBeenCalled();
+      expect(updateChatSessionPrefsMock).not.toHaveBeenCalled();
+      expect(createChatSessionMock).not.toHaveBeenCalled();
+      expect(createChatGeneratedArtifactMock).not.toHaveBeenCalled();
+      expect(attachThreadKnowledgeAttachmentMock).not.toHaveBeenCalled();
+      expect(removeThreadKnowledgeAttachmentMock).not.toHaveBeenCalled();
+      expect(setChatSessionGoalMock).not.toHaveBeenCalled();
+      expect(clearChatSessionGoalMock).not.toHaveBeenCalled();
+      expect(steerChatSessionMock).not.toHaveBeenCalled();
+      expect(loadModelsForProviderMock).not.toHaveBeenCalled();
+      expect(orchestration.handleStopActiveTurn).toHaveBeenCalledTimes(1);
+      expect(controlAgenticRunMock).toHaveBeenCalledTimes(1);
+      expect(controlAgenticRunMock).toHaveBeenCalledWith(
+        "agentic-run-1",
+        expect.objectContaining({ action: "cancel", expectedRevision: 12 }),
+        { workspaceId: "workspace-1" },
+      );
+    },
+  );
 
-    await renderHost({ coworkViewModelFactory: factory, lockSurface: true, surface: native ? "chat" : "code" });
-    await act(async () => {
-      latestSurfaceInput?.sessionRail.onSelectSession("session-1", {
-        searchHit: {
-          workspaceId: "workspace-1",
-          sessionId: "session-1",
-          messageId: "message-user",
-          sequence: 1,
-          excerpt: "Build the launch plan",
-          score: 10,
+  it.each(projectionAdapters)(
+    "fails closed across code-workbench mutation callbacks while historical context is active ($label)",
+    async ({ factory, native }) => {
+      mockSurfaceMode = native ? "chat" : "code";
+      const baseSessionData = useChatSessionDataMock();
+      useChatSessionDataMock.mockReturnValue({
+        ...baseSessionData,
+        historicalWindowTarget: { workspaceId: "workspace-1", sessionId: "session-1" },
+        historicalWindow: {
+          anchor: {
+            state: "found",
+            workspaceId: "workspace-1",
+            sessionId: "session-1",
+            messageId: "message-user",
+            sequence: 1,
+          },
+          items: [],
+          snapshotMaxSequence: 2,
+          snapshotMessageCount: 2,
+          hasOlder: false,
+          hasNewer: false,
+          truncated: false,
+          droppedItems: 0,
+          byteLength: 2,
         },
       });
-      await flushEffects(8);
-    });
 
-    const panel = latestSurfaceInput?.workflowPanel?.kind === "code" ? latestSurfaceInput.workflowPanel.props : null;
-    const sessionControls = useChatSessionControlsMock.mock.results.at(-1)?.value as any;
-    const workbench = useChatDockWorkbenchControllerMock.mock.results.at(-1)?.value as any;
-    vi.clearAllMocks();
-
-    expect(latestSurfaceInput?.activeSessionSurfaceProps?.historicalReadOnly).toBe(true);
-    expect(panel).not.toBeNull();
-
-    await act(async () => {
-      await panel?.onBindExistingProject?.("project-2");
-      await panel?.onImportProjectSource?.({ sourceType: "local_folder", sourcePath: "F:/repo" } as any);
-      panel?.onCreateWorktree?.();
-      panel?.onDraftChange?.("export const blocked = true;");
-      panel?.onDiscardDraft?.();
-      panel?.onSaveFile?.();
-      await panel?.onFileOperation?.({
-        operation: "create_file",
-        path: "src/blocked.ts",
-        expectedRevision: "a".repeat(64),
+      await renderHost({ coworkViewModelFactory: factory, lockSurface: true, surface: native ? "chat" : "code" });
+      await act(async () => {
+        latestSurfaceInput?.sessionRail.onSelectSession("session-1", {
+          searchHit: {
+            workspaceId: "workspace-1",
+            sessionId: "session-1",
+            messageId: "message-user",
+            sequence: 1,
+            excerpt: "Build the launch plan",
+            score: 10,
+          },
+        });
+        await flushEffects(8);
       });
-      panel?.onRunValidationCommand?.({ command: "pnpm", args: ["test"] } as any);
-      panel?.onApplyPatch?.("diff --git a/a b/a");
-      panel?.onRevertFile?.("src/index.ts");
-      panel?.onRevertAll?.();
-      panel?.onRunHelperSnippet?.("typescript", "export const blocked = true;");
-      await flushEffects(8);
-    });
 
-    expect(sessionControls.handleAssignProject).not.toHaveBeenCalled();
-    expect(sessionControls.handleImportCodeProject).not.toHaveBeenCalled();
-    expect(workbench.createWorkbenchWorktree).not.toHaveBeenCalled();
-    expect(workbench.setWorkbenchDraftContent).not.toHaveBeenCalled();
-    expect(workbench.discardWorkbenchDraft).not.toHaveBeenCalled();
-    expect(workbench.saveWorkbenchFile).not.toHaveBeenCalled();
-    expect(workbench.runWorkbenchFileOperation).not.toHaveBeenCalled();
-    expect(workbench.runWorkbenchValidationCommand).not.toHaveBeenCalled();
-    expect(workbench.applyWorkbenchPatch).not.toHaveBeenCalled();
-    expect(workbench.revertWorkbenchFile).not.toHaveBeenCalled();
-    expect(workbench.revertWorkbenchAll).not.toHaveBeenCalled();
-    expect(createCodeModeRunMock).not.toHaveBeenCalled();
-  });
+      const panel = latestSurfaceInput?.workflowPanel?.kind === "code" ? latestSurfaceInput.workflowPanel.props : null;
+      const sessionControls = useChatSessionControlsMock.mock.results.at(-1)?.value as any;
+      const workbench = useChatDockWorkbenchControllerMock.mock.results.at(-1)?.value as any;
+      vi.clearAllMocks();
+
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.historicalReadOnly).toBe(true);
+      expect(panel).not.toBeNull();
+
+      await act(async () => {
+        await panel?.onBindExistingProject?.("project-2");
+        await panel?.onImportProjectSource?.({ sourceType: "local_folder", sourcePath: "F:/repo" } as any);
+        panel?.onCreateWorktree?.();
+        panel?.onDraftChange?.("export const blocked = true;");
+        panel?.onDiscardDraft?.();
+        panel?.onSaveFile?.();
+        await panel?.onFileOperation?.({
+          operation: "create_file",
+          path: "src/blocked.ts",
+          expectedRevision: "a".repeat(64),
+        });
+        panel?.onRunValidationCommand?.({ command: "pnpm", args: ["test"] } as any);
+        panel?.onApplyPatch?.("diff --git a/a b/a");
+        panel?.onRevertFile?.("src/index.ts");
+        panel?.onRevertAll?.();
+        panel?.onRunHelperSnippet?.("typescript", "export const blocked = true;");
+        await flushEffects(8);
+      });
+
+      expect(sessionControls.handleAssignProject).not.toHaveBeenCalled();
+      expect(sessionControls.handleImportCodeProject).not.toHaveBeenCalled();
+      expect(workbench.createWorkbenchWorktree).not.toHaveBeenCalled();
+      expect(workbench.setWorkbenchDraftContent).not.toHaveBeenCalled();
+      expect(workbench.discardWorkbenchDraft).not.toHaveBeenCalled();
+      expect(workbench.saveWorkbenchFile).not.toHaveBeenCalled();
+      expect(workbench.runWorkbenchFileOperation).not.toHaveBeenCalled();
+      expect(workbench.runWorkbenchValidationCommand).not.toHaveBeenCalled();
+      expect(workbench.applyWorkbenchPatch).not.toHaveBeenCalled();
+      expect(workbench.revertWorkbenchFile).not.toHaveBeenCalled();
+      expect(workbench.revertWorkbenchAll).not.toHaveBeenCalled();
+      expect(createCodeModeRunMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("covers package-local host helpers", () => {
     const labels = new Map([
@@ -2422,59 +2436,65 @@ describe("MissionThreadedControllerHost", () => {
     expect(latestSurfaceInput?.changePlans).toEqual([]);
   });
 
-  it.each(projectionAdapters)("clears transient recovery errors when the selected chat changes ($label)", async ({ factory }) => {
-    createChangePlanMock.mockRejectedValueOnce(new Error("Change Plan preparation failed"));
-    await renderHost({ coworkViewModelFactory: factory, lockSurface: true, surface: "chat" });
-    await selectDefaultSession();
+  it.each(projectionAdapters)(
+    "clears transient recovery errors when the selected chat changes ($label)",
+    async ({ factory }) => {
+      createChangePlanMock.mockRejectedValueOnce(new Error("Change Plan preparation failed"));
+      await renderHost({ coworkViewModelFactory: factory, lockSurface: true, surface: "chat" });
+      await selectDefaultSession();
 
-    await act(async () => {
-      latestSurfaceInput?.activeSessionSurfaceProps?.onRequestModelChange("claude-4");
-      await flushEffects(8);
-    });
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onRequestModelChange("claude-4");
+        await flushEffects(8);
+      });
 
-    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamError).toBe("Change Plan preparation failed");
-    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamErrorSource).toBe("other");
-    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamStatus).toBe("idle");
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamError).toBe("Change Plan preparation failed");
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamErrorSource).toBe("other");
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamStatus).toBe("idle");
 
-    await act(async () => {
-      latestSurfaceInput?.sessionRail.onSelectSession("session-2", { turnId: "turn-2" });
-      await flushEffects(6);
-    });
+      await act(async () => {
+        latestSurfaceInput?.sessionRail.onSelectSession("session-2", { turnId: "turn-2" });
+        await flushEffects(6);
+      });
 
-    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamError).toBeNull();
-    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamErrorSource).toBeNull();
-  });
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamError).toBeNull();
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamErrorSource).toBeNull();
+    },
+  );
 
-  it.each(projectionAdapters)("ignores a late session-scoped UI error after the operator switches chats ($label)", async ({ factory }) => {
-    let rejectExport: ((reason?: unknown) => void) | undefined;
-    fetchRuntimeLifecycleExportMock.mockImplementationOnce(
-      () =>
-        new Promise((_, reject) => {
-          rejectExport = reject;
-        }),
-    );
-    await renderHost({ coworkViewModelFactory: factory, lockSurface: true, surface: "chat" });
-    await selectDefaultSession();
+  it.each(projectionAdapters)(
+    "ignores a late session-scoped UI error after the operator switches chats ($label)",
+    async ({ factory }) => {
+      let rejectExport: ((reason?: unknown) => void) | undefined;
+      fetchRuntimeLifecycleExportMock.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectExport = reject;
+          }),
+      );
+      await renderHost({ coworkViewModelFactory: factory, lockSurface: true, surface: "chat" });
+      await selectDefaultSession();
 
-    await act(async () => {
-      latestSurfaceInput?.activeSessionSurfaceProps?.onExportRunBundle();
-      await flushEffects(2);
-    });
-    expect(fetchRuntimeLifecycleExportMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session-1" }));
+      await act(async () => {
+        latestSurfaceInput?.activeSessionSurfaceProps?.onExportRunBundle();
+        await flushEffects(2);
+      });
+      expect(fetchRuntimeLifecycleExportMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "session-1" }));
 
-    await act(async () => {
-      latestSurfaceInput?.sessionRail.onSelectSession("session-2", { turnId: "turn-2" });
-      await flushEffects(6);
-    });
+      await act(async () => {
+        latestSurfaceInput?.sessionRail.onSelectSession("session-2", { turnId: "turn-2" });
+        await flushEffects(6);
+      });
 
-    await act(async () => {
-      rejectExport?.(new Error("Export for session-1 failed"));
-      await flushEffects(6);
-    });
+      await act(async () => {
+        rejectExport?.(new Error("Export for session-1 failed"));
+        await flushEffects(6);
+      });
 
-    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamError).toBeNull();
-    expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamErrorSource).toBeNull();
-  });
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamError).toBeNull();
+      expect(latestSurfaceInput?.activeSessionSurfaceProps?.streamErrorSource).toBeNull();
+    },
+  );
 
   it("synchronizes created and rail-selected sessions through the route owner", async () => {
     const navigateSurface = vi.fn();
@@ -2549,92 +2569,107 @@ describe("MissionThreadedControllerHost", () => {
     );
   });
 
-  it.each(projectionAdapters)("keeps canonical Chat controls, evidence and Code workbench with $label projection", async ({ factory }) => {
-    const activeTurn = {
-      ...selectedTurn,
-      trace: { ...selectedTurn.trace, status: "waiting_for_approval" },
-    };
-    const baseWorkbench = useChatDockWorkbenchControllerMock();
-    const workbench = {
-      ...baseWorkbench,
-      activeWorkflowTurn: activeTurn,
-      orchestrationCheckpoints: [{
-        checkpointId: "checkpoint-resumed",
-        checkpointKind: "run_resumed",
-        details: {},
-        createdAt: "2026-05-01T00:00:02.000Z",
-      }],
-    };
-    useChatDockWorkbenchControllerMock.mockReturnValue(workbench);
-    const projectionFactory = factory ? vi.fn(factory) : null;
-    await renderHost({ coworkViewModelFactory: projectionFactory, lockSurface: true, surface: "chat" });
-    await selectDefaultSession();
+  it.each(projectionAdapters)(
+    "keeps canonical Chat controls, evidence and Code workbench with $label projection",
+    async ({ factory }) => {
+      const activeTurn = {
+        ...selectedTurn,
+        trace: { ...selectedTurn.trace, status: "waiting_for_approval" },
+      };
+      const baseWorkbench = useChatDockWorkbenchControllerMock();
+      const workbench = {
+        ...baseWorkbench,
+        activeWorkflowTurn: activeTurn,
+        orchestrationCheckpoints: [
+          {
+            checkpointId: "checkpoint-resumed",
+            checkpointKind: "run_resumed",
+            details: {},
+            createdAt: "2026-05-01T00:00:02.000Z",
+          },
+        ],
+      };
+      useChatDockWorkbenchControllerMock.mockReturnValue(workbench);
+      const projectionFactory = factory ? vi.fn(factory) : null;
+      await renderHost({ coworkViewModelFactory: projectionFactory, lockSurface: true, surface: "chat" });
+      await selectDefaultSession();
 
-    const surface = latestSurfaceInput?.activeSessionSurfaceProps;
-    const dock = latestSurfaceInput?.contextDockProps;
-    const panel = latestSurfaceInput?.workflowPanel?.kind === "code" ? latestSurfaceInput.workflowPanel.props : null;
-    const outbound = useChatOutboundExecutionMock.mock.results.at(-1)?.value as any;
-    const orchestration = useChatSurfaceOrchestrationMock.mock.results.at(-1)?.value as any;
-    const delegationRun = useChatContextActionsMock.mock.results.at(-1)?.value.activeDelegationRun;
-    expect(latestSurfaceInput?.messageMode).toBe("chat");
-    expect(surface).not.toBeNull();
-    expect(panel).not.toBeNull();
-    expect(surface?.coworkStopRunControl).toBeNull();
-    expect(surface?.delegationRun).toBe(delegationRun);
-    expect(surface?.trust.effectiveProviderModelSummary).toBe("OpenAI / gpt-5.5");
-    expect(surface?.notices).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "lifecycle-approval-turn-1", tone: "neutral" }),
-      expect.objectContaining({ id: "lifecycle-resumed-checkpoint-resumed", tone: "success" }),
-    ]));
-    if (projectionFactory) {
-      const agenticRunTree = await fetchAgenticRunTreeMock.mock.results.at(-1)?.value;
-      expect(projectionFactory.mock.calls.at(-1)).toEqual([{
-        items: workbench.coworkItems,
-        orchestration: undefined,
-        orchestrationRun: null,
-        orchestrationCheckpoints: workbench.orchestrationCheckpoints,
-        orchestrationLoading: false,
-        orchestrationError: null,
-        executionPlan: activeTurn.trace.executionPlan,
-        delegationRun,
-        activeTurn,
-        selectedTurn,
-        workbenchState: workbench.workbenchState,
-        agenticRunTree,
-      }]);
-      expect(dock?.coworkViewModel).toEqual(projectionFactory.mock.results.at(-1)?.value);
-    } else {
-      expect(dock?.coworkViewModel).toBeNull();
-    }
-
-    vi.clearAllMocks();
-    await act(async () => {
-      surface?.onStopActiveTurn();
-      surface?.onApprovePending("once");
-      surface?.onDenyPending();
-      surface?.onSubmitUserInput({ kind: "text", text: "continue" });
-      surface?.onRetryTurn("turn-1");
-      panel?.onDraftChange("export const next = true;");
-      panel?.onSaveFile();
-      for (const language of ["ts", "tsx", "typescript", "js", "jsx", "javascript"]) {
-        await panel?.onRunHelperSnippet(language, "export const next = true;");
+      const surface = latestSurfaceInput?.activeSessionSurfaceProps;
+      const dock = latestSurfaceInput?.contextDockProps;
+      const panel = latestSurfaceInput?.workflowPanel?.kind === "code" ? latestSurfaceInput.workflowPanel.props : null;
+      const outbound = useChatOutboundExecutionMock.mock.results.at(-1)?.value as any;
+      const orchestration = useChatSurfaceOrchestrationMock.mock.results.at(-1)?.value as any;
+      const delegationRun = useChatContextActionsMock.mock.results.at(-1)?.value.activeDelegationRun;
+      expect(latestSurfaceInput?.messageMode).toBe("chat");
+      expect(surface).not.toBeNull();
+      expect(panel).not.toBeNull();
+      expect(surface?.coworkStopRunControl).toBeNull();
+      expect(surface?.delegationRun).toBe(delegationRun);
+      expect(surface?.trust.effectiveProviderModelSummary).toBe("OpenAI / gpt-5.5");
+      expect(surface?.notices).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "lifecycle-approval-turn-1", tone: "neutral" }),
+          expect.objectContaining({ id: "lifecycle-resumed-checkpoint-resumed", tone: "success" }),
+        ]),
+      );
+      if (projectionFactory) {
+        const agenticRunTree = await fetchAgenticRunTreeMock.mock.results.at(-1)?.value;
+        expect(projectionFactory.mock.calls.at(-1)).toEqual([
+          {
+            items: workbench.coworkItems,
+            orchestration: undefined,
+            orchestrationRun: null,
+            orchestrationCheckpoints: workbench.orchestrationCheckpoints,
+            orchestrationLoading: false,
+            orchestrationError: null,
+            executionPlan: activeTurn.trace.executionPlan,
+            delegationRun,
+            activeTurn,
+            selectedTurn,
+            workbenchState: workbench.workbenchState,
+            agenticRunTree,
+          },
+        ]);
+        expect(dock?.coworkViewModel).toEqual(projectionFactory.mock.results.at(-1)?.value);
+      } else {
+        expect(dock?.coworkViewModel).toBeNull();
       }
-      await flushEffects(8);
-    });
-    expect(orchestration.handleStopActiveTurn).toHaveBeenCalledTimes(1);
-    expect(orchestration.handleRetryTurn).toHaveBeenCalledWith("turn-1");
-    expect(outbound.handleApprovePending).toHaveBeenCalledWith("once");
-    expect(outbound.handleDenyPending).toHaveBeenCalledTimes(1);
-    expect(outbound.handleSubmitUserInput).toHaveBeenCalledWith({ kind: "text", text: "continue" });
-    expect(workbench.setWorkbenchDraftContent).toHaveBeenCalledWith("export const next = true;");
-    expect(workbench.saveWorkbenchFile).toHaveBeenCalledTimes(1);
-    expect(createCodeModeRunMock.mock.calls).toEqual(
-      ["typescript", "typescript", "typescript", "javascript", "javascript", "javascript"].map((language) => [{
-        language, source: "export const next = true;", originSurface: "chat", sessionId: "session-1",
-        turnId: "turn-1", requestedOutputIntent: "workbench_helper",
-      }]),
-    );
-  });
+
+      vi.clearAllMocks();
+      await act(async () => {
+        surface?.onStopActiveTurn();
+        surface?.onApprovePending("once");
+        surface?.onDenyPending();
+        surface?.onSubmitUserInput({ kind: "text", text: "continue" });
+        surface?.onRetryTurn("turn-1");
+        panel?.onDraftChange("export const next = true;");
+        panel?.onSaveFile();
+        for (const language of ["ts", "tsx", "typescript", "js", "jsx", "javascript"]) {
+          await panel?.onRunHelperSnippet(language, "export const next = true;");
+        }
+        await flushEffects(8);
+      });
+      expect(orchestration.handleStopActiveTurn).toHaveBeenCalledTimes(1);
+      expect(orchestration.handleRetryTurn).toHaveBeenCalledWith("turn-1");
+      expect(outbound.handleApprovePending).toHaveBeenCalledWith("once");
+      expect(outbound.handleDenyPending).toHaveBeenCalledTimes(1);
+      expect(outbound.handleSubmitUserInput).toHaveBeenCalledWith({ kind: "text", text: "continue" });
+      expect(workbench.setWorkbenchDraftContent).toHaveBeenCalledWith("export const next = true;");
+      expect(workbench.saveWorkbenchFile).toHaveBeenCalledTimes(1);
+      expect(createCodeModeRunMock.mock.calls).toEqual(
+        ["typescript", "typescript", "typescript", "javascript", "javascript", "javascript"].map((language) => [
+          {
+            language,
+            source: "export const next = true;",
+            originSurface: "chat",
+            sessionId: "session-1",
+            turnId: "turn-1",
+            requestedOutputIntent: "workbench_helper",
+          },
+        ]),
+      );
+    },
+  );
 
   it("builds cowork workflow props and sends enabled agentic controls", async () => {
     mockSurfaceMode = "cowork";
@@ -3008,7 +3043,7 @@ describe("MissionThreadedControllerHost", () => {
     await act(async () => {
       renderer.update(
         <MissionThreadedControllerHost
-        coworkViewModelFactory={deriveCoworkRunViewModel}
+          coworkViewModelFactory={deriveCoworkRunViewModel}
           workspaceId="workspace-1"
           workspaceName="Mission Workspace"
           approvalsCount={2}
@@ -3198,7 +3233,7 @@ describe("MissionThreadedControllerHost", () => {
     await act(async () => {
       trusted.renderer.update(
         <MissionThreadedControllerHost
-        coworkViewModelFactory={deriveCoworkRunViewModel}
+          coworkViewModelFactory={deriveCoworkRunViewModel}
           workspaceId="workspace-1"
           workspaceName="Mission Workspace"
           approvalsCount={2}
@@ -3222,7 +3257,7 @@ describe("MissionThreadedControllerHost", () => {
     await act(async () => {
       trusted.renderer.update(
         <MissionThreadedControllerHost
-        coworkViewModelFactory={deriveCoworkRunViewModel}
+          coworkViewModelFactory={deriveCoworkRunViewModel}
           workspaceId="workspace-1"
           workspaceName="Mission Workspace"
           approvalsCount={2}
@@ -3241,7 +3276,7 @@ describe("MissionThreadedControllerHost", () => {
     await act(async () => {
       trusted.renderer.update(
         <MissionThreadedControllerHost
-        coworkViewModelFactory={deriveCoworkRunViewModel}
+          coworkViewModelFactory={deriveCoworkRunViewModel}
           workspaceId="workspace-1"
           workspaceName="Mission Workspace"
           approvalsCount={2}
@@ -3284,9 +3319,15 @@ describe("MissionThreadedControllerHost", () => {
       const setPrefs = useChatSessionDataMock.mock.results.at(-1)?.value.setPrefs;
       const response = { ok: true, command: "/plan", prefs: { ...prefs, planningMode: "advisory" } };
       let resolveResponse!: (value: typeof response) => void;
-      parseChatCommandMock.mockReturnValueOnce(new Promise<typeof response>((resolve) => { resolveResponse = resolve; }));
+      parseChatCommandMock.mockReturnValueOnce(
+        new Promise<typeof response>((resolve) => {
+          resolveResponse = resolve;
+        }),
+      );
       let pending!: Promise<void>;
-      await act(async () => { pending = outbound.operations.handleCommandExecution("session-1", "/plan on"); });
+      await act(async () => {
+        pending = outbound.operations.handleCommandExecution("session-1", "/plan on");
+      });
       expect(parseChatCommandMock).toHaveBeenCalledWith("session-1", "/plan on", { surface: "chat" });
       if (selection !== "stay") {
         await act(async () => {
@@ -3303,10 +3344,15 @@ describe("MissionThreadedControllerHost", () => {
           }
           await flushEffects();
         });
-        expect(latestSurfaceInput?.sessionRail.selectedSessionId).toBe(selection === "switch" ? "session-2" : "session-1");
+        expect(latestSurfaceInput?.sessionRail.selectedSessionId).toBe(
+          selection === "switch" ? "session-2" : "session-1",
+        );
       }
       setPrefs.mockClear();
-      await act(async () => { resolveResponse(response); await pending; });
+      await act(async () => {
+        resolveResponse(response);
+        await pending;
+      });
       if (selection === "stay") expect(setPrefs).toHaveBeenCalledExactlyOnceWith(response.prefs);
       else expect(setPrefs).not.toHaveBeenCalled();
       expect(updateChatSessionPrefsMock).not.toHaveBeenCalled();
@@ -3635,7 +3681,9 @@ describe("MissionThreadedControllerHost", () => {
     // Review code is deferred until an action needs it; microtasks alone do not
     // prove that its imported renderer has committed the operator confirmation.
     await vi.waitFor(async () => {
-      await act(async () => { await Promise.resolve(); });
+      await act(async () => {
+        await Promise.resolve();
+      });
       const forkTitle = "Start a new conversation from this message?";
       expect({
         selectedSessionId: latestSurfaceInput?.sessionRail.selectedSessionId,
@@ -3651,7 +3699,9 @@ describe("MissionThreadedControllerHost", () => {
         forkReview: { open: true, title: forkTitle },
       });
     });
-    const confirm = confirmModalProps.filter((props) => props.title === "Start a new conversation from this message?").at(-1);
+    const confirm = confirmModalProps
+      .filter((props) => props.title === "Start a new conversation from this message?")
+      .at(-1);
     expect(confirm?.message).toContain("1 message exchange");
     await act(async () => {
       await confirm?.onConfirm();
@@ -3701,7 +3751,7 @@ describe("MissionThreadedControllerHost", () => {
     await act(async () => {
       renderer.update(
         <MissionThreadedControllerHost
-        coworkViewModelFactory={deriveCoworkRunViewModel}
+          coworkViewModelFactory={deriveCoworkRunViewModel}
           workspaceId="workspace-1"
           workspaceName="Mission Workspace"
           approvalsCount={2}
@@ -3743,7 +3793,7 @@ describe("MissionThreadedControllerHost", () => {
     await act(async () => {
       renderer.update(
         <MissionThreadedControllerHost
-        coworkViewModelFactory={deriveCoworkRunViewModel}
+          coworkViewModelFactory={deriveCoworkRunViewModel}
           workspaceId="workspace-1"
           workspaceName="Mission Workspace"
           approvalsCount={2}
@@ -4423,9 +4473,10 @@ describe("MissionThreadedControllerHost", () => {
     await selectDefaultSession();
     expect(latestSurfaceInput?.activeSessionSurfaceProps?.delegationRun).toBeNull();
     expect(
-      latestSurfaceInput?.activeSessionSurfaceProps?.notices.some((notice) =>
-        // The run tree type carries no top-level status; without a root node status the notice says "in progress".
-        notice.content === "A background run is in progress." && !notice.content.includes("agentic-run-1"),
+      latestSurfaceInput?.activeSessionSurfaceProps?.notices.some(
+        (notice) =>
+          // The run tree type carries no top-level status; without a root node status the notice says "in progress".
+          notice.content === "A background run is in progress." && !notice.content.includes("agentic-run-1"),
       ),
     ).toBe(true);
 
@@ -4965,7 +5016,7 @@ describe("MissionThreadedControllerHost", () => {
       await act(async () => {
         renderer.update(
           <MissionThreadedControllerHost
-        coworkViewModelFactory={deriveCoworkRunViewModel}
+            coworkViewModelFactory={deriveCoworkRunViewModel}
             workspaceId="workspace-1"
             workspaceName="Mission Workspace"
             approvalsCount={2}
@@ -4985,7 +5036,7 @@ describe("MissionThreadedControllerHost", () => {
       await act(async () => {
         renderer.update(
           <MissionThreadedControllerHost
-        coworkViewModelFactory={deriveCoworkRunViewModel}
+            coworkViewModelFactory={deriveCoworkRunViewModel}
             workspaceId="workspace-1"
             workspaceName="Mission Workspace"
             approvalsCount={2}
