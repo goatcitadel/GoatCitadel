@@ -82,19 +82,22 @@ function looksLikeJson(value: string): boolean {
   return /^\s*[[{"]/u.test(value);
 }
 
-/** Where a Task schedule files its task: the workspace its last run used, or the default workspace before one ran. */
+/**
+ * Where the next run of a Task schedule files its task, as the Gateway resolved it when it listed the schedule. A
+ * schedule whose destination the Gateway could not read says so; the last run's destination is never used instead.
+ */
 export function TaskDestination({ job }: { job: CronJobRecordResponse }) {
   const { activeCitadelId } = useUiPreferences();
   const nameOf = useWorkspaceNameLookup(activeCitadelId);
-  const workspaceId = readNonEmptyString(readLastRunOutput(job)?.workspaceId);
-  if (!workspaceId)
-    return job.citadelId ? (
-      <>the task list of its citadel&apos;s default workspace.</>
-    ) : (
-      <>the default workspace&apos;s task list.</>
-    );
+  const workspaceId = job.taskDestinationWorkspaceId;
+  if (!workspaceId) return <>could not be read.</>;
   const name = nameOf(workspaceId);
-  return name ? <>{name}&apos;s task list.</> : <>the task list of the workspace its last run used.</>;
+  if (name) return <>{name}&apos;s task list.</>;
+  return workspaceId === "default" ? (
+    <>the default workspace&apos;s task list.</>
+  ) : (
+    <>the task list of another workspace.</>
+  );
 }
 
 export function lastRunOutcomeLabel(job: CronJobRecordResponse): string {

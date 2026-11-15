@@ -122,25 +122,29 @@ describe("schedule summary rendering", () => {
     expect(container.textContent).not.toContain("memory_consolidation");
   });
 
-  it("names the workspace a Task schedule files into, or the default one before its first run", () => {
-    const ran = buildJob({
-      action: "task",
-      lastRunOutput: JSON.stringify({ result: "ok", workspaceId: "ws-c" }),
-    });
-    act(() => root.render(<WorkScheduleRecordDetails selected={ran} />));
+  it("names the workspace the next run files into, read from the Gateway's current answer", () => {
+    const task = (extra = {}) => buildJob({ action: "task", ...extra });
+    act(() => root.render(<WorkScheduleRecordDetails selected={task({ taskDestinationWorkspaceId: "ws-c" })} />));
     expect(container.textContent).toContain("Action: Task. Destination: Research's task list.");
 
-    act(() => root.render(<WorkScheduleRecordDetails selected={buildJob({ action: "task" })} />));
+    // The last run filed elsewhere; the sentence follows the current destination, not the last run.
+    const moved = task({
+      taskDestinationWorkspaceId: "ws-c",
+      lastRunOutput: JSON.stringify({ result: "ok", workspaceId: "ws-old" }),
+    });
+    act(() => root.render(<WorkScheduleRecordDetails selected={moved} />));
+    expect(container.textContent).toContain("Destination: Research's task list.");
+
+    act(() => root.render(<WorkScheduleRecordDetails selected={task({ taskDestinationWorkspaceId: "default" })} />));
     expect(container.textContent).toContain("Destination: the default workspace's task list.");
   });
 
-  it("says a citadel-scoped Task schedule files into its citadel's default workspace", () => {
-    const scoped = buildJob({ action: "task", citadelId: "team" });
-    act(() => root.render(<WorkScheduleRecordDetails selected={scoped} />));
-    expect(container.textContent).toContain("Destination: the task list of its citadel's default workspace.");
+  it("says the destination could not be read when the Gateway sent none, and never guesses", () => {
+    act(() => root.render(<WorkScheduleRecordDetails selected={buildJob({ action: "task", citadelId: "team" })} />));
+    expect(container.textContent).toContain("Destination: could not be read.");
     expect(container.textContent).not.toContain("Installation-wide");
     act(() => root.render(<WorkScheduleRecordDetails selected={buildJob({ action: "task" })} />));
-    expect(container.textContent).toContain("Installation-wide · Action: Task.");
+    expect(container.textContent).toContain("Installation-wide · Action: Task. Destination: could not be read.");
   });
 
   it("says a past next run is overdue and marks a projected one", () => {

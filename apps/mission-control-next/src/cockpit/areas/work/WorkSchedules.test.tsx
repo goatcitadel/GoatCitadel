@@ -536,7 +536,7 @@ describe("Work schedules", () => {
     const task = job({
       nextRunAt: new Date(Date.now() + 3 * 3_600_000).toISOString(),
       nextRunProjected: true,
-      lastRunOutput: JSON.stringify({ result: "ok", workspaceId: "ws-c" }),
+      taskDestinationWorkspaceId: "ws-c",
     });
     vi.mocked(fetchCronJobs).mockResolvedValue({ items: [task] });
     vi.mocked(fetchCronJob).mockResolvedValue(task);
@@ -549,7 +549,7 @@ describe("Work schedules", () => {
   });
 
   it("names the same destination in the edit review", async () => {
-    const task = job({ lastRunOutput: JSON.stringify({ result: "ok", workspaceId: "ws-c" }) });
+    const task = job({ taskDestinationWorkspaceId: "ws-c" });
     vi.mocked(fetchCronJobs).mockResolvedValue({ items: [task] });
     vi.mocked(fetchCronJob).mockResolvedValue(task);
     await render();
