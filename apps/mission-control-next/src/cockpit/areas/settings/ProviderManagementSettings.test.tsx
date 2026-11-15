@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   fetchLlmConfig: vi.fn(),
   patchSettings: vi.fn(),
   createChangePlan: vi.fn(),
+  confirmChangePlan: vi.fn(),
   updateProviderTransport: vi.fn(),
   fetchSettings: vi.fn(),
   fetchProviderSecretStatus: vi.fn(),
@@ -176,6 +177,76 @@ describe("native provider owner composition", () => {
     await render();
     expect(button("Add provider profile").disabled).toBe(true);
     expect(api.createChangePlan).toHaveBeenCalledOnce();
+  });
+  describe("a new provider profile's governed plan", () => {
+    const prepared = (input: { request: unknown }, risk?: string) => ({
+      planId: "new-plan",
+      revision: 1,
+      status: "awaiting_confirmation",
+      kind: "provider_connection",
+      intentHash: "a".repeat(64),
+      origin: { workspaceId: "default", surface: "settings" },
+      request: input.request,
+      target: { ownerId: "provider_connection", resourceId: "new-fixture", expectedRevision: 7 },
+      requiredAction: { kind: "confirmation", actionId: "confirm", actionNonce: "nonce", title: "Confirm profile" },
+      summary: "Review public profile",
+      ...(risk ? { risk } : {}),
+    });
+    async function addProfile() {
+      await render();
+      await click("Add provider profile");
+      await fill("Provider ID", "new-fixture");
+      await fill("Provider label", "New fixture");
+      await fill("Provider base URL", "http://127.0.0.1:9999/v1");
+      await click("Review provider profile");
+      await click("Apply reviewed provider profile");
+    }
+    it("is confirmed by the one press of Apply when the Gateway marks it safe, and says what is left", async () => {
+      let plan: Record<string, unknown>;
+      api.createChangePlan.mockImplementation(async (input) => (plan = prepared(input, "safe")));
+      api.confirmChangePlan.mockImplementation(async () => ({
+        ...plan,
+        revision: 2,
+        status: "awaiting_input",
+        requiredAction: {
+          kind: "secure_input",
+          actionId: "key",
+          actionNonce: "nonce-2",
+          title: "Enter the API key",
+          targetId: "new-fixture",
+        },
+        evidenceRefs: [],
+      }));
+      api.fetchChangePlan.mockImplementation(async () => plan);
+      await addProfile();
+      expect(api.createChangePlan).toHaveBeenCalledOnce();
+      expect(api.confirmChangePlan).toHaveBeenCalledExactlyOnceWith(
+        "new-plan",
+        expect.objectContaining({ workspaceId: "default" }),
+        { expectedRevision: 1, actionNonce: "nonce" },
+      );
+      expect(api.patchSettings).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Provider saved and confirmed");
+    });
+    it("keeps the review step and confirms nothing when the plan is not marked safe", async () => {
+      let plan: Record<string, unknown>;
+      api.createChangePlan.mockImplementation(async (input) => (plan = prepared(input, "caution")));
+      api.fetchChangePlan.mockImplementation(async () => plan);
+      await addProfile();
+      expect(api.confirmChangePlan).not.toHaveBeenCalled();
+      expect(button("Review required step")).toBeTruthy();
+    });
+    it("keeps the owner locked and says so when the confirmation is lost", async () => {
+      let plan: Record<string, unknown>;
+      api.createChangePlan.mockImplementation(async (input) => (plan = prepared(input, "safe")));
+      api.confirmChangePlan.mockRejectedValue(new Error("Connection lost"));
+      api.fetchChangePlan.mockImplementation(async () => plan);
+      await addProfile();
+      expect(api.confirmChangePlan).toHaveBeenCalledOnce();
+      expect(container.textContent).toContain("Connection lost");
+      expect(container.textContent).not.toContain("Provider saved and confirmed");
+      expect(button("Add provider profile").disabled).toBe(true);
+    });
   });
   it("retains explicit plaintext custody across remount and submits only the reviewed public plan", async () => {
     let prepared: Record<string, unknown>;

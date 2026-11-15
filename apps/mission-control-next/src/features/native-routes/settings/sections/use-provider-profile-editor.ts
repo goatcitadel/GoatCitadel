@@ -30,6 +30,7 @@ import {
   type ProviderSaveDraft,
 } from "./provider-save-contract";
 import { prepareProviderSave, sendsProviderChanges } from "./provider-save-operation";
+import { confirmReviewedSettingsPlan } from "./provider-connection-actions";
 import { matchesProviderTransportReceipt } from "./provider-transport-receipt";
 import type { ProviderCatalog, ProviderNoticeSetter } from "./provider-section-types";
 import {
@@ -232,7 +233,7 @@ export function useProviderProfileEditor({
         transportConfirmed = true;
       } else {
         if (submitted.governedCreation && creationRequest) {
-          const plan = await dispatchProviderMutation(() =>
+          const created = await dispatchProviderMutation(() =>
             createChangePlan({
               workspaceId: "default",
               surface: "settings",
@@ -240,15 +241,22 @@ export function useProviderProfileEditor({
             }),
           );
           if (
-            plan.origin.workspaceId !== "default" ||
-            plan.origin.surface !== "settings" ||
-            !matchesProviderTargetRevision(plan, submitted, revision) ||
-            plan.status !== "awaiting_confirmation" ||
-            plan.requiredAction?.kind !== "confirmation"
+            created.origin.workspaceId !== "default" ||
+            created.origin.surface !== "settings" ||
+            !matchesProviderTargetRevision(created, submitted, revision) ||
+            created.status !== "awaiting_confirmation" ||
+            created.requiredAction?.kind !== "confirmation"
           )
             throw new Error(
               "The prepared provider plan does not match this reviewed profile and revision. Inspect the Gateway plan before another action.",
             );
+          // Pressing Apply reviewed provider profile is the confirmation of a plan the Gateway itself marked safe.
+          // Anything else keeps its review step, and a step that needs the key or a sign-in comes after this one.
+          // The confirmation is its own tracked write, so a lost reply is checked against it and not the creation.
+          const plan =
+            created.risk === "safe"
+              ? await dispatchProviderMutation(() => confirmReviewedSettingsPlan(created))
+              : created;
           next = { ...latest, changePlanReceipt: plan };
         } else {
           const updated = await dispatchProviderMutation(() =>

@@ -207,6 +207,35 @@ describe("ChatChangePlanCard", () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("Model changed to gpt-5");
   });
 
+  const receiptSummaries = (renderer: ReactTestRenderer) =>
+    renderer.root
+      .findAll((node) => node.type === "p" && node.props.className === "chat-change-plan-receipt-summary")
+      .map((node) => node.children.join(""));
+  const receiptOf = (status: ChangePlanRecord["status"], summary: string) => {
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <ChatChangePlanCard
+          plan={plan({ status, title: "Add Example", requiredAction: undefined, result: { summary } })}
+        />,
+      );
+    });
+    return renderer;
+  };
+
+  it("says why a change needs your attention", () => {
+    const renderer = receiptOf("manual_required", "The provider owner did not pass post-apply verification.");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Add Example needs your attention");
+    expect(receiptSummaries(renderer)).toEqual(["The provider owner did not pass post-apply verification."]);
+  });
+
+  it("gives a failed change's reason too, and none for a change that finished", () => {
+    expect(receiptSummaries(receiptOf("failed", "The provider owner refused the profile."))).toEqual([
+      "The provider owner refused the profile.",
+    ]);
+    expect(receiptSummaries(receiptOf("completed", "All done."))).toEqual([]);
+  });
+
   it("honors a host-owned terminal dismissal without mutating the plan", () => {
     let renderer!: ReactTestRenderer;
     act(() => {

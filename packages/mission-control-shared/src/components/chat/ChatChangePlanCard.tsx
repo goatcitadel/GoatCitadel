@@ -123,6 +123,10 @@ function ChatChangePlanCardContents({
     onDismiss?.(plan);
   };
 
+  // A change that needs attention or failed says why under its title; one that finished is titled by its summary.
+  const unfinishedReason =
+    plan.status === "manual_required" || plan.status === "failed" ? plan.result?.summary : undefined;
+
   if (terminal) {
     return (
       <aside
@@ -135,6 +139,7 @@ function ChatChangePlanCardContents({
             <strong>{terminalReceiptTitle(plan)}</strong>
             <span>{formatStatus(plan.status)}</span>
           </p>
+          {unfinishedReason ? <p className="chat-change-plan-receipt-summary">{unfinishedReason}</p> : null}
           <div className="chat-change-plan-receipt-actions">
             {onRollback &&
             plan.rollbackRefs?.length > 0 &&
