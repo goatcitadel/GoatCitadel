@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { SystemOwnerLink } from "./SystemOwnerLink";
+import { ClassicOwnerLink } from "../../ui/ClassicOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
@@ -123,6 +124,14 @@ export function SystemActivity() {
         <p className="mt-1 text-xs text-fg-muted">
           This list keeps recent signals only, not the full history. Open the source record for full details. Signals
           are saved records: a reported host or device does not show its current health.
+        </p>
+        <p className="mt-1 text-xs text-fg-muted">
+          Read and unread marks for runtime notifications are only in the classic view.{" "}
+          <ClassicOwnerLink
+            href="/ops/notifications"
+            scope={JSON.stringify(["system-activity-notifications"])}
+            label="Mark notifications read or unread · classic view"
+          />
         </p>
         {events.dataUpdatedAt ? (
           <p className="mt-1 text-xs text-fg-muted">

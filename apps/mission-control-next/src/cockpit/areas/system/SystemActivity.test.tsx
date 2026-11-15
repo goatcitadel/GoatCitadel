@@ -141,3 +141,16 @@ describe("System activity reads as sentences (SY-01)", () => {
     expect(container.querySelectorAll("ol > li")).toHaveLength(3);
   });
 });
+
+describe("System activity notification feed link (U-IN-004)", () => {
+  it("links to read and unread marks for notifications in the classic view", async () => {
+    await render();
+    const link = [...container.querySelectorAll("a")].find(
+      (anchor) => anchor.textContent === "Mark notifications read or unread · classic view",
+    );
+    expect(link).toBeDefined();
+    const url = new URL(link!.getAttribute("href")!, "http://x");
+    expect(url.pathname).toBe("/ops/notifications");
+    expect(url.searchParams.get("shell")).toBe("classic");
+  });
+});
