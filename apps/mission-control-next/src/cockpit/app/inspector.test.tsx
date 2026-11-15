@@ -147,6 +147,19 @@ describe("inspector", () => {
     expect(document.activeElement).toBe(filter);
   });
 
+  it("leaves focus in a select the operator is using, whatever the opener asked", () => {
+    renderWith(
+      <select aria-label="Sort">
+        <option>Newest</option>
+      </select>,
+    );
+    const sort = container.querySelector("select")!;
+    sort.focus();
+    act(() => api.open({ title: "Run", body: <p>Steps</p>, focusOnOpen: true }));
+    expect(container.querySelector('[aria-label="Inspector: Run"]')).not.toBeNull();
+    expect(document.activeElement).toBe(sort);
+  });
+
   it("does not move focus when the window crosses a breakpoint with the panel open", () => {
     renderWith(<input aria-label="Composer" />);
     const composer = container.querySelector("input")!;

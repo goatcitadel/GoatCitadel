@@ -167,7 +167,7 @@ export function useInspector(): InspectorApi {
 
 // Where the operator is typing: a focus move never takes them out of it, whatever the opener asked for.
 const TYPING =
-  'input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"]), textarea, [contenteditable]:not([contenteditable="false"])';
+  'input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"]), select, textarea, [contenteditable]:not([contenteditable="false"])';
 
 export function InspectorPanel() {
   const { content, close } = useInspector();
