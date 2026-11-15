@@ -248,6 +248,18 @@ describe("native provider owner composition", () => {
       expect(container.textContent).not.toContain("Provider saved and confirmed");
       expect(button("Review required step")).toBeTruthy();
     });
+    it("tells the operator the refusal itself when the plan cannot be read again", async () => {
+      api.createChangePlan.mockImplementation(async (input) => prepared(input, "safe"));
+      api.confirmChangePlan.mockRejectedValue(
+        Object.assign(new Error("The Gateway refused this profile."), { status: 422 }),
+      );
+      api.fetchChangePlan.mockRejectedValue(new Error("offline"));
+      await addProfile();
+      expect(api.fetchChangePlan).toHaveBeenCalled();
+      expect(container.textContent).toContain("The Gateway refused this profile.");
+      expect(container.textContent).not.toContain("offline");
+      expect(container.textContent).not.toContain("Provider saved and confirmed");
+    });
     it("finishes the profile when the confirmation answers completed", async () => {
       let plan: Record<string, unknown>;
       api.createChangePlan.mockImplementation(async (input) => (plan = prepared(input, "safe")));

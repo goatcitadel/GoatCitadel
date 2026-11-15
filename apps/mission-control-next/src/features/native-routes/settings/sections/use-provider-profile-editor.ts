@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, type SetStateAction } from "react";
 import type { LlmProviderConfig } from "@goatcitadel/contracts";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import {
   fetchChangePlan,
   fetchLlmConfig,
@@ -64,7 +65,15 @@ async function confirmOrKeepForReview(
     return await dispatch(() => confirmReviewedSettingsPlan(created));
   } catch (error) {
     if (!isRefusal(error)) throw error;
-    const current = await fetchChangePlan(created.planId, { workspaceId: created.origin.workspaceId });
+    // A read that must not join an older one. If it fails, the refusal itself is what the operator is told.
+    let current: Awaited<ReturnType<typeof fetchChangePlan>>;
+    try {
+      current = await withFreshReads(() =>
+        fetchChangePlan(created.planId, { workspaceId: created.origin.workspaceId }),
+      );
+    } catch {
+      throw error;
+    }
     if (current.planId !== created.planId) throw error;
     return current;
   }
