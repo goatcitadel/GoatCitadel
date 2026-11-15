@@ -104,3 +104,32 @@ it("keeps saving after a navigation that never happened (a swallowed Back)", asy
     vi.useRealTimers();
   }
 });
+
+it("keeps the saved position through a navigation that takes two seconds to arrive", async () => {
+  vi.useFakeTimers();
+  const element = document.createElement("div");
+  const root = createRoot(element);
+  const home = window.location.href;
+  try {
+    await act(async () => root.render(<Probe identity="caller-a:work:slow" />));
+    const main = element.querySelector("main")!;
+    main.dispatchEvent(new Event("wheel"));
+    main.scrollTop = 420;
+    main.dispatchEvent(new Event("scroll"));
+    // The address moves at once; the next page (a lazy route chunk) is two seconds away.
+    window.history.pushState(null, "", "/library?slow=1");
+    window.dispatchEvent(new Event(COCKPIT_LOCATION_EVENT));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    main.scrollTop = 0;
+    main.dispatchEvent(new Event("scroll"));
+    await act(async () => root.render(<Probe identity="caller-a:library:slow" />));
+    await act(async () => root.render(<Probe identity="caller-a:work:slow" />));
+    expect(main.scrollTop).toBe(420);
+  } finally {
+    await act(async () => root.unmount());
+    window.history.replaceState(null, "", home);
+    vi.useRealTimers();
+  }
+});

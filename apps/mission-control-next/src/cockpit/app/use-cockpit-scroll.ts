@@ -31,15 +31,18 @@ export function useCockpitScroll(key: string) {
       if (!restoring || element.scrollTop === target) positions.set(key, element.scrollTop);
     };
     // Both fire before React renders the next page, so this is the last honest position of this one (U-GL-049).
-    // A navigation that never happens (a swallowed Back, a sheet that closes) leaves this page mounted under the same
-    // key, so after the wait below the page counts as current again and keeps saving its position.
+    // A navigation that never happens (a swallowed Back, a sheet that closes) leaves the address where this page is,
+    // so once the wait below ends with the address back here the page counts as current again and keeps saving its
+    // position. An address that moved is a real navigation, however slow its page is to arrive (a lazy route chunk):
+    // the flag then stays until the cleanup that comes with the new key.
+    const home = window.location.href;
     let stay: ReturnType<typeof setTimeout> | undefined;
     const leave = () => {
       remember();
       leaving = true;
       clearTimeout(stay);
       stay = setTimeout(() => {
-        leaving = false;
+        if (window.location.href === home) leaving = false;
       }, NAVIGATION_WAIT_MS);
     };
     window.addEventListener(COCKPIT_LOCATION_EVENT, leave);
