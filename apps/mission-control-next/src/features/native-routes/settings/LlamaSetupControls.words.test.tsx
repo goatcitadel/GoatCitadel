@@ -68,6 +68,6 @@ describe("local AI setup words (U-ST-012)", () => {
     expect(visible).not.toContain("openai");
     expect(visible).not.toContain("Ownership");
     expect(visible).not.toContain("Gateway installation");
-    if (!cockpit) expect(details[0]?.textContent).toContain(WORKSPACE);
+    expect(details[0]?.textContent).toContain(WORKSPACE);
   });
 });

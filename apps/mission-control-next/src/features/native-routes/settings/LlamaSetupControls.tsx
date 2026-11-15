@@ -1,7 +1,6 @@
 import type { ButtonHTMLAttributes, ComponentType, ReactNode } from "react";
 import type { ChangePlanRecord } from "@goatcitadel/contracts";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
-import { TechnicalDetails } from "../../../cockpit/ui/TechnicalDetails";
 import { NativeButton } from "../primitives";
 import { LLAMA_PROCESS_LABELS } from "./llama-process-labels";
 import { useLlamaSetup } from "./use-llama-setup";
@@ -57,14 +56,10 @@ export function LlamaSetupControls({
       <p>
         {processLabel}. Chat uses {projection?.chatRoute.model || "no model"} from the model setup in Settings › Models.
       </p>
-      {cockpit ? (
-        <TechnicalDetails>{technicalLines}</TechnicalDetails>
-      ) : (
-        <details>
-          <summary>Technical details</summary>
-          {technicalLines}
-        </details>
-      )}
+      <details className={cockpit ? "text-sm text-fg-secondary" : undefined}>
+        <summary className={cockpit ? "cursor-pointer font-medium text-accent" : undefined}>Technical details</summary>
+        {technicalLines}
+      </details>
       {control.evidence.loading ? <p role="status">Loading setup evidence…</p> : null}
       {control.evidence.error ? <p role="alert">{control.evidence.error}</p> : null}
       <fieldset disabled={control.locked}>
