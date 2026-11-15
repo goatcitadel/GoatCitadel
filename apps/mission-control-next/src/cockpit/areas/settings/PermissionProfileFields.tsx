@@ -6,7 +6,10 @@ import {
 } from "../../../features/native-routes/settings/helpers/permission-helpers";
 import { PERMISSION_CONTEXT_PRESENTATION } from "../../../features/native-routes/settings/sections/PermissionProfileDraftFields";
 
+import { Field } from "../../ui/Field";
+
 const inputClass = "mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg";
+const fieldClass = inputClass.replace("mt-1 ", "");
 export function PermissionProfileFields({
   draft,
   change,
@@ -35,35 +38,40 @@ export function PermissionProfileFields({
           onChange={(event) => change((old) => ({ ...old, description: event.target.value }))}
         />
       </label>
-      <label className="block">
-        Approval behavior
-        <select
-          aria-label="Approval behavior"
-          className={inputClass}
-          value={draft.approvalMode}
-          onChange={(event) => change((old) => ({ ...old, approvalMode: event.target.value as ToolApprovalMode }))}
-        >
-          <option value="approve_all">Ask every time</option>
-          <option value="approve_risky">Ask for risky work</option>
-          <option value="bypass" disabled={bypassUnavailable}>
-            Skip normal prompts
-          </option>
-        </select>
-        <span className="text-xs text-fg-muted">
-          Connectors set to let reads or changes run on their own are the exception.
-        </span>
-      </label>
+      <Field
+        label="Approval behavior"
+        help="Connectors set to let reads or changes run on their own are the exception."
+      >
+        {(field) => (
+          <select
+            {...field}
+            className={fieldClass}
+            value={draft.approvalMode}
+            onChange={(event) => change((old) => ({ ...old, approvalMode: event.target.value as ToolApprovalMode }))}
+          >
+            <option value="approve_all">Ask every time</option>
+            <option value="approve_risky">Ask for risky work</option>
+            <option value="bypass" disabled={bypassUnavailable}>
+              Skip normal prompts
+            </option>
+          </select>
+        )}
+      </Field>
       {(["toolPatterns", "allow", "deny"] as const).map((key) => (
-        <label key={key} className="block">
-          {key === "toolPatterns" ? "Tool patterns" : key === "allow" ? "Allow rules" : "Deny rules"}
-          <textarea
-            aria-label={key === "toolPatterns" ? "Tool patterns" : key === "allow" ? "Allow rules" : "Deny rules"}
-            className={inputClass}
-            value={draft[key]}
-            onChange={(event) => change((old) => ({ ...old, [key]: event.target.value }))}
-          />
-          <span className="text-xs text-fg-muted">One pattern per line, or separate with commas.</span>
-        </label>
+        <Field
+          key={key}
+          label={key === "toolPatterns" ? "Tool patterns" : key === "allow" ? "Allow rules" : "Deny rules"}
+          help="One pattern per line, or separate with commas."
+        >
+          {(field) => (
+            <textarea
+              {...field}
+              className={fieldClass}
+              value={draft[key]}
+              onChange={(event) => change((old) => ({ ...old, [key]: event.target.value }))}
+            />
+          )}
+        </Field>
       ))}
       <label className="block">
         Read access

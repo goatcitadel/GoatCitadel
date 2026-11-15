@@ -123,21 +123,29 @@ describe("native Chat permission profile", () => {
   it("retains uncertain committed activation across remount and reopening choices cannot review or repeat it", async () => {
     items = [profile, { ...profile, profileId: "other", label: "Other" }];
     const recordOwner = api.activatePermissionProfile.getMockImplementation()!;
-    api.activatePermissionProfile.mockImplementationOnce(async input => {
+    api.activatePermissionProfile.mockImplementationOnce(async (input) => {
       await recordOwner(input); // The owner changed; only its acknowledgement is lost.
       throw new Error("Synthetic lost activation acknowledgement");
     });
-    await mount("work-a");await select();await click("Review Chat profile selection");await click("Apply reviewed Chat profile");
+    await mount("work-a");
+    await select();
+    await click("Review Chat profile selection");
+    await click("Apply reviewed Chat profile");
     await vi.waitFor(() => expect(text(view.root)).toContain("Permission selection outcome is uncertain."));
     expect(api.activatePermissionProfile).toHaveBeenCalledTimes(1);
     const reviews = api.reviewPermissionProfileSelection.mock.calls.length;
     expect(reviews).toBe(2);
-    await act(async () => view.unmount());view = undefined as unknown as ReactTestRenderer;
+    await act(async () => view.unmount());
+    view = undefined as unknown as ReactTestRenderer;
     await mount("work-a", false);
     expect(text(view.root)).toContain("Permission selection outcome is uncertain.");
-    expect(view.root.findAllByType("button").some(item => text(item) === "Review Chat profile selection")).toBe(false);
+    expect(view.root.findAllByType("button").some((item) => text(item) === "Review Chat profile selection")).toBe(
+      false,
+    );
     await click("Change profile");
-    expect(view.root.findAllByProps({ type: "radio" }).find(item => item.props.value === "other")!.props.disabled).toBe(true);
+    expect(
+      view.root.findAllByProps({ type: "radio" }).find((item) => item.props.value === "other")!.props.disabled,
+    ).toBe(true);
     expect(button("Review Chat profile selection").props.disabled).toBe(true);
     expect(api.reviewPermissionProfileSelection).toHaveBeenCalledTimes(reviews);
     expect(api.activatePermissionProfile).toHaveBeenCalledTimes(1);
@@ -159,6 +167,28 @@ describe("native Chat permission profile", () => {
     expect(switchShellMock).not.toHaveBeenCalled();
     expect(api.activatePermissionProfile).not.toHaveBeenCalled();
     expect(api.revokeAutonomousActivationGrant).not.toHaveBeenCalled();
+  });
+  describe("profile editor help lines (U-ST-007)", () => {
+    const fieldLabelled = (name: string) => {
+      const label = view.root.findAllByType("label").find((item) => text(item).startsWith(name))!;
+      return view.root.find((item) => typeof item.type === "string" && item.props.id === label.props.htmlFor);
+    };
+    const helpOf = (name: string) => {
+      const describedBy = fieldLabelled(name).props["aria-describedby"] as string;
+      return text(view.root.find((item) => item.type === "p" && item.props.id === describedBy));
+    };
+    it.each(["Tool patterns", "Allow rules", "Deny rules"])("ties the help line to %s", async (name) => {
+      await mount("work-a");
+      await click("New permission profile");
+      expect(helpOf(name)).toBe("One pattern per line, or separate with commas.");
+    });
+    it("ties the approval behavior help line to its select", async () => {
+      await mount("work-a");
+      await click("New permission profile");
+      expect(helpOf("Approval behavior")).toBe(
+        "Connectors set to let reads or changes run on their own are the exception.",
+      );
+    });
   });
   it("uses the exact selected workspace, cancels a review, then shows fresh effective owner state", async () => {
     await mount();
