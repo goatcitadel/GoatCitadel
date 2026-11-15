@@ -36,6 +36,11 @@ const api = vi.hoisted(() => ({
   requestCapabilitySkillRemoval: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/capability-skills", () => api);
+const hub = vi.hoisted(() => ({ fetchSkillHubOperator: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/skill-hub", async (original) => ({
+  ...(await original<object>()),
+  ...hub,
+}));
 const approvals = vi.hoisted(() => ({ fetchApproval: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (original) => ({
   ...(await original<object>()),
@@ -275,6 +280,8 @@ beforeEach(() => {
     .mockImplementation(async (_workspaceId: string, skillId: string) => detailOf(skillId));
   api.setCapabilitySkillState.mockReset();
   api.requestCapabilitySkillRemoval.mockReset();
+  hub.fetchSkillHubOperator.mockReset();
+  hub.fetchSkillHubOperator.mockResolvedValue({ items: [] });
   stored = skillApproval();
   approvals.fetchApproval.mockReset().mockImplementation(async () => stored);
   decisions.resolveApproval.mockReset().mockImplementation(async (_id: string, decision: "approve" | "reject") => {
@@ -940,6 +947,50 @@ describe("Skill panel removal", () => {
     });
     await settle();
     expect(panelText()).toContain("This skill isn't in the list anymore.");
+  });
+
+  it("explains a removal that left the folder alone, and lets you ask again", async () => {
+    api.requestCapabilitySkillRemoval.mockResolvedValue({
+      status: "approved",
+      approvalId: APPROVAL_ID,
+      workspaceId: "ws-1",
+    });
+    hub.fetchSkillHubOperator.mockResolvedValue({
+      items: [
+        {
+          approvals: {
+            remove: {
+              approvalId: APPROVAL_ID,
+              operationId: "operation-remove",
+              operationKind: "remove",
+              status: "approved",
+              createdAt: "2026-10-30T10:00:00.000Z",
+              settlement: {
+                settlementId: "settlement-1",
+                disposition: "manual_reconciliation",
+                resultSha256: "c".repeat(64),
+                evidenceEnvelopeId: "evidence-1",
+                journeyEventId: "journey-1",
+                settledAt: "2026-10-30T10:01:00.000Z",
+                reason: "runtime_projection_diverged",
+              },
+            },
+          },
+        },
+      ],
+    });
+    await openLeftBehind();
+    await press(buttonIn(body(), "Remove skill"));
+    await press(buttonIn(dialog(), "Remove skill"));
+
+    await vi.waitFor(() =>
+      expect(panelText()).toContain(
+        "Not removed. The skill's folder no longer matches the files GoatCitadel checked, so nothing was deleted. Put the checked files back or delete the folder yourself, then remove the skill again.",
+      ),
+    );
+    expect(hub.fetchSkillHubOperator).toHaveBeenCalledWith({ workspaceId: "ws-1", limit: 100 });
+    expect(panelText()).not.toContain("Removing Meeting notes…");
+    expect(buttonIn(body(), "Remove skill")).toBeDefined();
   });
 
   it("puts the plain refusal under the button and lets you ask again", async () => {

@@ -28,6 +28,8 @@ export interface SkillHubOperatorApprovalSummary {
     evidenceEnvelopeId: string;
     journeyEventId: string;
     settledAt: string;
+    /** Why it settled as it did, as the effect recorded it (a code such as `runtime_projection_diverged`). */
+    reason?: string;
   };
 }
 

@@ -57,7 +57,10 @@ export interface SkillHubOperatorApprovalSummary {
   settlement?: Pick<
     SkillHubOperationSettlementRecord,
     "settlementId" | "disposition" | "resultSha256" | "evidenceEnvelopeId" | "journeyEventId" | "settledAt"
-  >;
+  > & {
+    /** Why it settled as it did, as the effect recorded it (a code such as `runtime_projection_diverged`). */
+    reason?: string;
+  };
 }
 
 export interface SkillHubOperatorCandidateSummary {
@@ -841,6 +844,7 @@ export class SkillHubOperatorService {
             evidenceEnvelopeId: settlement.evidenceEnvelopeId,
             journeyEventId: settlement.journeyEventId,
             settledAt: settlement.settledAt,
+            ...(typeof settlement.result.code === "string" ? { reason: settlement.result.code } : {}),
           }
         : undefined,
     };

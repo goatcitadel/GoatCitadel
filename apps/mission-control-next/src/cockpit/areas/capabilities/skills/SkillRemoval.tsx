@@ -3,10 +3,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { ApprovalRequest, CapabilitySkillItem } from "@goatcitadel/contracts";
 import { requestCapabilitySkillRemoval } from "@goatcitadel/mission-control-shared/api/capability-skills";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { fetchSkillHubOperator } from "@goatcitadel/mission-control-shared/api/skill-hub";
 import { skillListQuery } from "../../../data/capability-skills-query";
 import { Button } from "../../../ui/Button";
 import { Dialog } from "../../../ui/Dialog";
 import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
+import { findRemovalSettlement, removalOutcomeNote } from "./skill-removal-outcome";
 
 /** How often the list is read again while an approved removal is applied, and how many reads before it gives up. */
 const REMOVING_READ_MS = 3_000;
@@ -19,32 +21,62 @@ type Phase =
   | { kind: "idle"; note?: string; failed?: boolean }
   | { kind: "asking" }
   | { kind: "waiting"; approvalId: string; workspaceId: string }
-  | { kind: "removing" };
+  | { kind: "removing"; approvalId: string };
 
 /**
  * Reads the skill list again while an approved removal is applied, so the panel follows the list: once the skill is
- * gone the panel says so, and if it never goes the removal is offered again with a plain line.
+ * gone the panel says so. Each read also looks up the removal's own settlement in the Skill Hub read: a removal that
+ * settled without removing the skill stops the reads with the settlement's plain line. If neither comes, the removal
+ * is offered again with a plain line.
  */
-function useRemovalReads(active: boolean, workspaceId: string, onGaveUp: () => void) {
+function useRemovalReads(
+  removal: { approvalId: string } | undefined,
+  workspaceId: string,
+  onSettled: (note: string | undefined) => void,
+) {
   const queryClient = useQueryClient();
-  const gaveUp = useRef(onGaveUp);
-  gaveUp.current = onGaveUp;
+  const settled = useRef(onSettled);
+  settled.current = onSettled;
+  const approvalId = removal?.approvalId;
   useEffect(() => {
-    if (!active) return undefined;
+    if (!approvalId) return undefined;
     const key = skillListQuery(workspaceId).queryKey;
     let reads = 0;
-    void queryClient.invalidateQueries({ queryKey: key });
+    let stopped = false;
+    const stop = (note: string | undefined) => {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(timer);
+      settled.current(note);
+    };
+    const read = async () => {
+      void queryClient.invalidateQueries({ queryKey: key });
+      try {
+        const settlement = findRemovalSettlement(
+          (await fetchSkillHubOperator({ workspaceId, limit: 100 })).items,
+          approvalId,
+        );
+        const note = settlement ? removalOutcomeNote(settlement) : undefined;
+        if (note) stop(note);
+      } catch {
+        // A failed read tells nothing about the removal; the next read tries again, and the reads give up with UNFINISHED.
+        return;
+      }
+    };
     const timer = setInterval(() => {
       reads += 1;
       if (reads >= REMOVING_READS) {
-        clearInterval(timer);
-        gaveUp.current();
+        stop(undefined);
         return;
       }
-      void queryClient.invalidateQueries({ queryKey: key });
+      void read();
     }, REMOVING_READ_MS);
-    return () => clearInterval(timer);
-  }, [active, queryClient, workspaceId]);
+    void read();
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [approvalId, queryClient, workspaceId]);
 }
 
 /**
@@ -56,7 +88,9 @@ export function SkillRemoval({ item, workspaceId }: { item: CapabilitySkillItem;
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [confirming, setConfirming] = useState(false);
   const removing = phase.kind === "removing";
-  useRemovalReads(removing, workspaceId, () => setPhase({ kind: "idle", note: UNFINISHED, failed: true }));
+  useRemovalReads(phase.kind === "removing" ? phase : undefined, workspaceId, (note) =>
+    setPhase({ kind: "idle", note: note ?? UNFINISHED, failed: true }),
+  );
   const queryClient = useQueryClient();
   if (!item.removable) return null;
 
@@ -67,16 +101,16 @@ export function SkillRemoval({ item, workspaceId }: { item: CapabilitySkillItem;
       const outcome = await requestCapabilitySkillRemoval({ workspaceId, skillId: item.skillId });
       setPhase(
         outcome.status === "approved"
-          ? { kind: "removing" }
+          ? { kind: "removing", approvalId: outcome.approvalId }
           : { kind: "waiting", approvalId: outcome.approvalId, workspaceId: outcome.workspaceId },
       );
     } catch (error) {
       setPhase({ kind: "idle", note: describeApiError(error).summary, failed: true });
     }
   };
-  const resolved = (status: ApprovalRequest["status"] | undefined) => {
+  const resolved = (approvalId: string, status: ApprovalRequest["status"] | undefined) => {
     void queryClient.invalidateQueries({ queryKey: skillListQuery(workspaceId).queryKey });
-    setPhase(status === "approved" ? { kind: "removing" } : { kind: "idle", note: DECLINED });
+    setPhase(status === "approved" ? { kind: "removing", approvalId } : { kind: "idle", note: DECLINED });
   };
 
   return (
@@ -92,7 +126,7 @@ export function SkillRemoval({ item, workspaceId }: { item: CapabilitySkillItem;
             reviewLabel="Review the removal"
             loadFailureHint="Reload to try again."
             dangerReview
-            onResolved={resolved}
+            onResolved={(status) => resolved(phase.approvalId, status)}
           />
         </>
       ) : removing ? (

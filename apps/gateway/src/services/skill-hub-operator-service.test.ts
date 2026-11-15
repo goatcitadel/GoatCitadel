@@ -585,6 +585,39 @@ describe("SkillHubOperatorService", () => {
     expect(harness.createApproval).toHaveBeenCalledTimes(2);
   });
 
+  it("says why a removal settled as it did", async () => {
+    const checked = snapshot({ snapshotId: "snapshot-v1" });
+    const settledOperationIds = new Set<string>();
+    const harness = createHarness({
+      snapshots: [checked],
+      candidates: [
+        candidateVersion({
+          versionId: "version-v1",
+          upstreamSnapshotId: "snapshot-v1",
+          sourceFingerprint: checked.contentTreeSha256,
+          lifecycleState: "revoked",
+        }),
+      ],
+      lifecycle: { ...activeLifecycle(checked), lifecycleState: "revoked" },
+      settledOperationIds,
+    });
+    const asked = await harness.service.createApproval({
+      workspaceId: "workspace-1",
+      snapshotId: "snapshot-v1",
+      operationKind: "remove",
+      actorId: "operator-1",
+    });
+    harness.approvals[0] = { ...harness.approvals[0]!, status: "approved" };
+    settledOperationIds.add(asked.approval.operationId);
+
+    const item = (await harness.service.list({ workspaceId: "workspace-1" })).items[0]!;
+    expect(item.approvals.remove?.approvalId).toBe(asked.approval.approvalId);
+    expect(item.approvals.remove?.settlement).toMatchObject({
+      disposition: "manual_reconciliation",
+      reason: "runtime_projection_diverged",
+    });
+  });
+
   it("lets the same source install again after a removal, on a new lineage", async () => {
     const checked = snapshot({ snapshotId: "snapshot-v1" });
     const removed = candidateVersion({
@@ -908,6 +941,7 @@ function createHarness(input: {
               evidenceEnvelopeId: "evidence-1",
               journeyEventId: "journey-1",
               settledAt: "2026-07-14T01:05:00.000Z",
+              result: { disposition: "manual_reconciliation", code: "runtime_projection_diverged" },
             }
           : undefined,
       ),
