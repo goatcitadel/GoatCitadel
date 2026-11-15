@@ -76,6 +76,8 @@ const CODE_MODE_HELPER_REPLY = ["Deterministic governed helper:", "", "```ts", C
 const STREAM_RELOAD_PARTIAL_TEXT = Array.from({ length: 20 }, (_, index) => `Paragraph ${index + 1}: saved.`).join(
   "\n\n",
 );
+const PLANNING_TURN_CONTENT = "Plan this deterministic usability turn.";
+const PLANNING_TURN_REPLY = "Deterministic plan reply: tidy, sort, restore.";
 const DELEGATION_OUTPUTS = Object.freeze([
   "Deterministic research handoff.",
   "Deterministic review handoff.",
@@ -2891,10 +2893,18 @@ async function apiProbe(probe, state) {
         outcome: `canonical turn ${projection.turnId} retained ${projection.attachments.length} MIME-typed attachments plus rendered citation/tool evidence`,
       };
     }
+    case "planning-reply-rule": {
+      if (typeof state.stub?.replacePromptReplyRules !== "function") {
+        throw new Error("deterministic provider does not support prompt-matched reply rules");
+      }
+      // A unique reply proves the model answered this exact prompt, not an earlier message.
+      state.stub.replacePromptReplyRules([
+        { ruleId: "planning-turn", userContentIncludes: PLANNING_TURN_CONTENT, replyText: PLANNING_TURN_REPLY },
+      ]);
+      return { outcome: "planning prompt reply rule installed" };
+    }
     case "planning-turn-completed":
-      return await waitForExactCompletedChatTurn(state, "Plan this deterministic usability turn.", (turn) =>
-        validateCanonicalPlanningTurn(turn, state.sessionId, "Plan this deterministic usability turn."),
-      );
+      return await waitForExactCompletedChatTurn(state, PLANNING_TURN_CONTENT, validateCanonicalPlanningTurn);
     case "delegate-suggest-accept": {
       const objective = "Produce two independent deterministic analyses and synthesize both.";
       const parentThread = await checkedRequest(
@@ -6178,19 +6188,12 @@ export function validateUniversalRunDetailTrace(trace, expected) {
   return true;
 }
 
-export function validateCanonicalPlanningTurn(turn, sessionId, objective) {
-  // Plan first asks the model: the answer is the model reply, and the turn stays advisory (no drafted
-  // execution plan, no tool run, no delegation).
-  if (
-    !turn ||
-    (turn.sessionId !== undefined && turn.sessionId !== sessionId) ||
-    (turn.userMessage?.content !== undefined && turn.userMessage.content !== objective) ||
-    turn.trace?.executionPlan ||
-    turn.trace?.executionPlanId ||
-    (turn.trace?.toolRuns ?? []).length > 0
-  )
-    throw new Error("planning turn drafted a template plan or ran work instead of staying an advisory model answer");
-  if (turn.assistantMessage?.content !== DETERMINISTIC_LLM_DEFAULT_REPLY)
+export function validateCanonicalPlanningTurn(turn) {
+  // Plan first asks the model: the answer is the model reply and the turn stays a plain answer (no drafted
+  // execution plan, no tool run; with no tool there is nothing to delegate).
+  if (turn?.trace?.executionPlan || turn?.trace?.executionPlanId || (turn?.trace?.toolRuns ?? []).length > 0)
+    throw new Error("planning turn drafted a template plan or ran a tool instead of staying a plain model answer");
+  if (turn?.assistantMessage?.content !== PLANNING_TURN_REPLY)
     throw new Error("planning response differs from the model reply");
   return true;
 }
