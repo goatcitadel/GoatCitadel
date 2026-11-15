@@ -94,6 +94,27 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 describe("native integration management", () => {
+  it("opens the add form on the catalog entry a Set up link asked for, then reports it handled once", async () => {
+    const handled = vi.fn();
+    api.fetchIntegrationCatalog.mockResolvedValue({
+      items: [
+        { catalogId: saved.catalogId, kind: saved.kind, key: saved.key, label: "Fixture", operatorActions: [] },
+        { catalogId: "automation.gmail", kind: "automation", key: "gmail", label: "Gmail", operatorActions: [] },
+      ],
+    });
+    await act(async () => {
+      view = create(
+        <IntegrationManagementSettings
+          workspaceId="default"
+          createRequest={{ catalogId: "automation.gmail" }}
+          onCreateRequestHandled={handled}
+        />,
+      );
+    });
+    expect(view.root.findByProps({ "aria-label": "Integration catalog" }).props.value).toBe("automation.gmail");
+    expect(handled).toHaveBeenCalledTimes(1);
+  });
+
   it("reviews a disabled new connection without writes and confirms exact owner readback", async () => {
     await act(async () => {
       view = create(<IntegrationManagementSettings workspaceId="default" />);
@@ -116,8 +137,8 @@ describe("native integration management", () => {
     });
     expect(api.fetchIntegrationConnection).toHaveBeenCalledWith(saved.connectionId);
     expect(text(view.root)).toContain("Connection Reviewed fixture created.");
-    expect(text(view.root)).toContain("Configured status: Connected");
-    expect(text(view.root)).toContain("Connectivity unverified");
+    expect(text(view.root)).toContain("Saved status: Set up, not checked");
+    expect(text(view.root)).toContain("Not checked yet");
   });
   it("offers no plugin trust view", async () => {
     await act(async () => {

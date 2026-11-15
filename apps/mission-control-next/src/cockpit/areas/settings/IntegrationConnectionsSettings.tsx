@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { fetchIntegrationConnections } from "@goatcitadel/mission-control-shared/api/client";
@@ -18,12 +18,22 @@ import { IntegrationManagementSettings, type IntegrationManagementSelection } fr
 import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { McpDraftLeave } from "./McpDraftLeave";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { INTEGRATION_CONNECTION_STATUS_LABELS } from "./settings-vocabulary";
+import { SAVED_CONNECTION_STATUS_LABELS } from "./settings-vocabulary";
 import { consumeGoogleOAuthReturnFragment } from "../../../features/native-routes/settings/google-oauth-return";
 import { Callout } from "../../ui/Callout";
 
 const PAGE_SIZE = 20;
-export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: string }) {
+export function IntegrationConnectionsSettings({
+  workspaceId,
+  addCatalogId,
+  onAddHandled,
+}: {
+  workspaceId: string;
+  /** A catalog entry a Set up link asked to add: opens management on its add form, once. */
+  addCatalogId?: string;
+  /** Called once the add form has opened (or could not), so the request leaves the address. */
+  onAddHandled?: () => void;
+}) {
   const connections = useQuery({
     queryKey: ["settings", "integration-connections"],
     queryFn: () => fetchIntegrationConnections(),
@@ -49,6 +59,15 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
   };
   const leave = useDraftLeave();
   const ready = !connections.isError && Array.isArray(connections.data?.items);
+  // The request is kept here until management has acted on it, so removing it from the address does not lose it.
+  const [addRequest, setAddRequest] = useState<string | null>(null);
+  const handledAdd = useRef<string | null>(null);
+  useEffect(() => {
+    if (!addCatalogId || !ready || handledAdd.current === addCatalogId) return;
+    handledAdd.current = addCatalogId;
+    setAddRequest(addCatalogId);
+    setManagementOpen(true);
+  }, [addCatalogId, ready]);
   const control = useIntegrationEnabled({
     workspaceId,
     available: ready && !connections.isFetching,
@@ -82,7 +101,17 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
       >
         {managementOpen ? "Hide connection management" : "Add and manage integrations"}
       </Button>
-      {managementOpen ? <IntegrationManagementSettings workspaceId={workspaceId} selection={selection} /> : null}
+      {managementOpen ? (
+        <IntegrationManagementSettings
+          workspaceId={workspaceId}
+          selection={selection}
+          createRequest={addRequest ? { catalogId: addRequest } : null}
+          onCreateRequestHandled={() => {
+            setAddRequest(null);
+            onAddHandled?.();
+          }}
+        />
+      ) : null}
       <McpDraftLeave {...leave.dialogProps} />
       <Button
         size="sm"
@@ -155,7 +184,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
               />
             ))}
           </ul>
-          {!filtered.length ? (
+          {!filtered.length && !managementOpen ? (
             <p className="text-sm text-fg-muted">
               No saved integrations match this view. Use Add and manage integrations to set up a connection.
             </p>
@@ -209,11 +238,11 @@ function IntegrationRow({
         <div className="min-w-0 flex-1">
           <h4 className="break-words text-sm font-semibold text-fg">{connection.label}</h4>
           <p className="mt-1 text-sm text-fg-secondary">
-            {connection.enabled ? "Enabled" : "Disabled"} · Connectivity unverified
+            {connection.enabled ? "Enabled" : "Disabled"} · Not checked yet
           </p>
           <p className="text-xs text-fg-muted">
-            Configured status: {INTEGRATION_CONNECTION_STATUS_LABELS[connection.status] ?? "Unknown"}. A saved status
-            does not verify connectivity; choose Manage to run diagnostics.
+            Saved status: {SAVED_CONNECTION_STATUS_LABELS[connection.status] ?? "Unknown"}. Choose Manage to run
+            diagnostics.
           </p>
           <p className="mt-1 break-words text-xs text-fg-muted">
             {connection.workspaceId ? "Workspace-bound connection" : "Unbound · Personal Citadel policy"}

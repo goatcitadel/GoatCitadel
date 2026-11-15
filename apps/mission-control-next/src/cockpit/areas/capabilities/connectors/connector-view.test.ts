@@ -54,7 +54,7 @@ describe("groupConnectors", () => {
     ];
     const groups = groupConnectors(items);
     expect(groups.map((entry) => [entry.group, entry.label])).toEqual([
-      ["connected", "Connected"],
+      ["connected", "Added"],
       ["available", "Available"],
       ["turned_off", "Turned off"],
     ]);
@@ -154,6 +154,19 @@ describe("labels", () => {
   });
 });
 
+describe("saved but never connected", () => {
+  it("names the group of added connectors Added", () => {
+    expect(groupConnectors([item({ group: "connected" })])[0]?.label).toBe("Added");
+  });
+
+  it("words a saved server that never connected", () => {
+    const shown = presentConnectorState(
+      item({ state: "needs_sign_in", reason: "not_connected", source: "mcp_server" }),
+    );
+    expect(shown).toMatchObject({ label: "Not connected", reason: "Saved, not connected yet", tone: "waiting" });
+  });
+});
+
 describe("presentConnectorState", () => {
   it.each<[CapabilityConnectorState, CapabilityConnectorReason, string, string, string]>([
     ["connected", "ready", "Connected", "done", "Ready to use"],
@@ -168,7 +181,7 @@ describe("presentConnectorState", () => {
 
   it.each<[CapabilityConnectorReason, string]>([
     ["ready", "Ready to use"],
-    ["not_connected", "Not connected yet"],
+    ["not_connected", "Saved, not connected yet"],
     ["sign_in_needed", "Sign in to finish setup"],
     ["sign_in_expired", "Sign in again to keep using it"],
     ["error", "Stopped working; open it to see why"],
