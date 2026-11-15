@@ -260,7 +260,7 @@ function terminalReceiptTitle(plan: ChangePlanRecord): string {
   switch (plan.status) {
     case "completed":
     case "applied":
-      return model ? `Model changed to ${model}` : plan.result?.summary || plan.title;
+      return plan.result?.summary || (model ? `Model changed to ${model}` : plan.title);
     case "manual_required":
       return `${plan.title} needs your attention`;
     case "failed":
