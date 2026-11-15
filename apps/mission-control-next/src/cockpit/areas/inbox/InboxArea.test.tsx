@@ -238,6 +238,19 @@ describe("viewed Updates presentation", () => {
     expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
   });
 
+  it("keeps focus on Refresh while the Inbox reloads (U-GL-047)", async () => {
+    const data = updateProjection();
+    inboxMock.result = { data, isLoading: false, isError: false, isFetching: true, refetch: vi.fn() };
+    await renderUpdates(new QueryClient());
+    const refresh = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === "Refresh");
+    if (!refresh) throw new Error("Missing Refresh button");
+    refresh.focus();
+    await act(async () => refresh.click());
+    expect(refresh.disabled).toBe(false);
+    expect(refresh.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(refresh);
+  });
+
   it("keeps Mark all shown updates read available during a background refetch", async () => {
     const data = updateProjection();
     inboxMock.result = { data, isLoading: false, isError: false, isFetching: true, refetch: vi.fn() };

@@ -236,7 +236,7 @@ export function InboxArea() {
         actions={
           <>
             <InboxShortcutsToggle open={shortcutHelpOpen} onOpenChange={setShortcutHelpOpen} />
-            <Button size="sm" onClick={() => void inbox.refetch()} disabled={inbox.isFetching}>
+            <Button size="sm" onClick={() => void inbox.refetch()} loading={inbox.isFetching}>
               <RefreshCw aria-hidden="true" className="size-4" /> Refresh
             </Button>
           </>

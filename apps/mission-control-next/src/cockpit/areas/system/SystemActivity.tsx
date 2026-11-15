@@ -115,7 +115,7 @@ export function SystemActivity() {
         title="Activity log"
         description="Recent signals across this installation."
         actions={
-          <Button size="sm" disabled={events.isFetching} onClick={() => void events.refetch()}>
+          <Button size="sm" loading={events.isFetching} onClick={() => void events.refetch()}>
             <RefreshCw aria-hidden="true" className="size-4" /> Refresh
           </Button>
         }

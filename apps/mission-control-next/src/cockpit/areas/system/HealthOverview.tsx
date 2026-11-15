@@ -147,7 +147,8 @@ export function HealthOverview() {
           <Button
             size="sm"
             onClick={() => void health.refetch()}
-            disabled={health.isFetching || (health.isError && error.retryable === false)}
+            loading={health.isFetching}
+            disabled={health.isError && error.retryable === false}
           >
             <RefreshCw aria-hidden="true" className="size-4" /> Refresh<span className="sr-only"> system health</span>
           </Button>

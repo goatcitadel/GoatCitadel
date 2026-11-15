@@ -140,3 +140,19 @@ it("shows stale prior observations after actual API transport rejection and clea
   expect(container.textContent).not.toContain("Last known");
   expect(container.textContent).toContain("All reachable checks report no problems");
 });
+
+it("keeps focus on Refresh while the health summary reloads (U-GL-047)", async () => {
+  await render();
+  await tick(10);
+  const refresh = [...container.querySelectorAll("button")].find((entry) =>
+    entry.textContent?.includes("Refresh system health"),
+  );
+  if (!refresh) throw new Error("Missing Refresh system health button");
+  api.fetchHealthSummary.mockReturnValue(new Promise(() => undefined));
+  refresh.focus();
+  await act(async () => refresh.click());
+  await tick(10);
+  expect(refresh.disabled).toBe(false);
+  expect(refresh.getAttribute("aria-busy")).toBe("true");
+  expect(document.activeElement).toBe(refresh);
+});
