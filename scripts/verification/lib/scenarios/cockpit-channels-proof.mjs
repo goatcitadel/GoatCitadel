@@ -100,7 +100,6 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
           browserContext,
           receiver,
           draftRoute,
-          failed = false,
           stage = "start isolated notification receiver";
         const screenshotDir = path.join(context.artifactRoot, "screenshots");
         const suffix = randomUUID().replaceAll("-", "").slice(0, 12),
@@ -425,7 +424,6 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
             } catch {
               /* Preserve the original failure. */
             }
-          failed = true;
           return {
             status: "failed",
             error: `${stage}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
@@ -442,8 +440,9 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
               const current = await requestJson(stack.gatewayUrl, draftRoute);
               if (current.ok)
                 await api(draftRoute, { method: "DELETE", body: { expectedRevision: current.body.revision } });
-            } catch (error) {
-              if (!failed) throw error;
+            } catch {
+              // Intentionally ignored: a finally block must not replace this pass's result. A draft that could not
+              // be removed makes the next viewport fail at "Start guided setup", which reports the problem.
             }
           }
         }
