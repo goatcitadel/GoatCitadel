@@ -90,7 +90,7 @@ export const ROUTE_RELEASE_SCOPE: readonly RouteReleaseScope[] = [
     releaseAction:
       "Inspect currently captured learning, memory, approval, effect, and Skill Hub lifecycle evidence without mutation.",
     verification: "verify:surface:regression, focused Journey route and service tests",
-    note: "Canonical producers cover skill learning, candidate governance, memory, approvals and effects, plus Skill Hub lifecycle events including rollback and revoke; import and cross-surface coverage remain experimental.",
+    note: "Journey shows skill learning, candidate reviews, memory, approvals and their effects, and Skill Hub changes including rollback and revoke. Imports and changes made on other screens are experimental here.",
   },
   {
     area: "library",
@@ -205,7 +205,7 @@ export const ROUTE_RELEASE_SCOPE: readonly RouteReleaseScope[] = [
     status: "ship",
     releaseAction: "Create, select, edit, archive, and restore trusted layouts built from compiled Ops summaries.",
     verification: "focused HX-410 Mission Control tests, verify:surface:regression",
-    note: "Saved boards are layout-only projections; every widget reloads its canonical source and never becomes runtime authority.",
+    note: "Saved boards keep only their layout. Every widget reads its saved record again and never changes how GoatCitadel runs.",
   },
   {
     area: "ops",
