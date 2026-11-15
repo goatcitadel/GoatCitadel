@@ -459,31 +459,6 @@ export async function runCockpitProviderManagementProof({ context, browser, stac
           function readPlan(planId) {
             return api(`/api/v1/change-plans/${encodeURIComponent(planId)}?workspaceId=default`);
           }
-          async function confirmNative(plan, expectedStatus = "completed") {
-            await panel.getByRole("button", { name: "Review required step", exact: true }).click();
-            const dialog = page.getByRole("dialog");
-            await dialog.waitFor();
-            const response = responseFor(
-              "POST",
-              `/api/v1/change-plans/${encodeURIComponent(plan.planId)}/confirmations`,
-            );
-            await dialog.getByRole("button", { name: "Apply exact change", exact: true }).click();
-            const result = await response;
-            assert.equal(result.status(), 200);
-            const body = result.request().postDataJSON();
-            assert.equal(body.expectedRevision, plan.revision);
-            assert.equal(body.actionNonce, plan.requiredAction.actionNonce);
-            const saved = await result.json();
-            await recordPlan(saved);
-            if (expectedStatus === "completed")
-              assert.ok(
-                ["completed", "applied"].includes(saved.status),
-                "The owner did not complete the reviewed provider action.",
-              );
-            else assert.equal(saved.status, expectedStatus);
-            await dialog.waitFor({ state: "hidden" });
-            return saved;
-          }
           async function submitProfile(before, input, dialog, create = false) {
             // /settings treats this explicit reviewed Apply as confirmation.
             assertSavedSettingsUnchanged(before, await readConfig());
