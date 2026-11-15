@@ -1214,7 +1214,11 @@ function portHeldByAnotherProgram(input: {
 
 type BundledPostgresSummaryKind = "port_held" | "other_database" | "reserved_port" | "timeout" | "no_backend";
 
-function bundledPostgresOperatorSummary(kind: BundledPostgresSummaryKind, port: number, timeoutMs?: number): string {
+export function bundledPostgresOperatorSummary(
+  kind: BundledPostgresSummaryKind,
+  port: number,
+  timeoutMs?: number,
+): string {
   switch (kind) {
     case "port_held":
       return `The local database could not start because another program is using its port (${port}), or an older GoatCitadel database with a different password is still running. Stop that program and press Retry. Open Logs shows how to choose a different port.`;

@@ -395,6 +395,12 @@ test("real concurrent packaged launches serialize and start one process per mana
   assert.equal(starts.filter((entry) => entry.service === "mission-control").length, 1);
   assert.equal(starts.find((entry) => entry.service === "gateway").databaseDriver, "postgres");
   assert.equal(starts.find((entry) => entry.service === "mission-control").gatewayOrigin, `http://127.0.0.1:${gatewayPort}`);
+  // The launcher gives the Gateway (and only the Gateway) the record path, inside its runtime logs folder.
+  assert.equal(
+    starts.find((entry) => entry.service === "gateway").startupFailureFile,
+    path.join(installRoot, "runtime", "logs", "gateway-startup-failure.json"),
+  );
+  assert.equal(starts.find((entry) => entry.service === "mission-control").startupFailureFile, undefined);
   for (const entry of starts) {
     const identity = queryProcessCreationIdentity(entry.pid);
     assert.equal(identity.status, "running");
@@ -659,7 +665,7 @@ function materializeManagedPackagedFixture(installRoot) {
     "const service = process.env.GOATCITADEL_MANAGED_SERVICE;",
     'const port = Number(service === "gateway" ? process.env.GATEWAY_PORT : process.env.GOATCITADEL_UI_PORT);',
     'const host = service === "gateway" ? process.env.GATEWAY_HOST : process.env.GOATCITADEL_UI_HOST;',
-    'fs.appendFileSync(process.env.GC_TEST_MANAGED_START_LOG, JSON.stringify({ service, pid: process.pid, databaseDriver: process.env.GOATCITADEL_DATABASE_DRIVER, gatewayOrigin: process.env.GOATCITADEL_UI_GATEWAY_ORIGIN }) + "\\n");',
+    'fs.appendFileSync(process.env.GC_TEST_MANAGED_START_LOG, JSON.stringify({ service, pid: process.pid, databaseDriver: process.env.GOATCITADEL_DATABASE_DRIVER, gatewayOrigin: process.env.GOATCITADEL_UI_GATEWAY_ORIGIN, startupFailureFile: process.env.GOATCITADEL_STARTUP_FAILURE_FILE }) + "\\n");',
     "const server = http.createServer((request, response) => {",
     '  response.setHeader("content-type", "application/json");',
     '  if (request.url === "/health") {',

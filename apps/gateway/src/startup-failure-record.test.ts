@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   STARTUP_FAILURE_FILE_ENV,
+  isStartupFailureRecordPath,
   clearStartupFailureRecord,
   writeStartupFailureRecord,
 } from "./startup-failure-record.js";
@@ -18,6 +19,10 @@ async function tempDir(): Promise<string> {
   return dir;
 }
 
+async function recordFile(): Promise<string> {
+  return path.join(await tempDir(), "runtime", "logs", "gateway-startup-failure.json");
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -28,7 +33,7 @@ describe("startup failure record", () => {
   });
 
   it("writes the operator summary and whether a retry can help", async () => {
-    const file = path.join(await tempDir(), "gateway-startup-failure.json");
+    const file = await recordFile();
     const error = attachOperatorSummary(
       new NonRetryableStartupError("port 45432 held (code=28P01)"),
       "The local database could not start because another program is using its port (45432).",
@@ -43,7 +48,7 @@ describe("startup failure record", () => {
   });
 
   it("uses the general sentence for an error without a summary and never copies its message", async () => {
-    const file = path.join(await tempDir(), "gateway-startup-failure.json");
+    const file = await recordFile();
     await writeStartupFailureRecord(
       file,
       new Error("connect postgres://user:hunter2@127.0.0.1:45432/db failed"),
@@ -60,7 +65,7 @@ describe("startup failure record", () => {
   });
 
   it("clears the record and does not fail when it is already gone", async () => {
-    const file = path.join(await tempDir(), "gateway-startup-failure.json");
+    const file = await recordFile();
     await writeStartupFailureRecord(file, new Error("x"));
     await clearStartupFailureRecord(file);
     await expect(fs.access(file)).rejects.toThrow();
@@ -73,11 +78,26 @@ describe("startup failure record", () => {
     await expect(clearStartupFailureRecord(undefined)).resolves.toBeUndefined();
   });
 
+  it("ignores a path that is not the runtime logs record, for both writing and clearing", async () => {
+    const dir = await tempDir();
+    const elsewhere = path.join(dir, "gateway-startup-failure.json");
+    const wrongName = path.join(dir, "runtime", "logs", "other.json");
+    await writeStartupFailureRecord(elsewhere, new Error("x"));
+    await writeStartupFailureRecord(wrongName, new Error("x"));
+    await expect(fs.access(elsewhere)).rejects.toThrow();
+    await expect(fs.access(wrongName)).rejects.toThrow();
+    await fs.writeFile(elsewhere, "keep", "utf8");
+    await clearStartupFailureRecord(elsewhere);
+    await expect(fs.readFile(elsewhere, "utf8")).resolves.toBe("keep");
+    expect(isStartupFailureRecordPath(path.join("a", "runtime", "logs", "gateway-startup-failure.json"))).toBe(true);
+    expect(isStartupFailureRecordPath(path.join("a", "logs", "gateway-startup-failure.json"))).toBe(false);
+  });
+
   it("never throws when the file cannot be written", async () => {
     const dir = await tempDir();
     // A directory in the file's place cannot be replaced by a file.
-    const file = path.join(dir, "blocked");
-    await fs.mkdir(file);
+    const file = path.join(dir, "runtime", "logs", "gateway-startup-failure.json");
+    await fs.mkdir(file, { recursive: true });
     await expect(writeStartupFailureRecord(file, new Error("x"))).resolves.toBeUndefined();
   });
 });

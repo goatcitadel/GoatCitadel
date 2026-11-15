@@ -21,6 +21,7 @@ import {
   type RemoteWorkerNativeRuntimeService,
 } from "./services/remote-worker-native-runtime-service.js";
 import { SharedHostAdmissionClosedError } from "./services/shared-host-lifecycle-service.js";
+import { withBundledDatabaseTimeoutSummary } from "./startup-build-failure.js";
 import { resolveGatewayStartupExitCode } from "./startup-errors.js";
 import {
   STARTUP_FAILURE_FILE_ENV,
@@ -56,7 +57,10 @@ async function runGateway(): Promise<void> {
     buildAppPhase.fail(formatStartupPhaseError(error));
     console.error(error);
     process.exitCode = resolveGatewayStartupExitCode(error);
-    await writeStartupFailureRecord(process.env[STARTUP_FAILURE_FILE_ENV], error);
+    await writeStartupFailureRecord(
+      process.env[STARTUP_FAILURE_FILE_ENV],
+      error instanceof Error ? withBundledDatabaseTimeoutSummary(error, startupPhases.snapshot()) : error,
+    );
     endBootTracking();
     return;
   }

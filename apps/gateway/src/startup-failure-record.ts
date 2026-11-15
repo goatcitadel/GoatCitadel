@@ -10,6 +10,23 @@ export const STARTUP_FAILURE_FILE_ENV = "GOATCITADEL_STARTUP_FAILURE_FILE";
 
 const GENERAL_SUMMARY = "GoatCitadel's background service stopped while starting. Open Logs shows why.";
 const RECORD_VERSION = 1;
+const RECORD_FILE_NAME = "gateway-startup-failure.json";
+
+/**
+ * The launcher keeps its runtime logs in <install>/runtime/logs, beside (not under) the Gateway's
+ * own root, so the guard is the shape of the path: the fixed file name inside a folder named "logs"
+ * inside a folder named "runtime". Any other path is ignored, so a stray variable can neither
+ * create nor delete an arbitrary file.
+ */
+export function isStartupFailureRecordPath(filePath: string): boolean {
+  const resolved = path.resolve(filePath);
+  const logsDir = path.dirname(resolved);
+  return (
+    path.basename(resolved) === RECORD_FILE_NAME &&
+    path.basename(logsDir) === "logs" &&
+    path.basename(path.dirname(logsDir)) === "runtime"
+  );
+}
 
 /**
  * Records why the Gateway could not start: the operator summary attached to the
@@ -23,7 +40,7 @@ export async function writeStartupFailureRecord(
   now: Date = new Date(),
 ): Promise<void> {
   const target = filePath?.trim();
-  if (!target) {
+  if (!target || !isStartupFailureRecordPath(target)) {
     return;
   }
   const record = {
@@ -46,7 +63,7 @@ export async function writeStartupFailureRecord(
 /** Removes the record. Does nothing without a path and never throws. */
 export async function clearStartupFailureRecord(filePath: string | undefined): Promise<void> {
   const target = filePath?.trim();
-  if (!target) {
+  if (!target || !isStartupFailureRecordPath(target)) {
     return;
   }
   try {
