@@ -1,4 +1,5 @@
 import { useState, useSyncExternalStore } from "react";
+import type { RealtimeEvent } from "@goatcitadel/contracts";
 import { SystemOwnerLink } from "./SystemOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
@@ -20,7 +21,7 @@ import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { RecentSessions } from "./RecentSessions";
 import { ActivityOlderFooter } from "./ActivityOlderFooter";
-import { mergeActivity, useOlderActivity } from "./use-older-activity";
+import { MAX_OLDER_SIGNALS, useOlderActivity } from "./use-older-activity";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import {
@@ -31,6 +32,8 @@ import {
   describeActivity,
   type ActivityRow,
 } from "./activity-sentences";
+
+const EMPTY_EVENTS: readonly RealtimeEvent[] = [];
 
 export const SHOW_BACKGROUND_KEY = "goatcitadel.cockpit.activity.background";
 
@@ -124,8 +127,12 @@ export function SystemActivity() {
     getGatewayAccessRevision,
     getGatewayAccessRevision,
   );
-  const older = useOlderActivity(events.data?.nextCursor, `${activeWorkspaceId ?? "default"}:${accessRevision}`);
-  const items = mergeActivity(events.data?.items ?? [], older.pages);
+  const older = useOlderActivity(
+    events.data?.items ?? EMPTY_EVENTS,
+    events.data?.nextCursor,
+    `${activeWorkspaceId ?? "default"}:${accessRevision}`,
+  );
+  const items = older.items;
   // SY-01: background status refreshes are hidden by default so what happened stays readable.
   const shown = showBackground ? items : items.filter((event) => !describeActivity(event).operational);
   const rows = collapseActivity(shown);
@@ -209,6 +216,8 @@ export function SystemActivity() {
       {events.data ? (
         <ActivityOlderFooter
           hasMore={older.hasMore}
+          capped={older.capped}
+          cap={MAX_OLDER_SIGNALS}
           busy={older.busy}
           error={older.error}
           onLoad={() => void older.loadOlder()}

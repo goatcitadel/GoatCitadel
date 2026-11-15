@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider, type Query } from "@tanstack/react-qu
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ACTIVITY_FALLBACK_MS } from "../../data/activity-feed";
 import { queryKeys } from "../../data/query-keys";
+import { appendRetainedActivity } from "../../data/activity-feed";
 import { SHOW_BACKGROUND_KEY, SystemActivity } from "./SystemActivity";
 
 const stream = vi.hoisted(() => ({ state: "open" }));
@@ -244,6 +245,77 @@ describe("System activity older signals and counts (22.4)", () => {
     await act(async () => byText("Refresh").click());
     await settle();
     expect(container.textContent).not.toContain("Old thread");
+  });
+
+  const seq = (n: number) =>
+    signal(`e-${n}`, "chat_message", new Date(Date.UTC(2026, 9, 5, 0, 0, 0) + n * 1000).toISOString(), {
+      eventClass: "domain_fact",
+      payload: { title: `thread-${n}-end` },
+    });
+  const range = (from: number, to: number) => Array.from({ length: from - to + 1 }, (_, index) => seq(from - index));
+  const listedIds = () =>
+    [...container.querySelectorAll("ol > li")].map(
+      (node) => /thread-(\d+)-end/.exec(node.textContent ?? "")?.[1] ?? "",
+    );
+  const loadButton = () =>
+    [...container.querySelectorAll("button")].find((node) => node.textContent?.includes("Load older signals"));
+  const fillPages = (pages: number, lastHasCursor: boolean) => {
+    api.fetchRealtimeEvents.mockResolvedValueOnce({ items: range(1000, 901), nextCursor: "c0" });
+    for (let page = 1; page <= pages; page += 1)
+      api.fetchRealtimeEvents.mockResolvedValueOnce({
+        items: range(900 - (page - 1) * 100, 801 - (page - 1) * 100),
+        nextCursor: page < pages || lastHasCursor ? `c${page}` : undefined,
+      });
+  };
+  const loadPages = async (count: number) => {
+    for (let page = 1; page <= count; page += 1) {
+      await act(async () => loadButton()!.click());
+      await settle();
+    }
+  };
+
+  it("keeps the list continuous when live events push the oldest signals off the first page", async () => {
+    api.fetchRealtimeEvents
+      .mockResolvedValueOnce({ items: range(200, 101), nextCursor: "c1" })
+      .mockResolvedValueOnce({ items: range(100, 51) });
+    await render();
+    await settle();
+    for (const n of [201, 202, 203]) await act(async () => appendRetainedActivity(client, seq(n)));
+    await settle();
+    await act(async () => loadButton()!.click());
+    await settle();
+    const ids = listedIds();
+    expect(ids).toHaveLength(203 - 51 + 1);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (let n = 51; n <= 203; n += 1) expect(ids).toContain(String(n));
+    expect(container.textContent).toContain("Showing 153 entries.");
+  });
+
+  it("stops loading at the bound, says so, links Work history, and makes no further request", async () => {
+    fillPages(6, true);
+    await render();
+    await settle();
+    await loadPages(5);
+    expect(loadButton()).toBeUndefined();
+    expect(container.textContent).toContain("This page stops at the most recent 500 older signals.");
+    expect(container.textContent).toContain("Open Work history");
+    expect(container.textContent).not.toContain("That is everything this installation keeps.");
+    expect(container.textContent).toContain("Showing 600 entries.");
+    expect(api.fetchRealtimeEvents).toHaveBeenCalledTimes(6);
+  });
+
+  it("drops from the old end, and says so, when displaced signals push past the bound", async () => {
+    fillPages(5, false);
+    await render();
+    await settle();
+    await loadPages(5);
+    await act(async () => appendRetainedActivity(client, seq(1001)));
+    await settle();
+    const ids = listedIds();
+    expect(ids).toHaveLength(600);
+    expect(ids[0]).toBe("1001");
+    expect(ids).not.toContain("401");
+    expect(container.textContent).toContain("This page stops at the most recent 500 older signals.");
   });
 
   it("shows the Work history link when no older signals exist from the start", async () => {
