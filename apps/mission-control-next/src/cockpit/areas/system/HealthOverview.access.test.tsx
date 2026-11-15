@@ -87,6 +87,15 @@ it("shows current backup existence despite an older Inbox absence observation", 
   expect(container.textContent).not.toContain("No backup yet");
 });
 
+it("says this release has no live remote-worker status, in one statement", async () => {
+  await render();
+  await tick(10);
+  expect(container.textContent).toContain(
+    "This release does not include live remote-worker status. The workers page lists saved worker records.",
+  );
+  expect(container.textContent).not.toContain("Held back from this release.");
+});
+
 it.each([401, 403])("uses the full real loader without repeatedly fetching denied NPU %s", async (status) => {
   api.fetchNpuStatus.mockRejectedValue(
     new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/npu/status", status }),

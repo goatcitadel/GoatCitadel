@@ -214,7 +214,7 @@ export function SettingsArea() {
   const selectedEntry = page.entries.find((entry) => entry.section === selectedSection);
   const unavailable =
     selectedEntry?.releaseStatus === "hide"
-      ? `${selectedEntry.label} is not part of this release yet, so it can't be opened here.`
+      ? `${selectedEntry.label} is not part of this release, so it can't be opened here.`
       : rest[0] && !PAGES.some((item) => item.id === rest[0] || item.entries.some((entry) => entry.section === rest[0]))
         ? "This link does not match a settings page. Choose a page from Settings."
         : hash &&

@@ -86,7 +86,7 @@ it("lists workers by name and status without raw IDs or Classic words", async ()
 it("says the page is held back from this release (U-SY-001)", async () => {
   await render();
   expect(host.querySelector("[data-area-header]")?.textContent).toContain(
-    "Held back from this release: this page shows saved worker records, and live worker status is not connected yet.",
+    "Held back from this release: this page shows saved worker records, and live worker status is not connected.",
   );
 });
 
