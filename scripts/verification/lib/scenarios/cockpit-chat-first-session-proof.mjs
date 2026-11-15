@@ -163,7 +163,7 @@ export async function runCockpitChatFirstSessionProof({context,browser,stack,cit
     await page.waitForURL(url=>url.pathname==="/chat");
    }
    const draft=page.getByRole("textbox",{name:"Message",exact:true});
-   await page.getByText("Choose a conversation",{exact:true}).waitFor();
+   await page.getByText(/^(Choose a conversation|Start your first conversation)$/u).waitFor();
    assert.equal(await draft.count(),0,"Canonical empty Chat must not be relabelled as a null-owner composer");
    assert.equal(new URL(page.url()).searchParams.get("sessionId"),null);assert.equal(stats.creates.length,0);assertNoFirstSessionHydration(stats);
    const admitted=isImage?imagePrompt:`Synthetic retained attachment draft ${token}`;

@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { setTimeout as delay } from "node:timers/promises";
 import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 
+/** The jump button names a decision waiting for you instead of "Jump to latest" while one is shown. */
+const JUMP_TO_LATEST = /^Jump to (latest|the (approval|question) waiting for you)/u;
+
 /** SF6 uses production Chat, durable Gateway execution and a controllable loopback provider. */
 export async function runChatStreamingDisplayProof(context, deps) {
   const {
@@ -134,7 +137,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
           const messages = page.getByLabel("Messages", { exact: true });
           const scroller = messages.locator("[data-transcript-scroller]");
           const returnToLatest = async () => {
-            const jump = page.getByRole("button", { name: "Jump to latest", exact: true });
+            const jump = page.getByRole("button", { name: JUMP_TO_LATEST });
             if (await jump.count()) await jump.click();
             await scroller.evaluate((node) => {
               node.scrollTop = node.scrollHeight;
@@ -224,7 +227,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
             await page.mouse.wheel(0, -100_000);
             // Native scroll events arrive after the gesture. Confirm that the
             // shared reading owner has disengaged before dispatching more text.
-            await page.getByRole("button", { name: "Jump to latest", exact: true }).waitFor();
+            await page.getByRole("button", { name: JUMP_TO_LATEST }).waitFor();
             const readingTop = await scroller.evaluate((node) => node.scrollTop);
             assert.equal(stub.advanceControlledStream(), true);
             await messages.getByRole("cell", { name: "Short", exact: true }).waitFor();
@@ -254,7 +257,7 @@ export async function runChatStreamingDisplayProof(context, deps) {
               const node = document.querySelector('[aria-label="Messages"] [data-transcript-scroller]');
               return node && node.scrollHeight - node.scrollTop - node.clientHeight < 5;
             });
-            await page.getByRole("button", { name: "Jump to latest", exact: true }).waitFor({ state: "hidden" });
+            await page.getByRole("button", { name: JUMP_TO_LATEST }).waitFor({ state: "hidden" });
             assert.equal(stub.advanceControlledStream(), true);
             await page.locator("article[data-turn-id] pre").waitFor();
             await page.waitForFunction(() => {
