@@ -1,10 +1,10 @@
-import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Turn, ChatTranscriptEmpty, ChatTranscriptFooter, type TranscriptFooterContext } from "./ChatTranscriptContent";
 import { turnReadsDraft, useTurnActions } from "./use-turn-actions";
 import { selectTurnCapabilitySuggestions } from "./turn-capability-suggestions";
 import type { ChannelConversationContext } from "./channel-conversation";
 import { useChannelReading } from "./use-channel-conversation";
 import { ChatInspectorLoadFailure } from "./ChatInspectorLoadFailure";
+import { focusAfterJump, jumpLabel } from "./chat-jump-to-latest";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { useDeferredVirtuoso } from "../../ui/DeferredVirtuoso";
@@ -349,14 +349,13 @@ export function ChatTranscript({
           type="button"
           onClick={() => {
             jumpToLatest();
-            // CH-18: the button unmounts once the reader is at the end, so focus moves to the composer.
-            const composer = props.composerRef.current;
-            if (composer && !composer.disabled) composer.focus({ preventScroll: true });
-            else scrollRef.current?.focus({ preventScroll: true });
+            // CH-18: the button unmounts once the reader is at the end, so focus moves to a decision waiting
+            // for you, else to the composer.
+            window.setTimeout(() => focusAfterJump(props.composerRef.current, scrollRef.current), 0);
           }}
           className="absolute bottom-3 right-3 z-10 rounded-md border border-accent bg-overlay px-3 py-2 text-sm text-accent shadow-overlay"
         >
-          Jump to latest{unread ? ` · ${plural(unread, "new message")}` : ""}
+          {jumpLabel(props, unread)}
         </button>
       ) : null}
       <div

@@ -37,6 +37,8 @@ export function ChatPendingQuestion({
       onSubmit={submit}
       className="mt-3 rounded-md border border-status-waiting bg-raised p-3 text-sm"
       aria-label="Pending question"
+      tabIndex={-1}
+      data-chat-waiting-decision=""
     >
       <h3 className="font-semibold text-fg">{prompt.title || "Your input is needed"}</h3>
       {background ? (

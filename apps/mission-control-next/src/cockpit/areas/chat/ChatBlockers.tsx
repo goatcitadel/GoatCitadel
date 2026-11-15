@@ -175,6 +175,8 @@ export function ChatBlockers({ props }: { props: Blockers }) {
       {approval && !ownedByCodeModeCard ? (
         <section
           aria-label={decided ? "Decided approval" : "Pending approval"}
+          tabIndex={-1}
+          data-chat-waiting-decision={decided ? undefined : ""}
           className={`mt-3 rounded-md border bg-raised p-3 text-sm ${decided ? "border-line-subtle" : "border-status-waiting"}`}
         >
           <div className="flex flex-wrap items-start justify-between gap-2">
@@ -292,7 +294,12 @@ export function ChatBlockers({ props }: { props: Blockers }) {
           identity={questionScope}
           label="Answer controls"
           fallback={
-            <section aria-label="Pending question" className="mt-3 border-l-2 border-status-waiting pl-3 text-sm">
+            <section
+              aria-label="Pending question"
+              tabIndex={-1}
+              data-chat-waiting-decision=""
+              className="mt-3 border-l-2 border-status-waiting pl-3 text-sm"
+            >
               <h3 className="font-semibold text-fg">{input.title || "Your input is needed"}</h3>
               {isBackgroundChatUserInputPrompt(input) ? (
                 <p className="mt-1 text-xs text-fg-muted">Optional · Work continues</p>

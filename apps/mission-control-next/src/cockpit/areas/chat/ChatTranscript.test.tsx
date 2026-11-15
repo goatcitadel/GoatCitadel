@@ -145,6 +145,43 @@ afterEach(() => {
 });
 
 describe("ChatTranscript", () => {
+  it("names the approval waiting for you on Jump to latest, and moves focus to its card", async () => {
+    vi.mocked(fetchApproval).mockResolvedValueOnce({
+      preview: { targets: ["/workspace/fixture.txt"] },
+      payload: {},
+      createdAt: "2026-10-01T00:00:00Z",
+      approvalId: "jump-approval",
+      kind: "tool_invoke",
+      status: "pending",
+      riskLevel: "caution",
+      expiresAt: "2099-10-02T00:00:00Z",
+    } as never);
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript
+            props={{
+              ...sessionProps([turn("jump-approval-turn", true)]),
+              followOutput: false,
+              composerRef: { current: null },
+              pendingApproval: { approvalId: "jump-approval", toolName: "fs.read" },
+            }}
+          />
+        </InspectorProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.querySelector("[data-chat-waiting-decision]")).not.toBeNull());
+    const jump = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Jump to the approval waiting for you",
+    );
+    expect(jump).toBeDefined();
+    await act(async () => {
+      jump!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(document.activeElement?.hasAttribute("data-chat-waiting-decision")).toBe(true);
+  });
+
   it("hydrates missing approval risk from the matching pending canonical record", async () => {
     const onApprovePending = vi.fn();
     vi.mocked(fetchApproval).mockResolvedValueOnce({
@@ -575,10 +612,10 @@ describe("ChatTranscript", () => {
     )!;
     const summary = disclosure.querySelector("summary")!;
     expect(disclosure.open).toBe(true);
-    await act(async () => { await vi.dynamicImportSettled(); });
-    await vi.waitFor(() =>
-      expect(disclosure.querySelector('[data-tool-run-id="first"]')).not.toBeNull(),
-    );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    await vi.waitFor(() => expect(disclosure.querySelector('[data-tool-run-id="first"]')).not.toBeNull());
     const row = disclosure.querySelector('[data-tool-run-id="first"]');
     disclosure.open = true;
     summary.focus();
@@ -618,7 +655,9 @@ describe("ChatTranscript", () => {
     expect(activity.textContent).toContain("1 failed");
     expect(activity.textContent).toContain("1 approval needed");
     expect((activity as HTMLDetailsElement).open).toBe(true);
-    await act(async () => { await vi.dynamicImportSettled(); });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     await vi.waitFor(() => {
       for (const id of ["failed", "approval", "uncertain"]) {
         expect(activity.querySelector(`[data-tool-run-id="${id}"]`)).not.toBeNull();
@@ -1000,7 +1039,9 @@ describe("ChatTranscript", () => {
       ),
     );
     expect(container.textContent).toContain("Stopped — partial answer");
-    await vi.waitFor(() => expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Continue")).toBe(true));
+    await vi.waitFor(() =>
+      expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Continue")).toBe(true),
+    );
   });
 
   it("offers Continue only on the latest stopped turn and drafts the follow-up", async () => {
