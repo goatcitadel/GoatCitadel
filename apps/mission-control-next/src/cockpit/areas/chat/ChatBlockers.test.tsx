@@ -427,8 +427,8 @@ it("names the file a document approval would write (U-CH-046)", async () => {
   );
 });
 
-it("offers Ask again once a Chat approval expires (U-CH-031)", async () => {
-  api.fetchApproval.mockResolvedValue({
+it("offers Ask again once the record read after the local deadline says expired (U-CH-031)", async () => {
+  const pendingRecord = {
     approvalId: "approval/1",
     kind: "documents.create",
     status: "pending",
@@ -439,7 +439,9 @@ it("offers Ask again once a Chat approval expires (U-CH-031)", async () => {
     expiresAt: new Date(Date.now() + 1500).toISOString(),
     linkage: { turnId: "turn-1" },
     createdAt: "2026-10-01T00:00:00Z",
-  });
+  };
+  const deadline = Date.parse(pendingRecord.expiresAt);
+  api.fetchApproval.mockImplementation(async () => (Date.now() < deadline ? pendingRecord : sweptExpiredRecord));
   const composer = document.createElement("textarea");
   document.body.append(composer);
   const onDraftChange = vi.fn();
@@ -465,7 +467,9 @@ it("offers Ask again once a Chat approval expires (U-CH-031)", async () => {
     );
     await vi.waitFor(() => expect(findButton("Approve once")).toBeDefined());
     expect(findButton("Ask again")).toBeUndefined();
+    const readsBefore = api.fetchApproval.mock.calls.length;
     await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined(), { timeout: 5000 });
+    expect(api.fetchApproval.mock.calls.length).toBeGreaterThan(readsBefore);
     expect(container.textContent).toContain(
       "The action did not run. Ask again to put your request back in the message box.",
     );
@@ -511,6 +515,88 @@ async function renderExpired(overrides: Record<string, unknown>) {
   );
   return composer;
 }
+
+/** A record that still reads pending once its deadline has passed on this clock. */
+function lapsedPending() {
+  return {
+    approvalId: "approval/1",
+    kind: "documents.create",
+    status: "pending",
+    riskLevel: "caution",
+    payload: {},
+    preview: { toolName: "documents.create", path: "notes/note.txt" },
+    expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    linkage: { turnId: "turn-1" },
+    createdAt: "2026-10-01T00:00:00Z",
+  };
+}
+
+it("does not say the action did not run or offer Ask again while the late read is not answered (U-CH-031)", async () => {
+  api.fetchApproval.mockImplementation(() => new Promise(() => {}));
+  const composer = await renderExpired({
+    thread: expiredThread,
+    draft: "",
+    pendingApproval: {
+      approvalId: "approval/1",
+      kind: "documents.create",
+      riskLevel: "caution",
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    },
+  });
+  try {
+    await vi.waitFor(() => expect(container.textContent).toContain("Checking whether it was decided"));
+    expect(container.textContent).toContain("The time for this approval has passed.");
+    expect(container.textContent).not.toContain("did not run");
+    expect(findButton("Ask again")).toBeUndefined();
+  } finally {
+    composer.remove();
+  }
+});
+
+it("reads again after the deadline and follows an approved record (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValueOnce(lapsedPending());
+  api.fetchApproval.mockResolvedValue({ ...lapsedPending(), status: "approved", resolutionOutcome: "approved" });
+  const composer = await renderExpired({ thread: expiredThread, draft: "" });
+  try {
+    await vi.waitFor(() => expect(container.textContent).toContain("Approval decided"));
+    expect(api.fetchApproval.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(container.textContent).not.toContain("did not run");
+    expect(container.textContent).not.toContain("time for this approval has passed");
+    expect(findButton("Ask again")).toBeUndefined();
+  } finally {
+    composer.remove();
+  }
+});
+
+it("shows the confirmed expired block when the late read says expired (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValueOnce(lapsedPending());
+  api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
+  const composer = await renderExpired({ thread: expiredThread, draft: "" });
+  try {
+    await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
+    expect(container.textContent).toContain("Approval expired");
+    expect(container.textContent).toContain("The action did not run.");
+  } finally {
+    composer.remove();
+  }
+});
+
+it("offers Check again, never Ask again, when the late read fails (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValueOnce(lapsedPending());
+  api.fetchApproval.mockRejectedValueOnce(new Error("offline"));
+  const composer = await renderExpired({ thread: expiredThread, draft: "" });
+  try {
+    await vi.waitFor(() => expect(findButton("Check again")).toBeDefined());
+    expect(container.textContent).toContain("What happened to it is not confirmed yet.");
+    expect(container.textContent).not.toContain("did not run");
+    expect(findButton("Ask again")).toBeUndefined();
+    api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
+    await act(async () => findButton("Check again")!.click());
+    await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
+  } finally {
+    composer.remove();
+  }
+});
 
 it("keeps Ask again when the record read says the sweep expired it (U-CH-031)", async () => {
   api.fetchApproval.mockResolvedValue(sweptExpiredRecord);

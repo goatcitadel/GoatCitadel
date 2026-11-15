@@ -14,6 +14,7 @@ import { useGatewayUnavailable } from "../../app/gateway-unavailable-context";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
 import { approvalExpiredUnresolved } from "../inbox/approval-settlement";
 import { hasExpired, useMinuteClock } from "../inbox/use-minute-clock";
+import { useApprovalDeadlineCheck } from "./use-approval-deadline-check";
 import { DeferredChatLeaf } from "./DeferredChatLeaves";
 import { presentApprovalAction } from "./chat-vocabulary";
 import { approvalTargetLine } from "../inbox/approval-target";
@@ -157,7 +158,11 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   const sweptExpired = Boolean(
     decided && (decided.resolutionOutcome === "expired" || approvalExpiredUnresolved(decided)),
   );
-  const expired = Boolean(approval) && (sweptExpired || (!decided && hasExpired(expiresAt, now)));
+  const expired = Boolean(approval) && sweptExpired;
+  // The deadline passed on this clock but the record still reads pending: the approval may have been decided elsewhere,
+  // so nothing says the action did not run until a fresh read of the record does.
+  const lapsed = Boolean(approval) && !decided && hasExpired(expiresAt, now);
+  const deadlineCheck = useApprovalDeadlineCheck({ approvalId, lapsed, read: () => recordQuery.refetch() });
   const [askBlocked, setAskBlocked] = useState(false);
   // The text Ask again itself put in the box: it is the request, not something the operator typed.
   const restored = useRef<string | undefined>(undefined);
@@ -210,7 +215,9 @@ export function ChatBlockers({ props }: { props: Blockers }) {
                   ? "Approval expired"
                   : decided
                     ? `Approval decided: ${presentApprovalStatus(decided.status).label}`
-                    : "Approval needed"}
+                    : lapsed
+                      ? "Approval time has passed"
+                      : "Approval needed"}
               </h3>
               <p className="mt-1 text-fg-secondary">{presentApprovalAction(approval.toolName, approval.kind)}</p>
               {targetLine ? <p className="mt-1 text-xs text-fg-secondary wrap-anywhere">{targetLine}</p> : null}
@@ -301,6 +308,20 @@ export function ChatBlockers({ props }: { props: Blockers }) {
             onFollowOnChange={props.onRefreshThread}
             connectionLost={gatewayUnavailable}
           />
+          {lapsed ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p>
+                {deadlineCheck.checking
+                  ? "The time for this approval has passed. Checking whether it was decided…"
+                  : "The time for this approval has passed. What happened to it is not confirmed yet."}
+              </p>
+              {deadlineCheck.checking ? null : (
+                <Button type="button" size="sm" variant="secondary" onClick={deadlineCheck.check}>
+                  Check again
+                </Button>
+              )}
+            </div>
+          ) : null}
           {expired ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <p>
