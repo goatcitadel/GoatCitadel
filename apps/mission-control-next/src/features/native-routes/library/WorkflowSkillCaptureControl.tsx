@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { useStableHandler } from "../../threaded-surface/useStableHandler";
 import { useSessionDraft } from "./session-drafts";
@@ -40,6 +40,10 @@ type WorkflowCaptureProps = {
   initialOpen?: boolean;
   /** Called after the summary closes, once any unsaved draft was reviewed. */
   onClosed?: () => void;
+  /** Move focus to the summary once, on mount: the operator just chose Save as skill from the menu. */
+  focusOnOpen?: boolean;
+  /** Called after that one focus move, so the owner does not repeat it on a later mount. */
+  onFocused?: () => void;
 };
 function CaptureControl({
   turn,
@@ -50,7 +54,10 @@ function CaptureControl({
   onReviewPlan,
   initialOpen = false,
   onClosed,
+  focusOnOpen = false,
+  onFocused,
 }: WorkflowCaptureProps) {
+  const summaryRef = useRef<HTMLElement>(null);
   const operation = useLibraryOperation(JSON.stringify(["workflow-capture", workspaceId, sessionId, turn.turnId]));
   // The Chat transcript is virtualized and can recreate this row while the operator
   // works; keep the disclosure in the same presentation-scoped state as its receipts.
@@ -62,6 +69,12 @@ function CaptureControl({
   useEffect(() => {
     if (initialOpen) setOpen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only the request on mount seeds the state
+  }, []);
+  useEffect(() => {
+    if (!focusOnOpen) return;
+    summaryRef.current?.focus();
+    onFocused?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one move, on the mount that follows the menu choice
   }, []);
   const leave = useDraftLeave();
   const captureDraft = useSessionDraft(
@@ -130,6 +143,7 @@ function CaptureControl({
         }}
       >
         <summary
+          ref={summaryRef}
           onClick={(event) => {
             event.preventDefault();
             if (open)

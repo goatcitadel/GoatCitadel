@@ -1,8 +1,10 @@
-import { lazy, Suspense, type ReactNode } from "react";
+import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
 import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { skillCaptureVisibility } from "./chat-skill-capture";
 import type { TurnActions } from "./use-turn-actions";
+
+const MORE_BUTTON = 'button[aria-label="More message actions"]';
 
 const WorkflowSkillCaptureControl = lazy(() =>
   import("../../../features/native-routes/library/WorkflowSkillCaptureControl").then((module) => ({
@@ -26,26 +28,48 @@ export function useTurnSkillCapture(
     JSON.stringify(["chat-skill-capture", actions.workspaceId, actions.selectedSessionId, turn.turnId]),
     false,
   );
+  // Set only by the menu choice, and lost on a remount, so scrolling back to this answer never moves focus.
+  const [focusPending, setFocusPending] = useState(false);
+  const wrapper = useRef<HTMLDivElement>(null);
+  const closeBlock = () => {
+    // The block unmounts with the state change; the answer's More button, where the choice began, takes focus back.
+    const moreButton = wrapper.current?.closest("article")?.querySelector<HTMLElement>(MORE_BUTTON);
+    setRequested(false);
+    queueMicrotask(() => {
+      if (moreButton?.isConnected) moreButton.focus();
+    });
+  };
   const visibility = eligible && actions.selectedSessionId ? skillCaptureVisibility(turn, requested) : "hidden";
   if (visibility === "hidden") return { control: null };
-  if (visibility === "offered") return { onSaveAsSkill: () => setRequested(true), control: null };
+  if (visibility === "offered")
+    return {
+      onSaveAsSkill: () => {
+        setFocusPending(true);
+        setRequested(true);
+      },
+      control: null,
+    };
   return {
     control: (
-      <Suspense fallback={<p aria-busy="true">Loading skill capture…</p>}>
-        <WorkflowSkillCaptureControl
-          turn={turn}
-          sessionId={actions.selectedSessionId!}
-          workspaceId={actions.workspaceId}
-          draftEmpty={draftEmpty}
-          initialOpen={requested}
-          onClosed={() => setRequested(false)}
-          onPrepare={(prompt) => {
-            actions.onDraftChange(prompt);
-            actions.composerRef.current?.focus();
-          }}
-          onReviewPlan={actions.onReviewPlan}
-        />
-      </Suspense>
+      <div ref={wrapper}>
+        <Suspense fallback={<p aria-busy="true">Loading skill capture…</p>}>
+          <WorkflowSkillCaptureControl
+            turn={turn}
+            sessionId={actions.selectedSessionId!}
+            workspaceId={actions.workspaceId}
+            draftEmpty={draftEmpty}
+            initialOpen={requested}
+            onClosed={closeBlock}
+            focusOnOpen={focusPending}
+            onFocused={() => setFocusPending(false)}
+            onPrepare={(prompt) => {
+              actions.onDraftChange(prompt);
+              actions.composerRef.current?.focus();
+            }}
+            onReviewPlan={actions.onReviewPlan}
+          />
+        </Suspense>
+      </div>
     ),
   };
 }

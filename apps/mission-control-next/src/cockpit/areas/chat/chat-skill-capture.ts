@@ -1,3 +1,4 @@
+import { turnReadsDraft } from "./use-turn-actions";
 import { WORKFLOW_SKILL_CAPTURE_MARKER, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
 
 /**
@@ -7,11 +8,7 @@ import { WORKFLOW_SKILL_CAPTURE_MARKER, type ChatThreadTurnRecord } from "@goatc
  * every answer.
  */
 export function skillCaptureVisibility(turn: ChatThreadTurnRecord, requested: boolean): "hidden" | "offered" | "shown" {
-  const finished =
-    turn.trace.status === "completed" &&
-    turn.trace.completion?.status === "complete" &&
-    !!turn.assistantMessage?.content;
-  if (!finished) return "hidden";
+  if (!turnReadsDraft(turn) || !turn.assistantMessage?.content) return "hidden";
   if (turn.userMessage.content.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER) || requested) return "shown";
   return "offered";
 }
