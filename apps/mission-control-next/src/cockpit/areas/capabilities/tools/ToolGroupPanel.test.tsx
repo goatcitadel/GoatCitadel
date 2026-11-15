@@ -530,7 +530,7 @@ describe("Tool group panel", () => {
       });
       await act(async () => buttonIn(container, "Resolve in place")!.click());
       await settle();
-      expect(text()).toContain("Not switched on. The change was declined in Inbox.");
+      expect(text()).toContain("Not switched on. The change was declined.");
       expect(switchIn(container, "Turn it on or off: Git")?.getAttribute("aria-checked")).toBe("false");
     });
 

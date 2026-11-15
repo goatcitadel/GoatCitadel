@@ -729,7 +729,7 @@ describe("Install progress", () => {
     setFlow(EXAMPLE, {
       phase: "failed",
       step: "approval",
-      message: "You declined this install in Inbox. Nothing was changed.",
+      message: "You declined this install. Nothing was changed.",
       changed: [],
     });
     expect(text()).toContain("Nothing was changed.");

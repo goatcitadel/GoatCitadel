@@ -632,7 +632,7 @@ describe("useConnectorInstall", () => {
   });
 
   it.each([
-    ["cancelled", "approval_denied", "You declined this install in Inbox. Nothing was changed."],
+    ["cancelled", "approval_denied", "You declined this install. Nothing was changed."],
     ["failed", "approval_expired", "This request expired after 15 minutes. Start again."],
     ["failed", "expired", "This request expired after 15 minutes. Start again."],
   ] as const)("says plainly when Inbox ends the plan as %s (%s)", async (status, failureCode, message) => {
@@ -1177,7 +1177,7 @@ describe("useConnectorInstall", () => {
 
         expect(latest.state).toEqual({
           phase: "stopped",
-          message: "Another tab is following this install. It goes on there once you approve it in Inbox.",
+          message: "Another tab is following this install. It goes on there once you approve it.",
           changed: [],
           link: { label: "Open in Inbox", href: "/inbox?approvalId=approval-1&workspaceId=default" },
         });
