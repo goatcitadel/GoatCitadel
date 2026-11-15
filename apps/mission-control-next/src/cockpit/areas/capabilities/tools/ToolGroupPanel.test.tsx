@@ -38,6 +38,20 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", async (original) => ({
   ...(await original<object>()),
   ...plans,
 }));
+// The in-place approval dialog has its own tests (SettingsApprovalDialog.test.tsx); here only where it mounts and what it asks.
+vi.mock("../../settings/SettingsApprovalDialog", () => ({
+  SettingsApprovalDialog: (props: {
+    approvalId: string;
+    summary?: string;
+    onResolved: (status: undefined) => void;
+  }) => (
+    <section data-in-place-approval={props.approvalId}>
+      <p>{props.summary}</p>
+      <button onClick={() => props.onResolved(undefined)}>Resolve in place</button>
+    </section>
+  ),
+  reopenSettingsApproval: vi.fn(),
+}));
 // Library's inspector has its own tests (CapabilityPolicyInspector.test.tsx); here only what the panel hands it.
 vi.mock("../../library/CapabilityPolicyInspector", () => ({
   CapabilityPolicyInspector: ({ workspaceId, toolName }: { workspaceId: string; toolName?: string }) => (
@@ -457,6 +471,93 @@ describe("Tool group panel", () => {
       expect(target.pathname).toBe("/inbox");
       expect(target.searchParams.get("approvalId")).toBe("approval-1");
       expect(target.searchParams.get("workspaceId")).toBe("default");
+    });
+
+    it("opens the approval in place beside the Inbox link, and reads the plan again once it is decided", async () => {
+      await renderPanel("git");
+      await act(async () =>
+        setToolGroupSwitch("git", {
+          phase: "waiting",
+          groupId: "git",
+          planId: "plan-git",
+          enabled: true,
+          approvalId: "approval-1",
+        }),
+      );
+      expect(container.querySelector('[data-in-place-approval="approval-1"]')).not.toBeNull();
+      expect(text()).toContain("Switch Git on");
+      expect(text()).toContain("Waiting on you in Inbox");
+      expect([...container.querySelectorAll("a")].some((link) => link.textContent === "Open in Inbox")).toBe(true);
+      plans.fetchChangePlan.mockClear();
+      plans.fetchChangePlan.mockResolvedValue({
+        planId: "plan-git",
+        status: "awaiting_approval",
+        revision: 3,
+        request: {
+          kind: "runtime_configuration",
+          change: { operation: "tool_group_access", groupId: "git", enabled: true },
+        },
+        target: { ownerId: "runtime_settings", resourceId: "tool_group_access:git", expectedRevision: 7 },
+        requiredAction: { kind: "approval", approvalId: "approval-1" },
+      });
+      await act(async () => buttonIn(container, "Resolve in place")!.click());
+      await settle();
+      expect(plans.fetchChangePlan).toHaveBeenCalledTimes(1);
+      expect(plans.fetchChangePlan).toHaveBeenCalledWith("plan-git", { workspaceId: "default" });
+    });
+
+    it("shows a declined approval as a refusal, never as switched on", async () => {
+      await renderPanel("git", listOf({ ...FILES, git: { state: "off" } }));
+      await act(async () =>
+        setToolGroupSwitch("git", {
+          phase: "waiting",
+          groupId: "git",
+          planId: "plan-git",
+          enabled: true,
+          approvalId: "approval-1",
+        }),
+      );
+      plans.fetchChangePlan.mockResolvedValue({
+        planId: "plan-git",
+        status: "failed",
+        revision: 4,
+        request: {
+          kind: "runtime_configuration",
+          change: { operation: "tool_group_access", groupId: "git", enabled: true },
+        },
+        target: { ownerId: "runtime_settings", resourceId: "tool_group_access:git", expectedRevision: 7 },
+        result: { failureCode: "approval_denied", summary: "denied" },
+      });
+      await act(async () => buttonIn(container, "Resolve in place")!.click());
+      await settle();
+      expect(text()).toContain("Not switched on. The change was declined in Inbox.");
+      expect(switchIn(container, "Turn it on or off: Git")?.getAttribute("aria-checked")).toBe("false");
+    });
+
+    it("mounts one approval dialog when the row and its open panel are both on screen, and never on a card", async () => {
+      api.fetchCapabilityToolUsage.mockResolvedValue({
+        ...usageOf(),
+        mostUsed: { kind: "most_used", groupIds: ["git", "files", "memory", "browser"] },
+      });
+      await renderTab();
+      await press(buttonIn(rowOf("Git"), "View Git"));
+      await vi.waitFor(() => expect(document.body.querySelector('[aria-label="Inspector: Git"]')).not.toBeNull());
+      await act(async () =>
+        setToolGroupSwitch("git", {
+          phase: "waiting",
+          groupId: "git",
+          planId: "plan-git",
+          enabled: true,
+          approvalId: "approval-1",
+        }),
+      );
+      expect(document.body.querySelectorAll("[data-in-place-approval]")).toHaveLength(1);
+      expect(body()?.querySelector("[data-in-place-approval]")).not.toBeNull();
+      // Closing the panel hands the dialog back to the row.
+      await press(buttonIn(document.body, "Close inspector"));
+      expect(document.body.querySelectorAll("[data-in-place-approval]")).toHaveLength(1);
+      expect(rowOf("Git").querySelector("[data-in-place-approval]")).not.toBeNull();
+      expect(cardOf("Git").querySelector("[data-in-place-approval]")).toBeNull();
     });
 
     it("says why a change did not happen", async () => {
