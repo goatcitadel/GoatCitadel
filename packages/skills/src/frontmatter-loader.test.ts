@@ -192,6 +192,25 @@ Broken body`,
     });
   });
 
+  it("never loads a Skill Hub staging or recovery folder as a skill", async () => {
+    const root = await makeTempDir();
+    const body = `---
+name: demo
+description: Demo skill
+---
+Demo body`;
+    await writeSkill(path.join(root, "kept"), body.replace("name: demo", "name: kept"));
+    // A removal moves the folder to `.skill-hub-<token>.backup`; an activation stages under `.staging`.
+    await writeSkill(path.join(root, ".skill-hub-0123456789abcdef01234567.backup"), body);
+    await writeSkill(path.join(root, ".skill-hub-0123456789abcdef01234567.staging"), body);
+
+    const logger = makeLoggerSpy();
+    const loaded = await new SkillsService([{ source: "extra", dir: root }], logger).reload();
+
+    expect(loaded.map((skill) => skill.skillId)).toEqual(["extra:kept"]);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("reports a malformed SKILL.md instead of silently dropping it", async () => {
     const root = await makeTempDir();
     await writeSkill(
