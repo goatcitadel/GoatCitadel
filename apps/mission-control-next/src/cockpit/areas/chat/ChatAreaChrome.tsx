@@ -200,16 +200,27 @@ export function ChatHeaderSubtitle({
  * Advisory once a model is ready: sending works before setup is finished, so that copy must not read as a block.
  * Without a model nothing can answer, so the banner says so and sends the operator to choose one.
  */
-export function ChatSetupBanner({ modelReady, onReturnToSetup }: { modelReady: boolean; onReturnToSetup: () => void }) {
+export function ChatSetupBanner({
+  modelReady,
+  providerNotReady = false,
+  onReturnToSetup,
+}: {
+  modelReady: boolean;
+  /** A model is chosen and its provider reported that it is not ready: a different fix from choosing a model. */
+  providerNotReady?: boolean;
+  onReturnToSetup: () => void;
+}) {
+  const sentence = modelReady
+    ? "You can chat now. Finish setup to verify your first answer."
+    : providerNotReady
+      ? "Your model's provider is not ready. Check its connection before you send your first message."
+      : "Connect a model before you send your first message.";
+  const action = modelReady ? "Return to setup" : providerNotReady ? "Check model setup" : "Set up a model";
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line-subtle bg-sunken px-3 py-2 text-sm text-fg-secondary">
-      <p>
-        {modelReady
-          ? "You can chat now. Finish setup to verify your first answer."
-          : "Connect a model before you send your first message."}
-      </p>
+      <p>{sentence}</p>
       <Button size="sm" onClick={onReturnToSetup}>
-        {modelReady ? "Return to setup" : "Set up a model"}
+        {action}
       </Button>
     </div>
   );
@@ -228,9 +239,16 @@ export function ChatSetupGate({
   const state = onboarding.data;
   if (!state || onboarding.isError || state.completed || hidden) return null;
   const progress = projectFirstRunState(state);
-  // A chosen model whose readiness was not reported is unknown, not missing: no instruction either way.
-  if (progress.modelConfigured && !progress.providerReadinessReported) return null;
-  return <ChatSetupBanner modelReady={progress.modelReady} onReturnToSetup={onSetup} />;
+  // A chosen model whose readiness was not reported, or was reported as unknown, is not known: no instruction.
+  const provider = state.setupReadiness?.items.find((item) => item.id === "provider");
+  if (progress.modelConfigured && (!provider || provider.status === "unknown")) return null;
+  return (
+    <ChatSetupBanner
+      modelReady={progress.modelReady}
+      providerNotReady={progress.modelConfigured && !progress.providerReady}
+      onReturnToSetup={onSetup}
+    />
+  );
 }
 
 export function ChatEmptyState({

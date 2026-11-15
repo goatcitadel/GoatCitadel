@@ -321,6 +321,15 @@ describe("cockpit tool approval rule", () => {
     expect(container.textContent).not.toContain("Guided setup requires an approval rule");
   });
 
+  it("does not say normal prompts stay on when the saved rule already skips them", async () => {
+    owner.toolApprovalMode = "bypass";
+    await renderSafeOnly();
+    expect(container.textContent).toContain(
+      "Skip normal prompts lets allowed tools run without normal prompts. It is already the saved rule, and setup cannot choose it. Change it in Settings › Safety.",
+    );
+    expect(container.textContent).not.toContain("normal prompts stay on");
+  });
+
   it("does not promise a later switch on first run under Remote Hardened", async () => {
     owner.deploymentProfile = "remote_hardened";
     await renderSafeOnly();

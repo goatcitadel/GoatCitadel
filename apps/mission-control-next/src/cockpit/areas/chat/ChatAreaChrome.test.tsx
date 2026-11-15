@@ -350,6 +350,36 @@ describe("ChatSetupGate", () => {
     expect(container.textContent).toBe("");
   });
 
+  it("says the chosen model's provider is not ready, not that a model is missing", async () => {
+    const readiness = withModel.setupReadiness!;
+    const notReady = {
+      ...withModel,
+      setupReadiness: {
+        ...readiness,
+        items: readiness.items.map((item) => (item.id === "provider" ? { ...item, status: "blocked" as const } : item)),
+      },
+    };
+    await gate({ data: notReady, isError: false });
+    expect(container.textContent).toContain(
+      "Your model's provider is not ready. Check its connection before you send your first message.",
+    );
+    expect(container.textContent).toContain("Check model setup");
+    expect(container.textContent).not.toContain("Connect a model");
+  });
+
+  it("shows no setup instruction when the provider's readiness was reported as unknown", async () => {
+    const readiness = withModel.setupReadiness!;
+    const unknown = {
+      ...withModel,
+      setupReadiness: {
+        ...readiness,
+        items: readiness.items.map((item) => (item.id === "provider" ? { ...item, status: "unknown" as const } : item)),
+      },
+    };
+    await gate({ data: unknown, isError: false });
+    expect(container.textContent).toBe("");
+  });
+
   it("keeps the advisory wording when a model is ready", async () => {
     await gate({ data: withModel, isError: false });
     expect(container.textContent).toContain("You can chat now.");

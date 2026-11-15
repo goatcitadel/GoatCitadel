@@ -125,10 +125,14 @@ export function ApprovalModeEditor({
           {restricted ? (
             <p id={bypassReasonId} className="mt-2 text-sm text-status-waiting">
               {safeOnly
-                ? `${describeToolApprovalMode("bypass")} lets allowed tools run without normal prompts. Setup keeps it off, so normal prompts stay on. ${
-                    settings.data?.deploymentProfile === "remote_hardened"
-                      ? "Remote Hardened keeps normal prompt skipping unavailable."
-                      : "You can turn it on later in Settings › Safety."
+                ? `${describeToolApprovalMode("bypass")} lets allowed tools run without normal prompts. ${
+                    current === "bypass"
+                      ? "It is already the saved rule, and setup cannot choose it. Change it in Settings › Safety."
+                      : `Setup keeps it off, so normal prompts stay on. ${
+                          settings.data?.deploymentProfile === "remote_hardened"
+                            ? "Remote Hardened keeps normal prompt skipping unavailable."
+                            : "You can turn it on later in Settings › Safety."
+                        }`
                   }`
                 : `${describeToolApprovalMode("bypass")} is unavailable here. Remote Hardened keeps normal prompt skipping unavailable.`}
             </p>
