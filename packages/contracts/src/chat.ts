@@ -666,6 +666,34 @@ export interface ChatAttachmentRecord {
   createdAt: string;
 }
 
+/** How many characters of an attached text file the model is given in the prompt. */
+export const CHAT_ATTACHMENT_PROMPT_PREVIEW_CHARS = 1600;
+
+const CHAT_ATTACHMENT_TEXT_EXTENSIONS = [".md", ".txt", ".log", ".json", ".yaml", ".yml"];
+
+/** True when the Gateway reads the attachment as text (the one rule shared by extraction and display). */
+export function chatAttachmentIsTextLike(file: { fileName: string; mimeType: string }): boolean {
+  const mime = file.mimeType.toLowerCase();
+  const name = file.fileName.toLowerCase();
+  const dot = name.lastIndexOf(".");
+  const extension = dot >= 0 ? name.slice(dot) : "";
+  return (
+    mime.startsWith("text/") ||
+    mime === "application/json" ||
+    mime === "application/xml" ||
+    CHAT_ATTACHMENT_TEXT_EXTENSIONS.includes(extension)
+  );
+}
+
+/** True when only the start of the attached text file reaches the model (byte count is the rule). */
+export function chatAttachmentPromptIsPartial(file: {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+}): boolean {
+  return chatAttachmentIsTextLike(file) && file.sizeBytes > CHAT_ATTACHMENT_PROMPT_PREVIEW_CHARS;
+}
+
 /** One rendered viewport of an `html` generated artifact, stored as a chat attachment (PNG). */
 export interface ChatArtifactRenderRecord {
   artifactId: string;

@@ -1,4 +1,5 @@
 import { ChatConversationStarters } from "./ChatConversationStarters";
+import { CHAT_ATTACHMENT_PROMPT_PREVIEW_CHARS, chatAttachmentPromptIsPartial } from "@goatcitadel/contracts";
 import { lazy, memo, Suspense, type RefObject } from "react";
 import { canRetryTurn } from "@goatcitadel/mission-control-shared/components/chat/chat-display-helpers";
 import {
@@ -163,6 +164,9 @@ export const Turn = memo(function Turn({
             {turn.userMessage.attachments.map((file) => (
               <li key={file.attachmentId}>
                 {file.fileName} · {presentAttachmentType(file)} · {formatBytes(file.sizeBytes)}
+                {chatAttachmentPromptIsPartial(file)
+                  ? ` · Only its first ${CHAT_ATTACHMENT_PROMPT_PREVIEW_CHARS.toLocaleString("en-US")} characters were read`
+                  : null}
               </li>
             ))}
           </ul>

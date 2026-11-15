@@ -575,10 +575,10 @@ describe("ChatTranscript", () => {
     )!;
     const summary = disclosure.querySelector("summary")!;
     expect(disclosure.open).toBe(true);
-    await act(async () => { await vi.dynamicImportSettled(); });
-    await vi.waitFor(() =>
-      expect(disclosure.querySelector('[data-tool-run-id="first"]')).not.toBeNull(),
-    );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    await vi.waitFor(() => expect(disclosure.querySelector('[data-tool-run-id="first"]')).not.toBeNull());
     const row = disclosure.querySelector('[data-tool-run-id="first"]');
     disclosure.open = true;
     summary.focus();
@@ -618,7 +618,9 @@ describe("ChatTranscript", () => {
     expect(activity.textContent).toContain("1 failed");
     expect(activity.textContent).toContain("1 approval needed");
     expect((activity as HTMLDetailsElement).open).toBe(true);
-    await act(async () => { await vi.dynamicImportSettled(); });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     await vi.waitFor(() => {
       for (const id of ["failed", "approval", "uncertain"]) {
         expect(activity.querySelector(`[data-tool-run-id="${id}"]`)).not.toBeNull();
@@ -1000,7 +1002,9 @@ describe("ChatTranscript", () => {
       ),
     );
     expect(container.textContent).toContain("Stopped — partial answer");
-    await vi.waitFor(() => expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Continue")).toBe(true));
+    await vi.waitFor(() =>
+      expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Continue")).toBe(true),
+    );
   });
 
   it("offers Continue only on the latest stopped turn and drafts the follow-up", async () => {
@@ -1562,4 +1566,22 @@ it("tells a failure from a warning and a critical notice from a warning without 
   const attachments = container.querySelector('[aria-label="Sent attachments"]')!.textContent;
   expect(attachments).toContain("brief.pdf · PDF");
   expect(attachments).not.toContain("application/pdf");
+});
+
+it("says when only the start of a sent text attachment was read", async () => {
+  const sent = turn("cut-attachment", true, "completed");
+  sent.userMessage.attachments = [
+    { attachmentId: "a1", fileName: "review.md", mimeType: "text/markdown", sizeBytes: 122000 },
+    { attachmentId: "a2", fileName: "small.md", mimeType: "text/markdown", sizeBytes: 1600 },
+  ] as never;
+  await act(async () =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={sessionProps([sent])} />
+      </InspectorProvider>,
+    ),
+  );
+  const items = [...container.querySelectorAll('[aria-label="Sent attachments"] li')].map((li) => li.textContent);
+  expect(items[0]).toContain("Only its first 1,600 characters were read");
+  expect(items[1]).not.toContain("Only its first");
 });
