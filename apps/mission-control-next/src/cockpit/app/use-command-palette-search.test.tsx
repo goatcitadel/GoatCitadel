@@ -216,6 +216,18 @@ describe("cancellable cached palette search (NV-12)", () => {
     expect(owner.groups).toEqual([]);
     expect(api.sessions).not.toHaveBeenCalled();
   });
+
+  it("re-runs a failed workspace check when retry is called", async () => {
+    api.workspaces.mockResolvedValueOnce({ items: [] });
+    await render({ query: "needle" });
+    await settle();
+    expect(owner.error).toContain("could not be verified");
+    expect(api.workspaces).toHaveBeenCalledTimes(1);
+    await act(async () => owner.retry());
+    await settle();
+    expect(api.workspaces).toHaveBeenCalledTimes(2);
+    expect(owner.error).toBeUndefined();
+  });
 });
 
 describe("palette sources follow their owners' refreshes", () => {

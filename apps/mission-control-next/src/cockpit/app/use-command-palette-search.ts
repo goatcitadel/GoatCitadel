@@ -161,6 +161,8 @@ export function useCommandPaletteSearch(open: boolean, scope: PaletteScope, quer
   return {
     groups,
     error: check.isError ? describeApiError(check.error).summary : undefined,
+    /** Asks the workspace check again after it failed; the searches follow once it passes. */
+    retry: () => void check.refetch(),
     loading:
       open &&
       typed.length >= 2 &&

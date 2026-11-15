@@ -14,7 +14,12 @@ const controls = vi.hoisted(() => ({
   switchShell: vi.fn(),
   inspect: vi.fn(),
   create: vi.fn(),
-  search: { groups: [] as PaletteSearchGroup[], loading: false, error: undefined as string | undefined },
+  search: {
+    groups: [] as PaletteSearchGroup[],
+    loading: false,
+    error: undefined as string | undefined,
+    retry: vi.fn(),
+  },
   attempt: undefined as undefined | { state: string; message: string; mode: string; sessionId?: string },
   read: { isFetching: false, isError: false, dataUpdatedAt: 0 },
 }));
@@ -72,7 +77,7 @@ beforeEach(() => {
     (action: (review: { isCurrent: () => boolean; signal: AbortSignal; navigate: typeof controls.navigate }) => void) =>
       action({ isCurrent: () => true, signal: new AbortController().signal, navigate: controls.navigate }),
   );
-  controls.search = { groups: [], loading: false, error: undefined };
+  controls.search = { groups: [], loading: false, error: undefined, retry: vi.fn() };
   controls.attempt = undefined;
   controls.read = { isFetching: false, isError: false, dataUpdatedAt: 0 };
   container = document.createElement("div");
@@ -199,6 +204,7 @@ describe("CommandPalette", () => {
 
   it("keeps source evidence and live messages outside the selectable cmdk listbox", async () => {
     controls.search = {
+      retry: vi.fn(),
       loading: true,
       error: "Some owners are unavailable.",
       groups: [
@@ -229,7 +235,13 @@ describe("CommandPalette", () => {
     const listbox = dialog.querySelector('[role="listbox"]')!;
     expect(listbox.querySelector("details, summary, [role='status'], [role='alert']")).toBeNull();
     expect(dialog.textContent).toContain("Library unavailable.");
-    expect(dialog.querySelector("[role='alert']")?.textContent).toBe("Search didn't respond. Try again.");
+    const alert = dialog.querySelector("[role='alert']")!;
+    expect(alert.querySelector("p")?.textContent).toBe("Search didn't respond.");
+    expect(alert.querySelector("button")?.textContent).toBe("Try again");
+    act(() => {
+      alert.querySelector<HTMLButtonElement>("button")!.click();
+    });
+    expect(controls.search.retry).toHaveBeenCalledTimes(1);
     expect(dialog.querySelector("[role='status']")?.textContent?.trim()).toBe("Searching…");
     expect(dialog.textContent).toContain("No matches in the loaded results.");
     expect(dialog.textContent).toContain("Up to ten current workspace matches.");
