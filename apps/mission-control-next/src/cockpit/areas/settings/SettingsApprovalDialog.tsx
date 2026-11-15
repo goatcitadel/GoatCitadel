@@ -55,6 +55,7 @@ export function SettingsApprovalDialog({
   reviewLabel = "Review approval",
   loadFailureHint = "Use Refresh change status, or decide it in Inbox.",
   installationSetting = false,
+  dangerReview = false,
   onResolved,
 }: {
   approvalId: string;
@@ -76,6 +77,13 @@ export function SettingsApprovalDialog({
    * workspace. The bar still checks that the approval itself is the install-wide Settings shape.
    */
   installationSetting?: boolean;
+  /**
+   * A danger-level approval keeps its two-step review here: the red "Review danger approval" button and then its
+   * confirmation, as in Inbox. Caution still approves in one click and nuclear keeps its typed confirmation. For a
+   * change the operator asked for that was decided in Inbox before it opened in place (a connector install, the tool
+   * approval rule, filesystem access); dialogs that don't set it keep the one-click danger approval.
+   */
+  dangerReview?: boolean;
   /** Called after a decision with the approval's re-read status, so the owner can report a denial as a denial. */
   onResolved: (status: ApprovalRequest["status"] | undefined) => Promise<unknown> | void;
 }) {
@@ -147,7 +155,7 @@ export function SettingsApprovalDialog({
           </details>
           <ApprovalDecisionBar
             compact
-            reviewedInPlace
+            reviewedInPlace={!(dangerReview && approval.riskLevel === "danger")}
             installationSetting={installationSetting}
             approval={approval}
             workspaceId={workspaceId}

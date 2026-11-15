@@ -73,6 +73,7 @@ export function WriteAccessOutcomeStatus({
                 <SettingsApprovalDialog
                   approvalId={pending.receipt.requiredAction.approvalId}
                   summary="Change filesystem access"
+                  dangerReview
                   onResolved={change.refresh}
                 />
               ) : null}

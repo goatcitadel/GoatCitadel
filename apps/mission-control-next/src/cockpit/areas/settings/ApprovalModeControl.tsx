@@ -179,6 +179,7 @@ export function ApprovalModeEditor({
                   <SettingsApprovalDialog
                     approvalId={approval.approvalId}
                     summary={`Change the approval rule to ${describeToolApprovalMode(draft.value)}`}
+                    dangerReview
                     onResolved={change.refresh}
                   />
                 ) : null}

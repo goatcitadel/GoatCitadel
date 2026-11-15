@@ -91,8 +91,12 @@ vi.mock("./use-connector-install", async () => {
 
 // The in-place approval dialog has its own tests (SettingsApprovalDialog.test.tsx).
 vi.mock("../../settings/SettingsApprovalDialog", () => ({
-  SettingsApprovalDialog: (props: { approvalId: string; onResolved: (status: undefined) => void }) => (
-    <section data-in-place-approval={props.approvalId}>
+  SettingsApprovalDialog: (props: {
+    approvalId: string;
+    dangerReview?: boolean;
+    onResolved: (status: undefined) => void;
+  }) => (
+    <section data-in-place-approval={props.approvalId} data-danger-review={String(props.dangerReview === true)}>
       <button onClick={() => props.onResolved(undefined)}>Resolve in place</button>
     </section>
   ),
@@ -426,6 +430,8 @@ describe("Install progress", () => {
     await renderPanel(EXAMPLE.id, [EXAMPLE]);
     setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
     expect(text()).toContain("Waiting on your approval…");
+    // A connector install is always danger, so its dialog keeps the two-step review.
+    expect(body().querySelector("[data-in-place-approval]")?.getAttribute("data-danger-review")).toBe("true");
     expect(link("Open in Inbox")).toBeDefined();
     expect(flows.checkApproval).not.toHaveBeenCalled();
     await act(async () => button("Resolve in place")?.click());

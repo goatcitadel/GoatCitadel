@@ -41,8 +41,10 @@ vi.mock("../../ui/Dialog", () => ({
     ) : null,
 }));
 vi.mock("./SettingsApprovalDialog", () => ({
-  SettingsApprovalDialog: (props: { approvalId: string; summary?: string }) => (
-    <section data-in-place-approval={props.approvalId}>{props.summary}</section>
+  SettingsApprovalDialog: (props: { approvalId: string; summary?: string; dangerReview?: boolean }) => (
+    <section data-in-place-approval={props.approvalId} data-danger-review={String(props.dangerReview === true)}>
+      {props.summary}
+    </section>
   ),
 }));
 const dialog = () => container.querySelector<HTMLElement>('[role="dialog"]');
@@ -211,6 +213,8 @@ describe("cockpit tool approval rule", () => {
     await click("Save approval rule");
     await vi.waitFor(() => expect(container.querySelector('[data-in-place-approval="approval-1"]')).not.toBeNull());
     expect(container.textContent).toContain("Change the approval rule to");
+    // The rule can be danger (skipping prompts), so its dialog keeps the two-step review.
+    expect(container.querySelector("[data-in-place-approval]")?.getAttribute("data-danger-review")).toBe("true");
     expect(container.querySelector('a[href^="/inbox?"]')?.textContent).toBe("Open in Inbox");
     expect(
       [...container.querySelectorAll("button")].some((item) => item.textContent === "Continue approved change"),

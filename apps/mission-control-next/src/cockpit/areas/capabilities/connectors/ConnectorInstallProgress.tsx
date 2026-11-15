@@ -223,6 +223,7 @@ function PhaseBody({ install, scope, doneLine }: { install: ConnectorInstall; sc
             approvalId={state.approvalId}
             title="Approve this connector install?"
             reviewLabel="Review the install"
+            dangerReview
             onResolved={() => install.checkApproval()}
           />
           <p>
