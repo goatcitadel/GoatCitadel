@@ -17,7 +17,7 @@ import { isActiveInstallState, type ConnectorInstallState } from "./connector-in
 // Wording and ordering for the list the Gateway already built. Nothing here decides what a row is.
 
 const GROUP_LABELS: Readonly<Record<CapabilityConnectorGroup, string>> = {
-  connected: "Connected",
+  connected: "Added",
   on_this_device: "On this device",
   available: "Available",
   turned_off: "Turned off",
@@ -68,6 +68,12 @@ const STATE_LABELS: Readonly<Record<CapabilityConnectorState, string>> = {
   turned_off: "Turned off",
 };
 
+/** A reason that needs its own badge word, said in place of the state's. */
+const REASON_STATE_LABELS: Readonly<Partial<Record<CapabilityConnectorReason, string>>> = {
+  not_connected: "Not connected",
+  connecting: "Connecting",
+};
+
 const STATE_TONES: Readonly<Record<CapabilityConnectorState, StatusTone>> = {
   connected: "done",
   needs_sign_in: "waiting",
@@ -79,7 +85,8 @@ const STATE_TONES: Readonly<Record<CapabilityConnectorState, StatusTone>> = {
 
 const REASON_LINES: Readonly<Record<CapabilityConnectorReason, string>> = {
   ready: "Ready to use",
-  not_connected: "Not connected yet",
+  not_connected: "Saved, not connected yet",
+  connecting: "Connecting now",
   sign_in_needed: "Sign in to finish setup",
   sign_in_expired: "Sign in again to keep using it",
   error: "Stopped working; open it to see why",
@@ -191,11 +198,12 @@ export function presentConnectorState(
 ): StatusPresentation & { reason: string } {
   const chatBlocked = item.state === "connected" && !item.chat.available;
   const hiddenOnly = item.hiddenInWorkspace && item.state === "connected";
+  const stateLabel = REASON_STATE_LABELS[item.reason] ?? STATE_LABELS[item.state];
   const label = hiddenOnly
     ? "Hidden in this workspace"
     : item.hiddenInWorkspace
-      ? `${STATE_LABELS[item.state]} · hidden in this workspace`
-      : STATE_LABELS[item.state];
+      ? `${stateLabel} · hidden in this workspace`
+      : stateLabel;
   // Green says "usable". A connection Chat can't use yet asks for a look, and a hidden connected row is neither good
   // nor bad. Any other state keeps its own tone.
   const tone: StatusTone = hiddenOnly ? "neutral" : chatBlocked ? "waiting" : STATE_TONES[item.state];
@@ -305,7 +313,8 @@ export function connectorAction(item: CapabilityConnectorItem): { kind: Connecto
     case "sign_in_expired":
       return { kind: "reconnect", label: "Reconnect" };
     case "needs_sign_in":
-      return { kind: "connect", label: "Connect" };
+      // A server that is already connecting has nothing to start; its panel shows how it is going.
+      return item.reason === "connecting" ? { kind: "manage", label: "Manage" } : { kind: "connect", label: "Connect" };
     case "turned_off":
       return { kind: "turn_back_on", label: "Turn back on" };
     case "available":
