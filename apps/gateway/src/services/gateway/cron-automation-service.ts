@@ -31,8 +31,13 @@ import {
   normalizeAgentTurnCronActionConfig,
   runAgentTurnCronJob,
 } from "./cron-agent-turn-support.js";
-import { normalizeCronJobCitadelId, resolveCronJobCitadelScope, type CronCitadelReader } from "./cron-citadel-scope.js";
-import { withProjectedNextRun } from "./cron-next-run-projection.js";
+import {
+  cronTaskDestinationWorkspaceId,
+  normalizeCronJobCitadelId,
+  resolveCronJobCitadelScope,
+  type CronCitadelReader,
+} from "./cron-citadel-scope.js";
+import { withProjectedNextRun, withTaskDestination } from "./cron-next-run-projection.js";
 import { normalizeNoAgentCronActionConfig, runNoAgentCronJob } from "./cron-no-agent-support.js";
 import {
   COST_REPORT_HOURLY_JOB_ID,
@@ -210,7 +215,7 @@ export interface CronAutomationServiceDeps {
       job: CronJobRecord,
       context?: { contextFrom?: string; contextOutput?: string },
       scope?: { workspaceId?: string },
-    ) => Promise<{ taskId?: string; workspaceId?: string } | void>;
+    ) => Promise<{ taskId?: string } | void>;
     improvement: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
     backup: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
     memoryFlush: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
@@ -250,11 +255,8 @@ export class CronAutomationService {
     accessClass: string | undefined;
   }): Promise<CronJobRecord[]> {
     const { citadels, cronJobs } = this.deps.storage;
-    const now = new Date();
-    const projected = (jobs: CronJobRecord[]) =>
-      jobs.map((job) => withProjectedNextRun(job, now, computeNextCronRunAt));
     if (!citadel) {
-      return projected(await cronJobs.list());
+      return await this.projectCronJobs(await cronJobs.list());
     }
     const scope: CitadelAccessScope = {
       citadelId: citadel.citadelId,
@@ -269,7 +271,26 @@ export class CronAutomationService {
     if (!(await citadels.getCitadel(citadel.citadelId))) {
       throw new NotFoundError(`Citadel ${citadel.citadelId} not found.`);
     }
-    return projected(await cronJobs.listByCitadel(scope));
+    return await this.projectCronJobs(await cronJobs.listByCitadel(scope));
+  }
+
+  /** Read-only list projections: a next run worked out from the schedule and a Task schedule's current destination. */
+  private async projectCronJobs(jobs: CronJobRecord[]): Promise<CronJobRecord[]> {
+    const now = new Date();
+    const reader = this.citadelReader();
+    return await Promise.all(
+      jobs.map((job) =>
+        withTaskDestination(withProjectedNextRun(job, now, computeNextCronRunAt), async (target) =>
+          cronTaskDestinationWorkspaceId(await resolveCronJobCitadelScope(reader, target)),
+        ),
+      ),
+    );
+  }
+
+  /** One job as an operator reads it: the stored record plus the same read-only projections as the list. */
+  public async getCronJobView(jobId: string): Promise<CronJobRecord> {
+    const [job] = await this.projectCronJobs([await this.getCronJob(jobId)]);
+    return job!;
   }
 
   public async getCronJob(jobId: string): Promise<CronJobRecord> {
@@ -469,24 +490,15 @@ export class CronAutomationService {
       try {
         if (job.action === "task") {
           const context = await this.resolveCronJobContext(job);
-          const taskResult = await this.deps.runHandlers.task(
-            job,
-            context,
-            citadelScope.workspaceId ? { workspaceId: citadelScope.workspaceId } : {},
-          );
-          const finishedAt = new Date().toISOString();
-          // The last run's output carries the workspace the task was filed in, so the schedule can name it.
-          // Always written, so a workspace from an earlier run is never shown as this run's.
-          const lastRunOutput = JSON.stringify({
-            result: "ok",
-            ...(taskResult?.workspaceId ? { workspaceId: taskResult.workspaceId } : {}),
+          const taskResult = await this.deps.runHandlers.task(job, context, {
+            workspaceId: cronTaskDestinationWorkspaceId(citadelScope),
           });
-          const saved = await this.recordCronRunSuccess(job, runId, finishedAt, lastRunOutput);
+          const finishedAt = new Date().toISOString();
+          const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
           runSummary = {
             ...runSummary,
             action: job.action,
             taskId: taskResult?.taskId,
-            workspaceId: taskResult?.workspaceId,
             nextRunAt: saved.nextRunAt,
             contextFrom: context?.contextFrom,
             force,

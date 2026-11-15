@@ -12,3 +12,19 @@ export function withProjectedNextRun(job: CronJobRecord, now: Date, computeNextR
   const nextRunAt = computeNextRunAt(job.schedule, now, job.endAt);
   return nextRunAt ? { ...job, nextRunAt, nextRunProjected: true } : job;
 }
+
+/**
+ * A Task schedule's current destination, read fresh from its citadel with the rule a run uses. A schedule whose
+ * destination cannot be read is returned unchanged, so the screen says so instead of guessing. Never stored.
+ */
+export async function withTaskDestination(
+  job: CronJobRecord,
+  resolveWorkspaceId: (job: CronJobRecord) => Promise<string>,
+): Promise<CronJobRecord> {
+  if (job.action !== "task") return job;
+  try {
+    return { ...job, taskDestinationWorkspaceId: await resolveWorkspaceId(job) };
+  } catch {
+    return job;
+  }
+}

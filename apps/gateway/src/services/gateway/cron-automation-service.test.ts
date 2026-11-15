@@ -2528,10 +2528,9 @@ describe("citadel-scoped cron jobs", () => {
     expect(agentTurn.mock.calls[0]?.[0]).toMatchObject({ workspaceId: "ws-team" });
   });
 
-  it("files a citadel-scoped Task schedule's task in the citadel's workspace and records it", async () => {
-    const task = vi.fn(async (_job: CronJobRecord, _context?: unknown, scope?: { workspaceId?: string }) => ({
+  it("files a citadel-scoped Task schedule's task in the citadel's workspace and leaves the last run output alone", async () => {
+    const task = vi.fn(async (_job: CronJobRecord, _context?: unknown, _scope?: { workspaceId?: string }) => ({
       taskId: "task-ws",
-      workspaceId: scope?.workspaceId ?? "default",
     }));
     const service = createService(new FakeDb(), vi.fn(), {
       citadels: citadelReader([citadelRecord("team", { defaultWorkspaceId: "ws-c" })]),
@@ -2544,26 +2543,60 @@ describe("citadel-scoped cron jobs", () => {
     await service.runCronJobNow("global-task");
 
     expect(task.mock.calls[0]?.[2]).toEqual({ workspaceId: "ws-c" });
-    expect(task.mock.calls[1]?.[2]).toEqual({});
-    const output = JSON.parse((await service.getCronJob("scoped-task")).lastRunOutput ?? "{}") as Record<
-      string,
-      unknown
-    >;
-    expect(output.workspaceId).toBe("ws-c");
+    expect(task.mock.calls[1]?.[2]).toEqual({ workspaceId: "default" });
+    expect((await service.getCronJob("scoped-task")).lastRunOutput).toBeUndefined();
   });
 
-  it("never keeps an earlier run's workspace as the last run's", async () => {
-    const task = vi
-      .fn()
-      .mockResolvedValueOnce({ taskId: "task-1", workspaceId: "ws-c" })
-      .mockResolvedValueOnce({ taskId: "task-2" });
-    const service = createService(new FakeDb(), vi.fn(), { handlers: { task } });
-    await service.createCronJob({ ...taskJob, jobId: "plain-task" });
+  describe("Task schedule destination projection", () => {
+    const listed = async (service: CronAutomationService, jobId: string) =>
+      (await service.listCronJobs()).find((job) => job.jobId === jobId);
 
-    await service.runCronJobNow("plain-task");
-    expect(JSON.parse((await service.getCronJob("plain-task")).lastRunOutput ?? "{}").workspaceId).toBe("ws-c");
-    await service.runCronJobNow("plain-task");
-    expect(JSON.parse((await service.getCronJob("plain-task")).lastRunOutput ?? "{}")).toEqual({ result: "ok" });
+    it("projects the installation default for an unscoped schedule, and never stores it", async () => {
+      const cronJobs = new FakeCronJobs();
+      const service = createService(new FakeDb(), vi.fn(), { cronJobs });
+      await service.createCronJob({ ...taskJob, jobId: "plain" });
+
+      expect((await listed(service, "plain"))?.taskDestinationWorkspaceId).toBe("default");
+      expect((await service.getCronJobView("plain")).taskDestinationWorkspaceId).toBe("default");
+      expect(cronJobs.get("plain")?.taskDestinationWorkspaceId).toBeUndefined();
+      expect((await service.getCronJob("plain")).taskDestinationWorkspaceId).toBeUndefined();
+    });
+
+    it("projects the citadel's current default workspace and follows a change after a run", async () => {
+      const records = [citadelRecord("team", { defaultWorkspaceId: "ws-a" })];
+      const service = createService(new FakeDb(), vi.fn(), {
+        citadels: {
+          findRecord: (id) => records.find((record) => record.citadelId === id),
+          getCitadel: () => undefined,
+        },
+      });
+      await service.createCronJob({ ...taskJob, citadelId: "team" });
+      expect((await listed(service, "scoped-task"))?.taskDestinationWorkspaceId).toBe("ws-a");
+
+      await service.runCronJobNow("scoped-task");
+      records[0] = { ...records[0]!, defaultWorkspaceId: "ws-b" };
+
+      expect((await listed(service, "scoped-task"))?.taskDestinationWorkspaceId).toBe("ws-b");
+    });
+
+    it("leaves the destination out when it cannot be resolved, and for other actions", async () => {
+      const records = [citadelRecord("team")];
+      const cronJobs = new FakeCronJobs();
+      const service = createService(new FakeDb(), vi.fn(), {
+        cronJobs,
+        citadels: {
+          findRecord: (id) => records.find((record) => record.citadelId === id),
+          getCitadel: () => undefined,
+        },
+      });
+      await service.createCronJob({ ...taskJob, citadelId: "team" });
+      cronJobs.upsert(buildTaskJob({ jobId: "backup-job", action: "backup" }));
+      records.length = 0;
+
+      expect((await listed(service, "scoped-task"))?.taskDestinationWorkspaceId).toBeUndefined();
+      expect((await listed(service, "scoped-task"))?.jobId).toBe("scoped-task");
+      expect((await listed(service, "backup-job"))?.taskDestinationWorkspaceId).toBeUndefined();
+    });
   });
 
   it("fails closed when an admitted agent turn's job changes citadel before launch", async () => {
