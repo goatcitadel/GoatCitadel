@@ -241,6 +241,8 @@ export interface FlowRun {
   readonly templateId?: string;
   /** Sign in after the install (the template uses OAuth). */
   readonly oauth: boolean;
+  /** Stop after signing in: no switch-on and no global connect. */
+  readonly signInOnly?: boolean;
   /** Plain sentences for what already happened (R66). */
   readonly changed: readonly string[];
   /** Whether the server is known to be switched on, for the words a stop uses. */
@@ -254,7 +256,7 @@ export interface FlowRun {
   /** The sign-in this flow waits for: only a return with this state is taken. */
   readonly signIn?: { readonly state: string; readonly server: McpServerRecord; readonly stop: () => void };
 }
-export type RunStart = Pick<FlowRun, "name" | "templateId" | "oauth" | "client" | "listKey">;
+export type RunStart = Pick<FlowRun, "name" | "templateId" | "oauth" | "client" | "listKey"> & { signInOnly?: boolean };
 
 const runs = new Map<number, FlowRun>();
 let tokens = 0;

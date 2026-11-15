@@ -13,7 +13,7 @@ import {
   CONNECTOR_CHECK_STATUS_LABELS,
   CONNECTOR_DIAGNOSTIC_STATUS_LABELS,
   INTEGRATION_ACTION_STATUS_LABELS,
-  INTEGRATION_CONNECTION_STATUS_LABELS,
+  SAVED_CONNECTION_STATUS_LABELS,
   WRITEBACK_REPLAY_OUTCOME_LABELS,
   WRITEBACK_STATUS_LABELS,
 } from "./settings-vocabulary";
@@ -28,8 +28,8 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
     <section aria-label="Integration connection details" className="space-y-4 border-t border-line-subtle pt-4">
       <h3 className="break-words font-semibold">{connection.label}</h3>
       <p className="text-sm text-fg-secondary">
-        {connection.enabled ? "Enabled" : "Disabled"} · Configured status:{" "}
-        {INTEGRATION_CONNECTION_STATUS_LABELS[connection.status] ?? "Unknown"}
+        {connection.enabled ? "Enabled" : "Disabled"} · Saved status:{" "}
+        {SAVED_CONNECTION_STATUS_LABELS[connection.status] ?? "Unknown"}
       </p>
       <p className="text-sm text-fg-secondary">
         {s.diagnostics?.connectorId === connection.connectionId ? (
@@ -39,7 +39,7 @@ export function IntegrationConnectionDetails({ owner: s }: { owner: IntegrationS
             connectivity.
           </>
         ) : (
-          "Connectivity unverified. Saved configuration does not prove a working connection."
+          "Not checked yet. A saved status does not prove a working connection."
         )}
       </p>
       <p className="text-xs text-fg-muted">
