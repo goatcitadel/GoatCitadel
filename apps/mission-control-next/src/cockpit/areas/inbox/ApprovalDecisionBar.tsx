@@ -7,6 +7,7 @@ import { connectorSetupHref } from "../../app/routes";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { scopeDiffers } from "./installation-settings-approval";
 import { canonicalJsonString, type ApprovalRequest, type OperatorInboxItem } from "@goatcitadel/contracts";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -62,6 +63,12 @@ interface ApprovalDecisionBarProps {
    * a skill change that belongs to no workspace and that the operator asked for themselves.
    */
   reviewedInPlace?: boolean;
+  /**
+   * The caller is a Settings change dialog, whose change applies to the whole installation. Only an approval that is
+   * also the exact install-wide Settings shape (see isInstallationSettingsApproval) is then decided from any selected
+   * workspace; it is still read and decided in the workspace it was created in.
+   */
+  installationSetting?: boolean;
   /** Wording for the one-click approve button, when the action has its own ("Run it"). */
   approveLabel?: string;
   /** Styles the approve button as a danger action with a shield. */
@@ -126,6 +133,7 @@ function ApprovalDecisionReview({
   compact = false,
   stickyDecisions = false,
   reviewedInPlace = false,
+  installationSetting = false,
   approveLabel,
   approveDanger = false,
   withholdApprove = false,
@@ -146,7 +154,8 @@ function ApprovalDecisionReview({
   const approveFocus = useRef<{ origin: Element | null; cancel: () => void } | null>(null);
   const denyRef = useRef<HTMLButtonElement>(null);
   const sessionChanged = Boolean(sessionId && approval.linkage?.sessionId && sessionId !== approval.linkage.sessionId);
-  const scopeChanged = (activeWorkspaceId ?? "default") !== workspaceId || sessionChanged;
+  // The selected-workspace comparison is the one check an install-wide Settings approval skips; the rest still apply.
+  const scopeChanged = scopeDiffers(installationSetting, approval, activeWorkspaceId, workspaceId) || sessionChanged;
   const specialist = useDeferredApprovalCode(specialistApprovalCode, Boolean(specialistEvidence));
   const specialistCode = specialist.code;
   const specialistReady = Boolean(

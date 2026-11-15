@@ -208,7 +208,7 @@ function SelectedSessionControlManager({
       </div>
       {scopeMismatch ? (
         <p role="alert" className="text-status-failed">
-          This control state does not match the selected session and workspace. No control actions are available.
+          This conversation isn't in the selected workspace, so its controls aren't available here.
         </p>
       ) : null}
       {status.error ? (

@@ -23,6 +23,12 @@ function sessionUsage(item: SessionMeta): string {
   return plural(item.tokenTotal, "token") + split;
 }
 
+/** Opens the conversation in its own workspace when the session names one, so Chat can offer to switch to it. */
+function chatHref(item: SessionMeta): string {
+  const href = `/chat?sessionId=${encodeURIComponent(item.sessionId)}`;
+  return item.workspaceId ? `${href}&workspaceId=${encodeURIComponent(item.workspaceId)}` : href;
+}
+
 /**
  * One session in the words System › Activity and System › Sessions share: channel, health and budget state, and a
  * native Chat link. Identifiers and usage stay in the details disclosure; `onDetails` lets a page open the session.
@@ -51,7 +57,7 @@ export function SessionRow({ item, onDetails }: { item: SessionMeta; onDetails?:
         </TechnicalDetails>
       </details>
       <div className="flex flex-wrap items-center gap-3">
-        <SystemOwnerLink href={`/chat?sessionId=${encodeURIComponent(item.sessionId)}`} scope={item.sessionId}>
+        <SystemOwnerLink href={chatHref(item)} scope={item.sessionId}>
           Open in Chat
         </SystemOwnerLink>
         {onDetails ? (
