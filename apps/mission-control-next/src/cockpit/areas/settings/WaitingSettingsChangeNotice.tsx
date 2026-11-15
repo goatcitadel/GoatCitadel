@@ -23,6 +23,8 @@ export function WaitingSettingsChangeNotice({
   subject = "setting",
   showSentence = true,
   onCheckAgain,
+  dangerReview,
+  installationSetting,
 }: {
   waiting: WaitingSettingsNotice;
   onResolved: () => void;
@@ -31,6 +33,10 @@ export function WaitingSettingsChangeNotice({
   showSentence?: boolean;
   /** A control with no refresh of its own offers a "Check again" that looks at the waiting change once more. */
   onCheckAgain?: () => void;
+  /** Keeps the two-step review for a danger-level approval, as the control's own save dialog does. */
+  dangerReview?: boolean;
+  /** The change is an install-wide Settings change, so it can be decided from any selected workspace. */
+  installationSetting?: boolean;
 }) {
   const approvalId = "unreadable" in waiting || waiting.stage !== "approval" ? undefined : waiting.approvalId;
   useEffect(() => {
@@ -44,6 +50,8 @@ export function WaitingSettingsChangeNotice({
         approvalId={approvalId}
         {...(!("unreadable" in waiting) && waiting.title ? { title: waiting.title } : {})}
         reviewLabel="Review the waiting change"
+        {...(dangerReview ? { dangerReview } : {})}
+        {...(installationSetting ? { installationSetting } : {})}
         onResolved={onResolved}
       />
     );

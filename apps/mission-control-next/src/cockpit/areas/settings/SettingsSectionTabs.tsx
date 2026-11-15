@@ -6,6 +6,7 @@ import { preloadSettingsSection } from "./settings-controls";
 import { describeReleaseSurfaceStatus } from "../../../app/route-model";
 import { useOverflowEdges } from "./use-overflow-edges";
 import { isFeatureSwitchHash } from "./feature-switches";
+import { isWebSearchKeyAnchor } from "./web-search-state";
 import { isMcpOAuthReturnFragment } from "../../../features/native-routes/settings/mcp-oauth-return";
 import { isGoogleOAuthReturnFragment } from "../../../features/native-routes/settings/google-oauth-return";
 
@@ -55,7 +56,10 @@ export function selectedSettingsSection(page: SettingsIndexPage, routeSection: s
               : // Google sign-in lands there too; Integrations mounts the saved connection that finishes it.
                 isGoogleOAuthReturnFragment(hash)
                 ? "integrations"
-                : hash;
+                : // A key field's anchor lives inside Web & Search.
+                  isWebSearchKeyAnchor(hash)
+                  ? "web-search"
+                  : hash;
   return (
     page.entries.find((entry) => entry.anchor === aliasedHash || entry.section === aliasedHash)?.section ??
     page.entries.find((entry) => entry.section === routeSection)?.section ??

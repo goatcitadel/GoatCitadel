@@ -40,7 +40,7 @@ const RECOVERY_LIMIT = 100;
 const CONFLICT = "Changed elsewhere. Reload to see the latest.";
 const NOT_SWITCHED_ON = "Not switched on.";
 const NOT_SWITCHED_OFF = "Not switched off.";
-const DECLINED = "The change was declined in Inbox.";
+const DECLINED = "The change was declined.";
 const EXPIRED = "The request expired.";
 const CANCELLED = "The request was cancelled.";
 const SETTINGS_CHANGED = "Settings changed while this waited in Inbox.";
@@ -56,6 +56,8 @@ export interface ToolGroupSwitch {
   waiting: boolean;
   /** The Inbox approval the change waits on, when the plan names it. */
   waitingApprovalId?: string;
+  /** The way the change waiting on that approval switches the group: on, or off. */
+  waitingEnabled?: boolean;
   /**
    * Why the last change didn't happen, in plain words. `conflict` means `reload` is the way forward. It is the same
    * object for as long as that failure stands, in every view, so a view can tell a failure it was already showing from
@@ -67,6 +69,8 @@ export interface ToolGroupSwitch {
   setEnabled(next: boolean): void;
   /** Reads the list again and drops the last failure. */
   reload(): void;
+  /** Reads the plan of a change that waits on an approval now, for after the approval was decided in place. */
+  checkApproval(): void;
 }
 
 /** What following one group's change needs once no view of it is mounted: where its list lives. */
@@ -335,11 +339,16 @@ export function useToolGroupSwitch(group: CapabilityToolGroupItem, settingsRevis
     checked: group.state !== "off",
     pending: entry?.phase === "saving" || entry?.phase === "applying" || entry?.phase === "confirming",
     waiting,
-    ...(entry?.phase === "waiting" && entry.approvalId ? { waitingApprovalId: entry.approvalId } : {}),
+    ...(entry?.phase === "waiting" && entry.approvalId
+      ? { waitingApprovalId: entry.approvalId, waitingEnabled: entry.enabled }
+      : {}),
     ...(entry?.phase === "failed" ? { failure: failureOf(entry) } : {}),
     ...(group.heldOffBy && group.heldOffBy.length > 0 ? { heldOffBy: group.heldOffBy } : {}),
     setEnabled: (next) => {
       if (ownerCustody === custody) void save(group, next, settingsRevision, { client, listKey });
+    },
+    checkApproval: () => {
+      if (ownerCustody === custody) void readPlan(group.groupId);
     },
     reload: () => {
       if (ownerCustody !== custody) return;

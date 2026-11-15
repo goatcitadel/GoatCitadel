@@ -184,6 +184,11 @@ it.each([
       select.value = supportedValue;
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
+    expect(input.onSetThinkingLevel).not.toHaveBeenCalled();
+    // The choice is sent when the popover is closed, not on each step.
+    await act(async () =>
+      [...document.body.querySelectorAll("button")].find((node) => node.textContent === "Done")!.click(),
+    );
     expect(input.onSetThinkingLevel).toHaveBeenCalledExactlyOnceWith(supportedValue);
   },
 );
@@ -208,6 +213,10 @@ it("offers every thinking level with a support note when the catalog lists no ef
     select.value = "deep";
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
+  // The choice is sent when the popover is closed, not on each step.
+  await act(async () =>
+    [...document.body.querySelectorAll("button")].find((node) => node.textContent === "Done")!.click(),
+  );
   expect(input.onSetThinkingLevel).toHaveBeenCalledExactlyOnceWith("deep");
 });
 it("only offers Off when none is advertised and preserves the saved value across a model switch", async () => {

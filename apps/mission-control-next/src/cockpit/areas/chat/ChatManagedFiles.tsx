@@ -22,6 +22,7 @@ import {
   getGatewayCallerScopeRevision,
   subscribeGatewayCallerScope,
 } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useCurrentAccess } from "../../../app/use-current-access";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
@@ -325,8 +326,7 @@ function ManagedFilesControls({
         {files.isError ? (
           <div className="grid gap-2">
             <p className="text-sm text-status-failed">
-              Managed files are unavailable. Check the path and allow project.files.* in tools.allow in
-              config/tool-policy.json.
+              Managed files couldn't load. {describeApiError(files.error).summary}
             </p>
             <Button size="sm" onClick={() => void files.refetch()}>
               Refresh managed files

@@ -112,7 +112,10 @@ describe("ChatChangePlanCard", () => {
     act(() => {
       renderer = create(
         <ChatChangePlanCard
-          plan={plan({ status: "applied", result: { summary: "Applied.", evidenceRefs: ["chat_session:session-1"] } })}
+          plan={plan({
+            status: "applied",
+            result: { summary: "This Chat now uses openai / gpt-5.", evidenceRefs: ["chat_session:session-1"] },
+          })}
           onDismiss={onDismiss}
           onOpenDetails={onOpenDetails}
         />,
@@ -120,7 +123,7 @@ describe("ChatChangePlanCard", () => {
     });
     const initialText = JSON.stringify(renderer.toJSON());
 
-    expect(initialText).toContain("Model changed to gpt-5");
+    expect(initialText).toContain("This Chat now uses openai / gpt-5.");
     expect(buttonLabels(renderer)).toEqual(["Details", "Dismiss"]);
     expect(findButton(renderer, "Details").props["aria-expanded"]).toBe(false);
     expect(detailsRegion(renderer).props.hidden).toBe(true);
@@ -176,6 +179,61 @@ describe("ChatChangePlanCard", () => {
     const text = JSON.stringify(renderer.toJSON());
     expect(text).toContain(label);
     expect(text).not.toContain('"Change"');
+  });
+
+  it("titles a finished Chat model receipt by what changed", () => {
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <ChatChangePlanCard
+          plan={plan({
+            status: "completed",
+            requiredAction: undefined,
+            result: { summary: "This Chat now uses Provider / model at extended effort." },
+          })}
+        />,
+      );
+    });
+    const text = JSON.stringify(renderer.toJSON());
+    expect(text).toContain("This Chat now uses Provider / model at extended effort.");
+    expect(text).not.toContain("Model changed to");
+  });
+
+  it("names the model when a finished Chat model receipt has no summary of its own", () => {
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(<ChatChangePlanCard plan={plan({ status: "completed", requiredAction: undefined })} />);
+    });
+    expect(JSON.stringify(renderer.toJSON())).toContain("Model changed to gpt-5");
+  });
+
+  const receiptSummaries = (renderer: ReactTestRenderer) =>
+    renderer.root
+      .findAll((node) => node.type === "p" && node.props.className === "chat-change-plan-receipt-summary")
+      .map((node) => node.children.join(""));
+  const receiptOf = (status: ChangePlanRecord["status"], summary: string) => {
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <ChatChangePlanCard
+          plan={plan({ status, title: "Add Example", requiredAction: undefined, result: { summary } })}
+        />,
+      );
+    });
+    return renderer;
+  };
+
+  it("says why a change needs your attention", () => {
+    const renderer = receiptOf("manual_required", "The provider owner did not pass post-apply verification.");
+    expect(JSON.stringify(renderer.toJSON())).toContain("Add Example needs your attention");
+    expect(receiptSummaries(renderer)).toEqual(["The provider owner did not pass post-apply verification."]);
+  });
+
+  it("gives a failed change's reason too, and none for a change that finished", () => {
+    expect(receiptSummaries(receiptOf("failed", "The provider owner refused the profile."))).toEqual([
+      "The provider owner refused the profile.",
+    ]);
+    expect(receiptSummaries(receiptOf("completed", "All done."))).toEqual([]);
   });
 
   it("honors a host-owned terminal dismissal without mutating the plan", () => {

@@ -52,6 +52,12 @@
   text-transform: uppercase;
 }
 
+.chat-change-plan-receipt-summary {
+  flex: 1 1 100%;
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+
 .chat-change-plan-receipt-title span {
   color: var(--fg-muted);
   font: 600 var(--text-xs) / 1.2 var(--font-mono, monospace);

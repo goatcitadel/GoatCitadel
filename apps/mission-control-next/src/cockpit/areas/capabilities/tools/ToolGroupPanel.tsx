@@ -13,6 +13,7 @@ import { GroupSwitch, GroupSwitchNotes, GroupSwitchState } from "./GroupSwitchPa
 import { ToolGroupToolList } from "./ToolGroupToolList";
 import { ToolPolicyCheck } from "./ToolPolicyCheck";
 import { TOOL_GROUP_NOTES } from "./tool-group-notes";
+import { useClaimToolApprovalDialog } from "./tool-approval-owner";
 import { SAFETY_RULES_HREF } from "./tool-links";
 import { presentGroupBlockLines, presentToolGroupState } from "./tool-view";
 
@@ -117,6 +118,7 @@ function GroupDetails({
 }
 
 function ToolGroupPanelBody({ groupId, announce }: { groupId: ToolGroupId; announce: boolean }) {
+  useClaimToolApprovalDialog(groupId);
   const { activeWorkspaceId } = useUiPreferences();
   // The panel never reads either list itself (`enabled: false`): the Tools tab keeps them, and the panel follows the
   // cache entries, so its switch and its tools move with every change to the list. It carries the same options as the

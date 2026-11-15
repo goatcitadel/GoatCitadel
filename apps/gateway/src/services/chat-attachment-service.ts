@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
-import { PayloadTooLargeError, type ChatAttachmentMediaType, type ChatAttachmentRecord } from "@goatcitadel/contracts";
+import {
+  PayloadTooLargeError,
+  chatAttachmentIsTextLike,
+  type ChatAttachmentMediaType,
+  type ChatAttachmentRecord,
+} from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { assertExistingPathRealpathAllowed, assertWritePathInJail } from "@goatcitadel/policy-engine";
 import type { GatewayRuntimeConfig } from "../config.js";
@@ -322,19 +327,7 @@ function extractAttachmentPreview(
   mimeType: string,
   fileName: string,
 ): { extractStatus: "ready" | "unsupported" | "failed"; extractPreview?: string } {
-  const lowerMime = mimeType.toLowerCase();
-  const ext = path.extname(fileName).toLowerCase();
-  const textLike =
-    lowerMime.startsWith("text/") ||
-    lowerMime === "application/json" ||
-    lowerMime === "application/xml" ||
-    ext === ".md" ||
-    ext === ".txt" ||
-    ext === ".log" ||
-    ext === ".json" ||
-    ext === ".yaml" ||
-    ext === ".yml";
-  if (textLike) {
+  if (chatAttachmentIsTextLike({ fileName, mimeType })) {
     try {
       const preview = bytes.toString("utf8").slice(0, 4000);
       return { extractStatus: "ready", extractPreview: preview };

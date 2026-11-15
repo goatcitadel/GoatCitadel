@@ -3,6 +3,7 @@ import type { ReactNode, Ref } from "react";
 import { CommandPaletteCoverage, CommandPaletteResults, PALETTE_ITEM_CLASS } from "./CommandPaletteResults";
 import type { PaletteObject } from "./command-palette-search";
 import type { useCommandPaletteSearch } from "./use-command-palette-search";
+import { Button } from "../ui/Button";
 import { TechnicalDetails } from "../ui/TechnicalDetails";
 import type { UiTheme } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { otherThemeOptions, THEME_SEARCH_TERMS } from "./theme-options";
@@ -168,14 +169,24 @@ export function CommandPaletteView({
             different search term.
           </p>
         ) : null}
-        {search.loading ? (
+        {search.loading || search.retrying ? (
           <p role="status" className="px-3 py-2 text-sm text-fg-secondary">
             Searching…
           </p>
         ) : null}
-        {search.error ? (
-          <div role="alert" className="space-y-1 px-3 py-2 text-sm text-fg-secondary">
-            <p>Search didn't respond. Try again.</p>
+        {search.error && !search.retrying ? (
+          <div
+            role="alert"
+            className="space-y-1 px-3 py-2 text-sm text-fg-secondary"
+            // The palette runs its selected command on Enter; a key pressed on this button is the button's own.
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+            }}
+          >
+            <p>Search didn't respond.</p>
+            <Button size="sm" onClick={search.retry}>
+              Try again
+            </Button>
             <TechnicalDetails>{search.error}</TechnicalDetails>
           </div>
         ) : null}

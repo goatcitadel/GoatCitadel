@@ -14,6 +14,7 @@ import { IconButton } from "../../ui/IconButton";
 import { Sheet } from "../../ui/Sheet";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { ChatComposerNotices } from "./ChatComposerControls";
+import { attachmentUploadErrorText } from "./chat-upload-error-copy";
 import { loadChatComposerSources } from "./load-chat-composer-sources";
 import type { ComposerProps } from "./ChatTextComposer.types";
 
@@ -297,7 +298,7 @@ function ChatUploadStatus({ upload }: { upload: ComposerProps["attachmentUpload"
       ) : null}
       {upload?.error ? (
         <div role="alert" className="text-sm text-status-failed">
-          <p>The attachment didn’t upload. Select the file again to retry.</p>
+          <p>{attachmentUploadErrorText(upload.error)}</p>
           <TechnicalDetails>
             <p className="font-mono text-xs wrap-anywhere">{upload.error}</p>
           </TechnicalDetails>

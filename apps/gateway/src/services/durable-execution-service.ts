@@ -2169,7 +2169,9 @@ export async function executeDurableChatTurnRun(
         durableRunId: run.runId,
       },
     });
-    prepared.history = upsertChatCapabilityProfileSystemInstruction(prepared.history, durableProfile);
+    prepared.history = upsertChatCapabilityProfileSystemInstruction(prepared.history, durableProfile, {
+      advisoryPlanning: prepared.prefs?.planningMode === "advisory",
+    });
     if (!prepared.capabilityCatalogSnapshot) {
       throw new Error(`Durable Chat run ${run.runId} cannot bind its legacy profile without a catalog snapshot.`);
     }

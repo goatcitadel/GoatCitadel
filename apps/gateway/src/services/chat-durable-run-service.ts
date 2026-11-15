@@ -473,6 +473,9 @@ export async function beginDurableChatRun(
       prepared.history = upsertChatCapabilityProfileSystemInstruction(
         prepared.history ?? [],
         prepared.capabilityProfile,
+        {
+          advisoryPlanning: prepared.prefs?.planningMode === "advisory",
+        },
       );
     }
     await assertPreparedChatCapabilityAdmissionBindings(deps, prepared);

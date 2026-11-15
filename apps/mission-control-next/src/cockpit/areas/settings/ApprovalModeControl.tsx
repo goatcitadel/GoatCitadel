@@ -18,6 +18,7 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
+import { SettingsApprovalDialog } from "./SettingsApprovalDialog";
 import { WaitingSettingsChangeNotice } from "./WaitingSettingsChangeNotice";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { presentChangeStatusLabel, presentDeploymentProfile } from "./settings-vocabulary";
@@ -44,6 +45,12 @@ export function ApprovalModeEditor({
   const recoveryHref = `/settings/safety${parameters.size ? `?${parameters}` : ""}#approval-mode`;
   const approval = change.change?.receipt.requiredAction;
   const confirmed = settingsChangeIsConfirmed(change.change);
+  // One owner for an approval: a change already waiting is reopened by the notice below, so this save's own dialog
+  // stays out of the way when both name the same approval.
+  const waitingApprovalId =
+    control.waiting && !("unreadable" in control.waiting) && control.waiting.stage === "approval"
+      ? control.waiting.approvalId
+      : undefined;
   return (
     <section
       id="approval-mode"
@@ -179,16 +186,32 @@ export function ApprovalModeEditor({
               Refresh approval change
             </Button>
             {approval?.kind === "approval" && !confirmed ? (
-              <SettingsApprovalOwnerAction
-                plan={change.change.plan}
-                receipt={change.change.receipt}
-                owner="tool-approval"
-                workspaceId="default"
-                viewIdentity={draft.key}
-              />
+              <>
+                {/* The approval opens here; the Inbox copy stays one link away for whoever prefers it. */}
+                {approval.approvalId && approval.approvalId !== waitingApprovalId ? (
+                  <SettingsApprovalDialog
+                    approvalId={approval.approvalId}
+                    installationSetting
+                    summary={`Change the approval rule to ${describeToolApprovalMode(draft.value)}`}
+                    dangerReview
+                    onResolved={change.refresh}
+                  />
+                ) : null}
+                <SettingsApprovalOwnerAction
+                  plan={change.change.plan}
+                  receipt={change.change.receipt}
+                  owner="tool-approval"
+                  workspaceId="default"
+                  viewIdentity={draft.key}
+                  label="Open in Inbox"
+                />
+              </>
             ) : null}
           </div>
-          {!confirmed ? <ApprovedSettingsContinuation plan={change.change.plan} onSettled={change.refresh} /> : null}
+          {/* Approving applies the change (Gateway reconciliation); Continue is only for a card with no in-place approval. */}
+          {!confirmed && !(approval?.kind === "approval" && approval.approvalId) ? (
+            <ApprovedSettingsContinuation plan={change.change.plan} onSettled={change.refresh} />
+          ) : null}
           <TechnicalDetails label="Change record">
             <p className="break-all font-mono text-xs">
               Plan {change.change.receipt.planId} · version {change.change.receipt.revision}
@@ -207,6 +230,8 @@ export function ApprovalModeEditor({
           onResolved={control.clearWaiting}
           subject="rule"
           showSentence={false}
+          dangerReview
+          installationSetting
         />
       ) : null}
       {uncertain ? (

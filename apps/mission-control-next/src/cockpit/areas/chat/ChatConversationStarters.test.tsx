@@ -1,13 +1,31 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OnboardingState } from "@goatcitadel/contracts";
+import { fetchOnboardingState } from "@goatcitadel/mission-control-shared/api/client";
+import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import { ChatConversationStarters } from "./ChatConversationStarters";
-let container: HTMLDivElement, root: ReturnType<typeof createRoot>;
+
+vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ fetchOnboardingState: vi.fn() }));
+vi.mock("../../ui/NativeOwnerLink", () => ({
+  NativeOwnerLink: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a>,
+}));
+
+let container: HTMLDivElement, root: ReturnType<typeof createRoot>, client: QueryClient;
+beforeEach(() => {
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  vi.mocked(fetchOnboardingState).mockResolvedValue({ ...onboardingFixture(), completed: true });
+});
 afterEach(() => {
   if (root) act(() => root.unmount());
   container?.remove();
+  client.clear();
 });
+const configureModelsHref = () =>
+  [...container.querySelectorAll("a")].find((a) => a.textContent === "Configure models")?.getAttribute("href");
+const settle = () => act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
 async function mount(overrides = {}) {
   container = document.createElement("div");
   document.body.append(container);
@@ -18,7 +36,13 @@ async function mount(overrides = {}) {
   container.append(host);
   root = createRoot(host);
   const props = { draft: "", historicalReadOnly: false, sending: false, onDraftChange: vi.fn(), ...overrides };
-  await act(async () => root.render(<ChatConversationStarters props={props} />));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatConversationStarters props={props} />
+      </QueryClientProvider>,
+    ),
+  );
   await act(async () => vi.dynamicImportSettled());
   return props;
 }
@@ -45,6 +69,26 @@ describe("conversation starters", () => {
       "Draft or summarize",
     ]);
     for (const button of buttons) expect(button.className).not.toMatch(/\brounded-lg\b/);
+  });
+  it("sends Configure models to Get started while setup is unfinished", async () => {
+    vi.mocked(fetchOnboardingState).mockResolvedValue({ ...onboardingFixture(), completed: false });
+    await mount();
+    await settle();
+    expect(configureModelsHref()).toBe("/settings/first-run");
+  });
+  it("sends Configure models to the model settings once setup is finished", async () => {
+    await mount();
+    await settle();
+    expect(configureModelsHref()).toBe("/settings/models");
+  });
+  it.each([
+    ["not read yet", () => new Promise<OnboardingState>(() => {})],
+    ["unreadable", () => Promise.reject(new Error("Gateway unavailable"))],
+  ])("never sends Configure models to setup while setup is %s", async (_name, read) => {
+    vi.mocked(fetchOnboardingState).mockImplementation(read);
+    await mount();
+    await settle();
+    expect(configureModelsHref()).toBe("/settings/models");
   });
   it.each([{ draft: "keep this" }, { historicalReadOnly: true }, { sending: true }])(
     "never overwrites or starts work in a restricted state %o",

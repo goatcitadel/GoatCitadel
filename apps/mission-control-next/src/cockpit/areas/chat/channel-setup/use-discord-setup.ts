@@ -19,6 +19,7 @@ import {
   type DiscordPosting,
 } from "./discord-setup-model";
 import { listenForHi } from "./listen-for-hi";
+import { DISCORD_NO_KEY_STORE, isNoKeyStoreFailure } from "./no-key-store";
 import { CHAT_SETUP_PAGE, chatSetupToResume, latestDraft, markedChatSetupDraft } from "./setup-draft-session";
 import { useSetupState } from "./use-setup-state";
 
@@ -247,10 +248,15 @@ export function useDiscordSetup(workspaceId: string, resumeDraftId?: string): Di
           },
         });
         set({ draft: saved, check });
-      } catch {
+      } catch (cause) {
         // The token may have been stored before the failure, which moved the draft's version on.
         const latest = draft ? await latestDraft(draft.draftId) : null;
-        set({ ...(latest ? { draft: latest } : {}), check: null, busy: false, error: DISCORD_TOKEN_FAILED });
+        set({
+          ...(latest ? { draft: latest } : {}),
+          check: null,
+          busy: false,
+          error: isNoKeyStoreFailure(cause) ? DISCORD_NO_KEY_STORE : DISCORD_TOKEN_FAILED,
+        });
         return;
       }
       await settleChoices(check, set, live);

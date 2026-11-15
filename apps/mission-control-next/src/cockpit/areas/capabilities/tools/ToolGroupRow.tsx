@@ -5,6 +5,7 @@ import { Button } from "../../../ui/Button";
 import { RiskBadge } from "../../../ui/RiskBadge";
 import { LetterIcon } from "../LetterIcon";
 import { GroupSwitch, GroupSwitchNotes, GroupSwitchState } from "./GroupSwitchParts";
+import { useToolPanelHoldsApprovalDialog } from "./tool-approval-owner";
 import { presentGroupBlockLines } from "./tool-view";
 
 export interface ToolGroupViewProps {
@@ -30,6 +31,7 @@ export interface ToolGroupViewProps {
 export function ToolGroupRow({ group, calls, settingsRevision, onOpen }: ToolGroupViewProps) {
   const lines = presentGroupBlockLines(group);
   const noteId = useId();
+  const panelHoldsApproval = useToolPanelHoldsApprovalDialog(group.groupId);
   return (
     <li className="min-w-0 rounded-lg border border-line-subtle bg-raised p-3">
       <GroupSwitchState group={group} settingsRevision={settingsRevision}>
@@ -63,7 +65,13 @@ export function ToolGroupRow({ group, calls, settingsRevision, onOpen }: ToolGro
                 </Button>
               </div>
             </div>
-            <GroupSwitchNotes group={group} control={control} id={noteId} className="mt-2" />
+            <GroupSwitchNotes
+              group={group}
+              control={control}
+              id={noteId}
+              approveInPlace={!panelHoldsApproval}
+              className="mt-2"
+            />
           </>
         )}
       </GroupSwitchState>

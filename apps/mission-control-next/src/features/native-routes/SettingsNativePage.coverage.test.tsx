@@ -4397,7 +4397,7 @@ describe("SettingsNativePage partial gateway responses", () => {
     expect(text).toContain("0 configured");
   });
 
-  it("renders the access section when the device grant payload is empty", async () => {
+  it("shows unavailable device grants when the response is missing its list", async () => {
     settingsMocks.fetchDeviceAccessGrants.mockResolvedValue(
       {} as Awaited<ReturnType<typeof settingsMocks.fetchDeviceAccessGrants>>,
     );
@@ -4407,7 +4407,10 @@ describe("SettingsNativePage partial gateway responses", () => {
 
     const text = collectText(access.root);
     expect(text).toContain("Approved devices");
-    expect(text).toContain("No device grants found.");
+    expect(text).toContain("Device grant list is missing.");
+    expect(text).toContain("Device grants could not be loaded.");
+    expect(text).not.toContain("No device grants found.");
+    expect(findButton(access.root, "Retry")).toBeDefined();
   });
 
   it("renders the access section when the settings payload is empty", async () => {

@@ -38,6 +38,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/sessions", async (importOrigina
   fetchRuntimeLifecycle: vi.fn().mockResolvedValue({ canonical: {}, turns: [] }),
 }));
 
+// The empty conversation's starter choices read setup state to aim "Configure models"; keep it off the network.
+vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client")>()),
+  fetchOnboardingState: vi.fn().mockResolvedValue({ completed: true }),
+}));
+
 vi.mock("react-virtuoso", () => ({
   Virtuoso: ({
     data,
@@ -1703,4 +1709,22 @@ it("tells a failure from a warning and a critical notice from a warning without 
   const attachments = container.querySelector('[aria-label="Sent attachments"]')!.textContent;
   expect(attachments).toContain("brief.pdf · PDF");
   expect(attachments).not.toContain("application/pdf");
+});
+
+it("says when only the start of a sent text attachment was read", async () => {
+  const sent = turn("cut-attachment", true, "completed");
+  sent.userMessage.attachments = [
+    { attachmentId: "a1", fileName: "review.md", mimeType: "text/markdown", sizeBytes: 122000 },
+    { attachmentId: "a2", fileName: "small.md", mimeType: "text/markdown", sizeBytes: 1600 },
+  ] as never;
+  await act(async () =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={sessionProps([sent])} />
+      </InspectorProvider>,
+    ),
+  );
+  const items = [...container.querySelectorAll('[aria-label="Sent attachments"] li')].map((li) => li.textContent);
+  expect(items[0]).toContain("Only its first 1,600 characters may have been read");
+  expect(items[1]).not.toContain("Only its first");
 });

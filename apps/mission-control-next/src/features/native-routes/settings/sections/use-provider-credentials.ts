@@ -5,6 +5,7 @@ import {
   saveProviderSecret,
   deleteProviderSecret,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { describeSecretSaveError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useCredentialInput, retainCredentialSubmission, settleCredentialSubmission } from "../credential-input-owner";
 import { useSettingsChange } from "../use-settings-change";
 import { getErrorMessage, type LoadState } from "../SettingsShared";
@@ -85,7 +86,10 @@ export function useProviderCredentials({
     },
     matches: (status) => status.providerId === selectedProviderId && status.hasSecret === true,
     savedValue: () => "",
-    acceptSaved: (_value, revision, receipt) => settleCredentialSubmission(secretEditor.key, receipt, (submitted) => secretEditor.acceptSaved("", revision, submitted)),
+    acceptSaved: (_value, revision, receipt) =>
+      settleCredentialSubmission(secretEditor.key, receipt, (submitted) =>
+        secretEditor.acceptSaved("", revision, submitted),
+      ),
     reload,
   });
   const secretRemoval = useSettingsChange<{ providerId: string }, Awaited<ReturnType<typeof deleteProviderSecret>>>({
@@ -176,7 +180,9 @@ export function useProviderCredentials({
         return false;
       }
       attempted = true;
-      const next = await dispatchProviderMutation(() => saveProviderSecret(selectedProviderId, secretValue.trim(), revision));
+      const next = await dispatchProviderMutation(() =>
+        saveProviderSecret(selectedProviderId, secretValue.trim(), revision),
+      );
       const settled = secretChange.receive(next, retainCredentialSubmission(secretEditor.key, secretValue), revision);
       acknowledged = true;
       if (viewCurrent() && currentEditor.current === editorIdentity) {
@@ -205,7 +211,7 @@ export function useProviderCredentials({
           tone: "error",
           message: acknowledged
             ? "The Gateway acknowledged the credential action, but refreshing evidence failed."
-            : getErrorMessage(saveError),
+            : (describeSecretSaveError(saveError) ?? getErrorMessage(saveError)),
         });
       return false;
     } finally {

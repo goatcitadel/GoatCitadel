@@ -33,7 +33,7 @@ function MostUsedCard({
               <GroupSwitch control={control} label={where} describedBy={noteId} />
             </div>
             {/* The card is narrow, so the lines wrap inside it. The row below announces them; the card only shows them. */}
-            <GroupSwitchNotes group={group} control={control} id={noteId} announce={false} />
+            <GroupSwitchNotes group={group} control={control} id={noteId} announce={false} approveInPlace={false} />
             <Button size="sm" aria-label={`View ${where}`} onClick={() => onOpen(group.groupId)}>
               View
             </Button>

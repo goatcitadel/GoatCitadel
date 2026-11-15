@@ -22,13 +22,20 @@ export function formatAnswerReviewLabel(trace: Pick<ChatTurnTraceRecord, "reflec
     return null;
   }
   if (review.outcome === "unavailable") {
-    return "Review unavailable";
+    return unavailableReviewLabel(review.reason);
   }
   if (review.outcome === "passed") {
     return "Reviewed: no issues";
   }
   const count = plural(review.issues.length, "issue");
   return review.action === "noted_in_answer" ? `Reviewed: ${count}, noted in the answer` : `Reviewed: ${count}`;
+}
+
+/** The Gateway's reasons are fixed plain sentences; one is shown as the tail of the label, without its full stop. */
+function unavailableReviewLabel(reason: string | undefined): string {
+  const text = reason?.trim().replace(/\.$/u, "");
+  if (!text || text.length > 120) return "Review unavailable";
+  return `Review unavailable: ${text.charAt(0).toLowerCase()}${text.slice(1)}`;
 }
 
 export function parseTimestamp(timestamp: string): number | null {

@@ -9,6 +9,7 @@ import type { OperatorInboxResponse, RealtimeEvent } from "@goatcitadel/contract
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRealtime } from "./realtime";
 import { queryKeys } from "./query-keys";
+import { __resetApprovalsHandledInPlaceForTests, registerApprovalHandledInPlace } from "./approvals-handled-in-place";
 import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 
 const mocks = vi.hoisted(() => ({
@@ -539,6 +540,38 @@ describe("cockpit owner-backed notifications", () => {
     expect(mocks.warning).not.toHaveBeenCalled();
     expect(mocks.sound).not.toHaveBeenCalled();
     expect(mocks.desktop).not.toHaveBeenCalled();
+  });
+});
+describe("approval notifications for an approval a dialog is already offering", () => {
+  afterEach(() => __resetApprovalsHandledInPlaceForTests());
+  it("holds back only the toast: the sound and the desktop notification still come", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    registerApprovalHandledInPlace("a");
+    await render({
+      notificationPreferences: { ...defaultPreferences, soundMode: "subtle", desktopEnabled: true },
+    });
+    await emit();
+    expect(mocks.warning).not.toHaveBeenCalled();
+    expect(mocks.sound).toHaveBeenCalledWith("waiting", "subtle");
+    expect(mocks.desktop).toHaveBeenCalledWith(
+      item.title,
+      "warning",
+      expect.objectContaining({ tag: "inbox:w:approval:a" }),
+    );
+  });
+  it("shows no Inbox toast on top of a dialog that is showing the approval", async () => {
+    registerApprovalHandledInPlace("a");
+    await render();
+    await emit();
+    expect(mocks.warning).not.toHaveBeenCalled();
+  });
+  it("shows the toast when no dialog is showing the approval", async () => {
+    const release = registerApprovalHandledInPlace("a");
+    release();
+    await render();
+    await emit();
+    expect(mocks.warning).toHaveBeenCalledOnce();
   });
 });
 describe("approval notifications settled in place", () => {

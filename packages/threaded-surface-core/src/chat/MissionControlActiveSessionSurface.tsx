@@ -1,5 +1,6 @@
 import type {
   ChatAttachmentRecord,
+  ChatCompletionReasoningEffort,
   ChatCapabilityUpgradeSuggestion,
   ChatDelegationSuggestionRecord,
   ChatGeneratedArtifactRecord,
@@ -43,6 +44,13 @@ import type { ChatCapabilityProfileInspection } from "./useChatCapabilityProfile
 import type { MissionThreadedSessionControlBannerProps } from "./session-control-banner";
 import type { CommandSuggestionItem } from "../chat-command-suggestions";
 import type { ComposerPaletteSourceFailure } from "./composer-palette";
+
+/** What a model choice can change at once: the provider, the model and the effort. Fields left out stay as they are. */
+export interface ModelChoice {
+  providerId?: string;
+  model?: string;
+  thinkingLevel?: ChatThinkingLevel;
+}
 
 export interface ThreadedContextSelectionState {
   label: string;
@@ -107,6 +115,18 @@ export interface MissionControlActiveSessionSurfaceProps {
   modeOverridePending?: ChatMode | null;
   onRequestProviderChange: (providerId: string) => void;
   onRequestModelChange: (model: string) => void;
+  /**
+   * One deliberate choice of provider, model and effort, sent as one change. A surface that collects the choice (the
+   * model popover, until Done) uses it so each step of a pick is not applied on its own; without it the
+   * single-field callbacks above are used one by one.
+   */
+  onRequestModelChoice?: (choice: ModelChoice) => void;
+  /**
+   * The efforts a provider and model pair can be sent with, from the same catalog as the selected model's own list.
+   * Undefined when the catalog does not know them. A surface that holds a pick before sending it reads it for the held
+   * pair, so its effort choices match the model it is about to send.
+   */
+  reasoningEffortsFor?: (providerId: string, model: string) => ChatCompletionReasoningEffort[] | undefined;
   loading: boolean;
   historicalWindow: ChatHistoryWindowResponse | null;
   historicalWindowLoading: boolean;

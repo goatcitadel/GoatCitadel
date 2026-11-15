@@ -15,7 +15,6 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { MetricList } from "../../ui/MetricList";
 import { cockpitInputClass } from "../../ui/input-class";
 import { GuidedModelPlanDialog } from "./GuidedModelPlanDialog";
-import { GuidedModelSteps } from "./GuidedModelSteps";
 import { useGuidedModelSetup } from "./use-guided-model-setup";
 
 const SELECT = cockpitInputClass;
@@ -30,7 +29,7 @@ export function CockpitGuidedModelSetup({
   onEnterChat,
   enterChatLabel = "Enter Chat",
   onNoticeChange,
-  showSteps = true,
+  showReadinessNote = false,
 }: {
   onboarding: OnboardingState;
   reloadOnboarding: () => Promise<void>;
@@ -42,8 +41,8 @@ export function CockpitGuidedModelSetup({
    * unmounts the card when the re-read after a change fails. Without it the card shows its own (first run).
    */
   onNoticeChange?: (notice: string | null) => void;
-  /** First run lists its own steps, so it hides this card's step list and keeps one flat stepper. */
-  showSteps?: boolean;
+  /** Shows the sentence behind the Connection status, for a host that has no setup steps of its own. */
+  showReadinessNote?: boolean;
 }) {
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
@@ -71,8 +70,9 @@ export function CockpitGuidedModelSetup({
   // What the last check found, shown on every surface once the provider is not ready. Not while a check runs
   // (the button says so) and not once ready. It shares the one status line with the notice, so the page gains
   // no extra live region.
-  // Where the step list is shown it already carries this sentence, so it is not repeated.
-  const checkResult = !showSteps && !providerReady && readiness.state !== "checking" ? readiness.description : null;
+  // Where the readiness note is shown it already carries this sentence, so it is not repeated.
+  const checkResult =
+    !showReadinessNote && !providerReady && readiness.state !== "checking" ? readiness.description : null;
   const statusText = [checkResult, notice].filter(Boolean).join(" ");
   const PrimaryIcon = setup.primary.kind === "enter" ? Play : PlugZap;
   // Offer the better-supported provider as a one-click switch, only when the list has it.
@@ -88,7 +88,7 @@ export function CockpitGuidedModelSetup({
           Saved model defaults changed. Your selection is kept; confirming reviews the current saved setup.
         </Callout>
       ) : null}
-      {showSteps ? <GuidedModelSteps setup={setup} /> : null}
+      {showReadinessNote ? <p className="text-sm text-fg-secondary">{readiness.description}</p> : null}
       <MetricList
         label="Model setup status"
         items={[

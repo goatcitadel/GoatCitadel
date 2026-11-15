@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectedModelReasoningEfforts } from "./selected-model-reasoning-efforts";
+import { reasoningEffortsForSelection, selectedModelReasoningEfforts } from "./selected-model-reasoning-efforts";
 
 describe("selectedModelReasoningEfforts", () => {
   it("offers only no reasoning for a provider that reports none and lists nothing for the model", () => {
@@ -42,5 +42,23 @@ describe("selectedModelReasoningEfforts", () => {
   it("knows nothing without a provider or any reasoning metadata, so every effort stays offered", () => {
     expect(selectedModelReasoningEfforts(undefined, "m")).toBeUndefined();
     expect(selectedModelReasoningEfforts({ capabilities: {} }, "m")).toBeUndefined();
+  });
+});
+
+describe("reasoningEffortsForSelection", () => {
+  const providers = [
+    { providerId: "a", reasoningEffortsByModel: { m1: ["high" as const] } },
+    { providerId: "b", capabilities: { reasoningEfforts: ["low" as const] } },
+  ];
+
+  it("reads the list for the named provider and model, with or without the provider prefix", () => {
+    expect(reasoningEffortsForSelection(providers, "a", "m1")).toEqual(["high"]);
+    expect(reasoningEffortsForSelection(providers, "a", "a/m1")).toEqual(["high"]);
+    expect(reasoningEffortsForSelection(providers, "b", "any")).toEqual(["none", "low"]);
+  });
+
+  it("knows nothing for a provider or model the catalog does not list", () => {
+    expect(reasoningEffortsForSelection(providers, "missing", "m1")).toBeUndefined();
+    expect(reasoningEffortsForSelection(providers, "a", "other")).toBeUndefined();
   });
 });

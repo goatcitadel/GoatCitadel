@@ -548,6 +548,80 @@ describe("prepareAgentChatTurn route admission", () => {
     expect(harness.host.resolveChatTurnCapabilityProfile).not.toHaveBeenCalled();
   });
 
+  it("tells a Plan first turn on a bound profile that no tools are callable and runs it as manual", async () => {
+    const harness = createHost("chat", { planningMode: "advisory", toolAutonomy: "safe_auto" });
+    vi.mocked(harness.host.getSessionAutonomyPrefs).mockReturnValue({
+      sessionId: "session-1",
+      revision: 3,
+      proactiveMode: "off",
+      maxActionsPerHour: 6,
+      maxActionsPerTurn: 2,
+      cooldownSeconds: 60,
+      retrievalMode: "standard",
+      reflectionMode: "off",
+      heartbeatEnabled: true,
+      heartbeatIntervalSeconds: 3600,
+      activeHours: { start: 8, end: 22 },
+      createdAt: "2026-05-04T00:00:00.000Z",
+      updatedAt: "2026-05-04T00:00:00.000Z",
+    });
+    const profile = {
+      ...createCapabilityProfileForRoute("provider-frozen", "model-frozen", {
+        turnId: "turn-frozen",
+        sessionId: "session-1",
+        workspaceId: "default",
+        citadelId: "personal",
+      }),
+      hashes: { profileHash: "profile-hash-frozen" },
+      selection: {
+        mode: "chat",
+        effectiveProviderId: "provider-frozen",
+        effectiveModel: "model-frozen",
+        webMode: "off",
+        memory: { mode: "off", retrievalMode: "layered" },
+        thinkingLevel: "minimal",
+        speedMode: "standard",
+        subagentPolicy: "off",
+        toolAutonomy: "safe_auto",
+        tools: [{ canonicalName: "browser.search" }],
+        trustedSkills: [],
+      },
+    } as never;
+    harness.host.loadChatTurnCapabilityProfile = vi.fn(() => profile);
+    const userMessage = {
+      messageId: "message-frozen",
+      sessionId: "session-1",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "Plan the move.",
+      timestamp: "2026-07-13T00:00:00.000Z",
+    } as ChatMessageRecord;
+
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      "session-1",
+      { content: userMessage.content },
+      {
+        existingUserMessage: userMessage,
+        ingestUserMessage: false,
+        turnId: "turn-frozen",
+        capabilityProfileId: profile.profileId,
+        capabilityProfileHash: profile.hashes.profileHash,
+        capabilityProfileContent: "Plan the move.",
+      },
+    );
+
+    const binding = prepared.history.find(
+      (message) =>
+        typeof message.content === "string" && message.content.startsWith("Server-owned capability profile:"),
+    );
+    expect(String(binding?.content)).toContain("Callable tools for this turn: none.");
+    expect(String(binding?.content)).not.toContain("browser.search");
+    expect(prepared.effectiveToolAutonomy).toBe("manual");
+    expect(harness.readGuidance()).toContain("Planning mode is active");
+  });
+
   it("replays a bound profile without inheriting changed session selections", async () => {
     const harness = createHost("chat", {
       providerId: "provider-drifted",
@@ -938,6 +1012,69 @@ describe("prepareAgentChatTurn personality overlay", () => {
       expect.any(Object),
       expect.any(Object),
     );
+  });
+
+  it("keeps a Plan first turn off the quick web profile so the model is offered no tools", async () => {
+    const harness = createHost("chat", { planningMode: "advisory", toolAutonomy: "safe_auto" });
+
+    const prepared = await prepareAgentChatTurn(harness.host, "session-1", {
+      content: "please look up the best way to eat sushi",
+    });
+
+    expect(prepared.normalized.normalizationProfile).toBe("live");
+    expect(prepared.effectiveToolAutonomy).toBe("manual");
+    expect(harness.readGuidance()).toContain("Planning mode is active");
+    // A normal turn everywhere: workspace guidance, thread knowledge and the conversation path are all kept.
+    expect(harness.host.resolveRuntimeGuidance).toHaveBeenCalled();
+    expect(harness.host.resolveThreadKnowledgeContext).toHaveBeenCalled();
+    expect(harness.host.buildDefaultChatPersonalityOverlay).toHaveBeenCalled();
+    expect(harness.readGuidance()).not.toContain("quick web answer");
+  });
+
+  it("keeps the earlier turns of the conversation for a Plan first turn that mentions a lookup", async () => {
+    const harness = createHost("chat", { planningMode: "advisory", toolAutonomy: "safe_auto" });
+    const priorUser = {
+      messageId: "user-prior",
+      sessionId: "session-1",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "Earlier question",
+      timestamp: "2026-05-04T00:00:00.000Z",
+    } as ChatMessageRecord;
+    vi.mocked(harness.host.loadChatTurnSessionState).mockResolvedValue({
+      activeLeafTurnId: "turn-prior",
+      traces: [],
+      tracesById: new Map([
+        ["turn-prior", { turnId: "turn-prior", sessionId: "session-1", userMessageId: "user-prior" }],
+      ]),
+      messages: [],
+      messagesById: new Map([["user-prior", priorUser]]),
+      childrenByTurnId: new Map(),
+      turnLineageById: new Map([["turn-prior", { turnId: "turn-prior" }]]),
+    } as never);
+
+    const prepared = await prepareAgentChatTurn(harness.host, "session-1", {
+      content: "please look up the best way to eat sushi and plan what we discussed",
+    });
+
+    expect(prepared.conversationMessages.map((message) => message.messageId)).toContain("user-prior");
+    expect(vi.mocked(harness.host.buildLlmMessagesFromBranchPath).mock.calls[0]?.[1]).toEqual(["turn-prior"]);
+  });
+
+  it("gives a Plan first coding-shaped turn on a local provider the standard profile, and keeps sustained coding otherwise", async () => {
+    const content = "Implement a sorting module in sorter.ts and run tests";
+    const planFirst = createHost("chat", { planningMode: "advisory", providerId: "ollama", toolAutonomy: "safe_auto" });
+    planFirst.host.isDurableChatExecutionEnabled = vi.fn(async () => true);
+    const normal = createHost("chat", { planningMode: "off", providerId: "ollama", toolAutonomy: "safe_auto" });
+    normal.host.isDurableChatExecutionEnabled = vi.fn(async () => true);
+
+    const advisoryPrepared = await prepareAgentChatTurn(planFirst.host, "session-1", { content });
+    const normalPrepared = await prepareAgentChatTurn(normal.host, "session-1", { content });
+
+    // The coding-completion checks need tool receipts a no-tools plan can never have.
+    expect(advisoryPrepared.executionProfile).toBe("standard");
+    expect(normalPrepared.executionProfile).toBe("sustained_local_coding");
   });
 
   it("ingests attachment references and applies autonomy overrides after code inputs normalize to Chat", async () => {
@@ -1521,29 +1658,21 @@ describe("prepareAgentChatTurn personality overlay", () => {
     );
   });
 
-  it("skips orchestration for normal Chat turns and resolves advisory planning turns", async () => {
+  it("skips orchestration for normal Chat turns and for Plan first turns (U-CH-045)", async () => {
     const harness = createHost("chat");
     const normalPrepared = createPreparedTurnForOrchestration({ planningMode: "off" });
     const advisoryPrepared = createPreparedTurnForOrchestration({ planningMode: "advisory" });
 
     await expect(resolvePreparedTurnOrchestration(harness.host, normalPrepared as never)).resolves.toBeUndefined();
-    const advisory = await resolvePreparedTurnOrchestration(harness.host, advisoryPrepared as never);
+    await expect(resolvePreparedTurnOrchestration(harness.host, advisoryPrepared as never)).resolves.toBeUndefined();
 
-    expect(advisory).toEqual(
-      expect.objectContaining({
-        routerInput: expect.objectContaining({
-          task: expect.objectContaining({
-            mode: "chat",
-            objective: "Draft a launch note",
-          }),
-        }),
-        orchestrationPlan: expect.objectContaining({
-          routeDecision: expect.objectContaining({
-            modePolicy: "chat",
-          }),
-        }),
-      }),
-    );
+    expect(advisoryPrepared.modelRouterDecision).toMatchObject({
+      orchestration: {
+        decision: "bypassed",
+        reason: "Plan first asks the model to write the plan, so no separate orchestration plan is drafted.",
+      },
+    });
+    expect(harness.host.createChatCompletion).not.toHaveBeenCalled();
   });
 
   it("records the direct Chat bypass without planner work for long summaries", async () => {

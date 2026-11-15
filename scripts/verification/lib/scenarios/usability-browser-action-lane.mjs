@@ -76,6 +76,8 @@ const CODE_MODE_HELPER_REPLY = ["Deterministic governed helper:", "", "```ts", C
 const STREAM_RELOAD_PARTIAL_TEXT = Array.from({ length: 20 }, (_, index) => `Paragraph ${index + 1}: saved.`).join(
   "\n\n",
 );
+const PLANNING_TURN_CONTENT = "Plan this deterministic usability turn.";
+const PLANNING_TURN_REPLY = "Deterministic plan reply: tidy, sort, restore.";
 const DELEGATION_OUTPUTS = Object.freeze([
   "Deterministic research handoff.",
   "Deterministic review handoff.",
@@ -2891,10 +2893,18 @@ async function apiProbe(probe, state) {
         outcome: `canonical turn ${projection.turnId} retained ${projection.attachments.length} MIME-typed attachments plus rendered citation/tool evidence`,
       };
     }
+    case "planning-reply-rule": {
+      if (typeof state.stub?.replacePromptReplyRules !== "function") {
+        throw new Error("deterministic provider does not support prompt-matched reply rules");
+      }
+      // A unique reply proves the model answered this exact prompt, not an earlier message.
+      state.stub.replacePromptReplyRules([
+        { ruleId: "planning-turn", userContentIncludes: PLANNING_TURN_CONTENT, replyText: PLANNING_TURN_REPLY },
+      ]);
+      return { outcome: "planning prompt reply rule installed" };
+    }
     case "planning-turn-completed":
-      return await waitForExactCompletedChatTurn(state, "Plan this deterministic usability turn.", (turn) =>
-        validateCanonicalPlanningTurn(turn, state.sessionId, "Plan this deterministic usability turn."),
-      );
+      return await waitForExactCompletedChatTurn(state, PLANNING_TURN_CONTENT, validateCanonicalPlanningTurn);
     case "delegate-suggest-accept": {
       const objective = "Produce two independent deterministic analyses and synthesize both.";
       const parentThread = await checkedRequest(
@@ -6178,54 +6188,13 @@ export function validateUniversalRunDetailTrace(trace, expected) {
   return true;
 }
 
-export function validateCanonicalPlanningTurn(turn, sessionId, objective) {
-  const plan = turn?.trace?.executionPlan;
-  if (
-    !plan ||
-    plan.sessionId !== sessionId ||
-    plan.turnId !== turn.turnId ||
-    plan.planId !== turn.trace.executionPlanId ||
-    plan.mode !== "chat" ||
-    plan.planningMode !== "advisory" ||
-    plan.advisoryOnly !== true ||
-    plan.objective !== objective ||
-    !Array.isArray(plan.steps) ||
-    plan.steps.length === 0
-  )
-    throw new Error("planning turn lost the exact advisory plan and Chat correlation");
-  const ids = new Set(plan.steps.map((step) => step.stepId));
-  if (
-    ids.size !== plan.steps.length ||
-    plan.steps.some(
-      (step, index) =>
-        step.index !== index || !step.objective || (step.dependsOnStepIds ?? []).some((id) => !ids.has(id)),
-    )
-  )
-    throw new Error("planning turn has invalid ordered steps or dependencies");
-  const lines = plan.steps.map((step) =>
-    [
-      `${step.index + 1}. ${step.objective}`,
-      step.successCriteria ? `Success: ${step.successCriteria}` : undefined,
-      step.expectedOutput ? `Output: ${step.expectedOutput}` : undefined,
-      step.suggestedTools?.length ? `Suggested tools: ${step.suggestedTools.join(", ")}` : undefined,
-      step.dependsOnStepIds?.length ? `Depends on: ${step.dependsOnStepIds.join(", ")}` : undefined,
-      step.delegatedRole ? `Delegated role: ${step.delegatedRole}` : undefined,
-    ]
-      .filter(Boolean)
-      .join("\n   "),
-  );
-  const expected = [
-    "## Chat plan",
-    "",
-    `Objective: ${objective}`,
-    "",
-    plan.summary,
-    "",
-    "Planned steps:",
-    ...lines,
-  ].join("\n");
-  if (turn.assistantMessage?.content !== expected)
-    throw new Error("planning response differs from its persisted exact plan");
+export function validateCanonicalPlanningTurn(turn) {
+  // Plan first asks the model: the answer is the model reply and the turn stays a plain answer (no drafted
+  // execution plan, no tool run; with no tool there is nothing to delegate).
+  if (turn?.trace?.executionPlan || turn?.trace?.executionPlanId || (turn?.trace?.toolRuns ?? []).length > 0)
+    throw new Error("planning turn drafted a template plan or ran a tool instead of staying a plain model answer");
+  if (turn?.assistantMessage?.content !== PLANNING_TURN_REPLY)
+    throw new Error("planning response differs from the model reply");
   return true;
 }
 

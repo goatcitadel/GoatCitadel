@@ -7,6 +7,7 @@ import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { ApprovedSettingsContinuation } from "./ApprovedSettingsContinuation";
+import { SettingsApprovalDialog } from "./SettingsApprovalDialog";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import { presentChangeStatusLabel } from "./settings-vocabulary";
 import type { FilesystemWriteAccess } from "./use-filesystem-write-access";
@@ -34,6 +35,8 @@ export function WriteAccessOutcomeStatus({
   const pending = change.change;
   const confirmed = settingsChangeIsConfirmed(pending);
   const failed = notice?.tone === "failed" || Boolean(pending?.error);
+  const requiredAction = pending?.receipt.requiredAction;
+  const inPlaceApproval = requiredAction?.kind === "approval" && Boolean(requiredAction.approvalId);
   return (
     <div className="mt-3 space-y-2 text-sm text-fg-secondary">
       <div role={failed ? "alert" : "status"} className="space-y-1">
@@ -64,18 +67,33 @@ export function WriteAccessOutcomeStatus({
             Refresh change status
           </Button>
           {pending.receipt.requiredAction?.kind === "approval" && !confirmed ? (
-            <SettingsApprovalOwnerAction
-              plan={pending.plan}
-              receipt={pending.receipt}
-              owner="filesystem-write-access"
-              workspaceId="default"
-              viewIdentity={pending.receipt.planId}
-              label="Review approval"
-            />
+            <>
+              {/* The approval opens here; the Inbox copy stays one link away for whoever prefers it. */}
+              {pending.receipt.requiredAction.approvalId ? (
+                <SettingsApprovalDialog
+                  approvalId={pending.receipt.requiredAction.approvalId}
+                  summary="Change filesystem access"
+                  installationSetting
+                  dangerReview
+                  onResolved={change.refresh}
+                />
+              ) : null}
+              <SettingsApprovalOwnerAction
+                plan={pending.plan}
+                receipt={pending.receipt}
+                owner="filesystem-write-access"
+                workspaceId="default"
+                viewIdentity={pending.receipt.planId}
+                label="Open in Inbox"
+              />
+            </>
           ) : null}
         </div>
       ) : null}
-      {pending && !confirmed ? <ApprovedSettingsContinuation plan={pending.plan} onSettled={change.refresh} /> : null}
+      {/* Approving applies the change; Continue is only for a card with no in-place approval to decide. */}
+      {pending && !confirmed && !inPlaceApproval ? (
+        <ApprovedSettingsContinuation plan={pending.plan} onSettled={change.refresh} />
+      ) : null}
       {uncertain ? (
         <div className="space-y-2">
           <p>Changes stay locked until you re-read the current settings and check that they match what you expect.</p>

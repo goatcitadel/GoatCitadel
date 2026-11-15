@@ -23,6 +23,7 @@ export type CapabilityConnectorAuth = "none" | "oauth" | "api_key" | "bot_token"
 export type CapabilityConnectorReason =
   | "ready"
   | "not_connected"
+  | "connecting"
   | "sign_in_needed"
   | "sign_in_expired"
   | "error"
