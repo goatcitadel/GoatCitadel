@@ -10,6 +10,7 @@ import { TimeText } from "../../ui/TimeText";
 import { ChatConversationFilters, type ChatProjectFilterOption } from "./ChatConversationFilters";
 import { MessagingSection } from "./MessagingSection";
 import { isChannelConversation } from "./channel-conversation-scope";
+import { startConversation } from "./conversation-reuse";
 
 type RailSession = MissionThreadedSessionRailData["missionSessions"][number];
 
@@ -85,7 +86,7 @@ export function ConversationListPanel({
           <button
             type="button"
             onClick={() => {
-              void rail.onCreateSession();
+              startConversation(rail);
               onDone?.();
             }}
             disabled={rail.creatingSession || rail.loading}
