@@ -135,6 +135,7 @@ describe("guided provider readiness", () => {
         detail: "fetch failed",
       });
     }
+    expect(resolveGuidedProviderReadiness({ ...afterFailure, modelProbeState: "not_checked" }).state).toBe("checking");
     expect(
       resolveGuidedProviderReadiness({
         ...afterFailure,

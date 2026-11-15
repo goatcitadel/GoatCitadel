@@ -187,6 +187,10 @@ function resolveLocalEndpointReadiness(provider: GuidedReadinessProvider): Guide
     return readiness("ready", `${provider.label} answered at ${endpoint}.`, "local_endpoint");
   }
   const warning = provider.modelProbeWarning?.trim();
+  // A check that is running (or none yet) comes first: it must read as checking, whatever an earlier refresh did.
+  if (!provider.modelProbeState || provider.modelProbeState === "not_checked") {
+    return readiness("checking", `Checking ${provider.label} at ${endpoint}…`);
+  }
   // The last refresh failed, even if an earlier one answered: that is a failure, not an old list.
   if (provider.modelRefreshFailed) return unreachableReadiness(provider, warning);
   if (provider.modelProbeState === "error") {
@@ -203,9 +207,6 @@ function resolveLocalEndpointReadiness(provider: GuidedReadinessProvider): Guide
       "not_verified",
       `The last check of ${provider.label} at ${endpoint} is stale. Check the connection again.`,
     );
-  }
-  if (!provider.modelProbeState || provider.modelProbeState === "not_checked") {
-    return readiness("checking", `Checking ${provider.label} at ${endpoint}…`);
   }
   if (provider.modelProbeState === "empty") {
     return readiness(

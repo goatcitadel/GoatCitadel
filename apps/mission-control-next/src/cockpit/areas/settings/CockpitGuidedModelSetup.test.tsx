@@ -132,6 +132,38 @@ describe("shared guided model setup", () => {
     await mount({ showSteps: false });
     expect(container.querySelector('[role="status"]')).toBe(line);
     expect(line?.textContent).toContain("has not answered");
+    expect(line?.className).not.toContain("sr-only");
+    expect(line?.className).not.toContain("hidden");
+  });
+  it("keeps the empty status line in the accessibility tree, out of the layout", async () => {
+    catalog("ready");
+    await mount({ showSteps: false });
+    const line = container.querySelector('[role="status"]');
+    expect(line?.textContent).toBe("");
+    expect(line?.className).toContain("sr-only");
+    expect(line?.className).not.toMatch(/(^|s)(empty:)?hidden/u);
+  });
+  it("reads as checking during a re-check of a runtime whose last refresh failed", async () => {
+    const failed = {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "fallback",
+      modelProbeSource: "live",
+      modelRefreshStatus: "stale",
+      modelRefreshFailed: true,
+    };
+    catalog("ready", failed);
+    await mount({ showSteps: false });
+    let resolveLoad: (models: string[]) => void = () => {};
+    mocks.models.mockReturnValue(new Promise<string[]>((resolve) => (resolveLoad = resolve)));
+    await act(async () => void button("Check connection")!.click());
+    expect(button("Checking connection…")).toBeDefined();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
+    catalog("ready", failed);
+    await act(async () => resolveLoad([]));
+    await mount({ showSteps: false });
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("has not answered");
   });
   it("does not repeat the result under the button where the step list already shows it", async () => {
     catalog("ready", {

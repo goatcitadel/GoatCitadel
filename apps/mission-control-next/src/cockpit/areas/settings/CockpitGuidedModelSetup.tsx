@@ -20,6 +20,9 @@ import { useGuidedModelSetup } from "./use-guided-model-setup";
 
 const SELECT = cockpitInputClass;
 
+// Empty, the status line stays in the accessibility tree (so the sentence that fills it is announced) but takes no room.
+const statusClass = (text: string) => (text ? "text-sm text-fg-secondary" : "sr-only");
+
 /** The guided chat-model owner, shared by Models settings and first run. It includes the API-key path. */
 export function CockpitGuidedModelSetup({
   onboarding,
@@ -232,7 +235,7 @@ export function CockpitGuidedModelSetup({
         ) : null}
       </div>
       {/* Always mounted, so a sentence added later is announced; only its text changes. */}
-      <p role="status" className="text-sm text-fg-secondary empty:hidden">
+      <p role="status" className={statusClass(statusText)}>
         {statusText}
       </p>
       {!providerReady && readiness.detail ? <TechnicalDetails>{readiness.detail}</TechnicalDetails> : null}
