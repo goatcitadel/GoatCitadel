@@ -134,6 +134,15 @@ describe("schedule summary rendering", () => {
     expect(container.textContent).toContain("Destination: the default workspace's task list.");
   });
 
+  it("says a citadel-scoped Task schedule files into its citadel's default workspace", () => {
+    const scoped = buildJob({ action: "task", citadelId: "team" });
+    act(() => root.render(<WorkScheduleRecordDetails selected={scoped} />));
+    expect(container.textContent).toContain("Destination: the task list of its citadel's default workspace.");
+    expect(container.textContent).not.toContain("Installation-wide");
+    act(() => root.render(<WorkScheduleRecordDetails selected={buildJob({ action: "task" })} />));
+    expect(container.textContent).toContain("Installation-wide · Action: Task.");
+  });
+
   it("says a past next run is overdue and marks a projected one", () => {
     const stale = buildJob({ nextRunAt: new Date(Date.now() - 23 * 60_000).toISOString() });
     act(() =>

@@ -1,7 +1,12 @@
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
-import { ScheduleTime, WorkScheduleActionButtons, WorkScheduleRecordDetails } from "./WorkScheduleSummary";
+import {
+  ScheduleNextRun,
+  TaskDestination,
+  WorkScheduleActionButtons,
+  WorkScheduleRecordDetails,
+} from "./WorkScheduleSummary";
 import { WorkScheduleEditor } from "./WorkScheduleEditor";
 import { scheduleCadence, scheduleTimezoneSummary } from "./schedule-cadence";
 import { presentScheduleAction } from "./work-vocabulary";
@@ -123,9 +128,13 @@ export function WorkScheduleInspector({
             {" · "}
             {presentScheduleAction(reviewSnapshot?.action)}
             {". Destination: "}
-            {reviewSnapshot?.workdir || "Not reported"}
-            {". Next run: "}
-            <ScheduleTime value={reviewSnapshot?.nextRunAt} />
+            {reviewSnapshot?.action === "task" ? (
+              <TaskDestination job={reviewSnapshot} />
+            ) : (
+              `${reviewSnapshot?.workdir || "Not reported"}.`
+            )}
+            {" Next run: "}
+            {reviewSnapshot ? <ScheduleNextRun job={reviewSnapshot} /> : "Not reported"}
             {". "}
             {scheduleTimezoneSummary(reviewSnapshot?.schedule ?? "")}
             {" Displayed dates use your browser timezone."}

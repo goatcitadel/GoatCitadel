@@ -83,11 +83,16 @@ function looksLikeJson(value: string): boolean {
 }
 
 /** Where a Task schedule files its task: the workspace its last run used, or the default workspace before one ran. */
-function TaskDestination({ job }: { job: CronJobRecordResponse }) {
+export function TaskDestination({ job }: { job: CronJobRecordResponse }) {
   const { activeCitadelId } = useUiPreferences();
   const nameOf = useWorkspaceNameLookup(activeCitadelId);
   const workspaceId = readNonEmptyString(readLastRunOutput(job)?.workspaceId);
-  if (!workspaceId) return <>the default workspace&apos;s task list.</>;
+  if (!workspaceId)
+    return job.citadelId ? (
+      <>the task list of its citadel&apos;s default workspace.</>
+    ) : (
+      <>the default workspace&apos;s task list.</>
+    );
   const name = nameOf(workspaceId);
   return name ? <>{name}&apos;s task list.</> : <>the task list of the workspace its last run used.</>;
 }
@@ -252,7 +257,7 @@ export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecor
         </p>
       ) : null}
       <p className="text-sm text-fg-secondary">
-        Installation-wide · Action: {presentScheduleAction(selected.action)}. Destination:{" "}
+        {selected.citadelId ? "" : "Installation-wide · "}Action: {presentScheduleAction(selected.action)}. Destination:{" "}
         {selected.action === "task" ? <TaskDestination job={selected} /> : `${selected.workdir || "Not reported"}.`}{" "}
         {scheduleTimezoneSummary(selected.schedule)} Displayed dates use your browser timezone.
       </p>

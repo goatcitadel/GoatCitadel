@@ -386,6 +386,8 @@ export interface CronJobRecordResponse {
   updatedAt?: string;
   workdir?: string;
   contextFrom?: string;
+  /** Citadel this schedule belongs to; absent means it applies across workspaces. */
+  citadelId?: string;
   lastRunOutput?: string;
   lastRunId?: string;
   /** `skipped`: the run settled cleanly but its handler reported it did no work. */
