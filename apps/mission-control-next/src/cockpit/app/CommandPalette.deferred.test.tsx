@@ -75,7 +75,7 @@ vi.mock("./inspector", () => ({ useInspector: () => ({ open: controls.inspect })
 vi.mock("./use-command-palette-search", () => ({
   useCommandPaletteSearch: (...args: unknown[]) => {
     controls.search(...args);
-    return { groups: controls.groups, loading: false, error: undefined, retry: vi.fn() };
+    return { groups: controls.groups, loading: false, error: undefined, retry: vi.fn(), retrying: false };
   },
 }));
 vi.mock("./use-command-new-chat", () => ({

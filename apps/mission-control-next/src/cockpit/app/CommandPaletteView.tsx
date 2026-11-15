@@ -169,12 +169,12 @@ export function CommandPaletteView({
             different search term.
           </p>
         ) : null}
-        {search.loading ? (
+        {search.loading || search.retrying ? (
           <p role="status" className="px-3 py-2 text-sm text-fg-secondary">
             Searching…
           </p>
         ) : null}
-        {search.error ? (
+        {search.error && !search.retrying ? (
           <div role="alert" className="space-y-1 px-3 py-2 text-sm text-fg-secondary">
             <p>Search didn't respond.</p>
             <Button size="sm" onClick={search.retry}>
