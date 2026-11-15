@@ -2552,6 +2552,20 @@ describe("citadel-scoped cron jobs", () => {
     expect(output.workspaceId).toBe("ws-c");
   });
 
+  it("never keeps an earlier run's workspace as the last run's", async () => {
+    const task = vi
+      .fn()
+      .mockResolvedValueOnce({ taskId: "task-1", workspaceId: "ws-c" })
+      .mockResolvedValueOnce({ taskId: "task-2" });
+    const service = createService(new FakeDb(), vi.fn(), { handlers: { task } });
+    await service.createCronJob({ ...taskJob, jobId: "plain-task" });
+
+    await service.runCronJobNow("plain-task");
+    expect(JSON.parse((await service.getCronJob("plain-task")).lastRunOutput ?? "{}").workspaceId).toBe("ws-c");
+    await service.runCronJobNow("plain-task");
+    expect(JSON.parse((await service.getCronJob("plain-task")).lastRunOutput ?? "{}")).toEqual({ result: "ok" });
+  });
+
   it("fails closed when an admitted agent turn's job changes citadel before launch", async () => {
     const agentTurn = vi.fn();
     const cronJobs = new FakeCronJobs();

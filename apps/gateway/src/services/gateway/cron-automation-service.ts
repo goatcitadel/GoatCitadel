@@ -476,9 +476,11 @@ export class CronAutomationService {
           );
           const finishedAt = new Date().toISOString();
           // The last run's output carries the workspace the task was filed in, so the schedule can name it.
-          const lastRunOutput = taskResult?.workspaceId
-            ? JSON.stringify({ result: "ok", workspaceId: taskResult.workspaceId })
-            : undefined;
+          // Always written, so a workspace from an earlier run is never shown as this run's.
+          const lastRunOutput = JSON.stringify({
+            result: "ok",
+            ...(taskResult?.workspaceId ? { workspaceId: taskResult.workspaceId } : {}),
+          });
           const saved = await this.recordCronRunSuccess(job, runId, finishedAt, lastRunOutput);
           runSummary = {
             ...runSummary,
