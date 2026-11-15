@@ -906,7 +906,7 @@ it("lets operators disable single-letter shortcuts", async () => {
   expect(current).toHaveLength(1);
   expect(current[0]?.textContent).toContain("Selected");
 });
-it("orders decisions by risk and selects the next remaining decision after settlement", async () => {
+it("orders decisions by risk, clears the selection after settlement and focuses the next decision (U-IN-008)", async () => {
   const low = { ...projection.items[0]!, id: "approval:low", title: "Lower risk", riskLevel: "safe" as const };
   const high = { ...projection.items[0]!, id: "approval:high", title: "Higher risk", riskLevel: "nuclear" as const };
   const data = { ...projection, items: [low, high] };
@@ -915,9 +915,12 @@ it("orders decisions by risk and selects the next remaining decision after settl
   await renderUpdates(client);
   expect(container.querySelector("[data-inbox-item] h3")?.textContent).toBe("Higher risk");
   await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true })));
+  expect(container.querySelector('[data-inbox-item][data-selected="true"] h3')?.textContent).toBe("Higher risk");
   inboxMock.result = { data: { ...data, items: [low] }, isFetching: false, refetch: vi.fn() };
   await renderUpdates(client);
-  expect(container.querySelector('[data-inbox-item][data-selected="true"] h3')?.textContent).toBe("Lower risk");
+  expect(container.querySelector('[data-selected="true"]')).toBeNull();
+  expect(document.activeElement?.hasAttribute("data-inbox-detail")).toBe(true);
+  expect(document.activeElement?.closest("[data-inbox-row]")?.getAttribute("data-inbox-row")).toBe("approval:low");
 });
 
 it.each([0, 1])(

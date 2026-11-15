@@ -172,9 +172,10 @@ export function InboxArea() {
     priorItems.current = orderedItems;
     if (inbox.isFetching || !projection || !selectedId || orderedItems.some((item) => item.id === selectedId)) return;
     if (previous.find((item) => item.id === selectedId)?.group !== "needs_decision") return;
+    // A decided item leaves the list: nothing else is marked Selected, and focus goes to the next row (U-IN-008).
+    selectItem(null);
     const next = orderedItems.find((item) => groupOf(item) === "needs_decision");
     if (!next) return;
-    selectItem(next.id);
     // A decision made here moves focus through its own owner; this only recovers focus lost with a removed row.
     const active = document.activeElement;
     const lost = !active || active === document.body || !active.isConnected;
