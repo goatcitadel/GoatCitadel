@@ -19,15 +19,19 @@ export function workColumnStatus(
   view: RecordView<unknown>,
   count: number | undefined,
   noun: "tasks" | "runs",
-  options: { shown?: number; matching?: boolean } = {},
+  options: { shown?: number; matching?: boolean; partial?: boolean } = {},
 ): string {
   if (count !== undefined) {
     const suffix = view.phase === "error" ? " (stale)" : view.phase === "checking" ? " (checking)" : "";
-    const { shown, matching = false } = options;
+    const { shown, matching = false, partial = false } = options;
+    const counted = countedNoun(count, noun, matching);
+    // More pages exist than have loaded, so the number is a floor, not a total.
     const label =
       shown !== undefined && shown < count
-        ? `${shown} of ${countedNoun(count, noun, matching)} shown`
-        : countedNoun(count, noun, matching);
+        ? `${shown} of ${partial ? "at least " : ""}${counted} shown`
+        : partial
+          ? `At least ${counted}`
+          : counted;
     return `${label}${suffix}`;
   }
   return view.phase === "loading" ? `${NOUNS[noun]} loading` : `${NOUNS[noun]} unavailable`;

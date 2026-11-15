@@ -41,6 +41,17 @@ describe("WK-06 work column counts", () => {
     expect(workColumnStatus(query({ data: {} }), 3, "tasks", { shown: 3 })).toBe("3 tasks");
   });
 
+  it("says a count is only what has loaded while more pages exist", () => {
+    expect(workColumnStatus(query({ data: {} }), 200, "tasks", { partial: true })).toBe("At least 200 tasks");
+    expect(workColumnStatus(query({ data: {} }), 200, "tasks", { shown: 25, partial: true })).toBe(
+      "25 of at least 200 tasks shown",
+    );
+    expect(workColumnStatus(query({ data: {}, isFetching: true }), 1, "runs", { partial: true })).toBe(
+      "At least 1 run (checking)",
+    );
+    expect(workColumnStatus(query({ data: {} }), 3, "tasks", { partial: false })).toBe("3 tasks");
+  });
+
   it("names a filtered count as matching", () => {
     expect(workColumnStatus(query({ data: {} }), 1, "tasks", { shown: 1, matching: true })).toBe("1 matching task");
     expect(workColumnStatus(query({ data: {} }), 40, "runs", { shown: 25, matching: true })).toBe(
