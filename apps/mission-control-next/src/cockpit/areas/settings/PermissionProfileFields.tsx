@@ -21,23 +21,26 @@ export function PermissionProfileFields({
 }) {
   return (
     <div className="space-y-3">
-      <label className="block">
-        Profile name
-        <input
-          className={inputClass}
-          value={draft.label}
-          onChange={(event) => change((old) => ({ ...old, label: event.target.value }))}
-        />
-      </label>
-      <label className="block">
-        Profile description
-        <textarea
-          aria-label="Profile description"
-          className={inputClass}
-          value={draft.description}
-          onChange={(event) => change((old) => ({ ...old, description: event.target.value }))}
-        />
-      </label>
+      <Field label="Profile name">
+        {(field) => (
+          <input
+            {...field}
+            className={fieldClass}
+            value={draft.label}
+            onChange={(event) => change((old) => ({ ...old, label: event.target.value }))}
+          />
+        )}
+      </Field>
+      <Field label="Profile description">
+        {(field) => (
+          <textarea
+            {...field}
+            className={fieldClass}
+            value={draft.description}
+            onChange={(event) => change((old) => ({ ...old, description: event.target.value }))}
+          />
+        )}
+      </Field>
       <Field
         label="Approval behavior"
         help="Connectors set to let reads or changes run on their own are the exception."
@@ -73,22 +76,23 @@ export function PermissionProfileFields({
           )}
         </Field>
       ))}
-      <label className="block">
-        Read access
-        <select
-          aria-label="Read access"
-          className={inputClass}
-          value={draft.readAccessMode}
-          onChange={(event) =>
-            change((old) => ({ ...old, readAccessMode: event.target.value as FilesystemReadAccessMode | "" }))
-          }
-        >
-          <option value="">Keep GoatCitadel default or existing value</option>
-          <option value="roots_only">Allowed roots only</option>
-          <option value="approval_required">Require approval outside roots</option>
-          <option value="full_disk">Full disk subject to hard boundaries</option>
-        </select>
-      </label>
+      <Field label="Read access">
+        {(field) => (
+          <select
+            {...field}
+            className={fieldClass}
+            value={draft.readAccessMode}
+            onChange={(event) =>
+              change((old) => ({ ...old, readAccessMode: event.target.value as FilesystemReadAccessMode | "" }))
+            }
+          >
+            <option value="">Keep GoatCitadel default or existing value</option>
+            <option value="roots_only">Allowed roots only</option>
+            <option value="approval_required">Require approval outside roots</option>
+            <option value="full_disk">Full disk subject to hard boundaries</option>
+          </select>
+        )}
+      </Field>
       <fieldset>
         <legend>Default policy contexts</legend>
         {(["chat", "tools", "mcp", "all"] as const).map((surface) => (

@@ -182,6 +182,11 @@ describe("native Chat permission profile", () => {
       await click("New permission profile");
       expect(helpOf(name)).toBe("One pattern per line, or separate with commas.");
     });
+    it.each(["Profile name", "Profile description", "Read access"])("names %s through its label", async (name) => {
+      await mount("work-a");
+      await click("New permission profile");
+      expect(fieldLabelled(name).props["aria-label"]).toBeUndefined();
+    });
     it("ties the approval behavior help line to its select", async () => {
       await mount("work-a");
       await click("New permission profile");
