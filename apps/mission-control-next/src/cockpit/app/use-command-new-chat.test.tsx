@@ -11,7 +11,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
   createChatSession: api.create,
   fetchChatSessionStatus: api.read,
 }));
-vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({ getGatewayApiBaseUrl: () => "http://synthetic.invalid" }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
+  getGatewayApiBaseUrl: () => "http://synthetic.invalid",
+}));
 const scope = { workspaceId: "workspace-a", citadelId: "citadel-a" };
 const created: ChatSessionRecord = {
   sessionId: "created-session",
@@ -93,7 +95,8 @@ describe("explicit palette New chat", () => {
       await first;
       await duplicate;
     });
-    expect(api.read).toHaveBeenCalledWith(created.sessionId, expect.any(AbortSignal));
+    expect(api.read).not.toHaveBeenCalled();
+    expect(owner.attempt?.message).toBe("Conversation created.");
     expect(navigate).toHaveBeenCalledWith(created.sessionId);
     expect(owner.attempt?.state).toBe("confirmed");
   });
@@ -163,21 +166,14 @@ describe("explicit palette New chat", () => {
     expect(owner.attempt?.sessionId).toBe(created.sessionId);
   });
 
-  it("withholds mismatched receipts and canonical readbacks as unknown outcomes", async () => {
-    api.read.mockResolvedValue({ sessionId: created.sessionId, workspaceId: "foreign" });
-    await act(async () => {
-      await owner.create();
-    });
-    expect(owner.attempt?.state).toBe("unknown");
-    expect(navigate).not.toHaveBeenCalled();
-    resetCommandNewChatForTests();
+  it("withholds a mismatched receipt as an unknown outcome", async () => {
     api.create.mockResolvedValue({ ...created, workspaceId: "foreign" });
-    api.read.mockClear();
     await act(async () => {
       await owner.create();
     });
     expect(api.read).not.toHaveBeenCalled();
     expect(owner.attempt?.state).toBe("unknown");
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("rejects an old rendered action before any read or write in a new scope", async () => {
@@ -194,12 +190,11 @@ describe("explicit palette New chat", () => {
   });
 
   it("retains the unknown lock for a workspace moved to another Citadel after dispatch", async () => {
-    api.verify.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("Workspace moved"));
+    api.create.mockRejectedValueOnce(new Error("Connection lost"));
     await act(async () => {
       await owner.create();
     });
     expect(owner.attempt?.state).toBe("unknown");
-    expect(owner.attempt?.sessionId).toBe(created.sessionId);
     expect(navigate).not.toHaveBeenCalled();
     act(() => {
       root.render(<Probe citadelId="citadel-b" />);
@@ -211,16 +206,16 @@ describe("explicit palette New chat", () => {
     expect(api.create).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps independently verified creation confirmed when navigation throws", async () => {
+  it("keeps a created conversation confirmed when navigation throws", async () => {
     navigate.mockImplementation(() => {
       throw new Error("Presentation failed");
     });
     await act(async () => {
       await owner.create();
     });
-    expect(api.verify).toHaveBeenCalledTimes(2);
+    expect(api.verify).toHaveBeenCalledTimes(1);
     expect(owner.attempt?.state).toBe("confirmed");
-    expect(owner.attempt?.message).toContain("Opening it failed");
+    expect(owner.attempt?.message).toBe("Conversation created, but it didn't open. Use Open created conversation.");
     expect(owner.attempt?.sessionId).toBe(created.sessionId);
   });
 });

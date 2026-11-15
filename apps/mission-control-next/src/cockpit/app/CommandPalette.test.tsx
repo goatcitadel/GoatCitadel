@@ -129,7 +129,7 @@ describe("CommandPalette", () => {
   it("does not replay a confirmed creation that was already opened before this palette open", async () => {
     const opened = {
       state: "confirmed",
-      message: "Conversation created and independently verified.",
+      message: "Conversation created.",
       mode: "chat",
       sessionId: "s1",
     };
