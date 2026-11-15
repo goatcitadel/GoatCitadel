@@ -8,8 +8,13 @@ import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings"
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { SchedulerReviewQueue } from "./SchedulerReviewQueue";
 
+const preferences = vi.hoisted(() => ({ showTechnicalDetails: false }));
 vi.mock("@goatcitadel/mission-control-shared/api/cron", () => ({ fetchCronReviewQueue: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/settings", () => ({ fetchSettings: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/state/ui-preferences")>()),
+  useUiPreferences: () => preferences,
+}));
 
 let root: Root;
 let container: HTMLDivElement;
@@ -24,6 +29,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  preferences.showTechnicalDetails = false;
   act(() => root.unmount());
   client.clear();
   container.remove();
@@ -87,12 +93,57 @@ it("names a flagged run in plain words and keeps job and run ids out of the prim
       </QueryClientProvider>,
     ),
   );
-  await vi.waitFor(() => expect(container.textContent).toContain("Nightly digest · Scheduled due"));
+  await vi.waitFor(() => expect(container.textContent).toContain("Nightly digest · On its schedule"));
   expect(container.textContent).toContain("High severity");
   expect(container.textContent).toContain("Needs review");
   expect(container.textContent).toContain("Child run: Failed · needs recovery.");
   for (const raw of ["job-nightly-7f3a", "cron-run-9c1d", "durable-1234", "open", "2026-10-14T"])
     expect(container.textContent).not.toContain(raw);
+});
+
+const reviewItem = (summary: Record<string, unknown>) => ({
+  itemId: "item-b",
+  jobId: "job-b",
+  runId: "run-b",
+  severity: "medium",
+  status: "open",
+  summary,
+  createdAt: "2026-10-14T09:00:00.000Z",
+  updatedAt: "2026-10-14T09:05:00.000Z",
+});
+
+it("names the trigger and profile of each review row with no underscore (U-GL-032)", async () => {
+  vi.mocked(fetchSettings).mockResolvedValue({ features: { cronReviewQueueV1Enabled: true } } as never);
+  vi.mocked(fetchCronReviewQueue).mockResolvedValue({
+    items: [reviewItem({ trigger: "manual_run", profilePosture: "creator_profile_missing", childDurableRunId: "d-1" })],
+  } as never);
+  await renderQueue();
+  await vi.waitFor(() => expect(container.textContent).toContain("Started by hand"));
+  expect(container.textContent).toContain("Profile: Creator profile missing.");
+  expect(container.textContent).not.toMatch(/_/);
+});
+
+it("shows an unknown trigger, profile or child state as Other with the raw value in technical details", async () => {
+  preferences.showTechnicalDetails = true;
+  vi.mocked(fetchSettings).mockResolvedValue({ features: { cronReviewQueueV1Enabled: true } } as never);
+  vi.mocked(fetchCronReviewQueue).mockResolvedValue({
+    items: [
+      reviewItem({
+        trigger: "brand_new_trigger",
+        profilePosture: "brand_new_profile",
+        childDurableRunId: "d-1",
+        childDurableStatus: "brand_new_state",
+      }),
+    ],
+  } as never);
+  await renderQueue();
+  await vi.waitFor(() => expect(container.textContent).toContain("Other trigger"));
+  expect(container.textContent).toContain("Profile: Other profile.");
+  expect(container.textContent).toContain("Child run: Another state.");
+  const details = container.querySelector("details");
+  expect(details?.textContent).toContain("brand_new_trigger");
+  expect(details?.textContent).toContain("brand_new_profile");
+  expect(details?.textContent).toContain("brand_new_state");
 });
 
 async function renderQueue() {

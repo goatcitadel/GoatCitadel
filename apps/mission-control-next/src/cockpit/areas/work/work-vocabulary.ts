@@ -225,3 +225,34 @@ export const REVIEW_SEVERITY_LABELS: Readonly<Record<"low" | "medium" | "high" |
   high: "High",
   critical: "Critical",
 };
+
+/** What started a scheduler review item. The Gateway sends these as open strings, so an unknown value has no label. */
+const REVIEW_TRIGGER_LABELS: Readonly<Record<string, string>> = {
+  scheduled_due: "On its schedule",
+  scheduled_run: "On its schedule",
+  scheduler: "On its schedule",
+  manual: "Started by hand",
+  manual_run: "Started by hand",
+  forced: "Run now",
+  force_run: "Run now",
+  watchdog: "Watchdog check",
+  agent_turn_profile_warning: "Profile warning",
+  canonical_agent_turn_settlement: "Run finished",
+};
+
+/** The profile a scheduled agent run used. */
+const REVIEW_PROFILE_LABELS: Readonly<Record<string, string>> = {
+  scheduled_restricted: "Restricted for scheduled runs",
+  creator_intersection: "Limited to what its creator may do",
+  creator_profile_missing: "Creator profile missing",
+  creator_profile_archived: "Creator profile archived",
+  creator_profile_scope_mismatch: "Creator profile does not fit this schedule",
+  creator_profile_invalid: "Creator profile not valid",
+};
+
+export const REVIEW_TRIGGER_FALLBACK = "Other trigger";
+export const REVIEW_PROFILE_FALLBACK = "Other profile";
+export const REVIEW_CHILD_STATE_FALLBACK = "Another state";
+
+export const reviewTriggerLabel = (value: string): string => REVIEW_TRIGGER_LABELS[value] ?? REVIEW_TRIGGER_FALLBACK;
+export const reviewProfileLabel = (value: string): string => REVIEW_PROFILE_LABELS[value] ?? REVIEW_PROFILE_FALLBACK;
