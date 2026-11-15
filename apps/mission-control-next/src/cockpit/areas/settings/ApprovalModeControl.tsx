@@ -19,6 +19,7 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import { SettingsApprovalDialog } from "./SettingsApprovalDialog";
+import { WaitingSettingsChangeNotice } from "./WaitingSettingsChangeNotice";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { presentChangeStatusLabel, presentDeploymentProfile } from "./settings-vocabulary";
 
@@ -66,6 +67,7 @@ export function ApprovalModeEditor({
           onClick={() => {
             void settings.refetch();
             if (change.change) void change.refresh();
+            void control.recheckWaiting();
           }}
         >
           Refresh approval settings
@@ -207,10 +209,25 @@ export function ApprovalModeEditor({
           {notice}
         </p>
       ) : null}
+      {control.waiting ? (
+        <WaitingSettingsChangeNotice
+          waiting={control.waiting}
+          onResolved={control.clearWaiting}
+          subject="rule"
+          showSentence={false}
+        />
+      ) : null}
       {uncertain ? (
-        <p role="alert" className="mt-3 text-sm text-status-waiting">
-          {uncertain}
-        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <p role="alert" className="text-sm text-status-waiting">
+            {uncertain.message}
+          </p>
+          {!uncertain.checking ? (
+            <Button size="sm" onClick={() => void control.reconcile()}>
+              Check saved rule
+            </Button>
+          ) : null}
+        </div>
       ) : null}
       {uncertain || change.change?.blocking ? (
         <NativeOwnerLink

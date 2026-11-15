@@ -2,17 +2,23 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
 import { BudgetModeControl } from "./BudgetModeControl";
+import { resetSettingsAttempt } from "./settings-attempt.test-support";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import {
   awaitingLlamaApproval,
   llamaPlanFixture,
 } from "../../../features/native-routes/settings/llama-setup.test-support";
 
-const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), fetchChangePlan: vi.fn() }));
+const api = vi.hoisted(() => ({
+  fetchSettings: vi.fn(),
+  patchSettings: vi.fn(),
+  fetchChangePlan: vi.fn(),
+  fetchChangePlans: vi.fn(),
+}));
 // The in-place approval dialog reads its approval; these tests cover the save, so the read never settles.
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
   fetchApproval: () => new Promise(() => undefined),
@@ -21,9 +27,21 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchSettings: api.fetchSettings,
   patchSettings: api.patchSettings,
   fetchChangePlan: api.fetchChangePlan,
+  fetchChangePlans: api.fetchChangePlans,
   isApiRequestError: (value: unknown) => Boolean(value && typeof value === "object" && "status" in value),
 }));
 
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) =>
+  (await import("./settings-attempt.test-support")).withTrackedSettingsSave(
+    await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>(),
+  ),
+);
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) =>
+  (await import("./settings-attempt.test-support")).withSettingsAttemptRead(
+    await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/mutation-attempts")>(),
+  ),
+);
+beforeEach(resetSettingsAttempt);
 afterEach(() => {
   __resetSettingsChangesForTests();
   __resetSessionDraftsForTests();
@@ -171,6 +189,8 @@ describe("cockpit budget preference", () => {
 it("offers native budget inspection after an uncertain write without another mutation or clearing the lock", async () => {
   api.fetchSettings.mockResolvedValue({ revision: 2, budgetMode: "balanced" });
   api.patchSettings.mockRejectedValue(new Error("Lost response"));
+  // The open changes cannot be read either, so the lost answer stays unconfirmed and saving stays paused.
+  api.fetchChangePlans.mockRejectedValue(new Error("Lost response"));
   window.history.replaceState(
     { retained: true },
     "",
@@ -198,7 +218,7 @@ it("offers native budget inspection after an uncertain write without another mut
     });
     const save = [...container.querySelectorAll("button")].find((item) => item.textContent === "Save preference")!;
     await act(async () => save.click());
-    await vi.waitFor(() => expect(container.textContent).toContain("Save outcome is uncertain"));
+    await vi.waitFor(() => expect(container.textContent).toContain("this save isn't confirmed yet"));
     const link = [...container.querySelectorAll("a")].find(
       (item) => item.textContent === "Inspect budget settings activity",
     )!;
@@ -215,7 +235,8 @@ it("offers native budget inspection after an uncertain write without another mut
     expect(save.disabled).toBe(true);
     expect(select.disabled).toBe(true);
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
-    expect(container.textContent).toContain("Save outcome is uncertain");
+    expect(container.textContent).toContain("this save isn't confirmed yet");
+    expect(container.textContent).not.toContain("was not saved");
   } finally {
     act(() => root.unmount());
     client.clear();

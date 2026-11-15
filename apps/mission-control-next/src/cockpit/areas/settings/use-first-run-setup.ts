@@ -101,19 +101,21 @@ export function useFirstRunSetup(workspaceId: string | undefined) {
           ? "Wait for the current setup checks to finish." // refetch-guard: allow Prerequisite text changes during checks; the current setup record remains visible.
           : !progress?.modelReady
             ? "Connect a provider and confirm a ready default model before finishing."
-            : approval.locked
-              ? "Resolve the pending or uncertain approval-rule save before finishing."
-              : approval.draft.isDirty || approval.draft.hasRemoteChanges
-                ? "Save or reconcile the approval-rule draft, then refresh checks and review the current rule."
-                : !approvalReady
-                  ? "Refresh checks to confirm the current approval rule and saved settings."
-                  : !progress.safeApprovalMode
-                    ? "Choose and save an approval rule that keeps prompts, then refresh checks and review the current rule."
-                    : !safetyConfirmed
-                      ? "Review the current approval rule in Step 2 and choose Keep current rule before finishing."
-                      : !completion.ready
-                        ? "Refresh checks and review the current model and approval rule before finishing."
-                        : "Ready to finish setup and open Chat. A completed Chat answer verifies the model separately.";
+            : approval.uncertain
+              ? "Your last approval-rule save isn't confirmed yet. Press Refresh checks to check it."
+              : approval.locked
+                ? "Resolve the pending or uncertain approval-rule save before finishing."
+                : approval.draft.isDirty || approval.draft.hasRemoteChanges
+                  ? "Save or reconcile the approval-rule draft, then refresh checks and review the current rule."
+                  : !approvalReady
+                    ? "Refresh checks to confirm the current approval rule and saved settings."
+                    : !progress.safeApprovalMode
+                      ? "Choose and save an approval rule that keeps prompts, then refresh checks and review the current rule."
+                      : !safetyConfirmed
+                        ? "Review the current approval rule in Step 2 and choose Keep current rule before finishing."
+                        : !completion.ready
+                          ? "Refresh checks and review the current model and approval rule before finishing."
+                          : "Ready to finish setup and open Chat. A completed Chat answer verifies the model separately.";
 
   async function keepCurrentRule() {
     if (!canKeep || !binding || approval.change.isPending()) return;
@@ -169,7 +171,12 @@ export function useFirstRunSetup(workspaceId: string | undefined) {
   }
   async function refresh() {
     live.current.generation += 1;
-    await Promise.all([query.refetch(), approval.settings.refetch()]);
+    await Promise.all([
+      query.refetch(),
+      approval.settings.refetch(),
+      approval.uncertain ? approval.reconcile() : undefined,
+      approval.recheckWaiting(),
+    ]);
   }
   return {
     query,

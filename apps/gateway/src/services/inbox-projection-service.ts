@@ -569,7 +569,9 @@ export class InboxProjectionService {
       return {
         items: visible,
         partial: records.length === SOURCE_LIMIT || unscoped,
-        detail: unscoped ? "Dead letters without a readable scoped run were omitted." : undefined,
+        detail: unscoped
+          ? "A stopped run has no workspace recorded, so no Inbox can list it. Its record is kept."
+          : undefined,
       };
     });
 

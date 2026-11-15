@@ -54,6 +54,7 @@ export function SettingsApprovalDialog({
   summary,
   reviewLabel = "Review approval",
   loadFailureHint = "Use Refresh change status, or decide it in Inbox.",
+  installationSetting = false,
   onResolved,
 }: {
   approvalId: string;
@@ -70,6 +71,11 @@ export function SettingsApprovalDialog({
   reviewLabel?: string;
   /** What to do when the approval can't be read, after the sentence that says so. */
   loadFailureHint?: string;
+  /**
+   * The change applies to the whole installation (a Settings change), so it is decided here from any selected
+   * workspace. The bar still checks that the approval itself is the install-wide Settings shape.
+   */
+  installationSetting?: boolean;
   /** Called after a decision with the approval's re-read status, so the owner can report a denial as a denial. */
   onResolved: (status: ApprovalRequest["status"] | undefined) => Promise<unknown> | void;
 }) {
@@ -142,6 +148,7 @@ export function SettingsApprovalDialog({
           <ApprovalDecisionBar
             compact
             reviewedInPlace
+            installationSetting={installationSetting}
             approval={approval}
             workspaceId={workspaceId}
             onResolved={() => {

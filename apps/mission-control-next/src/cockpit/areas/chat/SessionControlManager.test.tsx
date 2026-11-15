@@ -298,7 +298,7 @@ it.each(["workspace", "session"])(
       pendingRequests: [],
     };
     await act(async () => root.render(<SessionControlManager sessionId="session-a" workspaceId="workspace-a" />));
-    expect(container.textContent).toContain("No control actions are available");
+    expect(container.textContent).toContain("isn't in the selected workspace, so its controls aren't available here");
     expect(container.textContent).not.toContain("PRIVATE FOREIGN CLIENT");
     expect(button("Review revoke")).toBeUndefined();
     expect(api.revokeSessionControl).not.toHaveBeenCalled();

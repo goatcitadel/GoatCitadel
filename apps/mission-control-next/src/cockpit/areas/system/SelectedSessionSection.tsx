@@ -1,5 +1,6 @@
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { OpsRuntimeData } from "../../../features/native-routes/ops/runtime-overview-model";
+import { nameWithKind, WorkspaceSwitchOffer } from "../../app/WorkspaceSwitchOffer";
 import { Button } from "../../ui/Button";
 import { MetricList } from "../../ui/MetricList";
 import { Section } from "../../ui/Section";
@@ -29,6 +30,7 @@ export function SelectedSessionSection({
   onClose: () => void;
 }) {
   const item = data ? findSession(data, sessionId) : undefined;
+  const elsewhere = item?.workspaceId && item.workspaceId !== workspaceId ? item.workspaceId : undefined;
   return (
     <Section
       id="selected-session"
@@ -74,7 +76,16 @@ export function SelectedSessionSection({
       <TechnicalDetails>
         Session ID: <code className="wrap-anywhere">{sessionId}</code>
       </TechnicalDetails>
-      <SessionControlManager key={sessionId} sessionId={sessionId} workspaceId={workspaceId} />
+      {elsewhere ? (
+        <WorkspaceSwitchOffer
+          workspaceId={elsewhere}
+          sentence={(name) =>
+            `This conversation is in the ${nameWithKind(name, "workspace")}. Its controls work there.`
+          }
+        />
+      ) : (
+        <SessionControlManager key={sessionId} sessionId={sessionId} workspaceId={workspaceId} />
+      )}
     </Section>
   );
 }

@@ -13,7 +13,12 @@ import { RiskBadge } from "../../ui/RiskBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
-import { canReviewConnectionPlan, connectionPlanCompleted, useProviderConnectionCustody } from "./provider-connection-state";
+import { WaitingSettingsChangeNotice } from "./WaitingSettingsChangeNotice";
+import {
+  canReviewConnectionPlan,
+  connectionPlanCompleted,
+  useProviderConnectionCustody,
+} from "./provider-connection-state";
 import { useProviderConnectionEditor } from "./use-provider-connection-editor";
 import {
   AWS_SIGV4_CREDENTIAL_HELP,
@@ -118,7 +123,7 @@ function ProviderConnectionEditor({
   const endpointCheck = useBlurValidation((value) => urlFieldError(value, { required: true }));
   const route = useCockpitRoute();
   const [credentialStorage, setCredentialStorage] = useState<"keychain" | "env">("keychain");
-  const { draft, attempt, blocked } = editor;
+  const { draft, attempt, blocked, waitingPanel } = editor;
   const credentialEditable =
     !provider.authMode || provider.authMode === "api-key" || isBedrockCredentialMode(provider.authMode);
   const sigV4 = provider.authMode === "aws-sigv4";
@@ -363,6 +368,14 @@ function ProviderConnectionEditor({
         <p role="alert" className="text-sm text-status-failed">
           {editor.error}
         </p>
+      ) : null}
+      {waitingPanel.waiting ? (
+        <WaitingSettingsChangeNotice
+          waiting={waitingPanel.waiting}
+          onResolved={waitingPanel.clearWaiting}
+          onCheckAgain={waitingPanel.recheck}
+          subject="provider"
+        />
       ) : null}
       {attempt?.uncertain || (plan && !canReviewConnectionPlan(plan) && !connectionPlanCompleted(plan)) ? (
         <NativeOwnerLink

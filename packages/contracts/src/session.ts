@@ -29,6 +29,8 @@ export interface SessionMeta {
   tokenTotal: number;
   costUsdTotal: number;
   budgetState: BudgetState;
+  /** The workspace of the Chat conversation behind this session; absent when no Chat record names one. */
+  workspaceId?: string;
 }
 
 export interface TranscriptEvent {

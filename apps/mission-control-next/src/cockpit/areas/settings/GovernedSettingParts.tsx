@@ -2,6 +2,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { SettingsApprovalDialog } from "./SettingsApprovalDialog";
+import { WaitingSettingsChangeNotice } from "./WaitingSettingsChangeNotice";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import { ApprovedSettingsContinuation } from "./ApprovedSettingsContinuation";
 import { presentChangeStatusLabel } from "./settings-vocabulary";
@@ -107,6 +108,7 @@ export function GovernedSettingChangeStatus<T extends GovernedSettingValue>({
                 {change.change.receipt.requiredAction.approvalId ? (
                   <SettingsApprovalDialog
                     approvalId={change.change.receipt.requiredAction.approvalId}
+                    installationSetting
                     onResolved={change.refresh}
                   />
                 ) : null}
@@ -139,14 +141,28 @@ export function GovernedSettingChangeStatus<T extends GovernedSettingValue>({
           {notice.message}
         </p>
       ) : null}
+      {governed.waiting ? (
+        <WaitingSettingsChangeNotice
+          waiting={governed.waiting}
+          onResolved={governed.clearWaiting}
+          showSentence={false}
+        />
+      ) : null}
       {governed.outcomeUncertain ? (
-        <NativeOwnerLink
-          href={governed.recoveryHref}
-          scope={[draft.key, change.change?.receipt.planId, change.change?.receipt.revision]}
-          className="mt-3 inline-block text-sm font-medium text-accent hover:underline"
-        >
-          {recoveryLabel}
-        </NativeOwnerLink>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          {!governed.checkingOutcome ? (
+            <Button size="sm" onClick={() => void governed.checkOutcome()}>
+              Check again
+            </Button>
+          ) : null}
+          <NativeOwnerLink
+            href={governed.recoveryHref}
+            scope={[draft.key, change.change?.receipt.planId, change.change?.receipt.revision]}
+            className="inline-block text-sm font-medium text-accent hover:underline"
+          >
+            {recoveryLabel}
+          </NativeOwnerLink>
+        </div>
       ) : null}
     </>
   );

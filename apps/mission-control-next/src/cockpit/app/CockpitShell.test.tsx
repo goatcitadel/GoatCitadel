@@ -201,7 +201,9 @@ describe("CockpitShell", () => {
       );
       expect(paletteCode.evaluated).not.toHaveBeenCalled();
       expect(palette()).toBeNull();
-      await act(async () => { await vi.dynamicImportSettled(); });
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
       const more = container.querySelector<HTMLButtonElement>('button[aria-label="More areas and settings"]')!;
       more.focus();
       await act(async () => {
@@ -230,9 +232,7 @@ describe("CockpitShell", () => {
       expect(palette()).toBeNull();
       expect(document.activeElement).toBe(more);
 
-      await act(async () =>
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true })),
-      );
+      await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true })));
       await vi.waitFor(() => expect(palette()).not.toBeNull());
       expect(paletteCode.evaluated).toHaveBeenCalledOnce();
     } finally {
@@ -621,7 +621,9 @@ describe("CockpitShell", () => {
       );
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }));
     });
-    await act(async () => { await vi.dynamicImportSettled(); });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
     expect(document.body.textContent).toContain("Unsaved changes");
     expect(document.querySelector('[aria-label="Command palette"]')).toBeNull();
@@ -848,7 +850,7 @@ it("routes the legacy sessions bookmark to its exact native session owner after 
   try {
     await act(async () => shellPreferences.setActiveScope({ citadelId: "personal", workspaceId: "default" }));
     expect(container.querySelector('[aria-label="Linked scope review"]')?.textContent).toContain(
-      "This link requests a different Citadel or workspace",
+      "This link is for a workspace that isn't in your list.",
     );
     expect(shellPreferences.activeWorkspaceId).toBe("default");
     // Trusted fixture selection represents a directory-reviewed scope; the URL never selects it.

@@ -6,6 +6,7 @@ import { PUBLIC_WEB_ADDRESS_NOT_HTTPS, type ApprovalStatus } from "@goatcitadel/
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
+import { resetSettingsAttempt } from "./settings-attempt.test-support";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 
 const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), fetchChangePlan: vi.fn() }));
@@ -17,6 +18,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 }));
 // The dialog itself is covered in SettingsApprovalDialog.test.tsx; here it only reports a decision.
 vi.mock("./SettingsApprovalDialog", () => ({
+  reopenSettingsApproval: () => undefined,
   SettingsApprovalDialog: ({ onResolved }: { onResolved: (status: ApprovalStatus) => void }) => (
     <button type="button" onClick={() => onResolved("approved")}>
       Decide approved
@@ -85,7 +87,18 @@ async function type(value: string) {
   });
 }
 
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) =>
+  (await import("./settings-attempt.test-support")).withTrackedSettingsSave(
+    await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>(),
+  ),
+);
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) =>
+  (await import("./settings-attempt.test-support")).withSettingsAttemptRead(
+    await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/mutation-attempts")>(),
+  ),
+);
 beforeEach(() => {
+  resetSettingsAttempt();
   server = { revision: 2, publicWebAddress: "https://old.example.com" };
   api.fetchSettings.mockImplementation(async () => ({ ...server }));
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -223,5 +236,61 @@ describe("PublicWebAddressField", () => {
     expect(container.querySelector("input")).toBeNull();
     expect(container.textContent).toBe("Loading the public web address…");
     expect(container.querySelector('[role="status"], [role="alert"], [aria-live]')).toBeNull();
+  });
+
+  it("leads to the waiting change instead of saying settings changed elsewhere", async () => {
+    api.patchSettings.mockRejectedValue({
+      status: 409,
+      kind: "http",
+      body: {
+        code: "WRITE_CONFLICT",
+        details: { resourceKind: "change_plan", resourceId: "plan-1", currentRevision: 2 },
+      },
+    });
+    api.fetchChangePlan.mockResolvedValue({
+      ...planFor("awaiting_approval", "https://other.example.com"),
+      title: "Change the public web address",
+      requiredAction: { kind: "approval", approvalId: "approval-1" },
+    });
+    await show();
+    await vi.waitFor(() => expect(input().value).toBe("https://old.example.com"));
+    await type("https://goat.example.com");
+    await act(async () => button("Save address")!.click());
+
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("One change to this setting is already waiting for your approval."),
+    );
+    expect(container.textContent).not.toContain("Settings changed elsewhere");
+    // The existing approval opens in place (the mocked dialog shows its decide button).
+    expect(button("Decide approved")).toBeDefined();
+    // The draft stays, and nothing is applied a second time.
+    expect(input().value).toBe("https://goat.example.com");
+    expect(api.patchSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops the waiting sentence once the change is decided in place, and saving works again", async () => {
+    api.patchSettings.mockRejectedValue({
+      status: 409,
+      kind: "http",
+      body: { code: "WRITE_CONFLICT", details: { resourceKind: "change_plan", resourceId: "plan-1" } },
+    });
+    api.fetchChangePlan.mockResolvedValue({
+      ...planFor("awaiting_approval", "https://other.example.com"),
+      requiredAction: { kind: "approval", approvalId: "approval-1" },
+    });
+    await show();
+    await vi.waitFor(() => expect(input().value).toBe("https://old.example.com"));
+    await type("https://goat.example.com");
+    await act(async () => button("Save address")!.click());
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("One change to this setting is already waiting for your approval."),
+    );
+    expect(button("Save address")!.disabled).toBe(true);
+
+    // The waiting change is decided in the in-place dialog.
+    await act(async () => button("Decide approved")!.click());
+    await vi.waitFor(() => expect(container.textContent).not.toContain("already waiting"));
+    expect(button("Decide approved")).toBeUndefined();
+    await vi.waitFor(() => expect(button("Save address")!.disabled).toBe(false));
   });
 });

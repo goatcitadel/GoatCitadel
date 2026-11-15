@@ -48,6 +48,8 @@ import { trackBackgroundTask } from "./background-scheduler.js";
 import type { DurableWorkflowExecutorRegistry } from "./durable-execution-service.js";
 import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.js";
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
+import { validIdentifier } from "./inbox-change-signal.js";
+import { runWorkspaceId } from "./inbox-projection-model.js";
 import { projectDurableBackgroundTaskRail } from "./durable-background-task-projection.js";
 import { verifySettledChatWaitingAuthority } from "./chat-durable-waiting-authority.js";
 import { commitDurableWakeTransition } from "./durable-wake-transition-service.js";
@@ -621,11 +623,15 @@ function buildDurableControlInterruptionError(kind: "paused" | "cancelled", mess
   return error;
 }
 
-function buildDurableRealtimeOptions(runId: string): Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links"> {
+function buildDurableRealtimeOptions(
+  runId: string,
+  workspaceId?: string | null,
+): Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links"> {
   return {
     eventClass: "domain_fact",
     eventAuthority: "retained_stream",
-    links: { runId },
+    // Only an id the Inbox change signal accepts: an invalid one would drop that signal instead of widening it.
+    links: { runId, ...(validIdentifier(workspaceId) ? { workspaceId } : {}) },
   };
 }
 
@@ -2984,7 +2990,7 @@ export class DurableRunService {
           postCommitGenerationId: expectedMarker.generationId,
           effect,
         },
-        buildDurableRealtimeOptions(createdChild.runId),
+        buildDurableRealtimeOptions(createdChild.runId, runWorkspaceId(createdChild)),
       );
     }
     if (committedChildRunId) {
@@ -3490,12 +3496,16 @@ export class DurableRunService {
       this.scheduleCommittedBackgroundAttention(run.runId, "run_waiting");
     }
     if (options.publishRealtime !== false) {
-      await this.publishDurableRealtimeSafely(run.runId, {
-        type: "durable_run_created",
-        runId: run.runId,
-        workflowKey: run.workflowKey,
-        status: run.status,
-      });
+      await this.publishDurableRealtimeSafely(
+        run.runId,
+        {
+          type: "durable_run_created",
+          runId: run.runId,
+          workflowKey: run.workflowKey,
+          status: run.status,
+        },
+        runWorkspaceId(run),
+      );
     }
     return run;
   }
@@ -3533,11 +3543,15 @@ export class DurableRunService {
       });
     });
     await this.abortActiveRun(runId, `Durable run ${runId} paused by ${actorId}.`, "paused");
-    await this.publishDurableRealtimeSafely(runId, {
-      type: "durable_run_paused",
+    await this.publishDurableRealtimeSafely(
       runId,
-      actorId,
-    });
+      {
+        type: "durable_run_paused",
+        runId,
+        actorId,
+      },
+      runWorkspaceId(next),
+    );
     return next;
   }
 
@@ -3577,11 +3591,15 @@ export class DurableRunService {
         previousStatus: current.status,
       });
     });
-    await this.publishDurableRealtimeSafely(runId, {
-      type: "durable_run_resumed",
+    await this.publishDurableRealtimeSafely(
       runId,
-      actorId,
-    });
+      {
+        type: "durable_run_resumed",
+        runId,
+        actorId,
+      },
+      runWorkspaceId(next),
+    );
     return next;
   }
 
@@ -3767,11 +3785,15 @@ export class DurableRunService {
     if (!transitioned) {
       return next;
     }
-    await this.publishDurableRealtimeSafely(runId, {
-      type: "durable_run_cancelled",
+    await this.publishDurableRealtimeSafely(
       runId,
-      actorId,
-    });
+      {
+        type: "durable_run_cancelled",
+        runId,
+        actorId,
+      },
+      runWorkspaceId(next),
+    );
     if (chatLink) {
       this.requestRunProcessing(runId);
     }
@@ -3784,13 +3806,14 @@ export class DurableRunService {
   }
   private async cancelFanoutChildrenAfterCommit(run: DurableRunRecord, actorId: string): Promise<void> {
     try {
-      await this.fanoutLedger.cancelParent(run,
-        async (childRunId) => await this.cancelDurableRun(childRunId, actorId));
+      await this.fanoutLedger.cancelParent(run, async (childRunId) => await this.cancelDurableRun(childRunId, actorId));
     } catch (error) {
       // Parent cancellation has committed. Preserve it and leave unfinished
       // fanout aggregates active for the existing reconciliation loop.
-      this.resolveLogger().warn({ error: boundedRecoveryError(error), runId: run.runId },
-        "durable fanout child cancellation deferred");
+      this.resolveLogger().warn(
+        { error: boundedRecoveryError(error), runId: run.runId },
+        "durable fanout child cancellation deferred",
+      );
     }
   }
   async retryDurableRun(runId: string, reason = "manual_retry", actorId = "operator"): Promise<DurableRunRecord> {
@@ -3965,30 +3988,42 @@ export class DurableRunService {
   ): Promise<void> {
     if (result.outcome === "terminal_finalization_pending") {
       this.scheduleCommittedBackgroundAttention(result.run.runId, "run_retry_budget_exhausted");
-      await this.publishDurableRealtimeSafely(result.run.runId, {
-        type: "durable_run_failed",
-        runId: result.run.runId,
-        error: result.reason,
-        retryExhausted: true,
-      });
+      await this.publishDurableRealtimeSafely(
+        result.run.runId,
+        {
+          type: "durable_run_failed",
+          runId: result.run.runId,
+          error: result.reason,
+          retryExhausted: true,
+        },
+        runWorkspaceId(result.run),
+      );
       this.requestRunProcessing(result.run.runId);
       return;
     }
     if (result.outcome === "dead_lettered") {
       this.scheduleCommittedBackgroundAttention(result.run.runId, "run_dead_lettered");
-      await this.publishDurableRealtimeSafely(result.run.runId, {
-        type: "durable_run_dead_lettered",
-        runId: result.run.runId,
-        reason: result.reason,
-      });
+      await this.publishDurableRealtimeSafely(
+        result.run.runId,
+        {
+          type: "durable_run_dead_lettered",
+          runId: result.run.runId,
+          reason: result.reason,
+        },
+        runWorkspaceId(result.run),
+      );
       return;
     }
-    await this.publishDurableRealtimeSafely(result.run.runId, {
-      type: "durable_run_retry_scheduled",
-      runId: result.run.runId,
-      attemptNo: result.attemptNo,
-      nextRetryAt: result.nextRetryAt,
-    });
+    await this.publishDurableRealtimeSafely(
+      result.run.runId,
+      {
+        type: "durable_run_retry_scheduled",
+        runId: result.run.runId,
+        attemptNo: result.attemptNo,
+        nextRetryAt: result.nextRetryAt,
+      },
+      runWorkspaceId(result.run),
+    );
   }
 
   async wakeDurableRun(
@@ -4089,11 +4124,15 @@ export class DurableRunService {
         detail: error instanceof Error ? error.message : "Wake failed",
       };
     }
-    await this.publishDurableRealtimeSafely(runId, {
-      type: "durable_run_woken",
+    await this.publishDurableRealtimeSafely(
       runId,
-      eventKey: event.eventKey,
-    });
+      {
+        type: "durable_run_woken",
+        runId,
+        eventKey: event.eventKey,
+      },
+      runWorkspaceId(next),
+    );
     return {
       runId,
       eventKey: event.eventKey,
@@ -4193,11 +4232,15 @@ export class DurableRunService {
       });
     });
     this.requestRunProcessing(deadLetter.runId);
-    await this.publishDurableRealtimeSafely(deadLetter.runId, {
-      type: "durable_dead_letter_recovered",
-      runId: deadLetter.runId,
-      deadLetterId: entryId,
-    });
+    await this.publishDurableRealtimeSafely(
+      deadLetter.runId,
+      {
+        type: "durable_dead_letter_recovered",
+        runId: deadLetter.runId,
+        deadLetterId: entryId,
+      },
+      runWorkspaceId(next),
+    );
     return next;
   }
 
@@ -4232,8 +4275,12 @@ export class DurableRunService {
     }
   }
 
-  private async publishDurableRealtimeSafely(runId: string, payload: Record<string, unknown>): Promise<void> {
-    await this.publishRealtimeSafely("system", "durable", payload, buildDurableRealtimeOptions(runId));
+  private async publishDurableRealtimeSafely(
+    runId: string,
+    payload: Record<string, unknown>,
+    workspaceId?: string | null,
+  ): Promise<void> {
+    await this.publishRealtimeSafely("system", "durable", payload, buildDurableRealtimeOptions(runId, workspaceId));
   }
 
   normalizeDurableRetryPolicy(input: Partial<DurableRetryPolicy> | undefined): DurableRetryPolicy {
@@ -4653,11 +4700,15 @@ export class DurableRunService {
       return undefined;
     }
     this.scheduleCommittedBackgroundAttention(failed.runId, "run_failed");
-    await this.publishDurableRealtimeSafely(failed.runId, {
-      type: "durable_run_failed",
-      runId: failed.runId,
-      error: safeReason,
-    });
+    await this.publishDurableRealtimeSafely(
+      failed.runId,
+      {
+        type: "durable_run_failed",
+        runId: failed.runId,
+        error: safeReason,
+      },
+      runWorkspaceId(failed),
+    );
     await this.notifyRunFailedSafely(failed, safeReason);
     return failed;
   }
@@ -5112,12 +5163,16 @@ export class DurableRunService {
               try {
                 await this.deps.taskLifecycle.autoBlockOnIncompleteExit(taskId, current.runId);
               } catch (error) {
-                await this.publishDurableRealtimeSafely(current.runId, {
-                  kind: "task_auto_block_failed",
-                  runId: current.runId,
-                  taskId,
-                  error: error instanceof Error ? error.message : String(error),
-                });
+                await this.publishDurableRealtimeSafely(
+                  current.runId,
+                  {
+                    kind: "task_auto_block_failed",
+                    runId: current.runId,
+                    taskId,
+                    error: error instanceof Error ? error.message : String(error),
+                  },
+                  runWorkspaceId(current),
+                );
               }
             }
           }
@@ -5200,13 +5255,17 @@ export class DurableRunService {
     if (shouldBlock) {
       this.scheduleCommittedBackgroundAttention(run.runId, blockedEventType);
     }
-    await this.publishDurableRealtimeSafely(run.runId, {
-      type: "durable_continuation_gate",
-      runId: run.runId,
-      decision: gateDecision.decision,
-      reasonCodes: gateDecision.reasonCodes,
-      recommendedAction: gateDecision.recommendedAction,
-    });
+    await this.publishDurableRealtimeSafely(
+      run.runId,
+      {
+        type: "durable_continuation_gate",
+        runId: run.runId,
+        decision: gateDecision.decision,
+        reasonCodes: gateDecision.reasonCodes,
+        recommendedAction: gateDecision.recommendedAction,
+      },
+      runWorkspaceId(run),
+    );
     try {
       await deps.recordEvidenceEnvelope?.({
         eventKind: "continuation_gate",
@@ -5219,19 +5278,27 @@ export class DurableRunService {
         },
       });
     } catch (error) {
-      await this.publishDurableRealtimeSafely(run.runId, {
-        type: "durable_continuation_gate_evidence_failed",
-        runId: run.runId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      await this.publishDurableRealtimeSafely(
+        run.runId,
+        {
+          type: "durable_continuation_gate_evidence_failed",
+          runId: run.runId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        runWorkspaceId(run),
+      );
     }
     if (shouldBlock) {
-      await this.publishDurableRealtimeSafely(run.runId, {
-        type: blockedStatus === "cancelled" ? "durable_run_cancelled" : "durable_run_paused",
-        runId: run.runId,
-        actorId: "continuation_gate",
-        decision: gateDecision.decision,
-      });
+      await this.publishDurableRealtimeSafely(
+        run.runId,
+        {
+          type: blockedStatus === "cancelled" ? "durable_run_cancelled" : "durable_run_paused",
+          runId: run.runId,
+          actorId: "continuation_gate",
+          decision: gateDecision.decision,
+        },
+        runWorkspaceId(run),
+      );
     }
     return shouldBlock;
   }
@@ -5321,12 +5388,16 @@ export class DurableRunService {
       return;
     }
     this.scheduleCommittedBackgroundAttention(waiting.runId, "run_waiting");
-    await this.publishDurableRealtimeSafely(waiting.runId, {
-      type: "durable_run_waiting",
-      runId: waiting.runId,
-      reason: "cowork_workflow_timeout",
-      waitForEvent,
-    });
+    await this.publishDurableRealtimeSafely(
+      waiting.runId,
+      {
+        type: "durable_run_waiting",
+        runId: waiting.runId,
+        reason: "cowork_workflow_timeout",
+        waitForEvent,
+      },
+      runWorkspaceId(waiting),
+    );
   }
 
   private async markAutonomousRunWaitingForKillSwitch(run: DurableRunRecord, error: Error): Promise<void> {
@@ -5378,12 +5449,16 @@ export class DurableRunService {
       return;
     }
     this.scheduleCommittedBackgroundAttention(waiting.runId, "run_waiting");
-    await this.publishDurableRealtimeSafely(waiting.runId, {
-      type: "durable_run_waiting",
-      runId: waiting.runId,
-      reason: "autonomy_kill_switch",
-      waitForEvent,
-    });
+    await this.publishDurableRealtimeSafely(
+      waiting.runId,
+      {
+        type: "durable_run_waiting",
+        runId: waiting.runId,
+        reason: "autonomy_kill_switch",
+        waitForEvent,
+      },
+      runWorkspaceId(waiting),
+    );
   }
 
   private abortActiveRun(runId: string, reason: string, kind: "paused" | "cancelled"): void {
@@ -5658,11 +5733,15 @@ export class DurableRunService {
     if (!run) {
       return undefined;
     }
-    await this.publishDurableRealtimeSafely(run.runId, {
-      type: "durable_run_started",
-      runId: run.runId,
-      workflowKey: run.workflowKey,
-    });
+    await this.publishDurableRealtimeSafely(
+      run.runId,
+      {
+        type: "durable_run_started",
+        runId: run.runId,
+        workflowKey: run.workflowKey,
+      },
+      runWorkspaceId(run),
+    );
     return run;
   }
 
@@ -5700,11 +5779,15 @@ export class DurableRunService {
       return false;
     }
     this.scheduleCommittedBackgroundAttention(failed.runId, "run_failed");
-    await this.publishDurableRealtimeSafely(failed.runId, {
-      type: "durable_run_failed",
-      runId: failed.runId,
-      error: reason,
-    });
+    await this.publishDurableRealtimeSafely(
+      failed.runId,
+      {
+        type: "durable_run_failed",
+        runId: failed.runId,
+        error: reason,
+      },
+      runWorkspaceId(failed),
+    );
     void this.notifyRunFailedSafely(failed, reason).catch(() => undefined);
     this.requestRunProcessing(failed.runId);
     return true;
@@ -5925,11 +6008,15 @@ export class DurableRunService {
       return false;
     }
     this.scheduleCommittedBackgroundAttention(failed.runId, "run_failed");
-    await this.publishDurableRealtimeSafely(failed.runId, {
-      type: "durable_run_failed",
-      runId: failed.runId,
-      error: safeMessage,
-    });
+    await this.publishDurableRealtimeSafely(
+      failed.runId,
+      {
+        type: "durable_run_failed",
+        runId: failed.runId,
+        error: safeMessage,
+      },
+      runWorkspaceId(failed),
+    );
     await this.notifyRunFailedSafely(failed, safeMessage);
     if (isAdmittedV2ChatRun(failed)) this.requestRunProcessing(failed.runId);
     return true;
@@ -6101,8 +6188,13 @@ export class DurableRunService {
   }
 
   private pollCancelledFanoutParents(): void {
-    if (this.workerStopped || this.fanoutCancellationPollActive || !this.isDurableFoundationEnabled() ||
-        !this.fanoutLedger.isAvailable()) return;
+    if (
+      this.workerStopped ||
+      this.fanoutCancellationPollActive ||
+      !this.isDurableFoundationEnabled() ||
+      !this.fanoutLedger.isAvailable()
+    )
+      return;
     this.fanoutCancellationPollActive = true;
     const task = this.runWithSharedHostWorkerAdmission(async () => {
       if (this.workerStopped) return;
@@ -6110,15 +6202,27 @@ export class DurableRunService {
         this.fanoutCancellationCursor,
         async (childRunId) => await this.cancelDurableRun(childRunId, "fanout:parent_cancelled"),
         () => this.workerStopped,
-        (error, invocationId) => this.resolveLogger().warn({ error: boundedRecoveryError(error), invocationId },
-          "durable fanout cancellation poll deferred"),
+        (error, invocationId) =>
+          this.resolveLogger().warn(
+            { error: boundedRecoveryError(error), invocationId },
+            "durable fanout cancellation poll deferred",
+          ),
       );
-    }).catch((error: unknown) => {
-      // Reporting must not create an unhandled background rejection.
-      try {
-        this.resolveLogger().warn({ error: boundedRecoveryError(error) }, "durable fanout cancellation poll deferred");
-      } catch { /* Ignore a logger failure so cleanup stays retryable and the owned background promise settles. */ }
-    }).finally(() => { this.fanoutCancellationPollActive = false; });
+    })
+      .catch((error: unknown) => {
+        // Reporting must not create an unhandled background rejection.
+        try {
+          this.resolveLogger().warn(
+            { error: boundedRecoveryError(error) },
+            "durable fanout cancellation poll deferred",
+          );
+        } catch {
+          /* Ignore a logger failure so cleanup stays retryable and the owned background promise settles. */
+        }
+      })
+      .finally(() => {
+        this.fanoutCancellationPollActive = false;
+      });
     if (this.deps) trackBackgroundTask(this.deps.backgroundTasks, task);
   }
   private ensurePollLoop(): void {

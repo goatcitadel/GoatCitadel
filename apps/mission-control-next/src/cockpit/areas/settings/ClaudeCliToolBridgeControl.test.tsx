@@ -2,17 +2,24 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
 import { ClaudeCliToolBridgeControl } from "./ClaudeCliToolBridgeControl";
+import { freshReadsActive } from "@goatcitadel/mission-control-shared/api/fresh-reads";
+import { resetSettingsAttempt, settingsAttempt } from "./settings-attempt.test-support";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import {
   awaitingLlamaApproval,
   llamaPlanFixture,
 } from "../../../features/native-routes/settings/llama-setup.test-support";
 
-const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), fetchChangePlan: vi.fn() }));
+const api = vi.hoisted(() => ({
+  fetchSettings: vi.fn(),
+  patchSettings: vi.fn(),
+  fetchChangePlan: vi.fn(),
+  fetchChangePlans: vi.fn(),
+}));
 // The in-place approval dialog reads its approval; these tests cover the save, so the read never settles.
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
   fetchApproval: () => new Promise(() => undefined),
@@ -21,6 +28,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchSettings: api.fetchSettings,
   patchSettings: api.patchSettings,
   fetchChangePlan: api.fetchChangePlan,
+  fetchChangePlans: api.fetchChangePlans,
   isApiRequestError: (value: unknown) => Boolean(value && typeof value === "object" && "status" in value),
 }));
 
@@ -69,6 +77,17 @@ async function toggleAndSave(container: HTMLElement) {
   });
 }
 
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) =>
+  (await import("./settings-attempt.test-support")).withTrackedSettingsSave(
+    await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>(),
+  ),
+);
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) =>
+  (await import("./settings-attempt.test-support")).withSettingsAttemptRead(
+    await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/mutation-attempts")>(),
+  ),
+);
+beforeEach(resetSettingsAttempt);
 afterEach(() => {
   __resetSettingsChangesForTests();
   __resetSessionDraftsForTests();
@@ -178,5 +197,596 @@ describe("cockpit Claude Code CLI tool setting", () => {
     } finally {
       unmount();
     }
+  });
+
+  describe("a save that does not apply cleanly", () => {
+    const planConflict = {
+      status: 409,
+      kind: "http",
+      body: {
+        code: "WRITE_CONFLICT",
+        details: { resourceKind: "change_plan", resourceId: "plan-waiting", currentRevision: 2 },
+      },
+    };
+    const waitingPlan = (planId: string, approvalId: string, enabled: boolean) => ({
+      ...awaitingLlamaApproval(llamaPlanFixture()),
+      planId,
+      title: "Turn off Claude Code CLI: reuse one process between tool steps",
+      origin: { workspaceId: "default", surface: "settings" as const },
+      request: {
+        kind: "runtime_configuration" as const,
+        change: { operation: "feature_flag" as const, flag: "claudeCliToolBridgeEnabled" as const, enabled },
+      },
+      target: { ownerId: "runtime_settings", resourceId: "feature:claudeCliToolBridgeEnabled", expectedRevision: 2 },
+      requiredAction: { kind: "approval" as const, approvalId, title: "Approve", approvalLabel: "Approve" },
+    });
+    const buttons = (container: HTMLElement) => [...container.querySelectorAll("button")];
+    const buttonsAndLinks = (container: HTMLElement) =>
+      [...container.querySelectorAll("button, a")].map((entry) => entry.textContent);
+    const saveButton = (container: HTMLElement) =>
+      buttons(container).find((item) => item.textContent === "Save setting")!;
+
+    it("reopens the waiting change instead of saying settings changed elsewhere", async () => {
+      api.fetchSettings.mockResolvedValue(settingsAt(4, true));
+      api.patchSettings.mockRejectedValue(planConflict);
+      api.fetchChangePlan.mockResolvedValue(waitingPlan("plan-waiting", "approval-waiting", false));
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() =>
+          expect(container.textContent).toContain("One change to this setting is already waiting for your approval."),
+        );
+        expect(container.textContent).not.toContain("Settings changed elsewhere");
+        expect(container.textContent).toContain("Unsaved draft: Off");
+        // Saving again would only meet the same conflict.
+        expect(saveButton(container).disabled).toBe(true);
+        expect(api.fetchChangePlan).toHaveBeenCalledWith("plan-waiting", { workspaceId: "default" });
+      } finally {
+        unmount();
+      }
+    });
+
+    it("opens the waiting change even when its value differs from the draft", async () => {
+      api.fetchSettings.mockResolvedValue(settingsAt(4, false));
+      api.patchSettings.mockRejectedValue(planConflict);
+      // The waiting change turns the setting off; the draft being saved turns it on.
+      api.fetchChangePlan.mockResolvedValue(waitingPlan("plan-waiting", "approval-waiting", false));
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: Off"));
+        await toggleAndSave(container);
+        await vi.waitFor(() =>
+          expect(container.textContent).toContain("One change to this setting is already waiting for your approval."),
+        );
+        expect(container.textContent).toContain("Unsaved draft: On");
+        expect(api.patchSettings).toHaveBeenCalledTimes(1);
+      } finally {
+        unmount();
+      }
+    });
+
+    it("points to Inbox when the waiting change cannot be read", async () => {
+      api.fetchSettings.mockResolvedValue(settingsAt(4, true));
+      api.patchSettings.mockRejectedValue(planConflict);
+      api.fetchChangePlan.mockRejectedValue(new Error("offline"));
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() =>
+          expect(container.textContent).toContain("One change to this setting is already waiting."),
+        );
+        expect(buttonsAndLinks(container)).toContain("Open Inbox to approve it.");
+      } finally {
+        unmount();
+      }
+    });
+
+    it("keeps the old copy for a conflict that is not a waiting change", async () => {
+      api.fetchSettings.mockResolvedValue(settingsAt(4, true));
+      api.patchSettings.mockRejectedValue({
+        status: 409,
+        kind: "http",
+        body: { code: "STATE_CONFLICT", details: { expectedRevision: 4, currentRevision: 5 } },
+      });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() => expect(container.textContent).toContain("Settings changed elsewhere"));
+        expect(container.textContent).not.toContain("already waiting");
+      } finally {
+        unmount();
+      }
+    });
+
+    it("shows a plain refusal as not saved and does not lock the page", async () => {
+      api.fetchSettings.mockResolvedValue(settingsAt(4, true));
+      api.patchSettings.mockRejectedValue({ status: 422, kind: "http", body: { error: "That setting is managed." } });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() => expect(container.textContent).toContain("Not saved."));
+        expect(container.textContent).not.toContain("uncertain");
+        expect(checkbox(container).disabled).toBe(false);
+        expect(api.fetchChangePlans).not.toHaveBeenCalled();
+      } finally {
+        unmount();
+      }
+    });
+
+    it("reconciles a lost answer by reading the saved value and lifts the lock", async () => {
+      api.fetchSettings
+        .mockResolvedValueOnce(settingsAt(4, true))
+        .mockResolvedValueOnce(settingsAt(4, true))
+        .mockResolvedValue(settingsAt(5, false));
+      api.patchSettings.mockRejectedValue({ status: 503, kind: "http", body: {} });
+      api.fetchChangePlans.mockResolvedValue({ items: [] });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() => expect(container.textContent).toContain("Setting saved."));
+        expect(saveButton(container).disabled).toBe(true); // a clean draft, not a lock
+        expect(checkbox(container).disabled).toBe(false);
+        expect(container.textContent).not.toContain("Save outcome is uncertain");
+        expect(api.patchSettings).toHaveBeenCalledTimes(1);
+      } finally {
+        unmount();
+      }
+    });
+
+    it("finds the change a lost answer queued and leads to its approval", async () => {
+      api.fetchSettings.mockResolvedValue(settingsAt(4, true));
+      api.patchSettings.mockRejectedValue(new Error("Failed to fetch"));
+      api.fetchChangePlans.mockResolvedValue({ items: [waitingPlan("plan-lost", "approval-lost", false)] });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() =>
+          expect(container.textContent).toContain("One change to this setting is already waiting for your approval."),
+        );
+        expect(checkbox(container).disabled).toBe(false);
+        expect(saveButton(container).disabled).toBe(true);
+        expect(api.patchSettings).toHaveBeenCalledTimes(1);
+      } finally {
+        unmount();
+      }
+    });
+
+    it("says plainly when a lost answer turns out not to be saved", async () => {
+      api.fetchSettings.mockResolvedValue(settingsAt(4, true));
+      api.patchSettings.mockRejectedValue(new Error("Failed to fetch"));
+      api.fetchChangePlans.mockResolvedValue({ items: [] });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() =>
+          expect(container.textContent).toContain(
+            "Your change was not saved. Your draft is kept, so you can save it again.",
+          ),
+        );
+        expect(container.textContent).toContain("Unsaved draft: Off");
+        expect(saveButton(container).disabled).toBe(false);
+      } finally {
+        unmount();
+      }
+    });
+
+    it("keeps saving paused and offers Check again while the Gateway still doesn't answer", async () => {
+      api.fetchSettings
+        .mockResolvedValueOnce(settingsAt(4, true))
+        .mockResolvedValueOnce(settingsAt(4, true))
+        .mockRejectedValue(new Error("Failed to fetch"));
+      api.patchSettings.mockRejectedValue(new Error("Failed to fetch"));
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() =>
+          expect(container.textContent).toContain("GoatCitadel didn't answer, so this save isn't confirmed yet."),
+        );
+        expect(container.textContent).not.toContain("was not saved");
+        expect(checkbox(container).disabled).toBe(true);
+        const again = buttons(container).find((entry) => entry.textContent === "Check again");
+        expect(again).toBeDefined();
+
+        // The Gateway answers on the next check, and the change turns out to have been saved.
+        api.fetchSettings.mockResolvedValue(settingsAt(5, false));
+        api.fetchChangePlans.mockResolvedValue({ items: [] });
+        await act(async () => again!.click());
+        await vi.waitFor(() => expect(container.textContent).toContain("Setting saved."));
+        expect(checkbox(container).disabled).toBe(false);
+        expect(api.patchSettings).toHaveBeenCalledTimes(1);
+      } finally {
+        unmount();
+      }
+    });
+
+    it("keeps the lock when the open changes cannot be read, though the settings can", async () => {
+      api.fetchSettings
+        .mockResolvedValueOnce(settingsAt(4, true))
+        .mockResolvedValueOnce(settingsAt(4, true))
+        .mockResolvedValue(settingsAt(4, true));
+      api.patchSettings.mockRejectedValue(new Error("Failed to fetch"));
+      api.fetchChangePlans.mockRejectedValue(new Error("Failed to fetch"));
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() => expect(container.textContent).toContain("isn't confirmed yet"));
+        expect(container.textContent).not.toContain("was not saved");
+        expect(checkbox(container).disabled).toBe(true);
+      } finally {
+        unmount();
+      }
+    });
+
+    it("calls a change that finished between the two reads saved, never not saved", async () => {
+      api.fetchSettings
+        .mockResolvedValueOnce(settingsAt(4, true))
+        .mockResolvedValueOnce(settingsAt(4, true))
+        .mockResolvedValue(settingsAt(5, false));
+      api.patchSettings.mockRejectedValue({ status: 503, kind: "http", body: {} });
+      // The plans read still lists the change as being applied; by the settings read it has finished.
+      api.fetchChangePlans.mockResolvedValue({
+        items: [{ ...waitingPlan("plan-late", "approval-late", false), status: "applying", requiredAction: undefined }],
+      });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() => expect(container.textContent).toContain("Setting saved."));
+        expect(container.textContent).not.toContain("was not saved");
+        expect(container.textContent).not.toContain("being applied");
+        // The open changes are read before the saved value, so a finishing change shows up as the saved value.
+        const afterWrite = api.fetchSettings.mock.invocationCallOrder[2]!;
+        expect(api.fetchChangePlans.mock.invocationCallOrder[0]).toBeLessThan(afterWrite);
+      } finally {
+        unmount();
+      }
+    });
+
+    it("keeps the lock when the settings read fails after the open changes were read", async () => {
+      api.fetchSettings
+        .mockResolvedValueOnce(settingsAt(4, true))
+        .mockResolvedValueOnce(settingsAt(4, true))
+        .mockRejectedValue(new Error("Failed to fetch"));
+      api.patchSettings.mockRejectedValue(new Error("Failed to fetch"));
+      api.fetchChangePlans.mockResolvedValue({ items: [] });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() => expect(container.textContent).toContain("isn't confirmed yet"));
+        expect(container.textContent).not.toContain("was not saved");
+        expect(checkbox(container).disabled).toBe(true);
+      } finally {
+        unmount();
+      }
+    });
+
+    it("keeps the lock when the Gateway reports no usable value instead of calling it not saved", async () => {
+      api.fetchSettings
+        .mockResolvedValueOnce(settingsAt(4, true))
+        .mockResolvedValueOnce(settingsAt(4, true))
+        .mockResolvedValue(settingsAt(5));
+      api.patchSettings.mockRejectedValue(new Error("Failed to fetch"));
+      api.fetchChangePlans.mockResolvedValue({ items: [] });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() => expect(container.textContent).toContain("isn't confirmed yet"));
+        expect(container.textContent).not.toContain("was not saved");
+      } finally {
+        unmount();
+      }
+    });
+
+    it("shows nothing misleading when the named change finished before it was looked up", async () => {
+      api.fetchSettings.mockResolvedValue(settingsAt(4, true));
+      api.patchSettings.mockRejectedValue(planConflict);
+      api.fetchChangePlan.mockResolvedValue({
+        ...waitingPlan("plan-waiting", "approval-waiting", false),
+        status: "completed",
+      });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() => expect(api.fetchChangePlan).toHaveBeenCalled());
+        await act(async () => undefined);
+        expect(container.textContent).not.toContain("already waiting");
+        expect(container.textContent).not.toContain("Open Inbox");
+        expect(container.textContent).not.toContain("Settings changed elsewhere");
+        // The draft is kept and nothing blocks saving it again.
+        expect(container.textContent).toContain("Unsaved draft: Off");
+        expect(saveButton(container).disabled).toBe(false);
+      } finally {
+        unmount();
+      }
+    });
+
+    it("uses the ordinary conflict copy when the named change is not a Settings change", async () => {
+      api.fetchSettings.mockResolvedValue(settingsAt(4, true));
+      api.patchSettings.mockRejectedValue(planConflict);
+      api.fetchChangePlan.mockResolvedValue({
+        ...waitingPlan("plan-waiting", "approval-waiting", false),
+        origin: { workspaceId: "default", surface: "chat" },
+      });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() => expect(container.textContent).toContain("Settings changed elsewhere"));
+        expect(container.textContent).not.toContain("already waiting");
+      } finally {
+        unmount();
+      }
+    });
+
+    it("clears the waiting notice on Refresh once the change was decided elsewhere, and saving works again", async () => {
+      api.fetchSettings.mockResolvedValue(settingsAt(4, true));
+      api.patchSettings.mockRejectedValue(planConflict);
+      api.fetchChangePlan.mockResolvedValue(waitingPlan("plan-waiting", "approval-waiting", false));
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() =>
+          expect(container.textContent).toContain("One change to this setting is already waiting for your approval."),
+        );
+        expect(saveButton(container).disabled).toBe(true);
+
+        // Denied in Inbox: the plan is finished and the setting did not change.
+        api.fetchChangePlan.mockResolvedValue({
+          ...waitingPlan("plan-waiting", "approval-waiting", false),
+          status: "cancelled",
+        });
+        await act(async () =>
+          buttons(container)
+            .find((entry) => entry.textContent === "Refresh")!
+            .click(),
+        );
+        await vi.waitFor(() => expect(container.textContent).not.toContain("already waiting"));
+        expect(saveButton(container).disabled).toBe(false);
+      } finally {
+        unmount();
+      }
+    });
+
+    it("says a change the operator must review is waiting for review, with a link", async () => {
+      api.fetchSettings.mockResolvedValue(settingsAt(4, true));
+      api.patchSettings.mockRejectedValue(planConflict);
+      api.fetchChangePlan.mockResolvedValue({
+        ...waitingPlan("plan-waiting", "approval-waiting", false),
+        status: "awaiting_confirmation",
+        requiredAction: { kind: "confirmation", actionId: "a", actionNonce: "n", title: "Confirm" },
+      });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() =>
+          expect(container.textContent).toContain("One change to this setting is waiting for your review."),
+        );
+        expect(container.textContent).not.toContain("being applied");
+        expect(buttonsAndLinks(container)).toContain("Open Inbox to review it.");
+      } finally {
+        unmount();
+      }
+    });
+
+    it("says a change really being applied is being applied", async () => {
+      api.fetchSettings.mockResolvedValue(settingsAt(4, true));
+      api.patchSettings.mockRejectedValue(planConflict);
+      api.fetchChangePlan.mockResolvedValue({
+        ...waitingPlan("plan-waiting", "approval-waiting", false),
+        status: "applying",
+        requiredAction: undefined,
+      });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() =>
+          expect(container.textContent).toContain(
+            "One change to this setting is still being applied. Refresh in a moment to see it.",
+          ),
+        );
+        expect(container.textContent).not.toContain("waiting for your review");
+      } finally {
+        unmount();
+      }
+    });
+
+    it("is not fooled by a change that finishes after the open changes were read", async () => {
+      // The settings still hold the old value until the open changes have been read; afterwards they hold the new one.
+      let written = false;
+      api.fetchSettings.mockImplementation(async () =>
+        written && api.fetchChangePlans.mock.calls.length > 0 ? settingsAt(5, false) : settingsAt(4, true),
+      );
+      api.patchSettings.mockImplementation(async () => {
+        written = true;
+        throw { status: 503, kind: "http", body: {} };
+      });
+      api.fetchChangePlans.mockResolvedValue({ items: [] });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() => expect(container.textContent).toContain("Setting saved."));
+        expect(container.textContent).not.toContain("was not saved");
+      } finally {
+        unmount();
+      }
+    });
+
+    describe("when the lost request may still be running", () => {
+      /** Old value, no open change: exactly what a request still in flight on the Gateway looks like. */
+      async function loseSave(mounted: ReturnType<typeof mount>) {
+        const { container } = await mounted;
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        return container;
+      }
+      const lostSetup = () => {
+        api.fetchSettings.mockResolvedValue(settingsAt(4, true));
+        api.patchSettings.mockRejectedValue(new Error("Failed to fetch"));
+        api.fetchChangePlans.mockResolvedValue({ items: [] });
+      };
+
+      it("keeps the lock while the Gateway says the request is running, then concludes once it finished", async () => {
+        lostSetup();
+        settingsAttempt.read.mockResolvedValue({ status: "pending", claimExpired: false });
+        const mounted = mount();
+        const container = await loseSave(mounted);
+        try {
+          await vi.waitFor(() => expect(container.textContent).toContain("isn't confirmed yet"));
+          expect(container.textContent).not.toContain("was not saved");
+          expect(checkbox(container).disabled).toBe(true);
+          // The reads must not be drawn on at all while the request may still apply.
+          expect(api.fetchChangePlans).not.toHaveBeenCalled();
+          expect(settingsAttempt.read).toHaveBeenCalledWith(settingsAttempt.key, "PATCH", "/api/v1/settings");
+
+          settingsAttempt.read.mockResolvedValue({ status: "completed", claimExpired: false });
+          const again = [...container.querySelectorAll("button")].find((entry) => entry.textContent === "Check again")!;
+          await act(async () => again.click());
+          await vi.waitFor(() =>
+            expect(container.textContent).toContain(
+              "Your change was not saved. Your draft is kept, so you can save it again.",
+            ),
+          );
+          expect(checkbox(container).disabled).toBe(false);
+        } finally {
+          (await mounted).unmount();
+        }
+      });
+
+      it("keeps the lock when the Gateway reports an expired claim or an unknown outcome", async () => {
+        for (const record of [{ status: "pending", claimExpired: true }, { status: "unknown_after_send" }]) {
+          __resetSettingsChangesForTests();
+          __resetSessionDraftsForTests();
+          lostSetup();
+          settingsAttempt.read.mockResolvedValue(record);
+          const mounted = mount();
+          const container = await loseSave(mounted);
+          try {
+            await vi.waitFor(() => expect(container.textContent).toContain("isn't confirmed yet"));
+            expect(container.textContent).not.toContain("was not saved");
+            expect(checkbox(container).disabled).toBe(true);
+          } finally {
+            (await mounted).unmount();
+          }
+        }
+      });
+
+      it("concludes not saved and unlocks when the Gateway never received the request", async () => {
+        // The first read of the check, made after the client's own request failed, finds no record: it never arrived.
+        lostSetup();
+        settingsAttempt.read.mockResolvedValue({ status: "absent" });
+        const mounted = mount();
+        const container = await loseSave(mounted);
+        try {
+          await vi.waitFor(() =>
+            expect(container.textContent).toContain(
+              "Your change was not saved. Your draft is kept, so you can save it again.",
+            ),
+          );
+          expect(container.textContent).toContain("Unsaved draft: Off");
+          expect(checkbox(container).disabled).toBe(false);
+          // The attempt was read before anything else was.
+          expect(settingsAttempt.read.mock.invocationCallOrder[0]).toBeLessThan(
+            api.fetchChangePlans.mock.invocationCallOrder[0]!,
+          );
+        } finally {
+          (await mounted).unmount();
+        }
+      });
+      it("keeps the lock when the Gateway's record cannot be read", async () => {
+        lostSetup();
+        settingsAttempt.read.mockRejectedValue(new Error("Failed to fetch"));
+        const mounted = mount();
+        const container = await loseSave(mounted);
+        try {
+          await vi.waitFor(() => expect(container.textContent).toContain("isn't confirmed yet"));
+          expect(container.textContent).not.toContain("was not saved");
+        } finally {
+          (await mounted).unmount();
+        }
+      });
+
+      it("never says not saved without the request's identity, but still finds a saved value", async () => {
+        lostSetup();
+        settingsAttempt.capture = false;
+        const mounted = mount();
+        const container = await loseSave(mounted);
+        try {
+          await vi.waitFor(() => expect(container.textContent).toContain("isn't confirmed yet"));
+          expect(container.textContent).not.toContain("was not saved");
+          expect(settingsAttempt.read).not.toHaveBeenCalled();
+          // The value turns out to have been applied: that is safe to say whatever became of the request.
+          api.fetchSettings.mockResolvedValue(settingsAt(5, false));
+          const again = [...container.querySelectorAll("button")].find((entry) => entry.textContent === "Check again")!;
+          await act(async () => again.click());
+          await vi.waitFor(() => expect(container.textContent).toContain("Setting saved."));
+        } finally {
+          (await mounted).unmount();
+        }
+      });
+    });
+
+    it("reads the saved value after the write, never from a read that started before it", async () => {
+      // A background settings read already in flight during the write answers with the old value; only a read made
+      // inside a fresh-read scope observes the state after the write.
+      let written = false;
+      api.fetchSettings.mockImplementation(async () =>
+        written && freshReadsActive() ? settingsAt(5, false) : settingsAt(4, true),
+      );
+      api.patchSettings.mockImplementation(async () => {
+        written = true;
+        throw new Error("Failed to fetch");
+      });
+      api.fetchChangePlans.mockResolvedValue({ items: [] });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() => expect(container.textContent).toContain("Setting saved."));
+        expect(container.textContent).not.toContain("was not saved");
+      } finally {
+        unmount();
+      }
+    });
+
+    it("cannot tell when a full page of plans shows no match, and keeps the lock", async () => {
+      api.fetchSettings.mockResolvedValue(settingsAt(4, true));
+      api.patchSettings.mockRejectedValue(new Error("Failed to fetch"));
+      // 200 newer plans of another kind fill the page, so an older open plan of ours may have been left out.
+      api.fetchChangePlans.mockResolvedValue({
+        items: Array.from({ length: 200 }, (_, index) => ({
+          ...waitingPlan(`other-${index}`, `approval-${index}`, false),
+          request: {
+            kind: "runtime_configuration",
+            change: { operation: "feature_flag", flag: "somethingElseEnabled", enabled: true },
+          },
+        })),
+      });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() => expect(container.textContent).toContain("isn't confirmed yet"));
+        expect(container.textContent).not.toContain("was not saved");
+        expect(checkbox(container).disabled).toBe(true);
+      } finally {
+        unmount();
+      }
+    });
   });
 });
