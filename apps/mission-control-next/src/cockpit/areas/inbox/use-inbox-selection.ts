@@ -13,11 +13,14 @@ const itemInAddress = () => new URLSearchParams(readCockpitLocation().search).ge
  * Owns the selected Inbox row and keeps the address in step with the item that is open in the inspector, so a
  * reload, a shared link and Back and Forward keep the operator's place.
  *
- * History rule: opening an item while none is open pushes one entry, so Back returns to the list with nothing open.
- * Opening another item while one is open (J and K, or Details on another row) replaces that entry, so arrowing never
- * stacks history. Closing the inspector removes the item from the address by replacing the entry. A decision leaves
- * the address as it is, because the open inspector keeps the decided item's receipt; a reload then says the item is
- * no longer in the Inbox. Highlighting a row with nothing open writes nothing.
+ * History rule: every write replaces the current entry, so opening, moving (J and K, or Details on another row) and
+ * closing never add a history step and Back still leaves the Inbox as it does without an item. The item stays in the
+ * address while it is open, so a reload or a copied link keeps it. A decision leaves the address as it is, because
+ * the open inspector keeps the decided item's receipt; a reload then says the item is no longer in the Inbox.
+ * Highlighting a row with nothing open writes nothing.
+ *
+ * A move happens only once the navigation owner accepts it (it may ask about unsaved drafts first), so a declined
+ * move leaves the old row marked and nothing waiting to open.
  *
  * The inspector closes whenever the address changes, so an item is opened once its address has landed: an address
  * that names an item is opened by `useInboxLinkedItem`, with the way the operator asked for it (`takePending`).
@@ -26,7 +29,7 @@ export function useInboxSelection(
   workspaceId: string,
   openNow: MutableRefObject<(...args: InboxOpenArguments) => void>,
 ) {
-  const { navigate, search } = useCockpitRoute();
+  const { requestTransition, search } = useCockpitRoute();
   const inspector = useInspector();
   const [selectedId, selectItem] = useState<string | null>(null);
   const addressItem = new URLSearchParams(search).get("item");
@@ -35,30 +38,44 @@ export function useInboxSelection(
   // The item the last write put in the address, so only Back, Forward and an edited address count as outside moves.
   const written = useRef<string | null | undefined>(undefined);
 
+  /** Replaces the address with one naming `id` (or no item), once the navigation owner accepts the move. */
   const write = useCallback(
-    (id: string | null, replace: boolean) => {
-      const location = readCockpitLocation();
-      const href = inboxSelectionHref(location, id, workspaceId);
-      if (href === location.pathname + location.search + location.hash) return;
-      written.current = id;
-      navigate(href, { replace });
+    (id: string | null, onAccepted?: () => void) => {
+      requestTransition((review) => {
+        const location = readCockpitLocation();
+        const href = inboxSelectionHref(location, id, workspaceId);
+        if (href === location.pathname + location.search + location.hash) return;
+        onAccepted?.();
+        written.current = id;
+        if (!review.navigate(href, { replace: true })) pending.current = null;
+      });
     },
-    [navigate, workspaceId],
+    [requestTransition, workspaceId],
   );
 
   const inspect = useCallback(
     (...args: InboxOpenArguments) => {
-      const named = itemInAddress();
-      if (named === args[0].id) {
+      const [item] = args;
+      if (itemInAddress() === item.id) {
         pending.current = null;
+        selectItem(item.id);
         openNow.current(...args);
         return;
       }
-      pending.current = args;
-      write(args[0].id, named !== null);
+      write(item.id, () => {
+        pending.current = args;
+        selectItem(item.id);
+      });
     },
     [write, openNow],
   );
+
+  /** Marks a row for the keyboard. While an item is open the mark follows the panel, so it waits for the move. */
+  const showsRef = useRef(showsItem);
+  showsRef.current = showsItem;
+  const highlight = useCallback((id: string | null) => {
+    if (id === null || !showsRef.current) selectItem(id);
+  }, []);
 
   const selectedRef = useRef(selectedId);
   selectedRef.current = selectedId;
@@ -80,14 +97,15 @@ export function useInboxSelection(
     const dismissed = generation !== dismissals.current;
     dismissals.current = generation;
     // The inspector was closed with an item in the address: the address stops naming it.
-    if (dismissed && !showsItem && addressItem !== null && !pending.current) write(null, true);
+    if (dismissed && !showsItem && addressItem !== null && !pending.current) write(null);
   }, [showsItem, addressItem, getDismissalGeneration, write]);
 
   const takePending = useCallback((id: string) => {
     const open = pending.current;
+    if (!open || open[0].id !== id) return null;
     pending.current = null;
-    return open && open[0].id === id ? open : null;
+    return open;
   }, []);
 
-  return { selectedId, selectItem, inspect, takePending };
+  return { selectedId, selectItem, highlight, inspect, takePending };
 }

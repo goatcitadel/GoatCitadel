@@ -9,8 +9,12 @@ import type { ApprovalRequest, OperatorInboxItem, OperatorInboxResponse } from "
 import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InspectorPanel, InspectorProvider } from "../../app/inspector";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+import { setSectionDirty } from "../../../features/native-routes/library/use-form-dirty";
 import { InboxArea } from "./InboxArea";
 import { __resetInboxViewedUpdatesForTests, isInboxUpdateViewed } from "./inbox-viewed-updates";
+
+prepareReadyDialogFixture();
 
 const apiMocks = vi.hoisted(() => ({
   fetchApproval: vi.fn(),
@@ -1135,7 +1139,7 @@ describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN
   const details = (id: string) =>
     container.querySelector<HTMLButtonElement>(`[data-inbox-row="${CSS.escape(id)}"] [data-inbox-detail]`)!;
 
-  it("puts the opened item in the address and keeps J/K from stacking history (U-IN-006)", async () => {
+  it("puts the opened item in the address without adding a history step (U-IN-006)", async () => {
     show([first, second], { needs_decision: { known: 2, complete: true } });
     await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
     expect(itemInAddress()).toBeNull();
@@ -1144,13 +1148,130 @@ describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN
     expect(itemInAddress()).toBe("approval:test");
     expect(new URLSearchParams(window.location.search).get("workspaceId")).toBe("default");
     expect(window.location.search).not.toContain("Review");
-    expect(window.history.length).toBe(before + 1);
+    expect(window.history.length).toBe(before);
     expect(container.querySelectorAll('[aria-label^="Inspector:"]')).toHaveLength(1);
     // Moving the open item with J/K replaces the entry: arrowing never stacks history.
     await press("j");
     expect(itemInAddress()).toBe("approval:second");
-    expect(window.history.length).toBe(before + 1);
+    expect(window.history.length).toBe(before);
     expect(container.querySelectorAll('[aria-label^="Inspector:"]')).toHaveLength(1);
+    expect(container.querySelector('[aria-label="Inspector: Second write"]')).not.toBeNull();
+    // The row mark follows the panel, and focus stays on the list row.
+    expect(container.querySelector('[data-inbox-item][data-selected="true"] h3')?.textContent).toBe("Second write");
+    expect(document.activeElement?.closest("[data-inbox-row]")?.getAttribute("data-inbox-row")).toBe("approval:second");
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Close inspector"]')!.click());
+    expect(itemInAddress()).toBeNull();
+    expect(window.history.length).toBe(before);
+  });
+
+  it("leaves the Inbox on Back after an item was opened and closed", async () => {
+    show([first, second], { needs_decision: { known: 2, complete: true } });
+    window.history.pushState(null, "", "/work");
+    window.history.pushState(null, "", "/inbox?workspaceId=default");
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    const before = window.history.length;
+    await act(async () => details("approval:test").click());
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Close inspector"]')!.click());
+    expect(window.history.length).toBe(before);
+    await act(async () => window.history.back());
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(window.location.pathname).toBe("/work");
+  });
+
+  it("reopens the item after a reload of its address", async () => {
+    show([first, second], { needs_decision: { known: 2, complete: true } });
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    await act(async () => details("approval:second").click());
+    const address = window.location.pathname + window.location.search;
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    window.history.replaceState(null, "", address);
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    expect(container.querySelector('[aria-label="Inspector: Second write"]')).not.toBeNull();
+    expect(container.querySelector('[data-inbox-item][data-selected="true"] h3')?.textContent).toBe("Second write");
+  });
+
+  describe("with five decisions after a decision", () => {
+    const names = ["one", "two", "three", "four", "five"];
+    const rows = names.map(
+      (name, index): OperatorInboxItem => ({
+        ...first,
+        id: "approval:" + name,
+        title: "Row " + name,
+        riskLevel: "caution",
+        createdAt: "2026-09-28T00:00:0" + index + "Z",
+        source: { workspaceId: "default", approvalId: name },
+      }),
+    );
+    const rowOrder = () =>
+      [...container.querySelectorAll("[data-inbox-row]")].map((row) => row.getAttribute("data-inbox-row")!);
+    const focusedRow = () => document.activeElement?.closest("[data-inbox-row]")?.getAttribute("data-inbox-row");
+
+    it("continues J and K from the focused row when nothing is selected (U-IN-008)", async () => {
+      show(rows, { needs_decision: { known: 5, complete: true } });
+      await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+      const order = rowOrder();
+      expect(order).toHaveLength(5);
+      await act(async () => details(order[2]!).focus());
+      expect(container.querySelector('[data-selected="true"]')).toBeNull();
+      await press("j");
+      expect(focusedRow()).toBe(order[3]);
+      expect(container.querySelector('[data-inbox-item][data-selected="true"] h3')?.textContent).toBe(
+        rows.find((row) => row.id === order[3])!.title,
+      );
+    });
+
+    it("moves K from the focused row when nothing is selected", async () => {
+      show(rows, { needs_decision: { known: 5, complete: true } });
+      await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+      const order = rowOrder();
+      await act(async () => details(order[2]!).focus());
+      await press("k");
+      expect(focusedRow()).toBe(order[1]);
+    });
+
+    it("lets A act on the focused row's item, never the first, and decides nothing", async () => {
+      show(rows, { needs_decision: { known: 5, complete: true } });
+      await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+      const order = rowOrder();
+      await act(async () => details(order[2]!).focus());
+      await press("a");
+      await settle();
+      await settle();
+      const title = rows.find((row) => row.id === order[2])!.title;
+      expect(container.querySelector('[aria-label="Inspector: ' + title + '"]')).not.toBeNull();
+      expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps the old row marked and nothing pending when unsaved drafts stop a move (U-IN-006)", async () => {
+    show([first, second], { needs_decision: { known: 2, complete: true } });
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    await act(async () => details("approval:test").click());
+    expect(container.querySelector('[data-inbox-item][data-selected="true"] h3')?.textContent).toBe(
+      "Review file write",
+    );
+    await act(async () => setSectionDirty("b14-draft", true, "A draft"));
+    try {
+      await act(async () => details("approval:second").click());
+      const stay = [...document.body.querySelectorAll("button")].find((entry) => entry.textContent === "Cancel");
+      expect(stay).toBeDefined();
+      await act(async () => stay!.click());
+      expect(itemInAddress()).toBe("approval:test");
+      expect(container.querySelector('[data-inbox-item][data-selected="true"] h3')?.textContent).toBe(
+        "Review file write",
+      );
+      expect(container.querySelector('[aria-label="Inspector: Review file write"]')).not.toBeNull();
+    } finally {
+      await act(async () => setSectionDirty("b14-draft", false));
+    }
+    // A later address change to the other item opens it with default arguments, not the declined request's.
+    await act(async () => {
+      window.history.replaceState(null, "", "/inbox?workspaceId=default&item=approval%3Asecond");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(container.querySelector('[aria-label="Inspector: Second write"]')).not.toBeNull();
+    expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
   });
 
   it("clears the item from the address when the inspector is closed", async () => {

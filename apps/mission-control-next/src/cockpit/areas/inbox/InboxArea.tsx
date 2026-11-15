@@ -160,7 +160,7 @@ export function InboxArea() {
   const showBulkReject = hasOpenDecisions || bulkRejectScope === scopeKey;
   const { announce, region: announcer } = useInboxAnnouncer();
   const openNowRef = useRef<(...args: InboxOpenArguments) => void>(() => undefined);
-  const { selectedId, selectItem, inspect, takePending } = useInboxSelection(workspaceId, openNowRef);
+  const { selectedId, selectItem, highlight, inspect, takePending } = useInboxSelection(workspaceId, openNowRef);
   const [contextSelection, setContextSelection] = useState<{ scope: string; id: string } | null>(null);
   const [shortcutsEnabled, setShortcutsEnabled] = useInboxShortcutsPreference();
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
@@ -257,7 +257,7 @@ export function InboxArea() {
     enabled: shortcutsEnabled,
     orderedItems,
     selectedId,
-    select: selectItem,
+    select: highlight,
     inspect,
     inspectorShowsInboxItem: Boolean(inspector.content?.source?.startsWith("inbox:")),
     groupOf,
@@ -387,7 +387,6 @@ export function InboxArea() {
                     contextOpen={contextSelection?.scope === scopeKey && contextSelection.id === item.id}
                     onDecision={(message, settled) => decisionRef.current(item, message, settled)}
                     onDetails={() => {
-                      selectItem(item.id);
                       inspect(item, undefined, true);
                     }}
                     onToggleContext={() =>
