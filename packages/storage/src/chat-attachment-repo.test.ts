@@ -16,7 +16,7 @@ function createStore(): { db: DatabaseClient; repo: ChatAttachmentRepository; pr
   const project = new ChatProjectRepository(db).create({
     workspaceId: "workspace-a",
     name: "Attachment project",
-    workspacePath: "F:/work/attachments",
+    workspacePath: "work/attachments",
   });
   return { db, repo: new ChatAttachmentRepository(db), projectId: project.projectId };
 }
@@ -148,15 +148,48 @@ describe("ChatAttachmentRepository", () => {
 describe("renderer-owned attachment receipts", () => {
   function fixture() {
     const store = createStore();
-    const identity = { artifactId: "html-artifact", artifactVersion: 1, sessionId: "session-render", workspaceId: "workspace-a",
-      contentHash: "a".repeat(64), rendererVersion: "html-snapshot.v1" };
-    new ChatGeneratedArtifactRepository(store.db).create({ artifactId: identity.artifactId, sessionId: identity.sessionId,
-      workspaceId: identity.workspaceId, turnId: "turn-render", title: "HTML", kind: "html", content: "<p>HTML</p>",
-      sourceSurface: "chat", version: 1, contentHash: identity.contentHash, createdAt: "2026-11-02", updatedAt: "2026-11-02" });
-    const attachment = store.repo.create({ attachmentId: "renderer-png", sessionId: identity.sessionId,
-      workspaceId: identity.workspaceId, fileName: "ordinary-name.png", mimeType: "image/png", mediaType: "image",
-      sizeBytes: 8, sha256: "b".repeat(64), storageRelPath: "render.png", extractStatus: "unsupported" });
-    const receipt = { ...identity, viewport: "desktop", width: 1440, height: 900, attachmentId: attachment.attachmentId, sha256: attachment.sha256 };
+    const identity = {
+      artifactId: "html-artifact",
+      artifactVersion: 1,
+      sessionId: "session-render",
+      workspaceId: "workspace-a",
+      contentHash: "a".repeat(64),
+      rendererVersion: "html-snapshot.v1",
+    };
+    new ChatGeneratedArtifactRepository(store.db).create({
+      artifactId: identity.artifactId,
+      sessionId: identity.sessionId,
+      workspaceId: identity.workspaceId,
+      turnId: "turn-render",
+      title: "HTML",
+      kind: "html",
+      content: "<p>HTML</p>",
+      sourceSurface: "chat",
+      version: 1,
+      contentHash: identity.contentHash,
+      createdAt: "2026-11-02",
+      updatedAt: "2026-11-02",
+    });
+    const attachment = store.repo.create({
+      attachmentId: "renderer-png",
+      sessionId: identity.sessionId,
+      workspaceId: identity.workspaceId,
+      fileName: "ordinary-name.png",
+      mimeType: "image/png",
+      mediaType: "image",
+      sizeBytes: 8,
+      sha256: "b".repeat(64),
+      storageRelPath: "render.png",
+      extractStatus: "unsupported",
+    });
+    const receipt = {
+      ...identity,
+      viewport: "desktop",
+      width: 1440,
+      height: 900,
+      attachmentId: attachment.attachmentId,
+      sha256: attachment.sha256,
+    };
     return { ...store, identity, attachment, receipt };
   }
 
@@ -166,12 +199,24 @@ describe("renderer-owned attachment receipts", () => {
     const recorded = f.repo.recordArtifactRender(f.receipt);
     assert.equal(recorded.attachmentId, f.attachment.attachmentId);
     assert.deepEqual(f.repo.listArtifactRenders(f.identity), [recorded]);
-    for (const drift of [{ artifactId: "another-artifact" }, { artifactVersion: 2 }, { sessionId: "another-session" },
-      { workspaceId: "workspace-b" }, { contentHash: `${"a".repeat(16)}${"c".repeat(48)}` }, { rendererVersion: "older-renderer" }]) {
+    for (const drift of [
+      { artifactId: "another-artifact" },
+      { artifactVersion: 2 },
+      { sessionId: "another-session" },
+      { workspaceId: "workspace-b" },
+      { contentHash: `${"a".repeat(16)}${"c".repeat(48)}` },
+      { rendererVersion: "older-renderer" },
+    ]) {
       assert.deepEqual(f.repo.listArtifactRenders({ ...f.identity, ...drift }), []);
     }
-    for (const drift of [{ artifactId: "missing" }, { artifactVersion: 2 }, { sessionId: "foreign" }, { workspaceId: "workspace-b" },
-      { sha256: "c".repeat(64) }, { contentHash: "c".repeat(64) }]) {
+    for (const drift of [
+      { artifactId: "missing" },
+      { artifactVersion: 2 },
+      { sessionId: "foreign" },
+      { workspaceId: "workspace-b" },
+      { sha256: "c".repeat(64) },
+      { contentHash: "c".repeat(64) },
+    ]) {
       assert.throws(() => f.repo.recordArtifactRender({ ...f.receipt, ...drift }), /does not match/);
     }
     setRawField(f.db, f.attachment.attachmentId, "sha256", "c".repeat(64));
