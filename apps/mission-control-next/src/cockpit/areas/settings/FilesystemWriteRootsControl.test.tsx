@@ -20,6 +20,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   isApiRequestError: (value: unknown) => Boolean(value && typeof value === "object" && "status" in value),
 }));
 
+vi.mock("./SettingsApprovalDialog", () => ({
+  SettingsApprovalDialog: (props: { approvalId: string; summary?: string }) => (
+    <section data-in-place-approval={props.approvalId}>{props.summary}</section>
+  ),
+}));
+
 type Root_ = { path: string; allowDelete: boolean; preset?: "os_temp"; label?: string; addedAt?: string };
 function settingsAt(
   revision: number,
@@ -315,7 +321,7 @@ describe("global filesystem tool access", () => {
     expect(api.patchSettings).not.toHaveBeenCalled();
   });
 
-  it("keeps a pending approval visible and links to its exact review", async () => {
+  it("opens a pending approval in place, keeps the Inbox link, and has no Continue step", async () => {
     api.fetchSettings.mockResolvedValue(settingsAt(4));
     api.patchSettings.mockResolvedValue({
       ...settingsAt(4),
@@ -358,6 +364,13 @@ describe("global filesystem tool access", () => {
     const target = new URL(container.querySelector<HTMLAnchorElement>('a[href^="/inbox?"]')!.href);
     expect(target.searchParams.get("approvalId")).toBe("approval-1");
     expect(target.searchParams.get("workspaceId")).toBe("default");
+    expect(container.querySelector('a[href^="/inbox?"]')?.textContent).toBe("Open in Inbox");
+    expect(container.querySelector('[data-in-place-approval="approval-1"]')?.textContent).toBe(
+      "Change filesystem access",
+    );
+    expect(button("Continue approved change")).toBeUndefined();
+    // The page never approves for the operator: the save went out once and the control stays locked.
+    expect(api.patchSettings).toHaveBeenCalledTimes(1);
     expect(toolSelect("fs.copy").disabled).toBe(true);
   });
 
