@@ -1177,6 +1177,16 @@ describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN
     expect(window.history.length).toBe(before);
   });
 
+  it("keeps focus on the list row when J moves the docked inspector to the next item (U-GL-039)", async () => {
+    show([first, second], { needs_decision: { known: 2, complete: true } });
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    await act(async () => details("approval:test").click());
+    await press("j");
+    expect(container.querySelector('[aria-label="Inspector: Second write"]')).not.toBeNull();
+    expect(document.activeElement?.closest("[data-inbox-row]")?.getAttribute("data-inbox-row")).toBe("approval:second");
+    expect(document.activeElement?.closest("aside")).toBeNull();
+  });
+
   it("leaves the Inbox on Back after an item was opened and closed", async () => {
     show([first, second], { needs_decision: { known: 2, complete: true } });
     window.history.pushState(null, "", "/work");

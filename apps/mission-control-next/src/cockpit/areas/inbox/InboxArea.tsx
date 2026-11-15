@@ -183,9 +183,10 @@ export function InboxArea() {
   const decisionRef = useRef(decisionFocus.onDecision);
   decisionRef.current = decisionFocus.onDecision;
   const openNow = useCallback(
-    (item: OperatorInboxItem, focusAction?: "approve" | "deny", explicitDetails = false) =>
+    (item: OperatorInboxItem, focusAction?: "approve" | "deny", explicitDetails = false, keepFocus = false) =>
       inspector.open({
         source: `inbox:${item.id}`,
+        keepFocus,
         title: inboxItemTitle(item),
         body: (
           <InboxInspectorBody

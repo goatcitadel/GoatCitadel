@@ -4,6 +4,11 @@ export interface InspectorContent {
   title: string;
   body: ReactNode;
   source?: string;
+  /**
+   * The panel opens for a move the operator is making elsewhere (J and K walking a list), so it must not take focus
+   * from the list. Without it, a panel that opens docked or floating takes focus.
+   */
+  keepFocus?: boolean;
 }
 export interface InspectorApi {
   content: InspectorContent | null;

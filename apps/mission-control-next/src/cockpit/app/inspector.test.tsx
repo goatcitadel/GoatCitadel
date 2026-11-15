@@ -104,6 +104,23 @@ describe("inspector", () => {
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Inspector");
   });
 
+  it("leaves focus where it is when the opener asks the panel to keep it", () => {
+    act(() => {
+      root.render(
+        <InspectorProvider>
+          <Probe />
+          <button type="button">Row</button>
+          <InspectorPanel />
+        </InspectorProvider>,
+      );
+    });
+    const row = container.querySelector("button")!;
+    row.focus();
+    act(() => api.open({ title: "Run", body: <p>Steps</p>, keepFocus: true }));
+    expect(container.querySelector('[aria-label="Inspector: Run"]')).not.toBeNull();
+    expect(document.activeElement).toBe(row);
+  });
+
   it("leaves focus in a text field that opened the inspector", () => {
     act(() => {
       root.render(

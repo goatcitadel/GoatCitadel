@@ -190,11 +190,13 @@ export function InspectorPanel() {
     if ((!active || active === document.body) && focusTarget.current?.isConnected) focusTarget.current.focus();
   }, [shown]);
   const floating = shown && overlay && !modal && !expanded && !isPhone;
+  const keepFocus = useRef(false);
+  keepFocus.current = Boolean(content?.keepFocus);
   const inline = shown && !modal && !expanded && !isPhone;
   useEffect(() => {
     if (!inline) return;
     // A text field that opened the panel (a filter box) keeps the operator's typing; anything else hands focus in.
-    if (focusTarget.current?.matches(TEXT_FIELD)) return;
+    if (keepFocus.current || focusTarget.current?.matches(TEXT_FIELD)) return;
     panel.current?.focus({ preventScroll: true });
   }, [inline]);
   if (!content) return null;
