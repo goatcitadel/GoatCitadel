@@ -136,7 +136,7 @@ describe("Work history head poll (U-WK-008)", () => {
   it("polls a one-page list exactly once per tick through the query's own timer", async () => {
     const only = { items: [run("r1", "running")] };
     api.fetchDurableRunHistory.mockResolvedValue(only);
-    client.setQueryData(workspaceDurableRunsOptions("w").queryKey, { pages: [only], pageParams: [""] });
+    client.setQueryData(workspaceDurableRunsOptions("w").queryKey, { pages: [only], pageParams: [""] } as never);
     const observer = new InfiniteQueryObserver(client, {
       ...workspaceDurableRunsOptions("w"),
       refetchOnMount: false,
