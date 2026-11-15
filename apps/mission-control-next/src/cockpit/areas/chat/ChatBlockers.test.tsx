@@ -477,6 +477,82 @@ it("offers Ask again once a Chat approval expires (U-CH-031)", async () => {
   }
 });
 
+const sweptExpiredRecord = {
+  approvalId: "approval/1",
+  kind: "documents.create",
+  status: "rejected",
+  resolutionOutcome: "expired",
+  resolvedBy: "system:approval-expiry",
+  riskLevel: "caution",
+  payload: {},
+  preview: { toolName: "documents.create", path: "notes/note.txt" },
+  linkage: { turnId: "turn-1" },
+  createdAt: "2026-10-01T00:00:00Z",
+};
+const expiredThread = { turns: [{ turnId: "turn-1", userMessage: { content: "Create the note" } }] };
+
+async function renderExpired(overrides: Record<string, unknown>) {
+  const composer = document.createElement("textarea");
+  document.body.append(composer);
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({
+            pendingApproval: { approvalId: "approval/1", kind: "documents.create", riskLevel: "caution" },
+            composerRef: { current: composer },
+            onDraftChange: vi.fn(),
+            ...overrides,
+          })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  return composer;
+}
+
+it("keeps Ask again when the record read says the sweep expired it (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
+  const onDraftChange = vi.fn();
+  const composer = await renderExpired({ thread: expiredThread, onDraftChange, draft: "" });
+  try {
+    await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
+    expect(container.textContent).toContain("Approval expired");
+    expect(container.textContent).not.toContain("Approval decided");
+    expect(container.textContent).toContain("The action did not run. Ask again to put your request back");
+    await act(async () => findButton("Ask again")!.click());
+    expect(onDraftChange).toHaveBeenCalledExactlyOnceWith("Create the note");
+  } finally {
+    composer.remove();
+  }
+});
+
+it("does not promise Ask again when no linked turn is found (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
+  const composer = await renderExpired({ thread: { turns: [] }, draft: "" });
+  try {
+    await vi.waitFor(() => expect(container.textContent).toContain("The action did not run."));
+    expect(findButton("Ask again")).toBeUndefined();
+    expect(container.textContent).not.toContain("Ask again to put");
+  } finally {
+    composer.remove();
+  }
+});
+
+it("leaves a message the operator has typed alone and says so (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
+  const onDraftChange = vi.fn();
+  const composer = await renderExpired({ thread: expiredThread, onDraftChange, draft: "Something I am typing" });
+  try {
+    await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
+    await act(async () => findButton("Ask again")!.click());
+    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Your message box already has text. Clear it to ask again.");
+  } finally {
+    composer.remove();
+  }
+});
+
 it("shows a failed record read as an error with Try again and Deny, not as checking (CH-02)", async () => {
   api.fetchApproval.mockRejectedValue(new Error("fixture outage"));
   const onDenyPending = vi.fn();

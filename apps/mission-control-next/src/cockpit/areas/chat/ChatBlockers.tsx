@@ -11,6 +11,7 @@ import { AttachmentImage } from "../../ui/AttachmentImage";
 import { ChatApprovalRenderer } from "./ChatApprovalRenderer";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
+import { approvalExpiredUnresolved } from "../inbox/approval-settlement";
 import { hasExpired, useMinuteClock } from "../inbox/use-minute-clock";
 import { DeferredChatLeaf } from "./DeferredChatLeaves";
 import { presentApprovalAction } from "./chat-vocabulary";
@@ -42,7 +43,7 @@ type Blockers = Pick<
   | "onSubmitUserInput"
   | "onRefreshThread"
 > &
-  Partial<Pick<MissionThreadedActiveSessionSurfaceProps, "composerRef" | "thread" | "onDraftChange">>;
+  Partial<Pick<MissionThreadedActiveSessionSurfaceProps, "composerRef" | "thread" | "onDraftChange" | "draft">>;
 
 function errandScreenshotAttachmentId(preview: Record<string, unknown> | undefined): string | undefined {
   const id = preview?.screenshotAttachmentId;
@@ -156,10 +157,21 @@ export function ChatBlockers({
   // An approval that ran out of time leaves the action undone: the way forward is to ask again.
   const expiresAt = reviewedApproval?.expiresAt ?? approval?.expiresAt;
   const now = useMinuteClock(expiresAt);
-  const expired = Boolean(approval) && !decided && hasExpired(expiresAt, now);
+  // The expiry sweep records an expired approval as a rejection with an expired outcome; it is still expired.
+  const sweptExpired = Boolean(
+    decided && (decided.resolutionOutcome === "expired" || approvalExpiredUnresolved(decided)),
+  );
+  const expired = Boolean(approval) && (sweptExpired || (!decided && hasExpired(expiresAt, now)));
+  const [askBlocked, setAskBlocked] = useState(false);
+  const draftHasText = Boolean(props.draft?.trim());
   const originalRequest = props.thread?.turns.find((turn) => turn.turnId === reviewedApproval?.linkage?.turnId)
     ?.userMessage.content;
   function askAgain() {
+    // Never replace what the operator has already typed.
+    if (draftHasText) {
+      setAskBlocked(true);
+      return;
+    }
     if (originalRequest) props.onDraftChange?.(originalRequest);
     props.composerRef?.current?.focus();
   }
@@ -191,7 +203,11 @@ export function ChatBlockers({
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <h3 className="font-semibold text-fg">
-                {decided ? `Approval decided: ${presentApprovalStatus(decided.status).label}` : "Approval needed"}
+                {sweptExpired
+                  ? "Approval expired"
+                  : decided
+                    ? `Approval decided: ${presentApprovalStatus(decided.status).label}`
+                    : "Approval needed"}
               </h3>
               <p className="mt-1 text-fg-secondary">{presentApprovalAction(approval.toolName, approval.kind)}</p>
               {targetLine ? <p className="mt-1 text-xs text-fg-secondary wrap-anywhere">{targetLine}</p> : null}
@@ -284,7 +300,11 @@ export function ChatBlockers({
           />
           {expired ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              <p>The action did not run. Ask again to put your request back in the message box.</p>
+              <p>
+                The action did not run.
+                {originalRequest ? " Ask again to put your request back in the message box." : ""}
+                {askBlocked && draftHasText ? " Your message box already has text. Clear it to ask again." : ""}
+              </p>
               {originalRequest ? (
                 <Button type="button" size="sm" variant="secondary" onClick={askAgain}>
                   Ask again
