@@ -271,6 +271,7 @@ function LibraryNoteEditorContent({
             </Callout>
           ) : null}
           <Button
+            variant="primary"
             disabled={busy || operation.locked || Boolean(outcome) || reviewStale || !available}
             onClick={() => void confirm()}
           >

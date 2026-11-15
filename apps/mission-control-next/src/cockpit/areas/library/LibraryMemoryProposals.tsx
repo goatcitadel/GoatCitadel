@@ -182,6 +182,7 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
           </Callout>
           {outcome ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
           <Button
+            variant="primary"
             disabled={busy || operation.locked || Boolean(outcome) || !enabled || query.isFetching || query.isError}
             onClick={() => void confirm()}
           >
