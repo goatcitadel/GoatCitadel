@@ -168,6 +168,8 @@ export interface MissionThreadedChangePlanReceipt {
 }
 
 export interface MissionThreadedRenderSurfaceInput {
+  /** The host's own error sentence and refresh state; `error` is null when the turn already shows it. */
+  hostStatus?: { error: string | null; refreshing: boolean };
   messageMode: ChatMode;
   sessionRailOpen: boolean;
   onSessionRailOpenChange: (next: boolean) => void;
@@ -213,6 +215,8 @@ export interface MissionThreadedControllerHostProps {
   hidePageHeader?: boolean;
   /** Let a shell render its conversation layout while initial discovery loads. */
   renderWhileLoading?: boolean;
+  /** The shell draws the host error and refresh state from `hostStatus`, so the frame prints neither. Defaults to false. */
+  ownsFrameStatus?: boolean;
   /** Secondary session evidence is admitted by the native inspector owner. */
   secondaryEvidenceEnabled?: boolean;
   /** Restore the pinned-goal presentation when the selected session changes. Defaults to true. */
