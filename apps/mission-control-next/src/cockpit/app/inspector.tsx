@@ -15,7 +15,10 @@ import {
 } from "react";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import { getGatewayAccessRevision, subscribeGatewayAccessChange } from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  getGatewayAccessRevision,
+  subscribeGatewayAccessChange,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { IconButton } from "../ui/IconButton";
 import {
@@ -159,6 +162,8 @@ export function useInspector(): InspectorApi {
   return api;
 }
 
+const TEXT_FIELD = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+
 export function InspectorPanel() {
   const { content, close } = useInspector();
   const isPhone = useMediaQuery(RESPONSIVE_QUERIES.phone);
@@ -185,9 +190,13 @@ export function InspectorPanel() {
     if ((!active || active === document.body) && focusTarget.current?.isConnected) focusTarget.current.focus();
   }, [shown]);
   const floating = shown && overlay && !modal && !expanded && !isPhone;
+  const inline = shown && !modal && !expanded && !isPhone;
   useEffect(() => {
-    if (floating) panel.current?.focus({ preventScroll: true });
-  }, [floating]);
+    if (!inline) return;
+    // A text field that opened the panel (a filter box) keeps the operator's typing; anything else hands focus in.
+    if (focusTarget.current?.matches(TEXT_FIELD)) return;
+    panel.current?.focus({ preventScroll: true });
+  }, [inline]);
   if (!content) return null;
   const body = (
     <div
@@ -224,7 +233,9 @@ export function InspectorPanel() {
         handoff={handoff}
       >
         <p data-inspector-body="true" role={failed ? "alert" : "status"} className="text-sm text-fg-muted">
-          {failed ? "Inspector controls could not load. Close the inspector to keep using the app." : "Loading inspector…"}
+          {failed
+            ? "Inspector controls could not load. Close the inspector to keep using the app."
+            : "Loading inspector…"}
         </p>
       </PendingDialog>
     );
@@ -234,7 +245,7 @@ export function InspectorPanel() {
       ref={panel}
       // The body region carries "Inspector: <title>"; the landmark stays generic so the two names differ.
       aria-label="Inspector"
-      tabIndex={floating ? -1 : undefined}
+      tabIndex={-1}
       data-inspector-mode={floating ? "overlay" : "docked"}
       style={{ width }}
       className={`cockpit-inspector flex max-w-full shrink-0 flex-col border-l border-line-subtle bg-raised ${

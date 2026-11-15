@@ -88,6 +88,39 @@ describe("inspector", () => {
     expect(container.querySelector('[aria-label="Inspector: Run"]')).toBeNull();
   });
 
+  it("moves focus into the docked inspector when a row opens it (U-GL-039)", () => {
+    act(() => {
+      root.render(
+        <InspectorProvider>
+          <Probe />
+          <button type="button">Open record</button>
+          <InspectorPanel />
+        </InspectorProvider>,
+      );
+    });
+    const opener = container.querySelector("button")!;
+    opener.focus();
+    act(() => api.open({ title: "Run", body: <p>Steps</p> }));
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Inspector");
+  });
+
+  it("leaves focus in a text field that opened the inspector", () => {
+    act(() => {
+      root.render(
+        <InspectorProvider>
+          <Probe />
+          <input aria-label="Filter" />
+          <InspectorPanel />
+        </InspectorProvider>,
+      );
+    });
+    const filter = container.querySelector("input")!;
+    filter.focus();
+    act(() => api.open({ title: "Run", body: <p>Steps</p> }));
+    expect(container.querySelector('[aria-label="Inspector: Run"]')).not.toBeNull();
+    expect(document.activeElement).toBe(filter);
+  });
+
   it("Escape outside the inspector does not close it", () => {
     act(() => {
       root.render(
@@ -430,9 +463,7 @@ it("overlays a non-modal inspector on 1024–1279px laptops and returns focus on
   expect(document.activeElement).toBe(trigger);
   // Expand still offers the modal reading view.
   await act(async () => trigger.click());
-  await vi.waitFor(() =>
-    expect(container.querySelector('[aria-label="Expand inspector"]')).not.toBeNull(),
-  );
+  await vi.waitFor(() => expect(container.querySelector('[aria-label="Expand inspector"]')).not.toBeNull());
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Expand inspector"]')!.click());
   await vi.waitFor(() => {
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Canonical evidence");
@@ -449,13 +480,13 @@ it("expands a docked inspector without discarding selection", async () => {
     ),
   );
   await act(async () => api.open({ title: "Run", body: <p>Canonical evidence</p> }));
-  await vi.waitFor(() =>
-    expect(container.querySelector('[aria-label="Expand inspector"]')).not.toBeNull(),
-  );
+  await vi.waitFor(() => expect(container.querySelector('[aria-label="Expand inspector"]')).not.toBeNull());
   const expand = container.querySelector<HTMLButtonElement>('[aria-label="Expand inspector"]');
   expect(expand).not.toBeNull();
   await act(async () => expand!.click());
-  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Canonical evidence"));
+  await vi.waitFor(() =>
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Canonical evidence"),
+  );
   await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Restore docked inspector"]')!.click());
   expect(container.textContent).toContain("Canonical evidence");
 });
