@@ -6,12 +6,13 @@ import { GovernedSettingLoadState } from "./GovernedSettingParts";
 import type { GovernedRuntimeSetting } from "./use-governed-runtime-setting";
 
 type Read = { isLoading: boolean; isError: boolean; isFetching: boolean; error: unknown; data: unknown };
-function governed(read: Partial<Read>, overrides: { ready?: boolean; busy?: boolean } = {}) {
+function governed(read: Partial<Read>, overrides: { ready?: boolean; busy?: boolean; reading?: boolean } = {}) {
   const refresh = vi.fn();
   const value = {
     settings: { isLoading: false, isError: false, isFetching: false, error: null, data: { revision: 2 }, ...read },
     ready: overrides.ready ?? true,
     busy: overrides.busy ?? false,
+    reading: overrides.reading ?? false,
     refresh,
   };
   return { value: value as unknown as GovernedRuntimeSetting<boolean>, refresh };
@@ -61,7 +62,7 @@ describe("a setting read that did not work offers Try again (U-ST-014)", () => {
   });
 
   it("Try again waits while a read or a save is already running", async () => {
-    await show(governed({ isError: true, isFetching: true, error: new Error("x"), data: undefined }, { ready: false }));
+    await show(governed({ isError: true, error: new Error("x"), data: undefined }, { ready: false, reading: true }));
     expect(tryAgain()!.disabled).toBe(true);
     await show(governed({ isError: true, error: new Error("x"), data: undefined }, { ready: false, busy: true }));
     expect(tryAgain()!.disabled).toBe(true);

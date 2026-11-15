@@ -40,7 +40,7 @@ export function GovernedSettingLoadState<T extends GovernedSettingValue>({
         </p>
       ) : null}
       {failed || incompleteRead ? (
-        <Button size="sm" className="mt-2" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>
+        <Button size="sm" className="mt-2" disabled={governed.reading || governed.busy} onClick={governed.refresh}>
           Try again
         </Button>
       ) : null}

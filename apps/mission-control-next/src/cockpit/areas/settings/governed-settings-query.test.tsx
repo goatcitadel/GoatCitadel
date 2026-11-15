@@ -150,6 +150,76 @@ describe("one shared settings read for the governed controls (U-GL-050)", () => 
     expect((container.querySelector("select") as HTMLSelectElement).value).toBe("saver");
   });
 
+  it("a background refetch of the shared read leaves Save enabled in all four, and a save still reads fresh first", async () => {
+    api.patchSettings.mockImplementation(async (input: { features?: Record<string, boolean> }) => {
+      server = settingsAt(server.revision + 1, { features: { ...server.features, ...input.features } });
+      return structuredClone(server);
+    });
+    server = settingsAt(2, { features: { ...server.features, claudeCliToolBridgeEnabled: true } });
+    const { container, client } = await mount(<FourControls />);
+    await vi.waitFor(() => expect(container.textContent).toContain("Current: Balanced"));
+    const switches = () => [
+      ...container.querySelectorAll<HTMLButtonElement>('[role="switch"], input[type="checkbox"]'),
+    ];
+    await act(async () => {
+      const select = container.querySelector("select")!;
+      select.value = "saver";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    for (const toggle of switches()) await act(async () => toggle.click());
+    const saves = () =>
+      [...container.querySelectorAll<HTMLButtonElement>("button")].filter((b) => /^Save/.test(b.textContent ?? ""));
+    expect(saves()).toHaveLength(4);
+    // The minute poll (or another control's re-read) is in flight.
+    let release: (value: Server) => void = () => undefined;
+    api.fetchSettings.mockImplementationOnce(() => new Promise<Server>((resolve) => (release = resolve)));
+    await act(async () => void client.refetchQueries({ queryKey: ["system", "settings-governed"] }));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    expect(client.isFetching({ queryKey: ["system", "settings-governed"] })).toBe(1);
+    expect(saves().map((b) => b.disabled)).toEqual([false, false, false, false]);
+    // A save goes through its own fresh read, not the shared one that is still running.
+    const before = api.fetchSettings.mock.calls.length;
+    await act(async () => {
+      saves()[1]!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => expect(api.patchSettings).toHaveBeenCalledTimes(1));
+    expect(api.fetchSettings.mock.calls.length).toBeGreaterThan(before);
+    await act(async () => release(structuredClone(server)));
+  });
+
+  it("one control's post-save re-read does not disable another control's Save", async () => {
+    api.patchSettings.mockImplementation(async (input: { features?: Record<string, boolean> }) => {
+      server = settingsAt(server.revision + 1, { features: { ...server.features, ...input.features } });
+      return structuredClone(server);
+    });
+    server = settingsAt(2, { features: { ...server.features, claudeCliToolBridgeEnabled: true } });
+    const { container } = await mount(<FourControls />);
+    await vi.waitFor(() => expect(container.textContent).toContain("Current: Balanced"));
+    const switches = () => [
+      ...container.querySelectorAll<HTMLButtonElement>('[role="switch"], input[type="checkbox"]'),
+    ];
+    await act(async () => switches()[0]!.click());
+    await act(async () => switches()[1]!.click());
+    const saves = () =>
+      [...container.querySelectorAll<HTMLButtonElement>("button")].filter((b) => /^Save/.test(b.textContent ?? ""));
+    // Hold the re-read that follows the first save.
+    api.fetchSettings.mockImplementationOnce(async () => structuredClone(server));
+    let release: (value: Server) => void = () => undefined;
+    const held = new Promise<Server>((resolve) => (release = resolve));
+    api.fetchSettings.mockImplementationOnce(() => held);
+    await act(async () => {
+      saves()
+        .find((b) => !b.disabled && b.textContent === "Save setting")!
+        .click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await vi.waitFor(() => expect(api.patchSettings).toHaveBeenCalledTimes(1));
+    const others = saves().filter((b) => b.textContent === "Save setting");
+    expect(others.some((b) => !b.disabled)).toBe(true);
+    await act(async () => release(structuredClone(server)));
+  });
+
   it("a read made to confirm a save is never joined to an older in-flight shared read", async () => {
     let resolveStale: (value: Server) => void = () => undefined;
     const stale = {
