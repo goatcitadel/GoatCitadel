@@ -1,4 +1,5 @@
-import { useId, useRef, useState, type SetStateAction } from "react";
+import { useId, useState } from "react";
+import { HeldChoiceNotice, useHeldChoice } from "./use-held-choice";
 import { Info, Menu, PanelRight } from "lucide-react";
 import type { ChatMode } from "@goatcitadel/contracts";
 import type {
@@ -109,6 +110,7 @@ export function ThreadConversationSurface({
             onChangeProvider={props.onRequestProviderChange}
             onChangeModel={props.onRequestModelChange}
             onChoose={props.onRequestModelChoice}
+            scope={props.selectedSessionId}
           />
           <details className="mc-next-chat-details">
             <summary aria-label="Chat details">
@@ -252,6 +254,8 @@ function startingModel(provider: { models: string[]; defaultModel?: string } | u
     : (provider.models[0] ?? "");
 }
 
+type ModelChoice = Parameters<NonNullable<MissionThreadedActiveSessionSurfaceProps["onRequestModelChoice"]>>[0];
+
 export function CompactModelControl({
   providerModelSummary,
   providers,
@@ -261,6 +265,7 @@ export function CompactModelControl({
   onChangeProvider,
   onChangeModel,
   onChoose,
+  scope,
 }: {
   providerModelSummary: string;
   providers: MissionThreadedActiveSessionSurfaceProps["providerOptions"];
@@ -269,39 +274,42 @@ export function CompactModelControl({
   disabled: MissionThreadedActiveSessionSurfaceProps["modelSwitchDisabled"];
   onChangeProvider: MissionThreadedActiveSessionSurfaceProps["onRequestProviderChange"];
   onChangeModel: MissionThreadedActiveSessionSurfaceProps["onRequestModelChange"];
-  /** Sends the provider and model picked here as one change when the control is closed. Without it each pick is sent. */
+  /** Sends the provider and model picked here as one change. Without it each pick is sent as it is made. */
   onChoose?: MissionThreadedActiveSessionSurfaceProps["onRequestModelChoice"];
+  /** The conversation: a pick held for another one is dropped, never applied to this one. */
+  scope?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const controlsId = useId();
-  // With `onChoose` a pick is held until the control closes, so arrowing through a select sends nothing on the way.
-  const [draft, setDraftState] = useState<{ providerId?: string; model?: string }>({});
-  // The same pick is also kept in a ref, so a close that is reported twice sends it once.
-  const held = useRef(draft);
-  const setDraft = (next: SetStateAction<{ providerId?: string; model?: string }>) => {
-    held.current = typeof next === "function" ? next(held.current) : next;
-    setDraftState(held.current);
-  };
-  const close = (next: boolean) => {
-    setOpen(next);
-    if (next || !onChoose) return;
-    const draft = held.current;
-    const providerId =
-      draft.providerId !== undefined && draft.providerId !== (providerIdProp ?? "") ? draft.providerId : undefined;
-    const model =
-      draft.model !== undefined && (providerId !== undefined || draft.model !== (modelProp ?? ""))
-        ? draft.model
-        : undefined;
-    setDraft({});
-    if (providerId !== undefined || model !== undefined)
-      onChoose({ ...(providerId !== undefined ? { providerId } : {}), ...(model !== undefined ? { model } : {}) });
-  };
+  // With `onChoose` a pick is held until it is applied (Apply, focus leaving, closing the control), so arrowing
+  // through a select sends nothing on the way. Escape discards it.
+  const held = useHeldChoice<{ providerId?: string; model?: string }, ModelChoice>({
+    resolve: (draft) => {
+      const providerId =
+        draft.providerId !== undefined && draft.providerId !== (providerIdProp ?? "") ? draft.providerId : undefined;
+      const model =
+        draft.model !== undefined && (providerId !== undefined || draft.model !== (modelProp ?? ""))
+          ? draft.model
+          : undefined;
+      return providerId === undefined && model === undefined
+        ? null
+        : { ...(providerId !== undefined ? { providerId } : {}), ...(model !== undefined ? { model } : {}) };
+    },
+    send: (choice) => onChoose?.(choice),
+    scope: scope ?? null,
+  });
+  const choosing = Boolean(onChoose);
 
   return (
     <details
       className="mc-next-threaded-model-control"
       open={open}
-      onToggle={(event) => close(event.currentTarget.open)}
+      onToggle={(event) => {
+        const next = event.currentTarget.open;
+        setOpen(next);
+        if (!next && choosing) held.apply();
+      }}
+      {...(choosing ? held.wrapperProps : {})}
     >
       <summary aria-expanded={open} aria-controls={controlsId} title="View or change the model for this chat">
         <span>Model</span>
@@ -310,20 +318,21 @@ export function CompactModelControl({
       <div id={controlsId} className="mc-next-threaded-model-control-body">
         <ChatModelPicker
           providers={providers}
-          providerId={draft.providerId ?? providerIdProp}
-          model={draft.model ?? modelProp}
+          providerId={held.draft.providerId ?? providerIdProp}
+          model={held.draft.model ?? modelProp}
           disabled={disabled}
           onChangeProvider={
-            onChoose
+            choosing
               ? (next) =>
-                  setDraft({
+                  held.hold(() => ({
                     providerId: next,
                     model: startingModel(providers.find((item) => item.providerId === next)),
-                  })
+                  }))
               : onChangeProvider
           }
-          onChangeModel={onChoose ? (next) => setDraft((current) => ({ ...current, model: next })) : onChangeModel}
+          onChangeModel={choosing ? (next) => held.hold((current) => ({ ...current, model: next })) : onChangeModel}
         />
+        {choosing && held.dirty ? <HeldChoiceNotice onApply={held.apply} /> : null}
       </div>
     </details>
   );
