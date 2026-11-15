@@ -1,0 +1,68 @@
+{
+ "profile": [
+  {
+   "checked": true,
+   "label": "Safe Current Ask before every otherwise-allowed tool action. Hard policy boundaries still "
+  },
+  {
+   "checked": false,
+   "label": "Trusted Local Power Run allowed local tools without normal prompts. Nuclear-risk, risky-sh"
+  },
+  {
+   "checked": false,
+   "label": "Scheduled (Restricted) Restricted profile for cron/scheduled autonomous agent turns. Side-"
+  },
+  {
+   "checked": false,
+   "label": "Heartbeat (Read-only) Read-only profile for silent heartbeat self-wake turns. Only time/me"
+  }
+ ],
+ "getStarted": {
+  "url": "/settings/models?shell=cockpit#onboarding",
+  "text": "Models\n\nFind a setting, or change the ones on this page.\n\nSearch settings\nRefresh\nGeneral\nModels\nSafety\nCitadel\nAccess\nAdvanced\nModels\nGet started\nProviders & models\nLocal AI\n\nSetup is done and your first Chat answer is verified.\n\nStep 1: Choose a model\nverification-stub-chat · Verification stub (loopback)\nDone\nStep 2: Choose your safety settings\nTool approval: Ask for risky work\nDone\nStep 3: Send a test message\nFirst response: Verified.\nDone\nOpen setup"
+ },
+ "route /settings/onboarding": {
+  "url": "/settings/onboarding",
+  "h1": "Models",
+  "text": "Models | Find a setting, or change the ones on this page. | Search settings | Refresh | General | Models | Safety | Citadel | Access | Advanced | Models | Get started | Providers & models | Local AI | Setup is done and your first Chat answer is verified. | Step 1: Choose a model | verifi"
+ },
+ "route /settings/channels": {
+  "url": "/chat/messaging/advanced?shell=cockpit",
+  "h1": "Advanced channel setup",
+  "text": "Conversations | New | Project | All projects | Unassigned | Mission Control Verification | Projects | Search | Recent | Archived | Runtime evidence follow-up | 2 hours ago | Mission Control Verification | Verification stub reply. | Operator surface polish | 2 hours ago | Mission Control Veri"
+ },
+ "route /settings/providers": {
+  "url": "/settings/providers",
+  "h1": "Models",
+  "text": "Models | Find a setting, or change the ones on this page. | Search settings | Refresh | General | Models | Safety | Citadel | Access | Advanced | Models | Get started | Providers & models | Local AI | Guided model setup | Check the default model, provider connections, and model choices "
+ },
+ "route /settings/tools": {
+  "url": "/settings/tools",
+  "h1": "Safety",
+  "text": "Safety | Find a setting, or change the ones on this page. | Search settings | Refresh | General | Models | Safety | Citadel | Access | Advanced | Safety | Permissions | Tools | Trust & policy | Hooks | Budgets | Tool approval rule | Installation default for future tool invocations. Tool gra"
+ },
+ "route /settings/integrations": {
+  "url": "/capabilities/connectors/advanced?shell=cockpit#integration-connections",
+  "h1": "Capabilities",
+  "text": "Capabilities | Everything GoatCitadel's AI can use, in one place. | Skills | Plugins | Connectors | Tools | Advanced setup | Every setting behind the Connectors list: MCP servers, integration connections and web search. | Back to Connectors | MCP servers | Integrations | Web & "
+ },
+ "route /settings/safety#device-access": {
+  "url": "/settings/safety#device-access",
+  "h1": "Safety",
+  "text": "Safety | Find a setting, or change the ones on this page. | Search settings | Refresh | General | Models | Safety | Citadel | Access | Advanced | Settings destination unavailable | This link does not match a section on this settings page. Choose a section from Settings. | Open Se"
+ },
+ "route /settings/permissions": {
+  "url": "/settings/permissions",
+  "h1": "Safety",
+  "text": "Safety | Find a setting, or change the ones on this page. | Search settings | Refresh | General | Models | Safety | Citadel | Access | Advanced | Safety | Permissions | Tools | Trust & policy | Hooks | Budgets | Chat permission profile | The profile sets which tools Chat can use in this wor"
+ },
+ "search dark": [],
+ "search notification routing": [],
+ "search ollama": [],
+ "search theme": [],
+ "search budget": [],
+ "search mcp": [],
+ "search hook": [],
+ "search devices": [],
+ "search tls": []
+}

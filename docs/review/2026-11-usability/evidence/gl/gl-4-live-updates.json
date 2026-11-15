@@ -1,0 +1,77 @@
+{
+ "approval": {
+  "countBefore": {
+   "A": 4,
+   "B": 4
+  },
+  "approvalId": "b553efd9-cd4a-4d19-a70f-659a2ba935dc",
+  "appearsInA_s": 0.27,
+  "appearsInB_s": 0.53,
+  "countAfterCreate": {
+   "A": 5,
+   "B": 5
+  },
+  "clickedApproveInA": true,
+  "rowGoneInA_s": 1.27,
+  "rowGoneInB_s": 0,
+  "rowGoneInB_fromClick_s": 1.27,
+  "countAfterApprove": {
+   "A": 4,
+   "B": 4
+  },
+  "apiStatus": "approved"
+ },
+ "task": {
+  "visibleInA_s": 0.01,
+  "visibleInB_s": 0,
+  "visibleInB_fromClick_s": 0.67
+ },
+ "chat": {
+  "sessionId": "sess_31da56df2558f3a7cbea21d6",
+  "base": {
+   "A": 7,
+   "B": 7
+  },
+  "userMsgInA_s": 0.01,
+  "userMsgInB_s": 2.49,
+  "replyInA_s": 0.04,
+  "replyInB_s": 0.05,
+  "fromSend": {
+   "userInB": 2.81
+  },
+  "listPreviewInB": [
+   "ut13-live-chat, just now, Verification stub reply.",
+   "ut13-live-chat, just now, Verification stub reply."
+  ]
+ },
+ "skill": {
+  "start": {
+   "A": "true",
+   "B": "true"
+  },
+  "offInA_s": 0.77,
+  "offInB_s": 0.25,
+  "offInB_fromClick_s": 1.05,
+  "onInA_s": 1.02,
+  "onInB_s": 0,
+  "onInB_fromApprove_s": 1.06,
+  "end": {
+   "A": "true",
+   "B": "true"
+  }
+ },
+ "setting": {
+  "start": {
+   "A": "false",
+   "B": "false"
+  },
+  "savedInA_s": 1.56,
+  "valueInB_s": 0,
+  "valueInB_fromApprove_s": 1.6,
+  "restoredInB_s": 0,
+  "end": {
+   "A": "false",
+   "B": "false"
+  }
+ }
+}

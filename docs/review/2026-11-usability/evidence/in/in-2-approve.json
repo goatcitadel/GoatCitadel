@@ -1,0 +1,10 @@
+{
+  "before": "2 decisions waiting.",
+  "panelBtn": "Approve once",
+  "clicks": 3,
+  "demoAfter": [
+    "Approved Turn on skill bundled:documentation. Approval effects settled. Linked work has its own execution outcome."
+  ],
+  "defaultAfter": "updated without reload",
+  "defaultHead": "1 decision waiting."
+}

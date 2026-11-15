@@ -1,0 +1,23 @@
+{
+ "steps": [
+  "Models: untick 'Keep one Claude Code process...', Save setting",
+  "approval dialog opens; press Escape",
+  "reload the page (the waiting-change card is gone)",
+  "tick the box again, Save setting"
+ ],
+ "result": "PATCH /api/v1/settings 409 WRITE_CONFLICT 'Another active Change Plan already owns this target.'; screen says 'Settings changed elsewhere. Your draft is preserved for review.'",
+ "network": [
+  {
+   "k": "http",
+   "s": 409,
+   "m": "PATCH",
+   "u": "/api/v1/settings",
+   "t": ""
+  },
+  {
+   "k": "console",
+   "t": "Failed to load resource: the server responded with a status of 409 (Conflict)",
+   "u": "http://127.0.0.1:55150/api/v1/settings"
+  }
+ ]
+}

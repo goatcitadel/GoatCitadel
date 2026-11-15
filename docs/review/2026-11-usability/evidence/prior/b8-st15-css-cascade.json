@@ -1,0 +1,43 @@
+{
+ "destructiveWithChatPlanClass": [
+  {
+   "t": "Cancel",
+   "bg": "rgb(15, 29, 45)",
+   "color": "rgb(244, 251, 255)"
+  },
+  {
+   "t": "Delete",
+   "bg": "rgb(15, 29, 45)",
+   "color": "rgb(255, 130, 146)"
+  }
+ ],
+ "withChatPlanClass": [
+  {
+   "t": "Keep editing",
+   "bg": "rgb(15, 29, 45)",
+   "color": "rgb(244, 251, 255)",
+   "border": "rgba(178, 224, 245, 0.24)"
+  },
+  {
+   "t": "Apply exact change",
+   "bg": "rgb(15, 29, 45)",
+   "color": "rgb(244, 251, 255)",
+   "border": "rgba(178, 224, 245, 0.24)"
+  }
+ ],
+ "withoutClass": [
+  {
+   "t": "Keep editing",
+   "bg": "rgb(15, 29, 45)",
+   "color": "rgb(244, 251, 255)",
+   "border": "rgba(178, 224, 245, 0.24)"
+  },
+  {
+   "t": "Apply exact change",
+   "bg": "rgb(92, 233, 255)",
+   "color": "rgb(12, 37, 48)",
+   "border": "rgb(92, 233, 255)"
+  }
+ ],
+ "accent": "#5ce9ff"
+}

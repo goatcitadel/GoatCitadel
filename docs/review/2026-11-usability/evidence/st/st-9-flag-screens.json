@@ -1,0 +1,9 @@
+{
+ "schedules": [
+  "Scheduler review is switched off in runtime settings on this installation. No review items can be shown."
+ ],
+ "knowledge": [
+  "Engineering learnings is disabled in this runtime. Direct links and technical details do not enable this feature."
+ ],
+ "memory": []
+}

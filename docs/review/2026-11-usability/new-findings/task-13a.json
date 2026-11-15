@@ -1,0 +1,118 @@
+[
+  {
+    "area": "global",
+    "priorIds": [],
+    "journey": "GL-3 Keyboard only: reach and operate the primary action of each area; focus is visible; a dialog returns focus on close",
+    "severity": "friction",
+    "kind": "bug",
+    "title": "After a page loads or reloads, the first Tab starts at the current tab, so the page's own buttons above it are skipped (Work's 'New task' is 54 Tab presses away)",
+    "trigger": "Open /work (or /system, /library/memory, /capabilities/skills) fresh or press F5, then press Tab with the keyboard only. Compare with Shift+Tab.",
+    "expected": "Tab from a fresh page starts at the top ('Skip to main content', sidebar, then the page header and its buttons), or at least at the main region's first control.",
+    "actual": "The first Tab goes to the second tab of the row (Work: History; System: Runtime; Library: Notes; Capabilities: Plugins), so the header buttons that sit before the tab row (Work: New task, Select tasks, Refresh, More Work views; System: Refresh; Library: Refresh memory directory) are skipped. From a fresh /work load it took 54 Tab presses to reach New task (first Tab landed on History, then the whole list of tasks and runs, then wrap-around); Shift+Tab reaches More Work views in 1. Cause confirmed in a micro test in this browser engine: the tab row calls scrollIntoView on the current tab when it mounts, and Chromium treats that as the place the next Tab continues from (scrollIntoView on an element, then Tab, focused the element after it). Inbox starts at the top (Skip link) and Chat's first Tab lands on the composer, so the behaviour differs by area.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/gl/gl-3-first-tab-start.txt",
+      "docs/review/2026-11-usability/evidence/gl/gl-3-keyboard.json",
+      "apps/mission-control-next/src/cockpit/ui/OverflowTabs.tsx:53"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/ui/OverflowTabs.tsx"
+  },
+  {
+    "area": "global",
+    "priorIds": [],
+    "journey": "GL-3 Keyboard only: reach and operate the primary action of each area; focus is visible; a dialog returns focus on close",
+    "severity": "friction",
+    "kind": "bug",
+    "title": "Keyboard focus is dropped to the page body after Refresh on Inbox and System and after approving a Settings change, so the next Tab starts from the top again",
+    "trigger": "Keyboard only: on System, Tab to 'Refresh' and press Enter (same on Inbox > Refresh); on Settings > Models, toggle 'Show model reasoning in Chat', Tab to 'Save setting', Enter, Tab twice to 'Approve once', Enter. Check document.activeElement, then press Tab.",
+    "expected": "Focus stays on the button that was pressed, or returns to the control that opened the dialog (as it does on Capabilities, where the approval dialog hands focus back to the skill switch).",
+    "actual": "After Enter on Refresh, focus is on the page body at 100 ms, 800 ms and 2.5 s; the next Tab goes to 'Health' (the first System tab) or, on Inbox, to the 'Couldn't fully check 1 source' line. After Approve once on Settings > Models the dialog closes with 'Done · Change saved and confirmed.' and focus is on the body (twice, once for the change and once for the restore). The Refresh buttons are disabled while the fetch runs (InboxArea.tsx:271 and HealthOverview.tsx:148), which makes the browser drop focus; the Settings dialog does not restore it. A screen-reader or keyboard user loses their place on every refresh.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/gl/gl-3-focus-after-enter.txt",
+      "docs/review/2026-11-usability/evidence/gl/gl-3-settings-save.json",
+      "docs/review/2026-11-usability/evidence/gl/gl-3-capabilities-skill.json",
+      "docs/review/2026-11-usability/evidence/gl/gl-3-dialogs.json",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxArea.tsx:271",
+      "apps/mission-control-next/src/cockpit/areas/system/HealthOverview.tsx:148"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/system/HealthOverview.tsx"
+  },
+  {
+    "area": "global",
+    "priorIds": [],
+    "journey": "GL-3 Keyboard only: reach and operate the primary action of each area; focus is visible; a dialog returns focus on close",
+    "severity": "polish",
+    "kind": "bug",
+    "title": "Pressing Escape in Chat's inline conversation rename box leaves keyboard focus on nothing instead of the Rename button",
+    "trigger": "Chat, keyboard only: Tab to 'Rename conversation' and press Enter (a text box takes focus), then press Escape.",
+    "expected": "The box closes and focus returns to the Rename button, as it does for the Conversation actions menu and the + options panel.",
+    "actual": "The box closes and document.activeElement is the page body (the other Chat openers, 'Conversation actions', 'Add and options' and 'Inspect', all returned focus to themselves).",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/gl/gl-3-dialogs.json",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatSessionControls.tsx:54"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatSessionControls.tsx"
+  },
+  {
+    "area": "global",
+    "priorIds": [],
+    "journey": "GL-6 Back, Forward and reload keep the operator's place; an unsaved draft is guarded",
+    "severity": "friction",
+    "kind": "bug",
+    "title": "Back from a task or run to the Work board or History does not return to where you were scrolled",
+    "trigger": "Work (or Work > History): scroll the list down with the mouse wheel (200, 500 or 1500 px), open a run from the list, press the browser Back button.",
+    "expected": "The list is back at the same scroll position (the Cockpit keeps scroll positions per address in use-cockpit-scroll.ts).",
+    "actual": "Measured on #main-content: scrolled 500 px, after Back 90 px; scrolled 1500 px, after Back 90 px; scrolled 200 px, after Back 90 px; the same for Work and Work > History, and with or without '?shell=cockpit' in the address. The page was 2949 px tall, so the position was available. When the scroll was set by a script instead of the wheel it went back to 0. Likely cause, not isolated: the main element is shared across routes, so when the run page's shorter content clamps the scroll position the old address's scroll listener (use-cockpit-scroll.ts:24) records the clamped value.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/gl/gl-6-scroll-restore.json",
+      "docs/review/2026-11-usability/evidence/gl/gl-6-forward-and-scroll.json",
+      "apps/mission-control-next/src/cockpit/app/use-cockpit-scroll.ts:24",
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:80"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/app/use-cockpit-scroll.ts"
+  },
+  {
+    "area": "global",
+    "priorIds": [],
+    "journey": "GL-5 Idle for two minutes on each area: count requests; more than 12 is a finding",
+    "severity": "polish",
+    "kind": "bug",
+    "title": "Left idle for two minutes, System makes 16 API requests and Settings > Models makes 14, eight of them the same settings read",
+    "trigger": "Open /system, or /settings/models, with nothing else running and leave it for 120 s (requests counted after the first 5 s).",
+    "expected": "At most 12 requests in 120 s, and one shared read where several controls need the same settings.",
+    "actual": "System: 16 (4 inbox, 2 presence, 2 each of observe/health, llamacpp/status, npu/status and others). Settings > Models: 14, of which 8 are GET /api/v1/settings (each governed-setting control polls it on its own 60 s timer: BudgetModeControl.tsx:38, ChatThinkingStreamControl.tsx:41, ClaudeCliToolBridgeControl.tsx:46, ClaudeCliWarmContinuationControl.tsx:39 each have refetchInterval 60_000). The other seven areas stayed at 6 to 8 (Inbox poll every 30 s plus presence every 60 s). No operator-visible effect in this sandbox; it is load that grows with every control added.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/gl/gl-5-idle.json",
+      "apps/mission-control-next/src/cockpit/areas/settings/BudgetModeControl.tsx:38",
+      "apps/mission-control-next/src/cockpit/areas/system/HealthOverview.tsx:125"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/BudgetModeControl.tsx"
+  },
+  {
+    "area": "global",
+    "priorIds": [],
+    "journey": "GL-1 Every sidebar entry, every tab in every area, and every command palette entry opens the page its label names",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "Some pages do not carry the name of the tab or entry you chose: all four Capabilities tabs have the heading 'Capabilities', 'Advanced setup' is titled 'Connectors', Get started is titled 'First run'",
+    "trigger": "Click each Capabilities tab, open Capabilities > Advanced setup (palette or link), open Settings > Get started (palette). Read the h1 and the browser tab title.",
+    "expected": "The heading and the tab title name the page the label named, the way System, Library and Work's other tabs do (Runtime, Notes, History).",
+    "actual": "Skills, Plugins, Connectors and Tools all show the h1 'Capabilities' (the tab title does say 'Capabilities · Skills'). Palette 'Capabilities › Advanced setup' opens an h1 'Capabilities' with the tab title 'Capabilities · Connectors'. Palette 'Settings · Get started' opens h1 'Get started' with the tab title 'Settings · First run'. System's first tab uses the area name 'System' and Work's uses 'Work' instead of 'Health' and 'Board'. Across 306 crawled pages every page had exactly one visible h1, no console errors and no horizontal overflow at 1440 and 375, so this is the only mismatch class found.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/gl/gl-1-crawl.json",
+      "apps/mission-control-next/src/cockpit/app/cockpit-document-title.ts:22"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/app/cockpit-document-title.ts"
+  }
+]

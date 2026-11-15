@@ -1,0 +1,33 @@
+{
+  "label": "production build (vite build, vite preview)",
+  "base": "http://127.0.0.1:18790",
+  "openButtonCount": 1,
+  "pageTextHead": "Models\n\nFind a setting, or change the ones on this page.\n\nSearch settings\nGet started\nRefresh\nGeneral\nModels\nSafety\nCitadel\nAccess\nAdvanced\nModels\nGet started\nProviders & models\nLocal AI\nGuided model setup\n\nCheck the default model, provider connections, and model choices before using Chat.\n\nStep 1\nD",
+  "inputType": "password",
+  "crashAfterClick": false,
+  "crashAfterX": false,
+  "dialogsAfterX": 1,
+  "valueLen": 20,
+  "crashAfter20": false,
+  "submitCount": 1,
+  "afterSubmitMs": 4061,
+  "afterSubmitText": "Skip to main content\nPersonal / Default Workspace\nSearch\nCtrl K\nChat\nInbox\n1\nWork\nNo queued or running interactive runs\nCapabilities\nLibrary\nSystem\n1 check needs review\nUpdates connected\nModels\n\nFind a setting, or change the ones on this page.\n\nSearch settings\nGet started\nRefresh\nGeneral\nModels\nSafety\nCitadel\nAccess\nAdvanced\nModels\nGet started\nProviders & models\nLocal AI\nGuided model setup\n\nCheck the default model, provider connections, and model choices before using Chat.\n\nStep 1\nDone\nConnect a provider\nVerification stub (loopback) answered at http://127.0.0.1:60394/v1.\nStep 2\nDone\nConfirm your model\nYour default is saved. A real Chat response verifies that the model works.\nStep 3\nCurrent\nS",
+  "log": [
+    {
+      "k": "http409",
+      "t": "POST http://127.0.0.1:18787/api/v1/change-plans"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 409 (Conflict)"
+    },
+    {
+      "k": "http503",
+      "t": "POST http://127.0.0.1:18787/api/v1/change-plans/dcaaa030-676d-47d5-9cd7-e0f8a2fde03c/provider-secret"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 503 (Service Unavailable)"
+    }
+  ]
+}

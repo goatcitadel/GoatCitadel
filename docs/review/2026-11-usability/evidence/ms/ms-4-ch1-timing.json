@@ -1,0 +1,8 @@
+{
+  "note": "Real model (claude-sonnet-5-5 via Claude Code CLI login), prompt 'Say hello in one short sentence.'",
+  "sendingChipAtMs": 230,
+  "stopAndSteerButtonsAtMs": 230,
+  "firstAnswerTextAtMs": 3000,
+  "doneAtMs": 4286,
+  "receipt": "3 s total"
+}

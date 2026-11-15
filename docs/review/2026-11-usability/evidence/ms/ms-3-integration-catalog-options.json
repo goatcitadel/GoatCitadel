@@ -1,0 +1,6 @@
+{
+  "captured": "Add integration connection > Integration catalog (select), first option selected by default: Apple Notes",
+  "options": ["Apple Notes","Apple Reminders","Things 3","Notion","Obsidian","Bear Notes","Trello","GitHub","Browser Control","Canvas + A2UI","Voice Wake + Talk","Gmail and Google Calendar","IMAP/SMTP Mail","Cron Jobs","Webhooks","Activepieces","Weather","Image Generation","GIF Search","Peekaboo Screen","Camera","macOS Menu Bar + Voice","iOS Canvas/Camera/Voice","Android Canvas/Camera/Screen","Windows (WSL2 Recommended)","Linux Native"],
+  "host": "Windows sandbox PC",
+  "defaultFormText": "Configure the local bridge GoatCitadel uses to read and write Apple Notes content."
+}

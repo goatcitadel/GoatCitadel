@@ -1,0 +1,7 @@
+# Gateway log excerpt (testbench-gateway.stderr.log, 22:14:09-22:14:57), copied before the sandbox was rebuilt
+22:14:09 ERROR gateway [req-7dc] chat write failed
+{"reqId":"req-7dc","error":{"error":"Durable Chat run d4efcedb-e1c7-4852-b981-380e7cae1a10 cannot be cancelled because turn 30fa909b-1107-41ee-9181-d8b3dd967c0b is already completed."}}
+22:14:09 WARN gateway POST /api/v1/chat/sessions/:sessionId/turns/:turnId/cancel -> 400
+22:14:22 ERROR gateway [req-7fb] chat write failed
+{"reqId":"req-7fb","error":{"error":"Durable Chat run 3665daaa-c005-40e9-b77e-25bd732d6a09 cannot be cancelled because turn e8226015-53d3-468e-a95e-860463024823 is already completed."}}
+22:14:22 WARN gateway POST /api/v1/chat/sessions/:sessionId/turns/:turnId/cancel -> 400

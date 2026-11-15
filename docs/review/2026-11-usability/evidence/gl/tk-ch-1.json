@@ -1,0 +1,51 @@
+{
+  "loadSettledMs": 4421,
+  "emptyText": "Conversations\nNew\nProject\nAll projects\nUnassigned\nProjects\nSearch\nRecent\nArchived\n\nNo conversations in this view.\n\nMessaging\nAdd\n\nNo channels yet\n\nAdd\nChat\n\nChoose a conversation\n\nPick one from the list, or start a new conversation.\n\nNew conversation",
+  "newToComposerMs": 282,
+  "newConvText": "Conversations\nNew\nProject\nAll projects\nUnassigned\nProjects\nSearch\nRecent\nArchived\nNew chat\njust now\nMessaging\nAdd\n\nNo channels yet\n\nAdd\nNew chat\n\nNo messages yet\n\nVerification stub (loopback)\n\nMessages\nWhat would you like to work on?\nExplain this project\nPlan a change\nDraft or summarize\n\nChoose a starting prompt, then review it before sending.\n\nConfigure models\nImport knowledge\nMessage\nverification-stub-chat · Verification stub (loopback) · Standard\nSend",
+  "firstFeedbackMs": 97,
+  "doneMs": 1384,
+  "afterText": "Conversations\nNew\nProject\nAll projects\nUnassigned\nProjects\nSearch\nRecent\nArchived\nSay hello in one sentence. ut13b CH-1\njust now\nVerification stub reply.\nMessaging\nAdd\n\nNo channels yet\n\nAdd\nSay hello in one sentence. ut13b CH-1\n\nLast response completed\n\nVerification stub (loopback)\n\nMessages\nResponse ended.\nYou said\n\nYou · 3:33 AM\n\nSay hello in one sentence. ut13b CH-1\n\nAssistant reply\n\nAssistant 3:33 AM\n\nVerification stub reply.\n\nverification-stub-chat · Verification stub (loopback) · 591 ms total\n· Open message details\nRetry\nCopy answer\nMore\nSave as skill\nBackground run\nRecorded for this response\nInspect run\nOpen run in Work\nMessage\nverification-stub-chat · Verification stub (loopback) · Standard\nSend",
+  "sessionUrl": "http://127.0.0.1:18788/chat?shell=cockpit&sessionId=sess_8bfde46c3ce429ee7174a7d5",
+  "composerRows": [
+    "Retry"
+  ],
+  "mutating": [
+    [
+      -7100,
+      "POST",
+      "/api/v1/auth/sse-token"
+    ],
+    [
+      -7082,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -3022,
+      "POST",
+      "/api/v1/chat/sessions"
+    ],
+    [
+      -2830,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -2770,
+      "POST",
+      "/api/v1/chat/sessions/sess_X/route-preflight"
+    ],
+    [
+      105,
+      "POST",
+      "/api/v1/chat/sessions/sess_X/route-preflight"
+    ],
+    [
+      129,
+      "POST",
+      "/api/v1/chat/sessions/sess_X/agent-send/stream"
+    ]
+  ],
+  "log": []
+}

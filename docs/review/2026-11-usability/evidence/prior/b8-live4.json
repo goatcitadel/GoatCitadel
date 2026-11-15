@@ -1,0 +1,49 @@
+{
+ "search dark": {
+  "links": [
+   "General Base defaults every other surface inherits. Opens cockpit controls"
+  ],
+  "empty": false
+ },
+ "search notification routing": {
+  "links": [
+   "General Base defaults every other surface inherits. Opens cockpit controls"
+  ],
+  "empty": false
+ },
+ "search ollama": {
+  "links": [
+   "Providers & models Provider credentials, model catalogs, and active routing defaults. Opens cockpit controls"
+  ],
+  "empty": false
+ },
+ "search budget": {
+  "links": [
+   "Budgets Choose a budget preference: Saver, Balanced, or Power. It is not a dollar limit. Opens cockpit controls"
+  ],
+  "empty": false
+ },
+ "search tls": {
+  "links": [],
+  "empty": true
+ },
+ "search device": {
+  "links": [
+   "Access & devices Gateway sign-in, approved devices, and desktop and mobile access checks. Opens cockpit controls"
+  ],
+  "empty": false
+ },
+ "search web search": {
+  "links": [],
+  "empty": true
+ },
+ "search hook": {
+  "links": [
+   "General Base defaults every other surface inherits. Opens cockpit controls",
+   "Hooks Governed lifecycle hooks, delivery status, and history. Opens cockpit controls"
+  ],
+  "empty": false
+ },
+ "plan": [],
+ "afterCheckPage": "Models\n\nFind a setting, or change the ones on this page.\n\nSearch settings\nRefresh\nGeneral\nModels\nSafety\nCitadel\nAccess\nAdvanced\nModels\nGet started\nProviders & models\nLocal AI\nGuided model setup\n\nCheck the default model, provider connections, and model choices before using Chat.\n\nStep 1\nDone\nConnect a provider\nVerification stub (loopback) answered at http://127.0.0.1:54790/v1.\nStep 2\nDone\nConfirm your model\nYour default is saved. A real Chat response verifies that the model works.\nStep 3\nDone\nStart the first Chat\nA completed model response is recorded in Chat.\nConnection\nReady\nModel\nverification-stub-chat\nFirst response\nVerified\nProvider or local runtime\nVerification stub (loopback)\nClaude Code CLI (local login) · not added yet\n\nGoatCitadel checks this connection before Chat can use it.\n\nModel\nverification-stub-chat\n\nGoatCitadel checks that the model is available when you confirm it.\n\nAdvanced model settings\nEnter Chat\nAdvanced provider configuration\n\nEdit each provider in one place, then inspect catalogs, routing, and advice.\n\nModel reasoning in Chat\n\nOff by default. When on, a model's reasoning streams into Chat above its answer under “Thinking…”. While the model thinks, its newest line shows next to that label; the full text stays shut unless you open it.\n\nRefresh\n\nCurrent: Off\n\nOff\nShow model reasoning in Chat\nReasoning is the model's own unreviewed text. It is not an explan"
+}

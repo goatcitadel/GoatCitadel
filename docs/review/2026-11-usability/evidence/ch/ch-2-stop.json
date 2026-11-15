@@ -1,0 +1,124 @@
+{
+  "out": [
+    {
+      "attempt": 0,
+      "stopVisibleMs": 113,
+      "clickedMs": 175,
+      "stoppingSeen": true,
+      "tail": "review-task-6 stop test 2 | Assistant reply | Assistant 10:14 PM | Verification stub reply. | verification-stub-chat · Verification stub (loopback) · 437 ms total | · Open message details | Retry | Copy answer | More | Save as skill | You said | You · 10:14 PM | review-task-6 stop test 0 | Assistant reply | Assistant 10:14 PM | Verification stub reply. | verification-stub-chat · Verification stub (loopback) · 353 ms total | · Open message details | Retry | Copy answer | More | Save as skill | Background run | Recorded for this response | Inspect run | Open run in Work | The provider request failed before the current step could finish. | Reload conversation | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "attempt": 1,
+      "stopVisibleMs": 113,
+      "clickedMs": 188,
+      "stoppingSeen": true,
+      "tail": "l | · Open message details | Retry | Copy answer | More | Save as skill | You said | You · 10:14 PM | review-task-6 stop test 0 | Assistant reply | Assistant 10:14 PM | Verification stub reply. | verification-stub-chat · Verification stub (loopback) · 353 ms total | · Open message details | Retry | Copy answer | More | Save as skill | You said | You · 10:14 PM | review-task-6 stop test 1 | Assistant reply | Assistant 10:14 PM | Verification stub reply. | verification-stub-chat · Verification stub (loopback) · 386 ms total | · Open message details | Retry | Copy answer | More | Save as skill | Background run | Recorded for this response | Inspect run | Open run in Work | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    },
+    {
+      "attempt": 2,
+      "stopVisibleMs": 95,
+      "clickedMs": 145,
+      "stoppingSeen": true,
+      "tail": "review-task-6 stop test 1 | Assistant reply | Assistant 10:14 PM | Verification stub reply. | verification-stub-chat · Verification stub (loopback) · 386 ms total | · Open message details | Retry | Copy answer | More | Save as skill | You said | You · 10:14 PM | review-task-6 stop test 2 | Assistant reply | Assistant 10:14 PM | Verification stub reply. | verification-stub-chat · Verification stub (loopback) · 365 ms total | · Open message details | Retry | Copy answer | More | Save as skill | Background run | Recorded for this response | Inspect run | Open run in Work | The provider request failed before the current step could finish. | Reload conversation | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send"
+    }
+  ],
+  "requests": [
+    [
+      0,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      27,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      274,
+      "POST",
+      "/api/v1/chat/sessions/sess_X/route-preflight"
+    ],
+    [
+      4676,
+      "POST",
+      "/api/v1/chat/sessions/sess_X/route-preflight"
+    ],
+    [
+      4692,
+      "POST",
+      "/api/v1/chat/sessions/sess_X/agent-send/stream"
+    ],
+    [
+      5150,
+      "POST",
+      "/api/v1/chat/sessions/sess_X/turns/T/cancel"
+    ],
+    [
+      10853,
+      "POST",
+      "/api/v1/chat/sessions/sess_X/route-preflight"
+    ],
+    [
+      10863,
+      "POST",
+      "/api/v1/chat/sessions/sess_X/agent-send/stream"
+    ],
+    [
+      11338,
+      "POST",
+      "/api/v1/chat/sessions/sess_X/turns/T/cancel"
+    ],
+    [
+      16933,
+      "POST",
+      "/api/v1/chat/sessions/sess_X/route-preflight"
+    ],
+    [
+      16944,
+      "POST",
+      "/api/v1/chat/sessions/sess_X/agent-send/stream"
+    ],
+    [
+      17402,
+      "POST",
+      "/api/v1/chat/sessions/sess_X/turns/T/cancel"
+    ]
+  ],
+  "log": [
+    {
+      "k": "http400",
+      "t": "POST http://127.0.0.1:54765/api/v1/chat/sessions/sess_63ac8c4e941e145e709a2d06/turns/f529776e-dd60-426d-ae69-669c4b0cbd79/cancel"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 400 (Bad Request)",
+      "u": "http://127.0.0.1:54765/api/v1/chat/sessions/sess_63ac8c4e941e145e709a2d06/turns/f529776e-dd60-426d-ae69-669c4b0cbd79/cancel"
+    },
+    {
+      "k": "http400",
+      "t": "POST http://127.0.0.1:54765/api/v1/chat/sessions/sess_63ac8c4e941e145e709a2d06/turns/534c548d-e812-4501-b365-7cf30ecb20df/cancel"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 400 (Bad Request)",
+      "u": "http://127.0.0.1:54765/api/v1/chat/sessions/sess_63ac8c4e941e145e709a2d06/turns/534c548d-e812-4501-b365-7cf30ecb20df/cancel"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/chat/sessions net::ERR_ABORTED"
+    },
+    {
+      "k": "http400",
+      "t": "POST http://127.0.0.1:54765/api/v1/chat/sessions/sess_63ac8c4e941e145e709a2d06/turns/26ac3c4b-6c8f-428f-a4a6-c106a69455fe/cancel"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 400 (Bad Request)",
+      "u": "http://127.0.0.1:54765/api/v1/chat/sessions/sess_63ac8c4e941e145e709a2d06/turns/26ac3c4b-6c8f-428f-a4a6-c106a69455fe/cancel"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:54765/api/v1/chat/sessions net::ERR_ABORTED"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+ "journey": [
+  "Go to Library › Journey timeline"
+ ],
+ "afterSelectJourney": {
+  "url": "http://127.0.0.1:54766/library/journey?shell=cockpit",
+  "h1": "Journey timeline"
+ },
+ "curator": [
+  "Go to Library › Skill curator"
+ ]
+}

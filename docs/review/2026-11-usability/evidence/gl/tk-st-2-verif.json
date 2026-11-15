@@ -1,0 +1,32 @@
+{
+  "ws": "ws_0d92e1e85db7468e90f57e67",
+  "clicks": 2,
+  "dlgText": "Turn on Claude Code CLI: reuse one process between tool steps / When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one. This turns it on. / Caution / Only this setting changes. You can turn it off again the same way. / Show details / The selected workspace changed. Open this item again in the current Inbox.",
+  "btns": [
+    ""
+  ],
+  "result": null,
+  "ev": [
+    [
+      516,
+      "RESP 200 POST /api/v1/auth/sse-token"
+    ],
+    [
+      3350,
+      "checked false"
+    ],
+    [
+      3434,
+      "clicked Save setting"
+    ],
+    [
+      3528,
+      "RESP 200 PATCH /api/v1/settings"
+    ],
+    [
+      3690,
+      "DIALOG after 0ms"
+    ]
+  ],
+  "log": []
+}

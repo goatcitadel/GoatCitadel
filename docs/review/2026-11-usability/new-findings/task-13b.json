@@ -1,0 +1,83 @@
+[
+  {
+    "area": "global",
+    "priorIds": [],
+    "journey": "GL-T Sign-in in token mode",
+    "severity": "friction",
+    "kind": "bug",
+    "title": "Pressing Enter in the Gateway token box on the sign-in page does nothing; only the Connect to gateway button signs in",
+    "trigger": "Gateway in token mode. Open the Cockpit with no stored credentials (sign-in page 'Sign in to continue'), click the Gateway token box, type the token, press Enter.",
+    "expected": "Enter submits the token, like every other single-field sign-in.",
+    "actual": "Nothing happens: after 5 s the page still reads 'Sign in to continue' and the token stays in the box (Playwright keyboard path: fill, press Enter). Clicking 'Connect to gateway' then signed in in 215 ms. The token input is a bare input with an onChange only, there is no form element and no key handler. Keyboard-only operators must Tab to the button. Mode 'none' installs never see this page, so this is token and basic mode only.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/gl/tk-signin-enter-does-nothing.png",
+      "docs/review/2026-11-usability/evidence/gl/tk-signin2.json",
+      "packages/mission-control-shared/src/components/GatewayAccessGate.tsx:359",
+      "packages/mission-control-shared/src/components/GatewayAccessGate.tsx:431"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "packages/mission-control-shared/src/components/GatewayAccessGate.tsx"
+  },
+  {
+    "area": "global",
+    "priorIds": [],
+    "journey": "GL-T Sign-in in token mode",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "Typing a wrong token on the sign-in page empties the box and says 'Gateway access changed', not that the token was refused; the same refusal on an open page does say 'rejected'",
+    "trigger": "Gateway in token mode, no stored credentials. On 'Sign in to continue' type a wrong token (for example 21 characters of nonsense) and click 'Connect to gateway'. Compare with signing in, then changing the stored token while a page is open and clicking any sidebar entry.",
+    "expected": "A wrong token gets a message that says the token was not accepted, and the box keeps its place for a retry.",
+    "actual": "After the click the page shows 'Gateway access changed. Sign in again to continue.' (2.5 s later still the same), the token box is empty and 'Stored credentials: None stored yet.' remains. Nothing says the token was wrong, so a typo reads like a session change. On an open page whose stored token stops working the screen is clear: 'Gateway credentials were rejected. Re-enter them to continue.' (appeared 420 ms after the click on Work; the Chat draft typed before it survived the re-sign-in). Likely cause (code read, not traced live): the rejection result of the retry is dropped by the revision check at use-gateway-access.ts:73 because clearing the bad token bumps the access revision, so the earlier generic message from line 122 stays; the 'rejected' wording exists at client-core.ts:848.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/gl/tk-signin-wrong-token.png",
+      "docs/review/2026-11-usability/evidence/gl/tk-signin.json",
+      "docs/review/2026-11-usability/evidence/gl/tk-signin-token-rejected-open-page.png",
+      "docs/review/2026-11-usability/evidence/gl/tk-signin-expire.json",
+      "apps/mission-control-next/src/app/use-gateway-access.ts:73",
+      "apps/mission-control-next/src/app/use-gateway-access.ts:122",
+      "packages/mission-control-shared/src/api/client-core.ts:848"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/app/use-gateway-access.ts"
+  },
+  {
+    "area": "settings",
+    "priorIds": [],
+    "journey": "GL-P Production build: credential box",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "When the OS keychain cannot store a provider key, the key dialog says only 'The gateway hit an error. Try again, or check System health.'",
+    "trigger": "Settings > Models > Advanced provider configuration > Replace API credential > Open secure input, type a placeholder (test-invalid-key-000, not a real key), Submit securely, on a Gateway whose secret store is unavailable (this sandbox runs with GOATCITADEL_DISABLE_SECRET_STORE=true; an install on a host with no keychain would be the same). Production build.",
+    "expected": "The dialog says what the Gateway said: the OS keychain is unavailable on this host, so the key cannot be saved, and what to do instead (environment variable or a host with a keychain).",
+    "actual": "The Gateway answered 503 {\"error\":\"OS keychain backend is unavailable on this host\",\"code\":\"SECRET_STORE_UNAVAILABLE\"}. The dialog stayed open and showed 'The gateway hit an error. Try again, or check System health.' Retrying cannot help and System health has no keychain card, so the operator has no way to learn the cause on screen. The dialog itself stated 'Stored in the OS keychain', so the cause is known to the product. It failed safely (no crash, no partial state, the dialog can be cancelled).",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/gl/pb-prod-after-submit.png",
+      "docs/review/2026-11-usability/evidence/gl/pb-prod.json",
+      "packages/mission-control-shared/src/api/describe-api-error.ts:117"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "packages/mission-control-shared/src/api/describe-api-error.ts"
+  },
+  {
+    "area": "work",
+    "priorIds": [],
+    "journey": "GL-L Large data: Work board",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "With 300 tasks the Needs attention lane header reads '200 tasks' and becomes '300 tasks' only after 'Load more tasks' at the bottom of the board",
+    "trigger": "300 operator tasks in a workspace (seeded through the Gateway API). Open Work > Board.",
+    "expected": "A lane count that is partial says so ('200 of 300' or '200+'), next to the number.",
+    "actual": "The lane header reads '200 tasks · 0 runs' while 300 exist. The only hint, 'More tasks exist beyond the loaded pages.' with a 'Load more tasks' button, sits below all the lanes. After one click the header read '300 tasks · 0 runs'. Nothing is lost silently, but the header number is a page size, not a count. Measured on the dev server; the text does not depend on the build.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/gl/ld-work-board.png",
+      "docs/review/2026-11-usability/evidence/gl/ld-probe.json",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkBoard.tsx:345"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkBoard.tsx"
+  }
+]

@@ -1,0 +1,42 @@
+{
+  "out": {
+    "listText": " | review-task-8-schedule | Operator task | Not started | Review archive | : review-task-8-schedule | review-task-8-schedule | Operator task | Not started | Review archive | : review-task-8-schedule | review-task-8-schedule | Operator task | Not started | Review archive | : review-task-8-schedule | review-task-8-schedule | Operator task | Not started | Review archive | : review-task-8-schedule | Run the governed verification command. | Operator task | Blocked | Review archive | : Run the governed verification command. | A run or background job manages this task, so it can't be archived or restored here. | Read saturday-plan.pdf and review it. | Operator task | Blocked | Review archive | : Read saturday-plan.pdf and review it. | A run or ba",
+    "buttons": [
+      "Refresh tasks",
+      "Review archive\n: review-task-8-schedule",
+      "Review archive\n: review-task-8-schedule",
+      "Review archive\n: review-task-8-schedule",
+      "Review archive\n: review-task-8-schedule",
+      "Review archive\n: Run the governed verification command.",
+      "Review archive\n: Read saturday-plan.pdf and review it.",
+      "Review archive\n: Read saturday-plan.pdf and review it.",
+      "Review archive\n: Plan this deterministic usability turn.",
+      "Review archive\n: Read saturday-plan.pdf and review it.",
+      "Review archive\n: view-task-7 CH-9 run the governed command"
+    ],
+    "archiveDialog": "Archive this task? | review-task-8-schedule · Default Workspace. The task is rechecked before anything is saved. | This task leaves active task lists. You can restore it from Archived tasks. | Archive task | Keep task",
+    "archiveResult": {
+      "clicks": 2,
+      "ms": 1553,
+      "text": [
+        "Workspace operator tasks. Archive removes a task from active lists and can be reversed. It does not cancel a run.",
+        "Archived tasks",
+        "Archived tasks",
+        "Active tasks to archive",
+        "Task archived and independently verified. Restore it from Archived tasks.",
+        "Review archive"
+      ]
+    },
+    "archivedRow": "review-task-8-schedule | Operator task | Not started | Review restore | : review-task-8-schedule",
+    "restoreDialog": "Restore this task? | review-task-8-schedule · Default Workspace. The task is rechecked before anything is saved. | This task returns to active task lists. | Restore task | Keep task",
+    "restoreResult": {
+      "ms": 1537,
+      "text": [
+        "Task restored and independently verified.",
+        "No archived tasks",
+        "Tasks you archive appear here, ready to restore."
+      ]
+    }
+  },
+  "log": []
+}

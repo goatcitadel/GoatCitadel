@@ -1,0 +1,24 @@
+{
+ "skipInDom": {
+  "text": "Skip to main content",
+  "w": 1,
+  "h": 1,
+  "indexAmongFocusables": 0
+ },
+ "tabOrder": [
+  "Skip to main content @8,8",
+  "Personal / Mission Control Nex @8,8",
+  "Collapse sidebar @8,44",
+  "SearchCtrl K @8,80"
+ ],
+ "afterSkipEnter": {
+  "active": "main-content",
+  "url": "/inbox#main-content"
+ },
+ "afterShortcut": {
+  "active": "BODY",
+  "url": "/work",
+  "h1": "Work",
+  "live": []
+ }
+}

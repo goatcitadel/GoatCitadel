@@ -1,0 +1,26 @@
+{
+  "enterFirst": {
+    "main": false,
+    "text": "Sign in to continue\n\nConnect to GoatCitadel to load your workspace.\n\nAccess required\nGateway target\n\nhttp://127.0.0.1:18"
+  },
+  "clickMs": 215,
+  "afterClick": {
+    "main": true,
+    "text": "Skip to main content\nReading Citadel... / Workspace\nSearch\nCtrl K\nChat\nInbox\nWork\nInteractive work status unknown\nCapabilities\nLibrary\nSystem\nChecking…\nConnecting to updates\nConversations\nNew\nProject\n"
+  },
+  "storage": {
+    "session": true,
+    "local": false
+  },
+  "url": "http://127.0.0.1:18788/chat",
+  "log": [
+    {
+      "k": "http401",
+      "t": "GET http://127.0.0.1:18787/api/v1/onboarding/startup"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+ "steps": [
+  "Models > Advanced provider configuration > Replace API credential",
+  "Open secure input",
+  "click the credential field",
+  "type one character"
+ ],
+ "result": "Settings couldn't be shown (AreaErrorBoundary)",
+ "consoleErrors": [
+  {
+   "k": "console",
+   "t": "%o\n\n%s\n\n%s\n TypeError: Cannot read properties of null (reading 'value')\n    at <dev-server module>/packages/mission-control-shared/dist/components/chat/ChatChangePlanActionDialogBody.js:115:50\n    at basicStateReducer (htt<path>",
+   "u": "htt<path>"
+  },
+  {
+   "k": "console",
+   "t": "[AreaErrorBoundary] render failed {label: Settings, error: TypeError: Cannot read properties of null (reading 'value')\n    at htt<path> componentStack: \n    at ChatChangePlanActionDialog (htt<path>)\n    at CockpitApp (<anonymous>)}",
+   "u": "htt<path>"
+  }
+ ]
+}

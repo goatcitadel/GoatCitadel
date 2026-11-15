@@ -1,0 +1,40 @@
+{
+ "vr02": "Memory\n\nWorkspace and global memory. Editing and forgetting ask for approval first; the change is confirmed separately after approval.\n\nRefresh memory directory\nCandidates and mesh\nMemory\nNotes\nFiles\nArtifacts\nAgents\nKnowledge\nMail\nPrompt packs\nNo active memories\n\nMemories appear here after you approve a memory write from Chat or promote a proposal below. Forgotten memories are listed under all statuses.\n\nShow all statuses\nOpen memory diagnostics and maintenance\nMemory proposals\n\nProposals are not trusted memory. Promotion is a decision you make explicitly.\n\nRefresh memory proposals\n\nNo proposals waiting for review.",
+ "sh12": "This link requests a different Citadel or workspace. The current scope stays active until you review the available choices.\n\nReview linked scope",
+ "sh12_after_nav": {
+  "url": "http://127.0.0.1:54766/library/notes",
+  "banner": false
+ },
+ "sh26": [
+  {
+   "t": "Commands",
+   "x": 453,
+   "itemX": 465
+  },
+  {
+   "t": "Go to",
+   "x": 453,
+   "itemX": 465
+  },
+  {
+   "t": "Preferences",
+   "x": 453,
+   "itemX": 465
+  },
+  {
+   "t": "Settings",
+   "x": 453,
+   "itemX": 465
+  }
+ ],
+ "settingsCitadel": [
+  "H1:Citadel",
+  "H2:Citadel",
+  "H3:Guided setup · Mason"
+ ],
+ "libCitadel": [
+  "H1:Guided setup · Mason",
+  "H3:Guided setup · Mason"
+ ],
+ "libCitadelTabsCurrent": []
+}

@@ -1,0 +1,66 @@
+{
+ "steps": [
+  {
+   "label": "empty",
+   "url": "/system/browser-sessions",
+   "txt": "Browser sessions | Governed browser-session records and scoped grants for this workspace. A session record does not open, bind or control a browser; tools still need a grant, policy checks and guardrails. | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | New browser session | Session label | Creates an empty session record in this workspace, with no grants. | Create session | Sessions | Active | Closed | All | Refresh sessions | No browser sessions match this filter. | Select a session to review its grants, saved state and events.",
+   "buttons": [
+    "Create session",
+    "Active",
+    "Closed",
+    "All",
+    "Refresh sessions"
+   ]
+  },
+  {
+   "label": "created",
+   "url": "/system/browser-sessions?sessionId=7082bb02-51e0-444f-b254-23776fa7767f&shell=cockpit",
+   "txt": "Browser sessions | Governed browser-session records and scoped grants for this workspace. A session record does not open, bind or control a browser; tools still need a grant, policy checks and guardrails. | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | New browser session | Session label | Creates an empty session record in this workspace, with no grants. | Session ut10-session recorded. It has no grants yet. | Create session | Sessions | Active | Closed | All | Refresh sessions | ut10-session | Open record | Updated just now | ut10-session | Open record | Session and grants | State | Events | Session overview | Workspace | This workspace | Created | just now | Active grants | 0 | Closed | Not closed | A session record governs browser grants and events. It does not show that a browser is open, bound or active. | Review closing this session | Scoped grants | Grants let one actor use this session within its scopes and hosts. Tools still pass policy checks and guardrails; a grant does not open, bind or control a browser. | No grants are recorded for this session. | New grant",
+   "buttons": [
+    "Create session",
+    "Active",
+    "Closed",
+    "All",
+    "Refresh sessions",
+    "ut10-session\nOpen record\nUpdated just now",
+    "Session and grants",
+    "State",
+    "Events",
+    "Review closing this session",
+    "",
+    ""
+   ]
+  },
+  {
+   "label": "selected",
+   "url": "/system/browser-sessions?sessionId=7082bb02-51e0-444f-b254-23776fa7767f&shell=cockpit",
+   "txt": "Browser sessions | Governed browser-session records and scoped grants for this workspace. A session record does not open, bind or control a browser; tools still need a grant, policy checks and guardrails. | Health | Runtime | Spend | Quality | Diagnostics | Activity | Sessions | Dashboards | Browser sessions | New browser session | Session label | Creates an empty session record in this workspace, with no grants. | Session ut10-session recorded. It has no grants yet. | Create session | Sessions | Active | Closed | All | Refresh sessions | ut10-session | Open record | Updated just now | ut10-session | Open record | Session and grants | State | Events | Session overview | Workspace | This workspace | Created | just now | Active grants | 0 | Closed | Not closed | A session record governs browser grants and events. It does not show that a browser is open, bound or active. | Review closing this session | Scoped grants | Grants let one actor use this session within its scopes and hosts. Tools still pass policy checks and guardrails; a grant does not open, bind or control a browser. | No grants are recorded for this session. | New grant",
+   "buttons": [
+    "Create session",
+    "Active",
+    "Closed",
+    "All",
+    "Refresh sessions",
+    "ut10-session\nOpen record\nUpdated just now",
+    "Session and grants",
+    "State",
+    "Events",
+    "Review closing this session",
+    "",
+    ""
+   ]
+  }
+ ],
+ "createMs": 2550,
+ "closeButton": 0,
+ "reqs": [
+  "GET 200 <dev-server module>",
+  "GET 200 /api/v1/browser-sessions",
+  "POST 201 /api/v1/browser-sessions",
+  "GET 200 /api/v1/browser-sessions",
+  "GET 200 /api/v1/browser-sessions/<id>",
+  "GET 200 /api/v1/browser-sessions/<id>/grants"
+ ],
+ "console": [],
+ "http": []
+}

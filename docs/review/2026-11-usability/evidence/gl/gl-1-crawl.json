@@ -1,0 +1,5573 @@
+[
+ {
+  "via": "sidebar-click",
+  "label": "Chat",
+  "width": 1440,
+  "finalUrl": "/chat",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "sidebar-click",
+  "label": "Inbox",
+  "width": 1440,
+  "finalUrl": "/inbox?shell=cockpit",
+  "h1": [
+   "Inbox"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Inbox",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "sidebar-click",
+  "label": "Work",
+  "width": 1440,
+  "finalUrl": "/work?shell=cockpit",
+  "h1": [
+   "Work"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Work",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "sidebar-click",
+  "label": "Capabilities",
+  "width": 1440,
+  "finalUrl": "/capabilities/connectors?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "sidebar-click",
+  "label": "Library",
+  "width": 1440,
+  "finalUrl": "/library?shell=cockpit",
+  "h1": [
+   "Candidates and mesh"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Library",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "sidebar-click",
+  "label": "System",
+  "width": 1440,
+  "finalUrl": "/system?shell=cockpit",
+  "h1": [
+   "System"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel System",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "gear-menu-items",
+  "items": [
+   "Settings",
+   "Use light theme",
+   "Match system theme",
+   "Switch to classic Mission Control"
+  ]
+ },
+ {
+  "via": "sidebar-click",
+  "label": "Settings (gear menu)",
+  "width": 1440,
+  "finalUrl": "/settings/general?shell=cockpit",
+  "h1": [
+   "General"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · General",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "tab-click",
+  "area": "/system",
+  "label": "Health",
+  "width": 1440,
+  "finalUrl": "/system",
+  "h1": [
+   "System"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/system",
+  "label": "Runtime",
+  "width": 1440,
+  "finalUrl": "/system/runtime?shell=cockpit",
+  "h1": [
+   "Runtime"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Runtime",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/system",
+  "label": "Spend",
+  "width": 1440,
+  "finalUrl": "/system/spend?shell=cockpit",
+  "h1": [
+   "Spend"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Spend",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/system",
+  "label": "Quality",
+  "width": 1440,
+  "finalUrl": "/system/quality?shell=cockpit",
+  "h1": [
+   "Quality"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Quality",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/system",
+  "label": "Diagnostics",
+  "width": 1440,
+  "finalUrl": "/system/diagnostics?shell=cockpit",
+  "h1": [
+   "Diagnostics"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Diagnostics",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/system",
+  "label": "Activity",
+  "width": 1440,
+  "finalUrl": "/system/activity?shell=cockpit",
+  "h1": [
+   "Activity log"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Activity",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/system",
+  "label": "Sessions",
+  "width": 1440,
+  "finalUrl": "/system/sessions?shell=cockpit",
+  "h1": [
+   "Sessions"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Sessions",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/system",
+  "label": "Dashboards",
+  "width": 1440,
+  "finalUrl": "/system/dashboards?shell=cockpit",
+  "h1": [
+   "Dashboards"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Dashboards",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/system",
+  "label": "Browser sessions",
+  "width": 1440,
+  "finalUrl": "/system/browser-sessions?shell=cockpit",
+  "h1": [
+   "Browser sessions"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Browser sessions",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/work",
+  "label": "Board",
+  "width": 1440,
+  "finalUrl": "/work",
+  "h1": [
+   "Work"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/work",
+  "label": "History",
+  "width": 1440,
+  "finalUrl": "/work/history?shell=cockpit",
+  "h1": [
+   "History"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work · History",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/work",
+  "label": "Schedules",
+  "width": 1440,
+  "finalUrl": "/work/schedules?shell=cockpit",
+  "h1": [
+   "Schedules"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work · Schedules",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/work",
+  "label": "Archived tasks",
+  "width": 1440,
+  "finalUrl": "/work/archive?shell=cockpit",
+  "h1": [
+   "Archived tasks"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work · Archived tasks",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/work",
+  "label": "Automation designer",
+  "width": 1440,
+  "finalUrl": "/work/automation?shell=cockpit",
+  "h1": [
+   "Automation designer"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work · Automation designer",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/capabilities",
+  "label": "Skills",
+  "width": 1440,
+  "finalUrl": "/capabilities/skills?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Skills",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/capabilities",
+  "label": "Plugins",
+  "width": 1440,
+  "finalUrl": "/capabilities/plugins?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Plugins",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/capabilities",
+  "label": "Connectors",
+  "width": 1440,
+  "finalUrl": "/capabilities/connectors?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/capabilities",
+  "label": "Tools",
+  "width": 1440,
+  "finalUrl": "/capabilities/tools?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Tools",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/library",
+  "label": "Candidates and mesh",
+  "width": 1440,
+  "finalUrl": "/library",
+  "h1": [
+   "Candidates and mesh"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/library",
+  "label": "Memory",
+  "width": 1440,
+  "finalUrl": "/library/memory?shell=cockpit",
+  "h1": [
+   "Memory"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Memory",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/library",
+  "label": "Notes",
+  "width": 1440,
+  "finalUrl": "/library/notes?shell=cockpit",
+  "h1": [
+   "Notes"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Notes",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/library",
+  "label": "Files",
+  "width": 1440,
+  "finalUrl": "/library/files?shell=cockpit",
+  "h1": [
+   "Files"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Files",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/library",
+  "label": "Artifacts",
+  "width": 1440,
+  "finalUrl": "/library/artifacts?shell=cockpit",
+  "h1": [
+   "Artifacts"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Artifacts",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/library",
+  "label": "Agents",
+  "width": 1440,
+  "finalUrl": "/library/agents?shell=cockpit",
+  "h1": [
+   "Agents"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Agents",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/library",
+  "label": "Knowledge",
+  "width": 1440,
+  "finalUrl": "/library/knowledge?shell=cockpit",
+  "h1": [
+   "Knowledge"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Knowledge",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/library",
+  "label": "Mail",
+  "width": 1440,
+  "finalUrl": "/library/communications?shell=cockpit",
+  "h1": [
+   "Mail"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Mail",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/library",
+  "label": "Prompt packs",
+  "width": 1440,
+  "finalUrl": "/library/prompt-packs?shell=cockpit",
+  "h1": [
+   "Prompt packs"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Prompt packs",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/settings",
+  "label": "General",
+  "width": 1440,
+  "finalUrl": "/settings/general?shell=cockpit",
+  "h1": [
+   "General"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · General",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "tab-click",
+  "area": "/settings",
+  "label": "Models",
+  "width": 1440,
+  "finalUrl": "/settings/models?shell=cockpit",
+  "h1": [
+   "Models"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Models",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "tab-click",
+  "area": "/settings",
+  "label": "Safety",
+  "width": 1440,
+  "finalUrl": "/settings/safety?shell=cockpit",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/settings",
+  "label": "Citadel",
+  "width": 1440,
+  "finalUrl": "/settings/citadel?shell=cockpit",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/settings",
+  "label": "Access",
+  "width": 1440,
+  "finalUrl": "/settings/access?shell=cockpit",
+  "h1": [
+   "Access"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Access",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "tab-click",
+  "area": "/settings",
+  "label": "Advanced",
+  "width": 1440,
+  "finalUrl": "/settings/advanced?shell=cockpit",
+  "h1": [
+   "Advanced"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Advanced",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Chat",
+  "width": 1440,
+  "finalUrl": "/chat",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Inbox",
+  "width": 1440,
+  "finalUrl": "/inbox?shell=cockpit",
+  "h1": [
+   "Inbox"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Inbox",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Work",
+  "width": 1440,
+  "finalUrl": "/work?shell=cockpit",
+  "h1": [
+   "Work"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Work",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Capabilities",
+  "width": 1440,
+  "finalUrl": "/capabilities/tools?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Capabilities · Tools",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Library",
+  "width": 1440,
+  "finalUrl": "/library?shell=cockpit",
+  "h1": [
+   "Candidates and mesh"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Library",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to System",
+  "width": 1440,
+  "finalUrl": "/system?shell=cockpit",
+  "h1": [
+   "System"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel System",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Settings",
+  "width": 1440,
+  "finalUrl": "/settings/general?shell=cockpit",
+  "h1": [
+   "General"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · General",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "palette",
+  "label": "Go to System › Health",
+  "width": 1440,
+  "finalUrl": "/system?shell=cockpit",
+  "h1": [
+   "System"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel System",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to System › Runtime",
+  "width": 1440,
+  "finalUrl": "/system/runtime?shell=cockpit",
+  "h1": [
+   "Runtime"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel System · Runtime",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to System › Spend",
+  "width": 1440,
+  "finalUrl": "/system/spend?shell=cockpit",
+  "h1": [
+   "Spend"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel System · Spend",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to System › Quality",
+  "width": 1440,
+  "finalUrl": "/system/quality?shell=cockpit",
+  "h1": [
+   "Quality"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel System · Quality",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to System › Diagnostics",
+  "width": 1440,
+  "finalUrl": "/system/diagnostics?shell=cockpit",
+  "h1": [
+   "Diagnostics"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel System · Diagnostics",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to System › Activity",
+  "width": 1440,
+  "finalUrl": "/system/activity?shell=cockpit",
+  "h1": [
+   "Activity log"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel System · Activity",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to System › Sessions",
+  "width": 1440,
+  "finalUrl": "/system/sessions?shell=cockpit",
+  "h1": [
+   "Sessions"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel System · Sessions",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to System › Dashboards",
+  "width": 1440,
+  "finalUrl": "/system/dashboards?shell=cockpit",
+  "h1": [
+   "Dashboards"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel System · Dashboards",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to System › Browser sessions",
+  "width": 1440,
+  "finalUrl": "/system/browser-sessions?shell=cockpit",
+  "h1": [
+   "Browser sessions"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel System · Browser sessions",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Work › Board",
+  "width": 1440,
+  "finalUrl": "/work?shell=cockpit",
+  "h1": [
+   "Work"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Work",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Work › History",
+  "width": 1440,
+  "finalUrl": "/work/history?shell=cockpit",
+  "h1": [
+   "History"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Work · History",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Work › Schedules",
+  "width": 1440,
+  "finalUrl": "/work/schedules?shell=cockpit",
+  "h1": [
+   "Schedules"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Work · Schedules",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Work › Archived tasks",
+  "width": 1440,
+  "finalUrl": "/work/archive?shell=cockpit",
+  "h1": [
+   "Archived tasks"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Work · Archived tasks",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Work › Automation designer",
+  "width": 1440,
+  "finalUrl": "/work/automation?shell=cockpit",
+  "h1": [
+   "Automation designer"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Work · Automation designer",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Capabilities › Skills",
+  "width": 1440,
+  "finalUrl": "/capabilities/skills?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Capabilities · Skills",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Capabilities › Plugins",
+  "width": 1440,
+  "finalUrl": "/capabilities/plugins?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Capabilities · Plugins",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Capabilities › Connectors",
+  "width": 1440,
+  "finalUrl": "/capabilities/connectors?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Capabilities › Tools",
+  "width": 1440,
+  "finalUrl": "/capabilities/tools?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Capabilities · Tools",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Library › Candidates and mesh",
+  "width": 1440,
+  "finalUrl": "/library?shell=cockpit",
+  "h1": [
+   "Candidates and mesh"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Library",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Library › Memory",
+  "width": 1440,
+  "finalUrl": "/library/memory?shell=cockpit",
+  "h1": [
+   "Memory"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Library · Memory",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Library › Notes",
+  "width": 1440,
+  "finalUrl": "/library/notes?shell=cockpit",
+  "h1": [
+   "Notes"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Library · Notes",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Library › Files",
+  "width": 1440,
+  "finalUrl": "/library/files?shell=cockpit",
+  "h1": [
+   "Files"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Library · Files",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Library › Artifacts",
+  "width": 1440,
+  "finalUrl": "/library/artifacts?shell=cockpit",
+  "h1": [
+   "Artifacts"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Library · Artifacts",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Library › Agents",
+  "width": 1440,
+  "finalUrl": "/library/agents?shell=cockpit",
+  "h1": [
+   "Agents"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Library · Agents",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Library › Knowledge",
+  "width": 1440,
+  "finalUrl": "/library/knowledge?shell=cockpit",
+  "h1": [
+   "Knowledge"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Library · Knowledge",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Library › Mail",
+  "width": 1440,
+  "finalUrl": "/library/communications?shell=cockpit",
+  "h1": [
+   "Mail"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Library · Mail",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Library › Skill curator",
+  "width": 1440,
+  "finalUrl": "/library/curator?shell=cockpit",
+  "h1": [
+   "Skill curator"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Library · Skill curator",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "palette",
+  "label": "Go to Library › Journey timeline",
+  "width": 1440,
+  "finalUrl": "/library/journey?shell=cockpit",
+  "h1": [
+   "Journey timeline"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Library · Journey",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "palette",
+  "label": "Go to Library › Prompt packs",
+  "width": 1440,
+  "finalUrl": "/library/prompt-packs?shell=cockpit",
+  "h1": [
+   "Prompt packs"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Library · Prompt packs",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Capabilities › Advanced setup",
+  "width": 1440,
+  "finalUrl": "/capabilities/connectors/advanced?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Go to Chat › Advanced channel setup",
+  "width": 1440,
+  "finalUrl": "/chat/messaging/advanced?shell=cockpit",
+  "h1": [
+   "Advanced channel setup"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · General",
+  "width": 1440,
+  "finalUrl": "/settings/general?shell=cockpit#appearance",
+  "h1": [
+   "General"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · General",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Personalities · Experimental",
+  "width": 1440,
+  "finalUrl": "/settings/general?shell=cockpit#work-personality",
+  "h1": [
+   "General"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · General",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Get started",
+  "width": 1440,
+  "finalUrl": "/settings/first-run?shell=cockpit",
+  "h1": [
+   "Get started"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · First run",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Providers & models",
+  "width": 1440,
+  "finalUrl": "/settings/models?shell=cockpit#providers",
+  "h1": [
+   "Models"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Models",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Local AI",
+  "width": 1440,
+  "finalUrl": "/settings/models?shell=cockpit#local-ai",
+  "h1": [
+   "Models"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Models",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Permissions",
+  "width": 1440,
+  "finalUrl": "/settings/safety?shell=cockpit#permission-profile",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Tools",
+  "width": 1440,
+  "finalUrl": "/settings/safety?shell=cockpit#approval-mode",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Trust & policy",
+  "width": 1440,
+  "finalUrl": "/settings/safety?shell=cockpit#trust-policy",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Hooks",
+  "width": 1440,
+  "finalUrl": "/settings/safety?shell=cockpit#hooks",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Budgets",
+  "width": 1440,
+  "finalUrl": "/settings/safety?shell=cockpit#budget-mode",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Citadel overview",
+  "width": 1440,
+  "finalUrl": "/settings/citadel?shell=cockpit#citadel-overview",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Workspaces",
+  "width": 1440,
+  "finalUrl": "/settings/citadel?shell=cockpit#workspace-directory",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Guided setup · Mason",
+  "width": 1440,
+  "finalUrl": "/settings/citadel?shell=cockpit#citadel-mason",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Rules · Wards",
+  "width": 1440,
+  "finalUrl": "/settings/citadel?shell=cockpit#citadel-wards",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Agents · Council",
+  "width": 1440,
+  "finalUrl": "/settings/citadel?shell=cockpit#citadel-council",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Secrets · Vault",
+  "width": 1440,
+  "finalUrl": "/settings/citadel?shell=cockpit#citadel-vault",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Export/import · Blueprint",
+  "width": 1440,
+  "finalUrl": "/settings/citadel?shell=cockpit#citadel-blueprint",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Access & devices",
+  "width": 1440,
+  "finalUrl": "/settings/access?shell=cockpit#device-access",
+  "h1": [
+   "Access"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Access",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "palette",
+  "label": "Settings · Runtime configuration",
+  "width": 1440,
+  "finalUrl": "/settings/advanced?shell=cockpit#managed-runtime",
+  "h1": [
+   "Advanced"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Settings · Advanced",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Chat projects",
+  "requested": "/chat/projects",
+  "width": 1440,
+  "finalUrl": "/chat/projects",
+  "h1": [
+   "Projects"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Messaging add",
+  "requested": "/chat/messaging/add",
+  "width": 1440,
+  "finalUrl": "/chat/messaging/add",
+  "h1": [
+   "Add a channel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Messaging advanced",
+  "requested": "/chat/messaging/advanced",
+  "width": 1440,
+  "finalUrl": "/chat/messaging/advanced",
+  "h1": [
+   "Advanced channel setup"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Work kanban (experimental)",
+  "requested": "/work/kanban",
+  "width": 1440,
+  "finalUrl": "/work/kanban",
+  "h1": [
+   "Older Kanban view"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work · Kanban",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "System improvement (experimental)",
+  "requested": "/system/improvement",
+  "width": 1440,
+  "finalUrl": "/system/improvement",
+  "h1": [
+   "Improvement"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Improvement",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Spend details",
+  "requested": "/system/spend/details",
+  "width": 1440,
+  "finalUrl": "/system/spend/details",
+  "h1": [
+   "Spend details"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Spend",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Runtime diagnostics",
+  "requested": "/system/runtime/diagnostics",
+  "width": 1440,
+  "finalUrl": "/system/runtime/diagnostics",
+  "h1": [
+   "Diagnostics"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Runtime",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Runtime workers (hide)",
+  "requested": "/system/runtime/workers",
+  "width": 1440,
+  "finalUrl": "/system/runtime/workers",
+  "h1": [
+   "Workers"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Runtime",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Library curator (exp)",
+  "requested": "/library/curator",
+  "width": 1440,
+  "finalUrl": "/library/curator",
+  "h1": [
+   "Skill curator"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Skill curator",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Library journey (exp)",
+  "requested": "/library/journey",
+  "width": 1440,
+  "finalUrl": "/library/journey",
+  "h1": [
+   "Journey timeline"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Journey",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Library citadel",
+  "requested": "/library/citadel",
+  "width": 1440,
+  "finalUrl": "/library/citadel",
+  "h1": [
+   "Guided setup · Mason"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Guided setup · Mason",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Library citadel-overview",
+  "requested": "/library/citadel-overview",
+  "width": 1440,
+  "finalUrl": "/library/citadel-overview",
+  "h1": [
+   "Citadel overview"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Citadel overview",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Library citadel-blueprint",
+  "requested": "/library/citadel-blueprint",
+  "width": 1440,
+  "finalUrl": "/library/citadel-blueprint",
+  "h1": [
+   "Export/import · Blueprint"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Export/import · Blueprint",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Library citadel-wards",
+  "requested": "/library/citadel-wards",
+  "width": 1440,
+  "finalUrl": "/library/citadel-wards",
+  "h1": [
+   "Rules · Wards"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Rules · Wards",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Library citadel-council",
+  "requested": "/library/citadel-council",
+  "width": 1440,
+  "finalUrl": "/library/citadel-council",
+  "h1": [
+   "Agents · Council"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Agents · Council",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Library citadel-vault",
+  "requested": "/library/citadel-vault",
+  "width": 1440,
+  "finalUrl": "/library/citadel-vault",
+  "h1": [
+   "Secrets · Vault"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Secrets · Vault",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Connectors advanced",
+  "requested": "/capabilities/connectors/advanced",
+  "width": 1440,
+  "finalUrl": "/capabilities/connectors/advanced",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Settings first-run",
+  "requested": "/settings/first-run",
+  "width": 1440,
+  "finalUrl": "/settings/first-run",
+  "h1": [
+   "Get started"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · First run",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "General#appearance",
+  "requested": "/settings/general#appearance",
+  "width": 1440,
+  "finalUrl": "/settings/general#appearance",
+  "h1": [
+   "General"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · General",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "General#personality",
+  "requested": "/settings/general#work-personality",
+  "width": 1440,
+  "finalUrl": "/settings/general#work-personality",
+  "h1": [
+   "General"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · General",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "General#updates",
+  "requested": "/settings/general#updates",
+  "width": 1440,
+  "finalUrl": "/settings/general#updates",
+  "h1": [
+   "General"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · General",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Models#providers",
+  "requested": "/settings/models#providers",
+  "width": 1440,
+  "finalUrl": "/settings/models#providers",
+  "h1": [
+   "Models"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Models",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Models#local-ai",
+  "requested": "/settings/models#local-ai",
+  "width": 1440,
+  "finalUrl": "/settings/models#local-ai",
+  "h1": [
+   "Models"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Models",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Safety#approval-mode",
+  "requested": "/settings/safety#approval-mode",
+  "width": 1440,
+  "finalUrl": "/settings/safety#approval-mode",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Safety#budget",
+  "requested": "/settings/safety#budget-mode",
+  "width": 1440,
+  "finalUrl": "/settings/safety#budget-mode",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Safety#trust",
+  "requested": "/settings/safety#trust-policy",
+  "width": 1440,
+  "finalUrl": "/settings/safety#trust-policy",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Safety#permissions",
+  "requested": "/settings/safety#permission-profile",
+  "width": 1440,
+  "finalUrl": "/settings/safety#permission-profile",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Safety#hooks",
+  "requested": "/settings/safety#hooks",
+  "width": 1440,
+  "finalUrl": "/settings/safety#hooks",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#workspace-directory",
+  "requested": "/settings/citadel#workspace-directory",
+  "width": 1440,
+  "finalUrl": "/settings/citadel#workspace-directory",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#blueprint",
+  "requested": "/settings/citadel#citadel-blueprint",
+  "width": 1440,
+  "finalUrl": "/settings/citadel#citadel-blueprint",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#overview",
+  "requested": "/settings/citadel#citadel-overview",
+  "width": 1440,
+  "finalUrl": "/settings/citadel#citadel-overview",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#mason",
+  "requested": "/settings/citadel#citadel-mason",
+  "width": 1440,
+  "finalUrl": "/settings/citadel#citadel-mason",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#wards",
+  "requested": "/settings/citadel#citadel-wards",
+  "width": 1440,
+  "finalUrl": "/settings/citadel#citadel-wards",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#council",
+  "requested": "/settings/citadel#citadel-council",
+  "width": 1440,
+  "finalUrl": "/settings/citadel#citadel-council",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#vault",
+  "requested": "/settings/citadel#citadel-vault",
+  "width": 1440,
+  "finalUrl": "/settings/citadel#citadel-vault",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#citadel-capabilities (hide)",
+  "requested": "/settings/citadel#citadel-capabilities",
+  "width": 1440,
+  "finalUrl": "/settings/citadel#citadel-capabilities",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "unavailable",
+   "hidden"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#workspace-capabilities (hide)",
+  "requested": "/settings/citadel#workspace-capabilities",
+  "width": 1440,
+  "finalUrl": "/settings/citadel#workspace-capabilities",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "unavailable",
+   "hidden"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Access#device",
+  "requested": "/settings/access#device-access",
+  "width": 1440,
+  "finalUrl": "/settings/access#device-access",
+  "h1": [
+   "Access"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Access",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Advanced#managed-runtime",
+  "requested": "/settings/advanced#managed-runtime",
+  "width": 1440,
+  "finalUrl": "/settings/advanced#managed-runtime",
+  "h1": [
+   "Advanced"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Advanced",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "System health alias",
+  "requested": "/system/health",
+  "width": 1440,
+  "finalUrl": "/system/health",
+  "h1": [
+   "System"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Health",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Inbox history",
+  "requested": "/inbox?view=history",
+  "width": 1440,
+  "finalUrl": "/inbox?view=history",
+  "h1": [
+   "Inbox"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Inbox",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Inbox recovery",
+  "requested": "/inbox?view=recovery",
+  "width": 1440,
+  "finalUrl": "/inbox?view=recovery",
+  "h1": [
+   "Inbox"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Inbox",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Advanced#mcp",
+  "requested": "/capabilities/connectors/advanced#mcp-servers",
+  "width": 1440,
+  "finalUrl": "/capabilities/connectors/advanced#mcp-servers",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Advanced#integrations",
+  "requested": "/capabilities/connectors/advanced#integration-connections",
+  "width": 1440,
+  "finalUrl": "/capabilities/connectors/advanced#integration-connections",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Advanced#web-search",
+  "requested": "/capabilities/connectors/advanced#web-search",
+  "width": 1440,
+  "finalUrl": "/capabilities/connectors/advanced#web-search",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops",
+  "requested": "/ops",
+  "width": 1440,
+  "finalUrl": "/system?shell=cockpit",
+  "h1": [
+   "System"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/approvals",
+  "requested": "/ops/approvals",
+  "width": 1440,
+  "finalUrl": "/inbox?shell=cockpit",
+  "h1": [
+   "Inbox"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Inbox",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/activity",
+  "requested": "/ops/activity",
+  "width": 1440,
+  "finalUrl": "/system/activity?shell=cockpit",
+  "h1": [
+   "Activity log"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Activity",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/quality",
+  "requested": "/ops/quality",
+  "width": 1440,
+  "finalUrl": "/system/quality?shell=cockpit",
+  "h1": [
+   "Quality"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Quality",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/diagnostics",
+  "requested": "/ops/diagnostics",
+  "width": 1440,
+  "finalUrl": "/system/diagnostics?shell=cockpit",
+  "h1": [
+   "Diagnostics"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Diagnostics",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/costs",
+  "requested": "/ops/costs",
+  "width": 1440,
+  "finalUrl": "/system/spend/details?shell=cockpit",
+  "h1": [
+   "Spend details"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Spend",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/improvement",
+  "requested": "/ops/improvement",
+  "width": 1440,
+  "finalUrl": "/system/improvement?shell=cockpit",
+  "h1": [
+   "Improvement"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Improvement",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/ops/runtime",
+  "requested": "/ops/runtime",
+  "width": 1440,
+  "finalUrl": "/system/runtime?shell=cockpit",
+  "h1": [
+   "Runtime"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Runtime",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/workers",
+  "requested": "/ops/workers",
+  "width": 1440,
+  "finalUrl": "/system/runtime/workers?shell=cockpit",
+  "h1": [
+   "Workers"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Runtime",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/notifications",
+  "requested": "/ops/notifications",
+  "width": 1440,
+  "finalUrl": "/inbox?shell=cockpit",
+  "h1": [
+   "Inbox"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Inbox",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/sessions",
+  "requested": "/ops/sessions",
+  "width": 1440,
+  "finalUrl": "/system/sessions?shell=cockpit",
+  "h1": [
+   "Sessions"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Sessions",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/kanban",
+  "requested": "/ops/kanban",
+  "width": 1440,
+  "finalUrl": "/work/kanban?shell=cockpit",
+  "h1": [
+   "Older Kanban view"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work · Kanban",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/ops/boards",
+  "requested": "/ops/boards",
+  "width": 1440,
+  "finalUrl": "/system/dashboards?shell=cockpit",
+  "h1": [
+   "Dashboards"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Dashboards",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/schedules",
+  "requested": "/ops/schedules",
+  "width": 1440,
+  "finalUrl": "/work/schedules?shell=cockpit",
+  "h1": [
+   "Schedules"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work · Schedules",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/sessions?view=browser-sessions",
+  "requested": "/ops/sessions?view=browser-sessions",
+  "width": 1440,
+  "finalUrl": "/system/browser-sessions?shell=cockpit",
+  "h1": [
+   "Browser sessions"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Browser sessions",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/cowork",
+  "requested": "/cowork",
+  "width": 1440,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/cowork/workspace",
+  "requested": "/cowork/workspace",
+  "width": 1440,
+  "finalUrl": "/cowork/workspace",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/cowork/tasks",
+  "requested": "/cowork/tasks",
+  "width": 1440,
+  "finalUrl": "/work?shell=cockpit",
+  "h1": [
+   "Work"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/cowork/board",
+  "requested": "/cowork/board",
+  "width": 1440,
+  "finalUrl": "/work?shell=cockpit",
+  "h1": [
+   "Work"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/code",
+  "requested": "/code",
+  "width": 1440,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/projects",
+  "requested": "/projects",
+  "width": 1440,
+  "finalUrl": "/chat/projects?shell=cockpit",
+  "h1": [
+   "Projects"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/library/skills",
+  "requested": "/library/skills",
+  "width": 1440,
+  "finalUrl": "/capabilities/skills?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Skills",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/library/tools",
+  "requested": "/library/tools",
+  "width": 1440,
+  "finalUrl": "/capabilities/tools?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Tools",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/library/capabilities",
+  "requested": "/library/capabilities",
+  "width": 1440,
+  "finalUrl": "/capabilities/skills?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Skills",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/library/skills?type=skill",
+  "requested": "/library/skills?type=skill",
+  "width": 1440,
+  "finalUrl": "/capabilities/skills?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Skills",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/connections",
+  "requested": "/settings/connections",
+  "width": 1440,
+  "finalUrl": "/capabilities/connectors/advanced?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/mcp",
+  "requested": "/settings/mcp",
+  "width": 1440,
+  "finalUrl": "/capabilities/connectors/advanced?shell=cockpit#mcp-servers",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/channels",
+  "requested": "/settings/channels",
+  "width": 1440,
+  "finalUrl": "/chat/messaging/advanced?shell=cockpit",
+  "h1": [
+   "Advanced channel setup"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/integrations",
+  "requested": "/settings/integrations",
+  "width": 1440,
+  "finalUrl": "/capabilities/connectors/advanced?shell=cockpit#integration-connections",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/web-search",
+  "requested": "/settings/web-search",
+  "width": 1440,
+  "finalUrl": "/capabilities/connectors/advanced?shell=cockpit#web-search",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/addons",
+  "requested": "/settings/addons",
+  "width": 1440,
+  "finalUrl": "/capabilities/plugins?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Plugins",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/advanced#addons",
+  "requested": "/settings/advanced#addons",
+  "width": 1440,
+  "finalUrl": "/capabilities/plugins?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Plugins",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/connections#addons",
+  "requested": "/settings/connections#addons",
+  "width": 1440,
+  "finalUrl": "/capabilities/plugins?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Plugins",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/providers",
+  "requested": "/settings/providers",
+  "width": 1440,
+  "finalUrl": "/settings/providers",
+  "h1": [
+   "Models"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Providers & models",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/settings/onboarding",
+  "requested": "/settings/onboarding",
+  "width": 1440,
+  "finalUrl": "/settings/onboarding",
+  "h1": [
+   "Models"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Get started",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/local-ai",
+  "requested": "/settings/local-ai",
+  "width": 1440,
+  "finalUrl": "/settings/local-ai",
+  "h1": [
+   "Models"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Local AI",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/tools",
+  "requested": "/settings/tools",
+  "width": 1440,
+  "finalUrl": "/settings/tools",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Tools",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/permissions",
+  "requested": "/settings/permissions",
+  "width": 1440,
+  "finalUrl": "/settings/permissions",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Permissions",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/trust-policy",
+  "requested": "/settings/trust-policy",
+  "width": 1440,
+  "finalUrl": "/settings/trust-policy",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Trust & policy",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/settings/hooks",
+  "requested": "/settings/hooks",
+  "width": 1440,
+  "finalUrl": "/settings/hooks",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Hooks",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/budget",
+  "requested": "/settings/budget",
+  "width": 1440,
+  "finalUrl": "/settings/budget",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Budgets",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/workspaces",
+  "requested": "/settings/workspaces",
+  "width": 1440,
+  "finalUrl": "/settings/workspaces",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Workspaces",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/runtime",
+  "requested": "/settings/runtime",
+  "width": 1440,
+  "finalUrl": "/settings/runtime",
+  "h1": [
+   "Advanced"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Runtime configuration",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/personalities",
+  "requested": "/settings/personalities",
+  "width": 1440,
+  "finalUrl": "/settings/personalities",
+  "h1": [
+   "General"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Personalities",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/settings/citadel-capabilities",
+  "requested": "/settings/citadel-capabilities",
+  "width": 1440,
+  "finalUrl": "/settings/citadel-capabilities",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel capabilities",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "unavailable",
+   "hidden"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/settings/workspace-capabilities",
+  "requested": "/settings/workspace-capabilities",
+  "width": 1440,
+  "finalUrl": "/settings/workspace-capabilities",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Workspace capabilities",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "unavailable",
+   "hidden"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/?tab=chat",
+  "requested": "/?tab=chat",
+  "width": 1440,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/?tab=dashboard",
+  "requested": "/?tab=dashboard",
+  "width": 1440,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/?surface=cowork",
+  "requested": "/?surface=cowork",
+  "width": 1440,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/?surface=code",
+  "requested": "/?surface=code",
+  "width": 1440,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/?space=operate&page=surface",
+  "requested": "/?space=operate&page=surface",
+  "width": 1440,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/inbox/approvals/does-not-exist",
+  "requested": "/inbox/approvals/does-not-exist",
+  "width": 1440,
+  "finalUrl": "/inbox?approvalId=does-not-exist&shell=cockpit",
+  "h1": [
+   "Inbox"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Inbox",
+  "consoleErrors": [
+   "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ],
+  "approvalMode403Count": 0,
+  "failedRequests": [
+   "404 GET http://127.0.0.1:55150/api/v1/approvals/does-not-exist"
+  ],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/__gallery",
+  "requested": "/__gallery",
+  "width": 1440,
+  "finalUrl": "/__gallery",
+  "h1": [
+   "Cockpit components"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Gallery",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/nonexistent-page",
+  "requested": "/nonexistent-page",
+  "width": 1440,
+  "finalUrl": "/nonexistent-page",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/system/nonexistent",
+  "requested": "/system/nonexistent",
+  "width": 1440,
+  "finalUrl": "/system/nonexistent",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found · Nonexistent",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/work/nonexistent",
+  "requested": "/work/nonexistent",
+  "width": 1440,
+  "finalUrl": "/work/nonexistent",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found · Nonexistent",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/capabilities/nonexistent",
+  "requested": "/capabilities/nonexistent",
+  "width": 1440,
+  "finalUrl": "/capabilities/nonexistent",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found · Nonexistent",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/library/nonexistent",
+  "requested": "/library/nonexistent",
+  "width": 1440,
+  "finalUrl": "/library/nonexistent",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found · Nonexistent",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/settings/nonexistent",
+  "requested": "/settings/nonexistent",
+  "width": 1440,
+  "finalUrl": "/settings/nonexistent",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found · Nonexistent",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Chat projects",
+  "requested": "/chat/projects",
+  "width": 375,
+  "finalUrl": "/chat/projects",
+  "h1": [
+   "Projects"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Messaging add",
+  "requested": "/chat/messaging/add",
+  "width": 375,
+  "finalUrl": "/chat/messaging/add",
+  "h1": [
+   "Add a channel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Messaging advanced",
+  "requested": "/chat/messaging/advanced",
+  "width": 375,
+  "finalUrl": "/chat/messaging/advanced",
+  "h1": [
+   "Advanced channel setup"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Work kanban (experimental)",
+  "requested": "/work/kanban",
+  "width": 375,
+  "finalUrl": "/work/kanban",
+  "h1": [
+   "Older Kanban view"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work · Kanban",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "System improvement (experimental)",
+  "requested": "/system/improvement",
+  "width": 375,
+  "finalUrl": "/system/improvement",
+  "h1": [
+   "Improvement"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Improvement",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Spend details",
+  "requested": "/system/spend/details",
+  "width": 375,
+  "finalUrl": "/system/spend/details",
+  "h1": [
+   "Spend details"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Spend",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Runtime diagnostics",
+  "requested": "/system/runtime/diagnostics",
+  "width": 375,
+  "finalUrl": "/system/runtime/diagnostics",
+  "h1": [
+   "Diagnostics"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Runtime",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Runtime workers (hide)",
+  "requested": "/system/runtime/workers",
+  "width": 375,
+  "finalUrl": "/system/runtime/workers",
+  "h1": [
+   "Workers"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Runtime",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Library curator (exp)",
+  "requested": "/library/curator",
+  "width": 375,
+  "finalUrl": "/library/curator",
+  "h1": [
+   "Skill curator"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Skill curator",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Library journey (exp)",
+  "requested": "/library/journey",
+  "width": 375,
+  "finalUrl": "/library/journey",
+  "h1": [
+   "Journey timeline"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Journey",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Library citadel",
+  "requested": "/library/citadel",
+  "width": 375,
+  "finalUrl": "/library/citadel",
+  "h1": [
+   "Guided setup · Mason"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Guided setup · Mason",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Library citadel-overview",
+  "requested": "/library/citadel-overview",
+  "width": 375,
+  "finalUrl": "/library/citadel-overview",
+  "h1": [
+   "Citadel overview"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Citadel overview",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Library citadel-blueprint",
+  "requested": "/library/citadel-blueprint",
+  "width": 375,
+  "finalUrl": "/library/citadel-blueprint",
+  "h1": [
+   "Export/import · Blueprint"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Export/import · Blueprint",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Library citadel-wards",
+  "requested": "/library/citadel-wards",
+  "width": 375,
+  "finalUrl": "/library/citadel-wards",
+  "h1": [
+   "Rules · Wards"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Rules · Wards",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Library citadel-council",
+  "requested": "/library/citadel-council",
+  "width": 375,
+  "finalUrl": "/library/citadel-council",
+  "h1": [
+   "Agents · Council"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Agents · Council",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Library citadel-vault",
+  "requested": "/library/citadel-vault",
+  "width": 375,
+  "finalUrl": "/library/citadel-vault",
+  "h1": [
+   "Secrets · Vault"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Library · Secrets · Vault",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Connectors advanced",
+  "requested": "/capabilities/connectors/advanced",
+  "width": 375,
+  "finalUrl": "/capabilities/connectors/advanced",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Settings first-run",
+  "requested": "/settings/first-run",
+  "width": 375,
+  "finalUrl": "/settings/first-run",
+  "h1": [
+   "Get started"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · First run",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "General#appearance",
+  "requested": "/settings/general#appearance",
+  "width": 375,
+  "finalUrl": "/settings/general#appearance",
+  "h1": [
+   "General"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · General",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "General#personality",
+  "requested": "/settings/general#work-personality",
+  "width": 375,
+  "finalUrl": "/settings/general#work-personality",
+  "h1": [
+   "General"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · General",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "General#updates",
+  "requested": "/settings/general#updates",
+  "width": 375,
+  "finalUrl": "/settings/general#updates",
+  "h1": [
+   "General"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · General",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Models#providers",
+  "requested": "/settings/models#providers",
+  "width": 375,
+  "finalUrl": "/settings/models#providers",
+  "h1": [
+   "Models"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Models",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Models#local-ai",
+  "requested": "/settings/models#local-ai",
+  "width": 375,
+  "finalUrl": "/settings/models#local-ai",
+  "h1": [
+   "Models"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Models",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Safety#approval-mode",
+  "requested": "/settings/safety#approval-mode",
+  "width": 375,
+  "finalUrl": "/settings/safety#approval-mode",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Safety#budget",
+  "requested": "/settings/safety#budget-mode",
+  "width": 375,
+  "finalUrl": "/settings/safety#budget-mode",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Safety#trust",
+  "requested": "/settings/safety#trust-policy",
+  "width": 375,
+  "finalUrl": "/settings/safety#trust-policy",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Safety#permissions",
+  "requested": "/settings/safety#permission-profile",
+  "width": 375,
+  "finalUrl": "/settings/safety#permission-profile",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Safety#hooks",
+  "requested": "/settings/safety#hooks",
+  "width": 375,
+  "finalUrl": "/settings/safety#hooks",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Safety",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#workspace-directory",
+  "requested": "/settings/citadel#workspace-directory",
+  "width": 375,
+  "finalUrl": "/settings/citadel#workspace-directory",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#blueprint",
+  "requested": "/settings/citadel#citadel-blueprint",
+  "width": 375,
+  "finalUrl": "/settings/citadel#citadel-blueprint",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#overview",
+  "requested": "/settings/citadel#citadel-overview",
+  "width": 375,
+  "finalUrl": "/settings/citadel#citadel-overview",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#mason",
+  "requested": "/settings/citadel#citadel-mason",
+  "width": 375,
+  "finalUrl": "/settings/citadel#citadel-mason",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#wards",
+  "requested": "/settings/citadel#citadel-wards",
+  "width": 375,
+  "finalUrl": "/settings/citadel#citadel-wards",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#council",
+  "requested": "/settings/citadel#citadel-council",
+  "width": 375,
+  "finalUrl": "/settings/citadel#citadel-council",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#vault",
+  "requested": "/settings/citadel#citadel-vault",
+  "width": 375,
+  "finalUrl": "/settings/citadel#citadel-vault",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#citadel-capabilities (hide)",
+  "requested": "/settings/citadel#citadel-capabilities",
+  "width": 375,
+  "finalUrl": "/settings/citadel#citadel-capabilities",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "unavailable",
+   "hidden"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Citadel#workspace-capabilities (hide)",
+  "requested": "/settings/citadel#workspace-capabilities",
+  "width": 375,
+  "finalUrl": "/settings/citadel#workspace-capabilities",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "unavailable",
+   "hidden"
+  ]
+ },
+ {
+  "via": "direct",
+  "label": "Access#device",
+  "requested": "/settings/access#device-access",
+  "width": 375,
+  "finalUrl": "/settings/access#device-access",
+  "h1": [
+   "Access"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Access",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Advanced#managed-runtime",
+  "requested": "/settings/advanced#managed-runtime",
+  "width": 375,
+  "finalUrl": "/settings/advanced#managed-runtime",
+  "h1": [
+   "Advanced"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Advanced",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "System health alias",
+  "requested": "/system/health",
+  "width": 375,
+  "finalUrl": "/system/health",
+  "h1": [
+   "System"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Health",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Inbox history",
+  "requested": "/inbox?view=history",
+  "width": 375,
+  "finalUrl": "/inbox?view=history",
+  "h1": [
+   "Inbox"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Inbox",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Inbox recovery",
+  "requested": "/inbox?view=recovery",
+  "width": 375,
+  "finalUrl": "/inbox?view=recovery",
+  "h1": [
+   "Inbox"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Inbox",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Advanced#mcp",
+  "requested": "/capabilities/connectors/advanced#mcp-servers",
+  "width": 375,
+  "finalUrl": "/capabilities/connectors/advanced#mcp-servers",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Advanced#integrations",
+  "requested": "/capabilities/connectors/advanced#integration-connections",
+  "width": 375,
+  "finalUrl": "/capabilities/connectors/advanced#integration-connections",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "direct",
+  "label": "Advanced#web-search",
+  "requested": "/capabilities/connectors/advanced#web-search",
+  "width": 375,
+  "finalUrl": "/capabilities/connectors/advanced#web-search",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops",
+  "requested": "/ops",
+  "width": 375,
+  "finalUrl": "/system?shell=cockpit",
+  "h1": [
+   "System"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/approvals",
+  "requested": "/ops/approvals",
+  "width": 375,
+  "finalUrl": "/inbox?shell=cockpit",
+  "h1": [
+   "Inbox"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Inbox",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/activity",
+  "requested": "/ops/activity",
+  "width": 375,
+  "finalUrl": "/system/activity?shell=cockpit",
+  "h1": [
+   "Activity log"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Activity",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/quality",
+  "requested": "/ops/quality",
+  "width": 375,
+  "finalUrl": "/system/quality?shell=cockpit",
+  "h1": [
+   "Quality"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Quality",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/diagnostics",
+  "requested": "/ops/diagnostics",
+  "width": 375,
+  "finalUrl": "/system/diagnostics?shell=cockpit",
+  "h1": [
+   "Diagnostics"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Diagnostics",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/costs",
+  "requested": "/ops/costs",
+  "width": 375,
+  "finalUrl": "/system/spend/details?shell=cockpit",
+  "h1": [
+   "Spend details"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Spend",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/improvement",
+  "requested": "/ops/improvement",
+  "width": 375,
+  "finalUrl": "/system/improvement?shell=cockpit",
+  "h1": [
+   "Improvement"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Improvement",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/ops/runtime",
+  "requested": "/ops/runtime",
+  "width": 375,
+  "finalUrl": "/system/runtime?shell=cockpit",
+  "h1": [
+   "Runtime"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Runtime",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/workers",
+  "requested": "/ops/workers",
+  "width": 375,
+  "finalUrl": "/system/runtime/workers?shell=cockpit",
+  "h1": [
+   "Workers"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Runtime",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/notifications",
+  "requested": "/ops/notifications",
+  "width": 375,
+  "finalUrl": "/inbox?shell=cockpit",
+  "h1": [
+   "Inbox"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Inbox",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/sessions",
+  "requested": "/ops/sessions",
+  "width": 375,
+  "finalUrl": "/system/sessions?shell=cockpit",
+  "h1": [
+   "Sessions"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Sessions",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/kanban",
+  "requested": "/ops/kanban",
+  "width": 375,
+  "finalUrl": "/work/kanban?shell=cockpit",
+  "h1": [
+   "Older Kanban view"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work · Kanban",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/ops/boards",
+  "requested": "/ops/boards",
+  "width": 375,
+  "finalUrl": "/system/dashboards?shell=cockpit",
+  "h1": [
+   "Dashboards"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Dashboards",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/schedules",
+  "requested": "/ops/schedules",
+  "width": 375,
+  "finalUrl": "/work/schedules?shell=cockpit",
+  "h1": [
+   "Schedules"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work · Schedules",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/ops/sessions?view=browser-sessions",
+  "requested": "/ops/sessions?view=browser-sessions",
+  "width": 375,
+  "finalUrl": "/system/browser-sessions?shell=cockpit",
+  "h1": [
+   "Browser sessions"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel System · Browser sessions",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/cowork",
+  "requested": "/cowork",
+  "width": 375,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/cowork/workspace",
+  "requested": "/cowork/workspace",
+  "width": 375,
+  "finalUrl": "/cowork/workspace",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/cowork/tasks",
+  "requested": "/cowork/tasks",
+  "width": 375,
+  "finalUrl": "/work?shell=cockpit",
+  "h1": [
+   "Work"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/cowork/board",
+  "requested": "/cowork/board",
+  "width": 375,
+  "finalUrl": "/work?shell=cockpit",
+  "h1": [
+   "Work"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Work",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/code",
+  "requested": "/code",
+  "width": 375,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/projects",
+  "requested": "/projects",
+  "width": 375,
+  "finalUrl": "/chat/projects?shell=cockpit",
+  "h1": [
+   "Projects"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/library/skills",
+  "requested": "/library/skills",
+  "width": 375,
+  "finalUrl": "/capabilities/skills?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Skills",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/library/tools",
+  "requested": "/library/tools",
+  "width": 375,
+  "finalUrl": "/capabilities/tools?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Tools",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/library/capabilities",
+  "requested": "/library/capabilities",
+  "width": 375,
+  "finalUrl": "/capabilities/skills?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Skills",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/library/skills?type=skill",
+  "requested": "/library/skills?type=skill",
+  "width": 375,
+  "finalUrl": "/capabilities/skills?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Skills",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/connections",
+  "requested": "/settings/connections",
+  "width": 375,
+  "finalUrl": "/capabilities/connectors/advanced?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/mcp",
+  "requested": "/settings/mcp",
+  "width": 375,
+  "finalUrl": "/capabilities/connectors/advanced?shell=cockpit#mcp-servers",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/channels",
+  "requested": "/settings/channels",
+  "width": 375,
+  "finalUrl": "/chat/messaging/advanced?shell=cockpit",
+  "h1": [
+   "Advanced channel setup"
+  ],
+  "h1Count": 1,
+  "h1InDom": 2,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/integrations",
+  "requested": "/settings/integrations",
+  "width": 375,
+  "finalUrl": "/capabilities/connectors/advanced?shell=cockpit#integration-connections",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/web-search",
+  "requested": "/settings/web-search",
+  "width": 375,
+  "finalUrl": "/capabilities/connectors/advanced?shell=cockpit#web-search",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Connectors",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/addons",
+  "requested": "/settings/addons",
+  "width": 375,
+  "finalUrl": "/capabilities/plugins?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Plugins",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/advanced#addons",
+  "requested": "/settings/advanced#addons",
+  "width": 375,
+  "finalUrl": "/capabilities/plugins?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Plugins",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/connections#addons",
+  "requested": "/settings/connections#addons",
+  "width": 375,
+  "finalUrl": "/capabilities/plugins?shell=cockpit",
+  "h1": [
+   "Capabilities"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Capabilities · Plugins",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/providers",
+  "requested": "/settings/providers",
+  "width": 375,
+  "finalUrl": "/settings/providers",
+  "h1": [
+   "Models"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Providers & models",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/settings/onboarding",
+  "requested": "/settings/onboarding",
+  "width": 375,
+  "finalUrl": "/settings/onboarding",
+  "h1": [
+   "Models"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Get started",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/local-ai",
+  "requested": "/settings/local-ai",
+  "width": 375,
+  "finalUrl": "/settings/local-ai",
+  "h1": [
+   "Models"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Local AI",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/tools",
+  "requested": "/settings/tools",
+  "width": 375,
+  "finalUrl": "/settings/tools",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Tools",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/permissions",
+  "requested": "/settings/permissions",
+  "width": 375,
+  "finalUrl": "/settings/permissions",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Permissions",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/trust-policy",
+  "requested": "/settings/trust-policy",
+  "width": 375,
+  "finalUrl": "/settings/trust-policy",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Trust & policy",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/settings/hooks",
+  "requested": "/settings/hooks",
+  "width": 375,
+  "finalUrl": "/settings/hooks",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Hooks",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/budget",
+  "requested": "/settings/budget",
+  "width": 375,
+  "finalUrl": "/settings/budget",
+  "h1": [
+   "Safety"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Budgets",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/workspaces",
+  "requested": "/settings/workspaces",
+  "width": 375,
+  "finalUrl": "/settings/workspaces",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Workspaces",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/runtime",
+  "requested": "/settings/runtime",
+  "width": 375,
+  "finalUrl": "/settings/runtime",
+  "h1": [
+   "Advanced"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Runtime configuration",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/settings/personalities",
+  "requested": "/settings/personalities",
+  "width": 375,
+  "finalUrl": "/settings/personalities",
+  "h1": [
+   "General"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Personalities",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "experimental"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/settings/citadel-capabilities",
+  "requested": "/settings/citadel-capabilities",
+  "width": 375,
+  "finalUrl": "/settings/citadel-capabilities",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Citadel capabilities",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "unavailable",
+   "hidden"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/settings/workspace-capabilities",
+  "requested": "/settings/workspace-capabilities",
+  "width": 375,
+  "finalUrl": "/settings/workspace-capabilities",
+  "h1": [
+   "Citadel"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Settings · Workspace capabilities",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "unavailable",
+   "hidden"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/?tab=chat",
+  "requested": "/?tab=chat",
+  "width": 375,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/?tab=dashboard",
+  "requested": "/?tab=dashboard",
+  "width": 375,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/?surface=cowork",
+  "requested": "/?surface=cowork",
+  "width": 375,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/?surface=code",
+  "requested": "/?surface=code",
+  "width": 375,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/?space=operate&page=surface",
+  "requested": "/?space=operate&page=surface",
+  "width": 375,
+  "finalUrl": "/chat?shell=cockpit",
+  "h1": [
+   "ut13-kb-approval-2"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Chat",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/inbox/approvals/does-not-exist",
+  "requested": "/inbox/approvals/does-not-exist",
+  "width": 375,
+  "finalUrl": "/inbox?approvalId=does-not-exist&shell=cockpit",
+  "h1": [
+   "Inbox"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Inbox",
+  "consoleErrors": [
+   "Failed to load resource: the server responded with a status of 404 (Not Found)"
+  ],
+  "approvalMode403Count": 0,
+  "failedRequests": [
+   "404 GET http://127.0.0.1:55150/api/v1/approvals/does-not-exist"
+  ],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/__gallery",
+  "requested": "/__gallery",
+  "width": 375,
+  "finalUrl": "/__gallery",
+  "h1": [
+   "Cockpit components"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Gallery",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": []
+ },
+ {
+  "via": "compat",
+  "label": "/nonexistent-page",
+  "requested": "/nonexistent-page",
+  "width": 375,
+  "finalUrl": "/nonexistent-page",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/system/nonexistent",
+  "requested": "/system/nonexistent",
+  "width": 375,
+  "finalUrl": "/system/nonexistent",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found · Nonexistent",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/work/nonexistent",
+  "requested": "/work/nonexistent",
+  "width": 375,
+  "finalUrl": "/work/nonexistent",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found · Nonexistent",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/capabilities/nonexistent",
+  "requested": "/capabilities/nonexistent",
+  "width": 375,
+  "finalUrl": "/capabilities/nonexistent",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found · Nonexistent",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/library/nonexistent",
+  "requested": "/library/nonexistent",
+  "width": 375,
+  "finalUrl": "/library/nonexistent",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found · Nonexistent",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ },
+ {
+  "via": "compat",
+  "label": "/settings/nonexistent",
+  "requested": "/settings/nonexistent",
+  "width": 375,
+  "finalUrl": "/settings/nonexistent",
+  "h1": [
+   "Page not found"
+  ],
+  "h1Count": 1,
+  "h1InDom": 1,
+  "title": "GoatCitadel Page not found · Nonexistent",
+  "consoleErrors": [],
+  "approvalMode403Count": 0,
+  "failedRequests": [],
+  "overflowPx": 0,
+  "flags": [
+   "notfound"
+  ]
+ }
+]

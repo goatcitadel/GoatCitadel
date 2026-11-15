@@ -1,0 +1,4 @@
+/system /^Refresh system health/ focus@100/800/2500ms: BODY | BODY | BODY | next Tab: A:Health | live regions: []
+/settings/general /^New destination/ focus@100/800/2500ms: BODY | BODY | BODY | next Tab: INPUT:Destination label | live regions: ["Blocked by your browser or host. Change this site's notification permission in h"]
+/library/memory /Show all statuses/ focus@100/800/2500ms: BODY | BODY | BODY | next Tab: INPUT: | live regions: []
+/inbox /^Refresh$/ focus@100/800/2500ms: BODY | BODY | BODY | next Tab: SUMMARY:Couldn't fully check 1 source | live regions: []

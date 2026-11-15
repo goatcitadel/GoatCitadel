@@ -1,0 +1,367 @@
+{
+ "chatFeatureAvailability": {
+  "durableExecution": true,
+  "explicitContext": true,
+  "supervisedDelegation": false,
+  "automaticFanout": false,
+  "providerFallback": false,
+  "staticMcp": false,
+  "explicitContextBranches": true,
+  "workspaceSnapshot": true,
+  "modelCouncil": true,
+  "workPassport": true
+ },
+ "revision": 35,
+ "environment": "local",
+ "deploymentProfile": "local_dev",
+ "toolApprovalMode": "approve_risky",
+ "budgetMode": "balanced",
+ "workspaceDir": "./workspace",
+ "browserErrands": {},
+ "writeJailRoots": [
+  "<sandbox runtime root>",
+  "<sandbox runtime root>",
+  "<sandbox runtime root>"
+ ],
+ "readOnlyRoots": [
+  "<sandbox runtime root>"
+ ],
+ "operatorWriteRoots": [],
+ "globalToolAccess": {
+  "deny": [
+   "fs.write",
+   "fs.patch",
+   "fs.delete",
+   "fs.move",
+   "shell.exec",
+   "shell.exec_background",
+   "mcp.invoke",
+   "browser.cookies.get",
+   "browser.storage.get",
+   "calendar.create",
+   "calendar.update",
+   "calendar.delete",
+   "fs.copy"
+  ],
+  "allow": [
+   "session.*",
+   "chat.*",
+   "memory.*",
+   "skills.*",
+   "fs.read",
+   "fs.list",
+   "fs.stat",
+   "file.read_range",
+   "file.find",
+   "code.search",
+   "docs.*",
+   "knowledge.*"
+  ]
+ },
+ "switchedOffToolGroups": [],
+ "operatorSwitchedOffToolGroups": [],
+ "pluginToolGroupHolds": [],
+ "readAccessMode": "approval_required",
+ "outsideRootWriteMode": "deny",
+ "networkAllowlist": [
+  "discord.com",
+  "chat.googleapis.com",
+  "hooks.slack.com",
+  "api.telegram.org",
+  "*.logic.azure.com",
+  "*.environment.api.powerplatform.com",
+  "chatgpt.com",
+  "api.openai.com",
+  "api.anthropic.com",
+  "generativelanguage.googleapis.com",
+  "api.minimax.io",
+  "ai-gateway.vercel.sh",
+  "openrouter.ai",
+  "api.mistral.ai",
+  "api.deepseek.com",
+  "api.z.ai",
+  "api.moonshot.ai",
+  "api.perplexity.ai",
+  "api.search.brave.com",
+  "api.parallel.ai",
+  "router.huggingface.co",
+  "duckduckgo.com",
+  "lite.duckduckgo.com",
+  "www.bing.com",
+  "www.google.com",
+  "127.0.0.1",
+  "localhost"
+ ],
+ "approvalExplainer": {
+  "enabled": true,
+  "mode": "async",
+  "minRiskLevel": "caution",
+  "timeoutMs": 15000,
+  "maxPayloadChars": 4000
+ },
+ "memory": {
+  "enabled": true,
+  "qmd": {
+   "enabled": true,
+   "applyToChat": true,
+   "applyToOrchestration": true,
+   "minPromptChars": 48,
+   "maxContextTokens": 1400,
+   "cacheTtlSeconds": 300
+  }
+ },
+ "web": {
+  "firecrawl": {
+   "enabled": true,
+   "baseUrl": "http://127.0.0.1:3002",
+   "apiKeyEnv": "FIRECRAWL_API_KEY",
+   "timeoutMs": 20000,
+   "defaultReadBackend": "firecrawl",
+   "fallbackToNative": true,
+   "baseUrlAllowlisted": true
+  },
+  "search": {
+   "engineOrder": [
+    "duckduckgo",
+    "bing",
+    "google"
+   ]
+  }
+ },
+ "auth": {
+  "mode": "none",
+  "allowLoopbackBypass": false,
+  "tokenConfigured": false,
+  "basicConfigured": false,
+  "plan": {
+   "mode": "none",
+   "warnings": [],
+   "token": {
+    "configured": false,
+    "source": "none"
+   },
+   "basicUsername": {
+    "configured": false,
+    "source": "none"
+   },
+   "basicPassword": {
+    "configured": false,
+    "source": "none"
+   }
+  }
+ },
+ "llm": {
+  "activeProviderId": "verification-stub",
+  "activeModel": "verification-stub-chat",
+  "defaultThinkingLevel": "standard",
+  "activeModelContextWindow": 128000,
+  "activeModelOutputTokenLimit": 16000,
+  "providers": [
+   {
+    "providerId": "verification-stub",
+    "label": "Verification stub (loopback)",
+    "baseUrl": "http://127.0.0.1:50671/v1",
+    "apiStyle": "openai-chat-completions",
+    "resolvedApiStyle": "openai-chat-completions",
+    "defaultModel": "verification-stub-chat",
+    "hasApiKey": true,
+    "apiKeySource": "env",
+    "hasKeychainSecret": false,
+    "apiKeyRef": "GOATCITADEL_VERIFY_STUB_LLM_KEY",
+    "capabilities": {
+     "vision": false,
+     "audio": false,
+     "video": false,
+     "toolCalling": true,
+     "jsonMode": false,
+     "webSearch": false,
+     "reasoning": true,
+     "reasoningEfforts": [
+      "none",
+      "low",
+      "medium",
+      "high"
+     ],
+     "imageGenerate": false,
+     "imageEdit": false
+    },
+    "activeModelContextWindow": 128000,
+    "activeModelOutputTokenLimit": 16000
+   },
+   {
+    "providerId": "ut11-local",
+    "label": "ut11-local-unreachable",
+    "baseUrl": "http://127.0.0.1:9/v1",
+    "apiStyle": "openai-responses",
+    "resolvedApiStyle": "openai-chat-completions",
+    "defaultModel": "ut11-model",
+    "hasApiKey": false,
+    "apiKeySource": "none",
+    "hasKeychainSecret": false,
+    "capabilities": {
+     "vision": false,
+     "audio": false,
+     "video": false,
+     "toolCalling": true,
+     "jsonMode": false,
+     "webSearch": false,
+     "reasoning": false,
+     "imageGenerate": false,
+     "imageEdit": false
+    }
+   }
+  ]
+ },
+ "mesh": {
+  "enabled": false,
+  "mode": "lan",
+  "nodeId": "bld-57756",
+  "mdns": true,
+  "staticPeers": [],
+  "requireMtls": true,
+  "tailnetEnabled": false
+ },
+ "npu": {
+  "enabled": false,
+  "autoStart": false,
+  "sidecarUrl": "http://127.0.0.1:11440",
+  "status": {
+   "enabled": false,
+   "desiredState": "stopped",
+   "processState": "stopped",
+   "sidecarUrl": "http://127.0.0.1:11440",
+   "healthy": false,
+   "backend": "unknown",
+   "capability": {
+    "platform": "win32",
+    "arch": "x64",
+    "isWindowsArm64": false,
+    "onnxRuntimeAvailable": false,
+    "onnxRuntimeGenAiAvailable": false,
+    "qnnExecutionProviderAvailable": false,
+    "supported": false,
+    "localInferenceReady": false,
+    "streamingChatCompletions": false,
+    "fallbackProxyConfigured": false,
+    "details": [
+     "NPU sidecar runtime was retired from GoatCitadel 1.0 and is not shipped."
+    ]
+   },
+   "lastError": "NPU sidecar runtime was retired from GoatCitadel 1.0 and is not shipped.",
+   "updatedAt": "2026-11-15T09:38:31.700Z"
+  }
+ },
+ "llamaCpp": {
+  "enabled": false,
+  "autoStart": false,
+  "managementMode": "external",
+  "baseUrl": "http://127.0.0.1:8080/v1",
+  "command": "llama-server",
+  "extraArgs": [
+   "--reasoning",
+   "off"
+  ],
+  "alias": "gemma-4-local",
+  "ctxSize": 40960,
+  "parallel": 1,
+  "batchSize": 1024,
+  "ubatchSize": 512,
+  "flashAttention": true,
+  "status": {
+   "enabled": false,
+   "desiredState": "stopped",
+   "processState": "stopped",
+   "baseUrl": "http://127.0.0.1:8080/v1",
+   "healthy": false,
+   "updatedAt": "2026-11-15T09:37:28.115Z",
+   "leaseDiagnostics": {
+    "state": "idle",
+    "activeLeaseCount": 0,
+    "ownership": "none",
+    "purposes": [],
+    "persistentDemand": {
+     "manual": false,
+     "api": false,
+     "autostart": false
+    },
+    "evidence": {
+     "lastProbe": {
+      "at": "2026-11-15T09:37:28.115Z",
+      "healthy": false
+     }
+    }
+   }
+  }
+ },
+ "features": {
+  "durableKernelV1Enabled": true,
+  "replayOverridesV1Enabled": false,
+  "memoryLifecycleAdminV1Enabled": true,
+  "memoryLifecycleAutoForgetEnabled": true,
+  "memoryMaintenanceV1Enabled": false,
+  "connectorDiagnosticsV1Enabled": false,
+  "computerUseGuardrailsV1Enabled": true,
+  "cronReviewQueueV1Enabled": false,
+  "replayRegressionV1Enabled": true,
+  "codeModeV1Enabled": true,
+  "codeModeHostSandboxEnabled": true,
+  "improvementLedgerV1Enabled": false,
+  "improvementActivationV1Enabled": false,
+  "promptRetuneCampaignV1Enabled": false,
+  "structuredReviewV2Enabled": false,
+  "delegationScopeExpansionV1Enabled": false,
+  "engineeringLearningsV1Enabled": false,
+  "coworkRuntimeQualityV1Disabled": false,
+  "orchestrationFinalStreamingV1Disabled": false,
+  "autonomyV1Disabled": false,
+  "chatThinkingStreamV1Enabled": false,
+  "chatContextBudgetVisibilityV1Enabled": false,
+  "chatAsyncClarificationV1Enabled": true,
+  "unifiedComposerPaletteV1Enabled": true,
+  "attachedContextToolsV1Enabled": true,
+  "chatSessionStatusV1Enabled": true,
+  "conversationForksV1Enabled": true,
+  "notificationRoutingV1Enabled": true,
+  "chatTimersV1Enabled": true,
+  "typedRunVariablesV1Enabled": true,
+  "documentEditingV1Enabled": true,
+  "channelVoiceInboundV1Enabled": true,
+  "plannerFastPathV1Disabled": false,
+  "parallelToolExecutionV1Disabled": false,
+  "streamIdleWatchdogV1Disabled": false,
+  "plannerFanoutV1Disabled": false,
+  "subagentFanoutV1Disabled": false,
+  "durableChatFanoutV1Enabled": false,
+  "chatProviderFallbackV1Enabled": false,
+  "chatSkillInstructionsV1Enabled": false,
+  "boundedToolExposureV1Enabled": false,
+  "scheduledChatTurnsV1Enabled": false,
+  "chatExplicitContextV1Enabled": true,
+  "chatAutomaticFanoutV1Enabled": false,
+  "chatDelegationControlsV1Enabled": false,
+  "proactiveHeartbeatTurnsV1Enabled": false,
+  "commitmentScheduledTurnsV1Enabled": false,
+  "chatMeshCapabilitiesV1Enabled": false,
+  "chatRemotePlacementV1Enabled": false,
+  "chatExplicitContextBranchesV1Enabled": true,
+  "chatWorkspaceSnapshotV1Enabled": true,
+  "chatModelCouncilV1Enabled": true,
+  "chatWorkPassportV1Enabled": true,
+  "chatRequesterMcpV1Enabled": false,
+  "chatStaticMcpV1Enabled": false,
+  "claudeCliToolBridgeEnabled": true,
+  "claudeCliWarmContinuationEnabled": true,
+  "browserErrandsEnabled": false,
+  "evolutionControlPlaneV1Enabled": true,
+  "settingsApprovalSkipEnabled": false,
+  "improvementLocalObservationV1Enabled": true,
+  "improvementModelEvaluationV1Enabled": false,
+  "productSourceEvolutionV1Enabled": false,
+  "channelVoiceReplyV1Enabled": false,
+  "memoryConsolidationV1Enabled": false,
+  "cronEvidenceV1Enabled": false,
+  "utilityModelRoutingV1Enabled": false,
+  "chatTurnInterruptionRecoveryV1Disabled": false,
+  "externalSideEffectReplayJobsV1Disabled": false
+ }
+}

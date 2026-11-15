@@ -1,0 +1,113 @@
+[
+ {
+  "sentence": "Durable run completed",
+  "url": "/work/runs/<id>?eventId=<id>&shell=cockpit",
+  "h1": [
+   "Run"
+  ],
+  "body": "Back to Work Run Run workspace unknown GoatCitadel could not confirm this run's workspace. Return to Work to choose a run."
+ },
+ {
+  "sentence": "Durable run started",
+  "url": "/work/runs/<id>?eventId=<id>&shell=cockpit",
+  "h1": [
+   "Run"
+  ],
+  "body": "Back to Work Run Run workspace unknown GoatCitadel could not confirm this run's workspace. Return to Work to choose a run."
+ },
+ {
+  "sentence": "Durable run woken",
+  "url": "/work/runs/<id>?eventId=<id>&shell=cockpit",
+  "h1": [
+   "Run"
+  ],
+  "body": "Back to Work Run Run workspace unknown GoatCitadel could not confirm this run's workspace. Return to Work to choose a run."
+ },
+ {
+  "sentence": "An approval was decided",
+  "url": "/inbox?approvalId=<id>&eventId=approval-observability%3A<id>%3Aapproval.resolve.realtime&workspaceId=ws_f13a3cf3b6f04dc49bd4b927&shell=cockpit",
+  "h1": [
+   "Inbox"
+  ],
+  "body": "Inbox Decisions and work that need your attention in this workspace. Refresh 1 decision waiting. Some sources couldn't be checked, so there may be more. Couldn't fully check 1 source What this Inbox covers Kind All kinds"
+ },
+ {
+  "sentence": "Approval explained",
+  "url": "/inbox?approvalId=<id>&eventId=<id>&shell=cockpit",
+  "h1": [
+   "Inbox"
+  ],
+  "body": "Inbox Decisions and work that need your attention in this workspace. Refresh 1 decision waiting. Some sources couldn't be checked, so there may be more. Couldn't fully check 1 source What this Inbox covers Kind All kinds"
+ },
+ {
+  "sentence": "Evidence envelope recorded",
+  "url": "/chat?shell=cockpit",
+  "h1": [
+   "Chat"
+  ],
+  "body": "Conversations New Project All projects Unassigned Projects Search Recent Archived No conversations in this view. Messaging Add No channels yet Add Chat Choose a conversation Pick one from the list, or start a new convers"
+ },
+ {
+  "sentence": "Tool invoked",
+  "url": "/inbox?approvalId=<id>&eventId=<id>&shell=cockpit",
+  "h1": [
+   "Inbox"
+  ],
+  "body": "Inbox Decisions and work that need your attention in this workspace. Refresh 1 decision waiting. Some sources couldn't be checked, so there may be more. Couldn't fully check 1 source What this Inbox covers Kind All kinds"
+ },
+ {
+  "sentence": "An approval is waiting for you",
+  "url": "/inbox?approvalId=<id>&eventId=approval-observability%3A<id>%3Aapproval.create.realtime&workspaceId=ws_f13a3cf3b6f04dc49bd4b927&shell=cockpit",
+  "h1": [
+   "Inbox"
+  ],
+  "body": "Inbox Decisions and work that need your attention in this workspace. Refresh 1 decision waiting. Some sources couldn't be checked, so there may be more. Couldn't fully check 1 source What this Inbox covers Kind All kinds"
+ },
+ {
+  "sentence": "Durable run created",
+  "url": "/work/runs/<id>?eventId=<id>&shell=cockpit",
+  "h1": [
+   "Run"
+  ],
+  "body": "Back to Work Run Run workspace unknown GoatCitadel could not confirm this run's workspace. Return to Work to choose a run."
+ },
+ {
+  "sentence": "A conversation was updated",
+  "url": "/chat?shell=cockpit",
+  "h1": [
+   "Chat"
+  ],
+  "body": "Conversations New Project All projects Unassigned Projects Search Recent Archived No conversations in this view. Messaging Add No channels yet Add Chat Choose a conversation Pick one from the list, or start a new convers"
+ },
+ {
+  "sentence": "Session event",
+  "url": "/chat?shell=cockpit",
+  "h1": [
+   "Chat"
+  ],
+  "body": "Conversations New Project All projects Unassigned Projects Search Recent Archived No conversations in this view. Messaging Add No channels yet Add Chat Choose a conversation Pick one from the list, or start a new convers"
+ },
+ {
+  "sentence": "Chat session updated",
+  "url": "/chat?shell=cockpit",
+  "h1": [
+   "Chat"
+  ],
+  "body": "Conversations New Project All projects Unassigned Projects Search Recent Archived No conversations in this view. Messaging Add No channels yet Add Chat Choose a conversation Pick one from the list, or start a new convers"
+ },
+ {
+  "sentence": "Memory mutation approval requested",
+  "url": "/inbox?approvalId=<id>&eventId=<id>&workspaceId=ws_f13a3cf3b6f04dc49bd4b927&shell=cockpit",
+  "h1": [
+   "Inbox"
+  ],
+  "body": "Inbox Decisions and work that need your attention in this workspace. Refresh 1 decision waiting. Some sources couldn't be checked, so there may be more. Couldn't fully check 1 source What this Inbox covers Kind All kinds"
+ },
+ {
+  "rowsWithOpenSource": 51
+ },
+ {
+  "console": [],
+  "http": []
+ }
+]

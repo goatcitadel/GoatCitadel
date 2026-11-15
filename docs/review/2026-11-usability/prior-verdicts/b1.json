@@ -1,0 +1,680 @@
+[
+  {
+    "priorId": "CH-01",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalAction.tsx:43",
+      "apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalAction.tsx:98",
+      "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalReviewSummaryContent.tsx:44",
+      "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalReviewSummaryContent.tsx:80"
+    ],
+    "note": "Chat and Inbox share ApprovalDecisionBar. Scope, expiry, targets and consequence are readable; raw request details sit in a collapsed Technical details block. Nuclear keeps its typed confirmation and a 'Review nuclear approval' button. Code read only."
+  },
+  {
+    "priorId": "CH-02",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerControls.tsx:63",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerControls.tsx:94",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerPlusMenu.tsx:176"
+    ],
+    "note": "Web is now a real Off/Auto/Deep select bound to the saved mode, with a pill when it is not Auto. Quick was deliberately retired (shows 'Quick (retired)' for old chats). Code read only."
+  },
+  {
+    "priorId": "CH-04",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:332",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerPlusMenu.tsx:162",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerControls.tsx:121"
+    ],
+    "note": "Desktop composer keeps only a + panel, mode pills and the model chip beside Send, so nothing overflows. Review answer lives in the + panel; the phone options sheet shows it too. Code read only."
+  },
+  {
+    "priorId": "CH-06",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:275",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnDetails.tsx:8",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnReceipt.tsx:20"
+    ],
+    "note": "The old 'Durable run · Run evidence' card text no longer exists (git grep). Completed replies get a compact receipt and a collapsed details disclosure; failures render a separate recovery card. Code read only."
+  },
+  {
+    "priorId": "CH-07",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/threaded-surface-core/src/chat/controller/createChatChangePlanReceipt.ts:30",
+      "packages/threaded-surface-core/src/chat/controller/createChatChangePlanReceipt.ts:33"
+    ],
+    "note": "Settings change plans carry no session, and the transcript receipt only takes plans with a session or turn origin, so a Settings change no longer lands in every conversation. Code read only."
+  },
+  {
+    "priorId": "CH-09",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatCodeModeRequestDetails.tsx:61",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatCodeModeRequestDetails.tsx:93",
+      "apps/mission-control-next/src/cockpit/areas/inbox/SpecialistApprovalReview.tsx:86",
+      "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalReviewSummaryContent.tsx:50"
+    ],
+    "note": "Code hash, file staging paths and size limits, all targets and the expiry now show in the shared approval review. Code read only."
+  },
+  {
+    "priorId": "CH-10",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/features/threaded-surface/SessionControlBanner.tsx:48",
+      "apps/mission-control-next/src/features/threaded-surface/SessionControlBanner.tsx:56",
+      "apps/mission-control-next/src/cockpit/areas/chat/SessionControlManager.tsx:52",
+      "apps/mission-control-next/src/cockpit/areas/chat/SessionControlManager.tsx:62"
+    ],
+    "note": "An externally controlled conversation shows Revoke and Emergency takeover, each with a pending label and a result message. Not exercised live (no externally controlled session in the sandbox)."
+  },
+  {
+    "priorId": "CH-11",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:141",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:349",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:124"
+    ],
+    "note": "While a reply runs the Send button becomes 'Steer response' or 'Queue message' and Stop sits beside it; Enter uses the same path. Code read only."
+  },
+  {
+    "priorId": "CH-13",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:65",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:193",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:319"
+    ],
+    "note": "Draft auto-grows from 2 to 8 lines; on touch devices Enter makes a new line and Send is the button (Ctrl/Cmd+Enter still sends). Code read only."
+  },
+  {
+    "priorId": "CH-14",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:178",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:211",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:217"
+    ],
+    "note": "A cancelled turn gets a Stopped status badge, a 'Stopped - partial answer' note and a Continue action. Code read only."
+  },
+  {
+    "priorId": "CH-15",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:410",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatStreamErrorNotice.tsx:35",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx:342"
+    ],
+    "note": "The transcript notice is skipped when the latest turn already shows its own failed/partial card, and the build-editor notice only shows with the editor open, so a failure renders once. The 'interrupted' wording is used only when the text names a stream/disconnect; otherwise generic copy. Code read only."
+  },
+  {
+    "priorId": "CH-16",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:152",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:159"
+    ],
+    "note": "The user bubble lists sent attachments (name, type, size) and workflow captures show a summary with the request and result under a 'Captured task' disclosure. Code read only."
+  },
+  {
+    "priorId": "CH-17",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.tsx:67",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.tsx:76",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.tsx:333"
+    ],
+    "note": "One polite live region announces 'Response started' once per start and resets on conversation change; it is not rendered from history. Code read only."
+  },
+  {
+    "priorId": "CH-18",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:57",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:60",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnFailureCard.tsx:62"
+    ],
+    "note": "Failure copy uses the Gateway's recommendedAction as the hint, a plain heading per failure class and a link to model providers for sign-in/billing failures; raw text stays in technical details. Code read only."
+  },
+  {
+    "priorId": "CH-19",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnActions.tsx:84",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnActions.tsx:141"
+    ],
+    "note": "Visible copy now says 'New conversation from here', 'Edit your message and resend' and 'Version N of M'. git grep for turn/branch/fork/thread in visible Chat strings found none. Code read only."
+  },
+  {
+    "priorId": "CH-03",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerControls.tsx:83",
+      "apps/mission-control-next/src/cockpit/areas/chat/chat-vocabulary.ts:147",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerPlusMenu.tsx:155"
+    ],
+    "note": "Plan first, Web and Review answer carry help text (tooltip, screen-reader description, and text in the options panel) and a switched-on mode shows as a labelled pill with a remove button, not only a border. Code read only."
+  },
+  {
+    "priorId": "CH-05",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:454",
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:459",
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:465"
+    ],
+    "note": "Answer markdown headings have their own h1/h2/h3+ size and spacing rules. Code read only."
+  },
+  {
+    "priorId": "CH-08",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/CH-08-requests.json",
+      "apps/mission-control-next/src/cockpit/areas/chat/use-thread-activity.ts:30",
+      "docs/review/2026-11-usability/evidence/prior/CH-08.png"
+    ],
+    "note": "Three cold loads of /chat in the sandbox each made 12 /api/ requests (limit 20); the saved listing (CH-08-requests.json) shows one startup-reads batch and only per-session reads for the single open conversation, with no per-row status call. The rail now takes each row's status from the sessions list itself (use-thread-activity.ts:30-34). The other ~776 requests per load were Vite dev module fetches. Dev-server count, not a production profile."
+  },
+  {
+    "priorId": "CH-12",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ime.ts:7",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:188",
+      "packages/threaded-surface-core/src/chat/useChatComposerInteractions.ts:233"
+    ],
+    "note": "Enter is ignored while composing, including keyCode 229. Code read only; not tried on Safari."
+  },
+  {
+    "priorId": "CH-20",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/data/realtime.ts:133",
+      "apps/mission-control-next/src/cockpit/data/event-map.ts:7"
+    ],
+    "note": "The Cockpit's event stream now emits refresh-bus signals naming the conversation. Code read only."
+  },
+  {
+    "priorId": "CH-21",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/WindowedRecordList.tsx:39",
+      "apps/mission-control-next/src/cockpit/ui/WindowedRecordList.tsx:128",
+      "apps/mission-control-next/src/cockpit/ui/WindowedRecordList.tsx:178",
+      "apps/mission-control-next/src/cockpit/areas/chat/ConversationListPanel.tsx:124"
+    ],
+    "note": "The list is named (nav 'Conversations', list label) and keeps a focus request across range changes. Code read only."
+  },
+  {
+    "priorId": "CH-22",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnActions.tsx:86",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnActions.tsx:121"
+    ],
+    "note": "Per answer: Retry, Copy answer, and one More menu holding the rest; no duplicates. Code read only."
+  },
+  {
+    "priorId": "CH-23",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatConversationStarters.tsx:13",
+      "docs/review/2026-11-usability/evidence/prior/CH-24.png"
+    ],
+    "note": "An empty conversation shows 'What would you like to work on?' with three starter prompts and links to Configure models and Import knowledge (screenshot of an empty conversation)."
+  },
+  {
+    "priorId": "CH-24",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/InspectorResizeHandle.tsx:2",
+      "apps/mission-control-next/src/cockpit/areas/chat/chat-area-inspector-target.ts:17",
+      "docs/review/2026-11-usability/evidence/prior/CH-24.png"
+    ],
+    "note": "The inspector now opens on the Message tab and has labelled keyboard tabs, but with it open at 1440px the Messages column measured 568px, the same squeeze as before.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "With the conversation inspector open on a 1440px screen the messages column is about 568px wide",
+      "trigger": "Open /chat at 1440x900, open a conversation, click the inspector toggle in the header",
+      "expected": "The transcript keeps a comfortable reading width, or the conversations rail yields space to it",
+      "actual": "Nav 240px + conversations rail 240px + inspector 360-480px leave a 568px transcript (measured)",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/CH-24.png",
+        "apps/mission-control-next/src/cockpit/app/InspectorResizeHandle.tsx:2",
+        "apps/mission-control-next/src/cockpit/areas/chat/ThreadList.tsx:20"
+      ],
+      "foundBy": "live",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/app/InspectorResizeHandle.tsx"
+    }
+  },
+  {
+    "priorId": "CH-25",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ThreadList.tsx:20",
+      "docs/review/2026-11-usability/evidence/prior/CH-25.png"
+    ],
+    "note": "At 1024px the nav, the 240px conversations rail and the transcript are all shown at once; the Messages region measured 536px, identical to the old finding.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "bug",
+      "title": "At 1024px wide the Chat transcript is squeezed to about 536px by the side navigation and the conversations rail",
+      "trigger": "Open /chat in a 1024x768 window",
+      "expected": "At a tablet-class width the conversations list collapses to a button/sheet so the transcript keeps most of the width",
+      "actual": "The rail (w-60, shown from the md breakpoint) stays beside the nav; Messages region measured 536px",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/CH-25.png",
+        "apps/mission-control-next/src/cockpit/areas/chat/ThreadList.tsx:20"
+      ],
+      "foundBy": "live",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/chat/ThreadList.tsx"
+    }
+  },
+  {
+    "priorId": "CH-27",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:58",
+      "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:68"
+    ],
+    "note": "A coarse-pointer rule gives every button a 44px minimum height and width in the Cockpit, which covers Approve, Deny and Submit on phones. A narrow desktop window without a touch pointer still gets the 28px sm buttons. Code read only."
+  },
+  {
+    "priorId": "CH-28",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.tsx:344",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.tsx:355"
+    ],
+    "note": "Jump to latest is a visible button over the transcript while scrolled away and shows a new-message count. It has no separate jump to a waiting decision.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "missing-state",
+      "title": "Jump to latest counts new messages but does not say or jump to a decision waiting for you",
+      "trigger": "Scroll up in a conversation that has a pending approval at the bottom; look at the Jump to latest button",
+      "expected": "The button (or a sibling) names a waiting approval or question and jumps to it",
+      "actual": "Only 'Jump to latest' and a new-message count appear; a waiting decision is announced to screen readers but not offered visually",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.tsx:344",
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.tsx:355"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.tsx"
+    }
+  },
+  {
+    "priorId": "CH-29",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatInspectorTurnPanel.tsx:46",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatInspectorTurnPanel.tsx:52",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnReceipt.tsx:32"
+    ],
+    "note": "Each answer's receipt names the model, and the inspector Message tab has Model, Chosen because and Fallback rows. Code read only."
+  },
+  {
+    "priorId": "CH-30",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatConversationsSheet.tsx:6",
+      "apps/mission-control-next/src/cockpit/areas/chat/ConversationListPanel.tsx:110",
+      "docs/review/2026-11-usability/evidence/prior/CH-26.png"
+    ],
+    "note": "Below the desktop rail a Conversations button opens a sheet with the same list and history actions as buttons, not a native select."
+  },
+  {
+    "priorId": "CH-31",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ConversationListPanel.tsx:173",
+      "apps/mission-control-next/src/cockpit/areas/chat/ConversationListPanel.tsx:180",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:147"
+    ],
+    "note": "Search results show a two-line excerpt and an 'Open matching message' action; every message header shows a local timestamp. Code read only."
+  },
+  {
+    "priorId": "CH-32",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:79",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.render-count.test.tsx:1"
+    ],
+    "note": "Turn is memoized with stable callbacks and a render-count test exists; only the changed turn re-renders. Not profiled."
+  },
+  {
+    "priorId": "CH-33",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptNotices.tsx:12",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptNotices.tsx:50"
+    ],
+    "note": "Warnings and critical notices are always visible; the latest routine update is shown in full and only older routine updates fold away. Code read only."
+  },
+  {
+    "priorId": "CH-34",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/features/threaded-surface/styles/code-highlight.css:9",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.tsx:24",
+      "apps/mission-control-next/src/cockpit/styles/chat-display.css:20"
+    ],
+    "note": "hljs token styles are imported by the transcript and the streaming cursor has an accent block style. Code read only; not checked in the light theme."
+  },
+  {
+    "priorId": "CH-35",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatModelOptionsPopover.tsx:40",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatModelOptionsPopover.tsx:121",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatModelOptionsPopover.tsx:126"
+    ],
+    "note": "Effort options follow the model's recorded levels, an unsupported current level is shown disabled with a reason, and the 'Choose' placeholder values are ignored. Code read only."
+  },
+  {
+    "priorId": "CH-36",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerTools.tsx:69",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerTools.tsx:188",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerTools.tsx:290"
+    ],
+    "note": "Upload state is shown by the composer tools (pending count and error) and controls are not frozen as 'sending' while an upload runs. Code read only."
+  },
+  {
+    "priorId": "CH-37",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/mission-control-shared/src/components/chat/useScrollToBottom.ts:163",
+      "packages/mission-control-shared/src/components/chat/useScrollToBottom.ts:165",
+      "packages/mission-control-shared/src/components/chat/useScrollToBottom.ts:185"
+    ],
+    "note": "One hook owns follow behaviour: it cancels a scheduled follow when the reader leaves the bottom and only follows when at the tail. Not tested by scrolling live."
+  },
+  {
+    "priorId": "CH-38",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:177",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:208"
+    ],
+    "note": "A live status badge names the turn state while streaming, thinking is shown as it streams, and 'Preparing response' appears only while nothing else exists. Layout-jump behaviour not measured."
+  },
+  {
+    "priorId": "CH-39",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:294",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerPalette.tsx:81",
+      "packages/threaded-surface-core/src/chat/useChatComposerInteractions.ts:20"
+    ],
+    "note": "The $ word swap now replaces only a trailing $token. The inline slash/$ suggestions still hang off the plain textarea (aria-controls, activedescendant) without combobox role or aria-expanded; only the global palette input is a real combobox.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "The inline slash and $ suggestion list is announced as a listbox beside a plain text box, not as a combobox",
+      "trigger": "Type / in the Chat message box with a screen reader and open the suggestions",
+      "expected": "The message box announces that a suggestion list is expanded and which option is active",
+      "actual": "The textarea has aria-controls and aria-activedescendant but no combobox role or aria-expanded",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:294",
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerPalette.tsx:81"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx"
+    }
+  },
+  {
+    "priorId": "CH-40",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:180",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:360"
+    ],
+    "note": "Send and Stop both return focus to the message box. Code read only."
+  },
+  {
+    "priorId": "CH-42",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatBlockers.tsx:146",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatBlockers.tsx:264",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatBlockers.tsx:133"
+    ],
+    "note": "git grep finds no 'native review shown in current approvals' copy; blockers link to /inbox with the approval id and explain a disabled Approve. Code read only."
+  },
+  {
+    "priorId": "CH-43",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatInspectorBody.tsx:93",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatInspectorBody.tsx:101",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatInspectorBody.tsx:131",
+      "apps/mission-control-next/src/cockpit/areas/chat/chat-area-inspector-target.ts:11",
+      "docs/review/2026-11-usability/evidence/prior/CH-24.png"
+    ],
+    "note": "Tabs are labelled buttons with tab/tabpanel roles and arrow/Home/End keys; an ordinary message opens on Message (screenshot shows Run, Message, Sources, Context, Files tabs)."
+  },
+  {
+    "priorId": "CH-44",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/recorded-cost.ts:7",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatInspectorTurnPanel.tsx:61"
+    ],
+    "note": "Cost reads 'About $x' for estimates, 'at least $x' for lower bounds, 'Included in ... subscription' or 'Unknown' with a defined meaning. The Work-side '+' claim is outside this Chat row. Code read only."
+  },
+  {
+    "priorId": "CH-46",
+    "verdict": "open",
+    "evidence": [
+      "packages/threaded-surface-core/src/chat/useChatRoutePreflight.ts:123",
+      "packages/threaded-surface-core/src/chat/useChatRoutePreflight.ts:135",
+      "packages/threaded-surface-core/src/chat/useChatRoutePreflight.ts:141"
+    ],
+    "note": "The cache has a 30s freshness check on read but entries are never evicted, so every distinct draft stays for the life of the page, and each keystroke still clears the shown result and sets loading before the 250ms debounce.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Route preflight keeps an entry for every draft ever typed and resets its displayed result on every keystroke",
+      "trigger": "Type a long message in Chat; each change produces a new preflight key",
+      "expected": "A bounded cache and a result that stays put until the new check returns",
+      "actual": "cacheRef Map grows without removal; setResult(null) and setLoading(true) run on each draft change",
+      "evidence": [
+        "packages/threaded-surface-core/src/chat/useChatRoutePreflight.ts:123",
+        "packages/threaded-surface-core/src/chat/useChatRoutePreflight.ts:141"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "packages/threaded-surface-core/src/chat/useChatRoutePreflight.ts"
+    }
+  },
+  {
+    "priorId": "CH-48",
+    "verdict": "cannot-check",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:194"
+    ],
+    "note": "Chat is retained in React Activity (hidden mode renders at low priority by design). Whether it still re-renders on unrelated navigation needs a React profiler run, which this read-only pass did not do."
+  },
+  {
+    "priorId": "CH-49",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx:278",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx:292"
+    ],
+    "note": "The inspector registration effect depends on `input` and `active`, which the controller recreates on each render, so it re-registers the inspector body on every controller update.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "slow",
+      "title": "The Chat inspector is re-registered on every controller render, so it renders twice while open",
+      "trigger": "Open the conversation inspector and type in the composer or stream a reply",
+      "expected": "The inspector registers once per conversation",
+      "actual": "useEffect deps [input, active, selectedSessionId, register, closeIfOpen] change on each controller update and call register again",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx:278",
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx:292"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx"
+    }
+  },
+  {
+    "priorId": "CH-50",
+    "verdict": "partial",
+    "evidence": [
+      "packages/mission-control-shared/src/components/chat/AssistantMessageRenderer.tsx:568",
+      "packages/mission-control-shared/src/components/chat/AssistantMessageRenderer.tsx:581",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:202"
+    ],
+    "note": "Streaming now splits the text incrementally and keeps completed blocks memoized with stable keys, but the finished answer is rendered through a different path, so completion may still remount blocks. Not measured.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "slow",
+      "title": "A finished streamed answer may remount its already-rendered blocks when streaming ends",
+      "trigger": "Stream a long answer with several paragraphs and code blocks; watch the DOM at completion",
+      "expected": "Completed block identity is preserved when the answer finishes",
+      "actual": "The streaming renderer keys blocks as identity:start:end; the settled answer uses a separate markdown path (AssistantMessageRenderer.tsx:127)",
+      "evidence": [
+        "packages/mission-control-shared/src/components/chat/AssistantMessageRenderer.tsx:581",
+        "packages/mission-control-shared/src/components/chat/AssistantMessageRenderer.tsx:127"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "packages/mission-control-shared/src/components/chat/AssistantMessageRenderer.tsx"
+    }
+  },
+  {
+    "priorId": "CH-26",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/CH-26.png"
+    ],
+    "note": "The 390px header now shows the title with a rename pencil, a status chip, a Conversations button and a More menu; nothing is cramped (screenshot)."
+  },
+  {
+    "priorId": "CH-41",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/CH-41.png",
+      "apps/mission-control-next/src/cockpit/areas/chat/ConversationListPanel.tsx:124",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatSessionControls.tsx:31"
+    ],
+    "note": "The rail keeps compact Project/Search/Recent-Archived controls above rows that show title, age and status, and the header has a visible rename pencil. Filters still sit above the list but no longer bury it."
+  },
+  {
+    "priorId": "CH-45",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/Button.tsx:16",
+      "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:58"
+    ],
+    "note": "On coarse pointers every button gets a 44px minimum, but Button still sets a fixed h-7/h-9, so a long label on a non-touch narrow window can wrap and overflow.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Shared Button has a fixed height, so long or wrapped labels can overflow on narrow non-touch windows",
+      "trigger": "Narrow a desktop window until a button label wraps (for example a long Approve label)",
+      "expected": "The button grows with its label",
+      "actual": "SIZES sets h-7 / h-9; only the coarse-pointer rule adds a minimum, there is no height:auto for wrapped labels",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/ui/Button.tsx:16"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/ui/Button.tsx"
+    }
+  },
+  {
+    "priorId": "CH-47",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:77",
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:193"
+    ],
+    "note": "A visited Chat stays mounted inside React Activity (hidden, effects disposed) and is shown again on return, so content and the draft are kept without a full refetch. Not timed live."
+  },
+  {
+    "priorId": "CH-51",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/chat-display.css:19"
+    ],
+    "note": "Task list markup has list-style none, so one checkbox shows with no bullet. Code read only."
+  },
+  {
+    "priorId": "CH-52",
+    "verdict": "cannot-check",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:77",
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:193"
+    ],
+    "note": "Chat (including its Build editor state) is retained in React Activity, which should survive leaving and returning. Whether a running stream reattaches without duplicate replay needs a live run with timing that this pass did not do."
+  },
+  {
+    "priorId": "CH-53",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerControls.tsx:70",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerControls.tsx:204"
+    ],
+    "note": "A fallback route shows the target provider/model and says whether it runs here or in the cloud and would leave this computer, with an Acknowledge fallback button. Code read only."
+  },
+  {
+    "priorId": "N-08",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:254",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:263",
+      "apps/mission-control-next/src/cockpit/areas/chat/ProjectAssignmentReview.tsx:1"
+    ],
+    "note": "Choosing a project from the palette opens 'Switch this Chat to another project?' with the destination and Cancel / Switch project. Code read only."
+  },
+  {
+    "priorId": "N-10",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ConversationListPanel.tsx:151",
+      "apps/mission-control-next/src/cockpit/areas/chat/ConversationListPanel.tsx:160",
+      "apps/mission-control-next/src/cockpit/areas/chat/ConversationListPanel.tsx:167",
+      "docs/review/2026-11-usability/evidence/prior/CH-24.png"
+    ],
+    "note": "Rows give the title its own line, a relative time, status, project and last-message preview (screenshot). The title still truncates on one line rather than two, which is cosmetic."
+  },
+  {
+    "priorId": "N-14",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx:402",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:92",
+      "packages/threaded-surface-core/src/chat-command-suggestions.ts:180"
+    ],
+    "note": "/btw opens the side-chat panel and the external-source palette item opens the source picker (or Library imports). Code read only."
+  }
+]

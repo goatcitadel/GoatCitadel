@@ -1,0 +1,18 @@
+{
+ "links": [
+  "Runtime -> /settings/advanced#voice-runtime",
+  "MCP -> /capabilities/connectors/advanced#mcp-servers",
+  "Integrations -> /capabilities/connectors/advanced#integration-connections",
+  "Ops -> /system/health",
+  "Access -> /settings/safety#device-access",
+  "Capabilities -> /capabilities/skills"
+ ],
+ "found": 1,
+ "landed": {
+  "url": "/settings/safety#device-access",
+  "h1": "Safety",
+  "h2": [
+   "Settings destination unavailable"
+  ]
+ }
+}

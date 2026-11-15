@@ -1,0 +1,44 @@
+{
+  "firstVisitMs": 825,
+  "firstVisitUrl": "http://127.0.0.1:18788/chat",
+  "wrongMs": 2549,
+  "wrongText": "Sign in to continue\n\nConnect to GoatCitadel to load your workspace.\n\nAccess required\nGateway target\n\nhttp://127.0.0.1:18787\n\nStored credentials\n\nNone stored yet.\n\nGateway access changed. Sign in again to continue.\n\nNext: Enter current credentials or approve this device from another signed-in GoatCitadel session.\n\n1\nReach gateway\nhttp://127.0.0.1:18787\n2\nVerify access\nCredentials or device approval required\n3\nOpen control plane\nWaits for verified access\nTechnical details\nCredential type\nToken\nBasic\nGateway token\nRemember credentials on this browser\nRequest label\nConnect to gateway\nRequest approval from another device\n\nUnsaved drafts stay in this app session while you sign in.",
+  "rightTimeout": "Sign in to continue\n\nConnect to GoatCitadel to load your workspace.\n\nAccess required\nGateway target\n\nhttp://127.0.0.1:18787\n\nStored credentials\n\nNone stored yet.\n\nGateway access changed. Sign in again to continue.\n\nNext: Enter current credentials or approve this device from another signed-in GoatCitadel session.\n\n1\nReach gateway\nhttp://127.0.0.1:18787\n2\nVerify access\nCredentials or device approval required\n3\nOpen control plane\nWaits for verified access\nTechnical details\nCredential type\nToken\nBasic\nGateway token\nRemember credentials on this browser\nRequest label\nConnect to gateway\nRequest approval from another device\n\nUnsaved drafts stay in this app session while you sign in.",
+  "rightMs": 60090,
+  "afterUrl": "http://127.0.0.1:18788/chat",
+  "afterText": "Sign in to continue\n\nConnect to GoatCitadel to load your workspace.\n\nAccess required\nGateway target\n\nhttp://127.0.0.1:18787\n\nStored credentials\n\nNone stored yet.\n\nGateway access changed. Sign in again to continue.\n\nNext: Enter current credentials or approve this device from another signed-in GoatCitadel session.\n\n1\nReach gateway\nhttp://127.0.0.1:18787\n2\nVerify access\nCredentials or device approval",
+  "storage": {
+    "session": false,
+    "local": false
+  },
+  "reloadStillIn": false,
+  "navErr": "TimeoutError: locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('link",
+  "badOpenText": "Sign in to continue\n\nConnect to GoatCitadel to load your workspace.\n\nAccess required\nGateway target\n\nhttp://127.0.0.1:18787\n\nStored credentials\n\nNone stored yet.\n\nGateway credentials are required. Sign in to continue.\n\nNext: Enter current credentials or approve this device from another signed-in GoatCitadel session.\n\n1\nReach gateway\nhttp://127.0.0.1:18787\n2\nVerify access\nCredentials or device approval required\n3\nOpen control plane\nWaits for verified access\nTechnical details\nCredential type\nToken\nBasic\nGateway token\nRemember credentials on this browser\nRequest label\nConnect to gateway\nRequest approval from another device\n\nUnsaved drafts stay in this app session while you sign in.",
+  "badOpenUrl": "http://127.0.0.1:18788/chat",
+  "log": [
+    {
+      "k": "http401",
+      "t": "GET http://127.0.0.1:18787/api/v1/onboarding/startup"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "k": "http401",
+      "t": "GET http://127.0.0.1:18787/api/v1/onboarding/startup"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "k": "http401",
+      "t": "GET http://127.0.0.1:18787/api/v1/onboarding/startup"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    }
+  ]
+}

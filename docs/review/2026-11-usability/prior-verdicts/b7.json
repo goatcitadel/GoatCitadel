@@ -1,0 +1,560 @@
+[
+  {
+    "priorId": "FR-01",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/FirstRunModelStep.tsx:14",
+      "apps/mission-control-next/src/cockpit/areas/settings/FirstRunModelStep.tsx:59",
+      "apps/mission-control-next/src/cockpit/areas/settings/GuidedModelPlanDialog.tsx:89",
+      "docs/review/2026-11-usability/evidence/prior/FR-01.png"
+    ],
+    "note": "Live: Get started step 1 'Use a cloud provider' opens the guided connect card (provider picker, model, Check connection) instead of the expert profile editors, and the key goes in through the guided plan dialog (submitChangePlanProviderSecret). 'Advanced: edit provider profiles' is a separate secondary button. Nothing was saved."
+  },
+  {
+    "priorId": "FR-02",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/approval-mode-state.ts:65",
+      "apps/mission-control-next/src/cockpit/areas/settings/use-approval-mode-control.ts:86",
+      "apps/mission-control-next/src/cockpit/areas/settings/use-approval-mode-control.ts:168",
+      "apps/mission-control-next/src/cockpit/areas/settings/use-first-run-setup.ts:104"
+    ],
+    "note": "The advice no longer says 'Refresh'; it now links to 'Inspect tool settings activity'. But the uncertain-save lock is still a module variable with no clear path (only retain and a test reset exist), so one lost response locks every approval-rule save, and first-run Finish, until the page is reloaded. Not reproduced live (needs a lost PATCH response).",
+    "finding": {
+      "area": "first-run",
+      "journey": "prior",
+      "severity": "stall",
+      "kind": "dead-end",
+      "title": "After one save with a lost response, the approval rule cannot be saved again, and first-run Finish stays disabled, until the page is reloaded",
+      "trigger": "In Settings or Get started, save an approval rule while the response is lost (connection drops after the request is sent). Then try to save again or press Refresh checks.",
+      "expected": "An uncertain save is reconciled by re-reading the saved setting, after which saving or finishing works again.",
+      "actual": "The control shows 'Save outcome is uncertain. Further saves are locked in this app session; inspect Settings activity before continuing.' plus a link to the activity page. Refresh checks does not clear it and Finish waits on 'Resolve the pending or uncertain approval-rule save'. Only a browser reload clears it, and the screen does not say so.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/approval-mode-state.ts:65",
+        "apps/mission-control-next/src/cockpit/areas/settings/use-approval-mode-control.ts:168",
+        "apps/mission-control-next/src/cockpit/areas/settings/use-first-run-setup.ts:104"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/approval-mode-state.ts"
+    }
+  },
+  {
+    "priorId": "SY-02",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/health-overview.ts:59",
+      "docs/review/2026-11-usability/evidence/prior/b7-health-vs-gateway.json",
+      "docs/review/2026-11-usability/evidence/prior/N-12.png"
+    ],
+    "note": "Live on the fresh sandbox: the Gateway reports no backups and no inbox item 'backup_trust:*', and Health shows Backups 'No backup yet' (neutral, not a stale warning). OL-06 is the same check and passes. A different card (Runtime service) does raise the page's attention count; that is N-12."
+  },
+  {
+    "priorId": "SY-01",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:109",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:53",
+      "apps/mission-control-next/src/cockpit/areas/system/activity-sentences.ts:82",
+      "docs/review/2026-11-usability/evidence/prior/SY-11.png"
+    ],
+    "note": "Live: the log lists specific sentences ('Durable run completed', 'An approval was decided', 'Skill mutation approval requested'), background refreshes are hidden behind 'Show background signals', and identical background rows collapse. No row reads 'System · Operational signal'."
+  },
+  {
+    "priorId": "FR-04",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/FirstRunArea.tsx:29",
+      "apps/mission-control-next/src/cockpit/areas/settings/FirstRunAdvanced.tsx:33",
+      "docs/review/2026-11-usability/evidence/prior/b7-first-run.json"
+    ],
+    "note": "Live copy on /settings/first-run is plain setup language ('Three steps to connect a model, choose how tools ask for approval, and verify a response'). Release and proof wording is limited to one link at the bottom, 'Open setup and release checks in System diagnostics'."
+  },
+  {
+    "priorId": "FR-05",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/FirstRunModelStep.tsx:15",
+      "docs/review/2026-11-usability/evidence/prior/FR-05.png"
+    ],
+    "note": "The demo is a visible peer choice beside 'Use a cloud provider' in step 1 ('Try the demo'), and opens the sample-records panel with plain wording and tour prompts. It no longer sits under an advanced disclosure. Nothing was started in the sandbox."
+  },
+  {
+    "priorId": "SY-03",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/health-overview.ts:138",
+      "apps/mission-control-next/src/cockpit/areas/system/health-overview.ts:152",
+      "apps/mission-control-next/src/cockpit/areas/system/HealthOverview.tsx:205",
+      "apps/mission-control-next/src/cockpit/areas/system/system-health.ts:76"
+    ],
+    "note": "Health now sorts checks by severity, words each state and detail (for example 'No managed local runtime is enabled'), keeps unconfirmed checks visible with an 'unverified' count, and links each card to its native owner page rather than Classic."
+  },
+  {
+    "priorId": "SY-04",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/Tabs.tsx:5",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemQuality.tsx:63",
+      "docs/review/2026-11-usability/evidence/prior/b7-quality-tabs.json"
+    ],
+    "note": "Live: on System > Quality, focusing a tab and pressing ArrowRight moves selection and focus to Evaluations, End moves to Design, and every tab's aria-controls id exists in the page. The tabs are Radix Tabs."
+  },
+  {
+    "priorId": "SY-05",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SpendOverview.tsx:66",
+      "apps/mission-control-next/src/cockpit/areas/system/SpendOverview.tsx:110",
+      "apps/mission-control-next/src/cockpit/areas/system/SpendDailyChart.tsx:56"
+    ],
+    "note": "The day buckets are still UTC, but the page now says so in the header ('Grouped by day (UTC)'), the section title, each row's tooltip, and explains that the period above is local time and cannot be rebucketed. Currency stays explicit (USD)."
+  },
+  {
+    "priorId": "SY-06",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SystemQuality.tsx:60",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemQuality.tsx:61",
+      "docs/review/2026-11-usability/evidence/prior/b7-quality-caveats.json",
+      "docs/review/2026-11-usability/evidence/prior/SY-06.png"
+    ],
+    "note": "Measured on all three tabs: the same four server-written caveats stack above the tabs on every tab (including Design, which has its own fifth line), so a limitation is not shown near its evidence. Nothing repeats three times any more. Same defect as SY-N06.",
+    "sameFindingAs": "SY-N06"
+  },
+  {
+    "priorId": "SY-07",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SystemDiagnostics.tsx:252",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemDiagnostics.tsx:317",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemDiagnostics.tsx:318"
+    ],
+    "note": "Log lines and event messages print inline; only one 'Event technical details' disclosure per diagnostic event keeps the raw record. The sandbox had no log entries, so this is a code read."
+  },
+  {
+    "priorId": "SY-08",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/CockpitBoardEditor.tsx:21",
+      "apps/mission-control-next/src/cockpit/areas/system/CockpitBoardEditor.tsx:228",
+      "apps/mission-control-next/src/cockpit/areas/system/CockpitBoardEditor.tsx:261",
+      "apps/mission-control-next/src/cockpit/areas/system/CockpitBoardEditor.tsx:302",
+      "docs/review/2026-11-usability/evidence/prior/SY-08.png",
+      "docs/review/2026-11-usability/evidence/prior/b7-board-editor.json"
+    ],
+    "note": "A 'Preview live widgets' toggle now exists and saving is guarded (review step, version check). But widgets still move one cell per 'Adjust' choice plus 'Apply', and the preview is a plain two-column list that ignores each widget's column, row and size, so the layout being edited is only seen after saving. Live: New board opened the editor and preview; nothing was saved.",
+    "finding": {
+      "area": "system",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "bug",
+      "title": "The board editor's 'Preview live widgets' does not show the layout you are arranging",
+      "trigger": "System > Dashboards > New board > Add widgets, set positions with Adjust + Apply, then 'Preview live widgets'.",
+      "expected": "The preview places each widget at its chosen column, row and size, like the saved board will.",
+      "actual": "The preview is a two-column stack in list order (it ignores column, row, width and height), while the saved board uses those positions. Each move is one step per 'Adjust' choice and Apply, with only the text 'Column 1, row 1 · 6 x 4' as feedback.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/system/CockpitBoardEditor.tsx:302",
+        "apps/mission-control-next/src/cockpit/areas/system/SystemDashboards.tsx:313",
+        "docs/review/2026-11-usability/evidence/prior/SY-08.png"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/system/CockpitBoardEditor.tsx"
+    }
+  },
+  {
+    "priorId": "SY-09",
+    "verdict": "obsolete",
+    "evidence": [
+      "PRODUCT.md:37",
+      "PRODUCT.md:15",
+      "apps/mission-control-next/src/cockpit/areas/system/system-views.ts:6",
+      "apps/mission-control-next/src/cockpit/areas/system/system-views.ts:10"
+    ],
+    "note": "DESIGN-DECISION: PRODUCT.md:37 defines System as 'Runtime health, activity, cost, diagnostics, backups, and release proof' and PRODUCT.md:15 keeps expert inspection in the product, so keeping Dashboards and Quality there is the specified shape; the old row's own criterion was to retain them. No finding."
+  },
+  {
+    "priorId": "SY-10",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/EmptyState.tsx:20",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:151",
+      "apps/mission-control-next/src/cockpit/areas/system/HealthOverview.tsx:168",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemQuality.tsx:50",
+      "docs/review/2026-11-usability/evidence/prior/SY-10.png",
+      "docs/review/2026-11-usability/evidence/prior/b7-load-failure.json"
+    ],
+    "note": "Live (500 injected in the browser for GET /api/v1/events): System > Activity shows the shared EmptyState, with no alert role, no icon and the normal heading colour, so a failed load looks like a calm empty page. The text does say 'Activity unavailable ... Try again'. The same component is used for load failures on Health, Quality, Spend, Sessions and Runtime.",
+    "finding": {
+      "area": "system",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "missing-state",
+      "title": "A failed load on System pages looks like an empty page: no error tone, icon or alert announcement",
+      "trigger": "Make a System read fail (for example stop the Gateway's events route), then open System > Activity.",
+      "expected": "A failure reads as a failure: an error tone, an icon, and an announcement for screen readers, with Try again.",
+      "actual": "The page renders the same centred EmptyState used for 'nothing here' (no role=alert, no icon, default heading colour) with the heading 'Activity unavailable'. Health, Quality, Spend, Sessions and Runtime do the same.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/ui/EmptyState.tsx:20",
+        "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:151",
+        "docs/review/2026-11-usability/evidence/prior/SY-10.png"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/ui/EmptyState.tsx"
+    }
+  },
+  {
+    "priorId": "FR-03",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/FirstRunModelStep.tsx:85",
+      "apps/mission-control-next/src/cockpit/areas/settings/use-first-run-setup.ts:94",
+      "apps/mission-control-next/src/cockpit/areas/settings/FirstRunArea.tsx:181",
+      "docs/review/2026-11-usability/evidence/prior/FR-05.png"
+    ],
+    "note": "There is now a 'Continue to safety' step with a line saying when it is available, a 'Keep current rule' step, and a Finish line that names the single missing prerequisite (use-first-run-setup.ts builds one sentence per cause). Live on the completed sandbox: step 1 shows 'Continue rechecks the ready default model before reviewing safety.' A truly fresh install was not available, so the disabled-state wording is a code read."
+  },
+  {
+    "priorId": "FR-06",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/FirstRunVerification.tsx:43",
+      "apps/mission-control-next/src/cockpit/areas/settings/settings-route-homes.ts:42",
+      "docs/review/2026-11-usability/evidence/prior/FR-06.png",
+      "docs/review/2026-11-usability/evidence/prior/b7-fr06-click.json"
+    ],
+    "note": "Live: System > Diagnostics > Ecosystem proof lanes > 'Access' goes to /settings/safety#device-access, which renders 'Settings destination unavailable'; the real home is /settings/access#device-access (settings-route-homes.ts:42).",
+    "finding": {
+      "area": "first-run",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "dead-end",
+      "title": "The 'Access' link in Diagnostics' Ecosystem proof lanes opens a 'Settings destination unavailable' page",
+      "trigger": "Open System > Diagnostics, expand 'Ecosystem proof lanes', choose the 'Access' link.",
+      "expected": "The link opens Settings > Access where phone and device access is managed.",
+      "actual": "The link goes to /settings/safety#device-access. The Safety page has no such section, so the operator lands on a heading 'Settings destination unavailable' and must find Access in the Settings rail.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/FirstRunVerification.tsx:43",
+        "docs/review/2026-11-usability/evidence/prior/FR-06.png",
+        "docs/review/2026-11-usability/evidence/prior/b7-fr06-click.json"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/FirstRunVerification.tsx"
+    }
+  },
+  {
+    "priorId": "N-04",
+    "verdict": "cannot-check",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SystemDashboards.tsx:68",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemDashboards.tsx:89",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemDashboards.tsx:347",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemDashboards.tsx:350",
+      "docs/review/2026-11-usability/evidence/prior/b7-system_dashboards.png"
+    ],
+    "note": "Dashboards half is fixed: under auth none the board list loads (live), a 401/403 stops polling, disables Refresh and offers 'Review access in Settings'. The Chat-composer 403 half is the approval-mode read the controller reserved for a later classification task, so it is left unjudged here. No finding recorded from this row."
+  },
+  {
+    "priorId": "N-06",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/HealthBackupAction.tsx:100",
+      "apps/mission-control-next/src/cockpit/areas/system/HealthBackupAction.tsx:115",
+      "apps/mission-control-next/src/cockpit/areas/system/RuntimeRecordSections.tsx:49",
+      "apps/mission-control-next/src/cockpit/areas/system/health-overview.ts:8"
+    ],
+    "note": "'Back up now' exists on Health and on Runtime, reads the backup scope first, confirms, and then shows a creation receipt from the API (backup id, size, file count) or an explicit failure/uncertain message. The Health links go to native Runtime sections, including the #ops-runtime-backups anchor. Creation was not run (read-only rule)."
+  },
+  {
+    "priorId": "N-12",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/health-overview.ts:117",
+      "apps/mission-control-next/src/cockpit/areas/system/health-overview.ts:143",
+      "docs/review/2026-11-usability/evidence/prior/b7-health-vs-gateway.json",
+      "docs/review/2026-11-usability/evidence/prior/N-12.png"
+    ],
+    "note": "The heading logic is fixed (problems, unverified and 'All reachable checks report no problems' are distinct). But on this fresh sandbox the Gateway reports the server running with no warnings (daemonStatus.running true, no diagnostics at warn or critical), and Health still headlines '1 check needs attention' because 'Runtime service: Unavailable' is forced to a waiting tone when service control is unsupported.",
+    "finding": {
+      "area": "system",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "wrong-status",
+      "title": "On a healthy fresh install, System > Health says '1 check needs attention' because service control is unsupported",
+      "trigger": "Open System > Health on a source or dev-run install where the Gateway reports daemonStatus.supported=false (the sandbox).",
+      "expected": "The headline says nothing needs attention, with the unsupported service-control shown as information.",
+      "actual": "The headline reads '1 check needs attention' and the first card is 'Runtime service - Unavailable - Service control is unavailable on this host.' The Gateway itself reports running=true, state=running and no warning or critical diagnostic.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/system/health-overview.ts:117",
+        "docs/review/2026-11-usability/evidence/prior/b7-health-vs-gateway.json",
+        "docs/review/2026-11-usability/evidence/prior/N-12.png"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/system/health-overview.ts"
+    }
+  },
+  {
+    "priorId": "SY-R01",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SystemRuntime.tsx:21",
+      "apps/mission-control-next/src/cockpit/areas/system/RuntimeOverview.tsx:85",
+      "docs/review/2026-11-usability/evidence/prior/b7-system_runtime_workers.png"
+    ],
+    "note": "git grep finds no use of the Classic RuntimeRoutePage or RuntimeRecordInspector under cockpit/. System > Runtime is the native RuntimeOverview (server, backups, local models, integrations, model performance) in the standard page layout, and Workers is a native page under cockpit/areas/system/workers."
+  },
+  {
+    "priorId": "SY-N06",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SystemQuality.tsx:60",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemQuality.tsx:61",
+      "apps/gateway/src/services/prompt-pack-service.ts:578",
+      "apps/gateway/src/services/prompt-pack-service.ts:598",
+      "apps/mission-control-next/src/cockpit/areas/system/RuntimeAuthorityMap.tsx:75",
+      "docs/review/2026-11-usability/evidence/prior/b7-quality-caveats.json"
+    ],
+    "note": "The Diagnostics authority map is fixed: the Cockpit words coded states (RuntimeAuthorityMap.tsx:75, runtime-authority-copy.ts) and keeps server prose in technical details. System > Quality still prints Gateway-written caveats verbatim, in developer words ('projection', 'endpoint', 'promoted to P0', 'Ops Quality').",
+    "finding": {
+      "area": "system",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "unclear-copy",
+      "title": "System > Quality opens with four stacked server-written caveats in developer words, on every tab",
+      "trigger": "Open System > Quality, then switch between Gates, Evaluations and Design.",
+      "expected": "Each limitation is written for the operator ('This page does not run tests') and shown once, next to the evidence it qualifies.",
+      "actual": "The Gateway's sentences appear unedited above the tabs on all three tabs: 'this projection does not call providers', 'this endpoint does not run providers', 'unless promoted to P0'; Gates adds 'Import ... from Ops Quality', a name no screen uses.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/system/SystemQuality.tsx:61",
+        "apps/gateway/src/services/prompt-pack-service.ts:578",
+        "apps/gateway/src/services/prompt-pack-service.ts:598",
+        "docs/review/2026-11-usability/evidence/prior/b7-quality-caveats.json"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/system/SystemQuality.tsx"
+    }
+  },
+  {
+    "priorId": "SY-N12",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SelectedSessionSection.tsx:77"
+    ],
+    "note": "git grep finds no RuntimeRecordInspector under cockpit/. A selected session renders one detail section with SessionControlManager only (SelectedSessionSection.tsx:77). It is a section with a 'Close session' button rather than a Sheet, which meets the one-surface criterion."
+  },
+  {
+    "priorId": "SY-04~fu206",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SystemDashboardWidget.tsx:66",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemDashboardWidget.tsx:106",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemOwnerLink.tsx:17",
+      "apps/mission-control-next/src/cockpit/areas/system/health-overview.ts:7"
+    ],
+    "note": "No Classic links remain in the System area (git grep 'classic' finds comments only). Widget links are named for their destination ('Open runs in Work') and Health cards link to the native Runtime page, which is no longer the Classic page mounted in the Cockpit (see SY-R01); SystemOwnerLink shows 'This page is not available here' instead of a dead link."
+  },
+  {
+    "priorId": "SY-11",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:72",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:110",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:161",
+      "docs/review/2026-11-usability/evidence/prior/b7-activity-count.json",
+      "docs/review/2026-11-usability/evidence/prior/SY-11.png"
+    ],
+    "note": "Fixed: ids are inside 'Event identifiers and raw payload' and rows are one line. Still open: with 'Show background signals' on, the header says 'Showing 100 recent signals' while 97 rows are listed, because the count is taken before identical rows collapse (measured live). The caveat paragraph above the list was shortened (U-GL-020 covers what remains).",
+    "finding": {
+      "area": "system",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "System > Activity says 'Showing 100 recent signals' but lists 97 rows when background signals are shown",
+      "trigger": "Open System > Activity and tick 'Show background signals'.",
+      "expected": "The count matches the number of rows listed, or says that identical signals were merged.",
+      "actual": "The count is the number of events read (shown.length) while the list merges identical consecutive background events (97 rows for 100 events in the sandbox).",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:110",
+        "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:161",
+        "docs/review/2026-11-usability/evidence/prior/b7-activity-count.json"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx"
+    }
+  },
+  {
+    "priorId": "DESKTOP-001",
+    "verdict": "fixed",
+    "evidence": [
+      "scripts/docker-start.mjs:80",
+      "scripts/docker-start.mjs:100",
+      "scripts/docker-start.mjs:102",
+      "scripts/docker-start.mjs:109",
+      "docker-compose.yaml:49"
+    ],
+    "note": "Code read: the wrapper sends SIGTERM, waits for each child's real 'exit' for the Gateway's 10 s drain (10.5 s budget), escalates to SIGKILL only for children still live, and exits non-zero with 'shutdown incomplete' if one never leaves. Compose allows 15 s. Not run in Docker."
+  },
+  {
+    "priorId": "DESKTOP-002",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-desktop/src-tauri/src/launcher_process.rs:14",
+      "apps/mission-control-desktop/src-tauri/src/launcher_process.rs:89",
+      "apps/mission-control-desktop/src-tauri/src/launcher_process.rs:296",
+      "apps/mission-control-desktop/src-tauri/src/main.rs:721",
+      "apps/mission-control-desktop/src-tauri/src/runtime_queue.rs:22"
+    ],
+    "note": "Code read: status probes run through launcher_process::output with an 8 s native deadline, the process group or job object (kill-on-close) is reaped when it passes, and lifecycle operations run one at a time through the runtime queue. Not run in the packaged app."
+  },
+  {
+    "priorId": "DESKTOP-003",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-desktop/src-tauri/src/main.rs:335",
+      "apps/mission-control-desktop/src-tauri/src/main.rs:341",
+      "apps/mission-control-desktop/src-tauri/src/main.rs:319",
+      "apps/mission-control-windows/Services/RuntimeStatusService.cs:46",
+      "apps/mission-control-windows/Services/RuntimeStatusService.cs:59"
+    ],
+    "note": "Code read: both desktop hosts treat a stop as done only when the launcher says stopped with an empty notStopped list; a refusal is surfaced as 'Runtime could not be stopped: <label> (<reason>)' (Tauri emits runtime-stop-failed). Not run in the packaged app."
+  },
+  {
+    "priorId": "DESKTOP-004",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-desktop/src/main.ts:128",
+      "apps/mission-control-desktop/src/main.ts:160",
+      "apps/mission-control-desktop/src/main.ts:167",
+      "apps/mission-control-windows/Services/DesktopRuntimeLifecycle.cs:37",
+      "apps/mission-control-windows/Services/DesktopRuntimeLifecycle.cs:45"
+    ],
+    "note": "Code read: both hosts number lifecycle changes (a generation counter); stopping bumps it and results from an earlier observation are discarded, and polling skips while a stop is pending. Not run in the packaged app."
+  },
+  {
+    "priorId": "DESKTOP-006",
+    "verdict": "fixed",
+    "evidence": [
+      "scripts/packaging/build-windows-native-installer.mjs:392",
+      "scripts/packaging/build-windows-native-installer.mjs:394"
+    ],
+    "note": "Code read: the installer's PowerShellLiteral doubles ASCII apostrophes and also U+2018 to U+201B, so a typographic quote in an install path stays inside one literal. The installer was not built or run."
+  },
+  {
+    "priorId": "DESKTOP-007",
+    "verdict": "fixed",
+    "evidence": [
+      "scripts/packaging/build-windows-native-installer.mjs:479",
+      "scripts/packaging/build-windows-native-installer.mjs:1012",
+      "scripts/packaging/build-windows-native-installer.mjs:1013"
+    ],
+    "note": "Code read: RemoveGoatCitadelPayload exits unless the live install marker exists, and the old recursive uninstall action is superseded by an unconditional no-op entry with the same RunOnceId. The installer was not built or run."
+  },
+  {
+    "priorId": "MESH-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/mesh-core/src/mesh-service.ts:306",
+      "packages/mesh-core/src/mesh-service.ts:315"
+    ],
+    "note": "Code read: the lease and session-owner readiness checks are fixed at 'warn' with messages 'Renewal and release remain unverified' and 'Failover remains unverified', separate from the configuration-ready verdict."
+  },
+  {
+    "priorId": "WORKER-BUDGET-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/features/native-routes/ops/worker-budget-attempts.ts:22",
+      "apps/mission-control-next/src/features/native-routes/ops/worker-budget-attempts.ts:24"
+    ],
+    "note": "Code read: the budget attempt state is keyed by the Gateway caller scope plus the worker, so a different caller opens with its own state and returning to the first caller finds the retained attempt (same grant id)."
+  },
+  {
+    "priorId": "SYSTEM-BOARD-FRESHNESS-COPY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SystemDashboards.tsx:263",
+      "apps/mission-control-next/src/cockpit/areas/system/CockpitBoardEditor.tsx:299"
+    ],
+    "note": "The board header and preview now say 'Widgets show the latest values they loaded' and no 'read just now' claim remains; widgets show a loading line while reading current data."
+  },
+  {
+    "priorId": "SYSTEM-HEALTH-EMPTY-COVERAGE-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/health-overview.ts:144",
+      "apps/mission-control-next/src/cockpit/areas/system/health-overview.ts:146",
+      "apps/mission-control-next/src/cockpit/areas/system/health-overview.ts:152"
+    ],
+    "note": "When no check can be confirmed the headline reads 'No health checks could be confirmed' and always appends '· N unverified'; the all-clear wording needs at least one check with a real answer. Code read; the sandbox cannot make every source fail."
+  },
+  {
+    "priorId": "UX-BROWSER-READ-BUSY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/BrowserSessionDetail.tsx:93",
+      "apps/mission-control-next/src/cockpit/areas/system/BrowserSessionStateView.tsx:37",
+      "apps/mission-control-next/src/cockpit/areas/system/BrowserSessionStateView.tsx:44"
+    ],
+    "note": "Code read: the session detail region sets aria-busy from the pending read for the open view, and the state view says 'Reading saved browser state…' and 'Reading grants…' while pending."
+  },
+  {
+    "priorId": "DESKTOP-STOP-PENDING-RETRY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-desktop/src/main.ts:128",
+      "apps/mission-control-desktop/src/main.ts:130",
+      "apps/mission-control-desktop/src/main.ts:160",
+      "apps/mission-control-desktop/src-tauri/src/runtime_queue.rs:22"
+    ],
+    "note": "Code read: 'desktop://runtime-stopping' disables Retry and sets stop-pending, status reads return early while pending, and the native side runs launch and stop in admission order through one queue, so a launch cannot be admitted in the middle of a stop."
+  },
+  {
+    "priorId": "PR-ops-improvement",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SystemImprovement.tsx:60",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemImprovement.tsx:75",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemImprovement.tsx:209",
+      "docs/review/2026-11-usability/evidence/prior/b7-system_improvement.png"
+    ],
+    "note": "Live /system/improvement shows the Experimental banner, the suggestion inbox with Refresh, weekly reports, test runs and a detail view. Every action Classic offered (refresh, open a report or test run, open Chat) is here and nothing links out to Classic. It is reachable by direct link, not a tab, as the release scope intends."
+  },
+  {
+    "priorId": "PR-ops-root",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:362",
+      "apps/mission-control-next/src/cockpit/areas/system/HealthOverview.tsx:159",
+      "docs/review/2026-11-usability/evidence/prior/b7-system.png"
+    ],
+    "note": "Classic /ops resolves to the native /system (cockpit-compatibility.ts:362), which is System > Health with a tab bar to every System section and the same actions (Refresh, Back up now, local runtime start). Nothing links out to Classic."
+  },
+  {
+    "priorId": "OL-05",
+    "verdict": "operator-only",
+    "evidence": [],
+    "note": "Steps (verification-gaps check 9): install the latest release-installers build on Windows (note the installed version first). 1) Start the app in the dark theme and watch for any light flash. 2) Press Ctrl+K, Ctrl+1 to Ctrl+5 and Ctrl+B in the composer and outside it. 3) In the Chat composer with the Japanese input method, confirm a conversion with Enter. 4) Stop the Gateway from the tray or service controls and read the banner's hint. Repeat step 3 with the macOS Japanese input method on a Mac. Pass: no light flash, each shortcut acts once, the conversion Enter does not send, and the banner names a next step."
+  },
+  {
+    "priorId": "OL-09",
+    "verdict": "cannot-check",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b7-first-run.json"
+    ],
+    "note": "needs a fresh install: Task 12 covers it. The sandbox already finished onboarding, so first-run time and clicks cannot be timed here. The real-provider half is operator-only: in a second fresh sandbox, run the same journey adding a real provider key through Get started, and record time, clicks and every point where the next step was unclear."
+  },
+  {
+    "priorId": "OL-11",
+    "verdict": "cannot-check",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SystemQuality.tsx:29",
+      "apps/gateway/src/services/dashboard-route-service.ts:338"
+    ],
+    "note": "Needs a 1,000-record run (CI dispatch of the nightly with long_list_count, once the proof is count-aware); the sandbox holds 2 prompt packs. Code read: System > Quality asks the Gateway for at most 200 packs and its only cap disclosure is the generic 'bounded read' sentence, with no 'showing the first 200' message. The proof's count-awareness is an engineering item."
+  }
+]

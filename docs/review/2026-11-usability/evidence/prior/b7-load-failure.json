@@ -1,0 +1,26 @@
+{
+ "activity": {
+  "headings": [
+   "H1:Activity log",
+   "H2:Activity unavailable",
+   "H2:Recent sessions"
+  ],
+  "alerts": [],
+  "emptyStateSection": {
+   "role": null,
+   "svgIcons": 0,
+   "text": "Activity unavailable\n\nThe gateway hit an error. Try again, or check System health.\n\nTry again",
+   "color": "rgb(244, 251, 255)"
+  }
+ },
+ "health": {
+  "headings": [
+   "H1:System",
+   "H2:Checks"
+  ],
+  "alerts": [
+   "status:Backup status is unavailable or refreshing. Back up now needs a current status c"
+  ],
+  "emptyStateSection": null
+ }
+}

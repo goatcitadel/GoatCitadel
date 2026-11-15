@@ -1,0 +1,22 @@
+{
+  "uploadStatusAndTime": [
+    [
+      201,
+      1794743529787
+    ]
+  ],
+  "chipMs": 553,
+  "seen": [
+    [
+      94,
+      "none"
+    ],
+    [
+      553,
+      "ut13b-15mb.bin | BIN · 15.0 MB"
+    ]
+  ],
+  "sendDoneMs": 2345,
+  "tail": "ool to read .bin files | Why? | Retry | Copy answer | More | Save as skill | You said | You · 3:52 AM | ut13b what is in the 15 MB attachment? | ut13b-15mb.bin · BIN · 15.0 MB | Assistant reply | Assistant 3:52 AM | Verification stub reply. | verification-stub-chat · Verification stub (loopback) · 881 ms total | · Open message details | Retry | Copy answer | More | Save as skill | Background run | Recorded for this response | Inspect run | Open run in Work | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send",
+  "log": []
+}

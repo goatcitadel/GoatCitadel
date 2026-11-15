@@ -1,0 +1,15 @@
+{
+  "sid": true,
+  "seedStatus": 201,
+  "liveCardMs": 4,
+  "label": "Review danger approval",
+  "clicks": 2,
+  "firstChangeMs": 129,
+  "card": "\n\nRun command\n\nDanger\n\nWaiting for verification approval.\n\nAction: Shell exec\n\nScope: Default Workspace · one linked conversation. This decision authorizes this request once.\n\nExpiry: No expiry set\n\nCommand: pnpm test\n\nTitle: Verification chat approval\n\nConsequence: After approval, the exact reviewed action may run; denying withholds it. The decision alone does not show the work resumed or completed.\n\nReview danger approval\nDeny\nHow this decision works\nInspect persisted approval\nMessage\n\nA decision is waiting above. Resolve it to keep going.\n\nverification-stub-chat · Verification stub (loopback) · Standard\nSend",
+  "dialogText": "Confirm danger-level action\n\nReview the exact action before approving once.\n\nAction: Shell exec\n\nScope: Default Workspace · one linked conversation. This decision authorizes this request once.\n\nExpiry: No expiry set\n\nCommand: pnpm test\n\nTitle: Verification chat approval\n\nConsequence: After approval, the exact reviewed action may run; denying withholds it. The decision alone does not show the work ",
+  "tail": "ation-stub-chat · Verification stub (loopback) · 1 tool · 6 s total | · Open message details | Awaiting approval to run pnpm test · 1 tool call · 1 approval needed | Run command pnpm test | Approval needed | Outcome uncertain. Check before retrying. Automatic replay is suppressed. | Inspect tool activity | Retry | Copy answer | More | Version 2 of 2 | 1 | 2 | Save as skill | Background run | Recorded for this response | Inspect run | Open run in Work | Message | verification-stub-chat · Verification stub (loopback) · Standard | Send",
+  "approvalStatus": "approved",
+  "inboxBefore": "2",
+  "inboxAfter": "1",
+  "log": []
+}

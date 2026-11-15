@@ -1,0 +1,16 @@
+{
+  "res": {
+    "before": "4 decisions waiting, 2 updates.",
+    "caution": {
+      "clicks": 1,
+      "msToFirstFeedback": 45
+    },
+    "afterHead": "3 decisions waiting, 2 updates.",
+    "page2AfterMs": "updated without reload",
+    "page2Head": "3 decisions waiting, 2 updates.",
+    "runCodeRowGone": true,
+    "panelText": "Personal / Mission Control Next Verification Workspace\nSearch\nCtrl K\nChat\nInbox\n3\nWork\nNo queued or running interactive runs\nCapabilities\nLibrary\nSystem\n1 check needs review\nUpdates connected",
+    "historyText": " view\nAll records\nWaiting on you\nApproved\nDenied\nApproved with edits\nRecovery\nRefresh approval history\nRun code\n\nRun code · Approved · 1 minute ago\n\nDecided by an operator.\n\nInspect decision\nShell exec\n\nShell exec · Denied · 1 minute ago\n\nDecided by an operator.\n\nInspect decision\nShell exec\n\nShell exec · Approved · 1 minute ago\n\nDecided by an operator.\n\nInspect decision\nSearch code files\n\nSearch code files · Waiting on you · 8 minutes ago\n\nInspect decision\nShell exec\n\nShell exec · Approved · 32 minutes ago\n\nDecided by an operator.\n\nInspect decision\nShell exec\n\nShell exec · Waiting on you · 44 minutes ago\n\nInspect decision\n\nEnd of retained approval history for this view.\n\nReject everything pending\n\nThis applies to every workspace in the installation, not only the one selected here.\n\nReview installation-wide rejection"
+  },
+  "log": []
+}

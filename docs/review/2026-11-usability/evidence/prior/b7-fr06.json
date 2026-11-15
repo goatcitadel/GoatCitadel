@@ -1,0 +1,78 @@
+{
+ "/settings/safety#device-access": {
+  "url": "/settings/safety#device-access",
+  "title": "GoatCitadel Settings · Safety",
+  "h1": [
+   "Safety"
+  ],
+  "h2": [
+   "Settings destination unavailable"
+  ],
+  "hasDeviceAccessAnchor": false,
+  "hasOnboardingAnchor": false,
+  "links": [
+   "Access -> /settings/access"
+  ]
+ },
+ "/settings/access#device-access": {
+  "url": "/settings/access#device-access",
+  "title": "GoatCitadel Settings · Access",
+  "h1": [
+   "Access"
+  ],
+  "h2": [
+   "Access"
+  ],
+  "hasDeviceAccessAnchor": true,
+  "hasOnboardingAnchor": false,
+  "links": [
+   "Access -> /settings/access"
+  ]
+ },
+ "/settings/access": {
+  "url": "/settings/access",
+  "title": "GoatCitadel Settings · Access",
+  "h1": [
+   "Access"
+  ],
+  "h2": [
+   "Access"
+  ],
+  "hasDeviceAccessAnchor": true,
+  "hasOnboardingAnchor": false,
+  "links": [
+   "Access -> /settings/access"
+  ]
+ },
+ "/settings/models#onboarding": {
+  "url": "/settings/models#onboarding",
+  "title": "GoatCitadel Settings · Models",
+  "h1": [
+   "Models"
+  ],
+  "h2": [
+   "Models"
+  ],
+  "hasDeviceAccessAnchor": false,
+  "hasOnboardingAnchor": false,
+  "links": [
+   "Access -> /settings/access",
+   "Open setup -> /settings/first-run?shell=cockpit"
+  ]
+ },
+ "/settings/general": {
+  "url": "/settings/general",
+  "title": "GoatCitadel Settings · General",
+  "h1": [
+   "General"
+  ],
+  "h2": [
+   "General"
+  ],
+  "hasDeviceAccessAnchor": false,
+  "hasOnboardingAnchor": false,
+  "links": [
+   "Access -> /settings/access"
+  ]
+ }
+}

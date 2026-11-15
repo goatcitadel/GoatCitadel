@@ -1,0 +1,207 @@
+[
+  {
+    "area": "chat",
+    "journey": "CH-5 Find an old conversation, rename it, delete it, and come back to where you were after a reload",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "In every project conversation the composer shows 'Approval mode unavailable' with a Retry button that can never work when the Gateway is in its default no-login mode",
+    "trigger": "Gateway auth mode none, which is the shipped default (config/goatcitadel.example.json auth.mode none, allowLoopbackBypass false; the packaged Windows desktop launcher sets only GOATCITADEL_HOME, GOATCITADEL_APP_DIR and GOATCITADEL_DESKTOP_HOST, so it stays in mode none; goatcitadel up and pnpm dev default to none too). Open any conversation that belongs to a project (for example the seeded 'Release readiness review'). The row 'Approval mode unavailable / Retry' appears above the composer; Retry repeats the same request.",
+    "expected": "Either the managed-project 'Use Auto mode' control, or nothing; if the control cannot be offered on this connection the row says why (for example that it needs a signed-in local connection) instead of offering a Retry.",
+    "actual": "GET /api/v1/chat/sessions/<id>/approval-mode answers 403 'Chat approval mode requires a local operator connection.' even from curl straight to 127.0.0.1 (no proxy, no cross-origin). In auth mode none the actor source is 'none' (plugins/auth.ts:180-182 returns there, before the loopback-bypass check is reached), and directLocal is never granted for that source, so the route refuses every call. This looks like a deliberate security rule (mode none cannot prove the caller is local); no document states it, and whether none-mode installs should be able to use Auto mode is a product decision, not decided here. What is defective regardless is the presentation: the row says 'unavailable' with a Retry that cannot succeed, gives no reason and no pointer to Settings › Access, and the browser console logs a 403 per load. For an operator whose goal is Auto mode or Managed files there is no path on screen. Who sees it: every mode-none install (packaged desktop, goatcitadel up, pnpm dev; the dev supervisor defaults to mode none, so its loopback bypass is not reached), in any conversation that belongs to a project. Docker (docker-compose.yaml:74-76 sets token mode with loopback bypass false) and proxied or remote setups likely see it as well because the request does not arrive as a direct loopback connection (unverified, not run). Token or basic mode with a direct loopback client does not get the 403 (code only, not run: the auth mode may not be changed in this review). While the row is shown the composer loses only the 'Use Auto mode' / 'Managed files' controls; sending, attachments, model and web options still work (checked live).",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-5-approval-mode-unavailable.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-5-approval-mode-403.json",
+      "apps/gateway/src/routes/chat.sessions.ts:29",
+      "apps/gateway/src/routes/session-control-request-context.ts:154",
+      "apps/gateway/src/services/session-control-service.ts:155",
+      "apps/gateway/src/plugins/auth.ts:180",
+      "apps/gateway/src/dev-supervisor.ts:745",
+      "docker-compose.yaml:74",
+      "apps/mission-control-desktop/src-tauri/src/main.rs:710",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatManagedFiles.tsx:109"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "journeys": [
+      "CH-2 Follow-up, edit an earlier message, retry an answer, stop a streaming answer",
+      "CH-6 Use the composer's plus menu: web on and off, Review answer, a prompt pack, a variable"
+    ],
+    "owner": "apps/gateway/src/routes/chat.sessions.ts"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-2 Follow-up, edit an earlier message, retry an answer, stop a streaming answer",
+    "severity": "friction",
+    "kind": "bug",
+    "title": "Stop pressed just as an answer finishes shows 'provider request failed' and a reload banner, though the answer is complete",
+    "trigger": "Send a message with the stub model and click 'Stop response' as soon as it appears (about 120-230 ms after sending; the stub finishes in under 500 ms). Repeat a few times.",
+    "expected": "If the turn is already finished, Stop quietly does nothing (or the screen simply shows the finished answer); if it is still running it is cancelled and marked Cancelled.",
+    "actual": "POST /api/v1/chat/sessions/<id>/turns/<turn>/cancel answered 400 {\"error\":\"Chat write failed. Check gateway diagnostics and retry.\"} in 5 of 6 attempts (2 of 3 in the first run, 3 of 3 in the second); once it answered normally and the turn showed 'Cancelled'. The Gateway log gives the cause: 'Durable Chat run ... cannot be cancelled because turn ... is already completed.' So the turn had already finished on the Gateway when the cancel arrived, not mid-start. After the 400 the screen shows a banner 'Chat write failed. Check gateway diagnostics and retry.' and a red card 'The provider request failed before the current step could finish.' with 'Reload conversation', while the finished answer ('Verification stub reply.', 380 ms total) is on screen. What remains true: the Stop button lingers about 100-250 ms after the Gateway completed the turn; cancelChatTurn rejects with a generic 400 in the window where the turn trace reads completed but the durable run is not yet terminal (the error is not mapped to a quiet no-op, sendChatWriteError turns it into the generic 400); and that window exists at the end of every real turn. Not reproduced with a real model, hence 'likely' for that case; see the settling test in the journey section.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-2-stop-attempt0.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-2-stop.json",
+      "docs/review/2026-11-usability/evidence/ch/ch-2-stop-gateway-log.txt",
+      "apps/gateway/src/routes/chat.messages.ts:1041",
+      "apps/gateway/src/routes/chat.shared.ts:115",
+      "apps/gateway/src/services/chat-turn-entry-service.ts:2164",
+      "packages/threaded-surface-core/src/chat/chat-error-copy.ts:112"
+    ],
+    "foundBy": "both",
+    "confidence": "likely",
+    "priorIds": [],
+    "owner": "apps/gateway/src/services/chat-turn-entry-service.ts"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-3 Attach a text file and an image, ask about them; attach a file that is too large",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "A file over the 20 MB attachment limit is refused with 'The attachment didn't upload. Select the file again to retry.' and no mention of size",
+    "trigger": "In a conversation, choose a 21 MB file through Attach files.",
+    "expected": "The message says the file is too large and gives the limit (20 MB), so the operator knows retrying the same file cannot work.",
+    "actual": "The Gateway answers 413 (limit MAX_CHAT_ATTACHMENT_BYTES = 20 MiB). The composer shows only 'The attachment didn't upload. Select the file again to retry.' Selecting the same file again fails the same way. The reason sits only in the collapsed technical details. The shared error helper already has 'That's too large to send.' for 413 but this path does not use it.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-3-too-large.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-3-network.json",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerTools.tsx:300",
+      "apps/gateway/src/services/chat-attachment-service.ts:29",
+      "packages/mission-control-shared/src/api/describe-api-error.ts:115"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerTools.tsx"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-4 Switch model and provider for one conversation; see which model answered",
+    "severity": "friction",
+    "kind": "approval-friction",
+    "title": "Choosing a different effort for one conversation takes three steps and a card with 'Exact revision 1', and a message sent in between silently uses the old setting",
+    "trigger": "Open the model chip beside Send, set Effort to Extended, press Done.",
+    "expected": "A setting that affects only this conversation and is marked 'safe' applies at once, or after one click on the card where it appeared.",
+    "actual": "Nothing changes on the chip (still 'Standard'). A card 'Use verification-stub-chat in this chat / AWAITING CONFIRMATION' appears in the transcript with 'Review and confirm', 'More', 'Details', 'Cancel plan', 'Make this my default'. 'Review and confirm' opens a second dialog (Scope, Risk 'safe', 'Exact revision 1') and only 'Apply exact change' applies it: three steps for a safe, current-chat-only choice. A message sent while the card was pending went out with thinkingLevel standard, and nothing near the composer says the choice is not active yet. After applying, the card reads 'Model changed to verification-stub-chat' although only the effort changed.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-4-confirm-card.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-4-confirm-step2.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-4-after-apply.png",
+      "packages/mission-control-shared/src/components/chat/ChatChangePlanCard.tsx:263",
+      "packages/mission-control-shared/src/components/chat/ChatChangePlanActionDialogBody.tsx:64"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "packages/mission-control-shared/src/components/chat/ChatChangePlanCard.tsx"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-8 Two tabs on the same conversation: send in one, the other catches up",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "Sending from a second tab while the first tab's turn runs shows a banner with the raw session id and 'agent-send/stream', and a card saying the response was interrupted",
+    "trigger": "Live: open one conversation in two tabs, type a message in each and press Enter in both at the same moment (the second send meets the first tab's turn lease). Realistic case with a slow model: a second tab or device sends while the first tab's long turn is still running, which takes the same lease; not run (the stub finishes too fast).",
+    "expected": "A plain note that another window is sending in this conversation, with the draft kept to send in a moment.",
+    "actual": "The banner reads 'A chat turn write is already in progress for session sess_ce0e62d2461015140aed3cbd. Wait for the current agent-send/stream to finish and retry.' and a red card says 'The response was interrupted. Check the connection to GoatCitadel and the conversation status before retrying.' with 'Reload conversation'. Nothing was interrupted: the other tab's answer completed. The draft stays in the composer (good) but the Send button stays live with no hint when to retry.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-8-simultaneous-a.png",
+      "apps/gateway/src/services/chat-turn-execution-registry.ts:76",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatStreamErrorNotice.tsx:8"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/gateway/src/services/chat-turn-execution-registry.ts"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-6 Use the composer's plus menu: web on and off, Review answer, a prompt pack, a variable",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "With Review answer on, the receipt says 'Review unavailable' with no reason and no next step",
+    "trigger": "Plus menu, switch on Review answer, send a message. (The stub model is the only model here, so the cause may be the stub's plain-text reply.)",
+    "expected": "A short reason (for example the review model did not answer in the expected form) or a hint where to look, since the operator switched on a feature that adds cost to every message.",
+    "actual": "'Reviewing the answer' shows for about 100 ms, then the receipt reads 'verification-stub-chat · Verification stub (loopback) · 501 ms total · Review unavailable'. formatAnswerReviewLabel returns the bare label for outcome 'unavailable'.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-6-review-answer.png",
+      "packages/mission-control-shared/src/components/chat/chat-display-helpers.ts:25"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "packages/mission-control-shared/src/components/chat/chat-display-helpers.ts"
+  },
+  {
+    "area": "chat",
+    "journey": "CH-1 First message in an empty install: New conversation, type, send, read the answer",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "In a workspace with no conversations the main pane says 'Choose a conversation' although the list is empty",
+    "trigger": "Open Chat in a workspace that has no conversations (the Default Workspace here).",
+    "expected": "An empty-state invitation to start the first conversation, with the composer or starter prompts one click away.",
+    "actual": "The list says 'No conversations in this view.' and the main pane says 'Choose a conversation / Pick one from the list, or start a new conversation.' with a 'New conversation' button. There is no composer until that button is pressed (354 ms to the composer), and the new empty conversation is created on the Gateway at that click and appears in the list as 'New chat'.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-1-empty-install.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-1-new-conversation.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatAreaChrome.tsx"
+  },
+  {
+    "area": "chat",
+    "priorIds": [],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "journey": "Outage (Review Focus 1, Step 4)",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "After the Gateway comes back the red 'Can't reach the GoatCitadel gateway' banner stays until 'Reload conversation' is pressed",
+    "trigger": "Freeze the Gateway for about 40 s while a Chat conversation is open (it does not exit), then let it run again.",
+    "expected": "The banner clears by itself once the Gateway answers, as the top 'unreachable' banner does for a stopped Gateway ('Check again', 'send resumes when the connection returns').",
+    "actual": "About 30 s after the freeze the banner 'Can't reach the GoatCitadel gateway. Check that it's running, then try again.' and a 'Reload conversation' button appeared (top bar and in the thread). After the Gateway was running again it was still there at every one of 15 once-a-second samples (15 s) and the screen had a completed answer under it; only pressing Reload conversation clears it (click not captured). During the first 30 s of the freeze nothing was shown and the nav stayed 'Updates connected'. Only a frozen Gateway was tested (a stopped one gives the self-clearing banner), so how often a real operator meets this is unknown.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-outage-after-resume.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-outage-freeze.json",
+      "docs/review/2026-11-usability/evidence/ch/ch-outage-freeze-25s.png"
+    ],
+    "owner": "packages/threaded-surface-core/src/chat/chat-error-copy.ts"
+  },
+  {
+    "area": "chat",
+    "priorIds": [],
+    "foundBy": "live",
+    "confidence": "likely",
+    "journey": "Outage (Review Focus 1, Step 4)",
+    "severity": "polish",
+    "kind": "missing-state",
+    "title": "While the Gateway is unreachable a pending approval card keeps its normal Review and Deny buttons",
+    "trigger": "Open a conversation with a pending approval card, then stop the Gateway.",
+    "expected": "The approval buttons show they cannot act right now (disabled, or a note beside them) while the unreachable banner is up.",
+    "actual": "The screenshot taken 12 s after the Gateway was killed shows 'Review danger approval' and 'Deny' drawn exactly as before, with the red 'GoatCitadel is unreachable' banner above. What a click does was not tried (the sandbox was already gone), so whether it fails quietly, queues or shows an error is unknown.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-outage-kill-12s.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-outage-kill.json"
+    ],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatApprovalRenderer.tsx"
+  },
+  {
+    "area": "chat",
+    "priorIds": [],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "journey": "CH-3 Attach a text file and an image, ask about them; attach a file that is too large",
+    "severity": "polish",
+    "kind": "bug",
+    "title": "The sticky 'You asked' bar covers the top line of the transcript",
+    "trigger": "Scroll a conversation a little up from the bottom at 1440x900 (seen after every send and while attaching).",
+    "expected": "The bar sits in its own strip or the text scrolls under a clear edge.",
+    "actual": "The 'You asked <previous message>' bar is drawn over the first visible line of the transcript, so a line such as 'Verification stub reply.' is half hidden behind it.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/ch/ch-3-too-large.png",
+      "docs/review/2026-11-usability/evidence/ch/ch-2-stop-attempt0.png"
+    ],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatStickyPrompt.tsx"
+  }
+]

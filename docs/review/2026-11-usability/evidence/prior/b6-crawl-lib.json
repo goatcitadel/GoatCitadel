@@ -1,0 +1,349 @@
+{
+ "/library": {
+  "title": "GoatCitadel Library",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Candidates and mesh",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Usability browser candidate",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Mesh capability publications",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Invocation outcomes (0)",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 1039
+ },
+ "/library/memory": {
+  "title": "GoatCitadel Library · Memory",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Memory",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Memory proposals",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "posture": 4
+  },
+  "ids": [],
+  "len": 1219
+ },
+ "/library/notes": {
+  "title": "GoatCitadel Library · Notes",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Notes",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Reminders",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 420
+ },
+ "/library/files": {
+  "title": "GoatCitadel Library · Files",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Files",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "mission-control-next-proof.md",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 511
+ },
+ "/library/artifacts": {
+  "title": "GoatCitadel Library · Artifacts",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Artifacts",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Generated note",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 433
+ },
+ "/library/agents": {
+  "title": "GoatCitadel Library · Agents",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Agents",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Builder Pair",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Architect Goat",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Coder Goat",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Memory Maintainer",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Ops Goat",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Personal Assistant Goat",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Product Goat",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "QA Goat",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Researcher Goat",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Operator Scout",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "evidence": 1
+  },
+  "ids": [],
+  "len": 1297
+ },
+ "/library/knowledge": {
+  "title": "GoatCitadel Library · Knowledge",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Knowledge",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Knowledge ingest and retrieval",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Memory files",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Context use and retrieval history",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Recovered external copies",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "External sources",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "evidence": 1
+  },
+  "ids": [],
+  "len": 2059
+ },
+ "/library/communications": {
+  "title": "GoatCitadel Library · Mail",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Mail",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Inbox",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Agenda",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Contacts",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Accounts",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Compose email",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 887
+ },
+ "/library/curator": {
+  "title": "GoatCitadel Library · Skill curator",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Skill curator",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Skills, most used first",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Archived skills",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 1693
+ },
+ "/library/journey": {
+  "title": "GoatCitadel Library · Journey",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Journey timeline",
+    "sr": false
+   },
+   {
+    "tag": "H2",
+    "text": "Events",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "canonical": 1
+  },
+  "ids": [],
+  "len": 1248
+ },
+ "/library/prompt-packs": {
+  "title": "GoatCitadel Library · Prompt packs",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Prompt packs",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "Pack library",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "Run settings",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "Advanced quality ops",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "Import a new pack",
+    "sr": false
+   },
+   {
+    "tag": "H4",
+    "text": "Tests",
+    "sr": false
+   }
+  ],
+  "counts": {
+   "posture": 2,
+   "replay": 1
+  },
+  "ids": [],
+  "len": 1277
+ },
+ "/library/citadel": {
+  "title": "GoatCitadel Library · Guided setup · Mason",
+  "heads": [
+   {
+    "tag": "H1",
+    "text": "Guided setup · Mason",
+    "sr": false
+   },
+   {
+    "tag": "H3",
+    "text": "Guided setup · Mason",
+    "sr": false
+   }
+  ],
+  "counts": {},
+  "ids": [],
+  "len": 598
+ }
+}

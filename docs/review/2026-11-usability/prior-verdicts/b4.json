@@ -1,0 +1,761 @@
+[
+  {
+    "priorId": "GL-01",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b4-live-measure.json"
+    ],
+    "note": "Live: two Work tabs open in one browser, idle for 30 s after settling, made 1 /api/ request each (one GET /api/v1/inbox). No refetch loop; the 91 requests per tab are the first-load burst."
+  },
+  {
+    "priorId": "GL-02",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CockpitNavigationProvider.tsx:52",
+      "apps/mission-control-next/src/cockpit/app/CockpitNavigationProvider.tsx:60"
+    ],
+    "note": "The Cockpit now installs a beforeunload guard and a Back/Forward guard that hold the move while any editor is dirty, then open the leave review. Code read; not exercised live (needs a dirty editor and a real reload)."
+  },
+  {
+    "priorId": "GL-04",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/WindowedRecordList.tsx:157",
+      "apps/mission-control-next/src/cockpit/ui/WindowedRecordList.tsx:212"
+    ],
+    "note": "Programmatic focus in record lists first scrolls the row into view (scrollToIndex for windowed lists, scrollIntoView for bounded ones) and only then focuses with preventScroll, so the focused row stays visible. Code read."
+  },
+  {
+    "priorId": "GL-05",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:86",
+      "apps/mission-control-next/src/cockpit/ui/Button.tsx:9",
+      "docs/review/2026-11-usability/evidence/prior/GL-05.png"
+    ],
+    "note": "A forced-colors block now keeps focus, selection, current page, tabs, menu highlight and disabled state visible (live screenshot with forced colors on). But the primary button has no border, so 'New task' reads as plain text in that mode, and the filled running dot has no border either (code only; the sandbox has no running run).",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "bug",
+      "title": "In Windows high-contrast (forced colors) the primary button loses its outline and reads as plain text",
+      "trigger": "Turn on forced colors (Windows high contrast, or Playwright forcedColors) and open Work: 'New task' is the only header action with no border. With a run queued, the sidebar Work dot (filled, no border) also disappears.",
+      "expected": "Every button keeps a visible boundary and status marks keep a shape or border in forced colors.",
+      "actual": "The accessible-controls forced-colors block recolors borders for buttons, but the primary variant is bg-accent with no border, so nothing is drawn; the running dot is background-only. The screenshot shows 'New task' unframed beside three framed buttons.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/GL-05.png",
+        "apps/mission-control-next/src/cockpit/ui/Button.tsx:9",
+        "apps/mission-control-next/src/cockpit/app/WorkRunningIndicator.tsx:75"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/ui/Button.tsx"
+    }
+  },
+  {
+    "priorId": "GL-06",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:10",
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:197",
+      "docs/review/2026-11-usability/evidence/prior/b4-live-measure.json"
+    ],
+    "note": "CockpitShell still imports ChatArea statically. Live (dev server): loading /inbox requested ChatArea.tsx and 71 modules under areas/chat. Production chunk size not measured here.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Opening any non-Chat page still loads the whole Chat module graph",
+      "trigger": "Open /inbox (or /system) cold and record the module requests.",
+      "expected": "Non-Chat first loads defer the Chat stack until Chat is opened.",
+      "actual": "CockpitShell statically imports ChatArea, so 71 chat modules (including ChatArea.tsx) load on /inbox and /system. Only the Chat render is deferred (retainedChat), not the code. Dev-server module counts, not production bytes. No load time was measured, so this is recorded as a structure issue, not a timing one.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:10",
+        "docs/review/2026-11-usability/evidence/prior/b4-live-measure.json"
+      ],
+      "foundBy": "both",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx"
+    }
+  },
+  {
+    "priorId": "GL-08",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/mission-control-shared/src/content/status-vocabulary.ts:81",
+      "DESIGN.md:54",
+      "DESIGN.md:60",
+      "DESIGN.md:71"
+    ],
+    "note": "DESIGN-DECISION: Risk badges and help text now go through one presenter and read Safe, Caution, Danger, Nuclear everywhere, which is the wording DESIGN.md lines 54, 60 and 71 specify. The old review's Low/Medium/High/Critical labels were a design alternative that was never adopted; the policy enum values are unchanged."
+  },
+  {
+    "priorId": "GL-09",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/chat-vocabulary.ts:208",
+      "apps/mission-control-next/src/cockpit/areas/inbox/inbox-presentation.ts:72",
+      "docs/review/2026-11-usability/evidence/prior/IN-02.png"
+    ],
+    "note": "Approval cards are named through presentApprovalAction; live the Inbox shows 'Review shell exec' with a plain policy reason and a Danger badge, and target detail sits under 'Show source context'."
+  },
+  {
+    "priorId": "GL-11",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:39",
+      "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:43",
+      "docs/review/2026-11-usability/evidence/prior/b4-token-contrast.json"
+    ],
+    "note": "Menu and palette highlight now draw a 2px accent outline, and the focus ring is !important so no unlayered rule strips it. The accent against canvas, raised and overlay is 5.4 to 11.1:1 in both themes (computed from the tokens)."
+  },
+  {
+    "priorId": "GL-12",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:197",
+      "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:36",
+      "docs/review/2026-11-usability/evidence/prior/GL-12.png",
+      "docs/review/2026-11-usability/evidence/prior/b4-live-measure.json"
+    ],
+    "note": "Tabs now carry an accent underline when selected (and an outline in forced colors), but the sidebar current page and the selected conversation row still use the same bg-sunken tint as hover. Live: current and hovered sidebar links share rgb(15,29,45); only the text colour differs slightly.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "The current page in the sidebar looks the same as a hovered one",
+      "trigger": "Open Work, hover another sidebar link and compare it with the highlighted Work row.",
+      "expected": "The current item differs from hover in more than a faint tint (marker, weight or an accent edge) in both themes.",
+      "actual": "Both use bg-sunken (1.06:1 against the dark canvas); current only switches text from fg-secondary to fg. The same pair of classes is used on conversation rows and messaging rows.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/GL-12.png",
+        "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:197",
+        "apps/mission-control-next/src/cockpit/areas/chat/ConversationListPanel.tsx:149"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/app/Sidebar.tsx"
+    }
+  },
+  {
+    "priorId": "GL-14",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:190",
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:220"
+    ],
+    "note": "Every rail destination now resolves to a native owner; Classic opens only through the explicit ?shell=classic rollback. The only remaining embedded Classic pages are Prompt packs and the Ops Kanban (WorkKanban.tsx:66, LibraryPromptPacks.tsx:85), not the approval, question, failed-run, health or settings tasks the row named."
+  },
+  {
+    "priorId": "GL-15",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CockpitAccessGate.tsx:31",
+      "apps/mission-control-next/src/cockpit/app/CockpitApp.tsx:54",
+      "apps/mission-control-next/src/cockpit/app/CockpitApp.tsx:72"
+    ],
+    "note": "The Cockpit has its own sign-in gate, and once it has mounted a lost session only hides the shell (Activity hidden, inert) so unsaved drafts stay mounted. Code read; token-mode sign-in was not exercised (the token Gateway is not running)."
+  },
+  {
+    "priorId": "GL-07",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/app/classic-owner-url.ts:6",
+      "apps/mission-control-next/src/app/shell-transition.ts:80"
+    ],
+    "note": "Handoffs to Classic add shellScope=visit, and the shell switch skips writing the saved preference for a visit, so only the explicit 'Switch to classic Mission Control' persists."
+  },
+  {
+    "priorId": "GL-10",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:280",
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:187",
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:220"
+    ],
+    "note": "Links to a nonexistent 'Ops' or 'Approvals' are gone because the Classic handoffs themselves are gone. Classic is still named four ways: 'Switch to classic Mission Control', 'Open the classic view', 'This view is available in Classic', 'classic Kanban'.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "Classic is still called four different things in the Cockpit",
+      "trigger": "Open the account menu, the palette (Ctrl+K), a Classic-only URL and the Ops Kanban run view.",
+      "expected": "One name for the other layout everywhere.",
+      "actual": "Sidebar.tsx:280 'classic Mission Control'; cockpit-compatibility.ts:187 'Open the classic view'; CockpitShell.tsx:220 'Classic'; WorkKanban.tsx:54 'classic Kanban'.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:280",
+        "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:187",
+        "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:220"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/app/Sidebar.tsx"
+    }
+  },
+  {
+    "priorId": "GL-13",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/AreaErrorBoundary.tsx:30",
+      "apps/mission-control-next/src/cockpit/app/CockpitApp.tsx:74",
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:230"
+    ],
+    "note": "AreaErrorBoundary wraps the whole shell, Chat, Projects and each area; it shows a recovery panel (with a stale-build reload for failed lazy chunks) and resets on scope change. Code read; a render error was not forced live."
+  },
+  {
+    "priorId": "NV-01",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/WorkRunningIndicator.tsx:134",
+      "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:212",
+      "apps/mission-control-next/src/cockpit/app/CollapsedStreamIndicator.tsx:6"
+    ],
+    "note": "The Work dot carries sr-only text and a title, and running (filled, pulsing) differs from unknown (hollow ring); health uses an icon plus label; the collapsed stream state is a focusable tooltip with a name. Not checked with a screen reader."
+  },
+  {
+    "priorId": "GL-03",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/data/record-view.ts:26",
+      "scripts/check-mission-control-next-cockpit-refetch.mjs:27"
+    ],
+    "note": "recordView keeps the last good record while a background read runs or fails (phase 'checking', stale flag), 28 areas use it, and a repo check script guards the pattern."
+  },
+  {
+    "priorId": "GL-16",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:58",
+      "docs/review/2026-11-usability/evidence/prior/b4-area-measure.json"
+    ],
+    "note": "Live at 375 px with touch: buttons, selects, tabs and nav links are at least 44 px. Plain text links stay 32 to 36 px (above the 24 px AA minimum, below the 44 px goal) and 'Advanced setup' is 17 px, which is under 24 px. Compact density not tested.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "bug",
+      "title": "On a phone, the 'Advanced setup' link on Capabilities is only 17 px tall",
+      "trigger": "At 375 px wide with touch, open Capabilities > Connectors and measure 'Advanced setup'.",
+      "expected": "Touch targets are at least the 24 px AA minimum (44 px is the product goal).",
+      "actual": "'Advanced setup' is 17 px tall. Other plain links measured 32 to 36 px (above 24 px, under the 44 px goal) and are not part of this finding.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/b4-area-measure.json",
+        "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:58"
+      ],
+      "foundBy": "live",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/styles/accessible-controls.css"
+    }
+  },
+  {
+    "priorId": "GL-17",
+    "verdict": "partial",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b4-area-measure.json",
+      "apps/mission-control-next/src/cockpit/lib/present-error.ts:51",
+      "apps/mission-control-next/src/cockpit/areas/system/BrowserGrantReview.tsx:16",
+      "apps/mission-control-next/src/cockpit/areas/system/BrowserSessionGrants.tsx:212",
+      "apps/mission-control-next/src/cockpit/areas/system/BrowserSessionGrants.tsx:372"
+    ],
+    "note": "Live, the seven landing pages (desktop and phone) showed no raw ids, ISO times, JSON or enums, and recorded errors go through presentErrorText. Running the raw-values script's own counting (ids inside TechnicalDetails are stripped) on the Cockpit still finds the browser-session actor id printed as visible text in System > Browser sessions (code read, not reproduced live; the sandbox has no browser grant).",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "System > Browser sessions prints the raw actor id as visible text in grants and grant reviews",
+      "trigger": "Code read, not reproduced live: System > Browser sessions, open a session's grants list, or press the review button for a new grant, a rotation or a revoke.",
+      "expected": "Names come first; ids appear only under technical details.",
+      "actual": "BrowserGrantReview.tsx:16 renders 'Actor: {request.actorId}' (also :47, :55, :59); BrowserSessionGrants.tsx:212 renders <strong>{grant.actorId}</strong> in each grant row, outside the TechnicalDetails at :227; the every-host warning at :372 reads '{review.request.actorId} can use this session'. The script's own comment treats browser-session actor ids as the grant's visible subject, so this may be intended; no other visible raw-id case was confirmed.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/system/BrowserGrantReview.tsx:16",
+        "apps/mission-control-next/src/cockpit/areas/system/BrowserSessionGrants.tsx:212",
+        "apps/mission-control-next/src/cockpit/areas/system/BrowserSessionGrants.tsx:372"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/system/BrowserGrantReview.tsx"
+    }
+  },
+  {
+    "priorId": "GL-19",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b4-work.png",
+      "docs/review/2026-11-usability/evidence/prior/b4-library.png",
+      "docs/review/2026-11-usability/evidence/prior/b4-system.png",
+      "apps/mission-control-next/src/cockpit/ui/AreaHeader.tsx:49"
+    ],
+    "note": "Every area page draws the h1 first, then its tab row, and the default tab (Work Board, Library first tab, System Health) matches the route; screenshots of Work, Library and System show it."
+  },
+  {
+    "priorId": "GL-20",
+    "verdict": "partial",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b4-selection-urls.json",
+      "docs/review/2026-11-usability/evidence/prior/b4-selection-urls-2.json",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxArea.tsx:162"
+    ],
+    "note": "Live: selecting a Work task or run, a Library capability or tab, a System tab and a Chat conversation each put the record in the URL and Back returns to the list. In Inbox, 'Review' on an approval leaves the URL at /inbox, so the selection is local state and not a link. The Capabilities row click also left the URL unchanged; that was not investigated (the clicked element may not have been a row).",
+    "finding": {
+      "area": "inbox",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "bug",
+      "title": "The Inbox item you open is not in the URL, so Back, reload and sharing lose it",
+      "trigger": "Open /inbox, press Review on the pending approval, then reload or copy the address.",
+      "expected": "The selected item has a deep link, like Work tasks and runs (/work/tasks/<id>).",
+      "actual": "selectedId is React state in InboxArea; the URL stays /inbox before and after Review, so a reload returns to an unselected list.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/b4-selection-urls-2.json",
+        "apps/mission-control-next/src/cockpit/areas/inbox/InboxArea.tsx:162"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/inbox/InboxArea.tsx"
+    }
+  },
+  {
+    "priorId": "GL-21",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/RiskBadge.tsx:8",
+      "apps/mission-control-next/src/cockpit/ui/StatusBadge.tsx:5"
+    ],
+    "note": "Risk badges use their own Shield and ShieldAlert icons while lifecycle status uses spinner, hand, check, cross and circle, all with text labels; the Work and System screenshots show distinct icons."
+  },
+  {
+    "priorId": "GL-23",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:246",
+      "apps/mission-control-next/src/cockpit/areas/system/RuntimeAuthorityMap.tsx:98"
+    ],
+    "note": "The 45 'Owner' labels are gone from the screens (System now says 'Managed by'). One remains: the memory detail prints 'Owner:' followed by a raw workspace id or 'global', with no link.",
+    "finding": {
+      "area": "library",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "Memory detail shows 'Owner: ws_...' as a raw id with no link",
+      "trigger": "Open Library > Memory and select an item with a workspace.",
+      "expected": "The responsible workspace is named, and linked when it can be opened.",
+      "actual": "Line 246 prints the workspace id (or 'global') after 'Owner:'.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:246"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx"
+    }
+  },
+  {
+    "priorId": "GL-24",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/mission-control-shared/src/content/mail-draft-failure.ts:58",
+      "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalSettlement.tsx:37"
+    ],
+    "note": "git grep finds no result copy crediting 'the Gateway' for an operator decision; settlement text says 'Approved. …'. The two remaining 'The Gateway …' strings (mail-draft-failure.ts:58, :68) describe runtime evidence accurately."
+  },
+  {
+    "priorId": "GL-25",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/lib/present-error.ts:51",
+      "apps/mission-control-next/src/cockpit/ui/RecordedErrorDetails.tsx:8"
+    ],
+    "note": "Recorded errors pass through presentErrorText: known text is reworded, technical text becomes a neutral line with the raw text kept under technical details."
+  },
+  {
+    "priorId": "GL-26",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/EmptyState.tsx:7",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryJourney.tsx:199"
+    ],
+    "note": "The shared EmptyState takes a title, a description of what will appear and an action, and is used in 60 places (for example 'No Journey events yet' says what will appear). Not every empty screen was checked."
+  },
+  {
+    "priorId": "GL-27",
+    "verdict": "partial",
+    "evidence": [
+      "packages/mission-control-shared/src/content/status-vocabulary.ts:129",
+      "apps/mission-control-next/src/cockpit/areas/library/mesh-capability-labels.ts:19",
+      "apps/mission-control-next/src/cockpit/areas/library/mesh-capability-labels.ts:74"
+    ],
+    "note": "Known cases now have tables (mcp_server reads 'MCP server', mail providers, channels), but humanizeToken itself still lowercases every acronym, so an unlisted token such as 'mesh_mcp_server' or 'url' reads 'Mesh mcp server' or 'Url'.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "The fallback label maker lowercases acronyms ('Mesh mcp server', 'Url')",
+      "trigger": "Show any token that has no entry in a label table, for example a mesh capability named mesh_mcp_server.",
+      "expected": "Established names and acronyms (MCP, URL, API, OAuth) keep their case.",
+      "actual": "humanizeToken lowercases everything after the first letter; mesh entry names use it directly (mesh-capability-labels.ts:19).",
+      "evidence": [
+        "packages/mission-control-shared/src/content/status-vocabulary.ts:129",
+        "apps/mission-control-next/src/cockpit/areas/library/mesh-capability-labels.ts:19"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "packages/mission-control-shared/src/content/status-vocabulary.ts"
+    }
+  },
+  {
+    "priorId": "GL-29",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ProjectDetail.tsx:263",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryNoteEditor.tsx:277",
+      "apps/mission-control-next/src/cockpit/areas/system/HealthBackupAction.tsx:174"
+    ],
+    "note": "git grep finds no 'Review apply', 'Confirm deny' or similar; second-step buttons now name the verb and object ('Confirm archive', 'Confirm backup'). 'Review answer' is a composer feature name, not a two-step button."
+  },
+  {
+    "priorId": "GL-30",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:6",
+      "apps/mission-control-next/src/cockpit/styles/cockpit-tokens.css:16",
+      "docs/review/2026-11-usability/evidence/prior/b4-token-contrast.json"
+    ],
+    "note": "Buttons, selects, inputs and textareas take --cockpit-border-control (the muted text colour): 5.7 to 6.1:1 in light and 7.8 to 9.2:1 in dark against canvas and raised. The translucent decorative borders (1.3 to 2.8:1) are not used as control boundaries."
+  },
+  {
+    "priorId": "GL-31",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ProjectDetail.tsx:263",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryNoteEditor.tsx:277",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryProposals.tsx:176",
+      "apps/mission-control-next/src/cockpit/areas/system/HealthBackupAction.tsx:170"
+    ],
+    "note": "Four confirm buttons now use variant primary (backup, board save, archive in Citadel, local runtime). Three still use the default secondary, identical to their Cancel: project archive, note save/archive, memory promote/reject. Counted over the areas folder; other commit buttons not audited.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Some confirm buttons look identical to Cancel",
+      "trigger": "Archive a project from Chat > Projects, and open the review dialog in Library > Notes or Memory proposals.",
+      "expected": "The commit button is primary (or danger for a destructive action) and Cancel is secondary.",
+      "actual": "ProjectDetail.tsx:263, LibraryNoteEditor.tsx:277 and LibraryMemoryProposals.tsx:176 render a default Button next to a default Cancel.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/chat/ProjectDetail.tsx:263",
+        "apps/mission-control-next/src/cockpit/areas/library/LibraryNoteEditor.tsx:277",
+        "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryProposals.tsx:176"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/chat/ProjectDetail.tsx"
+    }
+  },
+  {
+    "priorId": "GL-32",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:77",
+      "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:81",
+      "docs/review/2026-11-usability/evidence/prior/b4-live-measure.json"
+    ],
+    "note": "An unlayered reduced-motion rule sets animation: none !important on every cockpit element, beating the older 0.01ms reset in the base layer (cockpit.css:198); the sandbox had no running animation to compare, and status stays as text."
+  },
+  {
+    "priorId": "GL-33",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:43",
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:252",
+      "docs/review/2026-11-usability/evidence/prior/b4-GL-33-see-history.png"
+    ],
+    "note": "The shell-scoped focus ring is unlayered and !important so no other rule strips it, and the tab strip (a scroll container) draws its ring inside with outline-offset -2px. A geometric check of Work flagged only the tab strip and a last link at the scroll edge. The geometric check also flagged 'See History' (clipped by main#main-content); live at maximum scroll its ring (bottom 880) sits inside the scroller (bottom 900), so that flag was not a real clip (b4-GL-33-see-history.png)."
+  },
+  {
+    "priorId": "GL-34",
+    "verdict": "obsolete",
+    "evidence": [
+      "DESIGN.md:30",
+      "DESIGN.md:48",
+      "docs/review/2026-11-usability/evidence/prior/b4-token-contrast.json"
+    ],
+    "note": "DESIGN-DECISION: The surface values (canvas, raised, sunken, overlay) are exactly the hex pairs in DESIGN.md's colour table (line 30) and line 48 specifies 'Flat surfaces with hairline borders', so the flat ladder (dark canvas to sunken 1.06:1) is the documented design; separation comes from borders."
+  },
+  {
+    "priorId": "GL-35",
+    "verdict": "obsolete",
+    "evidence": [
+      "DESIGN.md:31",
+      "docs/review/2026-11-usability/evidence/prior/b4-token-contrast.json"
+    ],
+    "note": "DESIGN-DECISION: The text tiers are exactly the values in DESIGN.md's colour table (line 31). The current values are the documented design and the readability floor is met: every tier is at least 5.2:1 (light) and 7.8:1 (dark) on the surfaces, above the 4.5:1 body-text rule."
+  },
+  {
+    "priorId": "GL-36",
+    "verdict": "open",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b4-area-measure.json",
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:18"
+    ],
+    "note": "Measured by characters: 12 px and 13 px text is 86.9% (Inbox), 89.9% (Capabilities), 92.0% (Settings), 94.2% (Library), 95.5% (Chat), 99.2% (System) and 99.7% (Work) of visible text; 14 px is 0% on Work. This is the DESIGN.md-scale body size, so this is a density observation, not a measured safety-copy problem.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Almost all body and safety copy is 12 or 13 px",
+      "trigger": "Open any Cockpit area at 100% zoom and measure computed font sizes of visible text.",
+      "expected": "Primary and safety copy reads at 14 px or larger, with comfortable line length.",
+      "actual": "12 px and 13 px make up 87 to 99.7% of characters on the landing pages (Work 99.7%, System 99.2%, Chat 95.5%, Library 94.2%, Settings 92.0%, Capabilities 89.9%, Inbox 86.9%); no safety-relevant copy was shown to fall below the design scale.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/b4-area-measure.json",
+        "apps/mission-control-next/src/cockpit/styles/cockpit.css:18"
+      ],
+      "foundBy": "live",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/styles/cockpit.css"
+    }
+  },
+  {
+    "priorId": "GL-37",
+    "verdict": "partial",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b4-area-measure.json",
+      "apps/mission-control-next/src/cockpit/ui/AreaHeader.tsx:49",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatSessionControls.tsx:21",
+      "apps/mission-control-next/src/cockpit/areas/settings/SettingsArea.tsx:311",
+      "apps/mission-control-next/src/cockpit/areas/settings/AppearanceSettings.tsx:129"
+    ],
+    "note": "Area pages share one h1 (24 px) and the range narrowed (h2 13 to 16 px, h3 13 to 16 px, h1 14 to 24 px). Chat's h1 is 14 px, and Settings has h2 at 14 px above h3 at 16 px, so a lower level is larger.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Heading sizes still do not follow their levels (Settings h3 larger than h2; Chat h1 smaller than page h2s elsewhere)",
+      "trigger": "Open Settings > Appearance and Chat; read computed heading sizes.",
+      "expected": "h1 > h2 > h3 in size on every page.",
+      "actual": "Settings: h2 text-base (14 px) and h3 text-md (16 px). Chat h1 is text-base (14 px) against 24 px on other areas.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/b4-area-measure.json",
+        "apps/mission-control-next/src/cockpit/areas/settings/SettingsArea.tsx:311",
+        "apps/mission-control-next/src/cockpit/areas/settings/AppearanceSettings.tsx:129"
+      ],
+      "foundBy": "live",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/ui/AreaHeader.tsx"
+    }
+  },
+  {
+    "priorId": "GL-38",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/Callout.tsx:14",
+      "apps/mission-control-next/src/cockpit/app/ScopeSwitcherPicker.tsx:43"
+    ],
+    "note": "A Callout primitive now exists (icon, tone, role by tone, quiet option) with 227 uses, but 139 role=\"alert\" lines are still bare coloured text (263 role=alert lines in total, up from about 220).",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "Many errors are still bare red text with role=alert instead of the shared Callout",
+      "trigger": "Trigger a scope-switch error or any inline failure message; inspect the element.",
+      "expected": "Errors use Callout (icon, tone, announced once); routine states are not alerts.",
+      "actual": "139 lines pair role=\"alert\" with text-status-failed and no icon (for example ScopeSwitcherPicker.tsx:43).",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/ScopeSwitcherPicker.tsx:43",
+        "apps/mission-control-next/src/cockpit/ui/Callout.tsx:14"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/ui/Callout.tsx"
+    }
+  },
+  {
+    "priorId": "GL-39",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/cockpit-tokens.css:29",
+      "apps/mission-control-next/src/cockpit/ui/DialogRuntime.tsx:25",
+      "apps/mission-control-next/src/cockpit/ui/Dialog.tsx:46"
+    ],
+    "note": "Both dialog implementations (Radix overlay and native dialog) use one --cockpit-scrim token, defined once for both themes and not lightened in light mode. Anatomy was read, not compared pixel by pixel."
+  },
+  {
+    "priorId": "GL-40",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b4-scheme-forced.json"
+    ],
+    "note": "Live: html and a native select compute color-scheme dark in the dark theme and light in the light theme (also set before paint in index.html)."
+  },
+  {
+    "priorId": "GL-41",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:213",
+      "apps/mission-control-next/src/cockpit/app/inspector.tsx:167"
+    ],
+    "note": "CSS and JS both use range media queries on the same px values ((width < 640px), (width < ${RESPONSIVE_BREAKPOINTS.wide}px)). They complement Tailwind's min-width: 40rem exactly at the default 16 px root font size; with a changed root size the rem and px edges would differ by a few pixels. Code read."
+  },
+  {
+    "priorId": "GL-42",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/Button.tsx:8",
+      "apps/mission-control-next/src/cockpit/ui/IconButton.tsx:13",
+      "apps/mission-control-next/src/cockpit/styles/gateway-access.css:12"
+    ],
+    "note": "A shared Button (4 variants, 2 sizes) and IconButton exist and most dialogs use them, but 86 raw <button> elements remain under areas, app and ui, and literal border-radius values (0.4rem, 0.6rem, 0.375rem, 0.75rem, 999px) remain in chat CSS files and gateway-access.css.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Raw buttons and literal radii still sit beside the shared Button and radius tokens",
+      "trigger": "git grep '<button' and 'border-radius:' under the cockpit folder.",
+      "expected": "Action controls come from the shared Button; radii come from tokens.",
+      "actual": "86 raw <button> elements; 8+ literal radii in chat-build-editor.css, chat-feature-settings.css, gateway-access.css.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/ui/Button.tsx:8",
+        "apps/mission-control-next/src/cockpit/styles/gateway-access.css:12"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/ui/Button.tsx"
+    }
+  },
+  {
+    "priorId": "GL-43",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:437",
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:213"
+    ],
+    "note": "Cockpit stylesheets now restyle 67 distinct classic/shared class names (gc-, mc-, mc-next-, mc-gc-) against 91 in the old count, for example .mc-assistant-renderer and .mc-dialog-content. Not operator-visible.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "The Cockpit still overrides 67 Classic/shared class names with selectors of different strength",
+      "trigger": "git grep the cockpit css files for .gc-, .mc-, .mc-next- selectors.",
+      "expected": "Cockpit styles depend on shared owners through documented hooks, not selector overrides.",
+      "actual": "67 names still restyled from cockpit.css and area CSS files, across layered and unlayered rules.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/styles/cockpit.css:437"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/styles/cockpit.css"
+    }
+  },
+  {
+    "priorId": "GL-44",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/IconButton.tsx:13",
+      "apps/mission-control-next/src/cockpit/ui/Menu.tsx:171",
+      "apps/mission-control-next/src/cockpit/styles/accessible-controls.css:51"
+    ],
+    "note": "IconButton and Button dim and show not-allowed when disabled, and disabled menu items are marked data-disabled, styled muted and skipped by the click handler."
+  },
+  {
+    "priorId": "GL-45",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/IconButton.tsx:12",
+      "apps/mission-control-next/src/cockpit/app/CollapsedStreamIndicator.tsx:6"
+    ],
+    "note": "A shared Tooltip is now used in 7 places (including the collapsed rail stream indicator), but IconButton still sets title as its hint and about 345 other title= attributes remain, so touch users see no hint.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "Icon-button hints are native title tooltips that never show on touch or keyboard",
+      "trigger": "On a phone or with the keyboard only, focus an icon-only button such as 'Collapse sidebar'.",
+      "expected": "A shared tooltip shows on focus and long-press.",
+      "actual": "IconButton sets title={label}; the Tooltip primitive is used in 7 places only.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/ui/IconButton.tsx:12"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/ui/IconButton.tsx"
+    }
+  },
+  {
+    "priorId": "GL-46",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/mission-control-shared/src/components/chat/LazyOpenUiStructuredBlock.tsx:4",
+      "docs/review/2026-11-usability/evidence/prior/b4-live-measure.json"
+    ],
+    "note": "The OpenUI parser and renderer load through React.lazy only when a generated block is shown; live, loading /inbox and /system requested no openui or lang-core modules."
+  },
+  {
+    "priorId": "GL-47",
+    "verdict": "cannot-check",
+    "evidence": [
+      "packages/contracts/package.json:7"
+    ],
+    "note": "packages/contracts/package.json now has sideEffects: false, but whether the production bundle drops the unused schema graph needs a build and a bundle analysis; the sandbox is a dev server (it loads zod either way) and builds are out of scope here."
+  },
+  {
+    "priorId": "GL-48",
+    "verdict": "open",
+    "evidence": [
+      "scripts/check-mission-control-next-budgets.mjs:85",
+      "apps/mission-control-next/src/main.tsx:48"
+    ],
+    "note": "The budget still measures the one entry script named in index.html (450 KB cap). That script is the small main.tsx stub, which loads the Cockpit with import(\"./cockpit-entry\"), so the Cockpit and Chat chunks are only checked by the 900 KB per-lazy-chunk cap.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "The bundle budget check measures the entry stub, not the Cockpit that loads first",
+      "trigger": "Read scripts/check-mission-control-next-budgets.mjs and main.tsx.",
+      "expected": "The budget counts the initial Cockpit chunks (including Chat) or their transfer size.",
+      "actual": "entryScriptSize is the size of the index.html module script only; cockpit-entry is a dynamic import and is checked only against the lazy-chunk limit.",
+      "evidence": [
+        "scripts/check-mission-control-next-budgets.mjs:85",
+        "apps/mission-control-next/src/main.tsx:48"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "scripts/check-mission-control-next-budgets.mjs"
+    }
+  },
+  {
+    "priorId": "GL-50",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:1"
+    ],
+    "note": "cockpit.css is still a bare @import \"tailwindcss\" with no source() or @source, so Tailwind scans its default base (the whole app folder, including Classic, tests and mockups). The shared package uses no Tailwind classes, so no styling is missing; the cost is build work and extra CSS.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Tailwind still scans the whole app folder (Classic, tests, mockups)",
+      "trigger": "Read the first line of cockpit.css; there is no @source or source(none).",
+      "expected": "The scan lists the real Cockpit sources, with visual regression proof.",
+      "actual": "Unscoped @import \"tailwindcss\" generates utilities for classes used only in Classic, tests or mockups.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/styles/cockpit.css:1"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/styles/cockpit.css"
+    }
+  }
+]

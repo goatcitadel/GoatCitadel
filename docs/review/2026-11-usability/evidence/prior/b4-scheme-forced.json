@@ -1,0 +1,24 @@
+{
+ "colorScheme_light": {
+  "html": "light",
+  "dataTheme": "light",
+  "selectScheme": "light"
+ },
+ "colorScheme_dark": {
+  "html": "dark",
+  "dataTheme": "dark",
+  "selectScheme": "dark"
+ },
+ "forcedColorsMatches": true,
+ "forced": {
+  "currentOutline": "solid rgb(26, 235, 255)",
+  "currentDecoration": "underline",
+  "dots": [
+   {
+    "cls": "inline-flex items-center gap-1 rounded-full border px-2 py-0",
+    "bg": "rgba(0, 0, 0, 0.1)",
+    "border": "1px"
+   }
+  ]
+ }
+}

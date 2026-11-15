@@ -1,0 +1,52 @@
+{
+ "cap /capabilities/skills": {
+  "start": "/capabilities/skills",
+  "s0": {
+   "url": "/capabilities/skills",
+   "len": 2
+  },
+  "afterOpen": {
+   "url": "/capabilities/skills?item=skill%3Abundled%3Adocumentation&shell=cockpit",
+   "len": 3
+  },
+  "afterBack": {
+   "url": "/capabilities/skills",
+   "len": 3
+  },
+  "afterForward": {
+   "url": "/capabilities/skills?shell=cockpit",
+   "len": 3
+  },
+  "panelOpenAfterForward": true
+ },
+ "cap /capabilities/skills?shell=cockpit": {
+  "start": "/capabilities/skills?shell=cockpit",
+  "s0": {
+   "url": "/capabilities/skills?shell=cockpit",
+   "len": 2
+  },
+  "afterOpen": {
+   "url": "/capabilities/skills?item=skill%3Abundled%3Adocumentation&shell=cockpit",
+   "len": 3
+  },
+  "afterBack": {
+   "url": "/capabilities/skills?shell=cockpit",
+   "len": 3
+  },
+  "afterForward": {
+   "url": "/capabilities/skills?shell=cockpit",
+   "len": 3
+  },
+  "panelOpenAfterForward": true
+ },
+ "work scroll nth5": {
+  "before": 600,
+  "linkWasVisible": true,
+  "after": 0
+ },
+ "work scroll nth12": {
+  "before": 600,
+  "linkWasVisible": true,
+  "after": 0
+ }
+}

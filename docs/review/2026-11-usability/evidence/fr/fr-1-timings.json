@@ -1,0 +1,6 @@
+{
+  "firstPaintToUsableChatDevServerColdMs": 7436,
+  "firstRunPageReadyMs": 904,
+  "claudeCliPath": { "clicksFromFirstPaint": 10, "steps": ["Return to setup", "Use a cloud provider", "choose Claude Code CLI", "Add Claude Code CLI", "Apply exact change", "Confirm model", "Apply exact change", "Continue to safety", "Keep current rule", "Finish setup and open Chat"], "addAndVerifyMs": 5631, "confirmDefaultMs": 2500, "wholeLastLegMs": 13400 },
+  "note": "the Claude CLI path needs no secret; it worked because the CLI is signed in on this PC"
+}

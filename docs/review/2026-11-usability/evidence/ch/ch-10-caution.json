@@ -1,0 +1,25 @@
+{
+  "tool": "code_mode.request",
+  "tab2Requests": [],
+  "serverStatusAfterDeny": "rejected",
+  "serverStatusAfterStale": "rejected",
+  "console1": [
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/chat/messaging net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "PUT http://127.0.0.1:55150/api/v1/notifications/presence net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/events/stream net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/chat/sessions net::ERR_ABORTED"
+    }
+  ],
+  "console2": []
+}

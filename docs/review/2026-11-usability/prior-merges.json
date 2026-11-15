@@ -1,0 +1,43 @@
+{
+  "merge": [
+    {
+      "primary": "SY-02",
+      "with": ["OL-06"],
+      "reason": "Same defect on the same screen: OL-06 is the fresh-install re-test the verification-gaps report queued for the stale-backup warning SY-02 reported."
+    },
+    {
+      "primary": "CH-R09",
+      "with": ["CHAT-ORG-SAVE-001", "CH-24~fu206"],
+      "reason": "Same defect on the Chat Folder and Tags form: the save result is inferred from the draft, so success can show after the metadata write failed. CH-24 (older audit) is the same item left partial for the save-result half."
+    }
+  ],
+  "seeAlso": [
+    { "ids": ["N-03", "ST-11"] },
+    { "ids": ["SY-03", "SY-04~fu206"] },
+    { "ids": ["ST-22~fu206", "ST-23"] },
+    { "ids": ["ST-07", "ST-01~fu206"] },
+    { "ids": ["LB-R01", "LB-05~fu206"] },
+    { "ids": ["CH-09", "CH-R03"] },
+    { "ids": ["N-11", "PR-settings-integrations"] },
+    { "ids": ["N-10", "CH-27~fu206"] },
+    { "ids": ["ST-16~fu206", "APPEARANCE-SAVE-001"] },
+    { "ids": ["NV-19", "WORK-INDICATOR-001"] },
+    { "ids": ["LB-01", "LIBRARY-MEMORY-EMPTY-COVERAGE-001"] },
+    { "ids": ["DOC-TRUNC-001", "OL-13"] },
+    { "ids": ["DESKTOP-008", "OL-19"] },
+    { "ids": ["WEBSEARCH-SAVE-001", "OL-17"] },
+    { "ids": ["NV-05", "OL-03"] },
+    { "ids": ["CH-17", "OL-03"] },
+    { "ids": ["NV-20", "OL-07"] },
+    { "ids": ["GL-63", "OL-07"] },
+    { "ids": ["GL-13", "OL-07"] },
+    { "ids": ["CH-12", "OL-02"] },
+    { "ids": ["NV-02", "OL-02"] },
+    { "ids": ["NV-07", "OL-05"] },
+    { "ids": ["CH-09", "OL-04"] },
+    { "ids": ["CH-29", "OL-04"] },
+    { "ids": ["CH-32", "OL-04"] },
+    { "ids": ["CH-50", "OL-04"] },
+    { "ids": ["GL-01", "OL-04"] }
+  ]
+}

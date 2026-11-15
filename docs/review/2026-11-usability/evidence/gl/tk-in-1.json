@@ -1,0 +1,34 @@
+{
+  "before": "6",
+  "cardCount": 10,
+  "runCodeCards": 4,
+  "cautionApproveFirstMs": 183,
+  "cautionStatuses": {
+    "caution": "approved",
+    "caution2": "pending"
+  },
+  "afterCaution": "5",
+  "otherTabAfterCaution": "5",
+  "shellCards": 6,
+  "panelText": "Inbox\n\nDecisions and work that need your attention in this workspace.\n\nRefresh\n\nApproved Run code. A",
+  "panelHasSafeBadge": true,
+  "dangerApproveFirstMs": 193,
+  "dangerApproveClicks": 3,
+  "afterDanger": "4",
+  "dangerAfterText": [
+    "Approved Review shell exec. Approval effects settled. Linked work has its own execution outcome.\n",
+    "Decision recorded: Approved. Approval effects settled. Linked work has its own execution outcome.\n",
+    "Approved\nCommand: pnpm test",
+    "Approved Review shell exec."
+  ],
+  "dangerStatuses": {
+    "danger": "pending"
+  },
+  "shellCards2": 4,
+  "denyMs": 22,
+  "afterDeny": "3",
+  "denyStatuses": {
+    "danger": "pending"
+  },
+  "log": []
+}

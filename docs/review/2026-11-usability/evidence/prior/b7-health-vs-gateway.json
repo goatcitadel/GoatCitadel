@@ -1,0 +1,77 @@
+{
+ "measuredAt": "2026-11-15T05:04:26.906Z",
+ "gateway": {
+  "daemonStatus": {
+   "running": true,
+   "state": "running",
+   "supported": false,
+   "controllable": false
+  },
+  "daemonDiagnosticSeverities": [
+   "gateway_process_current:pass",
+   "gateway_port_inspection:info"
+  ],
+  "diagnostics": [],
+  "database": {
+   "reachable": true,
+   "issues": 0
+  },
+  "backups": {
+   "items": 0,
+   "latest": null
+  },
+  "remoteWorkerItems": 0,
+  "inboxBackupTrustItems": 0
+ },
+ "page": {
+  "heading": "1 check needs attention",
+  "cards": [
+   {
+    "title": "Runtime service",
+    "badge": "Unavailable",
+    "detail": "Service control is unavailable on this host."
+   },
+   {
+    "title": "Backups",
+    "badge": "No backup yet",
+    "detail": "No backup has been published yet. Back up now creates a host-wide backup. Scheduling and offline restore remain separate operator workflows."
+   },
+   {
+    "title": "Managed local models",
+    "badge": "Not set up",
+    "detail": "No managed local runtime is enabled. Cloud provider health is separate."
+   },
+   {
+    "title": "Channels",
+    "badge": "Not set up",
+    "detail": "No channel connection is enabled."
+   },
+   {
+    "title": "Integrations",
+    "badge": "Not set up",
+    "detail": "No non-channel integration connection is enabled."
+   },
+   {
+    "title": "Desktop updates",
+    "badge": "Desktop app only",
+    "detail": "Update status is available in the installed Windows app."
+   },
+   {
+    "title": "Remote workers",
+    "badge": "Not set up",
+    "detail": "No worker is registered in this workspace."
+   },
+   {
+    "title": "GoatCitadel server",
+    "badge": "Responding",
+    "detail": "The health summary is responding."
+   },
+   {
+    "title": "Database",
+    "badge": "Reachable",
+    "detail": "The configured store is reachable with no reported issues."
+   }
+  ]
+ },
+ "comparison": "Gateway reports the server running with no warning or critical diagnostic, a reachable database, no backups and no workers. The page agrees on database, backups and workers, but headlines 1 check needs attention for Runtime service: Unavailable, which the page code maps to a waiting tone (health-overview.ts:117) only because service control is unsupported."
+}

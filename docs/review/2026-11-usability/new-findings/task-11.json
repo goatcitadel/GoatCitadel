@@ -1,0 +1,236 @@
+[
+  {
+    "area": "settings",
+    "priorIds": [],
+    "journey": "ST-1 Add a provider with a key, pick a default model, send a Chat message with it",
+    "severity": "blocker",
+    "kind": "bug",
+    "title": "Typing one character into the API credential box crashes the Settings page: confirmed on the development build; a blocker if it reproduces on a production build, which was not run",
+    "trigger": "Settings > Models > Providers & models > Advanced provider configuration > Replace API credential > Open secure input > click the credential box and type any character (reproduced on the sandbox's dev-server build).",
+    "expected": "The characters appear (dots) and 'Submit securely' becomes available.",
+    "actual": "Confirmed on the development build; a blocker if it reproduces on a production build, which was not run. On the first keystroke the whole Settings area is replaced by 'Settings couldn't be shown' (Try again / Reload app / Go to Chat) and the dialog is gone; whether Try again recovers was not captured. Console: 'TypeError: Cannot read properties of null (reading 'value')' from the dialog body. Cause (lines opened by the reviewer): ChatChangePlanActionDialogBody.tsx:107-113 reads event.currentTarget.value inside the functional setSecureValues updater instead of capturing it to a local first (the other handlers in the file capture first). React is 19.2.5 and nulls the synthetic currentTarget after the listener returns; when React cannot use its eager-state shortcut (pending lanes on the fiber or its alternate, common right after the parent re-renders when the lazily loaded body mounts and calls onReady) the updater runs during render, after dispatch, and throws. That bookkeeping is the same in development and production, so production is likely, not certain; StrictMode (apps/mission-control-next/src/cockpit-entry.tsx:13) only repeats a call that is already late. Tests missed it: ChatChangePlanActionDialog.test.tsx:269 calls input.props.onChange with a hand-built object whose currentTarget is never nulled. Reach: ChatChangePlanActionDialog (which renders this body) is the only key entry in the Cockpit, used by the guided model setup (GuidedModelPlanDialog.tsx:32, first run), Settings > Models (ProviderConnectionSettings.tsx:376, ProviderManagementSettings.tsx:347, ProviderRoutingSettings.tsx:237) and LibraryCandidatePlan.tsx:193; the only routes around it are the Classic provider panel's plain field (reachability not verified) or setting the provider's environment variable outside the app. Not a keychain artifact: the disabled key boxes seen elsewhere are the Web & Search key fields (WebSearchKeys.tsx), which check keychain availability; the provider dialog has no such check and its field is enabled. This sandbox could not show whether submitting would then hit a keychain failure. The single settling check: build the UI, serve the output, open Models > Providers & models > Replace API credential > Open secure input, type one character.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/st/st-1-secure-input-dialog.png",
+      "docs/review/2026-11-usability/evidence/st/st-1-secure-typed.png",
+      "docs/review/2026-11-usability/evidence/st/st-1-secure-input-crash.json",
+      "packages/mission-control-shared/src/components/chat/ChatChangePlanActionDialogBody.tsx:107",
+      "packages/mission-control-shared/src/components/chat/ChatChangePlanActionDialog.test.tsx:269",
+      "apps/mission-control-next/src/cockpit-entry.tsx:13"
+    ],
+    "foundBy": "both",
+    "confidence": "likely",
+    "owner": "packages/mission-control-shared/src/components/chat/ChatChangePlanActionDialogBody.tsx"
+  },
+  {
+    "area": "settings",
+    "priorIds": [],
+    "journey": "ST-2 Change a setting that needs approval: the approval appears in place, one click, applied without a second step",
+    "severity": "friction",
+    "kind": "approval-friction",
+    "title": "Safety > Tools approval rule and filesystem tool access do not approve in place: they send the operator to the Inbox, or ask for a separate 'Continue approved change'",
+    "trigger": "Settings > Safety > Tools: change 'Approval rule' (Ask for risky work to Ask every time) and press Save approval rule; or set a filesystem tool (fs.copy) to Available and press Apply fs.copy. Default workspace.",
+    "expected": "The approval opens where the change was made, one click approves it, and the setting is applied with nothing left to press (this is how the Firecrawl, Claude CLI and reasoning controls behave: 3 clicks, dialog in 0.25 to 1.8 s, applied 0.6 to 0.9 s after Approve once).",
+    "actual": "Approval rule: after Save the card says 'Waiting on you . Change tool approval mode from approve_risky to approve_all' (raw setting ids) with 'Review required approval' and 'Continue approved change'. 'Review required approval' navigates away and first raises an 'Unsaved changes' dialog (Save and continue / Keep draft and close / Discard changes / Cancel); after 'Keep draft and close' the operator lands in the Inbox and must press Approve once there: 4 clicks after choosing the value, 3 screens, about 6 s. Filesystem access: no dialog opens on its own; a toast offers 'Open Inbox item' and the card offers 'Review approval' plus 'Continue approved change'. The code shows the better pattern already exists (GovernedSettingParts renders the in-place dialog and hides Continue) but ApprovalModeControl and the filesystem card still use the link and Continue buttons. Same family as U-CP-012 (a tool group goes to the Inbox the same way).",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/st/st-2-default-approval-1.png",
+      "docs/review/2026-11-usability/evidence/st/st-2-default-inplace-waiting.png",
+      "docs/review/2026-11-usability/evidence/st/st-2-default-inplace-dialog.png",
+      "docs/review/2026-11-usability/evidence/st/st-2-default-after-review-click.png",
+      "docs/review/2026-11-usability/evidence/st/st-6-allow.png",
+      "docs/review/2026-11-usability/evidence/st/st-2-timings.json",
+      "apps/mission-control-next/src/cockpit/areas/settings/ApprovalModeControl.tsx:173",
+      "apps/mission-control-next/src/cockpit/areas/settings/ApprovalModeControl.tsx:182"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/ApprovalModeControl.tsx",
+    "journeys": [
+      "ST-6 Permissions, Trust and policy: find out why a tool was blocked and allow it"
+    ]
+  },
+  {
+    "area": "settings",
+    "priorIds": [],
+    "journey": "ST-3 Save a provider with no changes; save two settings in a row",
+    "severity": "stall",
+    "kind": "missing-state",
+    "title": "A change waiting for approval vanishes from the Settings page after a reload, and the next save is refused with 'Settings changed elsewhere' or 'Save outcome is uncertain' and no pointer to the waiting approval",
+    "trigger": "Models: untick 'Keep one Claude Code process between tool steps', Save setting, press Escape on the approval dialog, reload the page, tick the box again, Save setting. Same with Safety > Tools approval rule, and with 'Replace API credential' pressed a second time after a reload.",
+    "expected": "The page shows the change that is still waiting (with its approval one click away), or the refusal says 'one change is already waiting for approval' and links to it.",
+    "actual": "After the reload the page shows no waiting change. The next save returns 409 WRITE_CONFLICT 'Another active Change Plan already owns this target.' The Models page words it 'Settings changed elsewhere. Your draft is preserved for review.' (nothing changed elsewhere), Safety > Tools words it 'Save outcome is uncertain. Further saves are locked in this app session; inspect Settings activity before continuing.' and Replace API credential says 'Change creation outcome is uncertain. Inspect provider activity...' then, after 'Check outcome', 'GoatCitadel released this change after an error, so it did not run again' while the original plan stays open. The way out is the Inbox, which none of the messages name; the plan lasts about 15 minutes. This is the same family as the old 'unchanged provider save returns 409' finding, but the no-change provider save itself was fine: its Review button is simply disabled with no sentence saying why.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/st/st-3-closed-dialog.png",
+      "docs/review/2026-11-usability/evidence/st/st-3-pending-plan-conflict.png",
+      "docs/review/2026-11-usability/evidence/st/st-3-pending-plan-conflict.json",
+      "docs/review/2026-11-usability/evidence/st/st-2-approval-rule-after-save.png",
+      "docs/review/2026-11-usability/evidence/st/st-3-provider-unchanged-dialog.png",
+      "apps/mission-control-next/src/cockpit/areas/settings/use-provider-connection-editor.ts:157"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/GovernedSettingParts.tsx",
+    "journeys": [
+      "ST-2 Change a setting that needs approval: the approval appears in place, one click, applied without a second step"
+    ]
+  },
+  {
+    "area": "settings",
+    "priorIds": [],
+    "journey": "ST-1 Add a provider with a key, pick a default model, send a Chat message with it",
+    "severity": "friction",
+    "kind": "approval-friction",
+    "title": "Adding a provider profile takes two confirmations and then a 'needs your attention - manual required' card, although the profile holds no secret",
+    "trigger": "Models > Advanced provider configuration > Add provider profile > fill id, label, URL > Review provider profile > Apply reviewed provider profile.",
+    "expected": "Review the profile once, apply it, see it in the provider list.",
+    "actual": "Review provider profile (dialog 1) > Apply reviewed provider profile > a card 'Add <name>' 'Awaiting confirmation' with 'Review and confirm' > dialog 2 'Confirm profile' with Apply exact change > the profile exists, but a card 'Add <name> needs your attention - MANUAL REQUIRED' with Details and Dismiss remains. No sentence says what is manual or that the next step is the credential (the page's earlier copy only says credentials are added separately). 4 clicks after the form, three dialogs/cards, for a safe, secret-free change.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/st/st-1-add-provider-review.png",
+      "docs/review/2026-11-usability/evidence/st/st-1-models-open-plans.png",
+      "docs/review/2026-11-usability/evidence/st/st-1-change-plan-dialog.png",
+      "docs/review/2026-11-usability/evidence/st/st-1-profile-applied.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/ProviderManagementSettings.tsx"
+  },
+  {
+    "area": "settings",
+    "priorIds": [],
+    "journey": "ST-1 Add a provider with a key, pick a default model, send a Chat message with it",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "Guided model setup alternates between 'Done / Ready' and 'Not verified - the last check is stale' on consecutive page loads with nothing changed",
+    "trigger": "Open Settings > Models > Providers & models repeatedly (no action between loads).",
+    "expected": "One stable verdict for the default model until something changes.",
+    "actual": "Some loads show three green 'Done' steps with Connection 'Ready'; the next load shows Step 1 'Current', 'The last check of Verification stub (loopback) ... is stale. Check the connection again.', Steps 2 and 3 'Not started', and a bright 'Check connection' button. Seen on 7 loads in this session, alternating. An operator is told to re-verify a working provider. Caveat: the stale-state loads also showed 'Showing a stale model catalog while remote provider refresh runs in background', a loading transient my script may have caught; the alternation may be a timing effect of when the page was captured. Not re-run.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/st/st-1-advanced-model-settings.png",
+      "docs/review/2026-11-usability/evidence/st/st-1-models-open-plans.png",
+      "docs/review/2026-11-usability/evidence/st/st-9-crawl-_settings_models.png"
+    ],
+    "foundBy": "live",
+    "confidence": "likely",
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/use-guided-model-setup.ts"
+  },
+  {
+    "area": "settings",
+    "priorIds": [],
+    "journey": "ST-1 Add a provider with a key, pick a default model, send a Chat message with it",
+    "severity": "friction",
+    "kind": "dead-end",
+    "title": "When the default provider cannot be reached, Chat says 'The connection dropped. Check the gateway or network connection' with no 'Open model providers' link, and System > Health has no model check",
+    "trigger": "Make a provider whose URL answers nothing the default (here http://127.0.0.1:9 with model ut11-model, through Models > Advanced provider configuration > Change default model), start a new Chat, send 'hello'. Then open System > Health.",
+    "expected": "Chat names the provider that did not answer and offers 'Open model providers'; Health lists the default model's provider as a check.",
+    "actual": "The turn fails in about 2 s with 'The request was interrupted before the turn could finish. Retry once and check the gateway connection if it happens again' and a card 'The connection dropped - Check the gateway or network connection, then retry the turn.' with Retry. The 'Open model providers' link exists only for sign-in and billing failures. Retry cannot help. The conversation header and composer chip do name the provider (ut11-local-unreachable), so the defect is the generic wording and the missing link (ChatTurnFailureCard.tsx:31 limits it to auth_required and provider_billing). Health has no model or provider check; its one attention item in the capture is the known permanent runtime-service warning. Also Settings > Models > Local AI: Check server on an unreachable URL answers only 'Live catalog unavailable; template aliases are not selectable.', never 'could not reach <url>'. Reverted afterwards: default model restored and a normal message answered.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/st/st-s4-chat-after.png",
+      "docs/review/2026-11-usability/evidence/st/st-s4-health.png",
+      "docs/review/2026-11-usability/evidence/st/st-s4-chat-revert-ok.png",
+      "docs/review/2026-11-usability/evidence/st/st-4-check-server-unreachable.png",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnFailureCard.tsx:31"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnFailureCard.tsx"
+  },
+  {
+    "area": "settings",
+    "priorIds": [],
+    "journey": "ST-6 Permissions, Trust and policy: find out why a tool was blocked and allow it",
+    "severity": "friction",
+    "kind": "dead-end",
+    "title": "A blocked tool names no rule and links nowhere: 'Blocked by policy or runtime guard' in Chat, a 'tool was blocked' card with no Settings link, and a Trust and policy page whose Blocked rows are only skills",
+    "trigger": "A Chat turn whose tool is denied (for example a tool in Settings > Safety > Tools 'Global filesystem tool access' set to Denied); then look for the reason in Chat and in Settings > Safety > Trust & policy.",
+    "expected": "The blocked tool row says which rule blocked it (global deny, profile limit, ward, tool group) and links to that Settings control.",
+    "actual": "Not reproduced live (the stub model cannot be made to call a denied tool). Code: the tool row falls back to 'Blocked by policy or runtime guard.' and the failure card for tool_blocked has no link, because the Settings link is limited to sign-in and billing failures. Trust & policy filtered to 'Blocked' showed 4 rows, all skills (genie-npu-ir20, meeting-notes), none a tool. The five-place precedence text on Safety explains the rules in general but cannot be reached from a blocked turn. Allowing a tool was tested: fs.copy Denied to Available took Apply, approval (see the approval-friction finding), and back to Denied applied at once with no approval.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/st/st-6-trust-blocked.png",
+      "docs/review/2026-11-usability/evidence/st/st-6-allow.png",
+      "packages/mission-control-shared/src/components/chat/ChatToolActivity.tsx:152",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnFailureCard.tsx:76"
+    ],
+    "foundBy": "code",
+    "confidence": "likely",
+    "owner": "packages/mission-control-shared/src/components/chat/ChatToolActivity.tsx"
+  },
+  {
+    "area": "settings",
+    "priorIds": [],
+    "journey": "ST-8 Web search and Firecrawl: set a base URL and allowlist, run a search from Chat",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "The Firecrawl page's own allowlist check can disagree with the Gateway's, and then it shows 'Not allowlisted' with no add button and no link to where the allowlist is",
+    "trigger": "Capabilities > Connectors > Advanced setup > Web & Search: set Self-hosted base URL to http://127.0.0.1:9, Save Firecrawl, approve, Test connection. The loopback port was a contrived trigger; a self-hosted LAN host (plain http, which the Gateway allows only by an exact allowlist entry) is the realistic case.",
+    "expected": "When the Gateway refuses, the page shows the governed 'Add <host> to the outbound allowlist' button it already has, or links to the Network allowlist field (Settings > Get started > Change installation defaults, which connector-links.ts:33 already points connectors to). Either fixes it without weakening the allowlist.",
+    "actual": "The page's check (isBaseUrlAllowlisted, web-search-state.ts:145-160) matches on host or hostname, so with '127.0.0.1' in the allowlist it treated 127.0.0.1:9 as allowed and Save was enabled; the Gateway wants host:port (web-search-state.ts:165 notes the exact-entry rule for LAN http). The change was approved and applied, then a warning appeared ('The saved Firecrawl URL is not in the outbound allowlist, so tools skip Firecrawl and use native search') and Test connection answered 'Not allowlisted - 127.0.0.1:9 is not in the outbound allowlist, so tools cannot reach it.' The page shows its add button only when its own check fails (FirecrawlSettings.tsx:101, :329), so when only the Gateway refuses there is no button and no link. The allowlist itself is reachable: Settings > Get started > Change installation defaults has a 'Network allowlist' field (FirstRunDefaults.tsx:98-102). Severity friction because native search fallback keeps the operator's task working. Restored to http://127.0.0.1:3002 afterwards.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/st/st-8-set-after-save.png",
+      "docs/review/2026-11-usability/evidence/st/st-8-set-test.png",
+      "apps/mission-control-next/src/cockpit/areas/settings/FirecrawlSettings.tsx:101",
+      "apps/mission-control-next/src/cockpit/areas/settings/FirecrawlSettings.tsx:329",
+      "apps/mission-control-next/src/cockpit/areas/settings/web-search-state.ts:145",
+      "apps/mission-control-next/src/cockpit/areas/settings/FirstRunDefaults.tsx:98",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/connector-links.ts:33"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/FirecrawlSettings.tsx"
+  },
+  {
+    "area": "settings",
+    "priorIds": [],
+    "journey": "ST-9 Every Settings page: open it, change one harmless value, save, reload, value kept",
+    "severity": "friction",
+    "kind": "dead-end",
+    "title": "Work > Schedules and Library > Knowledge say a feature is 'switched off in runtime settings', but no Settings page can switch it on (scheduler review, engineering learnings, connector diagnostics)",
+    "trigger": "Open Work > Schedules (review queue) and Library > Knowledge (Engineering learnings); in Capabilities > Connectors > Advanced setup run a connector health check.",
+    "expected": "A link or sentence naming where the switch is.",
+    "actual": "Schedules: 'Scheduler review is switched off in runtime settings on this installation.' Knowledge: 'Engineering learnings is disabled in this runtime.' The MCP health check says 'Connector diagnostics are disabled in this Gateway.' The flags are cronReviewQueueV1Enabled, engineeringLearningsV1Enabled and connectorDiagnosticsV1Enabled, all off by default; none has a control on any Settings page (full table in evidence st-9-feature-flags.json). Prompt-pack retuning (promptRetuneCampaignV1Enabled) is hidden the same way without any sentence. Same class as existing findings: U-LB-008 (Library > Memory off by default with no switch), U-CP-015 (hand-registered MCP server, nothing says how to let Chat use it) and U-CH-044 ('use <skill>' does nothing). promptRetuneCampaignV1Enabled gates a surface no screen mentions, so it is listed for completeness, not as something the operator is told about.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/st/st-9-flag-schedules-review-off.png",
+      "docs/review/2026-11-usability/evidence/st/st-9-flag-knowledge.png",
+      "docs/review/2026-11-usability/evidence/st/st-9-flag-screens.json",
+      "docs/review/2026-11-usability/evidence/st/st-9-feature-flags.json",
+      "apps/mission-control-next/src/cockpit/areas/work/SchedulerReviewQueue.tsx:122",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryEngineeringLearnings.tsx:156"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/work/SchedulerReviewQueue.tsx"
+  },
+  {
+    "area": "settings",
+    "priorIds": [],
+    "journey": "ST-7 Workspaces and personalities: create, switch, delete",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "Creating a personality asks the operator to type a raw ID, and the workspace archive review prints 'Record ID' and 'Version' as ordinary text",
+    "trigger": "Settings > General > Personalities > Add custom personality (field 'ID'); Settings > Citadel > Workspaces > Archive.",
+    "expected": "An id made from the label, and technical ids behind Technical details.",
+    "actual": "The form has both 'ID' and 'Label'. The archive review shows 'Record ID ws_...' and 'Version 1' next to 'Change active -> archived'. Both flows otherwise worked (create 0.2 s, switch with one review dialog, remove with a clear 'This cannot be undone' dialog); workspaces can only be archived, never deleted.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/st/st-7-personality-form.png",
+      "docs/review/2026-11-usability/evidence/st/st-7-archive-dialog.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/PersonalityEditor.tsx"
+  },
+  {
+    "area": "settings",
+    "priorIds": [],
+    "journey": "ST-6 Permissions, Trust and policy: find out why a tool was blocked and allow it",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "Safety > Tools lists dozens of identical-looking 'Allow - Session' grants with only 'Inspect grant' and 'Revoke grant' to tell them apart",
+    "trigger": "Settings > Safety > Tools > Tool catalog and grants > Recorded grants.",
+    "expected": "Grants grouped or labelled by what created them, so an operator can tell which to keep.",
+    "actual": "'Showing 30 of 171 matching records from the latest 400 grants': the rows repeat the same few tools (tool_artifact.read, local_business.research, session.history, session.search, http.get, browser.*), each 'Allow - Session - available'. Most are likely seeded by earlier test tasks in this sandbox, so this may be less visible on a real install; not verified there.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/st/st-9-safety-tools.png"
+    ],
+    "foundBy": "live",
+    "confidence": "likely",
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/ToolGrantSettings.tsx"
+  }
+]

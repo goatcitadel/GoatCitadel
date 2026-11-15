@@ -1,0 +1,24 @@
+{
+ "summaryLine": "Showing 76 recent signals; older signals are not shown. 24 background signals are hidden.",
+ "hasFilterOrSearch": 1,
+ "controls": [
+  "Refresh",
+  "Refresh sessions"
+ ],
+ "newest": "15 minutes ago",
+ "oldest": "29 minutes ago",
+ "rows": 76,
+ "failureWords": [],
+ "showBackgroundToggle": 1,
+ "afterToggle": "Showing 100 recent signals; older signals are not shown.",
+ "openSource": {
+  "url": "http://127.0.0.1:55151/work/runs/47b324b2-fa72-4581-bb0f-72fe28dccb2b?eventId=72b4a460-5b17-472e-b922-71140fce2fb1&shell=cockpit",
+  "h1": [
+   "Run"
+  ],
+  "ms": 2574
+ },
+ "openSourceText": "Back to Work\nRun\nRun workspace unknown\n\nGoatCitadel could not confirm this run's workspace. Return to Work to choose a run.",
+ "console": [],
+ "http": []
+}

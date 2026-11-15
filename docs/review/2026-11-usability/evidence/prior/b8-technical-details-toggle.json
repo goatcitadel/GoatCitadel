@@ -1,0 +1,100 @@
+{
+ "/settings/general OFF": {
+  "sums": [
+   "Recent deliveries"
+  ],
+  "td": 0,
+  "len": 1577
+ },
+ "/settings/general ON": {
+  "sums": [
+   "Recent deliveries"
+  ],
+  "td": 0,
+  "len": 1577
+ },
+ "/settings/models OFF": {
+  "sums": [
+   "Advanced model settings"
+  ],
+  "td": 0,
+  "len": 3030
+ },
+ "/settings/models ON": {
+  "sums": [
+   "Advanced model settings",
+   "Technical details",
+   "Technical details",
+   "Technical details"
+  ],
+  "td": 3,
+  "len": 2963
+ },
+ "/settings/safety OFF": {
+  "sums": [
+   "Advanced: policy contexts, profiles, temporary overrides and autonomous grants",
+   "Legacy compatibility policy contexts"
+  ],
+  "td": 0,
+  "len": 1771
+ },
+ "/settings/safety ON": {
+  "sums": [
+   "Advanced: policy contexts, profiles, temporary overrides and autonomous grants",
+   "Policy identity",
+   "Policy identity",
+   "Policy identity",
+   "Legacy compatibility policy contexts",
+   "Policy identity",
+   "Policy identity"
+  ],
+  "td": 0,
+  "len": 1771
+ },
+ "/settings/access OFF": {
+  "sums": [
+   "Desktop and mobile continuity"
+  ],
+  "td": 0,
+  "len": 743
+ },
+ "/settings/access ON": {
+  "sums": [
+   "Desktop and mobile continuity"
+  ],
+  "td": 0,
+  "len": 743
+ },
+ "/settings/advanced OFF": {
+  "sums": [
+   "Saved launch paths",
+   "Process manager and commands",
+   "Recovery handoffs",
+   "Voice runtime details"
+  ],
+  "td": 1,
+  "len": 2191
+ },
+ "/settings/advanced ON": {
+  "sums": [
+   "Technical details",
+   "Saved launch paths",
+   "Process details",
+   "Process manager and commands",
+   "Recovery handoffs",
+   "Voice runtime details"
+  ],
+  "td": 3,
+  "len": 2227
+ },
+ "/settings/first-run OFF": {
+  "sums": [],
+  "td": 0,
+  "len": 639
+ },
+ "/settings/first-run ON": {
+  "sums": [],
+  "td": 0,
+  "len": 639
+ }
+}

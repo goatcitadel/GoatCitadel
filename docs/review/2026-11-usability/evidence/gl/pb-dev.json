@@ -1,0 +1,29 @@
+{
+  "label": "dev server control",
+  "base": "http://127.0.0.1:18788",
+  "openButtonCount": 1,
+  "pageTextHead": "Models\n\nFind a setting, or change the ones on this page.\n\nSearch settings\nGet started\nRefresh\nGeneral\nModels\nSafety\nCitadel\nAccess\nAdvanced\nModels\nGet started\nProviders & models\nLocal AI\nGuided model setup\n\nCheck the default model, provider connections, and model choices before using Chat.\n\nStep 1\nD",
+  "inputType": "password",
+  "crashAfterClick": false,
+  "crashAfterX": true,
+  "dialogsAfterX": 0,
+  "crashText": "Skip to main content\nPersonal / Default Workspace\nSearch\nCtrl K\nChat\nInbox\n1\nWork\nNo queued or running interactive runs\nCapabilities\nLibrary\nSystem\n1 check needs review\nUpdates connected\nSettings couldn't be shown\n\nSomething went wrong while showing this view. If you had just sent or approved something, check whether it went through before trying again.\n\nTry again\nReload app\nGo to Chat",
+  "log": [
+    {
+      "k": "http409",
+      "t": "POST http://127.0.0.1:18787/api/v1/change-plans"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 409 (Conflict)"
+    },
+    {
+      "k": "console",
+      "t": "%o\n\n%s\n\n%s\n TypeError: Cannot read properties of null (reading 'value')\n    at http://127.0.0.1:18788/@fs/<worktree>/packages/mission-control-shared/dist/components/chat/ChatChangePlanActionDialogBody.js:115:50\n    at basicStateReducer (http://127.0.0.1"
+    },
+    {
+      "k": "console",
+      "t": "[AreaErrorBoundary] render failed {label: Settings, error: TypeError: Cannot read properties of null (reading 'value')\n    at http://127.0.0.1:18788/@fs/<worktree>/…, componentStack: \n    at ChatChangePlanActionDialog (http://127.0.0…erences.js:75:32)\n    at CockpitApp (<anonymous>)}"
+    }
+  ]
+}

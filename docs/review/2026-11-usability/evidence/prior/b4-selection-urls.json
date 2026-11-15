@@ -1,0 +1,66 @@
+{
+ "work-card": {
+  "start": "/work",
+  "before": "/work",
+  "after": "/work/tasks/ea0bdb30-94ff-4df7-a18a-295065b361f5?shell=cockpit",
+  "urlChanged": true,
+  "afterBackUrl": "/work",
+  "note": ""
+ },
+ "work-run-card": {
+  "start": "/work",
+  "before": "/work",
+  "after": "/work/runs/257c6e3f-9909-4c67-8df6-ebcb5b7aef4d?shell=cockpit",
+  "urlChanged": true,
+  "afterBackUrl": "/work",
+  "note": ""
+ },
+ "library-capability-row": {
+  "start": "/library",
+  "before": "/library",
+  "after": "/library/candidate_skill/candidate%3Ausability-browser-candidate%3Ausability-browser-candidate-v1?shell=cockpit",
+  "urlChanged": true,
+  "afterBackUrl": "/library",
+  "note": ""
+ },
+ "library-tab-notes": {
+  "start": "/library",
+  "before": "/library",
+  "after": "/library/notes?shell=cockpit",
+  "urlChanged": true,
+  "afterBackUrl": "/library",
+  "note": ""
+ },
+ "inbox-question-card": {
+  "start": "/inbox",
+  "before": "/inbox",
+  "after": "/inbox",
+  "urlChanged": false,
+  "afterBackUrl": "/library",
+  "note": ""
+ },
+ "system-tab-runtime": {
+  "start": "/system",
+  "before": "/system",
+  "after": "/system/runtime?shell=cockpit",
+  "urlChanged": true,
+  "afterBackUrl": "/system",
+  "note": ""
+ },
+ "capabilities-first-row": {
+  "start": "/capabilities",
+  "before": "/capabilities/connectors?shell=cockpit",
+  "after": "/capabilities/connectors?shell=cockpit",
+  "urlChanged": false,
+  "afterBackUrl": "/system",
+  "note": ""
+ },
+ "chat-session-row": {
+  "start": "/chat",
+  "before": "/chat",
+  "after": "/chat?shell=cockpit&sessionId=sess_10ca4b5da2946c6e60aaa97f",
+  "urlChanged": true,
+  "afterBackUrl": "/chat",
+  "note": ""
+ }
+}

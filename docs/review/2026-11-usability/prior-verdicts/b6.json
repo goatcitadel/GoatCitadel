@@ -1,0 +1,778 @@
+[
+  {
+    "priorId": "LB-02",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:261",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:267",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryEditor.tsx:261",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryEditor.tsx:305",
+      "apps/mission-control-next/src/cockpit/areas/library/library-resources.ts:125"
+    ],
+    "note": "Memory now pages with Previous and Next buttons over a Gateway cursor, Files and Artifacts have Load more, and an opened memory item has Memory history and a Forget review (approval first). Promoting a memory can be reversed by forgetting it, so the two defects in the old row are gone."
+  },
+  {
+    "priorId": "LB-01",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/memory-item-pagination-service.ts:21",
+      "apps/gateway/src/services/memory-lifecycle-service.ts:310",
+      "packages/mission-control-shared/src/api/describe-api-error.ts:50",
+      "packages/mission-control-shared/src/api/describe-api-error.ts:52",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:68",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:200",
+      "config/goatcitadel.example.json:202"
+    ],
+    "note": "The Gateway does gate the memory list: MemoryItemPaginationService.list() calls requireEnabled() (memory-item-pagination-service.ts:21), wired to memoryLifecycleAdminV1Enabled (memory-lifecycle-service.ts:310), which the example config defaults to false, so a new install gets a 409. The UI fix is that describeApiError maps a disabled-feature 409 to category feature_disabled with 'This feature is turned off for this installation.' (describe-api-error.ts:50-52), so stalePage, which needs category conflict, stays false (LibraryMemoryWorkspace.tsx:68) and the false 'changed somewhere else' text is gone. On a default install Library › Memory therefore shows that 'turned off' message in an error callout instead of the memory list, and the callout prints only that summary (LibraryMemoryWorkspace.tsx:200), so it does not say where to turn the setting on. Code read only; the live disabled-flag path was not run (the sandbox has the flag on), and a later task tests it."
+  },
+  {
+    "priorId": "LB-03",
+    "verdict": "partial",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b6-library.png",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryArea.tsx:67",
+      "apps/mission-control-next/src/cockpit/areas/library/library-sections.ts:2",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryGovernanceRoute.tsx:33"
+    ],
+    "note": "/library now opens a page titled 'Candidates and mesh' (no longer a tool catalog titled Library) and the tab row names every Library section. But there is still no Library overview explaining what Library holds, and the only Library page that links to Settings › Citadel is /library/citadel itself (LibraryGovernanceRoute.tsx:33), so the criterion's overview and governance links are not met.",
+    "finding": {
+      "area": "library",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "Library opens on a list of skill candidates with no overview of what Library holds or where governance pages are",
+      "trigger": "Click Library in the sidebar.",
+      "expected": "A short overview naming memory, files, artifacts and so on, with links to the governance destinations.",
+      "actual": "The first screen is 'Candidates and mesh'; only the tab row hints at the other sections, and nothing on it links to Settings › Citadel.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/b6-library.png",
+        "apps/mission-control-next/src/cockpit/areas/library/LibraryArea.tsx:67"
+      ],
+      "foundBy": "both",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/library/CapabilityCatalog.tsx"
+    }
+  },
+  {
+    "priorId": "LB-04",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/library/CapabilityPolicyInspector.tsx:33",
+      "apps/mission-control-next/src/cockpit/areas/library/CapabilityPolicyInspector.tsx:201"
+    ],
+    "note": "The policy inspector is headed 'Evaluate a selected tool context' and keeps the technical inputs behind an 'Advanced policy context' disclosure, so it answers from the selected capability without six manual inputs."
+  },
+  {
+    "priorId": "LB-05",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b6-library.png",
+      "packages/mission-control-shared/src/content/capability-rows.ts:51"
+    ],
+    "note": "Library capability rows no longer repeat constants: each row shows its type and a derived availability chip (the sandbox's one candidate reads Candidate and Inspect-only), and the Library list holds candidates and mesh publications rather than 119 tool rows."
+  },
+  {
+    "priorId": "LB-R01",
+    "verdict": "partial",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/LB-R01.png",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelMasonSettings.tsx:32",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryGovernanceRoute.tsx:28",
+      "docs/review/2026-11-usability/evidence/prior/b6-live1.json"
+    ],
+    "note": "At /library/citadel the page has an h1 'Guided setup · Mason' and the embedded editor adds an h3 with the same text; no Library tab is selected. The sr-only h2 is gone, Start setup is primary and the description links to Settings › Citadel, so the old row is only partly closed.",
+    "finding": {
+      "area": "library",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "Library › Citadel shows 'Guided setup · Mason' as a page title and again as a section heading directly under it",
+      "trigger": "Open /library/citadel (or any old Library Citadel link).",
+      "expected": "One heading, and either a Library tab marked as current or a redirect to Settings › Citadel.",
+      "actual": "The h1 and an h3 both read 'Guided setup · Mason', and none of the Library tabs is marked current.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/LB-R01.png",
+        "apps/mission-control-next/src/cockpit/areas/settings/CitadelMasonSettings.tsx:32",
+        "apps/mission-control-next/src/cockpit/areas/library/LibraryGovernanceRoute.tsx:28"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/CitadelMasonSettings.tsx"
+    }
+  },
+  {
+    "priorId": "LB-05~fu206",
+    "verdict": "partial",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/LB-R01.png",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelMasonSettings.tsx:32"
+    ],
+    "note": "Headings now use one shared label ('Guided setup · Mason', from CITADEL_PAGE_LABELS) so the nav link and title agree, but the Library route still repeats it as an h1 plus an h3. Same open defect as LB-R01.",
+    "sameFindingAs": "LB-R01"
+  },
+  {
+    "priorId": "LB-08",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:179",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryResources.tsx:78",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryAgentsWorkspace.tsx:106",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryKnowledgeWorkspace.tsx:50"
+    ],
+    "note": "Pagination and folders now exist (Load more, folder navigation, Next memory page) but search still behaves three ways: Files, Notes and Artifacts search as you type after a pause, Agents and Knowledge filter live, and Memory needs the 'Apply memory filter' button.",
+    "finding": {
+      "area": "library",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "unclear-copy",
+      "title": "Memory search needs an 'Apply memory filter' click while every other Library list filters as you type",
+      "trigger": "Library › Memory: type in Search memory.",
+      "expected": "The list narrows as it does in Files, Notes, Agents and Knowledge, or all of them use a Search button.",
+      "actual": "Nothing changes until Apply memory filter is pressed (or Enter is hit); the other Library lists update after a short pause.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:179",
+        "apps/mission-control-next/src/cockpit/areas/library/LibraryResources.tsx:78"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx"
+    }
+  },
+  {
+    "priorId": "LB-17",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/library/library-sections.ts:2",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryArea.tsx:67",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryCurator.tsx:163",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryCurator.tsx:31",
+      "docs/review/2026-11-usability/evidence/prior/b6-crawl-lib.json"
+    ],
+    "note": "One label map feeds both the Library tab and the page heading ('Skill curator', 'Journey timeline'), and the curator list heading reads 'Skills, most used first' instead of a raw key. The crawl shows each tab label matching its h1."
+  },
+  {
+    "priorId": "VR-02",
+    "verdict": "partial",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/VR-02.png",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:107",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:272",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:279"
+    ],
+    "note": "With no memories the page now leads with one 'No active memories' empty state and hides the filters, bulk buttons and paging, and the coverage line pluralizes ('2 matching records'). The 'Open memory diagnostics and maintenance' button and the 'Memory proposals' section with its Refresh button still render below the empty state.",
+    "finding": {
+      "area": "library",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "missing-state",
+      "title": "An empty Library › Memory still shows a diagnostics button and a proposals section with its own Refresh under the empty-state message",
+      "trigger": "Open Library › Memory in a workspace with no memory.",
+      "expected": "One empty state with nothing else competing (DESIGN.md: an empty page hides empty groups until there are rows).",
+      "actual": "'No active memories' is followed by 'Open memory diagnostics and maintenance', a 'Memory proposals' heading, 'No proposals waiting for review' and a Refresh button.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/VR-02.png",
+        "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:272",
+        "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:279"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx"
+    }
+  },
+  {
+    "priorId": "MEMORY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/memory-lifecycle-service.ts:3353",
+      "apps/gateway/src/services/memory-lifecycle-service.ts:3403"
+    ],
+    "note": "Promotion claims the candidate with UPDATE ... WHERE status = 'proposed' inside the same transaction that inserts the learning, and rejection uses the same guard, so a second promote or a promote after reject gets a conflict. Code read only; the focused tests were not run."
+  },
+  {
+    "priorId": "MEMORY-002",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/memory-lifecycle-service.ts:3375",
+      "apps/gateway/src/services/memory-lifecycle-service.ts:3378",
+      "apps/gateway/src/services/memory-lifecycle-service.ts:3915"
+    ],
+    "note": "The learning-created event is published with publication 'deferred' and only sent after the transaction returns (promote and supersede both), so no success event leaves before the commit. Code read only."
+  },
+  {
+    "priorId": "PERF-COCKPIT-001",
+    "verdict": "cannot-check",
+    "evidence": [
+      "scripts/verification/lib/scenarios/cockpit-performance-proof.mjs"
+    ],
+    "note": "Cold-start request count and gzip bytes are production-build measurements; the sandbox is a Vite dev server, so no valid number can be taken and the code does not settle it. To check later: run scripts/verification/lib/scenarios/cockpit-performance-proof.mjs (via its verification lane) against a production build and compare with 20 startup requests and 350,000 initial JS gzip bytes."
+  },
+  {
+    "priorId": "CLIENT-STARTUP-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/mission-control-shared/src/api/startup-reads.ts:120",
+      "packages/mission-control-shared/src/api/startup-reads.ts:133",
+      "packages/mission-control-shared/src/api/startup-reads.ts:252"
+    ],
+    "note": "Each reader has its own abort (line 252) and the batch fetch is aborted only when every row in it has settled (line 120), so a cancelled reader rejects only itself; fallback direct GETs run per row, once, and only for rows still current and unsettled. Code read only."
+  },
+  {
+    "priorId": "MEMORY-003",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/memory-lifecycle-service.ts:943",
+      "apps/gateway/src/services/memory-lifecycle-service.ts:947"
+    ],
+    "note": "Supersession links the predecessor with UPDATE ... WHERE status IN ('proposed','trusted') and inserts the successor in the same transaction; a losing correction sees zero changed rows and throws a conflict before inserting, and its event is published after commit. Code read only."
+  },
+  {
+    "priorId": "LIBRARY-UPLOAD-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryFileUpload.tsx:96",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryFileUpload.tsx:112",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryFileUpload.tsx:114"
+    ],
+    "note": "The receipt check compares spelling aliases of the path (backslashes, ./) and accepts a normalized path; success prints the Gateway's own path and size and clears the submitted draft. Code read; no upload was made in the sandbox."
+  },
+  {
+    "priorId": "LIBRARY-KNOWLEDGE-SOURCE-LINK-COPY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryKnowledgeEvidence.tsx:179"
+    ],
+    "note": "The Chat link on a recovered external copy now reads 'Open attached conversation', and the copy's provenance is separate under 'Saved copy provenance'."
+  },
+  {
+    "priorId": "LIBRARY-MEMORY-EMPTY-COVERAGE-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:85",
+      "apps/mission-control-next/src/cockpit/areas/library/library-resources.ts:136"
+    ],
+    "note": "The empty-state claim now requires zero listed rows, no withheld records and no next cursor; withheld records produce 'Some inconsistent scope records were withheld.' in the coverage line."
+  },
+  {
+    "priorId": "PR-library-skills",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/capabilities/skills/SkillsTab.tsx:53",
+      "apps/mission-control-next/src/features/native-routes/library/LibrarySkillsSection.tsx:838",
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:104",
+      "apps/mission-control-next/src/features/native-routes/library/LibrarySkillsSection.tsx:288",
+      "apps/mission-control-next/src/features/native-routes/library/LibrarySkillsSection.tsx:325"
+    ],
+    "note": "/library/skills now lands on Capabilities › Skills, where skills can be installed, paused, enabled and inspected. Classic's Generate scenarios, Run baseline, Run improvement, Create proposal and Skill Hub snapshot and approval panel have no Cockpit control and no link to Classic. Enabling a skill in Capabilities › Skills goes through its own approval ('Review the change') and neither requires nor mentions the baseline and improvement checks; in Classic the Enable button is also not blocked by 'Needs eval' (LibrarySkillsSection.tsx:325), so the checks are optional guidance.",
+    "finding": {
+      "area": "library",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "dead-end",
+      "title": "Skill scenario, baseline and improvement runs and the Skill Hub panel from Classic's Library › Skills have no Cockpit screen or Classic link",
+      "trigger": "Open /library/skills in the Cockpit and look for Generate scenarios, Run baseline, Run improvement or Skill Hub.",
+      "expected": "Each action is available in Capabilities › Skills, or the page links to the Classic view that has it.",
+      "actual": "The route redirects to Capabilities › Skills, which offers install, pause and enable only. Enabling there is approval-gated and does not require or mention the baseline and improvement checks that Classic's skill detail recommends (LibrarySkillsSection.tsx:288: 'before treating this skill as runtime-ready'), so nothing in the Cockpit tells the operator the checks exist and the operator is not blocked from finishing; severity stays friction.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/capabilities/skills/SkillsTab.tsx:53",
+        "apps/mission-control-next/src/features/native-routes/library/LibrarySkillsSection.tsx:838",
+        "apps/mission-control-next/src/features/native-routes/library/LibrarySkillsSection.tsx:288"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/capabilities/skills/SkillsTab.tsx"
+    }
+  },
+  {
+    "priorId": "PR-library-capabilities",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/library/CapabilityCatalog.tsx:228",
+      "apps/mission-control-next/src/cockpit/areas/library/CapabilityCatalogFilters.tsx:37",
+      "packages/mission-control-shared/src/content/capability-rows.ts:51",
+      "docs/review/2026-11-usability/evidence/prior/b6-library.png"
+    ],
+    "note": "Library now has a native capability catalog with search, Type, Status (available, configured, inspect-only, degraded, unavailable) and Trust filters and an inspector with Overview, Policy, Usage, Source and Settings tabs; callable versus inspect-only is stated per row."
+  },
+  {
+    "priorId": "PR-library-journey",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryJourney.tsx:118",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryArea.tsx:63",
+      "apps/mission-control-next/src/cockpit/app/CommandPalette.tsx:42",
+      "apps/mission-control-next/src/cockpit/app/CommandPalette.tsx:152",
+      "docs/review/2026-11-usability/evidence/prior/b6-palette-journey.json",
+      "docs/review/2026-11-usability/evidence/prior/b6-palette-journey.png"
+    ],
+    "note": "The Journey timeline screen works and is read-only like Classic's. It is experimental and hidden from the Library tab row (LibraryArea.tsx:63 filters tabs through isPrimaryRailRoute), but the Cockpit command palette reaches it: TAB_DESTINATIONS is built from LIBRARY_SECTION_LABELS (CommandPalette.tsx:42), which includes journey, and is matched on a typed query (CommandPalette.tsx:152). Live capture: typing 'journey' lists 'Go to Library › Journey timeline' and selecting it opens /library/journey with h1 'Journey timeline' (b6-palette-journey.json). The EXPERIMENTAL_COMMAND_ROUTES list in MissionControlNextApp.tsx is the Classic shell's palette; the Cockpit does not use it."
+  },
+  {
+    "priorId": "PR-library-curator",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryCurator.tsx:163",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryCurator.tsx:353",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxImprovementProposalDetail.tsx:291",
+      "apps/mission-control-next/src/cockpit/app/CommandPalette.tsx:42",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryArea.tsx:63",
+      "docs/review/2026-11-usability/evidence/prior/b6-palette-journey.json",
+      "docs/review/2026-11-usability/evidence/prior/b6-library_curator.png"
+    ],
+    "note": "The Cockpit curator offers Generate report, Refresh, sort, per-skill detail, Review pending archive, Archive skill with a review step and an Archived skills list, which covers Classic's Generate report, Refresh and Archive. It is experimental and hidden from the Library tab row (LibraryArea.tsx:63), but two Cockpit entries reach it: the 'Open Curator' link in an Inbox improvement proposal (InboxImprovementProposalDetail.tsx:291) and the command palette, where typing 'curator' lists 'Go to Library › Skill curator' (CommandPalette.tsx:42, b6-palette-journey.json). Every action is available, so the verdict stays fixed."
+  },
+  {
+    "priorId": "SH-N01",
+    "verdict": "open",
+    "evidence": [
+      "packages/threaded-surface-core/src/chat/ThreadedLoadingState.tsx:30",
+      "packages/threaded-surface-core/src/chat/ThreadedLoadingState.tsx:36",
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:386"
+    ],
+    "note": "The Chat startup state still renders four tiles (Workspace, Sessions, Projects, Approvals) with 'Loading' as a value, a three-step list, and the word 'posture'.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "The Chat loading screen shows four stat tiles whose values read 'Loading', plus a three-step list",
+      "trigger": "Open Chat on a slow start.",
+      "expected": "One 'Preparing Chat…' line and a skeleton (DESIGN.md refuses the hero-metric template).",
+      "actual": "Tiles titled Workspace, Sessions, Projects and Approvals show 'Loading', followed by 'Connecting session history' and two more steps.",
+      "evidence": [
+        "packages/threaded-surface-core/src/chat/ThreadedLoadingState.tsx:30",
+        "apps/mission-control-next/src/cockpit/styles/cockpit.css:386"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "packages/threaded-surface-core/src/chat/ThreadedLoadingState.tsx"
+    }
+  },
+  {
+    "priorId": "SH-N05",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/DialogRuntime.tsx:25",
+      "apps/mission-control-next/src/cockpit/ui/DialogRuntime.tsx:43"
+    ],
+    "note": "Dialog scrim is still z-40 with content at z-50 (the stacking scale is documented in cockpit.css), so a dialog opened over a sheet or another dialog adds a scrim that sits below the first one's content and does not dim it.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "A dialog opened over a sheet or another dialog does not dim the one underneath it",
+      "trigger": "Library › Memory: open a memory item (side sheet), choose Forget so the 'Forget memory' dialog opens over the sheet, and look at whether the sheet is dimmed.",
+      "expected": "The newest dialog's scrim covers everything beneath it.",
+      "actual": "Every dialog scrim is z-40 and every dialog body z-50, so the lower layer's content stays above the new scrim.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/ui/DialogRuntime.tsx:25",
+        "apps/mission-control-next/src/cockpit/ui/DialogRuntime.tsx:43"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/ui/DialogRuntime.tsx"
+    }
+  },
+  {
+    "priorId": "SH-N07",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:229",
+      "apps/mission-control-next/src/cockpit/app/MobileStatusStrip.tsx:29",
+      "apps/mission-control-next/src/cockpit/app/MobileStatusStrip.tsx:57"
+    ],
+    "note": "The More sheet now has an 'Open System health' button, but the sentence naming which checks failed and when they last ran is still only in the title attribute of the health row (Sidebar.tsx:229, MobileStatusStrip.tsx:29), so touch and keyboard users never see it.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "missing-state",
+      "title": "Which health checks failed and when they last ran appears only in a hover tooltip",
+      "trigger": "Phone width: open More, read the health row. Desktop: look at the sidebar health link without hovering.",
+      "expected": "The sentence is visible text, or one tap away.",
+      "actual": "Only the short label ('1 check needs review') is visible; the full sentence is a title attribute.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:229",
+        "apps/mission-control-next/src/cockpit/app/MobileStatusStrip.tsx:29"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/app/MobileStatusStrip.tsx"
+    }
+  },
+  {
+    "priorId": "SH-N09",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:263",
+      "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:274"
+    ],
+    "note": "The gear menu is still named 'Settings and account' but holds Settings, theme choices and 'Switch to classic Mission Control'; there is no account item.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "The gear menu is called 'Settings and account' but has no account entry",
+      "trigger": "Click the gear at the bottom of the sidebar.",
+      "expected": "A name that matches the contents, such as 'Settings and theme'.",
+      "actual": "The accessible name says account; the items are Settings, theme and the Classic switch.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:263",
+        "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:274"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/app/Sidebar.tsx"
+    }
+  },
+  {
+    "priorId": "SH-N12",
+    "verdict": "open",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/SH-N12.png",
+      "apps/mission-control-next/src/cockpit/app/IncomingScopeReview.tsx:25",
+      "docs/review/2026-11-usability/evidence/prior/b6-live1.json"
+    ],
+    "note": "Opening /library/memory?workspaceId=ws_other_b6 shows 'This link requests a different Citadel or workspace' with only a 'Review linked scope' button; it does not name the requested scope and has no dismiss. Navigating to another route drops the parameters and the banner.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "unclear-copy",
+      "title": "The linked-scope banner does not say which workspace or Citadel the link asks for and cannot be dismissed",
+      "trigger": "Open any Cockpit link that carries a workspaceId or citadelId different from the active one.",
+      "expected": "The banner names the requested scope and offers 'Stay here'.",
+      "actual": "Generic sentence and one button; the banner stays until the operator navigates away.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/SH-N12.png",
+        "apps/mission-control-next/src/cockpit/app/IncomingScopeReview.tsx:25"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/app/IncomingScopeReview.tsx"
+    }
+  },
+  {
+    "priorId": "SH-26",
+    "verdict": "partial",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/SH-26.png",
+      "docs/review/2026-11-usability/evidence/prior/b6-live1.json",
+      "apps/mission-control-next/src/cockpit/app/CommandPaletteView.tsx:84",
+      "apps/mission-control-next/src/cockpit/app/CommandPaletteResults.tsx:22"
+    ],
+    "note": "The nested 'Search coverage' disclosure is now a single level, but the static group headings (Commands, Go to, Preferences, Settings) still sit 12px left of their items (heading x 453, item text x 465); only search-result groups get heading padding.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Command palette group headings sit 12px left of the items under them",
+      "trigger": "Press Ctrl+K and look at the Commands, Go to, Preferences and Settings groups.",
+      "expected": "Headings align with the items.",
+      "actual": "Headings start at x=453 while the item text starts at x=465.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/SH-26.png",
+        "apps/mission-control-next/src/cockpit/app/CommandPaletteView.tsx:84"
+      ],
+      "foundBy": "live",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/app/CommandPaletteView.tsx"
+    }
+  },
+  {
+    "priorId": "GL-N02",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryFileTemplates.tsx:25",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryFileUpload.tsx:15",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryJourney.tsx:53",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMailCompose.tsx:42",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryNoteEditor.tsx:24",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryKnowledgeSourceFields.tsx:14",
+      "docs/review/2026-11-usability/evidence/prior/b6-contrast.json"
+    ],
+    "note": "Six Library files still style inputs with border-line; the Settings one now uses cockpitInputClass. Measured from the tokens, the border against the raised surface is 1.54:1 in light and 1.87:1 in dark, under the 3:1 that control boundaries need (border-line-control gives 6.08 and 7.77).",
+    "finding": {
+      "area": "library",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "bug",
+      "title": "Text fields in Library notes, files, mail, journey and knowledge forms have borders too faint to see (1.5 to 1.9 to 1)",
+      "trigger": "Open Library › Notes (new note), Files (upload), Mail (compose), Knowledge (add source) and look at the input outlines.",
+      "expected": "Input borders reach 3:1 against the page, as other cockpit fields do.",
+      "actual": "These inputs use the translucent border-line token, 1.54:1 in light and 1.87:1 in dark.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/library/LibraryNoteEditor.tsx:24",
+        "apps/mission-control-next/src/cockpit/areas/library/LibraryMailCompose.tsx:42",
+        "docs/review/2026-11-usability/evidence/prior/b6-contrast.json"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/library/LibraryNoteEditor.tsx"
+    }
+  },
+  {
+    "priorId": "GL-N03",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/Section.tsx:35",
+      "apps/mission-control-next/src/cockpit/ui/DialogRuntime.tsx:49"
+    ],
+    "note": "Section headings are still text-base (14px) and the shared dialog title is text-md (16px); DESIGN.md gives section titles lg 20/28.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Section headings are body size (14px) and dialog titles use a different size from the 20px DESIGN.md gives section titles",
+      "trigger": "Open any page with Sections, then open a dialog.",
+      "expected": "Section titles at the lg size, and one dialog title size.",
+      "actual": "Section h2 uses text-base; dialog titles use text-md.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/ui/Section.tsx:35",
+        "apps/mission-control-next/src/cockpit/ui/DialogRuntime.tsx:49"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/ui/Section.tsx"
+    }
+  },
+  {
+    "priorId": "GL-N05",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/TimeText.tsx:23",
+      "apps/mission-control-next/src/cockpit/ui/TimeText.tsx:29"
+    ],
+    "note": "TimeText still prints 'Updated · Time unavailable' (middle dot) when the time is missing and 'Updated 5 minutes ago' (space) when present.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "'Updated · Time unavailable' and 'Updated 5 minutes ago' use different separators",
+      "trigger": "View any 'Updated' line with and without a time.",
+      "expected": "One form of the prefix.",
+      "actual": "The missing-time form adds a middle dot.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/ui/TimeText.tsx:23",
+        "apps/mission-control-next/src/cockpit/ui/TimeText.tsx:29"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/ui/TimeText.tsx"
+    }
+  },
+  {
+    "priorId": "GL-N06",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/OverflowTabs.tsx:93",
+      "apps/mission-control-next/src/cockpit/areas/settings/SettingsSectionTabs.tsx:109",
+      "apps/mission-control-next/src/cockpit/ui/Tabs.tsx:16"
+    ],
+    "note": "Area tabs are an underlined link row with hover colour, Settings section tabs are a filled pill group on a sunken bar with no hover colour and a different height, and Tabs.tsx triggers have no hover either.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Page tabs and Settings section tabs look and behave differently (underline with hover versus filled pills without hover)",
+      "trigger": "Open Settings and compare the top tab row with the section tabs under it.",
+      "expected": "One tab style, hover feedback, same height.",
+      "actual": "Two designs; the pill tabs show no hover state.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/ui/OverflowTabs.tsx:93",
+        "apps/mission-control-next/src/cockpit/areas/settings/SettingsSectionTabs.tsx:109"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/ui/Tabs.tsx"
+    }
+  },
+  {
+    "priorId": "GL-N07",
+    "verdict": "cannot-check",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/area-layout.ts:7"
+    ],
+    "note": "ENGINEERING-NOTE: AREA_TABS is still exported with no importer (git grep finds only its definition) and the stale CSS comment remains; this is dead code with no operator-visible symptom."
+  },
+  {
+    "priorId": "GL-N09",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CommandPaletteView.tsx:178"
+    ],
+    "note": "A failed palette search shows 'Search didn't respond. Try again.' with Technical details but no Retry button; the operator has to retype or edit the query.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "missing-state",
+      "title": "A failed command palette search says 'Try again' but has no Retry button",
+      "trigger": "Press Ctrl+K and search while the Gateway is unreachable.",
+      "expected": "A Retry button beside the message.",
+      "actual": "Message and Technical details only.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/CommandPaletteView.tsx:178"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/app/CommandPaletteView.tsx"
+    }
+  },
+  {
+    "priorId": "GL-L02",
+    "verdict": "partial",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b6-crawl-glob.json",
+      "docs/review/2026-11-usability/evidence/prior/b6-crawl-lib.json",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:115",
+      "apps/mission-control-next/src/cockpit/areas/settings/LlamaRuntimeLifecycle.tsx:63"
+    ],
+    "note": "Measured on 31 routes: the System › Diagnostics server prose from the old note is gone, but glossary words still show as visible text: 'Durable run completed/started/created' 14 times on System › Activity, 'projections' on System › Quality (2), 'canonical' on System › Dashboards and Library › Journey ('Canonical producers'), 'replay' on Library › Prompt packs, 'Runtime authority map' on Diagnostics. Also seen: Settings › Advanced prints 'Ownership: No process owned' (LlamaRuntimeLifecycle.tsx:63) and several 'Gateway' lines (page text crawl). Not counted: 'posture' on Library › Memory and Prompt packs is seeded item names, and 'Authoritative' on Capabilities is a vendor's connector description.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "unclear-copy",
+      "title": "Internal words (durable run, projection, canonical, replay, authority) still appear as ordinary text on System and Library pages",
+      "trigger": "Open System › Activity, System › Quality, System › Dashboards, System › Diagnostics, Settings › Advanced, Library › Journey and Library › Prompt packs.",
+      "expected": "The DESIGN.md glossary words: 'run', the page name, 'saved record', 'run again'.",
+      "actual": "'Durable run completed' (x14), 'read-only projections from stored prompt-pack reports', 'canonical verification sources', 'Canonical producers', 'replay'., 'Runtime authority map' on Diagnostics, and 'Ownership: No process owned' with 'Gateway' lines on Settings › Advanced.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/b6-crawl-glob.json",
+        "docs/review/2026-11-usability/evidence/prior/b6-crawl-lib.json"
+      ],
+      "foundBy": "live",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/system/system-vocabulary.ts"
+    }
+  },
+  {
+    "priorId": "GL-07~fu206",
+    "verdict": "partial",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b6-crawl-glob.json",
+      "docs/review/2026-11-usability/evidence/prior/b6-crawl-lib.json"
+    ],
+    "note": "Same defect as GL-L02: the Chat 'Gateway memory policy remains authoritative' sentence was not on a seeded screen, but 'Durable run', 'projections', 'canonical' and 'replay' still appear as operator copy (see GL-L02 for the measured list).",
+    "sameFindingAs": "GL-L02"
+  },
+  {
+    "priorId": "GL-04~fu206",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/SchedulerReviewQueue.tsx:47",
+      "apps/mission-control-next/src/cockpit/areas/work/SchedulerReviewQueue.tsx:55",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkAutomation.tsx:220",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkRunDetail.tsx:246",
+      "scripts/check-mission-control-next-raw-values.mjs:29"
+    ],
+    "note": "Presenters now exist for Work (work-vocabulary.ts) and the raw-values guard budgets humanizeToken at 27, but trigger, profile, validation status and approval kind are still humanized from raw tokens in Work (lines above).",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "Some Work labels (scheduler trigger and profile, automation validation, approval kind) are raw tokens with underscores stripped instead of named states",
+      "trigger": "Work › scheduler review items and automation export; Work › run detail approvals.",
+      "expected": "Labels come from the shared status vocabulary.",
+      "actual": "humanizeToken turns the stored token straight into text.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/work/SchedulerReviewQueue.tsx:47",
+        "apps/mission-control-next/src/cockpit/areas/work/WorkRunDetail.tsx:246"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/work/SchedulerReviewQueue.tsx"
+    }
+  },
+  {
+    "priorId": "GL-06~fu206",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/BrowserSessionGrants.tsx:212",
+      "apps/mission-control-next/src/cockpit/areas/system/BrowserSessionGrants.tsx:165",
+      "docs/review/2026-11-usability/evidence/prior/b6-crawl-glob.json"
+    ],
+    "note": "Measured on 31 routes: no workspace ids, UUIDs, ISO timestamps or revision numbers appear as visible text (revisions and project ids are inside Technical details). What remains: a browser-session grant's actor id is the row title and receipt sentences quote it (BrowserSessionGrants.tsx:212, 165-168), and Chat and Spend rows print the raw model id ('verification-stub-chat').",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "A browser-session grant is titled by its raw actor id, and Chat and Spend rows show the raw model id",
+      "trigger": "System › Browser sessions with a grant; Chat reply details; System › Spend recent calls.",
+      "expected": "A plain name first, the id in Technical details.",
+      "actual": "The actor id is the row heading; the model id is in the metadata line.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/system/BrowserSessionGrants.tsx:212",
+        "docs/review/2026-11-usability/evidence/prior/b6-crawl-glob.json"
+      ],
+      "foundBy": "both",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/areas/system/BrowserSessionGrants.tsx"
+    }
+  },
+  {
+    "priorId": "GL-10~fu206",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxItemCard.tsx:41",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkBoardColumn.tsx:51",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkBoardColumn.tsx:12",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatOpenCodeEvidence.tsx:44",
+      "apps/mission-control-next/src/cockpit/areas/system/BrowserSessionGrants.tsx:206",
+      "docs/review/2026-11-usability/evidence/prior/b6-nesting.json"
+    ],
+    "note": "Code read: Inbox rows are hairline-separated (border-b, InboxItemCard.tsx:41), Work columns are unboxed sections with a hairline header and single-level cards inside (WorkBoardColumn.tsx:51 and :12), browser-session grants are a divide-y list (BrowserSessionGrants.tsx:206), and the OpenCode evidence has two separate single bordered blocks rather than a box in a box (ChatOpenCodeEvidence.tsx:44, :101). The DOM scan is weak evidence: it ran on nine routes but 8 of them rendered no bordered boxes at all (only Settings › Models had 3, none nested), so it covered mostly empty or box-free routes and the verdict rests on the code read."
+  },
+  {
+    "priorId": "GL-13~fu206",
+    "verdict": "cannot-check",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/styles/cockpit.css:131"
+    ],
+    "note": "ENGINEERING-NOTE: bare 'rounded' is at zero in the cockpit, and compact density still sets --spacing: 0.21875rem (cockpit.css:131); that is a CSS-token and spacing-grid matter with no operator-visible defect, listed as a known deferral."
+  },
+  {
+    "priorId": "OL-01",
+    "verdict": "operator-only",
+    "evidence": [],
+    "note": "Firefox and WebKit are not installed on this PC (Playwright has Chromium only) and installing them is a download that needs operator approval. Steps: 1) pnpm exec playwright install firefox webkit. 2) Start a sandbox with pnpm testbench. 3) node scripts/verification/cross-browser-smoke.mjs --ui <UI URL>. Pass: one ok line per engine for chat, inbox, work, capabilities, library, system and settings; any FAIL is rerun in Chromium to see if it is engine-specific."
+  },
+  {
+    "priorId": "OL-02",
+    "verdict": "operator-only",
+    "evidence": [],
+    "note": "Needs real Firefox and Safari (Safari needs a Mac). Steps at 1440 and 390 px: send a Chat message by Enter and by the Send button; type Japanese with an IME and confirm Enter while composing does not send; open an approval review then cancel; open the inspector by keyboard; reload in dark theme and watch for a light flash; Tab through Chat, Inbox and Library checking the focus ring. Pass: every step behaves as the checklist in check 6 describes."
+  },
+  {
+    "priorId": "OL-03",
+    "verdict": "operator-only",
+    "evidence": [],
+    "note": "Needs a screen reader (NVDA, Narrator, VoiceOver). Steps: switch areas and listen for the route announcement; send a message and a reply and listen for both; in Inbox press J and K and confirm focus and announcement follow; open an approval dialog and check focus lands in it and returns on close; edit a setting, press Back and check the unsaved-changes dialog is announced. Pass: each of the five journeys in check 7 is announced and focus never lands on a hidden element."
+  },
+  {
+    "priorId": "OL-07",
+    "verdict": "operator-only",
+    "evidence": [],
+    "note": "A real outage needs the Gateway stopped, which this review may not do to the shared sandbox. I tried to emulate it in Chromium by cutting the network for 60 s; the already-open event stream stayed up, so the outage banner never appeared and the test says nothing about it (draft stayed intact). Steps: with the launcher running a Gateway you own, open Chat, type a draft, stop the Gateway process only; expect within ~15 s the banner 'GoatCitadel is unreachable. Sending is paused; your draft is kept.', press Check again and see 'Checking…' then 'Still unreachable · checked <time>', count requests in the Network tab for 30 s (about one probe every 5 s), restart the Gateway and expect the banner to clear without reload and the draft to remain. Chunk failure: block one lazy JS chunk in DevTools and open that area; expect an error with a way to reload."
+  },
+  {
+    "priorId": "OL-08",
+    "verdict": "operator-only",
+    "evidence": [],
+    "note": "Needs four hours of wall time, which does not fit this review. Steps: open Chat and an idle Inbox in two tabs on a sandbox, record performance.memory.usedJSHeapSize and the Network request count per minute at 0, 1, 2, 3 and 4 hours (DevTools console or a Playwright loop). Pass: heap and requests per minute stay roughly flat with no steady climb."
+  },
+  {
+    "priorId": "OL-10",
+    "verdict": "operator-only",
+    "evidence": [],
+    "note": "Dispatching a GitHub Actions workflow is an action outside this PC, which the review rules forbid. Steps: gh workflow run verification-ux-budgets-nightly.yml --ref main, wait for the run, then label every non-passing scenario harness, product or environment (see checks 1 and 2 in docs/review/2026-10-cockpit-verification-gaps.md). Pass: the run completes and each failure has a class."
+  }
+]

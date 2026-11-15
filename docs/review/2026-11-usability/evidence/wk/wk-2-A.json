@@ -1,0 +1,19 @@
+{
+  "res": [
+    {
+      "action": "Pause",
+      "clicks": 2,
+      "dialog": "Pause this run? | Stops active processing and leaves the run paused. GoatCitadel will recheck policy and state. | Pause run | Go back",
+      "msToFeedback": 79,
+      "after": "Run controls | Refresh | Current status:  | Paused These controls are available only for runs scoped to the selected workspace. | Run moved to Paused. Refresh to review its current state and any follow-on effects."
+    },
+    {
+      "action": "Resume",
+      "clicks": 2,
+      "dialog": "Resume this run? | Queues a paused run to continue. GoatCitadel will recheck policy and state. | Resume run | Go back",
+      "msToFeedback": 92,
+      "after": "Run controls | Refresh | Current status:  | Waiting These controls are available only for runs scoped to the selected workspace. | Run moved to Queued. Refresh to review its current state and any follow-on effects."
+    }
+  ],
+  "log": []
+}

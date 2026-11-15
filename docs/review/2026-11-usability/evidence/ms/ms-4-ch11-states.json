@@ -1,0 +1,32 @@
+{
+ "states": [
+  {
+   "at": 455,
+   "stop": true,
+   "chips": "Working"
+  },
+  {
+   "at": 1137,
+   "stop": true,
+   "chips": "Working / Working"
+  },
+  {
+   "at": 3034,
+   "stop": false,
+   "chips": "Working"
+  },
+  {
+   "at": 3528,
+   "stop": false,
+   "chips": "Delegation / Supervised work · Done / steps done · Latest: Synthesizer"
+  }
+ ],
+ "before": {
+  "out": 4902,
+  "inn": 291911
+ },
+ "after": {
+  "out": 4902,
+  "inn": 291911
+ }
+}

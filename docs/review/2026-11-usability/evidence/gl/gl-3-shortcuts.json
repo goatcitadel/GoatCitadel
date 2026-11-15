@@ -1,0 +1,22 @@
+{
+ "g i": "/inbox",
+ "g a": "/capabilities/connectors",
+ "g l": "/library",
+ "g s": "/system",
+ "g t": "/settings",
+ "g w": "/work",
+ "g c": "/chat",
+ "help": {
+  "text": "Keyboard shortcuts Area shortcuts work outside text fields. Press g, then the area key within 1.5 seconds. Moving focus cancels the sequence. Chat g then c Inbox g then i Work g then w Capabilities ",
+  "focusInside": true
+ },
+ "helpFocusReturned": true,
+ "ctrlB": {
+  "before": 231,
+  "after": 39
+ },
+ "chatComposerFocusedGI": {
+  "url": "/inbox",
+  "composerText": ""
+ }
+}

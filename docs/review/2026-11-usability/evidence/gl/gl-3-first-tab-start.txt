@@ -1,0 +1,6 @@
+/work Tab1=A:History | ShiftTab x2=BUTTON:More Work views | fresh ShiftTab1=BUTTON:More Work views
+/system Tab1=A:Runtime | ShiftTab x2=BUTTON:Refresh system health | fresh ShiftTab1=BUTTON:Refresh system health
+/library/memory Tab1=A:Notes | ShiftTab x2=A:Candidates and mesh | fresh ShiftTab1=A:Candidates and mesh
+/capabilities/skills Tab1=A:Plugins | ShiftTab x2=BUTTON:Settings and account | fresh ShiftTab1=BUTTON:Settings and account
+/inbox Tab1=A:Skip to main content | ShiftTab x2=BUTTON:Review installation-wide rejec | fresh ShiftTab1=BUTTON:Review installation-wide rejec
+/settings/general Tab1=DIV:These preferences apply right  | ShiftTab x2=A:Advanced | fresh ShiftTab1=BUTTON:Appearance

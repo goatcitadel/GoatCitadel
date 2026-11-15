@@ -1,0 +1,282 @@
+{
+  "chatList": {
+    "runs": [
+      {
+        "firstContentMs": 547,
+        "maxLongTask": 91,
+        "longTasks": 1,
+        "maxGap": 83,
+        "renderedRows": 100,
+        "setsize": "100",
+        "moreButtons": [
+          "Load more",
+          "More",
+          "More"
+        ],
+        "tail": ""
+      },
+      {
+        "firstContentMs": 642,
+        "maxLongTask": 92,
+        "longTasks": 1,
+        "maxGap": 83,
+        "renderedRows": 100,
+        "setsize": "100",
+        "moreButtons": [
+          "Load more",
+          "More",
+          "More"
+        ],
+        "tail": ""
+      },
+      {
+        "firstContentMs": 529,
+        "maxLongTask": 94,
+        "longTasks": 1,
+        "maxGap": 83,
+        "renderedRows": 100,
+        "setsize": "100",
+        "moreButtons": [
+          "Load more",
+          "More",
+          "More"
+        ],
+        "tail": ""
+      }
+    ],
+    "medianMainMs": 547,
+    "medianMaxGapMs": 83,
+    "medianMaxLongTaskMs": 92
+  },
+  "threadOpen": {
+    "runs": [
+      {
+        "firstContentMs": 909,
+        "lastTurnVisibleMs": 8,
+        "maxLongTask": 102,
+        "longTasks": 2,
+        "maxGap": 100,
+        "renderedTurnText": 2
+      },
+      {
+        "firstContentMs": 908,
+        "lastTurnVisibleMs": 265,
+        "maxLongTask": 104,
+        "longTasks": 1,
+        "maxGap": 100,
+        "renderedTurnText": 2
+      },
+      {
+        "firstContentMs": 950,
+        "lastTurnVisibleMs": 7,
+        "maxLongTask": 104,
+        "longTasks": 1,
+        "maxGap": 100,
+        "renderedTurnText": 2
+      }
+    ],
+    "medianMainMs": 909,
+    "medianMaxGapMs": 100,
+    "medianMaxLongTaskMs": 104
+  },
+  "threadTop": {
+    "runs": [
+      {
+        "reachedTopMs": 732,
+        "wheelSteps": 11,
+        "scrollHeight": 48369,
+        "firstVisibleTurnNumber": "1",
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0
+      },
+      {
+        "reachedTopMs": 745,
+        "wheelSteps": 11,
+        "scrollHeight": 48369,
+        "firstVisibleTurnNumber": "1",
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0
+      },
+      {
+        "reachedTopMs": 686,
+        "wheelSteps": 11,
+        "scrollHeight": 48369,
+        "firstVisibleTurnNumber": "1",
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0
+      }
+    ],
+    "medianMainMs": 732,
+    "medianMaxGapMs": 0,
+    "medianMaxLongTaskMs": 0
+  },
+  "memoryOpen": {
+    "runs": [
+      {
+        "firstContentMs": 509,
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0,
+        "renderedItems": 200,
+        "moreButtons": [
+          "Next memory page"
+        ],
+        "countLines": []
+      },
+      {
+        "firstContentMs": 517,
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0,
+        "renderedItems": 200,
+        "moreButtons": [
+          "Next memory page"
+        ],
+        "countLines": []
+      },
+      {
+        "firstContentMs": 494,
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0,
+        "renderedItems": 200,
+        "moreButtons": [
+          "Next memory page"
+        ],
+        "countLines": []
+      }
+    ],
+    "medianMainMs": 509,
+    "medianMaxGapMs": 0,
+    "medianMaxLongTaskMs": 0
+  },
+  "workBoard": {
+    "runs": [
+      {
+        "firstContentMs": 489,
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0,
+        "renderedTasks": 30,
+        "laneCounts": [
+          "0 tasks · 0 runs",
+          "200 tasks · 0 runs",
+          "0 tasks · 0 runs",
+          "0 tasks · 25 runs"
+        ],
+        "moreButtons": [
+          "More",
+          "Load more runs",
+          "Load more tasks"
+        ]
+      },
+      {
+        "firstContentMs": 446,
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0,
+        "renderedTasks": 30,
+        "laneCounts": [
+          "0 tasks · 0 runs",
+          "200 tasks · 0 runs",
+          "0 tasks · 0 runs",
+          "0 tasks · 25 runs"
+        ],
+        "moreButtons": [
+          "More",
+          "Load more runs",
+          "Load more tasks"
+        ]
+      },
+      {
+        "firstContentMs": 521,
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0,
+        "renderedTasks": 30,
+        "laneCounts": [
+          "0 tasks · 0 runs",
+          "200 tasks · 0 runs",
+          "0 tasks · 0 runs",
+          "0 tasks · 25 runs"
+        ],
+        "moreButtons": [
+          "More",
+          "Load more runs",
+          "Load more tasks"
+        ]
+      }
+    ],
+    "medianMainMs": 489,
+    "medianMaxGapMs": 0,
+    "medianMaxLongTaskMs": 0
+  },
+  "chatSearch": {
+    "runs": [
+      {
+        "typedMs": 848,
+        "foundMsAfterTyping": 1,
+        "rowsAfterFilter": 2,
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0
+      },
+      {
+        "typedMs": 1036,
+        "foundMsAfterTyping": 1,
+        "rowsAfterFilter": 2,
+        "maxLongTask": 74,
+        "longTasks": 1,
+        "maxGap": 67
+      },
+      {
+        "typedMs": 832,
+        "foundMsAfterTyping": 1,
+        "rowsAfterFilter": 2,
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0
+      }
+    ],
+    "medianMainMs": 1,
+    "medianMaxGapMs": 0,
+    "medianMaxLongTaskMs": 0
+  },
+  "memorySearch": {
+    "runs": [
+      {
+        "searchBox": true,
+        "typedMs": 255,
+        "foundMsAfterTyping": 34,
+        "rowsAfterFilter": 2,
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0
+      },
+      {
+        "searchBox": true,
+        "typedMs": 245,
+        "foundMsAfterTyping": 36,
+        "rowsAfterFilter": 2,
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0
+      },
+      {
+        "searchBox": true,
+        "typedMs": 260,
+        "foundMsAfterTyping": 38,
+        "rowsAfterFilter": 2,
+        "maxLongTask": 0,
+        "longTasks": 0,
+        "maxGap": 0
+      }
+    ],
+    "medianMainMs": 36,
+    "medianMaxGapMs": 0,
+    "medianMaxLongTaskMs": 0
+  }
+}

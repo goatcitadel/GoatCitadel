@@ -1,0 +1,705 @@
+[
+  {
+    "priorId": "CH-R03",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatApprovalRenderer.tsx:237",
+      "docs/review/2026-11-usability/evidence/prior/CH-R03.png"
+    ],
+    "note": "Live: the approval card now shows one header and one summary (action, scope, expiry, command, consequence). The separate 'How this decision works' disclosure is still there under the buttons, next to 'Inspect persisted approval'.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatApprovalRenderer.tsx:237",
+        "docs/review/2026-11-usability/evidence/prior/CH-R03.png"
+      ],
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "A Chat approval card still carries a separate 'How this decision works' disclosure under the buttons",
+      "trigger": "Open a conversation with a pending approval (sandbox: Mission Control Next Verification Session).",
+      "expected": "Decision-mechanics text lives in the technical details, not as a second disclosure on the card.",
+      "actual": "Collapsed 'How this decision works' sits between the Deny button and 'Inspect persisted approval'.",
+      "owner": "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalDecisionBar.tsx"
+    }
+  },
+  {
+    "priorId": "CH-R04",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ConversationListPanel.tsx:161",
+      "apps/mission-control-next/src/cockpit/areas/chat/thread-activity.ts:71"
+    ],
+    "note": "Row status renders only when isNotableThreadActivity (running, waiting, failed). Unknown and neutral render nothing; live list shows status only on the waiting row."
+  },
+  {
+    "priorId": "CH-R06",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatApprovalRenderer.tsx:263",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerTools.tsx:137",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatInspectorLoadFailure.tsx:53",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatModelOptionsButton.tsx:158",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.tsx:414"
+    ],
+    "note": "Still four copied 'Reload app?' dialogs in Chat (plus Menu.tsx and the command palette), while the transcript's 'Reload app' link reloads at once with no dialog.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatApprovalRenderer.tsx:263",
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerTools.tsx:137",
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatInspectorLoadFailure.tsx:53",
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatModelOptionsButton.tsx:158",
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.tsx:414"
+      ],
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Reload app asks for confirmation in some Chat places and reloads immediately in another",
+      "trigger": "Trigger a Chat load failure that shows 'Reload app' in the transcript, then one in the inspector or model options.",
+      "expected": "One consistent reload behaviour.",
+      "actual": "Transcript link reloads immediately; the other places open a red 'Reload app?' dialog.",
+      "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscript.tsx"
+    }
+  },
+  {
+    "priorId": "CH-R09",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatOrganizationForm.tsx:28",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatOrganizationForm.tsx:69",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatOrganizationForm.tsx:73"
+    ],
+    "note": "Save outcome comes from the save promise result (dock.onSaveOrganization returns boolean), with an inline 'Folder and tags weren't saved' message on failure."
+  },
+  {
+    "priorId": "CH-R10",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnActions.tsx:59"
+    ],
+    "note": "effectfulTools still counts any run whose effectPotential is not 'none', so a run with no recorded potential asks for a Retry confirmation. The code comment says this is deliberate.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnActions.tsx:59"
+      ],
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Retry asks for confirmation on tools with no recorded effect potential",
+      "trigger": "Retry a turn whose tool runs have no effectPotential recorded (older records).",
+      "expected": "Only tools that may write or have side effects trigger the confirmation.",
+      "actual": "Unrecorded potential is treated as effectful, so Retry asks first.",
+      "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatTurnActions.tsx"
+    }
+  },
+  {
+    "priorId": "CH-R11",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx:74",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx:87"
+    ],
+    "note": "Controller hand-offs in ChatArea (Inbox, Work, first-run, settings, library, system) no longer append ?shell=cockpit."
+  },
+  {
+    "priorId": "CH-N01",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx:60",
+      "packages/threaded-surface-core/src/chat/controller/renderChatControllerFrame.tsx:235",
+      "apps/mission-control-next/src/cockpit/styles/chat-display.css:87"
+    ],
+    "note": "Cockpit Chat still renders inside the shared controller frame (chat-v11 section with a Classic p.error host error and a status-banner 'Refreshing chat context...' row). CSS restyles the error row under cockpit tokens, and the page header is hidden.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx:60",
+        "packages/threaded-surface-core/src/chat/controller/renderChatControllerFrame.tsx:235",
+        "apps/mission-control-next/src/cockpit/styles/chat-display.css:87"
+      ],
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Cockpit Chat still uses the Classic controller frame's error and refresh rows",
+      "trigger": "Open Chat while the Gateway refreshes chat context or a host error is raised.",
+      "expected": "Host errors and refresh status shown through cockpit components.",
+      "actual": "Classic-class paragraphs are shown, restyled by CSS only.",
+      "owner": "packages/threaded-surface-core/src/chat/controller/renderChatControllerFrame.tsx"
+    }
+  },
+  {
+    "priorId": "CH-N11",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:43",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx:39",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:14",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatInspectorBody.tsx:24"
+    ],
+    "note": "Chat still imports components from features/threaded-surface and features/native-routes (WorkflowSkillCaptureControl, ThreadedDocumentsPanel, useProjectSwitchReview, auto-grow). 'Save as skill' still shows as its own block under the answer (live screenshot OL-12.png), not in the turn's More menu.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:43",
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatArea.tsx:39",
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:14",
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatInspectorBody.tsx:24"
+      ],
+      "severity": "polish",
+      "kind": "bug",
+      "title": "Chat still embeds Classic components, and Save as skill is a separate block under the answer",
+      "trigger": "Finish a turn in Chat; look under the answer.",
+      "expected": "Cockpit-native pieces; Save as skill folded into the More menu.",
+      "actual": "A separate 'Save as skill' disclosure card sits between the turn actions and the Background run card.",
+      "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx"
+    }
+  },
+  {
+    "priorId": "CH-N12",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatBuildEditor.tsx:2",
+      "apps/mission-control-next/src/features/threaded-surface/workflow/CodeWorkbenchPanel.tsx:781"
+    ],
+    "note": "The build editor is still the Classic NextCodeWorkbenchPanel wrapped in a cockpit class. 'Revert all worktree changes?' says it discards every visible change but gives no file count and no 'can't be undone'.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatBuildEditor.tsx:2",
+        "apps/mission-control-next/src/features/threaded-surface/workflow/CodeWorkbenchPanel.tsx:781"
+      ],
+      "severity": "friction",
+      "kind": "unclear-copy",
+      "title": "Revert-all in the build editor does not say how many files go or that it cannot be undone",
+      "trigger": "Open a Code Mode run's build editor and choose Revert all.",
+      "expected": "Dialog states the scope (for example 4 files) and the consequence.",
+      "actual": "Generic text: 'discard every visible worktree change in this session. Review the repo diff before confirming.'",
+      "owner": "apps/mission-control-next/src/features/threaded-surface/workflow/CodeWorkbenchPanel.tsx"
+    }
+  },
+  {
+    "priorId": "CH-N13",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatBackgroundTasks.tsx:218",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatBackgroundTasks.tsx:223"
+    ],
+    "note": "The cancel dialog still prints 'Task version N · Watcher version M' in its body. The description was reworded ('Completed work stays in its record'). A prior note says a browser proof reads the versions, so it was kept on purpose.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatBackgroundTasks.tsx:218",
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatBackgroundTasks.tsx:223"
+      ],
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "The cancel-background-task dialog shows task and watcher version numbers",
+      "trigger": "Chat > background task > Cancel.",
+      "expected": "Plain consequence; versions behind technical details.",
+      "actual": "Body line 'label · Task version N · Watcher version M'.",
+      "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatBackgroundTasks.tsx"
+    }
+  },
+  {
+    "priorId": "CH-N20",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatAttachmentChips.tsx:28",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTranscriptContent.tsx:163",
+      "apps/mission-control-next/src/cockpit/areas/chat/chat-vocabulary.ts:179"
+    ],
+    "note": "Pending chips and sent attachments both use presentAttachmentType from chat-vocabulary."
+  },
+  {
+    "priorId": "CH-N21",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerControls.tsx:88",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerControls.tsx:122"
+    ],
+    "note": "Plan first and Review answer toggles now carry min-h-8; on desktop they live behind the + panel and appear as pills."
+  },
+  {
+    "priorId": "CH-L02",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/CH-L02.png",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerPlusMenu.tsx:170"
+    ],
+    "note": "Live at 1180px: the composer is one row (+, model chip, Send). Plan first, Web, Review answer and voice moved into the + panel, so no extra control rows."
+  },
+  {
+    "priorId": "CH-11~fu206",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/CH-R03.png"
+    ],
+    "note": "Header subtitle shows the provider name ('Verification stub (loopback)'), not provider-model ids. The composer chip still shows the model id when the catalog has no display name, which a prior note says is intended."
+  },
+  {
+    "priorId": "CH-27~fu206",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/CH-R03.png"
+    ],
+    "note": "Live: rows are two lines (title; age plus project) with no 'Active' label and no seconds; status appears only for the waiting row."
+  },
+  {
+    "priorId": "CH-39~fu206",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatPendingQuestion.tsx:39",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:321"
+    ],
+    "note": "Auto-collapse is fixed (use-auto-open-disclosure never closes itself) and the composer is resize-none. An optional background question still has no Skip control, only the 'Optional · Work continues' note.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "foundBy": "code",
+      "confidence": "likely",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatPendingQuestion.tsx:39",
+        "apps/mission-control-next/src/cockpit/areas/chat/ChatTextComposer.tsx:321"
+      ],
+      "severity": "polish",
+      "kind": "missing-state",
+      "title": "An optional background question has no Skip button",
+      "trigger": "A running turn asks an optional background question.",
+      "expected": "A way to dismiss the question.",
+      "actual": "Only an Answer path; the card stays until the turn ends.",
+      "owner": "apps/mission-control-next/src/cockpit/areas/chat/ChatPendingQuestion.tsx"
+    }
+  },
+  {
+    "priorId": "DOC-TRUNC-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/policy-engine/src/tool-executor/artifact-executor.ts:132",
+      "packages/policy-engine/src/tool-executor/artifact-executor.ts:828"
+    ],
+    "note": "documentTruncationWarnings now measures the same asString fallback chain (body or content, heading or title) that the document uses, so a blank primary field no longer hides the cut. Code read."
+  },
+  {
+    "priorId": "CHAT-02",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/approval-resolution-effects-service.ts:2860",
+      "apps/gateway/src/services/approval-resolution-effects-service.ts:2950"
+    ],
+    "note": "The wake is deferred while the linked turn is running or waiting_for_approval and has not parked; an unreadable trace schedules a retry. Code read."
+  },
+  {
+    "priorId": "SEC-ERRAND-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/browser-errands/errand-loop.ts:484",
+      "apps/gateway/src/services/browser-errands/errand-approval-gate.ts:393"
+    ],
+    "note": "Drag classifies both endpoints (handover beats ask), binds the source in the approval and rechecks both before dispatch. Code read."
+  },
+  {
+    "priorId": "CHAT-01",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/chat-durable-fanout-service.ts:107",
+      "apps/gateway/src/services/chat-durable-fanout-service.ts:120"
+    ],
+    "note": "ChatFanoutLedger.cancelParent validates each linked child and requests its cancellation, leaving the aggregate retryable on failure. Code read."
+  },
+  {
+    "priorId": "DESKTOP-005",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/claude-code-cli-run-dir-sweep.ts:21",
+      "apps/gateway/src/services/claude-code-cli-run-dir-sweep.ts:130"
+    ],
+    "note": "Sweep removes a run directory only when its recorded owner PID is definitely dead; unknown or invalid owners are kept. Code read."
+  },
+  {
+    "priorId": "DOCUMENT-002",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/document-editing-service.ts:217"
+    ],
+    "note": "Proposal creation throws a Conflict when the base already has a direct successor. Code read."
+  },
+  {
+    "priorId": "PROVIDER-01",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/llm-completion-helpers.ts:250"
+    ],
+    "note": "The typed claude_cli_usage_limited reason is kept instead of being reclassified. Code read."
+  },
+  {
+    "priorId": "PROVIDER-02",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/chat-turn-user-message.ts:91",
+      "apps/gateway/src/services/chat-turn-user-message.ts:137"
+    ],
+    "note": "Document context is kept next to image parts; only images actually sent claim vision delivery. Code read."
+  },
+  {
+    "priorId": "SEC-ARTIFACT-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/html-artifact-render-service.ts:62",
+      "apps/gateway/src/services/html-artifact-render-service.ts:108"
+    ],
+    "note": "Render reuse now needs a stored renderer receipt bound to artifact, version, hash, viewport and renderer version, and the PNG bytes are verified. Code read."
+  },
+  {
+    "priorId": "UX-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/NativeMessageRenderer.tsx:17"
+    ],
+    "note": "Plain-text fast path is skipped whenever math delimiters would normalize, so math keeps the shared renderer at settlement. Code read (the stub model cannot emit math)."
+  },
+  {
+    "priorId": "UX-002",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/threaded-surface-core/src/chat/useChatSurfaceOrchestration.ts:361",
+      "packages/threaded-surface-core/src/chat/useChatSurfaceOrchestration.ts:10"
+    ],
+    "note": "Edit and resend hydrates the original attachments with fetchChatAttachment and sets pending attachments, with an error if loading fails. Code read."
+  },
+  {
+    "priorId": "UX-003",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/threaded-surface-core/src/chat/retained-chat-stream.ts:41",
+      "packages/threaded-surface-core/src/chat/retained-chat-stream.ts:45"
+    ],
+    "note": "Retained replay rebuilds thinking from thinking_delta chunks through the reducer instead of dropping them. Code read."
+  },
+  {
+    "priorId": "UX-004",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/chat-message-route-runtime.ts:589",
+      "apps/gateway/src/services/chat-message-route-runtime.ts:665"
+    ],
+    "note": "The selected thread projects an exactly matched, durably running append (projectExactLiveAppend). Code read."
+  },
+  {
+    "priorId": "SEC-GIT-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/policy-engine/src/engine.ts:3517"
+    ],
+    "note": "git.add grants are matched only against explicit paths operands. Code read."
+  },
+  {
+    "priorId": "UI-COST-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatInspectorTurnPanel.tsx:31",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatInspectorTurnPanel.tsx:35"
+    ],
+    "note": "Subscription cost wording is only used once token usage is recorded; a planned route alone stays Unknown. Code read."
+  },
+  {
+    "priorId": "DOC-PDF-COVER-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/policy-engine/src/document-pdf.ts:26",
+      "packages/policy-engine/src/document-pdf.ts:105"
+    ],
+    "note": "drawCover returns whether the title was cut and the PDF result adds a warning that the full title is in the metadata. Code read."
+  },
+  {
+    "priorId": "CHAT-SETEXT-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/NativeMessageRenderer.tsx:20"
+    ],
+    "note": "The fast-path guard now treats any dash-only line (setext underline) as Markdown, so it uses the shared renderer. Code read."
+  },
+  {
+    "priorId": "SEC-ERRAND-002",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/policy-engine/src/errand-browser/errand-overlay-script.ts:304",
+      "packages/policy-engine/src/errand-browser/errand-overlay-script.ts:325"
+    ],
+    "note": "The overlay observes the card title and body as well as the buttons and requires all to be visible for a full dwell before a decision counts. Code read."
+  },
+  {
+    "priorId": "SEC-ANSWER001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/chat-answer-review.ts:270"
+    ],
+    "note": "The reviewer prompt uses projectToolRunsForModel, the same projection as ordinary Chat tool evidence. Code read."
+  },
+  {
+    "priorId": "WARD-PROXY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/chat-route-local-ward.ts:183",
+      "apps/gateway/src/services/chat-route-local-ward.ts:198"
+    ],
+    "note": "A local-only Ward rejects a non-loopback provider URL or a non-loopback proxy origin. Code read."
+  },
+  {
+    "priorId": "EXPLORER-PATH-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/workspace-explorer-path-projection.ts:81",
+      "apps/gateway/src/services/workspace-explorer-path-projection.ts:84"
+    ],
+    "note": "An oversized outside path is replaced by a marker and its continuation is suppressed up to its delimiter. Code read."
+  },
+  {
+    "priorId": "CHAT-SCOUT-EXT-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/chat-capability-scout.ts:150"
+    ],
+    "note": "The extension is optional and read only from the file's basename; no extension gives neutral wording. Code read."
+  },
+  {
+    "priorId": "CHAT-SCOUT-COPY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/chat-capability-scout.ts:419"
+    ],
+    "note": "Evidence-only suggestions use their own wording; only searched suggestions claim a completed search. Code read."
+  },
+  {
+    "priorId": "CHAT-WEB-SCOPE-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/chat-turn-entry-service.ts:1575",
+      "packages/threaded-surface-core/src/chat/useChatRoutePreflight.ts:62"
+    ],
+    "note": "An explicit fullWebAccess false is passed through preflight, dispatches and both Gateway retries. Code read."
+  },
+  {
+    "priorId": "CHAT-OPENCODE-CAPTURE-COPY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatOpenCodeEvidence.tsx:89"
+    ],
+    "note": "Truncated evidence says 'Some output was omitted. Open run details for the saved output.' Code read."
+  },
+  {
+    "priorId": "CHAT-EDIT-DOCUMENT-SELECTION-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/threaded-surface-core/src/chat/useChatDocuments.ts:131",
+      "packages/threaded-surface-core/src/chat/controller/createChatContextDockProps.ts:289"
+    ],
+    "note": "In edit mode new document refs are not offered or appended; existing refs stay removable. Code read."
+  },
+  {
+    "priorId": "ORCH-MODEL-PIN-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/orchestration/model-selector.ts:23"
+    ],
+    "note": "The selected candidate matches the pinned model, not just the provider default. Code read."
+  },
+  {
+    "priorId": "UX-DEFERRED-REVIEW-FOCUS-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/mission-control-shared/src/components/chat/ChatChangePlanActionDialog.tsx:91",
+      "packages/mission-control-shared/src/components/chat/ChatChangePlanActionDialog.tsx:256"
+    ],
+    "note": "Loading focus sits on a sentinel and moves to the first real control once ready unless the operator already moved. Code read only; not exercised live."
+  },
+  {
+    "priorId": "VOICE-PARTIAL-START-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/threaded-surface-core/src/chat/multimodal-live-voice-start.ts:124",
+      "packages/threaded-surface-core/src/chat/multimodal-realtime-voice.ts:57"
+    ],
+    "note": "A throw after microphone acquisition retires the data channel, peer connection and audio element, and the hook stops the session and microphone and rethrows the original error. Code read (needs a real microphone to run)."
+  },
+  {
+    "priorId": "MEDIA-UPLOAD-RECEIPT-01",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/threaded-surface-core/src/chat/multimodal-image-code.ts:121",
+      "packages/threaded-surface-core/src/chat/useChatComposerInteractions.ts:211",
+      "packages/threaded-surface-core/src/chat/useChatComposerInteractions.ts:214"
+    ],
+    "note": "Success notice and draft clearing happen only when the uploader returns true; the uploader returns false on error and keeps the error. Code read."
+  },
+  {
+    "priorId": "MEDIA-FIRST-SESSION-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/threaded-surface-core/src/chat/useChatComposerInteractions.ts:199",
+      "packages/threaded-surface-core/src/chat/useChatComposerInteractions.ts:202"
+    ],
+    "note": "The initiating upload follows its own confirmed owner.destination and rejects foreign selection changes. Code read."
+  },
+  {
+    "priorId": "CHAT-CREATOR-SELECTION-ABA-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/threaded-surface-core/src/chat/useChatSessionControls.ts:273",
+      "packages/threaded-surface-core/src/chat/useChatSessionControls.ts:314"
+    ],
+    "note": "ensureSession aborts instead of selecting its new conversation when the selection revision moved during creation. Code read."
+  },
+  {
+    "priorId": "UI-COMPOSER-SUGGESTION-OVERFLOW-001",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/UI-COMPOSER-SUGGESTION-OVERFLOW-001.png",
+      "apps/mission-control-next/src/cockpit/areas/chat/ChatComposerPalette.tsx:98"
+    ],
+    "note": "Live at 375px: typing '/' opens 24 suggestions; the listbox scrollWidth equals clientWidth (341) and every row is 341px wide, so nothing scrolls sideways."
+  },
+  {
+    "priorId": "MEDIA-TRANSCRIBE-SELECTION-ABA-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/threaded-surface-core/src/chat/useChatMultimodalControls.ts:359",
+      "packages/threaded-surface-core/src/chat/useChatMultimodalControls.ts:691"
+    ],
+    "note": "A transcription ticket is dropped on any media generation change and checks selection revision before dispatch and before inserting text. Code read."
+  },
+  {
+    "priorId": "MEDIA-TRANSCRIBE-AUTHORITY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/threaded-surface-core/src/chat/useChatMultimodalControls.ts:329",
+      "packages/threaded-surface-core/src/chat/useChatMultimodalControls.ts:691"
+    ],
+    "note": "The ticket binds workspace, Gateway base, access revision and caller scope; changes reject dispatch and the queued draft write. Code read."
+  },
+  {
+    "priorId": "PR-cowork-workspace",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:235",
+      "docs/review/2026-11-usability/evidence/prior/PR-cowork-workspace.png"
+    ],
+    "note": "Live: /cowork/workspace shows 'Page not found' in the Cockpit; only /cowork, /code and /cowork/tasks|board are redirected.",
+    "finding": {
+      "area": "chat",
+      "journey": "prior",
+      "foundBy": "live",
+      "confidence": "confirmed",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:235",
+        "docs/review/2026-11-usability/evidence/prior/PR-cowork-workspace.png"
+      ],
+      "severity": "polish",
+      "kind": "dead-end",
+      "title": "An old /cowork/workspace link ends on 'Page not found'",
+      "trigger": "Open /cowork/workspace in the Cockpit.",
+      "expected": "Redirect into Chat like /cowork.",
+      "actual": "Page not found.",
+      "owner": "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts"
+    }
+  },
+  {
+    "priorId": "PR-cowork-tasks",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:235",
+      "apps/mission-control-next/src/features/native-routes/cowork/CoworkNativePage.tsx:380",
+      "apps/mission-control-next/src/cockpit/areas/work/TaskStatusControl.tsx:102"
+    ],
+    "note": "Live: /cowork/tasks lands on Work (/work?shell=cockpit); create, edit, status, assign and archive exist there. Classic also let the operator add a deliverable (CoworkNativePage.tsx:380); the Cockpit lists deliverables read-only and git grep finds no addTaskDeliverable call in the Cockpit.",
+    "finding": {
+      "area": "work",
+      "journey": "prior",
+      "foundBy": "both",
+      "confidence": "likely",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:235",
+        "apps/mission-control-next/src/features/native-routes/cowork/CoworkNativePage.tsx:380",
+        "apps/mission-control-next/src/cockpit/areas/work/TaskStatusControl.tsx:102"
+      ],
+      "severity": "stall",
+      "kind": "dead-end",
+      "title": "Work cannot record a task deliverable, so a manual task cannot be marked done there",
+      "trigger": "In Work, open a manual task with no deliverable and try to set it Done.",
+      "expected": "A way to add a deliverable (as the Classic task page had).",
+      "actual": "'Done requires at least one recorded deliverable. The option appears once one is recorded.' with no control to record one.",
+      "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkTaskDetail.tsx"
+    }
+  },
+  {
+    "priorId": "PR-cowork-board",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:235",
+      "apps/mission-control-next/src/features/native-routes/cowork/CoworkNativePage.tsx:475"
+    ],
+    "note": "Live: /cowork/board lands on Work. The Classic board was a read-only posture page whose actions were links to tasks, approvals and the kanban, all native in the Cockpit."
+  },
+  {
+    "priorId": "PR-code-root",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:231"
+    ],
+    "note": "Live: /code redirects to /chat?shell=cockpit."
+  },
+  {
+    "priorId": "PR-cowork-root",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:231"
+    ],
+    "note": "Live: /cowork redirects to /chat?shell=cockpit."
+  },
+  {
+    "priorId": "OL-04",
+    "verdict": "operator-only",
+    "evidence": [],
+    "note": "Needs real models. Steps: (1) in Chat pick a cloud model with tools, ask it to run a tool, and confirm the approval and run cards show action, scope and result; (2) pick a reasoning model with thinking on and watch the thinking stream, then record frame times in the browser Performance panel (pass: frames under 50 ms); (3) with a local llama.cpp model, leave two idle Chat tabs for 3 minutes and count requests in Network (pass: 6 or fewer per minute per tab)."
+  },
+  {
+    "priorId": "OL-12",
+    "verdict": "operator-only",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-12.png"
+    ],
+    "note": "Sandbox with the stub: Review answer toggled in the + panel shows a 'Review answer' pill, and the live region announced 'Reviewing the answer.' while the turn ran; afterwards the answer line read 'Review unavailable' (the stub cannot review). A readable verdict needs a real model. Steps: turn on Review answer, send a question that has a checkable fact, watch for 'Reviewing the answer' while it runs, then confirm a readable review result under the answer. Pass: status shows while running and the result states agree or concerns in plain words."
+  },
+  {
+    "priorId": "OL-13",
+    "verdict": "operator-only",
+    "evidence": [
+      "packages/policy-engine/src/tool-executor/artifact-executor.ts:823"
+    ],
+    "note": "Needs a real model to write an oversized document. Steps: ask Chat for a document with a body above 12000 characters, or a section above 2000, saved as pdf or docx. Pass: the answer says text was cut (the tool result carries 'Some text is missing from the document: Cut 1 body to 12000 characters.') and the artifact shows the same notice. Code note: git grep finds no cockpit component that shows tool-result warnings or designReport.residualRisks directly, so the notice depends on the model relaying it; if it does not, record a finding."
+  },
+  {
+    "priorId": "OL-15",
+    "verdict": "operator-only",
+    "evidence": [],
+    "note": "Needs a real model and a Code Mode approval. Steps: in Chat ask for a PDF made by running code, approve the Code Mode request card once, wait for the run. Pass: the turn shows the PDF file and its artifact record (Library > Artifacts) and 'Open run in Work' opens the run."
+  }
+]

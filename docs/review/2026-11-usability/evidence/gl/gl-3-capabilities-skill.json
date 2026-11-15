@@ -1,0 +1,23 @@
+{
+ "presses": 26,
+ "stateBefore": "false",
+ "dialogMs": 1026,
+ "dialog": {
+  "text": "Approve skill state change Turn documentation on Danger Show details Approve once Deny",
+  "focusInside": true,
+  "focused": "Close dialog"
+ },
+ "approveTabs": 2,
+ "approveReached": true,
+ "dialogClosedMs": 531,
+ "focusAfter": {
+  "tag": "button[switch]",
+  "label": "documentation",
+  "visible": true,
+  "outline": "solid 2px",
+  "shadow": "no",
+  "inView": true,
+  "focusVisible": true
+ },
+ "switchAfter": "true"
+}

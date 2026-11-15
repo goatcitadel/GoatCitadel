@@ -1,0 +1,52 @@
+{
+ "change": {
+  "pressesToSwitch": 11,
+  "found": true,
+  "before": "false",
+  "afterSpace": "true",
+  "pressesToSave": 1,
+  "dialogMs": 841,
+  "dialog": {
+   "text": "Turn on Model reasoning in Chat When on, models that report their reasoning stream it into Chat above the answer. While the model thinks, its newest line shows beside the label; the full text stays shut unless you open it. This turns it on. Caution Only thi",
+   "focusInside": true,
+   "focused": "Close dialog"
+  },
+  "tabsToApprove": 2,
+  "approveReached": true,
+  "dialogClosedMs": 213,
+  "focusAfter": {
+   "tag": "body",
+   "label": "",
+   "visible": null
+  },
+  "statusText": [
+   "Done · Change saved and confirmed."
+  ]
+ },
+ "afterReload": "true",
+ "restore": {
+  "pressesToSwitch": 11,
+  "found": true,
+  "before": "true",
+  "afterSpace": "false",
+  "pressesToSave": 1,
+  "dialogMs": 324,
+  "dialog": {
+   "text": "Turn off Model reasoning in Chat When on, models that report their reasoning stream it into Chat above the answer. While the model thinks, its newest line shows beside the label; the full text stays shut unless you open it. This turns it off. Caution Only t",
+   "focusInside": true,
+   "focused": "Close dialog"
+  },
+  "tabsToApprove": 2,
+  "approveReached": true,
+  "dialogClosedMs": 595,
+  "focusAfter": {
+   "tag": "body",
+   "label": "",
+   "visible": null
+  },
+  "statusText": [
+   "Done · Change saved and confirmed."
+  ]
+ },
+ "afterRestoreReload": "false"
+}

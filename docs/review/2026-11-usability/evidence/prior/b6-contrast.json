@@ -1,0 +1,13 @@
+{
+ "note": "Contrast of a control border against the raised surface it sits on (token values from cockpit-tokens.css). WCAG 1.4.11 asks for 3:1.",
+ "light": {
+  "surface": "#ffffff",
+  "borderLine": 1.54,
+  "borderLineControl": 6.08
+ },
+ "dark": {
+  "surface": "#1a3045",
+  "borderLine": 1.87,
+  "borderLineControl": 7.77
+ }
+}

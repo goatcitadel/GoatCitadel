@@ -1,0 +1,366 @@
+[
+  {
+    "area": "capabilities",
+    "journey": "CP-3 Plugins: inspect, install, see what it added, uninstall (including the second uninstall when its skill is on)",
+    "severity": "stall",
+    "kind": "wrong-status",
+    "title": "The uninstall confirmation promises 'Installing it again adds its pieces back', but a plugin that held a skill can never be installed again",
+    "trigger": "Capabilities > Plugins > Add from folder (a folder with one skill and one prompt pack) > Check > Install, approve three times. Open the plugin, click Uninstall: the confirmation reads 'This can't be undone here. Installing it again adds its pieces back.' Approve, then Finish uninstalling and approve again. Add the same folder (or another plugin with a skill of the same name) from folder and Check.",
+    "expected": "Either the plugin installs again, as the confirmation says, or the confirmation says up front that the skill's name is used up for good.",
+    "actual": "The check of the second install shows 'This skill was removed with an earlier install. It can't come back until skills can be removed.' under the skill and 'So it can't be installed.' under the plugin, with no Install button, although the prompt pack passed. The only earlier warning is a line in the later approval dialog ('A skill it added can't be installed again until skills can be removed'), after the operator has already pressed Uninstall. No screen removes a skill, so there is no way out from the Cockpit.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/cp/cp-3-uninstall-1.png",
+      "docs/review/2026-11-usability/evidence/cp/cp-3-uninstall-dialog-1.png",
+      "docs/review/2026-11-usability/evidence/cp/cp-2-collision-check.png",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/PluginUninstall.tsx:98",
+      "apps/gateway/src/services/capability-plugin-inspection-service.ts:74",
+      "apps/gateway/src/services/plugin-uninstall-change-plan-adapter.ts:186"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/PluginUninstall.tsx",
+    "journeys": [
+      "CP-2 Import a skill from a folder and from a Git source; an import that collides with an existing id."
+    ]
+  },
+  {
+    "area": "capabilities",
+    "journey": "CP-3 Plugins: inspect, install, see what it added, uninstall (including the second uninstall when its skill is on)",
+    "severity": "friction",
+    "kind": "bug",
+    "title": "After a plugin is uninstalled, its skill stays in Capabilities > Skills for good as 'Removed with <plugin>', counted in the skill total, with a View button and no way to clear it",
+    "trigger": "Uninstall a plugin that added a skill (both passes approved). Open Capabilities > Skills and search for the skill name.",
+    "expected": "An uninstalled plugin's skill leaves the Installed list, or the row offers a way to remove it.",
+    "actual": "After the first pass the row reads 'Revoked, it was revoked, so the AI can't use it' (screenshot; its switch still reads On). After Finish uninstalling the page text read 'Removed with Review task 9 plugin - Its plugin was uninstalled, so the AI can't use it' with a View button (seen in the page text capture, not in a screenshot). The list header kept counting it ('2 of 25 skills' for a search that finds it, 25 where 24 were installed before). It cannot be dismissed from any Cockpit screen.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/cp/cp-3-skill-after-uninstall1.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/capabilities/skills/InstalledView.tsx"
+  },
+  {
+    "area": "capabilities",
+    "journey": "CP-3 Plugins: inspect, install, see what it added, uninstall (including the second uninstall when its skill is on)",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "After the first uninstall approval the plugin sits at 'Removing...' with both pieces marked Removed and a red 'Finish uninstalling' button that says nothing about why a second step is needed",
+    "trigger": "Uninstall a plugin whose skill is switched on, approve the first request in place, then open the plugin again.",
+    "expected": "One sentence under the badge: what is left, why it needs a second approval, and that pressing the button is safe.",
+    "actual": "The panel shows the badge 'Removing...', 'What it added: Skill meeting-notes Removed, Prompt pack Meeting notes check 1.0 Removed' and the button. Every piece already reads Removed, so the operator cannot tell what remains. The second approval then says 'Remove the skill meeting-notes, so the AI can't use it', which the first panel already showed as Removed. The flow worked and took two approvals (about 1.2 s each).",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/cp/cp-3-removing-panel.png",
+      "docs/review/2026-11-usability/evidence/cp/cp-3-finish-dialog.png",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/PluginUninstall.tsx:40"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/PluginUninstall.tsx"
+  },
+  {
+    "area": "capabilities",
+    "journey": "CP-4 Connectors: add a connector from a template up to the credential step with an invalid test credential; read the error; remove it.",
+    "severity": "friction",
+    "kind": "bug",
+    "title": "'Set up Brave Search' opens Advanced setup at the top of Web & Search, on the Firecrawl settings; the Brave key field is a page and a half further down and nothing scrolls or focuses it",
+    "trigger": "Capabilities > Connectors, search 'brave', Set up Brave Search, then 'Advanced setup' in the panel (link ends in #web-search).",
+    "expected": "The page opens at the Brave Search key field, or at least on its heading, focused.",
+    "actual": "The page opens with scrollTop 0 on the Firecrawl section ('Use Firecrawl', Server, Self-hosted base URL). The Brave Search heading is 1518 px from the top of a 900 px window, after the search-engine list and the Firecrawl key. Focus stays on the page body. The operator who clicked 'Set up Brave Search' has to guess where to scroll.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/cp/cp-4-brave-anchor.json",
+      "docs/review/2026-11-usability/evidence/cp/cp-4-advanced-websearch.png",
+      "docs/review/2026-11-usability/evidence/cp/cp-4-brave-panel.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/connector-links.ts"
+  },
+  {
+    "area": "capabilities",
+    "journey": "CP-5 MCP: add a static MCP server, see its tools, use one in Chat.",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "The word 'Connected' (amber badge, 'Connected 2' group, 'Connected - not available in Chat') is shown for an MCP server that has never connected; Advanced setup says 'Last connection state: Disconnected'",
+    "trigger": "Capabilities > Connectors > Add your own > Local process (stdio), label and a command, Review, Register. Close the dialog and read the new row, then open Connectors > Advanced setup > MCP servers.",
+    "expected": "A server that was saved but never connected reads 'Saved, not connected yet' (or similar) on both screens.",
+    "actual": "The dialog says 'No connection or tool call was performed'. The row then reads 'Connected' in an amber badge (waiting tone, because Chat cannot use it) with the line 'Connected - not available in Chat', and the page groups it under 'Connected'. The panel says 'No tools listed yet. They show up once it connects.' The Gateway's own record says status 'disconnected', and Advanced setup says 'Last connection state: Disconnected'. The word is what misleads: the Connectors projection returns state 'connected' for any enabled server whose status is not error.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/cp/cp-5-row.png",
+      "docs/review/2026-11-usability/evidence/cp/cp-5-panel.png",
+      "docs/review/2026-11-usability/evidence/cp/cp-5-advanced-mcp.png",
+      "apps/gateway/src/services/capability-connectors-projection.ts:292"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/gateway/src/services/capability-connectors-projection.ts"
+  },
+  {
+    "area": "capabilities",
+    "journey": "CP-5 MCP: add a static MCP server, see its tools, use one in Chat.",
+    "severity": "stall",
+    "kind": "missing-state",
+    "title": "When connecting an MCP server fails, the row says 'open it to see why' but the panel shows no reason unless Settings > Technical details is on, and nothing says so",
+    "trigger": "Advanced setup > MCP servers > Inspect the server > Review connection > Connect reviewed server, on a host where the connection fails (here the sandbox has no OS keychain: 'OS keychain backend is unavailable on this host'). Then read the Connectors row and open its panel, with the Settings 'Technical details' preference at its default (off).",
+    "expected": "The panel shows the reason, or says where it is ('turn on Technical details in Settings > Appearance').",
+    "actual": "The Gateway recorded the cause as the server's last error for any connect failure (reviewedConnectFailure stores the cause's own words, secret-redacted; here 'Reviewed MCP connection did not complete: OS keychain backend is unavailable on this host'). The row reads 'Not working - Stopped working; open it to see why - Try again'. The panel reads only 'Not working. Stopped working. Try again'. The reason is rendered only as 'Last error' inside a Technical details block, which exists only when the Settings > Appearance 'Technical details' checkbox is on; it is off by default (showTechnicalDetails false), and the extra sentence 'The last error is under Technical details.' that points at it is also printed only when the preference is on. With the default, the row's promise cannot be kept and no screen says a preference would show the reason. The cause in this run was the sandbox's missing keychain, but the gap holds for any connect failure. Not re-run with the preference on (Last error not seen live). Separately, after the 500 the inspection said 'MCP connection outcome is unconfirmed. Further changes to this server are locked for this app session; inspect its current owner state.' and Review connection and Review disconnect were greyed; seen once, after a 500 in the sandbox, cause not isolated.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/cp/cp-5-connected.png",
+      "docs/review/2026-11-usability/evidence/cp/cp-5-row-after-error.png",
+      "docs/review/2026-11-usability/evidence/cp/cp-5-error-panel.png",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/connector-view.ts:85",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/connector-view.ts:101",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/connector-view.ts:205",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/ConnectorPanelParts.tsx:109",
+      "apps/mission-control-next/src/cockpit/ui/TechnicalDetails.tsx:7",
+      "apps/mission-control-next/src/cockpit/areas/settings/AppearanceSettings.tsx:116",
+      "packages/mission-control-shared/src/state/ui-preferences.tsx:80",
+      "apps/gateway/src/services/mcp-server-admin-service.ts:372",
+      "apps/gateway/src/services/mcp-server-admin-service.ts:399"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/connector-view.ts"
+  },
+  {
+    "area": "capabilities",
+    "journey": "CP-5 MCP: add a static MCP server, see its tools, use one in Chat.",
+    "severity": "stall",
+    "kind": "dead-end",
+    "title": "For an MCP server the operator registered by hand, nothing says how to let Chat use it: the screens say 'Ask the runtime operator ... features.chatStaticMcpV1Enabled', and the only Cockpit switch is a pre-ticked box in the template-install panel",
+    "trigger": "Register an MCP server through Connectors > Add your own > Register MCP server. Open its Connectors panel ('Chat can't use connectors yet. See Chat access in Advanced setup'), follow the link, then Inspect the server in Advanced setup. (An install from a template, such as Airtable, is the other path: its panel shows 'Also let Chat use connectors'; not installed here.)",
+    "expected": "For a hand-registered server, a switch for Chat access or a pointer to the template-install checkbox / Settings.",
+    "actual": "Static MCP in Chat defaults to off (chatStaticMcpV1Enabled ?? false, config.ts:1552). The Cockpit does have one way to turn it on: installing a connector from a template shows a pre-ticked 'Also let Chat use connectors' checkbox whenever Chat is blocked for 'mcp_in_chat_off' (ConnectorInstallPanel.tsx:42, :80-89), and the install change plan patches the flag on (connector-install-change-plan-adapter.ts:102, :163-164). A server registered by hand never reaches that panel. Its screens read 'Callable: Static MCP in Chat is disabled for this runtime', 'Ask the runtime operator to enable static MCP in Chat through a reviewed settings change, with resumable runs enabled' and, under 'Runtime operator setting', 'The reviewed settings change uses features.chatStaticMcpV1Enabled. This view does not change runtime settings.' The 'See Chat access in Advanced setup' link lands on the MCP list, which has no such switch (connector-links.ts:11 sends it there and the comment above it says the cockpit has no switch of its own). A git grep of apps/mission-control-next/src and packages/mission-control-shared finds the flag only in a type and in this text. An operator who registers their own server and has never installed a template connector is the runtime operator, is told to ask one, and is not told that installing any template with the box ticked would turn it on for every server.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/cp/cp-5-inspect.png",
+      "docs/review/2026-11-usability/evidence/cp/cp-5-panel.png",
+      "docs/review/2026-11-usability/evidence/cp/cp-4-install-panel.png",
+      "apps/mission-control-next/src/cockpit/areas/settings/McpSetupProgress.tsx:145",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/connector-links.ts:11",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/ConnectorInstallPanel.tsx:42",
+      "apps/gateway/src/services/connector-install-change-plan-adapter.ts:164",
+      "apps/gateway/src/config.ts:1552"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/McpSetupProgress.tsx"
+  },
+  {
+    "area": "capabilities",
+    "journey": "CP-5 MCP: add a static MCP server, see its tools, use one in Chat.",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "After 'Register reviewed MCP server' the dialog stays open on the template list and prints 'Saved server ID: e5b16f2f-...' as plain visible text",
+    "trigger": "Capabilities > Connectors > Add your own > fill label and command > Review MCP registration > Register reviewed MCP server.",
+    "expected": "A confirmation that names the server, and the dialog closes or offers the server's panel; ids sit inside Technical details.",
+    "actual": "The dialog keeps the full template picker and search and shows 'Saved server ID: <uuid>' outside a TechnicalDetails element. The new row sits behind the dialog.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/cp/cp-5-registered.png",
+      "apps/mission-control-next/src/cockpit/areas/settings/McpServerCreate.tsx:85"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/settings/McpServerCreate.tsx"
+  },
+  {
+    "area": "capabilities",
+    "journey": "CP-6 Tools: find a tool, read what it can do and what approval it needs, change its permission.",
+    "severity": "friction",
+    "kind": "approval-friction",
+    "title": "Switching a tool group back on sends the operator to the Inbox ('Waiting on you in Inbox / Open in Inbox') while a skill switch is approved in place",
+    "trigger": "Capabilities > Tools > Web search > View > switch off (applies at once) > switch on. Read the panel, follow 'Open in Inbox', approve there.",
+    "expected": "The approval opens in place with one click, as it does for skills and plugins on the same tab bar.",
+    "actual": "After the click the switch stays off and the panel reads 'Waiting on you in Inbox - Open in Inbox' (2.5 s later nothing else on screen). The operator leaves Capabilities, finds the card 'Switch the Web search tools back on' in the Inbox, approves it (one Approve once click on the card), then returns and reloads the tool group to see it On. Skills (SkillPanelSwitch) and plugins (PluginInstallProgress) open the same Settings approval dialog in place.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/cp/cp-6-on-done.png",
+      "docs/review/2026-11-usability/evidence/cp/cp-6-inbox.png",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/tools/GroupSwitchParts.tsx:18",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/tools/GroupSwitchParts.tsx:167"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/capabilities/tools/GroupSwitchParts.tsx"
+  },
+  {
+    "area": "library",
+    "journey": "LB-1 Memory: see what was remembered and why, edit an item, forget an item, see history.",
+    "severity": "stall",
+    "kind": "dead-end",
+    "title": "On a default install Library > Memory shows only 'This feature is turned off for this installation.' and no screen offers the setting that turns it on (not reproduced live)",
+    "trigger": "Fresh install on config defaults. First run copies config/goatcitadel.example.json to config/goatcitadel.json (loadGatewayConfig: syncUnifiedConfig 'materialized ... from example', config.ts:553-558); that file sets memoryLifecycleAdminV1Enabled false. Then Library > Memory. The sandbox shows true only because tools/seed.mjs patched it on; not reproduced live on a default install.",
+    "expected": "The page says where to turn memory administration on, or offers a switch.",
+    "actual": "The full chain, read from the code: the in-code fallback is `memoryLifecycleAdminV1Enabled ?? true` (config.ts:1475), but a fresh install materialises its config from the example, which sets false (config/goatcitadel.example.json:202), so a real fresh install gets false. No onboarding or first-run code sets the flag (git grep over apps/gateway/src and apps/mission-control-next/src finds only read checks and the Settings route schema) and no Settings screen exposes it. With false the Gateway refuses the list read with 409 (requireEnabled, memory-item-pagination-service.ts:21), the shared error mapper turns it into 'This feature is turned off for this installation.' and the page shows that sentence in an error callout (LibraryMemoryWorkspace.tsx:196-201) with the filters and batch buttons still on screen. The flag appears only in read checks (LibraryMemoryBatch, LibraryMemoryDiagnostics, LibraryMemoryEditor, LibraryMemoryProposals), a type and a test fixture. Not reproduced live: the sandbox value is true (read-only GET /api/v1/settings).",
+    "evidence": [
+      "apps/gateway/src/services/memory-item-pagination-service.ts:21",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx:196",
+      "packages/mission-control-shared/src/api/describe-api-error.ts:52",
+      "config/goatcitadel.example.json:202",
+      "apps/gateway/src/config.ts:1475",
+      "apps/gateway/src/config.ts:553",
+      "docs/review/2026-11-usability/evidence/lb/lb-1-memory.png"
+    ],
+    "foundBy": "code",
+    "confidence": "likely",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryWorkspace.tsx"
+  },
+  {
+    "area": "library",
+    "journey": "LB-1 Memory: see what was remembered and why, edit an item, forget an item, see history.",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "A memory item's 'Memory provenance' shows only dates, expiry and namespace; why it was remembered (source, conversation, origin) is not on screen",
+    "trigger": "Library > Memory > Open an item > expand Memory provenance.",
+    "expected": "A line such as 'Remembered from conversation X on <date>' or the recorded source.",
+    "actual": "The visible provenance reads 'Created 2 minutes ago - Updated 2 minutes ago', 'No expiry recorded', 'Namespace: Mission control next'. The recorded source keys (source, sourceRef, sourceSessionId, origin) are written only inside a collapsed technical block as raw 'key: value' lines. The page header promises 'what was remembered and why'.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/lb/lb-1-provenance.png",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryEditor.tsx:264",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryEditor.tsx:278"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryEditor.tsx"
+  },
+  {
+    "area": "library",
+    "journey": "LB-1 Memory: see what was remembered and why, edit an item, forget an item, see history.",
+    "severity": "friction",
+    "kind": "approval-friction",
+    "title": "Editing a memory item takes four clicks through three stacked dialogs: Review memory changes, Request edit approval, Review danger approval, Approve once",
+    "trigger": "Library > Memory > Open an item, change the content, Review memory changes, Request edit approval, Review danger approval, Approve once.",
+    "expected": "One review, one approval click, then the item shows the new text.",
+    "actual": "Four clicks and a dialog on top of a dialog on top of the side panel; the second dialog is a wall of approval fields ('Action: Memory lifecycle', 'Scope', 'Expiry', 'Content size before redaction: 63 B', 'Workspace: ws_..., namespace: ...'). The edit then applied by itself (history reads 'Updated - Changed: content - Approved change'), about 8 s in total when scripted. Forget is the same four clicks.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/lb/lb-1-edit-review.png",
+      "docs/review/2026-11-usability/evidence/lb/lb-1-edit-after-request-1.png",
+      "docs/review/2026-11-usability/evidence/lb/lb-1-danger-review.png",
+      "docs/review/2026-11-usability/evidence/lb/lb-1-history-after-edit.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryEditor.tsx"
+  },
+  {
+    "area": "library",
+    "journey": "LB-1 Memory: see what was remembered and why, edit an item, forget an item, see history.",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "The approval to forget a memory item names it only by raw id ('Subject Id: mem_5e38..., Subject Kind: memory_item'), and the Inbox card is titled 'Review memory lifecycle' for both edit and forget",
+    "trigger": "Library > Memory > Open an item > Review forget > Request forget approval > Review danger approval; or open the same approval from the Inbox.",
+    "expected": "The confirmation names the item it will forget, as the edit confirmation does ('Target: review-task-9 memory').",
+    "actual": "The danger confirmation reads 'Subject Id: mem_5e38952b122f45c5a2ecc77c63dbbb24 / Subject Kind: memory_item / Title: Approve memory forget'. The Inbox card says 'Review the requested action and its policy reason. Target details are available in the approval record.' Another approval in the same Inbox ('Docs ingest - Ingests a document - review-task-9 source') names its target. The dialog does say 'A forgotten item can't be restored from the cockpit.'",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/lb/lb-1-forget-done.png",
+      "docs/review/2026-11-usability/evidence/lb/lb-1-forget-review.png",
+      "docs/review/2026-11-usability/evidence/lb/lb-1-inbox.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/library/LibraryMemoryReceipt.tsx"
+  },
+  {
+    "area": "library",
+    "journey": "LB-2 Files and artifacts: upload a text file, find an artifact made in Chat, open it.",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "'Upload text file' has no file chooser: the operator types a path and pastes the file's text into a box",
+    "trigger": "Library > Files > Upload text file.",
+    "expected": "Either a file chooser, or a title that says the text is pasted ('Add text file').",
+    "actual": "The form holds 'Relative file path' and 'Text content' and no file input (0 input[type=file]). An operator with a file on disk has to open it and copy its text. After Upload file succeeds the dialog stays open on the same form, still showing a live 'Upload file' button beside 'GoatCitadel accepted review-task-9-note.txt (68 B)'.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/lb/lb-2-upload-form.png",
+      "docs/review/2026-11-usability/evidence/lb/lb-2-uploaded.png",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryFileUpload.tsx:143"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/library/LibraryFileUpload.tsx"
+  },
+  {
+    "area": "library",
+    "journey": "LB-3 Agents: view profiles and the imported catalog; prompt packs: open, use in Chat.",
+    "severity": "friction",
+    "kind": "bug",
+    "title": "'Open <agent>' in Library > Agents shows nothing in view: the editor opens below the whole profile list, about 1400 px down, with no scroll or focus move",
+    "trigger": "Library > Agents > Profiles > Open QA Goat.",
+    "expected": "The profile opens in a panel or scrolls into view with focus on it.",
+    "actual": "The URL gains agentId=builtin-qa and the screen looks unchanged for the 2.5 s watched. The editor ('QA Goat - Installation-wide profile ... Role ID, Agent name, ...') is rendered after the tenth profile at 1395 px from the top of a 900 px window; scrollTop stays 0 and focus stays on the Open button.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/lb/lb-3-profile.png",
+      "docs/review/2026-11-usability/evidence/lb/lb-3-profile-open-bottom.png",
+      "docs/review/2026-11-usability/evidence/lb/lb-3-profile-position.json",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryAgentsWorkspace.tsx:132"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/library/LibraryAgentsWorkspace.tsx"
+  },
+  {
+    "area": "library",
+    "journey": "LB-3 Agents: view profiles and the imported catalog; prompt packs: open, use in Chat.",
+    "severity": "friction",
+    "kind": "missing-state",
+    "title": "An empty 'Imported catalog' shows a heading, a closed 'Import agent catalog' and a search box, with no 'nothing imported yet' message",
+    "trigger": "Library > Agents > Imported catalog on an install with no imported agents.",
+    "expected": "'No imported agents yet. Open Import agent catalog to bring some in.'",
+    "actual": "After the 'Reading imported catalog...' status the page ends at 'Refresh imported catalog'. The operator cannot tell an empty catalog from a failed read.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/lb/lb-3-imported.png",
+      "apps/mission-control-next/src/cockpit/areas/library/LibraryImportedAgents.tsx:106"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/library/LibraryImportedAgents.tsx"
+  },
+  {
+    "area": "library",
+    "journey": "LB-3 Agents: view profiles and the imported catalog; prompt packs: open, use in Chat.",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "Running a prompt-pack test prints the full path of a log file on this computer in the result line ('Saved log to' followed by an absolute path)",
+    "trigger": "Library > Prompt packs > Run on a test.",
+    "expected": "'Ran TEST-01. Auto-scored 60.3/100 (review).' with the log reachable by a link or left out.",
+    "actual": "The result line ends with 'Saved log to <absolute path under the runtime's temp folder>', which the operator cannot open from the Cockpit.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/lb/lb-3-pack-run.png",
+      "apps/mission-control-next/src/features/prompt-packs/usePromptPacksWorkbenchState.ts:683"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/features/prompt-packs/usePromptPacksWorkbenchState.ts"
+  },
+  {
+    "area": "library",
+    "journey": "LB-4 Knowledge: add a source, see it used in an answer with its citation.",
+    "severity": "friction",
+    "kind": "missing-state",
+    "title": "After a knowledge source is ingested, Library > Knowledge lists no sources: the only proof it was stored is the receipt line inside the approval dialog",
+    "trigger": "Library > Knowledge > pick a source conversation, namespace 'review-task-9', Source type Text, title and text > Review knowledge ingest > Confirm knowledge request > Approve once. Close the dialog and read the page.",
+    "expected": "The page lists the stored source (title, namespace, when) so the operator can see what the AI may retrieve.",
+    "actual": "The dialog reads 'Original ingest completed; the canonical document receipt is available.' The page below holds 'Memory files' (empty), 'Context use and retrieval history' (earlier Chat retrievals) and 'External sources'. Nothing mentions review-task-9 or the new source, and the page header promises 'Source material, governed imports, retrieval history'. The operator cannot see or remove what was stored.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/lb/lb-4-approved-1.png",
+      "docs/review/2026-11-usability/evidence/lb/lb-4-knowledge-after.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/library/LibraryKnowledgeWorkspace.tsx"
+  }
+]

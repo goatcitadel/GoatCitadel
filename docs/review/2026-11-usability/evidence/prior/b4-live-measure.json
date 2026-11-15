@@ -1,0 +1,105 @@
+{
+ "twoTabIdle": {
+  "windowSeconds": 30,
+  "tabAFirst8s": 91,
+  "tabBFirst8s": 91,
+  "tabAIdle30s": 1,
+  "tabBIdle30s": 1,
+  "topIdleA": [
+   [
+    "GET /api/v1/inbox",
+    1
+   ]
+  ],
+  "topIdleB": [
+   [
+    "GET /api/v1/inbox",
+    1
+   ]
+  ]
+ },
+ "inboxBootModules": {
+  "total": 865,
+  "chatAreaFiles": 34,
+  "chatAreaTsx": [
+   "/src/cockpit/areas/chat/ChatArea.tsx"
+  ],
+  "anyAreasChat": 71,
+  "openui": [],
+  "zodV4": [],
+  "zodAny": [
+   "/node_modules/.vite/deps/zod_mini.js",
+   "/node_modules/.vite/deps/zod.js"
+  ],
+  "workAreaLoaded": 3
+ },
+ "systemBootModules": {
+  "total": 911,
+  "anyAreasChat": 71,
+  "openui": [],
+  "zodV4": []
+ },
+ "sidebarCurrentVsHover": {
+  "current": {
+   "text": "WorkNo queue",
+   "bg": "rgb(15, 29, 45)",
+   "color": "rgb(244, 251, 255)",
+   "weight": "400",
+   "shadow": "none",
+   "outline": "none",
+   "border": "0px"
+  },
+  "hover": {
+   "text": "Chat",
+   "bg": "rgb(15, 29, 45)",
+   "color": "rgb(211, 227, 237)",
+   "weight": "400",
+   "shadow": "none"
+  }
+ },
+ "focusRingClipping_work": {
+  "checked": 33,
+  "clippedCount": 6,
+  "examples": [
+   {
+    "el": "Board",
+    "clipper": "nav.cockpit-area-tabs cockpit-overflow-fade ",
+    "sides": "LTB"
+   },
+   {
+    "el": "History",
+    "clipper": "nav.cockpit-area-tabs cockpit-overflow-fade ",
+    "sides": "TB"
+   },
+   {
+    "el": "Schedules",
+    "clipper": "nav.cockpit-area-tabs cockpit-overflow-fade ",
+    "sides": "TB"
+   },
+   {
+    "el": "Archived tasks",
+    "clipper": "nav.cockpit-area-tabs cockpit-overflow-fade ",
+    "sides": "TB"
+   },
+   {
+    "el": "Automation designer",
+    "clipper": "nav.cockpit-area-tabs cockpit-overflow-fade ",
+    "sides": "TB"
+   },
+   {
+    "el": "See History",
+    "clipper": "main#main-content.min-w-0 flex-1 overflow-y-auto",
+    "sides": "B"
+   }
+  ]
+ },
+ "reducedMotion": {
+  "running": 0,
+  "infiniteRunning": 0,
+  "names": []
+ },
+ "normalMotion": {
+  "running": 0,
+  "infiniteRunning": 0
+ }
+}

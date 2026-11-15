@@ -1,0 +1,679 @@
+[
+  {
+    "priorId": "CAP-003",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/capability-skill-actions-service.ts:265",
+      "apps/gateway/src/services/capability-skill-actions-service.ts:350",
+      "apps/gateway/src/services/capability-skill-actions-service.ts:471"
+    ],
+    "note": "Code read: after the step's approval exists the service re-reads the plugin records and declines the approval, then refuses with PLUGIN_OWNED, unless that install plan's record is still installing or installed and lists the skill. A completed uninstall therefore cannot be crossed by a late activation."
+  },
+  {
+    "priorId": "CAP-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/capability-plugins-composition.ts:410",
+      "apps/gateway/src/services/capability-plugins-composition.ts:418"
+    ],
+    "note": "Code read: every store change marks the holds unavailable (the policy engine then denies every group a plugin could hold) and a failed read is retried in the background after 5 s, 15 s and then every minute until one lands."
+  },
+  {
+    "priorId": "CAP-002",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/plugin-uninstall-change-plan-adapter.ts:460",
+      "apps/gateway/src/services/plugin-uninstall-change-plan-adapter.ts:463"
+    ],
+    "note": "Code read: the uninstall re-reads the connector scope under the plugin-record lock and throws a Conflict (scope changed, replan) if another plugin's install changed who keeps a connector."
+  },
+  {
+    "priorId": "INT-COMMS-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/communications-approval-effect-service.ts:138",
+      "apps/gateway/src/services/communications-approval-effect-service.ts:190"
+    ],
+    "note": "Code read: both the mail and the calendar effects ask for the exact completed receipt first (`await completed() ? { replayed: true } : ...`) and only dispatch when none exists, so drift in the connection cannot hide a completed send nor cause a second one."
+  },
+  {
+    "priorId": "INT-MCP-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/mcp-http-transport.ts:174"
+    ],
+    "note": "Code read: a JSON or SSE reply settles the call only when `isReplyFor` matches the request id and has no `method`; otherwise the call fails with 'did not include the expected JSON-RPC response'."
+  },
+  {
+    "priorId": "SEC-CODE-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/capability-system-service.ts:3458",
+      "apps/gateway/src/services/capability-system-service.ts:3550"
+    ],
+    "note": "Code read: the execute paths call requireCodeModeEnabled('executing') at run time, so a legacy pending run is blocked by the live flag; terminal records are read through separate paths."
+  },
+  {
+    "priorId": "INT-MCP-002",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/mcp-legacy-sse-transport.ts:178"
+    ],
+    "note": "Code read: a 404 after a tools/call was sent now throws 'outcome is unknown' instead of reconnecting and re-posting; mcp-runtime.ts marks it manualReconciliationRequired."
+  },
+  {
+    "priorId": "INT-COMMS-002",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/communications-dashboard-service.ts:271",
+      "apps/gateway/src/services/communications-dashboard-service.ts:248"
+    ],
+    "note": "Code read: recovery of a draft that is no longer an unlinked fence returns not_interrupted with the current draft and records nothing; the fence update is guarded by expectedUnlinkedUpdatedAt."
+  },
+  {
+    "priorId": "INT-COMMS-003",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/communications-dashboard-service.ts:227",
+      "apps/gateway/src/services/communications-dashboard-service.ts:230"
+    ],
+    "note": "Code read: the approval is linked to the exact draft fence inside the approval-creation transaction; a stale fence throws StaleMailSendFenceError, which aborts that creation and returns the current draft."
+  },
+  {
+    "priorId": "SKILL-SNAPSHOT-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/capability-skills-service.ts:182",
+      "apps/gateway/src/services/capability-skill-actions-service.ts:230"
+    ],
+    "note": "Code read: the explicit check and the installs lookup ask Skill Hub for the exact snapshot id (`snapshotIds: [snapshotId]`); only the ordinary list keeps the newest-100 limit."
+  },
+  {
+    "priorId": "PLUGIN-PATH-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/contracts/src/plugins.ts:404",
+      "packages/contracts/src/plugins.ts:350"
+    ],
+    "note": "Code read: the shared portable-segment check rejects < > : \" | ? * and trailing dots or spaces, and the manifest answers PIECE_PATH_INVALID with the exact pieces[n].path field."
+  },
+  {
+    "priorId": "CAPABILITY-CUSTODY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/capabilities/skills/use-skill-switch.ts:459",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/skills/use-skill-install.ts:508"
+    ],
+    "note": "Code read: both the skill-switch and skill-install stores subscribe to Gateway access changes and caller-scope changes and clear their timers and state, so a new caller starts from canonical state."
+  },
+  {
+    "priorId": "DISCORD-ALLOWLIST-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/discord-runtime-service.ts:1475"
+    ],
+    "note": "Code read: the synthesized default guild rule denies when inboundAccessMode is allowlist and the sender list is empty; a saved explicit guild rule is used first."
+  },
+  {
+    "priorId": "CODEMODE-CATALOG-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/capability-system-service.ts:4551",
+      "apps/gateway/src/services/capability-system-service.ts:4564"
+    ],
+    "note": "Code read: a tool in a switched-off group stays in the inspectable catalog with the warning 'This tool group is switched off.' and is marked callable:false, so the frozen callable catalog excludes it."
+  },
+  {
+    "priorId": "SMTP-BODY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "packages/policy-engine/src/tool-executor/smtp-mail-executor.ts:173",
+      "packages/policy-engine/src/tool-executor/smtp-mail-executor.ts:183"
+    ],
+    "note": "Code read: the SMTP message takes args.bodyText untouched as `text`."
+  },
+  {
+    "priorId": "GROUP-HOLD-COPY-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/capabilities/tools/GroupSwitchParts.tsx:47",
+      "apps/gateway/src/services/chat-capability-scout.ts:126"
+    ],
+    "note": "Code read: Tools and Chat now say uninstalling releases the holds and that, if the group stays off, the operator can switch it on."
+  },
+  {
+    "priorId": "TELEGRAM-POLL-GENERATION-001",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/gateway/src/services/channel-stream-adapters/telegram-stream-adapter.ts:249",
+      "apps/gateway/src/services/channel-stream-adapters/telegram-stream-adapter.ts:258"
+    ],
+    "note": "Code read: the offset write carries the connection revision and a TelegramPollRevisionChangedError is not counted as a head failure, so stale poll work cannot admit an event or drop an update after the cutover."
+  },
+  {
+    "priorId": "PR-library-citadel",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelMasonSettings.tsx:19",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelMasonSettings.tsx:59",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelMasonSettings.tsx:267",
+      "apps/mission-control-next/src/features/native-routes/library/CitadelMasonRoutePage.tsx:75"
+    ],
+    "note": "Classic actions: start the Mason session, answer and save its questions, send a message, draft and review the Blueprint, review staging, stage the reviewed Blueprint, cancel staging, refresh the session. The Cockpit page (Settings › Citadel, also at /library/citadel-*) renders the same owner hook and offers every one; CitadelMasonSettings uses useMasonEditor and useMasonStaging (:19, :21) with Start session (:59), draft and review, Review staging and the confirm 'Stage reviewed Blueprint' (:267)."
+  },
+  {
+    "priorId": "PR-library-citadel-overview",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelOverviewSettings.tsx:23",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelOverviewSettings.tsx:361",
+      "apps/mission-control-next/src/features/native-routes/library/CitadelOverviewRoutePage.tsx:28"
+    ],
+    "note": "Classic actions: view the Charter and Chambers/Gatehouse posture, edit and save the Charter (with review), create the Charter from a default template, archive or restore the Citadel. The Cockpit page (Settings › Citadel, also at /library/citadel-*) renders the same owner hook and offers every one; CitadelOverviewSettings uses useCitadelOverview (:23) with the editor, the template review and Confirm archive/restore (:361)."
+  },
+  {
+    "priorId": "PR-library-citadel-wards",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelWardsSettings.tsx:12",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelWardsSettings.tsx:188",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelWardsSettings.tsx:234",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelWardsSettings.tsx:262",
+      "apps/mission-control-next/src/features/native-routes/library/CitadelWardsRoutePage.tsx:35"
+    ],
+    "note": "Classic actions: list Wards, add a Ward (with review), delete a Ward, test an action against the Wards. The Cockpit page (Settings › Citadel, also at /library/citadel-*) renders the same owner hook and offers every one; CitadelWardsSettings uses useCitadelWards (:12) with Confirm add Ward (:188), Confirm delete Ward (:234) and the action test (:262)."
+  },
+  {
+    "priorId": "PR-library-citadel-council",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelCouncilSettings.tsx:13",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelCouncilSettings.tsx:224",
+      "apps/mission-control-next/src/features/native-routes/library/CitadelCouncilRoutePage.tsx:30"
+    ],
+    "note": "Classic actions: seat an agent, remove a seat, inspect a seat, open the agents catalog. The Cockpit page (Settings › Citadel, also at /library/citadel-*) renders the same owner hook and offers every one; CitadelCouncilSettings uses useCitadelCouncil (:13) with Confirm Council seat / Remove seat (:224), seat inspection, Refresh agents and a link to Library › Agents."
+  },
+  {
+    "priorId": "PR-library-citadel-blueprint",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelBlueprintSettings.tsx:20",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelBlueprintSettings.tsx:150",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelBlueprintSettings.tsx:228",
+      "apps/mission-control-next/src/features/native-routes/library/CitadelBlueprintRoutePage.tsx:14"
+    ],
+    "note": "Classic actions: export the Blueprint (download), load the export into import, validate pasted Blueprint text, apply the import after a confirmation. The Cockpit page (Settings › Citadel, also at /library/citadel-*) renders the same owner hook and offers every one; CitadelBlueprintSettings uses useCitadelBlueprint (:20) with Download blueprint, Load into import, validate (:150) and the confirmed apply (:228)."
+  },
+  {
+    "priorId": "PR-library-citadel-vault",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelVaultSettings.tsx:15",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelVaultSettings.tsx:166",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelVaultSettings.tsx:208",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelVaultSettings.tsx:265",
+      "apps/mission-control-next/src/features/native-routes/library/CitadelVaultRoutePage.tsx:28",
+      "docs/review/2026-11-usability/evidence/prior/PR-library-citadel-vault.png"
+    ],
+    "note": "Classic actions: list secret names, store or replace a secret, reveal a value on request (hides again), delete a secret with a confirmation. The Cockpit page (Settings › Citadel, also at /library/citadel-*) renders the same owner hook and offers every one; CitadelVaultSettings uses useCitadelVaultEditor (:15) with store (:166), Reveal secret with a 30 s countdown (:208) and delete (:265). Live: /library/citadel-vault opens the Cockpit Vault page."
+  },
+  {
+    "priorId": "PR-settings-general",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/AppearanceSettings.tsx:137",
+      "apps/mission-control-next/src/cockpit/areas/settings/AppearanceSettings.tsx:199",
+      "apps/mission-control-next/src/cockpit/areas/settings/AppearanceSettings.tsx:207",
+      "apps/mission-control-next/src/cockpit/areas/settings/AppearanceSettings.tsx:227",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/GeneralSection.tsx:121"
+    ],
+    "note": "Classic actions: display density, in-app toast switch, sound cue, desktop notifications with unfocused-only and scope, check permission, send a test notification, open the Cockpit layout, the updates card. The Cockpit page has density, theme, the toast switch (:137), sound, desktop switch, the unfocused-only switch, Check permission (:199), Send test (:207), the updates card (#application-updates) and attention routing (:227). 'Open Cockpit' is moot inside the Cockpit."
+  },
+  {
+    "priorId": "PR-settings-providers",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/ModelsSettings.tsx:57",
+      "apps/mission-control-next/src/cockpit/areas/settings/ModelsSettings.tsx:99",
+      "apps/mission-control-next/src/cockpit/areas/settings/ProviderManagementSettings.tsx:49",
+      "apps/mission-control-next/src/cockpit/areas/settings/ProviderRoutingSettings.tsx:25",
+      "apps/mission-control-next/src/cockpit/areas/settings/ProviderSavedCredential.tsx:69",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/ProvidersSection.tsx:93"
+    ],
+    "note": "Classic actions: guided add of a provider and key, edit a provider profile, save or delete a stored key, sign in with OpenAI/Codex OAuth, choose the default model route, browse the model catalog, run connection diagnostics, set up llama.cpp. All exist on Settings › Models: the guided setup (:57), profile editing (ProviderManagementSettings :49), Remove saved API credential (ProviderSavedCredential :69), OAuth steps, routing review (ProviderRoutingSettings :25, same useProviderRouting hook as Classic ProvidersSection :93), Refresh models and Verify provider connection; llama.cpp is on Models › Local AI. Rows ST-07 and ST-N19 record what is awkward there; nothing is missing."
+  },
+  {
+    "priorId": "PR-settings-personalities",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/PersonalitySettings.tsx:13",
+      "apps/mission-control-next/src/cockpit/areas/settings/PersonalityEditor.tsx:167",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/PersonalitiesSection.tsx:319"
+    ],
+    "note": "Classic actions: refresh the catalog, create a custom personality, edit and save, make one the default (reviewed), remove a custom one or reset a built-in. Cockpit PersonalitySettings and PersonalityEditor use the same usePersonalityEditor hook (:13) with Refresh, new custom personality, Save (:167), Make default and the remove/reset confirmation."
+  },
+  {
+    "priorId": "PR-settings-access",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/DeviceAccessSettings.tsx:24",
+      "apps/mission-control-next/src/cockpit/areas/settings/DeviceAccessSettings.tsx:32",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/AccessSection.tsx:64"
+    ],
+    "note": "Classic actions: edit the Gateway sign-in (token or basic), see loopback posture, list device grants, revoke a device, desktop/mobile continuity. Cockpit Settings › Access renders the same GatewayAuthEditor through GatewayAuthSettings (:32), revokes devices with the same useDeviceAccessRevocation hook (:24, 'Revoke access' with a confirmation) and has the continuity checks. (The Diagnostics 'Access' link that lands on 'Settings destination unavailable' was recorded by b8 and has no row here.)"
+  },
+  {
+    "priorId": "PR-settings-permissions",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileSettings.tsx:64",
+      "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileSettings.tsx:316",
+      "apps/mission-control-next/src/cockpit/areas/settings/PermissionProfileSettings.tsx:317",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/PermissionsSection.tsx:147"
+    ],
+    "note": "Classic actions: view effective permission contexts, change and activate a permission profile (reviewed), edit profile contents, local operator overrides, revoke autonomous grants. Cockpit Settings › Safety renders the same usePermissionProfileActivation (:64), the effective contexts, LocalOperatorOverrides (:316), AutonomousGrantsSettings (:317) and the profile editor."
+  },
+  {
+    "priorId": "PR-settings-trust-policy",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/TrustPolicySettings.tsx:40",
+      "apps/mission-control-next/src/cockpit/areas/settings/TrustPolicySettings.tsx:225",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/TrustPolicySection.tsx:172",
+      "docs/review/2026-11-usability/evidence/prior/PR-settings-trust-policy.png"
+    ],
+    "note": "Classic actions: refresh the Trust & Policy matrix, filter by status and kind, search, expand a row and 'Open <owner>', plus a block of six quick jumps (Permissions, Tools, MCP, Skills, Capabilities, Approvals). Cockpit TrustPolicySettings uses the same useTrustPolicySnapshot (:40) and filters, shows the rules-precedence link, and each selected row has 'Open <owner>' (:225). The six quick-jump buttons are not repeated, but the same pages are one tab or one rail item away and the row's owner link leads to each edit page, so no action is lost."
+  },
+  {
+    "priorId": "PR-settings-budget",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/BudgetModeControl.tsx:123",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/BudgetSection.tsx:100",
+      "docs/review/2026-11-usability/evidence/prior/PR-settings-budget.png"
+    ],
+    "note": "Setting the budget mode works in the Cockpit (same governed save, :123). Classic's 'Cost evidence' block (Open cost telemetry, Change model routing) is gone: the Cockpit Budgets page links to neither System › Spend nor Models.",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "dead-end",
+      "title": "The Budgets page has no link to the spend figures it is about",
+      "trigger": "Settings › Safety › Budgets (opened live at /settings/budget).",
+      "expected": "A page that sets how much to spend offers a way to see what was spent, as the Classic page did with 'Open cost telemetry'.",
+      "actual": "The page shows only the preference, its three modes and Save preference; the operator has to know to open System › Spend.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/settings/BudgetModeControl.tsx:123",
+        "apps/mission-control-next/src/features/native-routes/settings/sections/BudgetSection.tsx:100",
+        "docs/review/2026-11-usability/evidence/prior/PR-settings-budget.png"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/settings/BudgetModeControl.tsx"
+    }
+  },
+  {
+    "priorId": "PR-settings-onboarding",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/FirstRunDefaults.tsx:28",
+      "apps/mission-control-next/src/cockpit/areas/settings/FirstRunDemo.tsx:12",
+      "apps/mission-control-next/src/cockpit/areas/settings/use-first-run-setup.ts:55",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/OnboardingSection.tsx:82",
+      "docs/review/2026-11-usability/evidence/prior/PR-settings-onboarding.png"
+    ],
+    "note": "Classic actions: follow readiness through provider or local path, edit and review the first-run defaults, prepare and open the demo, refresh, mark complete. The old address /settings/onboarding opens Models › Get started live; the defaults, the demo and the completion are on Settings › Get started (FirstRunDefaults :28 with useOnboardingDefaults, FirstRunDemo :12 with useDemoBootstrap, completion in use-first-run-setup :55). Batch b7 checked that page in detail."
+  },
+  {
+    "priorId": "PR-settings-runtime",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/ManagedRuntimeSettings.tsx:147",
+      "apps/mission-control-next/src/cockpit/areas/settings/DaemonDiagnostics.tsx:43",
+      "apps/gateway/src/services/daemon-route-service.ts:101",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/RuntimeSection.tsx:347",
+      "docs/review/2026-11-usability/evidence/prior/PR-settings-runtime.png"
+    ],
+    "note": "Classic actions: view runtime posture, Gateway daemon Start, Stop and Restart, edit and save the llama.cpp settings (enable, auto-start, alias), llama.cpp stop and refresh, the retired NPU view. Cockpit Settings › Advanced has the managed runtime editor with review (:147), the llama.cpp lifecycle block (Stop, Refresh), process diagnostics and voice runtime. Daemon Start/Stop/Restart were always disabled in Classic because the Gateway reports controllable:false (daemon-route-service.ts:101); the Cockpit says so (DaemonDiagnostics :43). NPU is retired in Classic's own text."
+  },
+  {
+    "priorId": "PR-settings-local-ai",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/LocalAiSettings.tsx:19",
+      "apps/mission-control-next/src/cockpit/areas/settings/LocalAiSettings.tsx:234",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/LocalAiSection.tsx:23"
+    ],
+    "note": "Classic actions: check model fit, hardware and jobs views, queue a download or serve job after review, check a job's outcome, reload. Cockpit Models › Local AI uses the same useLocalAiSettings hook (:19) with hardware and jobs, Download and Serve review (:234), Check outcome and Refresh, and the llama.cpp setup flow."
+  },
+  {
+    "priorId": "PR-settings-workspaces",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/WorkspaceSettings.tsx:82",
+      "apps/mission-control-next/src/cockpit/areas/settings/CitadelDirectory.tsx:51",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/WorkspacesSection.tsx:102"
+    ],
+    "note": "Classic actions: list and search workspaces, create and save a workspace, archive or restore it, create and save a Citadel, archive or restore a Citadel. Cockpit Settings › Citadel has the workspace directory (useWorkspaceEditor :82, archive/restore through useDirectoryLifecycle) and the Citadel directory with the same lifecycle (:51) plus a design-context editor."
+  },
+  {
+    "priorId": "PR-settings-addons",
+    "verdict": "obsolete",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:124",
+      "docs/review/2026-11-usability/evidence/prior/PR-settings-addons.png"
+    ],
+    "note": "Add-ons (capability packs) were removed; plugins replace them. `git grep -i addons` over features and app finds no Classic section; the only hit is the Cockpit address map that sends /settings/addons to Capabilities › Plugins, which opened live."
+  },
+  {
+    "priorId": "PR-settings-integrations",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/ConnectorSetupPage.tsx:26",
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationManagementSettings.tsx:33",
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionDetails.tsx:56",
+      "apps/mission-control-next/src/cockpit/areas/settings/IntegrationConnectionsSettings.tsx:52",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/IntegrationsSection.tsx:128",
+      "docs/review/2026-11-usability/evidence/prior/PR-settings-integrations.png"
+    ],
+    "note": "Classic actions: list connections, create and edit one, enable or disable it, run diagnostics, run operator actions, Google Meet preparation, delivery records, imported connectors, notification routing. The section moved from the retired Settings › Connections to Capabilities › Connectors › Advanced setup (/settings/integrations opens it live), which renders the same useIntegrationSettings hook (:33) with Create, Edit, Run integration diagnostics (:56), the enable switch (:52), Meet, Delivery records and Imported connectors; routing moved to General (AttentionNotificationRouting)."
+  },
+  {
+    "priorId": "PR-settings-channels",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/chat/channel-setup/ChannelAdvancedSetup.tsx:35",
+      "apps/mission-control-next/src/cockpit/areas/settings/ChannelsSettings.tsx:28",
+      "apps/mission-control-next/src/cockpit/areas/settings/ChannelLifecycleControls.tsx:191",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/ChannelsSection.tsx:42",
+      "docs/review/2026-11-usability/evidence/prior/PR-settings-channels.png"
+    ],
+    "note": "Classic actions: list channels and drafts, create a channel from the catalog with the guided wizard, edit setup, enable or disable, delete a draft or connection, live test. The section now lives at Chat › Messaging › Advanced channel setup (/settings/channels opens it live) and renders the same useChannelSettings hook (:28) with the wizard, Edit setup, enable/disable review (:191), Delete saved draft and the pairing and journey operations. Four channels also have shorter guided pages."
+  },
+  {
+    "priorId": "PR-settings-mcp",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/ConnectorSetupPage.tsx:24",
+      "apps/mission-control-next/src/cockpit/areas/settings/McpServerCreate.tsx:34",
+      "apps/mission-control-next/src/cockpit/areas/settings/McpServerEditor.tsx:59",
+      "apps/mission-control-next/src/cockpit/areas/settings/McpDeleteControl.tsx:19",
+      "apps/mission-control-next/src/cockpit/areas/settings/McpServersSettings.tsx:63",
+      "apps/mission-control-next/src/cockpit/areas/settings/McpServerInspection.tsx:208",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/McpSection.tsx:628",
+      "docs/review/2026-11-usability/evidence/prior/PR-settings-mcp.png"
+    ],
+    "note": "Classic actions: add a server (stdio, remote http/sse, from a template), edit, delete, enable or disable, connect and disconnect, sign in with OAuth, answer elicitation requests, inspect mode evidence. The section moved to Capabilities › Connectors › Advanced setup (/settings/mcp opens it live) and renders the same hooks: useMcpCreation (:34), useMcpEditor (:59), useMcpDeletion (:19), useMcpEnabled (:63), McpOAuthControls (:208 in the inspection)."
+  },
+  {
+    "priorId": "PR-settings-tools",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/ToolGrantSettings.tsx:54",
+      "apps/mission-control-next/src/cockpit/areas/settings/ApprovalModeControl.tsx:26",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/ToolsSection.tsx:86",
+      "docs/review/2026-11-usability/evidence/prior/PR-settings-tools.png"
+    ],
+    "note": "Classic actions: set the global tool approval mode, browse the tool catalog, create a scoped allow/deny grant (reviewed), inspect and revoke a grant. Cockpit Settings › Safety › Tools has the same useToolGrantActions hook (:54), the approval mode control (:26), catalog search, grant creation, details and revoke, plus the settings-approval skip control."
+  },
+  {
+    "priorId": "PR-settings-hooks",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/HooksSettings.tsx:24",
+      "apps/mission-control-next/src/features/native-routes/settings/sections/HooksSection.tsx:22"
+    ],
+    "note": "Classic actions: register a hook (reviewed), test it, delete it, view delivery history and redrive a delivery. Cockpit Safety › Hooks uses the same useHooksSettings hook (:24) with register, Delivery history, test, delete and redrive reviews and the delivery evidence."
+  },
+  {
+    "priorId": "PR-settings-workspace-capabilities",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/SettingsArea.tsx:213",
+      "apps/mission-control-next/src/app/route-release-scope.ts:449",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/skills/skill-view.ts:127",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/ConnectorPanelParts.tsx:86",
+      "docs/review/2026-11-usability/evidence/prior/PR-settings-workspace-capabilities.png"
+    ],
+    "note": "Classic let the operator pick which skills, plugins and MCP servers a workspace uses (CapabilityScopePanel). The Cockpit has the editor (CapabilityScopesSettings) but its release scope is 'hide', so /settings/citadel#workspace-capabilities answers 'Settings destination unavailable', and two Cockpit links point at it.",
+    "finding": {
+      "area": "capabilities",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "dead-end",
+      "title": "'Change this workspace's skills' and 'Change workspace capabilities' open a page that says it is unavailable",
+      "trigger": "A skill shown as 'Left out of this workspace', or a connector the workspace hides: press the link in its panel (Capabilities › Skills or Connectors). Opened live at /settings/citadel#workspace-capabilities.",
+      "expected": "The link opens the place where the workspace's skill and connector choices are changed.",
+      "actual": "The page shows 'Settings destination unavailable: This capability is hidden from the current release', so an operator who sees a skill left out has no way to bring it back from the Cockpit.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/capabilities/skills/skill-view.ts:127",
+        "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/ConnectorPanelParts.tsx:86",
+        "apps/mission-control-next/src/app/route-release-scope.ts:449",
+        "apps/mission-control-next/src/cockpit/areas/settings/SettingsArea.tsx:213",
+        "docs/review/2026-11-usability/evidence/prior/PR-settings-workspace-capabilities.png"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/capabilities/connectors/connector-links.ts"
+    }
+  },
+  {
+    "priorId": "PR-settings-citadel-capabilities",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/settings/SettingsArea.tsx:213",
+      "apps/mission-control-next/src/app/route-release-scope.ts:457",
+      "docs/review/2026-11-usability/evidence/prior/PR-settings-citadel-capabilities.png"
+    ],
+    "note": "Classic had a page to govern which skills, plugins and MCP servers exist in a Citadel. The Cockpit has the editor but marks it hidden for the 1.0 release (release scope notes 'not yet part of the certified 1.0 release surface'), so the address shows 'Settings destination unavailable'; no Cockpit link points to it.",
+    "finding": {
+      "area": "settings",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "dead-end",
+      "title": "The Citadel capabilities page is not reachable in the Cockpit",
+      "trigger": "Open /settings/citadel#citadel-capabilities (live).",
+      "expected": "The operator can govern which skills, plugins and MCP servers exist in the Citadel, as the Classic page allowed.",
+      "actual": "The page says 'This capability is hidden from the current release'. It is a deliberate release decision and nothing links to it, so this costs only an operator who knew the Classic page.",
+      "evidence": [
+        "apps/mission-control-next/src/app/route-release-scope.ts:457",
+        "apps/mission-control-next/src/cockpit/areas/settings/SettingsArea.tsx:213",
+        "docs/review/2026-11-usability/evidence/prior/PR-settings-citadel-capabilities.png"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/app/route-release-scope.ts"
+    }
+  },
+  {
+    "priorId": "OL-14",
+    "verdict": "operator-only",
+    "evidence": [],
+    "note": "Needs a real model reply, so it was not run here (the bundled skills themselves are present: skills/bundled/ponytail/SKILL.md). Steps: 1. Open Library › Skills and confirm 'ponytail' and 'debugging' are listed as bundled and on. 2. In Chat with a real model, send 'use ponytail' and, in a second message, 'use impeccable critique this page'. 3. Send an unrelated message that only contains a common word, such as 'keep this small'. Pass: after step 2 the reply or the turn's skill chip names the skill it loaded and what it did; after step 3 no explicit-only skill is loaded."
+  },
+  {
+    "priorId": "OL-18",
+    "verdict": "operator-only",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-18-connectors.png",
+      "docs/review/2026-11-usability/evidence/prior/OL-18-install-panel.png"
+    ],
+    "note": "Checked here: Capabilities › Connectors lists 78 available vendor connectors; opening Atlassian shows what it lets GoatCitadel do, 'Signs in at mcp.atlassian.com', 'Installing makes sure mcp.atlassian.com is on your network allowlist', 'Reads run on their own. Anything that creates or changes something asks you first', and the button 'Sign in and install'. I did not press it (it signs in at the vendor). Operator steps: 1. Capabilities › Connectors, press Install on a vendor you have an account with. 2. Press 'Sign in and install' and finish the vendor's sign-in in the browser window. 3. Return: the row reads Connected. 4. In Chat ask for something only that vendor can answer. Pass: the connector shows Connected, Chat calls one of its tools and shows it, and a tool that changes something asks for approval first."
+  },
+  {
+    "priorId": "OL-20",
+    "verdict": "operator-only",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-discord-error.png",
+      "docs/review/2026-11-usability/evidence/prior/OL-discord-filled.png"
+    ],
+    "note": "Checked here (sandbox, no account): Chat › Messaging › Add › Discord opens a 4-5 step page (make the bot in the Developer Portal, paste the token, invite it, choose where it posts, say hi, turn on). A made-up token 'test-invalid-token' was refused with 'Discord didn't accept that token, or GoatCitadel couldn't reach Discord. Check the token and try again.' in about 6 s; Start over deleted the draft (saved drafts 0, connections 0 afterwards). Left to the operator, with a real Discord account: 1. Chat › Messaging › Add › Discord. 2. Make a bot in the Developer Portal and paste its token, Check token. 3. Use the invite link, choose where it may post. 4. Say hi to the bot in Discord. 5. Turn it on, send the test message, reply from Discord. Pass: the token check names the bot, hi arrives, the test message lands in Discord, a Discord reply is answered in Chat."
+  },
+  {
+    "priorId": "OL-21",
+    "verdict": "operator-only",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-slack-error.png",
+      "docs/review/2026-11-usability/evidence/prior/OL-slack-filled.png"
+    ],
+    "note": "Checked here (sandbox, no account): Add › Slack opens 'Make your Slack app' (a link that opens Slack with the app settings filled in), 'Install it and copy two tokens' (Bot token and App-level token), then posting, say hi and turn on. Two made-up tokens were refused with 'Slack didn't accept the bot token, or GoatCitadel couldn't reach Slack. Check it and try again.' (about 6 s); Start over left no draft. Left to the operator, with a real Slack account: 1. Add › Slack, press 'Create the Slack app', choose your workspace, Create. 2. Install it and paste both tokens, Check tokens. 3. Choose the channel it posts in. 4. Say hi. 5. Turn on, send the test message, answer in Slack. Pass: both tokens are accepted, the app says hi back, the test message appears in Slack and a Slack reply is answered."
+  },
+  {
+    "priorId": "OL-22",
+    "verdict": "operator-only",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-telegram-error.png",
+      "docs/review/2026-11-usability/evidence/prior/OL-telegram-filled.png"
+    ],
+    "note": "Checked here (sandbox, no account): Add › Telegram opens 'Make your bot' (QR code and Open BotFather link, 4 steps), 'Paste your bot's key', 'Say hi to your bot', 'Turn it on'. The made-up key was refused with 'Telegram didn't accept that key, or GoatCitadel couldn't reach Telegram. Check the key and try again.' (about 6 s), steps 3 and 4 stayed locked, and Start over deleted the draft. Left to the operator, with a real Telegram account: 1. Add › Telegram, make a bot with BotFather (/newbot) and copy its key. 2. Paste it, Check key. 3. Say hi to the bot in Telegram. 4. Turn it on, send the test message, reply from Telegram. Pass: the key check names your bot, hi arrives, the test message lands in Telegram and your reply is answered in Chat."
+  },
+  {
+    "priorId": "OL-23",
+    "verdict": "operator-only",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-adv-google-chat.png",
+      "docs/review/2026-11-usability/evidence/prior/OL-adv-google-chat-wizard.png"
+    ],
+    "note": "Checked here (sandbox, no account): Add › Google Chat goes to Advanced channel setup with Google Chat preselected ('Google Chat app and webhook integration. intermediate, about 10 minutes') and 'Start guided setup' opened the guided wizard (a saved draft was created; I deleted it with 'Delete saved draft', drafts 0 afterwards). No credentials were entered. Left to the operator, with a real Google Chat account: 1. Set the public web address (receiving needs one). 2. Add › Google Chat › Start guided setup and follow the steps with your Google Cloud app. 3. Validate, run the live test, finish. 4. Send a message in Google Chat. Pass: the live test passes, the connection turns on, the message is answered."
+  },
+  {
+    "priorId": "OL-24",
+    "verdict": "operator-only",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-adv-teams.png"
+    ],
+    "note": "Checked here (sandbox, no account): Add › Microsoft Teams goes to Advanced channel setup ('Send Adaptive Card notifications to a Teams channel through a Workflows webhook. Sends only. beginner, about 6 minutes'); 'Start guided setup' creates a saved draft (deleted afterwards, drafts 0). No webhook was entered. Left to the operator, with a real Microsoft Teams account: 1. Create a Workflows webhook in Teams. 2. Start guided setup, paste the webhook address, validate. 3. Run the live test. Pass: the test card appears in the Teams channel (Teams is send-only, so no reply is expected)."
+  },
+  {
+    "priorId": "OL-25",
+    "verdict": "operator-only",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-whatsapp-0.png"
+    ],
+    "note": "Checked here (sandbox, no account): Add › WhatsApp opens a guided page: 1 'Give GoatCitadel a public web address' (https only, Save address / Clear), 2 'Make your Meta app' (Phone number ID, WhatsApp Business Account ID, App ID and secret), then the later steps. I did not save a web address or enter any value. Left to the operator, with a real WhatsApp account: 1. Save your public https address. 2. Make the Meta app and paste its ids and secret. 3. Register GoatCitadel's webhook address in Meta. 4. Say hi from WhatsApp, turn it on, send the test message. Pass: Meta verifies the webhook, hi arrives, the test message is delivered and a WhatsApp reply is answered."
+  },
+  {
+    "priorId": "OL-26",
+    "verdict": "operator-only",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-adv-line.png"
+    ],
+    "note": "Checked here (sandbox, no account): Add › LINE goes to Advanced channel setup with LINE preselected ('LINE Messaging API integration. intermediate, about 6 minutes'; picker note: receiving needs a public web address). I read the entry page only; the wizard was not started for LINE. Left to the operator, with a real LINE account: 1. Save the public web address. 2. Start guided setup, paste the channel secret and access token. 3. Set the webhook address in the LINE console. 4. Run the live test, send a message from LINE. Pass: the live test passes and a LINE message is answered."
+  },
+  {
+    "priorId": "OL-27",
+    "verdict": "operator-only",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-adv-matrix.png",
+      "docs/review/2026-11-usability/evidence/prior/OL-adv-matrix-wizard.png"
+    ],
+    "note": "Checked here (sandbox, no account): Add › Matrix goes to Advanced channel setup; 'Start guided setup' opened a 7-step wizard (What this connection does, Make the bot account and a room, Connect the account, Choose destinations and access, Validate the draft, Finish setup, Verify the first conversation) with 'What you need' and the note that encrypted rooms are not supported. The draft it created was deleted afterwards (drafts 0). No token was entered. Left to the operator, with a real Matrix account: 1. Make a bot account and an unencrypted room, invite the bot. 2. In the wizard paste the access token, allow the homeserver host. 3. Validate, run the live test, finish. 4. Say hi in the room. Pass: the test notice arrives in the room, a message from an allowed Matrix ID is answered."
+  },
+  {
+    "priorId": "OL-28",
+    "verdict": "operator-only",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-adv-qqbot.png"
+    ],
+    "note": "Checked here (sandbox, no account): Add › QQBot goes to Advanced channel setup ('QQBot text sends and replies, with signed webhook inbound. advanced, about 25 minutes'; picker note: needs a public web address). Entry page read only; the wizard was not started. Left to the operator, with a real QQBot account: 1. Save the public web address. 2. Start guided setup with your QQ bot app id and secret. 3. Register the signed webhook. 4. Run the live test and send a message. Pass: the live test passes and a QQ message is answered."
+  },
+  {
+    "priorId": "OL-29",
+    "verdict": "operator-only",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/OL-adv-wecom.png"
+    ],
+    "note": "Checked here (sandbox, no account): Add › WeCom goes to Advanced channel setup ('WeCom application text sends, with encrypted callback inbound. intermediate, about 25 minutes'; picker note: receiving needs a public web address). Entry page read only; the wizard was not started. Left to the operator, with a real WeCom account: 1. Save the public web address. 2. Start guided setup with the corp id, agent id and secret. 3. Register the encrypted callback. 4. Run the live test and send a message. Pass: the live test passes and a WeCom message is answered."
+  },
+  {
+    "priorId": "OL-31",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/plugin-install-view.ts:57",
+      "apps/gateway/src/services/capability-plugin-inspection-service.ts:436",
+      "docs/review/2026-11-usability/evidence/prior/OL-plugin-p-mixed.png"
+    ],
+    "note": "Live (check only, nothing installed): a folder plugin with two good skills and one skill without front matter shows 'This skill didn't pass GoatCitadel's checks.' and 'So it can't be installed.' It never says why or what to change. The Skills tab words each blocker; the plugin panel prints the Gateway's one fixed sentence.",
+    "finding": {
+      "area": "capabilities",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "unclear-copy",
+      "title": "A plugin skill that fails its check says only that it failed, not why or what to fix",
+      "trigger": "Capabilities › Plugins › Add from folder with a plugin whose skill has no front matter; press Check.",
+      "expected": "The line names the reason (for example 'its SKILL.md has no name') and the fix, as the Skills tab does for a skill checked on its own.",
+      "actual": "The row reads 'This skill didn't pass GoatCitadel's checks.' and the panel ends 'So it can't be installed.' The blocker code is only in Technical details.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/plugin-install-view.ts:57",
+        "apps/gateway/src/services/capability-plugin-inspection-service.ts:71",
+        "apps/gateway/src/services/capability-plugin-inspection-service.ts:436",
+        "docs/review/2026-11-usability/evidence/prior/OL-plugin-p-mixed.png"
+      ],
+      "foundBy": "live",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/plugin-install-view.ts"
+    }
+  },
+  {
+    "priorId": "OL-32",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/PluginInstallPanel.tsx:250",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/plugin-view.ts:83",
+      "docs/review/2026-11-usability/evidence/prior/OL-plugin-p-mixed.png"
+    ],
+    "note": "A plugin with a skill that fails its check cannot be installed at all (the panel says 'So it can't be installed'), so an installed plugin never holds blocked skills, and the list note is only the piece counts ('2 skills, 1 connector'), not a usable-of-total figure. Live: the mixed plugin shows two 'Passed' rows and one failed row and no combined count."
+  },
+  {
+    "priorId": "OL-33",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/PluginInstallPanel.tsx:241",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/PluginInstallPanel.tsx:259",
+      "docs/review/2026-11-usability/evidence/prior/OL-plugin-p-noname.png"
+    ],
+    "note": "A manifest with an empty name is refused, and the panel then leaves out the 'What it is' block and uses 'this plugin' in its sentences instead of a blank. Live: the nameless folder plugin opens a panel titled 'Install a plugin' with one refusal line and 'So it can't be installed.', no empty heading or quotes. (The refusal sentence does not name the empty field: the same canned-copy pattern as OL-35.)"
+  },
+  {
+    "priorId": "OL-34",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/PluginInstallPanel.tsx:117",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/plugin-check-copy.ts:40",
+      "docs/review/2026-11-usability/evidence/prior/OL-plugin-p-mixed.png",
+      "docs/review/2026-11-usability/evidence/prior/OL-plugin-p-dupe.png"
+    ],
+    "note": "'So it can't be installed.' is one fixed line placed right after the reason: under the pieces list for a blocked piece, under the refusal sentence for a refused manifest. Live, both cases showed it once, in that place, with no layout jump."
+  },
+  {
+    "priorId": "OL-35",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/plugin-check-copy.ts:25",
+      "packages/contracts/src/plugins.ts:269",
+      "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/plugin-check-copy.ts:40",
+      "apps/gateway/src/services/claude-code-plugin-translator.ts:168",
+      "docs/review/2026-11-usability/evidence/prior/OL-plugin-p-dupe.png"
+    ],
+    "note": "A Claude Code skill folder named like a generated id now gets a fallback id, so that collision no longer happens. A manifest with two pieces sharing an id is still refused with 'Two of its pieces have the same id.': it names neither the id nor the pieces, though the Gateway's own sentence does (contracts plugins.ts:269).",
+    "finding": {
+      "area": "capabilities",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "unclear-copy",
+      "title": "A plugin with a repeated piece id is refused without saying which id",
+      "trigger": "Capabilities › Plugins › Add from folder with a manifest whose two pieces both have id skill-2; press Check.",
+      "expected": "The refusal names the id (skill-2) and says to give each piece its own id.",
+      "actual": "The panel says 'Two of its pieces have the same id.' and 'So it can't be installed.' The Gateway's sentence with the id is replaced by the screen's canned line.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/plugin-check-copy.ts:25",
+        "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/plugin-check-copy.ts:40",
+        "packages/contracts/src/plugins.ts:269",
+        "docs/review/2026-11-usability/evidence/prior/OL-plugin-p-dupe.png"
+      ],
+      "foundBy": "live",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/capabilities/plugins/plugin-check-copy.ts"
+    }
+  }
+]

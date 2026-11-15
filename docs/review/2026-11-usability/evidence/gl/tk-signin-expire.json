@@ -1,0 +1,38 @@
+{
+  "signinAfterMs": 420,
+  "badTokenText": "Sign in to continue\n\nConnect to GoatCitadel to load your workspace.\n\nAccess required\nGateway target\n\nhttp://127.0.0.1:18787\n\nStored credentials\n\nNone stored yet.\n\nGateway credentials were rejected. Re-enter them to continue.\n\nNext: Enter current credentials or approve this device from another signed-in GoatCitadel session.\n\n1\nReach gateway\nhttp://127.0.0.1:18787\n2\nVerify access\nCredentials or device approval required",
+  "badTokenUrl": "http://127.0.0.1:18788/work?shell=cockpit",
+  "passwordFieldPrefilled": "",
+  "afterReSignUrl": "http://127.0.0.1:18788/work?shell=cockpit",
+  "draftAfter": [
+    "ut13b draft that must survive"
+  ],
+  "afterText": "Work\n\nWorkspace tasks and recent Chat or supervised plan runs.\n\nNew task\nSelect tasks\nRefresh\nMore\nBoard\nHistory\nSchedules\nArchived tasks\nAutomation designer\nWaiting on your decision\n\nFrom your Inbox.",
+  "removedText": "Sign in to continue\n\nConnect to GoatCitadel to load your workspace.\n\nAccess required\nGateway target\n\nhttp://127.0.0.1:18787\n\nStored credentials\n\nNone stored yet.\n\nGateway credentials are required. Sig",
+  "log": [
+    {
+      "k": "http401",
+      "t": "GET http://127.0.0.1:18787/api/v1/tasks"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "k": "http401",
+      "t": "PUT http://127.0.0.1:18787/api/v1/notifications/presence"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "k": "http401",
+      "t": "GET http://127.0.0.1:18787/api/v1/onboarding/startup"
+    },
+    {
+      "k": "console",
+      "t": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    }
+  ]
+}

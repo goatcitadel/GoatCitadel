@@ -1,0 +1,14 @@
+{
+ "inboxStart": "/inbox",
+ "inboxReviewButtons": 1,
+ "inboxAfterReview": "/inbox",
+ "inboxAfterBack": "about:blank",
+ "capStart": "/capabilities/skills",
+ "capLinks": [
+  "/capabilities/skills | Skills",
+  "/capabilities/plugins | Plugins",
+  "/capabilities/connectors | Connectors",
+  "/capabilities/tools | Tools"
+ ],
+ "capAfterRowClick": "/capabilities/skills"
+}

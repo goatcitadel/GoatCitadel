@@ -1,0 +1,20 @@
+{
+ "loads": 0,
+ "controls": [
+  "Refresh conversations and activity",
+  "Refresh runs"
+ ],
+ "found": 2,
+ "countLine": "36 saved runs loaded. End of saved run history.",
+ "rowText": "Chat turn\n\nCancelled\n\nCreated 1 hour ago · Updated 1 hour ago\n\nOpen run record\n: Chat turn",
+ "runUrl": "/work/runs/<id>?shell=cockpit",
+ "runText": "Back to Work\nChat turn\n\nUpdated 1 hour ago\n\nCancelled\n\nThis page shows the saved run record. Open this conversation in Chat for its conversation context. Open runtime health in System to inspect host runtime status. Run controls and recorded errors are available here.\n\nRun controls\nRefresh\n\nCurrent status: \nCancelled These controls are available only for runs scoped to the selected workspace.\n\nNo direct control is available from this run state or workspace.\n\nCancelled by auth:[REDACTED]\n\nCheckpoints and tool calls saved for this run, and the provider cost recorded so far.\n\nCheckpoints\n2\nTool calls\nUnknown\nRecorded cost\nUnknown\nRun history\nRun cancelled\n1 hour ago\nPlan, delegation and tool records\nSigned run receipt\n\nBuild and verify a portable, signed record of this run.\n\nInspect signed receipt\n\nInspect to see signature, lineage, effects, and artifact counts.\n\nApprovals\nOpen approval history\n\nApproval details are not available.\n\nArtifacts\n\nArtifact records are not available.\n\nCurrent conversation worktree\n\nInspect the conversation's current worktree and files. This view may include changes made after this run; it does not identify which changes the run made.\n\nInspect current worktree\nRecorded run errors\n2 recorded errors need review.\nRun: cancelled by auth:[REDACTED]\nTurn: Waiting for verification approval.",
+ "links": [
+  "Back to Work -> /work",
+  "Open this conversation in Chat -> /chat?workspaceId=ws_f13a3cf3b6f04dc49bd4b927&runId=<id>&sessionId=sess_25fa5a7a13b46d36a2ca143c&shell=cockpit",
+  "Open runtime health in System -> /system?workspaceId=ws_f13a3cf3b6f04dc49bd4b927&runId=<id>&sessionId=sess_25fa5a7a13b46d36a2ca143c&shell=cockpit",
+  "Open approval history -> /inbox?workspaceId=ws_f13a3cf3b6f04dc49bd4b927&runId=<id>&sessionId=sess_25fa5a7a13b46d36a2ca143c&view=history&shell=cockpit"
+ ],
+ "console": [],
+ "http": []
+}

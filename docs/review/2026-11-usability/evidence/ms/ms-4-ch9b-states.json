@@ -1,0 +1,28 @@
+{
+ "states": [
+  {
+   "at": 416,
+   "stop": true,
+   "approval": false,
+   "btns": [],
+   "status": "Sending"
+  },
+  {
+   "at": 839,
+   "stop": true,
+   "approval": false,
+   "btns": [],
+   "status": ""
+  },
+  {
+   "at": 15249,
+   "stop": false,
+   "approval": false,
+   "btns": [],
+   "status": ""
+  }
+ ],
+ "approvalAt": null,
+ "approved": null,
+ "afterApprove": null
+}

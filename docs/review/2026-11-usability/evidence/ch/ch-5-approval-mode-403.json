@@ -1,0 +1,14 @@
+{
+  "request": "GET /api/v1/chat/sessions/<seeded project conversation>/approval-mode, sent with curl from 127.0.0.1 straight to the Gateway port (no browser, no UI dev server, no proxy headers, no Origin header)",
+  "status": 403,
+  "body": {"error": "Chat approval mode requires a local operator connection."},
+  "sandbox": {"auth.mode": "none", "allowLoopbackBypass": false},
+  "reading": "The same 403 without the browser or the UI port in the path, so it is not a cross-origin or proxy effect. In auth mode none the actor source is 'none' and createAuthenticatedOperatorAdmissionContext never sets directLocal for that source.",
+  "code": [
+    "apps/gateway/src/routes/chat.sessions.ts:29-33 (requireLocalChatApprovalOperator)",
+    "apps/gateway/src/routes/session-control-request-context.ts:154 (directLocal: request.authActorSource !== \"none\" && isDirectLoopbackRequest(request))",
+    "apps/gateway/src/services/session-control-service.ts:155 (directLocal dropped again when authActorSource is \"none\")",
+    "apps/gateway/src/plugins/auth.ts:180-183 (auth.mode none sets actor source none)",
+    "apps/gateway/src/config.ts:1271 and config/goatcitadel.example.json:29-30 (default mode none, allowLoopbackBypass false)"
+  ]
+}

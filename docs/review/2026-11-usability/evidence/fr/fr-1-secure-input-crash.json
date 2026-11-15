@@ -1,0 +1,8 @@
+{
+  "where": "Settings > Get started (first run) > Use a cloud provider > OpenAI API (platform key) > Connect provider > Open secure input",
+  "action": "clicked the credential box, typed one placeholder character (x)",
+  "screen": "Settings couldn't be shown (Try again / Reload app / Go to Chat)",
+  "console": "TypeError: Cannot read properties of null (reading 'value') at <dev-server module>/packages/mission-control-shared/dist/components/chat/ChatChangePlanActionDialogBody.js:115",
+  "afterTryAgain": "back on Get started, step 1; the provider choice is reset; a 'Connect OpenAI - awaiting input' plan card is left behind",
+  "build": "dev server (not a production build)"
+}

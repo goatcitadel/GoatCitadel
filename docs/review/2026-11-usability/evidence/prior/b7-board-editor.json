@@ -1,0 +1,8 @@
+{
+ "editor": "Dashboards\n\nSaved boards for this workspace.\n\nOpen a board for live widgets or create a saved layout.\n\nNew board\nRefresh\nHealth\nRuntime\nSpend\nQuality\nDiagnostics\nActivity\nSessions\nDashboards\nBrowser sessions\nShow archived boards\nCreate board\n\nChoose from the five built-in live widgets and arrange them in a bounded grid.\n\nBoard name\nDescription\nWidgets (1/12)\nAdd widget\nAgentic run Kanban\nApproval queue\nRuntime truth\nTask status\nUsage and cost\nAdd\n\nRuntime truth\n\nColumn 1, row 1 · 6 × 4\n\nAdjust\nMove left\nMove right\nMove up\nMove down\nMake narrower\nMake wider\nMake shorter\nMake taller\nApply\nRemove\nPreview live widgets\nReview new board\nClose editor\nVerification command board\n\nFive compiled operational summaries over canonical verification sources.\n\n5 widgets\n\nRuntime truth\nApproval queue\nUsage and cost\nAgentic run Kanban\nTask status\nOpen board",
+ "hasAdd": 1,
+ "previewText": "Unsaved layout preview. Widgets show the latest values they loaded.\n\nRuntime truth\n\nHost-wide health\n\nRefresh\nRuntime truth\n\nHost-wide status applies beyond the selected workspace.\n\nHost\nBLD\nRuntime service\nUnavailable\nMemory\n47% used\nOpen System › Diagnostics",
+ "writes": [
+  "PUT http://127.0.0.1:54765/api/v1/notifications/presence"
+ ]
+}

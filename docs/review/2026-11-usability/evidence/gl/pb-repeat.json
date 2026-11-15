@@ -1,0 +1,38 @@
+{
+  "prod": [
+    {
+      "crashed": false,
+      "errs": []
+    },
+    {
+      "crashed": false,
+      "errs": []
+    },
+    {
+      "crashed": false,
+      "errs": []
+    },
+    {
+      "crashed": false,
+      "errs": []
+    },
+    {
+      "crashed": false,
+      "errs": []
+    }
+  ],
+  "dev": [
+    {
+      "crashed": true,
+      "errs": []
+    },
+    {
+      "crashed": true,
+      "errs": []
+    },
+    {
+      "crashed": true,
+      "errs": []
+    }
+  ]
+}

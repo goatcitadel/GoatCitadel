@@ -1,0 +1,107 @@
+{
+  "workspace": "default",
+  "tool": "shell.exec",
+  "clicks": 2,
+  "marks": [
+    [
+      "click1:Review danger approval",
+      77
+    ],
+    [
+      "click2:Approve once",
+      940
+    ]
+  ],
+  "focus": "TEXTAREA role=null label=null text=",
+  "firstChangeAfterFinalClickMs": 116,
+  "inboxBefore": "7",
+  "inboxAfterWithoutReload": "6",
+  "mutatingRequests": [
+    [
+      -19820,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -19565,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -19499,
+      "POST",
+      "/api/v1/chat/sessions/sess_1b12817e92d70b0a5e6df682/route-preflight"
+    ],
+    [
+      -16814,
+      "POST",
+      "/api/v1/chat/sessions"
+    ],
+    [
+      -16435,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -14109,
+      "POST",
+      "/api/v1/chat/sessions/sess_a25b8567f252caa3e4d79cb4/route-preflight"
+    ],
+    [
+      -14078,
+      "POST",
+      "/api/v1/chat/sessions/sess_a25b8567f252caa3e4d79cb4/route-preflight"
+    ],
+    [
+      -14061,
+      "POST",
+      "/api/v1/chat/sessions/sess_a25b8567f252caa3e4d79cb4/agent-send/stream"
+    ],
+    [
+      -5120,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -3990,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -3905,
+      "PUT",
+      "/api/v1/notifications/presence"
+    ],
+    [
+      -3690,
+      "POST",
+      "/api/v1/chat/sessions/sess_a25b8567f252caa3e4d79cb4/route-preflight"
+    ],
+    [
+      955,
+      "POST",
+      "/api/v1/approvals/5ab05708-d617-4ac0-bbcc-95e839108264/resolve"
+    ]
+  ],
+  "approval": {
+    "status": "approved"
+  },
+  "turnStatuses": [
+    "completed"
+  ],
+  "cardText": "\n\nRun command\n\nDanger\n\nWaiting for verification chat approval.\n\nAction: Shell exec\n\nScope: Default Workspace · one linked conversation. This decision authorizes this request once.\n\nExpiry: No expiry set\n\nCommand: pnpm test\n\nTitle: Verification chat approval\n\nConsequence: After approval, the exact reviewed action may run; denying withholds it. The decision alone does not show the work resumed or completed.\n\nReview danger approval\nDeny\nHow this decision works\nInspect persisted approval\nMessage\n\nA decision is waiting above. Resolve it to keep going.\n\nverification-stub-chat · Verification stub (loopback) · Standard\nSend",
+  "console": [
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/chat/messaging net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "PUT http://127.0.0.1:55150/api/v1/notifications/presence net::ERR_ABORTED"
+    },
+    {
+      "k": "reqfailed",
+      "t": "GET http://127.0.0.1:55150/api/v1/events/stream net::ERR_ABORTED"
+    }
+  ]
+}

@@ -1,0 +1,362 @@
+[
+  {
+    "area": "projects",
+    "journey": "PJ-1 Create a project, add files, start a conversation in it, switch projects",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "The New project form asks for a 'Workspace path' with no example, and a rejected path says 'workspacePath must be relative and jailed'",
+    "trigger": "Chat > Projects > New project. Read the form: Project name, Workspace path, Project description, Project color, with one sentence about workspace paths applying to future work. Type 'review-task-8-bad' and '../../outside', click Create project.",
+    "expected": "The field says what kind of path it takes (a folder inside the workspace, written relative to it, with an example) and a refusal names the problem in plain words and what to type instead.",
+    "actual": "The field has no placeholder or help text. The refusal reads 'workspacePath must be relative and jailed Your draft is preserved. Check the saved project before retrying.' (camel-case field name, the word 'jailed', no example, and a missing full stop before 'Your draft'). Empty submit reads 'Project name and workspace path are required.' The operator has to guess that the path is relative to the workspace folder.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/pj/pj-1-create-form.png",
+      "docs/review/2026-11-usability/evidence/pj/pj-1-bad-path.png",
+      "packages/storage/src/chat-project-repo.ts:357",
+      "apps/mission-control-next/src/cockpit/areas/chat/ProjectEditor.tsx:90"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ProjectEditor.tsx"
+  },
+  {
+    "area": "projects",
+    "journey": "PJ-1 Create a project, add files, start a conversation in it, switch projects",
+    "severity": "friction",
+    "kind": "bug",
+    "title": "A project path like C:/folder is accepted although the form says paths must stay inside the workspace",
+    "trigger": "Chat > Projects > New project, name 'review-task-8-bad', Workspace path 'C:/Windows/Temp/x', Create project. For comparison '../../outside' is refused with 'workspacePath must be relative and jailed'.",
+    "expected": "A path the form's own error message calls not allowed is refused the same way whichever way it is written.",
+    "actual": "The project was created and opened; the list shows 'C:/Windows/Temp/x' as its path. The validator (sanitizeWorkspacePath) converts backslashes and refuses only a leading '/', a leading '../', '..' and '/../', so a drive-letter path passes and is stored verbatim. Nothing is created or read at creation, and no read or write outside the workspace was demonstrated (the project was archived). A drive path is not a documented capability: the local-folder import copies the folder into the workspace and stores a workspace-relative path (chat-project-service.ts:90-146, relative path at line 109). Downstream, writes go through assertWritePathInJail (chat-workbench-service.ts:117, :199, :404; chat-attachment-service.ts:90) and reads or searches go through an approval card that shows the full path. The plausible risk, not tried: on Windows path.resolve(workspaceRoot, project.workspacePath) (chat-workbench-service.ts:1029, :1610) returns the drive path itself, so later path resolution points outside the workspace root; whoever owns path safety should look at it.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/pj/pj-1-absolute-path.png",
+      "docs/review/2026-11-usability/evidence/pj/pj-1-projects-list-three.png",
+      "packages/storage/src/chat-project-repo.ts:352",
+      "apps/gateway/src/services/chat-workbench-service.ts:1029",
+      "apps/gateway/src/services/chat-project-service.ts:109"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "packages/storage/src/chat-project-repo.ts"
+  },
+  {
+    "area": "projects",
+    "journey": "PJ-1 Create a project, add files, start a conversation in it, switch projects",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "Project screens print the raw workspace id ('Workspace ws_f13a...') as visible text",
+    "trigger": "Chat > Projects > New project: the sentence under the heading reads 'Workspace ws_f13a3cf3b6f04dc49bd4b927. Project context and its workspace path apply to future work...'. Archive project dialog: 'Review review-task-8-bad in workspace ws_f13a...'.",
+    "expected": "The workspace is named ('Mission Control Next Verification Workspace', as the page header already does). DESIGN.md: no ID reaches the screen outside a technical-details slot.",
+    "actual": "Both the editor intro (ProjectEditor.tsx) and the archive dialog (ProjectDetail.tsx:248).print the id in plain text.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/pj/pj-1-create-form.png",
+      "docs/review/2026-11-usability/evidence/pj/pj-1-archived.png",
+      "apps/mission-control-next/src/cockpit/areas/chat/ProjectEditor.tsx:106"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ProjectEditor.tsx"
+  },
+  {
+    "area": "projects",
+    "journey": "PJ-2 Open, edit and save a project file; leave with unsaved changes",
+    "severity": "polish",
+    "kind": "missing-state",
+    "title": "After 'Keep draft and close' nothing on the project page says an unsaved draft exists",
+    "trigger": "Project > Edit project, change the description, click a sidebar link, choose 'Keep draft and close', press Back to the project.",
+    "expected": "The project page shows that a draft is waiting ('Unsaved draft') so the operator knows to reopen Edit project.",
+    "actual": "The page reads as if nothing happened; the edit form is closed and no draft marker is shown. The draft is kept: Edit project reopens with the typed text and Save project then saved in about 1.5 s. (Library's 'Upload text file' summary does carry an 'Unsaved draft' marker, so the pattern exists elsewhere.)",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/pj/pj-2-kept-draft.png",
+      "docs/review/2026-11-usability/evidence/pj/pj-2-leave.json"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/chat/ProjectDetail.tsx"
+  },
+  {
+    "area": "inbox",
+    "journey": "IN-1 Open the Inbox with pending approvals: read what is asked, approve one, deny one, see the result and where it went",
+    "severity": "polish",
+    "kind": "approval-friction",
+    "title": "A danger approval in the Inbox needs a row-selection click before the documented two-step review",
+    "trigger": "Inbox, a 'Review shell exec' row (Danger). Click the row's 'Review' (opens the side panel), click the red 'Review danger approval' in the panel, then 'Approve once' in the 'Confirm danger-level action' dialog. Measured 3 clicks; 85 ms from the last click to 'Recording the approval decision'. Deny: 2 clicks (Review, Deny).",
+    "expected": "DESIGN.md (line 60) specifies a red review button, then approve: two clicks. The dialog already shows action, scope, command and consequence, so the row could open it directly.",
+    "actual": "Row 'Review' (selects the row and opens the side panel) (1), red 'Review danger approval' in the panel (2), 'Approve once' in the 'Confirm danger-level action' dialog (3). Only the first click is beyond the document; the other two are the specified review. The dialog repeats Action twice and Command twice from the panel above it. After the last click the panel reads 'Decision recorded: Approved. Approval effects settled', the Inbox count drops 6 to 5 and the sidebar badge follows without a reload (85 ms to first feedback). Deny: 2 clicks.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/in/in-1-danger-review.png",
+      "docs/review/2026-11-usability/evidence/in/in-1-danger-dialog.png",
+      "docs/review/2026-11-usability/evidence/in/in-1-danger-after-approve.png",
+      "docs/review/2026-11-usability/evidence/in/in-1-flow-a.json"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "journeys": [
+      "IN-3 Notification from the Inbox to the thing that raised it, and back"
+    ],
+    "owner": "apps/mission-control-next/src/cockpit/areas/inbox/InboxApprovalActions.tsx"
+  },
+  {
+    "area": "inbox",
+    "journey": "IN-1 Open the Inbox with pending approvals: read what is asked, approve one, deny one, see the result and where it went",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "After a decision the list marks the next row 'Selected' while the side panel still shows the item just decided",
+    "trigger": "Inbox with several decisions waiting. Open the first Danger row's panel, approve it (or deny it).",
+    "expected": "The highlighted row and the open panel are the same item, or the panel closes or moves on with the highlight.",
+    "actual": "The decided row leaves the list and the list moves 'Selected' to the next needs-decision row (InboxArea.tsx moves selectedId to the first remaining decision), but the panel keeps showing the decided item ('Decision recorded: Approved ...', 'Original linked work: Done'). Seen twice (approve, then deny): the row marked Selected was a different approval (the next shell command, then 'Run code') from the one in the panel, and it carries its own inline Approve once and Deny buttons. An operator reading the highlight as 'what I am deciding next' is looking at the wrong item.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/in/in-1-danger-after-approve.png",
+      "docs/review/2026-11-usability/evidence/in/in-1-deny-step.png",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxArea.tsx:171",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxItemCard.tsx:47"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/inbox/InboxArea.tsx"
+  },
+  {
+    "area": "inbox",
+    "journey": "IN-1 Open the Inbox with pending approvals: read what is asked, approve one, deny one, see the result and where it went",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "A 'Run code' row offers a one-click Approve once without describing the code (the generic row sentence itself is U-IN-001)",
+    "trigger": "Inbox with a caution-level Code Mode request pending. The row has Details, Approve once and Deny; its text says nothing about what would run.",
+    "expected": "Before a one-click approval of code execution the row shows the goal or the first line of what would run.",
+    "actual": "The row shows the same generic sentence as the shell rows (U-IN-001) and, unlike them, carries an inline Approve once, so code execution can be approved from the list without seeing the goal ('read the text of saturday-plan.pdf') or the code, which appear only after Details. This finding is only the one-click approval without a description; the identical-rows problem is U-IN-001 (see Notes in the journeys file).",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/in/in-1-list-before.png",
+      "docs/review/2026-11-usability/evidence/in/in-1-caution-after.png",
+      "apps/gateway/src/services/inbox-projection-service.ts:120"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/gateway/src/services/inbox-projection-service.ts"
+  },
+  {
+    "area": "inbox",
+    "journey": "IN-1 Open the Inbox with pending approvals: read what is asked, approve one, deny one, see the result and where it went",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "The panel for a Danger shell approval shows a 'Safe' badge next to 'Run Command: with 2 arguments'",
+    "trigger": "Inbox > Review on a 'Review shell exec' row (Danger). Read the Action preview block.",
+    "expected": "One risk word for one action, or a label that says what the second badge rates.",
+    "actual": "The header says 'Danger' and 'Waiting on you'; two lines below, the expandable line 'Run Command: with 2 arguments' carries a 'Safe' badge (the shell explainer's rating of the command text). Together with 'Approval summary unavailable. Review the action preview before deciding.' (the explainer returned non-JSON content in this sandbox) the operator gets contradictory signals on the riskiest button in the product.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/in/in-1-danger-review.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/inbox/ApprovalShellExplanations.tsx"
+  },
+  {
+    "area": "inbox",
+    "journey": "IN-1 Open the Inbox with pending approvals: read what is asked, approve one, deny one, see the result and where it went",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "An expired change plan counts as '1 decision waiting' and lights the Inbox badge, although nothing can be decided",
+    "trigger": "Default workspace: a Chat model-switch change plan expired unanswered. Open the Inbox.",
+    "expected": "An expired item is history (or at most 'expired, nothing to do'); the count and badge show only what the operator can still decide.",
+    "actual": "Header '1 decision waiting.' and sidebar badge '1'; the row sits under 'Needs decision 1' and is labelled 'Expired' twice, with only Details, 'Open in Inbox' and Show source context. Deciding is no longer possible, so the operator is left with a standing badge they cannot clear.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/in/in-0-default.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/gateway/src/services/inbox-projection-service.ts"
+  },
+  {
+    "area": "inbox",
+    "journey": "IN-2 An approval with no workspace: is it visible anywhere",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "The install-wide skill approval is titled 'Turn on skill bundled:documentation' with the internal skill id",
+    "trigger": "Capabilities > Skills, switch 'documentation' off, then on. The approval row in every workspace's Inbox, and the toast, read 'Turn on skill bundled:documentation'. The skills list calls the same skill 'documentation'.",
+    "expected": "The skill's name ('Turn on skill documentation'). DESIGN.md: no ID reaches the screen outside a technical slot.",
+    "actual": "skillChangeTitle builds the title from preview.skillId. Seen in the Inbox row (all three workspaces), the Capabilities toast and the success banner 'Approved Turn on skill bundled:documentation.'",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/in/in-2-skill-on-request.png",
+      "docs/review/2026-11-usability/evidence/in/in-2-visibility.json",
+      "apps/gateway/src/services/inbox-projection-service.ts:95"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/gateway/src/services/inbox-projection-service.ts"
+  },
+  {
+    "area": "inbox",
+    "journey": "IN-2 An approval with no workspace: is it visible anywhere",
+    "severity": "polish",
+    "kind": "dead-end",
+    "title": "A dead-lettered run with no workspace is dropped from every Inbox and its Work page says 'Run workspace unknown'",
+    "trigger": "The only way found to make one without a model was the dev route durable-recovery-seed (a dead-lettered approval-wait run whose approval has no linkage). Open any Inbox; then open /work/runs/<that run>.",
+    "expected": "An item the Gateway cannot place in a workspace is either shown in every Inbox (as install-wide approvals are) or the Inbox names where to find it.",
+    "actual": "Dependent on a dev fixture: the run was made with the dev route durable-recovery-seed, and no real producer of a workspace-less dead-lettered run was found, so the real-install behaviour is unproven. With the fixture present every workspace's Inbox reads 'Some sources couldn't be checked, so there may be more.' with, under 'Couldn't fully check 1 source', 'Dead letters without a readable scoped run were omitted.' The run page shows only 'Run workspace unknown. GoatCitadel could not confirm this run's workspace. Return to Work to choose a run.' with no Recover or Retry. Install-wide approvals themselves work: the skill approval appeared in all three workspaces' Inboxes and a decision in one removed it from the others without a reload.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/in/in-1-coverage-warning.png",
+      "docs/review/2026-11-usability/evidence/wk/wk-2-run-5d869f5c-7a82-4ff1-844c-84cca17.png",
+      "apps/gateway/src/services/inbox-projection-service.ts:557"
+    ],
+    "foundBy": "both",
+    "confidence": "likely",
+    "priorIds": [],
+    "owner": "apps/gateway/src/services/inbox-projection-service.ts"
+  },
+  {
+    "area": "inbox",
+    "journey": "IN-3 Notification from the Inbox to the thing that raised it, and back",
+    "severity": "polish",
+    "kind": "dead-end",
+    "title": "'Open approval' and 'Open in Inbox' on an Inbox row open the same Inbox again",
+    "trigger": "Inbox > a 'Search code files' row > 'Open approval' (also 'Open in Inbox' on a question row). The link target is /inbox?approvalId=...&sessionId=...",
+    "expected": "A link that says 'Open approval' leads to the approval, or does not appear when the operator is already looking at it.",
+    "actual": "The URL gains query parameters and the page reloads to the same list; the item is not opened on its own page (U-IN-006 covers the missing deep link). The useful links are 'Open source conversation' (inside the panel, 2.7 s to the Chat thread with its approval card) and 'Open in Work' on updates.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/in/in-3-open-approval.png",
+      "docs/review/2026-11-usability/evidence/in/in-3-flow.json"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/inbox/InboxItemCard.tsx"
+  },
+  {
+    "area": "work",
+    "journey": "WK-2 Pause, resume, cancel and retry a run; the buttons say what each will do",
+    "severity": "friction",
+    "kind": "missing-state",
+    "title": "After Pause the run page shows no Resume button until the operator presses Refresh",
+    "trigger": "Work > a waiting run > Pause > 'Pause run'. The notice says 'Run moved to Paused. Refresh to review its current state and any follow-on effects.' and the status reads Paused.",
+    "expected": "A paused run offers Resume at once.",
+    "actual": "The control buttons are hidden after any successful action (completed state) until Refresh is pressed; only then Resume and Cancel appear. After Resume the notice says 'Run moved to Queued' while the status badge reads Waiting. Each action is 2 clicks, first feedback 79 to 92 ms, and the dialog text says what the action does ('Stops active processing and leaves the run paused.'), which is good.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/wk/wk-2-pause-after.png",
+      "docs/review/2026-11-usability/evidence/wk/wk-2-resume-after.png",
+      "docs/review/2026-11-usability/evidence/wk/wk-2-A.json",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkRunControls.tsx:229"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkRunControls.tsx"
+  },
+  {
+    "area": "work",
+    "journey": "WK-3 Create a schedule, edit it, see when it next runs, see that it ran",
+    "severity": "friction",
+    "kind": "wrong-status",
+    "title": "'Next run' reads 'just now' for a time up to a minute away, and 'Next run: 23 minutes ago' for an enabled hourly schedule",
+    "trigger": "Work > Schedules. (1) Create 'review-task-8-schedule' with the expression * * * * *; it fires at about 18 s past each minute. (2) Look at the seeded 'Cost Report Hourly' card (Enabled, last outcome Succeeded).",
+    "expected": "A future run reads 'in 40 seconds'; a schedule that is enabled and overdue says so ('overdue', 'did not run') rather than a past time labelled 'Next run'.",
+    "actual": "(1) Live: at 07:26:21 the card for a schedule I created (every minute) said 'Next run: just now' while the Gateway's nextRunAt was 07:27:00 (39 s ahead); the review panel said 'Next run just now, Last run just now'. (2) 'Cost Report Hourly' is a seeded job in a freshly booted sandbox: its card read 'Next run: 20 minutes ago', later '23 minutes ago' (nextRunAt 07:01:00 against lastRunAt 07:00:18; no later run), and a paused schedule's delete dialog printed 'Next run: 5 minutes ago'. Whether a long-running real install shows stale times is unproven, hence likely; the 'just now' for a future time is the formatter (presentTime in format.ts) and was seen live. Cause not isolated.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/wk/wk-3-next-run-label.png",
+      "docs/review/2026-11-usability/evidence/wk/wk-3-schedules.png",
+      "docs/review/2026-11-usability/evidence/wk/wk-3-delete-dialog.png",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleSummary.tsx:149"
+    ],
+    "foundBy": "live",
+    "confidence": "likely",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleSummary.tsx"
+  },
+  {
+    "area": "work",
+    "journey": "WK-3 Create a schedule, edit it, see when it next runs, see that it ran",
+    "severity": "friction",
+    "kind": "missing-state",
+    "title": "Enabled daily and weekly schedules show 'Next run: Not reported', so the operator cannot see when they will fire",
+    "trigger": "Work > Schedules in a fresh install: Memory Flush Daily, Private Beta Daily Backup, Daily Update Review, Curator Weekly Report are Enabled and each reads 'Next run: Not reported / Last outcome: Not reported'.",
+    "expected": "The next time follows from the cadence the card already prints ('Every day at 03:00').",
+    "actual": "In this freshly booted, seeded sandbox the Gateway holds no nextRunAt for jobs that have not run yet (cron job records show next undefined) and the screen prints 'Not reported'. Whether a long-running real install computes it after the scheduler has ticked once is unproven, hence likely. The one job that had run ('Cost Report Hourly') showed a stale time instead (see the previous finding).",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/wk/wk-3-schedules.png",
+      "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleSummary.tsx:13"
+    ],
+    "foundBy": "both",
+    "confidence": "likely",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleSummary.tsx"
+  },
+  {
+    "area": "work",
+    "journey": "WK-3 Create a schedule, edit it, see when it next runs, see that it ran",
+    "severity": "friction",
+    "kind": "missing-state",
+    "title": "A 'Task' schedule says it succeeded, but the task it adds appears only in the Default workspace",
+    "trigger": "In the verification workspace create a schedule with Action 'Task'. The form says it 'Adds a task to the task list each time it runs' and 'Applies across workspaces'. Wait for 07:23:18; the card shows 'Last outcome: Succeeded' and 'Destination: Not reported'. Open the Work board.",
+    "expected": "The card says which workspace's task list receives the task, and a link or count leads to it.",
+    "actual": "The verification workspace's board shows no new task. The Default workspace's board shows 'review-task-8-schedule' (Not started), one more each minute (4 in 4 minutes). An operator who creates the schedule anywhere but Default and checks the board there concludes it did not run.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/wk/wk-3-board-verification.png",
+      "docs/review/2026-11-usability/evidence/wk/wk-3-board-default.png",
+      "docs/review/2026-11-usability/evidence/wk/wk-3-review-schedule.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkScheduleCreateForm.tsx"
+  },
+  {
+    "area": "work",
+    "journey": "WK-1 Create a task on the Board, move it, open its run, read its history",
+    "severity": "friction",
+    "kind": "unclear-copy",
+    "title": "Work > History lists dozens of runs titled only 'Workflow run' or 'Chat turn', with nothing to tell them apart",
+    "trigger": "Work > History after a few Chat approvals: '36 saved runs loaded'. Most rows read 'Workflow run / Done / Created 16 minutes ago · Updated 16 minutes ago / Open run record'.",
+    "expected": "Each row names what it did (the conversation, the effect, the task) so the operator can pick the one to open.",
+    "actual": "workRunTitle falls back to the fixed label 'Workflow run' (or 'Chat turn') when the run carries no objective; the post-commit background effects of every Chat turn show up as identical 'Workflow run' rows. Opening one gives 'Chat turn / Run history: Run woken, started, completed' with no conversation name.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/wk/wk-1-history.png",
+      "docs/review/2026-11-usability/evidence/wk/wk-1-done-run.png",
+      "apps/mission-control-next/src/cockpit/areas/work/work-board.ts:42"
+    ],
+    "foundBy": "both",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/work/work-board.ts"
+  },
+  {
+    "area": "work",
+    "journey": "WK-1 Create a task on the Board, move it, open its run, read its history",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "A task page says 'No deliverables were returned.' and 'No activity was returned.'",
+    "trigger": "Work > Back to Work > New task (title and description, Create task: lands on the task page after about 1 s) and read Activity and Deliverables.",
+    "expected": "'No deliverables yet' with a word on how one is added; 'No activity yet'.",
+    "actual": "Interface-call wording ('returned') in both empty states. For deliverables it matters because the same page says 'Done requires at least one recorded deliverable. The option appears once one is recorded.' and offers no way to record one (see Notes on U-WK-001).",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/wk/wk-1-task-detail.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkTaskDetail.tsx"
+  },
+  {
+    "area": "work",
+    "journey": "WK-4 Archive and restore a task; open the Automation designer and the older Kanban view",
+    "severity": "polish",
+    "kind": "unclear-copy",
+    "title": "The Automation designer preview says 'Missing capabilities: automation-workflows.' with the internal id",
+    "trigger": "Work > Automation designer, Task description 'review-task-8 summarize new tasks each morning', Preview automation recipe (about 1.2 s).",
+    "expected": "A plain name for what is missing, and where to get it.",
+    "actual": "The recipe lists 'Missing capabilities: automation-workflows.' and then steps that assume it ('Run once manually and inspect artifacts'); the Trigger and Frequency fields are free-text boxes and the preview reports 'Timing intent: Not specified'.",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/wk/wk-4-automation-preview.png"
+    ],
+    "foundBy": "live",
+    "confidence": "confirmed",
+    "priorIds": [],
+    "owner": "apps/mission-control-next/src/cockpit/areas/work/WorkAutomation.tsx"
+  }
+]

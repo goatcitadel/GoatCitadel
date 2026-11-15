@@ -1,0 +1,119 @@
+[
+ {
+  "link": "Review runtime service",
+  "href": "/system/runtime?shell=cockpit",
+  "url": "/system/runtime?shell=cockpit",
+  "h1": [
+   "Runtime"
+  ],
+  "title": "GoatCitadel System · Runtime",
+  "anchorTarget": null,
+  "atTop": 0,
+  "text": "Runtime The GoatCitadel server, local models, backups and integrations, as each reports itself. Updated just now Refresh runtime Health Runtime Spend Quality Diagnostics Activity Sessions Dashboard",
+  "consoleErrors": []
+ },
+ {
+  "link": "Review managed local models",
+  "href": "/settings/local-ai?shell=cockpit",
+  "url": "/settings/local-ai?shell=cockpit",
+  "h1": [
+   "Models"
+  ],
+  "title": "GoatCitadel Settings · Local AI",
+  "anchorTarget": null,
+  "atTop": 0,
+  "text": "Models Find a setting, or change the ones on this page. Search settings Refresh General Models Safety Citadel Access Advanced Models Get started Providers & models Local AI Set up llama.cpp Choose ",
+  "consoleErrors": []
+ },
+ {
+  "link": "Review channels",
+  "href": "/chat/messaging/advanced?shell=cockpit",
+  "url": "/chat/messaging/advanced?shell=cockpit",
+  "h1": [
+   "Advanced channel setup"
+  ],
+  "title": "GoatCitadel Chat",
+  "anchorTarget": null,
+  "atTop": 0,
+  "text": "Conversations New Project All projects Unassigned Projects Search Recent Archived ut13-kb-approval-2 18 minutes ago Verification stub reply. ut13-kb-approval 18 minutes ago Waiting on you Read saturda",
+  "consoleErrors": []
+ },
+ {
+  "link": "Review integrations",
+  "href": "/capabilities/connectors/advanced?shell=cockpit#integration-connections",
+  "url": "/capabilities/connectors/advanced?shell=cockpit#integration-connections",
+  "h1": [
+   "Capabilities"
+  ],
+  "title": "GoatCitadel Capabilities · Connectors",
+  "anchorTarget": true,
+  "atTop": 0,
+  "text": "Capabilities Everything GoatCitadel's AI can use, in one place. Skills Plugins Connectors Tools Advanced setup Every setting behind the Connectors list: MCP servers, integration connections and web",
+  "consoleErrors": []
+ },
+ {
+  "link": "Review desktop updates",
+  "href": "/settings/general?shell=cockpit#updates",
+  "url": "/settings/general?shell=cockpit#updates",
+  "h1": [
+   "General"
+  ],
+  "title": "GoatCitadel Settings · General",
+  "anchorTarget": false,
+  "atTop": 0,
+  "text": "General Find a setting, or change the ones on this page. Search settings Refresh General Models Safety Citadel Access Advanced General Appearance Personalities · Experimental These preferences appl",
+  "consoleErrors": []
+ },
+ {
+  "link": "Review remote workers",
+  "href": "/system/runtime/workers?shell=cockpit",
+  "url": "/system/runtime/workers?shell=cockpit",
+  "h1": [
+   "Workers"
+  ],
+  "title": "GoatCitadel System · Runtime",
+  "anchorTarget": null,
+  "atTop": 0,
+  "text": "Workers Remote workers, their assignments and spending budgets. Refresh workers Health Runtime Spend Quality Diagnostics Activity Sessions Dashboards Browser sessions No workers have joined yet Wor",
+  "consoleErrors": []
+ },
+ {
+  "link": "Review goatcitadel server",
+  "href": "/system/runtime?shell=cockpit",
+  "url": "/system/runtime?shell=cockpit",
+  "h1": [
+   "Runtime"
+  ],
+  "title": "GoatCitadel System · Runtime",
+  "anchorTarget": null,
+  "atTop": 0,
+  "text": "Runtime The GoatCitadel server, local models, backups and integrations, as each reports itself. Updated just now Refresh runtime Health Runtime Spend Quality Diagnostics Activity Sessions Dashboard",
+  "consoleErrors": []
+ },
+ {
+  "link": "Review database",
+  "href": "/system/runtime?shell=cockpit",
+  "url": "/system/runtime?shell=cockpit",
+  "h1": [
+   "Runtime"
+  ],
+  "title": "GoatCitadel System · Runtime",
+  "anchorTarget": null,
+  "atTop": 0,
+  "text": "Runtime The GoatCitadel server, local models, backups and integrations, as each reports itself. Updated just now Refresh runtime Health Runtime Spend Quality Diagnostics Activity Sessions Dashboard",
+  "consoleErrors": []
+ },
+ {
+  "link": "Review backups",
+  "href": "/system/runtime?shell=cockpit#ops-runtime-backups",
+  "url": "/system/runtime?shell=cockpit#ops-runtime-backups",
+  "h1": [
+   "Runtime"
+  ],
+  "title": "GoatCitadel System · Runtime",
+  "anchorTarget": true,
+  "atTop": 593,
+  "text": "Runtime The GoatCitadel server, local models, backups and integrations, as each reports itself. Updated just now Refresh runtime Health Runtime Spend Quality Diagnostics Activity Sessions Dashboard",
+  "consoleErrors": []
+ }
+]

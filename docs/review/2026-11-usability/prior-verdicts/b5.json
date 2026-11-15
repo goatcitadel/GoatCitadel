@@ -1,0 +1,689 @@
+[
+  {
+    "priorId": "GL-52",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CockpitAccessGate.tsx:50",
+      "apps/mission-control-next/src/cockpit/app/CockpitAccessGate.tsx:53",
+      "apps/mission-control-next/src/cockpit/app/CockpitAccessGate.tsx:66"
+    ],
+    "note": "The gate's 'Setup needs attention' state now prints the Gateway's own message (access.message) and every non-sign-in state has a 'Try again' button that is disabled only while checking. Code read; the sandbox runs with auth none so the gate cannot be shown live."
+  },
+  {
+    "priorId": "GL-53",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/app/shell-transition.ts:77",
+      "apps/mission-control-next/src/shell-preference.ts:34",
+      "apps/mission-control-next/src/shell-preference.ts:110"
+    ],
+    "note": "A task detour to Classic opens with shellScope=visit so the saved default stays Cockpit, both shells number history under one key (shell-transition.ts:12) and the shell swap replaces only the current entry, so Back does not mix shells. classicFallbackPath keeps the nearest owner and its query. Code read; the Classic side is out of scope and was not exercised."
+  },
+  {
+    "priorId": "GL-54",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:262",
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:71",
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:220",
+      "docs/review/2026-11-usability/evidence/prior/GL-54.png",
+      "docs/review/2026-11-usability/evidence/prior/b5-m3.json",
+      "docs/review/2026-11-usability/evidence/prior/b5-m5.json"
+    ],
+    "note": "Live: /nonexistent-page shows an h1 'Page not found' and tab title 'GoatCitadel Page not found'; the legacy /ops/approvals?approvalId=abc link lands on /inbox keeping approvalId; /work/runs/does-not-exist shows 'Run details unavailable. That item no longer exists.' Unknown routes no longer render another page."
+  },
+  {
+    "priorId": "GL-55",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/work/work-views.ts:3",
+      "apps/mission-control-next/src/cockpit/areas/system/system-views.ts:8",
+      "apps/mission-control-next/src/cockpit/areas/system/system-views.ts:10",
+      "docs/review/2026-11-usability/evidence/prior/b5-desktop-m1.json"
+    ],
+    "note": "Work keeps 'Board' and 'History'; System keeps 'Activity' and 'Dashboards'. Live headers describe different purposes ('Workspace tasks and recent Chat or supervised plan runs', 'Saved runs, conversations, and recent activity in this workspace', 'Recent signals across this installation'), so the singular/plural clash and the History/Activity overlap are explained rather than merged."
+  },
+  {
+    "priorId": "NV-02",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/public/theme-boot.js:5",
+      "apps/mission-control-next/public/theme-boot.js:9",
+      "apps/mission-control-next/index.html:25",
+      "apps/mission-control-next/src/cockpit/app/cockpit-appearance.ts:16",
+      "apps/mission-control-next/src/cockpit/app/theme-options.ts:15"
+    ],
+    "note": "A pre-paint script sets data-theme from the saved choice, else from prefers-color-scheme, and index.html paints a matching background; the cockpit then rewrites the theme-color meta to the chosen theme. 'Match system' is offered in every theme control. Code read; a visual flash was not captured."
+  },
+  {
+    "priorId": "NV-05",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:151",
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:185",
+      "docs/review/2026-11-usability/evidence/prior/b5-skip-focus.json",
+      "docs/review/2026-11-usability/evidence/prior/b5-skiplink-focus.png"
+    ],
+    "note": "A skip link now exists, is the first tab stop and moves focus to #main-content. But a route change (g then w, or a sidebar click) leaves focus where it was, announces nothing (no live region), and the skip link leaves #main-content in the address bar. Not verified with a screen reader. The nav.afterSkip capture in b5-desktop-m1.json and the skip block in b5-m2.json are superseded by b5-skip-focus.json (the earlier runs tabbed from a stale focus start).",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "missing-state",
+      "title": "Switching area by keyboard or sidebar gives a screen-reader user no sign that the page changed",
+      "trigger": "Open Inbox, press g then w (or click Work in the sidebar). Read document.activeElement and the live regions.",
+      "expected": "Focus moves to the new page heading or main region, or a polite live region names the new page.",
+      "actual": "Focus stays on the old control (BODY after the shortcut, the sidebar link after a click) and the page has no aria-live or role=status text for the new area; the only signal is the changed h1 and tab title.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/b5-skip-focus.json",
+        "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:185"
+      ],
+      "foundBy": "both",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx"
+    }
+  },
+  {
+    "priorId": "NV-06",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CommandPaletteResults.tsx:17",
+      "apps/mission-control-next/src/cockpit/app/CommandPaletteView.tsx:165",
+      "apps/mission-control-next/src/cockpit/app/CommandPaletteResults.tsx:43",
+      "docs/review/2026-11-usability/evidence/prior/b5-palette-nomatch.png"
+    ],
+    "note": "Groups with no items are filtered out, search coverage sits behind a single 'Search coverage' disclosure, and a query with no hit shows 'No matching commands or returned records' with suggestions. Live: 'zzzqqq' gives no group headings and that line (screenshot)."
+  },
+  {
+    "priorId": "NV-07",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/use-area-shortcuts.ts:73",
+      "apps/mission-control-next/src/cockpit/app/use-area-shortcuts.ts:38",
+      "apps/mission-control-next/src/cockpit/app/ShortcutHelp.tsx:31",
+      "docs/review/2026-11-usability/evidence/prior/b5-skip-focus.json"
+    ],
+    "note": "Area shortcuts are 'g' then a letter, ignored inside text fields and dialogs, and the '?' dialog documents them; Ctrl/Cmd+K stays the palette. Live: g then w opened Work. Earlier skip-link captures (b5-desktop-m1.json, b5-m2.json) are superseded by b5-skip-focus.json."
+  },
+  {
+    "priorId": "NV-08",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/ToasterRuntime.tsx:12",
+      "apps/mission-control-next/src/cockpit/data/realtime-attention.ts:148"
+    ],
+    "note": "Toasts sit 64 px from the top (below the 48 px header rows) and the realtime attention toast uses toast.error / toast.warning, so failures carry their own tone; the toast library pauses expiry while the stack has keyboard focus. Code read; focus-pause is library behaviour and was not exercised."
+  },
+  {
+    "priorId": "NV-10",
+    "verdict": "cannot-check",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CockpitNavigationProvider.tsx:116",
+      "apps/mission-control-next/src/cockpit/app/CockpitNavigationProvider.tsx:117"
+    ],
+    "note": "ENGINEERING-NOTE: the navigation provider still builds its context value inline each render (consumers fell from 39 to 11 files); the criterion needs a profile and has no operator-visible symptom, so it is not carried as a finding."
+  },
+  {
+    "priorId": "NV-11",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/MobileTabBar.tsx:162",
+      "apps/mission-control-next/src/cockpit/app/ScopeSwitcher.tsx:111",
+      "docs/review/2026-11-usability/evidence/prior/NV-11.png",
+      "docs/review/2026-11-usability/evidence/prior/b5-m3.json"
+    ],
+    "note": "Live: at 375 px the Chat page text never names the workspace or Citadel (it appears only inside the More sheet); at 820 px the collapsed rail shows a compass icon with no name (tooltip and accessible name only).",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "friction",
+      "kind": "missing-state",
+      "title": "On a phone or tablet the page never shows which workspace you are acting in",
+      "trigger": "Open /chat at 375 px or 820 px wide with the sandbox workspace. Read the visible text, then tap More (phone).",
+      "expected": "The current Citadel and workspace are visible on the page, or one tap away from every scoped action.",
+      "actual": "Phone: the name appears only inside the More sheet. Tablet: the collapsed rail's first button is an icon whose name is a tooltip. Neither page header names the scope.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/NV-11.png",
+        "docs/review/2026-11-usability/evidence/prior/b5-m3.json",
+        "apps/mission-control-next/src/cockpit/app/MobileTabBar.tsx:162"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/app/MobileTabBar.tsx"
+    }
+  },
+  {
+    "priorId": "NV-14",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CommandPalette.tsx:72",
+      "apps/mission-control-next/src/cockpit/app/CommandPalette.tsx:76",
+      "docs/review/2026-11-usability/evidence/prior/b5-desktop-m1.json"
+    ],
+    "note": "Destinations carry search terms: live, 'settings' returns 'Go to Settings', 'approvals' returns 'Go to Inbox', 'health' returns 'Go to System' and 'Go to System > Health'."
+  },
+  {
+    "priorId": "NV-15",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/inspector.tsx:166",
+      "apps/mission-control-next/src/cockpit/app/inspector.tsx:187",
+      "apps/mission-control-next/src/cockpit/app/inspector.tsx:189",
+      "apps/mission-control-next/src/cockpit/app/inspector.tsx:185"
+    ],
+    "note": "Below 1024 px the inspector is a modal with a scrim; at 1024-1279 px it floats and takes focus; closing returns focus to the opener. At 1280 px and up the docked panel takes no focus on open (focus is only moved when floating, inspector.tsx:187-189), so a keyboard user must tab through the page to reach it (Ctrl+I only toggles). Code read only.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "At wide widths the docked inspector does not take keyboard focus when it opens",
+      "trigger": "At 1440 px, open an inspector from a record with the keyboard (Enter on the row) and press Tab.",
+      "expected": "Focus moves into the inspector, or the operator has a one-key way to reach it.",
+      "actual": "Focus stays on the opener and the inspector sits after the main content in tab order; only the floating and modal modes focus the panel.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/inspector.tsx:187",
+        "apps/mission-control-next/src/cockpit/app/inspector.tsx:189"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/app/inspector.tsx"
+    }
+  },
+  {
+    "priorId": "NV-16",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:180",
+      "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:190",
+      "apps/mission-control-next/src/cockpit/ui/OverflowTabs.tsx:84",
+      "apps/mission-control-next/src/cockpit/ui/OverflowTabs.tsx:89"
+    ],
+    "note": "Sidebar areas, phone tabs and in-area tabs are real links with an href and let modified clicks through (isModifiedClick, 24 call sites in the cockpit). Code read."
+  },
+  {
+    "priorId": "NV-17",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:80",
+      "apps/mission-control-next/src/cockpit/app/use-cockpit-scroll.ts:10"
+    ],
+    "note": "Scroll position is stored per installation, caller, scope, pathname, search and hash and restored on return, so areas and sub-pages no longer share one offset. Code read."
+  },
+  {
+    "priorId": "NV-18",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/MobileTabBar.tsx:125",
+      "apps/mission-control-next/src/cockpit/app/MobileTabBar.tsx:132",
+      "apps/mission-control-next/src/cockpit/ui/Sheet.tsx:63",
+      "docs/review/2026-11-usability/evidence/prior/NV-18.png",
+      "docs/review/2026-11-usability/evidence/prior/b5-m3.json"
+    ],
+    "note": "Back now closes the open More sheet and stays on the page (live: history.back() with the sheet open left the URL unchanged and the sheet closed). But the More tab only gets aria-current in Capabilities, System and Settings; its colour is identical to an inactive tab (live computed rgb(176,200,213) in Chat, System and Settings), so the visual 'you are here' is still missing.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "missing-state",
+      "title": "On a phone, the More tab does not look selected while you are in Capabilities, System or Settings",
+      "trigger": "Open /capabilities, /system or /settings at 375 px wide, look at the bottom tab bar.",
+      "expected": "The tab that holds the current area is highlighted like Chat, Inbox, Work and Library are.",
+      "actual": "Only the Chat/Inbox/Work/Library links style aria-current; the More button has the same muted colour in Capabilities, System and Settings. The page h1 and tab link still say where you are, so this costs little.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/NV-18.png",
+        "apps/mission-control-next/src/cockpit/app/MobileTabBar.tsx:132"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/app/MobileTabBar.tsx"
+    }
+  },
+  {
+    "priorId": "GL-22",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:124",
+      "docs/review/2026-11-usability/evidence/prior/GL-22.png",
+      "docs/review/2026-11-usability/evidence/prior/b5-desktop-m1.json"
+    ],
+    "note": "Most page descriptions now lead with the task ('Decisions and work that need your attention in this workspace'). System > Activity still opens with three lines of disclaimer: what the list keeps, that signals are saved records, and that quiet events do not prove health.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "System > Activity opens with three lines of caveats before the list",
+      "trigger": "Open /system/activity.",
+      "expected": "One line saying what the page is for; caveats as secondary detail (DESIGN.md allows at most one line of description).",
+      "actual": "The header shows 'Recent signals across this installation.' then two caveat lines about retention, saved records and live events.",
+      "evidence": [
+        "docs/review/2026-11-usability/evidence/prior/GL-22.png",
+        "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx:124"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/system/SystemActivity.tsx"
+    }
+  },
+  {
+    "priorId": "GL-28",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b5-desktop-m1.json",
+      "DESIGN.md:73"
+    ],
+    "note": "Live audit of every visible button, link, tab and menu item with an aria-label on ten pages found no accessible name that drops its visible text: the only differences were visible suffixes such as the 'Ctrl K' hint, the sr-only Work status and '+ 4' vs '+4 more categories'. Names now read like 'Runtime evidence follow-up, 35 minutes ago, ...'."
+  },
+  {
+    "priorId": "GL-49",
+    "verdict": "cannot-check",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/WindowedRecordList.tsx:298",
+      "apps/mission-control-next/src/cockpit/ui/WindowedRecordList.tsx:306"
+    ],
+    "note": "ENGINEERING-NOTE: WindowedRecordList still passes a fresh data copy and context object on every range change (lists above 100 rows only); there is no operator-visible symptom and no profile was taken, so it is not carried as a finding."
+  },
+  {
+    "priorId": "GL-51",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b5-boot-idle.json",
+      "apps/mission-control-next/src/cockpit/app/CockpitApp.tsx:26"
+    ],
+    "note": "Live (dev server, cold /chat): the whole boot made 10 Gateway requests; the workspace, model, runs and session reads travel as five startup-reads calls (plus separate route-preflight and approval-mode GETs, 10 requests in all) (useGatewayAccess batchStartupReads), with the first 9 requests finished by 1.0 s. No serial waterfall of separate reads remains. Production timing not measured."
+  },
+  {
+    "priorId": "GL-18",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b5-m2.json"
+    ],
+    "note": "Live, three cold loads each in a fresh browser context (dev server): CLS was 0.0028 on /chat, 0.041 on /work, and 0.011 / 0.046 / 0.046 on /settings/general (all at or under 0.10); phone /chat was 0.028 twice. Production CLS may differ slightly."
+  },
+  {
+    "priorId": "NV-03",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/data/use-citadel-name.ts:15",
+      "apps/mission-control-next/src/cockpit/data/record-view.ts:36"
+    ],
+    "note": "The name shows 'Reading Citadel...' only while the first read has no data; a background refresh keeps the last good record (recordView phase 'checking' keeps record). Code read."
+  },
+  {
+    "priorId": "NV-04",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/use-health-digest.ts:162",
+      "apps/mission-control-next/src/cockpit/app/use-health-digest.ts:170",
+      "apps/mission-control-next/src/cockpit/app/use-health-digest.ts:150"
+    ],
+    "note": "The rail distinguishes 'Checking...', 'Checks out of date' (kept evidence with a last-checked time), earlier problems, and 'Checks unavailable' only after an error with no data. Code read."
+  },
+  {
+    "priorId": "NV-09",
+    "verdict": "fixed",
+    "evidence": [
+      "docs/review/2026-11-usability/evidence/prior/b5-boot-idle.json",
+      "apps/mission-control-next/src/cockpit/app/use-health-digest.ts:28",
+      "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:129"
+    ],
+    "note": "Live: 65 s idle on desktop made 3 Gateway requests (two Inbox reads and one presence heartbeat), none of them a health fan-out. The shell shares one core digest query that polls every 5 minutes and refreshes on events."
+  },
+  {
+    "priorId": "NV-12",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/use-command-palette-search.ts:21",
+      "apps/mission-control-next/src/cockpit/app/use-command-palette-search.ts:54",
+      "apps/mission-control-next/src/cockpit/app/use-command-palette-search.ts:56"
+    ],
+    "note": "Typed text is debounced 300 ms, each source is one cached query that receives an AbortSignal, and placeholderData keeps the previous results on screen (same workspace) while the next wave loads. Code read."
+  },
+  {
+    "priorId": "NV-13",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:173",
+      "apps/mission-control-next/src/cockpit/app/MobileStatusStrip.tsx:23",
+      "docs/review/2026-11-usability/evidence/prior/b5-boot-idle.json"
+    ],
+    "note": "The sidebar is not mounted on phones (live: no aside in the DOM at 375 px; 65 s idle made 3 requests). Health and live-update state sit at the top of the More sheet with distinct icons and text."
+  },
+  {
+    "priorId": "NV-19",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/WorkRunningIndicator.tsx:107",
+      "apps/mission-control-next/src/cockpit/app/WorkRunningIndicator.tsx:111",
+      "apps/mission-control-next/src/cockpit/app/WorkRunningIndicator.tsx:112"
+    ],
+    "note": "The Work dot keeps the last good summary on refresh or failure, labels stale data 'as of <time>', polls only while runs are running, and uses separate classes for running and unknown. One shared query key per installation and workspace. Code read."
+  },
+  {
+    "priorId": "NV-20",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/GatewayUnavailableBanner.tsx:7",
+      "apps/mission-control-next/src/cockpit/app/GatewayUnavailableBanner.tsx:47",
+      "apps/mission-control-next/src/cockpit/app/gateway-host-hint.ts:26",
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:169"
+    ],
+    "note": "The banner sits above the scrolling row, 'Check again' shows a loading state and then 'Still unreachable - checked <time>', and the start hint depends on desktop app, same machine or remote host (no pnpm dev). Code read; the Gateway cannot be stopped in the shared sandbox."
+  },
+  {
+    "priorId": "GL-56",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/OverflowTabs.tsx:79",
+      "apps/mission-control-next/src/cockpit/ui/OverflowTabs.tsx:53",
+      "docs/review/2026-11-usability/evidence/prior/b5-m3.json"
+    ],
+    "note": "Live at 375 px: Work's tab strip (scrollWidth 487 > 343) has data-overflow-end with a fade, the current tab is scrolled into view, and System (9 tabs) becomes a select picker."
+  },
+  {
+    "priorId": "GL-57",
+    "verdict": "obsolete",
+    "evidence": [
+      "DESIGN.md:102",
+      "docs/review/2026-11-usability/evidence/prior/b5-desktop-m1.json"
+    ],
+    "note": "DESIGN-DECISION: current behavior is the documented design (DESIGN.md:102 puts 'the primary action, then Refresh' in every AreaHeader). Live, Refresh is on Inbox, Work, Library, Activity and Settings, while System shows 'Updated just now'. Observation for the Settings review, not a finding here: b5-desktop-m1.json shows four Refresh buttons on /settings/models where DESIGN.md:102 specifies one in the header."
+  },
+  {
+    "priorId": "GL-58",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/data/use-citadel-name.ts:15",
+      "apps/mission-control-next/src/cockpit/app/ScopeSwitcher.tsx:111"
+    ],
+    "note": "Sentence case and the ellipsis character are now consistent (537 uses of the single-character ellipsis in cockpit source); one visible string still uses three dots: the scope name 'Reading Citadel...'.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "The sidebar scope name shows 'Reading Citadel...' with three dots while loading",
+      "trigger": "Cold-load any page on a desktop width and watch the scope button before the Citadel name arrives.",
+      "expected": "Loading text uses the same ellipsis character as the rest of the product.",
+      "actual": "use-citadel-name returns 'Reading Citadel...' (ASCII dots) and ScopeSwitcher prints it as 'Reading Citadel... / <workspace>'.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/data/use-citadel-name.ts:15",
+        "apps/mission-control-next/src/cockpit/app/ScopeSwitcher.tsx:111"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/data/use-citadel-name.ts"
+    }
+  },
+  {
+    "priorId": "GL-59",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/stream-status.ts:25",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxUpdatesControls.tsx:55",
+      "apps/mission-control-next/src/cockpit/areas/inbox/inbox-presentation.ts:9"
+    ],
+    "note": "'Updates' still names the live connection ('Updates connected' in the rail and phone More sheet), the Inbox 'Updates' group ('Mark all shown updates read'), and, in Settings, app updates (DesktopUpdateSettings).",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "The word 'Updates' labels the live connection, an Inbox group and app updates",
+      "trigger": "Compare the sidebar footer ('Updates connected'), the Inbox 'Updates' group and Settings > desktop updates.",
+      "expected": "Each meaning has its own label (for example 'Live connection', 'Notices', 'App updates').",
+      "actual": "The rail says 'Updates connected' for the event stream while Inbox uses 'Updates' for background changes and Settings uses it for installer releases.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/stream-status.ts:25",
+        "apps/mission-control-next/src/cockpit/areas/inbox/inbox-presentation.ts:9"
+      ],
+      "foundBy": "code",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/app/stream-status.ts"
+    }
+  },
+  {
+    "priorId": "GL-60",
+    "verdict": "obsolete",
+    "evidence": [
+      "DESIGN.md:34",
+      "DESIGN.md:54"
+    ],
+    "note": "DESIGN-DECISION: current behavior is the documented design. DESIGN.md:34 sets running to the accent colour and neutral to the muted text colour, and DESIGN.md:54 says status is never conveyed by colour alone; the rail and phone strip add distinct icon shapes per tone (stream-status.ts HEALTH_TONE_ICON)."
+  },
+  {
+    "priorId": "GL-61",
+    "verdict": "cannot-check",
+    "evidence": [],
+    "note": "Needs a consumer audit of every design primitive, variant and CSS rule (including unreachable inspector CSS) with visual proof. It has no operator-visible symptom and the review is read-only, so it was not attempted."
+  },
+  {
+    "priorId": "GL-62",
+    "verdict": "cannot-check",
+    "evidence": [
+      "apps/mission-control-next/vite.config.ts:595"
+    ],
+    "note": "Actual initial transfer needs a production build; the sandbox is a Vite dev server. The chunk selector was rewritten (boot-graph ownership in vite.config.ts) but a vendor-radix chunk is still produced, and whether it loads eagerly cannot be settled from the code."
+  },
+  {
+    "priorId": "GL-65",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/cockpit-document-title.ts:30",
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:105",
+      "apps/mission-control-next/index.html:14",
+      "docs/review/2026-11-usability/evidence/prior/b5-desktop-m1.json"
+    ],
+    "note": "The access gate no longer uses the codename in its text, and area and tab names are in the title. But a selected conversation or run is not: live, /chat with 'Runtime evidence follow-up' open is titled 'GoatCitadel Chat' and a run page 'GoatCitadel Work > Runs'. index.html still holds 'GoatCitadel Mission Control Next', which is the tab title while the gate or loader shows.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "The browser tab title never names the open conversation or run",
+      "trigger": "Open a conversation (or /work/runs/<id>) and read the tab title.",
+      "expected": "The title includes the conversation or run name when known.",
+      "actual": "cockpitDocumentTitle gets only the area label and first path segment; chat passes no section, so the title is 'GoatCitadel Chat'. Before the cockpit mounts (and on the sign-in/connection gate) the title is the codename 'GoatCitadel Mission Control Next'.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:105",
+        "apps/mission-control-next/src/cockpit/app/cockpit-document-title.ts:30",
+        "apps/mission-control-next/index.html:14"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/app/cockpit-document-title.ts"
+    }
+  },
+  {
+    "priorId": "NV-21",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/ui/SheetDrawerRuntime.tsx:42",
+      "apps/mission-control-next/src/cockpit/ui/SheetDrawerRuntime.tsx:33",
+      "docs/review/2026-11-usability/evidence/prior/NV-21.png",
+      "docs/review/2026-11-usability/evidence/prior/b5-m3.json"
+    ],
+    "note": "The close button is 44 x 44 px on a phone (live) and the sheet has a title. The title row still sits inside the scrolling body, so it scrolls away in a long sheet, and there is no drag handle or description (aria-describedby is deliberately undefined). The More sheet itself does not scroll.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "In a long phone sheet the title and close button scroll out of view",
+      "trigger": "Open a sheet whose content is taller than 85% of the screen on a phone and scroll down.",
+      "expected": "The title and close button stay visible.",
+      "actual": "The title and Drawer.Close live inside .cockpit-sheet-scroll with the content, so they scroll away; no drag handle is drawn.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/ui/SheetDrawerRuntime.tsx:42",
+        "docs/review/2026-11-usability/evidence/prior/NV-21.png"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/ui/SheetDrawerRuntime.tsx"
+    }
+  },
+  {
+    "priorId": "NV-22",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/inspector.tsx:169",
+      "apps/mission-control-next/src/cockpit/app/InspectorResizeHandle.tsx:2",
+      "apps/mission-control-next/src/cockpit/app/InspectorResizeHandle.tsx:66"
+    ],
+    "note": "Code read: width is plain useState(384), clamped 360-480 px, so it resets on reload; the resize grip has opacity-0 until hover or keyboard focus. Keyboard resize (arrows, Home, End) and an accessible name now exist.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "bug",
+      "title": "The inspector width resets on reload, is capped at 480 px and the resize grip is invisible until hovered",
+      "trigger": "Open the inspector, drag its edge wider, reload.",
+      "expected": "Width persists, the range allows a wider panel, and the handle is discoverable.",
+      "actual": "useState(384) with a 360-480 clamp; the grip is opacity-0 until group-hover or focus.",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/inspector.tsx:169",
+        "apps/mission-control-next/src/cockpit/app/InspectorResizeHandle.tsx:66"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/app/inspector.tsx"
+    }
+  },
+  {
+    "priorId": "NV-23",
+    "verdict": "open",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/use-command-new-chat.ts:57",
+      "apps/mission-control-next/src/cockpit/app/use-command-new-chat.ts:66",
+      "apps/mission-control-next/src/cockpit/app/use-command-new-chat.ts:72",
+      "apps/mission-control-next/src/cockpit/app/use-command-new-chat.ts:79",
+      "apps/mission-control-next/src/cockpit/app/use-command-new-chat.ts:85"
+    ],
+    "note": "Code read, not run (it would create a conversation in the shared sandbox): palette New chat still does workspace check, create, status read and a second workspace check one after another before it navigates, and it reports 'Conversation created and independently verified.' It does now show 'Verifying the selected workspace...' and 'Creating one conversation...' while it waits.",
+    "finding": {
+      "area": "global",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "slow",
+      "title": "Choosing 'New chat' in the palette waits several round trips and ends with 'independently verified' wording",
+      "trigger": "Ctrl+K, choose New chat, watch the status line.",
+      "expected": "The new conversation opens right away, and the wording is plain ('Conversation created').",
+      "actual": "The palette shows 'Verifying the selected workspace...' then 'Creating one conversation...' and only then opens the chat; the success line reads 'Conversation created and independently verified.' (four sequential Gateway calls in use-command-new-chat.ts; wait time not measured).",
+      "evidence": [
+        "apps/mission-control-next/src/cockpit/app/use-command-new-chat.ts:57",
+        "apps/mission-control-next/src/cockpit/app/use-command-new-chat.ts:85"
+      ],
+      "foundBy": "code",
+      "confidence": "likely",
+      "owner": "apps/mission-control-next/src/cockpit/app/use-command-new-chat.ts"
+    }
+  },
+  {
+    "priorId": "NV-24",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/use-cockpit-shell-switch.tsx:49",
+      "apps/mission-control-next/src/cockpit/app/use-cockpit-shell-switch.tsx:50",
+      "apps/mission-control-next/src/cockpit/app/CockpitNavigationProvider.tsx:120",
+      "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:284"
+    ],
+    "note": "Shell-switch and hand-off status renders in a fixed overlay (bottom-20 above the phone tab bar, bottom-4 on desktop, z-70) with role=status or role=alert, instead of inline in the 56 px rail. Code read."
+  },
+  {
+    "priorId": "NV-25",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:236",
+      "apps/mission-control-next/src/cockpit/app/CockpitShell.tsx:241",
+      "apps/mission-control-next/src/cockpit/app/use-cockpit-preload.ts:12",
+      "apps/mission-control-next/src/cockpit/app/Sidebar.tsx:194"
+    ],
+    "note": "Area loading shows a status line plus skeleton blocks that reserve the heading and body, and preloading fires on pointer enter, focus or pointer down of a destination (not eagerly on boot) behind canPreload()."
+  },
+  {
+    "priorId": "GL-63",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/data/query-client.ts:6",
+      "apps/mission-control-next/src/cockpit/data/query-client.ts:9",
+      "apps/mission-control-next/src/cockpit/app/use-gateway-reachability.ts:95",
+      "apps/mission-control-next/src/cockpit/areas/inbox/InboxUserInputDetail.tsx:38"
+    ],
+    "note": "One query retry, none for 4xx (documented cap of four requests); the outage probe stops while the tab is hidden and re-checks when visible; Inbox detail reads use the cached projection before fetching (cached ?? fetchOperatorInbox). Code read."
+  },
+  {
+    "priorId": "GL-64",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/data/realtime.ts:327"
+    ],
+    "note": "The event-stream effect depends on queryClient, enabled, installation, access revision and caller only, not on the workspace, so switching workspace keeps the connection (a generation counter changes scoped invalidation). Code read."
+  },
+  {
+    "priorId": "N-01",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:248",
+      "apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts:262",
+      "apps/mission-control-next/src/cockpit/data/inbox-notification.ts:52",
+      "docs/review/2026-11-usability/evidence/prior/b5-m3.json"
+    ],
+    "note": "Old /ops/approvals and /inbox/approvals/<id> links resolve to /inbox with approvalId (live: /ops/approvals?approvalId=abc opened Inbox keeping the id); malformed ids or routes resolve to not-found; a notification for an approval links to /inbox?approvalId=...&workspaceId=.... Runtime is now native too."
+  },
+  {
+    "priorId": "N-02",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/app/CockpitApp.tsx:44",
+      "apps/mission-control-next/src/hooks/useNotificationPresenceLease.ts:66",
+      "apps/mission-control-next/src/hooks/useNotificationPresenceLease.ts:97",
+      "docs/review/2026-11-usability/evidence/prior/b5-boot-idle.json"
+    ],
+    "note": "CockpitApp renews the presence lease only while access is ready, with focus, visibility and the visible session, and sends a not-focused update on cleanup. Live: PUT /api/v1/notifications/presence is sent at boot and again during idle."
+  },
+  {
+    "priorId": "N-05",
+    "verdict": "partial",
+    "evidence": [
+      "apps/mission-control-next/src/app/route-release-scope.ts:89",
+      "apps/mission-control-next/src/app/route-release-scope.ts:236",
+      "apps/mission-control-next/src/app/route-release-scope.ts:246",
+      "apps/mission-control-next/src/cockpit/areas/settings/SettingsArea.tsx:378",
+      "apps/mission-control-next/src/cockpit/app/CommandPaletteView.tsx:158",
+      "apps/mission-control-next/src/cockpit/areas/system/SystemArea.tsx:54",
+      "apps/mission-control-next/src/cockpit/areas/system/HealthOverview.tsx:94",
+      "docs/review/2026-11-usability/evidence/prior/b5-m3.json"
+    ],
+    "note": "Live: Library Journey, Library Curator, Work Kanban, System Improvement and Settings Personalities each say 'Experimental', and Settings sections and palette hits carry the label too. But Workers has release status 'hide' (route-release-scope.ts:236-240, held until live worker authority exists), is still served at /system/runtime/workers and linked from System Health, and its page shows no held or experimental text (b5-m3.json: experimental false, empty snippet).",
+    "finding": {
+      "area": "system",
+      "journey": "prior",
+      "severity": "polish",
+      "kind": "unclear-copy",
+      "title": "System > Workers, held back in the release scope, opens as a normal page with no note that it is held",
+      "trigger": "Open /system/health, follow the remote workers check to 'Open' (or go to /system/runtime/workers).",
+      "expected": "A surface the release scope marks 'hide' (waiting for live worker authority) says so, with a blocked reason, like the Experimental surfaces do.",
+      "actual": "The page renders like a finished System page; neither the page nor the link says that remote-worker visibility is held pending live worker authority.",
+      "evidence": [
+        "apps/mission-control-next/src/app/route-release-scope.ts:236",
+        "apps/mission-control-next/src/cockpit/areas/system/SystemArea.tsx:54",
+        "apps/mission-control-next/src/cockpit/areas/system/HealthOverview.tsx:94",
+        "docs/review/2026-11-usability/evidence/prior/b5-m3.json"
+      ],
+      "foundBy": "both",
+      "confidence": "confirmed",
+      "owner": "apps/mission-control-next/src/cockpit/areas/system/workers/SystemWorkers.tsx"
+    }
+  },
+  {
+    "priorId": "N-13",
+    "verdict": "fixed",
+    "evidence": [
+      "apps/mission-control-next/src/cockpit/areas/system/activity-sentences.ts:43",
+      "apps/mission-control-next/src/cockpit/areas/chat/ProjectDetail.tsx:149",
+      "apps/mission-control-next/src/cockpit/areas/chat/ProjectEditor.tsx:122"
+    ],
+    "note": "'memory_qmd_fallback' now reads 'Memory summary used fallback context', revision numbers and ids sit inside TechnicalDetails, and 'BLD' no longer appears in cockpit source. The run kind 'Chat turn' remains as plain wording."
+  }
+]

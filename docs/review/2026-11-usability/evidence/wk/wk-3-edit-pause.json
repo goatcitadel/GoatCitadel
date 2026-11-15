@@ -1,0 +1,53 @@
+{
+  "out": [
+    {
+      "k": "edit dialog",
+      "v": "Save schedule changes? | GoatCitadel will check the current version before saving this configuration. | Installation-wide · review-task-8-schedule-edited · Every minute · * * * * * | Action: Task. Destination: Not specified. Context: Not specified. End: No end date. Runs in UTC (the GoatCitadel default when the expression names no timezone).Displayed dates use your browser timezone. Review expires after one minute. | Description: None. Action configuration: None | Save schedule changes | Keep editing"
+    },
+    {
+      "k": "confirm label",
+      "v": "Save schedule changes"
+    },
+    {
+      "k": "edit result",
+      "v": {
+        "clicks": 2,
+        "ms": 207,
+        "text": [
+          "Schedule settings saved and independently verified. Execution has not been verified."
+        ]
+      }
+    },
+    {
+      "k": "pause dialog",
+      "v": "Review schedule action | Applies across workspaces. The schedule is checked again before anything is saved; this review expires after one minute. | review-task-8-schedule-edited · Every minute · Task. Destination: Not reported. Next run: just now. Runs in UTC (the GoatCitadel default when the expression names no timezone). Displayed dates use your browser timezone. | Pause stops future occurrences; it does not cancel a running job. | Pause this schedule? The current schedule is checked again before the request is sent. | Pause schedule | Don't pause"
+    },
+    {
+      "k": "pause result",
+      "v": {
+        "ms": 1604,
+        "card": "review-task-8-schedule-edited | Task | Paused | Every minute · Runs in UTC (the GoatCitadel default when the expression names no timezone). | Next run: Paused | Last outcome: Succeeded | Review schedule | Shown in detail"
+      }
+    },
+    {
+      "k": "buttons now",
+      "v": [
+        "New schedule",
+        "Refresh",
+        "Review schedule",
+        "Review schedule",
+        "Review schedule",
+        "Review schedule",
+        "Review schedule",
+        "Review schedule",
+        "Review schedule",
+        "Review schedule",
+        "Review schedule changes",
+        "Run now",
+        "Resume",
+        "Delete schedule…"
+      ]
+    }
+  ],
+  "log": []
+}
