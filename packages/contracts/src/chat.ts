@@ -123,6 +123,28 @@ export type ChatInputPart =
       mimeType?: string;
     };
 
+export const PROJECT_WORKSPACE_PATH_RULE =
+  "Use a folder inside the workspace folder, written relative to it, for example projects/website. Drive letters such as C:/ and paths that start with / or .. aren't accepted.";
+
+/** Returns the plain-words rule when a project folder is refused; empty values are left to the required check. */
+export function projectWorkspacePathProblem(value: string): string | undefined {
+  const trimmed = value.trim().replaceAll("\\", "/");
+  if (!trimmed) {
+    return undefined;
+  }
+  if (
+    trimmed.startsWith("/") ||
+    /^[A-Za-z]:/.test(trimmed) ||
+    trimmed === ".." ||
+    trimmed.startsWith("../") ||
+    trimmed.includes("/../") ||
+    trimmed.endsWith("/..")
+  ) {
+    return PROJECT_WORKSPACE_PATH_RULE;
+  }
+  return undefined;
+}
+
 export interface ChatProjectRecord {
   projectId: string;
   revision: number;
