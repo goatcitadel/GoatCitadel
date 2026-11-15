@@ -3,7 +3,6 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { fetchCostSummary } from "@goatcitadel/mission-control-shared/api/system";
-import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import {
   projectProviderCostRows,
@@ -11,6 +10,7 @@ import {
 } from "@goatcitadel/mission-control-shared/content/cost-summary";
 import { formatAbsoluteTime, plural } from "@goatcitadel/mission-control-shared/content/format";
 import { queryKeys } from "../../data/query-keys";
+import { useGovernedSettingsQuery } from "../settings/governed-settings-query";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -37,11 +37,7 @@ export function SpendOverview() {
     queryFn: () => fetchCostSummary("day"),
     refetchInterval: 60_000,
   });
-  const settings = useQuery({
-    queryKey: ["system", "settings-budget-mode"],
-    queryFn: fetchSettings,
-    refetchInterval: 60_000,
-  });
+  const settings = useGovernedSettingsQuery();
   const summary = costs.data;
   const projection = summary ? projectUsageCostSummary(summary) : null;
   const providers = summary ? projectProviderCostRows(summary) : [];

@@ -129,12 +129,10 @@ export const queryKeys = {
  */
 export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
   ["system", "managed-runtime-settings"],
-  ["system", "settings-budget-mode"],
+  // The budget preference, model reasoning in Chat, the two Claude Code CLI switches and Spend share this one read.
+  ["system", "settings-governed"],
   // Settings › Advanced › Features and the screens that say a feature is off read the feature switches.
   ["system", "settings-feature-switches"],
-  ["system", "settings-claude-cli-tool-bridge"],
-  ["system", "settings-claude-cli-warm-continuation"],
-  ["system", "settings-chat-thinking-stream"],
   ["system", "settings-claude-cli-background-jobs"],
   ["system", "settings-web-search"],
   ["system", "settings-approval-mode"],

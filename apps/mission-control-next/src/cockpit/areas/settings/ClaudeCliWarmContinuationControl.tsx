@@ -1,9 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
 import { CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS, type ChangePlanRecord } from "@goatcitadel/contracts";
-import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { Button } from "../../ui/Button";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { useGovernedSettingsQuery } from "./governed-settings-query";
 import { useGovernedRuntimeSetting } from "./use-governed-runtime-setting";
 import {
   GovernedSettingChangeStatus,
@@ -33,11 +32,7 @@ const matchesPlan = (plan: ChangePlanRecord, submitted: boolean) =>
   plan.target.ownerId === "runtime_settings";
 
 export function ClaudeCliWarmContinuationControl() {
-  const query = useQuery({
-    queryKey: ["system", "settings-claude-cli-warm-continuation"],
-    queryFn: fetchSettings,
-    refetchInterval: 60_000,
-  });
+  const query = useGovernedSettingsQuery();
   const governed = useGovernedRuntimeSetting<boolean>({
     settings: query,
     draftKey: "features:system:claude-cli-warm-continuation",
