@@ -364,7 +364,7 @@ export function ChatTranscript({
         onKeyDown={onTranscriptBoundaryKey}
         // #497: `relative` makes the scroller the containing block of the turns' absolute sr-only headings, so their
         // overflow stays inside it instead of escaping to <main> and shifting the header and composer.
-        className="relative h-full w-full scroll-pt-12 overflow-y-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        className="relative h-full w-full overflow-y-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       >
         <div className="w-full">
           {virtualized && Virtuoso && scrollElement ? (

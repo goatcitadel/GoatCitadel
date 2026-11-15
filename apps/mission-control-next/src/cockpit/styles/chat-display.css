@@ -94,3 +94,8 @@
     overflow-wrap: anywhere;
   }
 }
+
+/* The "You asked" bar covers the scroller's top edge while shown; focus and scroll-into-view stop below it. */
+[data-transcript-scroller][data-sticky-prompt] {
+  scroll-padding-top: 3rem;
+}
