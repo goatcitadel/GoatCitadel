@@ -6,6 +6,7 @@ import { PUBLIC_WEB_ADDRESS_NOT_HTTPS, type ApprovalStatus } from "@goatcitadel/
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
+import { resetSettingsAttempt } from "./settings-attempt.test-support";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 
 const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), fetchChangePlan: vi.fn() }));
@@ -86,7 +87,18 @@ async function type(value: string) {
   });
 }
 
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) =>
+  (await import("./settings-attempt.test-support")).withTrackedSettingsSave(
+    await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>(),
+  ),
+);
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) =>
+  (await import("./settings-attempt.test-support")).withSettingsAttemptRead(
+    await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/mutation-attempts")>(),
+  ),
+);
 beforeEach(() => {
+  resetSettingsAttempt();
   server = { revision: 2, publicWebAddress: "https://old.example.com" };
   api.fetchSettings.mockImplementation(async () => ({ ...server }));
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

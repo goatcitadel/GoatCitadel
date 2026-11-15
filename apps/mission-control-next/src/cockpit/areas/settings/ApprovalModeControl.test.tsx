@@ -9,6 +9,7 @@ import { __resetSettingsChangesForTests } from "../../../features/native-routes/
 import { __resetApprovalModeUncertaintyForTests } from "./approval-mode-state";
 import { ApprovalModeControl } from "./ApprovalModeControl";
 import { SHELL_HISTORY_POSITION } from "../../../app/shell-transition";
+import { resetSettingsAttempt } from "./settings-attempt.test-support";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import {
   awaitingLlamaApproval,
@@ -82,8 +83,19 @@ function pending(mode: ToolApprovalMode) {
   api.fetchChangePlan.mockResolvedValue(canonical);
   return canonical;
 }
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) =>
+  (await import("./settings-attempt.test-support")).withTrackedSettingsSave(
+    await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>(),
+  ),
+);
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) =>
+  (await import("./settings-attempt.test-support")).withSettingsAttemptRead(
+    await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/mutation-attempts")>(),
+  ),
+);
 beforeEach(() => {
   vi.resetAllMocks();
+  resetSettingsAttempt();
   switchShellMock.mockResolvedValue("cancelled");
   window.history.replaceState(
     { retained: true },

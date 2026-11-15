@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { ChangePlanRecord, ToolApprovalMode } from "@goatcitadel/contracts";
 import { isApiRequestError, type RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/client";
+import type { TrackedAttempt } from "../../../features/native-routes/settings/mutation-attempt-tracking";
 import { TOOL_APPROVAL_MODE_OPTIONS } from "../../../features/native-routes/settings/helpers/permission-helpers";
 
 export const APPROVAL_MODE_DRAFT_KEY = "tools:system:approval-mode";
@@ -57,6 +58,8 @@ export interface ApprovalModeUncertainty {
   previous: ToolApprovalMode;
   /** The Gateway the write went to; the check reads only that one. */
   installation: string;
+  /** The write's identity, so the Gateway's record of that very request can say whether it has finished. */
+  transport?: TrackedAttempt;
   checking: boolean;
 }
 // One record per Gateway: a lost write on one installation must never overwrite, clear or be cleared by another's.

@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChangePlanRecord } from "@goatcitadel/contracts";
 
 const api = vi.hoisted(() => ({ fetchChangePlan: vi.fn(), fetchChangePlans: vi.fn() }));
+const attempts = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchMutationAttempt: attempts.read,
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchChangePlan: api.fetchChangePlan,
   fetchChangePlans: api.fetchChangePlans,
@@ -13,6 +18,7 @@ import {
   describeWaitingChange,
   findActiveSettingsChange,
   findWaitingSettingsChange,
+  settingsSaveFinished,
   waitingNoticeFor,
 } from "./settings-save-outcome";
 
@@ -156,30 +162,102 @@ describe("describeWaitingChange and waitingNoticeFor", () => {
     expect(waitingNoticeFor({ kind: "foreign" }, "p")).toBeNull();
   });
 });
+/** The list route as the Gateway serves it: filtered by one status, newest first, cut at the limit. */
+function serve(plans: ChangePlanRecord[]) {
+  api.fetchChangePlans.mockImplementation(async (_context: unknown, options: { status: string; limit: number }) => ({
+    items: plans
+      .filter((candidate) => candidate.status === options.status)
+      .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)))
+      .slice(0, options.limit),
+  }));
+}
+
 describe("findActiveSettingsChange", () => {
-  it("returns the newest open matching Settings plan", async () => {
-    api.fetchChangePlans.mockResolvedValue({
-      items: [
-        plan({ planId: "old", createdAt: "2026-11-15T09:00:00.000Z" }),
-        plan({ planId: "new", createdAt: "2026-11-15T11:00:00.000Z" }),
-        plan({ planId: "done", status: "completed", createdAt: "2026-11-15T12:00:00.000Z" }),
-        plan({
-          planId: "chat",
-          origin: { surface: "chat", workspaceId: "default" },
-          createdAt: "2026-11-15T13:00:00.000Z",
-        }),
-        plan({ planId: "nomatch", title: "other", createdAt: "2026-11-15T14:00:00.000Z" }),
-      ],
-    });
+  it("returns the newest open matching Settings plan, asking for open plans only", async () => {
+    serve([
+      plan({ planId: "old", createdAt: "2026-11-15T09:00:00.000Z" }),
+      plan({ planId: "new", createdAt: "2026-11-15T11:00:00.000Z" }),
+      plan({ planId: "done", status: "completed", createdAt: "2026-11-15T12:00:00.000Z" }),
+      plan({
+        planId: "chat",
+        origin: { surface: "chat", workspaceId: "default" },
+        createdAt: "2026-11-15T13:00:00.000Z",
+      }),
+      plan({ planId: "nomatch", title: "other", createdAt: "2026-11-15T14:00:00.000Z" }),
+    ]);
     const found = await findActiveSettingsChange((candidate) => candidate.title.startsWith("Turn off"));
     expect(found).toMatchObject({ planId: "new", approvalId: "approval-7" });
-    expect(api.fetchChangePlans).toHaveBeenCalledWith({ workspaceId: "default" }, { limit: 50 });
+    const asked = api.fetchChangePlans.mock.calls.map(([, options]) => options.status).sort();
+    expect(asked).toEqual([
+      "applying",
+      "awaiting_approval",
+      "awaiting_confirmation",
+      "awaiting_input",
+      "draft",
+      "monitoring",
+      "rolling_back",
+      "staging",
+      "verifying",
+    ]);
+    expect(api.fetchChangePlans.mock.calls.every(([context]) => context.workspaceId === "default")).toBe(true);
   });
 
-  it("answers undefined when nothing is open and unreadable when the read fails", async () => {
-    api.fetchChangePlans.mockResolvedValue({ items: [] });
+  it("answers undefined when a short page shows nothing open and unreadable when a read fails", async () => {
+    serve([]);
     expect(await findActiveSettingsChange(() => true)).toBeUndefined();
     api.fetchChangePlans.mockRejectedValue(new Error("offline"));
     expect(await findActiveSettingsChange(() => true)).toBe("unreadable");
+  });
+
+  it("cannot tell when a full page shows no match, because an older open plan may have been left out", async () => {
+    const crowd = Array.from({ length: 200 }, (_, index) =>
+      plan({
+        planId: `other-${index}`,
+        title: "Something else",
+        createdAt: `2026-11-16T10:${String(index % 60).padStart(2, "0")}:00.000Z`,
+      }),
+    );
+    serve(crowd);
+    expect(await findActiveSettingsChange((candidate) => candidate.title.startsWith("Turn off"))).toBe("unreadable");
+  });
+
+  it("still finds a match on a full page", async () => {
+    const crowd = Array.from({ length: 199 }, (_, index) =>
+      plan({ planId: `other-${index}`, title: "Something else", createdAt: "2026-11-16T10:00:00.000Z" }),
+    );
+    serve([...crowd, plan({ planId: "mine", createdAt: "2026-11-16T09:00:00.000Z" })]);
+    expect(await findActiveSettingsChange((candidate) => candidate.planId === "mine")).toMatchObject({
+      planId: "mine",
+    });
+  });
+});
+
+describe("settingsSaveFinished", () => {
+  const attempt = { attemptKey: "key-1", method: "PATCH" as const, routePattern: "/api/v1/settings" };
+
+  it("is finished only when the Gateway recorded the request as committed or released", async () => {
+    for (const [record, finished] of [
+      [{ status: "completed" }, true],
+      [{ status: "failed" }, true],
+      [{ status: "pending", claimExpired: false }, false],
+      [{ status: "pending", claimExpired: true }, false],
+      [{ status: "unknown_after_send" }, false],
+      [{ status: "absent" }, false],
+    ] as const) {
+      attempts.read.mockResolvedValue(record);
+      expect(await settingsSaveFinished(attempt)).toBe(finished);
+    }
+    expect(attempts.read).toHaveBeenCalledWith("key-1", "PATCH", "/api/v1/settings");
+  });
+
+  it("is not finished when the record cannot be read", async () => {
+    attempts.read.mockRejectedValue(new Error("offline"));
+    expect(await settingsSaveFinished(attempt)).toBe(false);
+  });
+
+  it("is not finished for a request sent to another Gateway", async () => {
+    attempts.read.mockResolvedValue({ status: "completed" });
+    expect(await settingsSaveFinished({ ...attempt, installation: "http://another.example" })).toBe(false);
+    expect(attempts.read).not.toHaveBeenCalled();
   });
 });

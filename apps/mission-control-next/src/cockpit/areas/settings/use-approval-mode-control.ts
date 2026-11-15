@@ -8,15 +8,19 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
 import {
   classifySettingsSaveFailure,
   findActiveSettingsChange,
   describeWaitingChange,
   findWaitingSettingsChange,
+  sendTrackedSettingsSave,
+  settingsSaveFinished,
   waitingNoticeFor,
   type WaitingSettingsNotice,
 } from "../../../features/native-routes/settings/settings-save-outcome";
+import type { TrackedAttempt } from "../../../features/native-routes/settings/mutation-attempt-tracking";
 import { useSettingsChange } from "../../../features/native-routes/settings/use-settings-change";
 import {
   APPROVAL_MODE_DRAFT_KEY,
@@ -143,6 +147,7 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     setNotice(null);
     setReview(null);
     let mutationAttempted = false;
+    let transport: TrackedAttempt | undefined;
     try {
       const latest = await fetchSettings();
       if (!isCurrent(intent.generation)) return false;
@@ -164,7 +169,12 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
         return false;
       }
       mutationAttempted = true;
-      const response = await patchSettings({ expectedRevision: intent.revision, toolApprovalMode: intent.mode });
+      const response = await sendTrackedSettingsSave(
+        () => patchSettings({ expectedRevision: intent.revision, toolApprovalMode: intent.mode }),
+        (tracked) => {
+          transport = tracked;
+        },
+      );
       if (getGatewayApiBaseUrl() !== installation)
         throw new Error("You switched to a different GoatCitadel installation, so the save could not be confirmed.");
       // Retain the dispatched origin result even after its editor unmounts.
@@ -202,6 +212,7 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
             baseRevision: intent.revision,
             previous: current,
             installation,
+            ...(transport ? { transport } : {}),
             checking: true,
           };
           retainApprovalModeUncertainty(record);
@@ -229,9 +240,10 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     }
   }
   /**
-   * Reads the open changes first and the saved rule second, so a change that finishes in between shows up as the saved
-   * rule, never as "not saved". The rule is called "not saved" only when the settings read came after a plans read that
-   * showed no open change for it. A failed read keeps the lock.
+   * First asks the Gateway whether that very request has finished: a request still running can apply after any read,
+   * so the rule is called "not saved" only once it has (without an attempt identity it never is). Then reads the open
+   * changes first and the saved rule second, so a change that finishes in between shows up as the saved rule. All
+   * reads are made after the write, never joined to an older one. A failed read keeps the lock.
    */
   async function settleRecord(start: ApprovalModeUncertainty): Promise<void> {
     const record = { ...start, message: CHECKING_MESSAGE, checking: true };
@@ -240,11 +252,14 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
       retainApprovalModeUncertainty({ ...record, message: UNCONFIRMED_MESSAGE, checking: false });
     // Another Gateway cannot say whether this one applied the write.
     if (getGatewayApiBaseUrl() !== record.installation) return keepLocked();
+    const finished = record.transport ? await settingsSaveFinished(record.transport) : false;
+    if (record.transport && !finished) return keepLocked();
     const active = await findActiveSettingsChange((plan) => matchesApprovalModePlan(plan, record.submitted));
     if (active === "unreadable") return keepLocked();
-    const latest = await fetchSettings().catch(() => undefined);
+    const latest = await withFreshReads(() => fetchSettings()).catch(() => undefined);
     if (!latest || !hasApprovalSettings(latest) || getGatewayApiBaseUrl() !== record.installation) return keepLocked();
     const outcome = settleApprovalModeUncertainty(record, latest, Boolean(active));
+    if (outcome === "not_saved" && !finished) return keepLocked();
     clearApprovalModeUncertainty(record.installation);
     if (live.current.mounted) {
       if (outcome === "saved") {

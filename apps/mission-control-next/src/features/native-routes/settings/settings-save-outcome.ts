@@ -1,6 +1,12 @@
-import { changePlanPhaseForStatus, type ChangePlanRecord } from "@goatcitadel/contracts";
+import { CHANGE_PLAN_STATUSES, changePlanPhaseForStatus, type ChangePlanRecord } from "@goatcitadel/contracts";
 import { fetchChangePlan, fetchChangePlans, isApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
+import {
+  classifyMutationAttempt,
+  fetchMutationAttempt,
+} from "@goatcitadel/mission-control-shared/api/mutation-attempts";
+import { dispatchTrackedMutation, sentToConnectedGateway, type TrackedAttempt } from "./mutation-attempt-tracking";
 
 /**
  * What a rejected Settings save means for the operator:
@@ -114,7 +120,7 @@ function describeWaiting(plan: ChangePlanRecord): WaitingSettingsChange {
 export async function findWaitingSettingsChange(planId: string): Promise<WaitingLookup> {
   let plan: ChangePlanRecord;
   try {
-    plan = await fetchChangePlan(planId, { workspaceId: "default" });
+    plan = await withFreshReads(() => fetchChangePlan(planId, { workspaceId: "default" }));
   } catch {
     return { kind: "unreadable" };
   }
@@ -144,17 +150,60 @@ export function describeWaitingChange(waiting: WaitingSettingsNotice, subject: W
   return `One change to this ${subject} is still being applied. Refresh in a moment to see it.`;
 }
 
-/** The newest open Settings change that `matches`; `"unreadable"` when the plans could not be read. */
+// The list route filters by one status at a time and returns at most 200 rows, newest first. Asking per open status
+// keeps finished plans out of the page; a full page cannot show whether an older open plan was left out.
+const OPEN_STATUSES = CHANGE_PLAN_STATUSES.filter((status) => changePlanPhaseForStatus(status) !== "terminal");
+const PLAN_PAGE = 200;
+
+/**
+ * The newest open Settings change that `matches`; `"unreadable"` when the plans could not be read, or when a page was
+ * full and showed no match (an older open plan may have been left out, so "none" cannot be said). Read after the write,
+ * not joined to an older read.
+ */
 export async function findActiveSettingsChange(
   matches: (plan: ChangePlanRecord) => boolean,
 ): Promise<WaitingSettingsChange | undefined | "unreadable"> {
   try {
-    const { items } = await fetchChangePlans({ workspaceId: "default" }, { limit: 50 });
-    const open = items
+    const pages = await withFreshReads(() =>
+      Promise.all(
+        OPEN_STATUSES.map((status) => fetchChangePlans({ workspaceId: "default" }, { status, limit: PLAN_PAGE })),
+      ),
+    );
+    const open = pages
+      .flatMap((page) => page.items)
       .filter((plan) => isSettingsPlan(plan) && !isTerminal(plan) && matches(plan))
       .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
-    return open[0] ? describeWaiting(open[0]) : undefined;
+    if (open[0]) return describeWaiting(open[0]);
+    return pages.some((page) => page.items.length >= PLAN_PAGE) ? "unreadable" : undefined;
   } catch {
     return "unreadable";
+  }
+}
+
+/** The route a Settings save goes through, as the Gateway registers it (its attempts are recorded by key). */
+const SETTINGS_SAVE_ROUTES = ["/api/v1/settings"] as const;
+
+/** Sends one Settings save as a tracked attempt, so a lost answer can be settled from the Gateway's record of it. */
+export function sendTrackedSettingsSave<T>(
+  dispatch: () => Promise<T>,
+  onTracked: (attempt: TrackedAttempt | undefined) => void,
+): Promise<T> {
+  return dispatchTrackedMutation(SETTINGS_SAVE_ROUTES, dispatch, onTracked);
+}
+
+/**
+ * Whether the Gateway's own record says the save has finished (committed, or released after an error). Running,
+ * unknown, never-recorded and unreadable all read as "not finished": the request may still be in flight, so nothing
+ * read after it can say "not saved".
+ */
+export async function settingsSaveFinished(attempt: TrackedAttempt): Promise<boolean> {
+  if (!sentToConnectedGateway(attempt)) return false;
+  try {
+    const verdict = classifyMutationAttempt(
+      await withFreshReads(() => fetchMutationAttempt(attempt.attemptKey, attempt.method, attempt.routePattern)),
+    );
+    return sentToConnectedGateway(attempt) && (verdict === "committed" || verdict === "failed_confirm_by_readback");
+  } catch {
+    return false;
   }
 }

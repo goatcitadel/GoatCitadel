@@ -3,6 +3,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import type { ChangePlanRecord } from "@goatcitadel/contracts";
 import { fetchSettings, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
@@ -11,9 +12,12 @@ import {
   findActiveSettingsChange,
   describeWaitingChange,
   findWaitingSettingsChange,
+  sendTrackedSettingsSave,
+  settingsSaveFinished,
   waitingNoticeFor,
   type WaitingSettingsNotice,
 } from "../../../features/native-routes/settings/settings-save-outcome";
+import type { TrackedAttempt } from "../../../features/native-routes/settings/mutation-attempt-tracking";
 import {
   settingsChangeIsConfirmed,
   useSettingsChange,
@@ -100,7 +104,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
   const [waiting, setWaiting] = useState<WaitingSettingsNotice | null>(null);
   const [checkingOutcome, setCheckingOutcome] = useState(false);
   // The write that may or may not have been applied, kept so its outcome can be checked once the answer is lost.
-  const attempt = useRef<{ submitted: T; baseRevision: number } | null>(null);
+  const attempt = useRef<{ submitted: T; baseRevision: number; transport?: TrackedAttempt } | null>(null);
   const checking = useRef(false);
   // A lookup that finishes after the control went away, or after another Gateway was chosen, must not land here.
   const installation = getGatewayApiBaseUrl();
@@ -142,8 +146,15 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
         return false;
       }
       mutationAttempted = true;
-      attempt.current = { submitted, baseRevision };
-      const response = await patchSettings({ expectedRevision: baseRevision, ...options.patch(submitted) });
+      const sentWrite: NonNullable<typeof attempt.current> = { submitted, baseRevision };
+      attempt.current = sentWrite;
+      const response = await sendTrackedSettingsSave(
+        () => patchSettings({ expectedRevision: baseRevision, ...options.patch(submitted) }),
+        (tracked) => {
+          if (tracked) sentWrite.transport = tracked;
+          else delete sentWrite.transport;
+        },
+      );
       const accepted = change.receive(response, submitted, baseRevision);
       setNotice({
         tone: accepted ? "done" : "waiting",
@@ -203,9 +214,11 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
   }
 
   /**
-   * After a save whose answer was lost: reads the open Settings changes first and the saved value second, so a change
-   * that finishes in between shows up as the saved value, never as "not saved". Saving stays paused only while either
-   * cannot be read; a failed read is never reported as "not saved".
+   * After a save whose answer was lost: first asks the Gateway whether that very request has finished. Reads of the
+   * open changes and the saved value say "not saved" only once it has, because a request still running can apply after
+   * both reads. Then it reads the open changes first and the saved value second, so a change that finishes in between
+   * shows up as the saved value. All reads are made after the write, never joined to an older one. Saving stays paused
+   * while the request may still be running or a read fails; neither is ever reported as "not saved".
    */
   async function checkOutcome(): Promise<void> {
     const sent = attempt.current;
@@ -215,6 +228,9 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
     const keepLocked = () => setNotice({ tone: "failed", message: UNCONFIRMED_MESSAGE });
     try {
       const expected = options.normalize?.(sent.submitted) ?? sent.submitted;
+      // Without an attempt identity nothing can say the request is over, so "not saved" cannot be concluded below.
+      const finished = sent.transport ? await settingsSaveFinished(sent.transport) : false;
+      if (sent.transport && !finished) return keepLocked();
       const active = await findActiveSettingsChange(
         (plan) =>
           options.matchesPlan?.(plan, sent.submitted) ??
@@ -224,7 +240,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
             plan.target.ownerId === "runtime_settings"),
       );
       if (active === "unreadable") return keepLocked();
-      const latest = await fetchSettings().catch(() => undefined);
+      const latest = await withFreshReads(() => fetchSettings()).catch(() => undefined);
       const savedValue = latest ? options.read(latest) : undefined;
       if (!latest || savedValue === undefined) return keepLocked();
       if (savedValue === expected && latest.revision > sent.baseRevision) {
@@ -235,6 +251,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
         await settings.refetch();
         return;
       }
+      if (!active && !finished) return keepLocked();
       setOutcomeUncertain(false);
       if (active) {
         setWaiting(active);
