@@ -107,7 +107,7 @@ export function SettingsApprovalDialog({
   const [message, setMessage] = useState<string>();
   // Where focus was when the dialog opened, so a decision (which removes the Review button) hands it back to the setting.
   const origin = useRef<{ opener: HTMLElement | null; region: HTMLElement | null }>({ opener: null, region: null });
-  const focusTimer = useRef<number>();
+  const focusTimer = useRef<number | undefined>(undefined);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
