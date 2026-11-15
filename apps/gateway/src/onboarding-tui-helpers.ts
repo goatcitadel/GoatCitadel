@@ -132,6 +132,8 @@ export function resolveProviderKeyStatus(input: {
   apiKeyEnv: string;
   env: NodeJS.ProcessEnv;
   existing?: { hasApiKey?: boolean; apiKeySource?: string };
+  /** The provider's endpoint is on this machine; the Gateway treats that as ready without a key. */
+  localEndpoint?: boolean;
 }): ProviderKeyStatus {
   if (input.apiKey.trim().length > 0) {
     return input.keySaved ? { kind: "typed_saved" } : { kind: "typed_not_saved" };
@@ -143,9 +145,10 @@ export function resolveProviderKeyStatus(input: {
   if (input.apiKeyEnv.trim().length === 0) {
     return { kind: "not_needed" };
   }
-  return providerKeyMissing({ apiKey: "", apiKeyEnv: input.apiKeyEnv, env: input.env })
-    ? { kind: "missing" }
-    : { kind: "environment" };
+  if (!providerKeyMissing({ apiKey: "", apiKeyEnv: input.apiKeyEnv, env: input.env })) {
+    return { kind: "environment" };
+  }
+  return input.localEndpoint ? { kind: "not_needed" } : { kind: "missing" };
 }
 
 /** A short plain reason for a failed key save: no route, status line or response body. */

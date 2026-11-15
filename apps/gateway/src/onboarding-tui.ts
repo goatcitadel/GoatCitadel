@@ -26,6 +26,7 @@ import {
   validateRequired,
 } from "./onboarding-tui-helpers.js";
 import { resolveGoatCitadelAppDir } from "./onboarding-tui-paths.js";
+import { isProviderLikelyLocal } from "./provider-locality.js";
 import { renderBox, renderBulletList, renderKeyValueSummary, renderSection } from "./tui/render.js";
 import { tuiTheme } from "./tui/theme.js";
 
@@ -173,6 +174,7 @@ async function run(): Promise<void> {
       apiKeyEnv: provider.providerApiKeyEnv,
       env: process.env,
       existing: initialState.settings.llm.providers.find((item) => item.providerId === provider.providerId),
+      localEndpoint: isProviderLikelyLocal(provider.providerBaseUrl),
     });
     // A typed key that is not saved is gone after this run, so it only counts if the environment has one.
     const keyMissing =

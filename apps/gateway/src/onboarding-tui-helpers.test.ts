@@ -138,6 +138,16 @@ describe("onboarding TUI helpers", () => {
     expect(resolveProviderKeyStatus({ ...base, env: { GLM_API_KEY: "k" } })).toEqual({ kind: "environment" });
     expect(resolveProviderKeyStatus(base)).toEqual({ kind: "missing" });
     expect(resolveProviderKeyStatus({ ...base, apiKeyEnv: "" })).toEqual({ kind: "not_needed" });
+    // A local endpoint needs no key even though a fallback variable name exists.
+    expect(resolveProviderKeyStatus({ ...base, apiKeyEnv: "OLLAMA_API_KEY", localEndpoint: true })).toEqual({
+      kind: "not_needed",
+    });
+    expect(
+      resolveProviderKeyStatus({ ...base, apiKeyEnv: "OLLAMA_API_KEY", localEndpoint: true, apiKey: "typed" }),
+    ).toEqual({ kind: "typed_not_saved" });
+    expect(resolveProviderKeyStatus({ ...base, apiKeyEnv: "OLLAMA_API_KEY", localEndpoint: false })).toEqual({
+      kind: "missing",
+    });
     expect(resolveProviderKeyStatus({ ...base, existing: { hasApiKey: false, apiKeySource: "none" } })).toEqual({
       kind: "missing",
     });
