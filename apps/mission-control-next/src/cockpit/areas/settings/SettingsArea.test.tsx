@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsArea } from "./SettingsArea";
+import { FIRST_RUN_LANE_DESTINATIONS } from "./FirstRunVerification";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { resolveCockpitCompatibility } from "../../app/cockpit-compatibility";
 import { buildSettingsIndex } from "./settings-index";
@@ -269,7 +270,11 @@ describe("Settings section tabs", () => {
       window.location.hash = "citadel-capabilities";
       window.dispatchEvent(new Event("hashchange"));
     });
-    await vi.waitFor(() => expect(container.textContent).toContain("This capability is hidden from the current release. Technical display preferences do not enable it."));
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain(
+        "This capability is hidden from the current release. Technical display preferences do not enable it.",
+      ),
+    );
     expect(window.location.pathname + window.location.search).toBe(current);
     expect(document.documentElement).toBe(documentOwner);
     expect(tab("Citadel capabilities")).toBeUndefined();
@@ -444,4 +449,15 @@ describe("the Settings targets of the Tools panel", () => {
     expect(container.textContent).not.toContain("Settings destination unavailable");
     expect(container.textContent).not.toContain("does not match");
   });
+});
+
+describe("the Settings targets of the Diagnostics lanes", () => {
+  it.each(Object.values(FIRST_RUN_LANE_DESTINATIONS).filter((href) => href.startsWith("/settings/")))(
+    "opens the Diagnostics lane target %s on a real section (U-FR-002)",
+    async (href) => {
+      await render(href.replace("#", "?shell=cockpit#"));
+      await vi.waitFor(() => expect(container.textContent).not.toContain("Loading"));
+      expect(container.textContent).not.toContain("Settings destination unavailable");
+    },
+  );
 });

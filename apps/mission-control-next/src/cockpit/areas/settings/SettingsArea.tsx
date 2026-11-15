@@ -227,6 +227,7 @@ export function SettingsArea() {
               "filesystem-write-roots",
               "notification-routing",
               "settings-approval-skip",
+              "voice-runtime",
             ].includes(hash) &&
             !isFeatureSwitchHash(hash) &&
             !page.entries.some((entry) => entry.anchor === hash || entry.section === hash)
