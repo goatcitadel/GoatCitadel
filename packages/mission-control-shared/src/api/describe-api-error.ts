@@ -5,6 +5,8 @@ export interface ApiErrorDescription {
   technical?: string;
   category?: "authentication" | "permission" | "feature_disabled" | "conflict" | "transient";
   retryable?: boolean;
+  /** The Gateway's own name for the switched-off feature; set only on a `feature_disabled` result. */
+  featureFlag?: string;
 }
 
 export const GATEWAY_UNREACHABLE_SUMMARY =
@@ -47,12 +49,14 @@ export function describeApiError(error: unknown, fallback = DEFAULT_FALLBACK): A
         retryable: false,
       };
     }
-    if (error.status === 409 && readDisabledFeatureFlag(error.body)) {
+    const disabledFlag = error.status === 409 ? readDisabledFeatureFlag(error.body) : undefined;
+    if (disabledFlag) {
       return {
         summary: "This feature is turned off for this installation.",
         technical,
         category: "feature_disabled",
         retryable: false,
+        featureFlag: disabledFlag,
       };
     }
     return {
