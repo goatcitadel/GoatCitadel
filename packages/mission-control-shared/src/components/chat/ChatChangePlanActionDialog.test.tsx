@@ -274,6 +274,43 @@ describe("ChatChangePlanActionDialog", () => {
     expect(JSON.stringify(renderer.toJSON())).not.toContain("direct-secret");
   });
 
+  it("keeps each keystroke after React clears the event's target", async () => {
+    const handlers = callbacks();
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <ChatChangePlanActionDialog
+          plan={plan({
+            kind: "secure_input",
+            actionId: "secret-1",
+            actionNonce: "nonce-1234567890123456",
+            targetId: "openai",
+            title: "Enter OpenAI key",
+            expiresAt: "2099-01-01T00:00:00.000Z",
+          })}
+          {...handlers}
+        />,
+      );
+    });
+    await settleDialogBody();
+    const input = renderer.root.findByType("input");
+    // React nulls currentTarget once a listener returns. Two keystrokes in one batch make the second state
+    // updater run later, during render, which is where a late read of currentTarget crashes.
+    const first: { currentTarget: { value: string } | null } = { currentTarget: { value: "a" } };
+    const second: { currentTarget: { value: string } | null } = { currentTarget: { value: "ab" } };
+    await act(async () => {
+      input.props.onChange(first);
+      first.currentTarget = null;
+      input.props.onChange(second);
+      second.currentTarget = null;
+    });
+    expect(renderer.root.findByType("input").props.value).toBe("ab");
+    await act(async () => latestModalProps?.onConfirm?.());
+    expect(handlers.onSubmitSecureInput).toHaveBeenCalledWith(expect.objectContaining({ planId: "plan-1" }), {
+      credential: "ab",
+    });
+  });
+
   it("renders bounded public fields and submits only their values", async () => {
     const handlers = callbacks();
     let renderer!: ReactTestRenderer;

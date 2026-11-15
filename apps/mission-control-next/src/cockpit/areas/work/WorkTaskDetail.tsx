@@ -8,6 +8,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { Button } from "../../ui/Button";
+import { TaskDeliverableForm } from "./TaskDeliverableForm";
 import { TaskStatusControl } from "./TaskStatusControl";
 import { EmptyState } from "../../ui/EmptyState";
 import { taskMatchesWorkspace } from "./work-tasks";
@@ -216,6 +217,13 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
               ) : null}
               {!deliverables.isError && deliverables.data && deliverables.data.items.length >= 200 ? (
                 <p className="mt-2 text-xs text-fg-muted">Showing at most 200 recent deliverables.</p>
+              ) : null}
+              {!task.agenticContext && !task.proactiveContext ? (
+                <TaskDeliverableForm
+                  key={`${workspaceId}:${task.taskId}:deliverable`}
+                  task={task}
+                  workspaceId={workspaceId}
+                />
               ) : null}
             </section>
           </div>

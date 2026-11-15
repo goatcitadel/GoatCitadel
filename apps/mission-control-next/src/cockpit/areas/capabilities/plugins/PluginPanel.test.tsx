@@ -372,6 +372,10 @@ describe("Plugin panel", () => {
       "Deletes the runs of its prompt packs.",
     ]);
     expect(dialog()?.textContent).toContain("This can't be undone here.");
+    expect(dialog()?.textContent).toContain(
+      "This can't be undone here. It added a skill, and skills can't be removed yet, so you won't be able to install this plugin again.",
+    );
+    expect(dialog()?.textContent).not.toContain("Installing it again adds its pieces back.");
     await press(button("Keep it", dialog()));
     expect(api.uninstallCapabilityPlugin).not.toHaveBeenCalled();
   });
@@ -559,6 +563,25 @@ describe("Plugin panel", () => {
 
     expect(button("Finish uninstalling", body())).toBeDefined();
     expect(button("Uninstall", body())).toBeUndefined();
+    expect(body()?.textContent).toContain(
+      "Almost done. A skill this plugin added still has to be switched off, and that takes its own approval. Finish uninstalling asks for it, then removes what is left, picking up where it stopped.",
+    );
+  });
+
+  it("promises no skill approval when the uninstall stopped on something else", async () => {
+    plugin.state = "uninstalling";
+    plugin.pieces = [
+      { ...CALENDAR, state: "added" },
+      { ...NOTES, state: "removed", href: undefined },
+    ];
+    list = { ...list, installed: [{ ...ROW, state: "uninstalling" }] };
+    await renderTab(`/capabilities/plugins?shell=cockpit&item=plugin%3A${PLUGIN_ID}`);
+
+    expect(button("Finish uninstalling", body())).toBeDefined();
+    expect(body()?.textContent).toContain(
+      "Almost done. Something this plugin added couldn't be removed the first time. Finish uninstalling removes what is left, picking up where it stopped.",
+    );
+    expect(body()?.textContent).not.toContain("takes its own approval");
   });
 
   it("shows GoatCitadel's own words when an uninstall is refused", async () => {

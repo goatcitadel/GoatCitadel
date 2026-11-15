@@ -10,6 +10,7 @@ import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { readCockpitLocation } from "../../app/cockpit-back-guard";
+import { TASK_DELIVERABLE_TITLE_ID } from "./TaskDeliverableForm";
 import { TASK_STATUSES } from "./work-tasks";
 import { NOTICE_TONE_CLASS } from "./work-vocabulary";
 
@@ -101,7 +102,10 @@ export function TaskStatusControl({
       ) : null}
       {!executionOwned && !canMarkDone && task.status !== "done" ? (
         <p className="mt-2 text-xs text-fg-muted">
-          Done requires at least one recorded deliverable. The option appears once one is recorded.
+          Done needs at least one deliverable.{" "}
+          <Button size="sm" variant="ghost" onClick={() => document.getElementById(TASK_DELIVERABLE_TITLE_ID)?.focus()}>
+            Record a deliverable
+          </Button>
         </p>
       ) : null}
       {owner.busy ? (

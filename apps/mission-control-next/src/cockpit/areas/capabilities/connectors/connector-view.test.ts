@@ -20,6 +20,7 @@ import {
   LETTER_ICON_TONE_COUNT,
   letterIconTone,
   presentConnectorState,
+  CONNECTOR_NO_REASON_LINE,
   withInstallProgress,
 } from "./connector-view";
 
@@ -239,24 +240,11 @@ describe("presentConnectorState", () => {
     });
   });
 
-  it("points the panel, not the row, at Technical details for a broken connector", () => {
+  it("words a broken connector's panel line without pointing anywhere", () => {
     const broken = item({ state: "broken", reason: "error", lastError: "spawn ENOENT" });
-    // The row's line sends the reader to the panel; the panel itself must not send them back to it.
     expect(presentConnectorState(broken).reason).toBe("Stopped working; open it to see why");
-    expect(presentConnectorState(broken, "row").reason).toBe("Stopped working; open it to see why");
-    expect(presentConnectorState(broken, "panel", { technicalDetailsShown: true }).reason).toBe(
-      "Stopped working. The last error is under Technical details.",
-    );
-  });
-
-  it("points at Technical details only when they are shown and hold an error", () => {
-    const broken = item({ state: "broken", reason: "error", lastError: "spawn ENOENT" });
-    const noError = item({ state: "broken", reason: "error" });
-    // Hidden by the operator's preference: the pointer would lead nowhere.
     expect(presentConnectorState(broken, "panel").reason).toBe("Stopped working.");
-    expect(presentConnectorState(broken, "panel", { technicalDetailsShown: false }).reason).toBe("Stopped working.");
-    // Shown, but there is no error row to find.
-    expect(presentConnectorState(noError, "panel", { technicalDetailsShown: true }).reason).toBe("Stopped working.");
+    expect(CONNECTOR_NO_REASON_LINE).toBe("No reason was recorded.");
   });
 
   it("words every other reason the same in the panel as on the row", () => {

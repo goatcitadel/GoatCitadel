@@ -19,6 +19,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/tasks", () => ({
   fetchTaskActivities: vi.fn(),
   fetchTaskDeliverables: vi.fn(),
   updateTask: vi.fn(),
+  addTaskDeliverable: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/operators-agents-files", () => ({ fetchAgents: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
@@ -81,6 +82,28 @@ async function render() {
 }
 
 describe("Work task detail", () => {
+  it("offers to record a deliverable for a manual task and points the Done hint at it", async () => {
+    vi.mocked(fetchTask).mockResolvedValue(task());
+    await render();
+    await vi.waitFor(() => expect(container.textContent).toContain("Record a deliverable"));
+    expect(container.textContent).toContain("Done needs at least one deliverable.");
+    expect(container.textContent).not.toContain("The option appears once one is recorded.");
+    const jump = [...container.querySelectorAll("button")].find(
+      (entry) => entry.textContent === "Record a deliverable",
+    )!;
+    await act(async () => jump.click());
+    expect(document.activeElement?.id).toBe("task-deliverable-title");
+  });
+
+  it("leaves deliverables to the run when a run handles the task", async () => {
+    vi.mocked(fetchTask).mockResolvedValue(
+      task({ agenticContext: { durableRunId: "run-1" } as TaskRecord["agenticContext"] }),
+    );
+    await render();
+    await vi.waitFor(() => expect(container.textContent).toContain("Scoped task"));
+    expect(container.querySelector("#task-deliverable-title")).toBeNull();
+  });
+
   it("withholds a foreign record and does not request its detail evidence", async () => {
     vi.mocked(fetchTask).mockResolvedValue(task({ workspaceId: "workspace-b", title: "PRIVATE TASK" }));
     await render();

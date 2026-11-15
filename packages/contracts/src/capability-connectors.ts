@@ -67,7 +67,7 @@ export interface CapabilityConnectorItem {
   connectionId?: string;
   chat: { available: boolean; blockedBy?: CapabilityConnectorChatBlock };
   hiddenInWorkspace: boolean;
-  /** Shown only inside TechnicalDetails. */
+  /** Why it stopped, in the Gateway's own words (secret-redacted). The connector panel shows it as plain text. */
   lastError?: string;
   /** A saved server a plugin added: only uninstalling that plugin removes it. Absent for every other connector. */
   fromPlugin?: { pluginId: string; name: string };

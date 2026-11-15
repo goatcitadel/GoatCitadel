@@ -4,7 +4,7 @@ import { Button } from "../../../ui/Button";
 import { Dialog } from "../../../ui/Dialog";
 import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
 import type { PluginUninstallEntry } from "./plugin-uninstall-store";
-import { uninstallConfirmLines } from "./plugin-uninstall-view";
+import { finishUninstallLine, uninstallConfirmDescription, uninstallConfirmLines } from "./plugin-uninstall-view";
 import { usePluginUninstall } from "./use-plugin-uninstall";
 
 /**
@@ -38,9 +38,12 @@ export function PluginUninstall({ detail }: { detail: CapabilityPluginDetail }) 
       <UninstallOutcome entry={entry} />
       {current.state === "uninstalling" ? (
         // It goes on removing what the first pass left, so it is red like Uninstall; it asks no confirmation again.
-        <Button variant="danger" loading={asking} loadingLabel="Asking…" onClick={flow.start}>
-          Finish uninstalling
-        </Button>
+        <>
+          <p className="text-sm text-fg-secondary">{finishUninstallLine(current.pieces)}</p>
+          <Button variant="danger" loading={asking} loadingLabel="Asking…" onClick={flow.start}>
+            Finish uninstalling
+          </Button>
+        </>
       ) : underWay ? null : (
         <Button variant="danger" loading={asking} loadingLabel="Asking…" onClick={() => setConfirming(true)}>
           Uninstall
@@ -95,7 +98,7 @@ function UninstallConfirmation({
       open={open}
       onOpenChange={onOpenChange}
       title={`Uninstall ${detail.name}?`}
-      description="This can't be undone here. Installing it again adds its pieces back."
+      description={uninstallConfirmDescription(detail.pieces)}
     >
       <div className="space-y-3 text-sm text-fg-secondary">
         <ul className="space-y-1">

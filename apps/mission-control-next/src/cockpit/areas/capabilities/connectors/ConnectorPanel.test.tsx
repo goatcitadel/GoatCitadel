@@ -271,24 +271,22 @@ describe("Connector panel", () => {
     expect(text()).not.toContain("background runs are off");
   });
 
-  it("points a broken connector's reason at technical details instead of back at itself", async () => {
-    prefs.showTechnicalDetails = true;
-    const failing = { ...LINEAR, state: "broken", reason: "error", lastError: "spawn ENOENT" } as const;
-    await renderPanel(LINEAR.id, [failing]);
-    expect(text()).toContain("Stopped working. The last error is under Technical details.");
-    // The pointer leads somewhere: the section is on the page and holds the error.
-    expect(body().querySelector("details summary")?.textContent).toBe("Technical details");
-    expect(text()).toContain("spawn ENOENT");
-    // The row's line sends the reader here; here it must not send them back.
-    expect(text()).not.toContain("open it to see why");
-  });
-
-  it("does not point at technical details while they are hidden", async () => {
+  it("shows why a broken connector stopped with Technical details off", async () => {
     const failing = { ...LINEAR, state: "broken", reason: "error", lastError: "spawn ENOENT" } as const;
     await renderPanel(LINEAR.id, [failing]);
     expect(text()).toContain("Stopped working.");
+    expect(text()).toContain("What went wrong: spawn ENOENT");
     expect(text()).not.toContain("under Technical details");
+    expect(text()).not.toContain("open it to see why");
     expect(body().querySelector("details")).toBeNull();
+  });
+
+  it("says no reason was recorded when a broken connector has none", async () => {
+    const failing = { ...LINEAR, state: "broken", reason: "error", lastError: undefined } as const;
+    await renderPanel(LINEAR.id, [failing]);
+    expect(text()).toContain("Stopped working.");
+    expect(text()).toContain("No reason was recorded.");
+    expect(text()).not.toContain("What went wrong:");
   });
 
   it("does not claim a connected web search row needs a key", async () => {
@@ -335,18 +333,20 @@ describe("Connector panel", () => {
     expect(target.pathname + target.hash).toBe("/settings/citadel#workspace-capabilities");
   });
 
-  it("keeps ids, hosts and the last error inside technical details", async () => {
-    const failing = { ...LINEAR, state: "broken", reason: "error", lastError: "spawn ENOENT" } as const;
+  it("wraps a long reason and keeps ids and hosts inside Technical details", async () => {
+    const long = `Reviewed MCP connection did not complete: ${"x".repeat(400)}`;
+    const failing = { ...LINEAR, state: "broken", reason: "error", lastError: long } as const;
     await renderPanel(LINEAR.id, [failing]);
-    expect(text()).not.toContain("spawn ENOENT");
+    const line = [...body().querySelectorAll("p")].find((entry) => entry.textContent?.startsWith("What went wrong:"))!;
+    expect(line.className).toContain("break-words");
     expect(text()).not.toContain("mcp-server:linear");
     prefs.showTechnicalDetails = true;
     await renderPanel(LINEAR.id, [failing]);
     const details = body().querySelector("details")!;
-    expect(details.textContent).toContain("spawn ENOENT");
     expect(details.textContent).toContain("mcp-server:linear");
     expect(details.textContent).toContain("mcp.linear.app");
     expect(details.textContent).toContain(REVISION);
+    expect(details.textContent).not.toContain("Last error");
   });
 
   it("lists the catalog entry in technical details for a connected service", async () => {

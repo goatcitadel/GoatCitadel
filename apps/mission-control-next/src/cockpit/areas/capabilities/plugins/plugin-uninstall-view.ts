@@ -24,6 +24,46 @@ const ADDED_STATES: ReadonlySet<CapabilityPluginPieceState> = new Set([
   "removing",
 ]);
 
+/** The confirmation's opening when the plugin added a skill: skills can't be removed yet, so it can't be installed again. */
+export const UNINSTALL_SKILL_STAYS =
+  "This can't be undone here. It added a skill, and skills can't be removed yet, so you won't be able to install this plugin again.";
+
+/** The confirmation's opening when nothing the plugin added is a skill. */
+export const UNINSTALL_REINSTALLABLE = "This can't be undone here. Installing it again adds its pieces back.";
+
+/** Said above "Finish uninstalling" while a skill the plugin added still has to be switched off. */
+export const FINISH_UNINSTALL_SKILL_LINE =
+  "Almost done. A skill this plugin added still has to be switched off, and that takes its own approval. Finish uninstalling asks for it, then removes what is left, picking up where it stopped.";
+
+/** Said above "Finish uninstalling" when the first pass stopped for another reason: no skill approval is promised. */
+export const FINISH_UNINSTALL_RETRY_LINE =
+  "Almost done. Something this plugin added couldn't be removed the first time. Finish uninstalling removes what is left, picking up where it stopped.";
+
+/** The confirmation's opening when a skill's state can't be read: no reinstall is promised on missing evidence. */
+export const UNINSTALL_SKILL_UNKNOWN =
+  "This can't be undone here. GoatCitadel can't tell whether a skill it added is still there. If one is, you won't be able to install this plugin again, because skills can't be removed yet.";
+
+/** A skill the plugin itself brought, as opposed to one that was already there. */
+function ownSkills(pieces: readonly CapabilityPluginDetailPiece[]): CapabilityPluginDetailPiece[] {
+  return pieces.filter((piece) => piece.kind === "skill" && piece.check.status !== "already_there");
+}
+
+/** The confirmation's description: it says up front whether the plugin can be installed again. */
+export function uninstallConfirmDescription(pieces: readonly CapabilityPluginDetailPiece[]): string {
+  const skills = ownSkills(pieces);
+  if (skills.some((piece) => ADDED_STATES.has(piece.state))) return UNINSTALL_SKILL_STAYS;
+  return skills.some((piece) => piece.state === "unknown") ? UNINSTALL_SKILL_UNKNOWN : UNINSTALL_REINSTALLABLE;
+}
+
+/**
+ * The line above "Finish uninstalling": it names the skill approval only while a skill of the plugin's still needs
+ * one. A skill already being removed has its approval, so nothing more is asked for it.
+ */
+export function finishUninstallLine(pieces: readonly CapabilityPluginDetailPiece[]): string {
+  const needsApproval = ownSkills(pieces).some((piece) => ADDED_STATES.has(piece.state) && piece.state !== "removing");
+  return needsApproval ? FINISH_UNINSTALL_SKILL_LINE : FINISH_UNINSTALL_RETRY_LINE;
+}
+
 /**
  * The confirmation's lines, from the detail: what the plugin added goes, what was already there stays, and so do the
  * hosts it allowed, each named once. The plan's own approval and outcome then say exactly what the Gateway did.
