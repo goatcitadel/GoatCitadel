@@ -27,8 +27,15 @@ const proposal = {
   updatedAt: "2026-10-01T00:00:00Z",
 } as unknown as TraceMemoryCandidateRecord;
 
+const switchState = vi.hoisted(() => ({ on: undefined as boolean | undefined }));
+vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
+  ...(await original<object>()),
+  fetchSettings: async () => ({ features: { memoryLifecycleAdminV1Enabled: switchState.on } }),
+}));
+
 let root: Root, container: HTMLDivElement, client: QueryClient;
 beforeEach(() => {
+  switchState.on = undefined;
   vi.resetAllMocks();
   container = document.createElement("div");
   document.body.append(container);
@@ -94,4 +101,29 @@ it("says memory administration is turned off and links to its switch when propos
   expect(new URL(link!.getAttribute("href")!, "http://cockpit.invalid").hash).toBe(
     "#feature-switch-memory-administration",
   );
+});
+
+it("reads proposals again, without a reload, once memory administration is turned on", async () => {
+  const off = new ApiRequestError("off", {
+    kind: "http",
+    method: "GET",
+    path: "/api/v1/memory/trace-candidates",
+    status: 409,
+    body: { code: "FEATURE_DISABLED", details: { flag: "memoryLifecycleAdminV1Enabled" } },
+  });
+  vi.mocked(fetchTraceMemoryCandidates).mockImplementation(async () => {
+    if (switchState.on !== true) throw off;
+    return { items: [] } as unknown as Awaited<ReturnType<typeof fetchTraceMemoryCandidates>>;
+  });
+  switchState.on = false;
+  await render();
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain("Memory administration is turned off on this installation."),
+  );
+  switchState.on = true;
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: ["system", "settings-feature-switches"] });
+  });
+  await vi.waitFor(() => expect(container.textContent).toContain("No proposals waiting for review."));
+  expect(container.textContent).not.toContain("turned off on this installation");
 });

@@ -45,8 +45,15 @@ vi.mock("../../ui/Sheet", () => ({
     ) : null,
 }));
 
+const switchState = vi.hoisted(() => ({ on: undefined as boolean | undefined }));
+vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
+  ...(await original<object>()),
+  fetchSettings: async () => ({ features: { memoryLifecycleAdminV1Enabled: switchState.on } }),
+}));
+
 let root: Root, container: HTMLDivElement, client: QueryClient;
 beforeEach(() => {
+  switchState.on = undefined;
   vi.resetAllMocks();
   window.history.replaceState(null, "", "/library/memory?shell=cockpit");
   container = document.createElement("div");
@@ -192,4 +199,31 @@ it("keeps the plain error for a refusal that names no listed switch", async () =
   await render();
   await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
   expect(container.textContent).not.toContain("Turn it on in Settings › Advanced");
+});
+
+it("reads the directory again, without a reload, once memory administration is turned on", async () => {
+  const off = new ApiRequestError("off", {
+    kind: "http",
+    method: "GET",
+    path: "/api/v1/memory/items",
+    status: 409,
+    body: { code: "FEATURE_DISABLED", details: { flag: "memoryLifecycleAdminV1Enabled" } },
+  });
+  api.load.mockImplementation(async () => {
+    if (switchState.on !== true) throw off;
+    return { items: [], coverage: "0 matching records" };
+  });
+  switchState.on = false;
+  await render();
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain("Memory administration is turned off on this installation."),
+  );
+  const readsWhileOff = api.load.mock.calls.length;
+  switchState.on = true;
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: ["system", "settings-feature-switches"] });
+  });
+  await vi.waitFor(() => expect(container.textContent).toContain("No active memories"));
+  expect(api.load.mock.calls.length).toBeGreaterThan(readsWhileOff);
+  expect(container.textContent).not.toContain("turned off on this installation");
 });

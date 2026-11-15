@@ -7,6 +7,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { FeatureOffNotice, listedFeatureFlag } from "../settings/FeatureOffNotice";
+import { useRetryWhenSwitchTurnsOn } from "../settings/feature-switches";
 import { Field } from "../../ui/Field";
 import { loadLibraryResources } from "./library-resources";
 import { LibraryMemoryEditor } from "./LibraryMemoryEditor";
@@ -71,6 +72,11 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
     if (cursors.length > 1) setCursors([undefined]);
     else void list.refetch();
   }
+  useRetryWhenSwitchTurnsOn(
+    "memoryLifecycleAdminV1Enabled",
+    listedFeatureFlag(list.error) === "memoryLifecycleAdminV1Enabled",
+    reloadDirectory,
+  );
   function select(id?: string) {
     const next = new URLSearchParams(route.search);
     if (id) next.set("itemId", id);

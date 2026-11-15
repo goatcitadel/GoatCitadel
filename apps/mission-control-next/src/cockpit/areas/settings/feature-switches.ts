@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS } from "@goatcitadel/contracts";
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
@@ -91,4 +92,17 @@ export function useFeatureSwitchOn(flag: FeatureSwitchFlag): boolean | undefined
   });
   const value = query.data?.features?.[flag];
   return typeof value === "boolean" ? value : undefined;
+}
+
+/**
+ * A screen that read "this feature is turned off" from the Gateway reads again once the switch turns on, so turning it
+ * on in Settings never needs a reload. `waiting` is true while that refusal is what the screen shows.
+ */
+export function useRetryWhenSwitchTurnsOn(flag: FeatureSwitchFlag, waiting: boolean, retry: () => void): void {
+  const on = useFeatureSwitchOn(flag);
+  const latest = useRef(retry);
+  latest.current = retry;
+  useEffect(() => {
+    if (waiting && on === true) latest.current();
+  }, [waiting, on]);
 }
