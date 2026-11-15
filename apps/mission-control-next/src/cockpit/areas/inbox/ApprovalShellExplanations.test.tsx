@@ -23,3 +23,24 @@ it("shows shell risk on the shared Safe/Caution/Danger scale instead of raw risk
   expect(host.textContent).not.toContain("caution:");
   expect(host.textContent).not.toContain("· danger");
 });
+
+it("never shows a lower risk than the approval's own (U-IN-010)", () => {
+  const safe: ShellCommandExplanation = {
+    command: "ls",
+    parsed: true,
+    program: "ls",
+    summary: "Lists files",
+    details: [],
+    risks: [],
+    highestRisk: "info",
+  };
+  const host = document.createElement("div");
+  host.innerHTML = renderToStaticMarkup(
+    <ApprovalShellExplanations commands={[{ text: "ls" }]} explanations={[safe]} approvalRisk="danger" />,
+  );
+  expect(host.querySelector("summary")?.textContent).toBe("Lists files · Danger");
+  host.innerHTML = renderToStaticMarkup(
+    <ApprovalShellExplanations commands={[{ text: "ls" }]} explanations={[safe]} approvalRisk="safe" />,
+  );
+  expect(host.querySelector("summary")?.textContent).toBe("Lists files · Safe");
+});

@@ -105,6 +105,21 @@ export const shellRiskAsApprovalRisk: Readonly<Record<ShellRiskLevel, ApprovalRe
   danger: "danger",
 };
 
+const approvalRiskOrder: readonly ApprovalRequest["riskLevel"][] = ["safe", "caution", "danger", "nuclear"];
+
+/** The stricter of two approval risks, so a shell command's own rating never shows a weaker word than the approval. */
+export function higherApprovalRisk(
+  a: ApprovalRequest["riskLevel"],
+  b: ApprovalRequest["riskLevel"],
+): ApprovalRequest["riskLevel"] {
+  const rankA = approvalRiskOrder.indexOf(a);
+  const rankB = approvalRiskOrder.indexOf(b);
+  // A level this build does not know is kept as it is: it is never swapped for a known, possibly weaker one.
+  if (rankA < 0) return a;
+  if (rankB < 0) return b;
+  return rankB > rankA ? b : a;
+}
+
 const documentProposalStates: Readonly<Record<DocumentPatchProposalState, StatusPresentation>> = {
   pending: status("Waiting on you", "waiting"),
   applied: status("Applied", "done"),

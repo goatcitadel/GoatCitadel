@@ -175,8 +175,8 @@ describe("Inbox approval detail", () => {
     const explanations = () => container.querySelector('[aria-label="Command explanations"]');
     await settleUntil(() => Boolean(explanations()));
     expect([...explanations()!.querySelectorAll("summary")].map((entry) => entry.textContent)).toEqual([
-      "Stored first · Safe",
-      "Stored second · Safe",
+      "Stored first · Caution",
+      "Stored second · Caution",
       "Command preview is shortened",
     ]);
     expect(explanations()?.textContent).not.toContain("end marker");
