@@ -154,7 +154,8 @@ export function hostOf(baseUrl: string): string | undefined {
 
 /**
  * Client-side preview of the Gateway allowlist check, used only to offer the "add host" step.
- * The Gateway re-checks on save and on every tool call.
+ * The Gateway re-checks on save and on every tool call. Like the Gateway, a loopback or private LAN address passes
+ * only by an exact host and port entry; a hostname-only entry or a wildcard does not cover it.
  */
 export function isBaseUrlAllowlisted(baseUrl: string, allowlist: readonly string[]): boolean {
   let parsed: URL;
@@ -166,11 +167,38 @@ export function isBaseUrlAllowlisted(baseUrl: string, allowlist: readonly string
   if (isLocalHost(parsed.hostname) && parsed.port === "3002") return true;
   const host = parsed.host.toLowerCase();
   const hostname = parsed.hostname.toLowerCase();
+  if (isLocalHost(hostname) || isLanIpv4(hostname)) {
+    return allowlist.some((raw) => raw.trim().toLowerCase() === host);
+  }
   return allowlist.some((raw) => {
     const entry = raw.trim().toLowerCase();
     if (entry === "*" || entry === host || entry === hostname) return true;
     return entry.startsWith("*.") && hostname.endsWith(entry.slice(1));
   });
+}
+
+/** Where the Firecrawl page says the Gateway refuses the address, and which host the add button would add. */
+export function firecrawlAllowlistGap(input: {
+  draft: FirecrawlDraft;
+  saved?: { enabled: boolean; baseUrl: string; baseUrlAllowlisted?: boolean };
+  allowlist: readonly string[];
+  draftDirty: boolean;
+  lastCheck?: "ok" | "reachable" | "unauthorized" | "unreachable" | "blocked";
+}): { host: string; source: "draft" | "gateway" } | undefined {
+  const { draft, saved, allowlist, draftDirty, lastCheck } = input;
+  if (draftDirty) {
+    const host = hostOf(draft.baseUrl);
+    return host &&
+      draft.enabled &&
+      !firecrawlUrlProblem(draft.baseUrl) &&
+      !isBaseUrlAllowlisted(draft.baseUrl, allowlist)
+      ? { host, source: "draft" }
+      : undefined;
+  }
+  if (!saved?.enabled) return undefined;
+  const refused = saved.baseUrlAllowlisted === false || lastCheck === "blocked";
+  const host = hostOf(saved.baseUrl);
+  return refused && host ? { host, source: "gateway" } : undefined;
 }
 
 function isLocalHost(hostname: string): boolean {
