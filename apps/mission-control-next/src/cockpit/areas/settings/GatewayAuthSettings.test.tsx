@@ -93,6 +93,9 @@ describe("native Gateway authentication", () => {
     // The warning names the control that fixes it, which sits right below it in this section.
     expect(JSON.stringify(renderer.toJSON())).toContain("Use Configure access below.");
     expect(button("Configure access")).toBeDefined();
+    expect(JSON.stringify(renderer.toJSON())).toContain(
+      "Auto mode and Managed files in project conversations also need sign-in.",
+    );
   });
   it("renders installation scope, requires explicit review, and saves through the shared owner", async () => {
     expect(JSON.stringify(renderer.toJSON())).toContain("every workspace");

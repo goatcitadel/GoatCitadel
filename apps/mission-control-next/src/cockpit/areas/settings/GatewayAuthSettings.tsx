@@ -44,7 +44,8 @@ export function GatewayAuthSettings() {
       {settings.data?.auth?.mode === "none" ? (
         // The "Configure access" button below this section's status opens the sign-in editor.
         <Callout tone="warning" announce={false}>
-          Anyone who can reach this app can change settings. Set up sign-in. Use Configure access below.
+          Anyone who can reach this app can change settings. Set up sign-in. Use Configure access below. Auto mode and
+          Managed files in project conversations also need sign-in.
         </Callout>
       ) : null}
       <p role="status">
