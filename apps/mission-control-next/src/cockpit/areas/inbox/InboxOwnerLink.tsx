@@ -69,8 +69,9 @@ export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem;
   const names =
     area === "Chat" ? (["sessionId", "turnId"] as const) : (["sessionId", "turnId", "runId", "taskId"] as const);
   if (area === "Chat") {
-    carried.delete("runId");
-    carried.delete("taskId");
+    // The address may select a turn, message or artifact of another conversation; none of it belongs to this one.
+    for (const key of ["sessionId", "turnId", "artifactId", "messageId", "sequence", "runId", "taskId"])
+      carried.delete(key);
   }
   for (const key of names) {
     const value = item.source[key];

@@ -102,6 +102,17 @@ it("opens the conversation an approval came from, not the Inbox again (U-IN-014)
   expect(target.searchParams.has("approvalId")).toBe(false);
 });
 
+it("does not carry the address's turn, message or artifact into another conversation's link", () => {
+  const [link] = withAddress(
+    "?shell=cockpit&sessionId=old&turnId=old-turn&artifactId=old-art&messageId=old-msg&sequence=4",
+    () => renderLinks([{ ...decisionBase, source: { ...decisionBase.source, sessionId: "s1" } }]),
+  );
+  const target = new URL(link!.href);
+  expect(target.pathname).toBe("/chat");
+  expect(target.searchParams.get("sessionId")).toBe("s1");
+  for (const key of ["turnId", "artifactId", "messageId", "sequence"]) expect(target.searchParams.has(key)).toBe(false);
+});
+
 it("opens the run an approval belongs to when it has no conversation", () => {
   const [link] = withAddress("?shell=cockpit", () =>
     renderLinks([{ ...decisionBase, source: { ...decisionBase.source, runId: "r1" } }]),
