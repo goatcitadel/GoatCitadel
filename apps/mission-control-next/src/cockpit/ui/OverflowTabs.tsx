@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { isModifiedClick } from "../lib/modified-click";
-import { useOverflowEdges } from "./use-overflow-edges";
+import { useScrollEdges } from "./use-scroll-edges";
 
 export interface OverflowTab {
   id: string;
@@ -31,7 +31,7 @@ export function OverflowTabs({
 }) {
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const picker = phone && tabs.length >= PICKER_MIN_TABS;
-  const { ref: row, ...edges } = useOverflowEdges<HTMLElement>([tabs.length, picker]);
+  const { ref: row, ...edges } = useScrollEdges<HTMLElement>([tabs.length, picker]);
   useEffect(() => {
     row.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   }, [row, current, picker]);

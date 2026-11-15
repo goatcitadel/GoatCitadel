@@ -5,14 +5,13 @@ import {
   renderInspectorRunEvidence,
   ModelDetailRow,
   ModelTechnicalDetails,
-  TABS,
   type ChatInspectorTab,
 } from "./chat-inspector-evidence";
 import { useEffect, useState } from "react";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { useOverflowEdges } from "../../ui/use-overflow-edges";
+import { ChatInspectorTabStrip } from "./ChatInspectorTabStrip";
 import {
   presentMemoryMode,
   presentPlanningMode,
@@ -40,7 +39,6 @@ export function ChatInspector({
   initialTab?: ChatInspectorTab;
 }) {
   const [tab, setTab] = useState<ChatInspectorTab>(initialTab);
-  const { ref: tabStrip, ...edges } = useOverflowEdges<HTMLDivElement>([]);
   useEffect(() => setTab(initialTab), [initialTab]);
   const active = input.activeSessionSurfaceProps;
   const dock = input.contextDockProps;
@@ -91,47 +89,7 @@ export function ChatInspector({
 
   return (
     <div className="space-y-4">
-      <div
-        ref={tabStrip}
-        role="tablist"
-        aria-label="Conversation inspector"
-        data-overflow-start={edges.start || undefined}
-        data-overflow-end={edges.end || undefined}
-        className="cockpit-overflow-fade flex gap-1 overflow-x-auto whitespace-nowrap rounded-md bg-sunken p-1"
-      >
-        {TABS.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === entry.id}
-            id={`cockpit-inspector-tab-${entry.id}`}
-            tabIndex={tab === entry.id ? 0 : -1}
-            aria-controls={`cockpit-inspector-${entry.id}`}
-            onClick={() => setTab(entry.id)}
-            onKeyDown={(event) => {
-              const index = TABS.findIndex((item) => item.id === tab);
-              const next =
-                event.key === "ArrowRight"
-                  ? (index + 1) % TABS.length
-                  : event.key === "ArrowLeft"
-                    ? (index + TABS.length - 1) % TABS.length
-                    : event.key === "Home"
-                      ? 0
-                      : event.key === "End"
-                        ? TABS.length - 1
-                        : -1;
-              if (next < 0) return;
-              event.preventDefault();
-              setTab(TABS[next]!.id);
-              (event.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
-            }}
-            className="min-h-8 shrink-0 rounded-md px-2 text-xs font-medium text-fg-secondary hover:bg-raised aria-selected:bg-raised aria-selected:text-fg"
-          >
-            {entry.label}
-          </button>
-        ))}
-      </div>
+      <ChatInspectorTabStrip tab={tab} onSelect={setTab} />
       <section
         id={`cockpit-inspector-${tab}`}
         aria-labelledby={`cockpit-inspector-tab-${tab}`}

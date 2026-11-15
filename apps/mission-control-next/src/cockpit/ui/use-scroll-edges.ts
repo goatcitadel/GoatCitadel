@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
  * the scrolling row and `start`/`end` on its `data-overflow-start`/`data-overflow-end`. `deps` re-measure the row when
  * its contents change (a tab added or removed, a picker swapped for the strip); a 1 px tolerance ignores rounding.
  */
-export function useOverflowEdges<T extends HTMLElement>(
+export function useScrollEdges<T extends HTMLElement>(
   deps: readonly unknown[],
 ): { ref: RefObject<T | null>; start: boolean; end: boolean } {
   const ref = useRef<T>(null);
@@ -13,11 +13,12 @@ export function useOverflowEdges<T extends HTMLElement>(
   useEffect(() => {
     const element = ref.current;
     if (!element) return undefined;
-    const measure = () =>
-      setEdges({
-        start: element.scrollLeft > 1,
-        end: element.scrollLeft + element.clientWidth < element.scrollWidth - 1,
-      });
+    const measure = () => {
+      const start = element.scrollLeft > 1;
+      const end = element.scrollLeft + element.clientWidth < element.scrollWidth - 1;
+      // Scroll fires many times a second; an unchanged answer keeps the same state so nothing re-renders.
+      setEdges((previous) => (previous.start === start && previous.end === end ? previous : { start, end }));
+    };
     measure();
     element.addEventListener("scroll", measure, { passive: true });
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;

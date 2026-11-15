@@ -266,6 +266,18 @@ describe("conversation inspector", () => {
     },
   );
 
+  it("fades the tab strip's hidden side when the conversation opens after the inspector did (U-CH-048)", async () => {
+    const empty = { ...fixture(), activeSessionSurfaceProps: null } as unknown as MissionThreadedRenderSurfaceInput;
+    await act(async () => root.render(<ChatInspector input={empty} />));
+    expect(container.querySelector('[role="tablist"]')).toBeNull();
+    await act(async () => root.render(<ChatInspector input={fixture()} />));
+    const strip = container.querySelector<HTMLElement>('[role="tablist"]')!;
+    Object.defineProperty(strip, "scrollWidth", { configurable: true, value: 600 });
+    Object.defineProperty(strip, "clientWidth", { configurable: true, value: 300 });
+    await act(async () => strip.dispatchEvent(new Event("scroll")));
+    expect(strip.hasAttribute("data-overflow-end")).toBe(true);
+  });
+
   it("offers session control for the selected conversation", async () => {
     const input = fixture();
     // The Conversation tab shows the current planning and web preferences.
