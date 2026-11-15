@@ -1335,7 +1335,11 @@ export class ChatTurnAgentRunner {
         !presentationArtifactIntent &&
         detectDocumentArtifactIntent(input.content),
     };
-    if ((input.toolAutonomy === "manual" && !quickWebProfile) || promptLabContract.toolUseSuppressed) {
+    if (
+      input.planningMode === "advisory" ||
+      (input.toolAutonomy === "manual" && !quickWebProfile) ||
+      promptLabContract.toolUseSuppressed
+    ) {
       return {
         tools: [],
         modelToCanonical: new Map(),
@@ -2454,16 +2458,25 @@ export class ChatTurnAgentRunner {
       input.capabilityProfile && this.deps.listCapabilityCatalog
         ? await this.deps.listCapabilityCatalog("callable", input.capabilityProfile.identity.workspaceId)
         : undefined;
-    const admittedToolSchema = input.capabilityProfile
-      ? await toolSchemaFromCapabilityProfile(
-          input,
-          input.capabilityProfile,
-          storage,
-          liveCallableEntries,
-          this.deps.revalidateRequesterTool,
-          this.deps.revalidateMeshTool,
-        )
-      : await this.resolveCapabilityToolSchema(input);
+    // Plan first offers the model no tools on any path, whatever autonomy or frozen profile the turn carries.
+    const planFirstNoTools = input.planningMode === "advisory";
+    const admittedToolSchema = planFirstNoTools
+      ? ({
+          tools: [],
+          modelToCanonical: new Map(),
+          canonicalToModel: new Map(),
+          policyDecisions: [],
+        } satisfies ResolvedChatTurnToolSchema)
+      : input.capabilityProfile
+        ? await toolSchemaFromCapabilityProfile(
+            input,
+            input.capabilityProfile,
+            storage,
+            liveCallableEntries,
+            this.deps.revalidateRequesterTool,
+            this.deps.revalidateMeshTool,
+          )
+        : await this.resolveCapabilityToolSchema(input);
     const routedContextToolSchema = await this.filterRoutedContextCapabilityToolSchema(input, admittedToolSchema);
     const filteredToolSchema = await this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema);
     if (
@@ -4932,7 +4945,11 @@ export class ChatTurnAgentRunner {
             );
             break;
           }
-          if ((toolCalls.length === 0 && toolCallRepairFeedback.length === 0) || input.toolAutonomy === "manual") {
+          if (
+            (toolCalls.length === 0 && toolCallRepairFeedback.length === 0) ||
+            input.toolAutonomy === "manual" ||
+            planFirstNoTools
+          ) {
             // A reply received during the final provider request gets a further
             // bounded model boundary when the normal turn budget permits one.
             if (
@@ -7544,6 +7561,10 @@ export class ChatTurnAgentRunner {
     chunk?: ChatStreamChunkDraft;
     userInputPrompt?: ChatUserInputPromptRecord;
   }> {
+    // Last gate: a Plan first turn never dispatches a tool, whatever reached this point.
+    if (input.input.planningMode === "advisory") {
+      throw new Error("A Plan first turn does not run tools.");
+    }
     const res = await this.executeToolCallInternal(input);
     const delegatedScopeApprovalId = readDelegatedScopeExpansionApprovalId(res.record);
     if (delegatedScopeApprovalId) {

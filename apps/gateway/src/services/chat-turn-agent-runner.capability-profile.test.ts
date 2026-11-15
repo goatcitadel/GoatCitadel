@@ -895,7 +895,9 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       "The operator can uninstall every plugin that keeps the group off in Capabilities › Plugins to release the holds.",
     );
     expect(blocked?.failureGuidance).toContain("Capabilities › Plugins");
-    expect(blocked?.failureGuidance).toContain("If the group stays off, they can switch it on in Capabilities › Tools.");
+    expect(blocked?.failureGuidance).toContain(
+      "If the group stays off, they can switch it on in Capabilities › Tools.",
+    );
   });
 
   it("never drops a frozen approval requirement when current policy becomes broader", async () => {
@@ -1500,5 +1502,93 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     }
     expect(createChatCompletion).not.toHaveBeenCalled();
     expect(invokeTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("ChatTurnAgentRunner Plan first with a frozen capability profile", () => {
+  function buildRunner(profile: ChatTurnCapabilityProfileRecord, reply: Record<string, unknown>) {
+    const completionRequests: ChatCompletionRequest[] = [];
+    const createChatCompletion = vi.fn(async (request: ChatCompletionRequest) => {
+      completionRequests.push(request);
+      return reply as never;
+    });
+    const invokeTool = vi.fn(async () => ({ outcome: "executed", result: { results: [] } }));
+    const runner = new ChatTurnAgentRunner({
+      storage: createProfileStorage(profile) as never,
+      listToolCatalog: () => createToolCatalog(["browser.search", "fs.write"]),
+      listCapabilityCatalog: () => liveCallableCatalog(profile),
+      createChatCompletion,
+      invokeTool: invokeTool as never,
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+    });
+    return { runner, completionRequests, createChatCompletion, invokeTool };
+  }
+  const planReply = {
+    model: "model-a",
+    choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "1. Do it." } }],
+  };
+  const toolCallReply = {
+    model: "model-a",
+    choices: [
+      {
+        index: 0,
+        finish_reason: "tool_calls",
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            { id: "c1", type: "function", function: { name: "browser_search", arguments: '{"query":"x"}' } },
+          ],
+        },
+      },
+    ],
+  };
+
+  it("offers no tools and runs none for a safe_auto frozen profile, without throwing", async () => {
+    const profile = buildProfile({ toolAutonomy: "safe_auto" });
+    const { runner, completionRequests, invokeTool } = buildRunner(profile, toolCallReply);
+
+    const result = await runner.run({ ...buildInput(profile), planningMode: "advisory" });
+
+    expect(completionRequests.length).toBeGreaterThan(0);
+    for (const request of completionRequests) expect(request.tools ?? []).toEqual([]);
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.toolRuns ?? []).toEqual([]);
+  });
+
+  it("returns the model's plan for a frozen profile under Plan first", async () => {
+    const profile = buildProfile({ toolAutonomy: "safe_auto" });
+    const { runner, createChatCompletion } = buildRunner(profile, planReply);
+
+    const result = await runner.run({ ...buildInput(profile), planningMode: "advisory" });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(result.assistantContent).toBe("1. Do it.");
+  });
+
+  it("runs no synthetic quick-web search for a Plan first quick-web profile with browser.search admitted", async () => {
+    const profile = buildProfile({ toolAutonomy: "manual", webMode: "quick" });
+    const content = "please look up the best way to eat sushi";
+    const { runner, invokeTool } = buildRunner(profile, planReply);
+
+    await runner.run({
+      ...buildInput(profile),
+      content,
+      historyMessages: [{ role: "user" as const, content }],
+      normalizationProfile: "quick_web",
+      executionProfile: "quick_web",
+      planningMode: "advisory",
+    });
+
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("still offers the frozen tool when Plan first is off", async () => {
+    const profile = buildProfile({ toolAutonomy: "safe_auto" });
+    const { runner, completionRequests } = buildRunner(profile, planReply);
+
+    await runner.run({ ...buildInput(profile), planningMode: "off" });
+
+    expect(completionRequests[0]?.tools).toEqual([TOOL_DEFINITION]);
   });
 });
