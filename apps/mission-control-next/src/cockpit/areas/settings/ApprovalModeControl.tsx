@@ -125,7 +125,7 @@ export function ApprovalModeEditor({
           {restricted ? (
             <p id={bypassReasonId} className="mt-2 text-sm text-status-waiting">
               {safeOnly
-                ? `${describeToolApprovalMode("bypass")} lets allowed tools run without asking you first. Setup keeps it off, so you see each risky step before it runs. You can turn it on later in Settings › Safety.`
+                ? `${describeToolApprovalMode("bypass")} lets allowed tools run without normal prompts. Setup keeps it off, so normal prompts stay on. You can turn it on later in Settings › Safety.`
                 : `${describeToolApprovalMode("bypass")} is unavailable here. Remote Hardened keeps normal prompt skipping unavailable.`}
             </p>
           ) : null}

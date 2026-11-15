@@ -3,9 +3,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
-import type { ChatSessionRecord } from "@goatcitadel/contracts";
+import type { ChatSessionRecord, OnboardingState } from "@goatcitadel/contracts";
+import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
-import { ChatHeaderSubtitle, ChatSessionHeader, ChatSetupBanner } from "./ChatAreaChrome";
+import { ChatHeaderSubtitle, ChatSessionHeader, ChatSetupBanner, ChatSetupGate } from "./ChatAreaChrome";
 import type { ChannelConversationContext } from "./channel-conversation";
 
 const media = vi.hoisted(() => ({ phone: false }));
@@ -310,5 +311,42 @@ describe("ChatSetupBanner", () => {
     await act(async () => root.render(<ChatSetupBanner modelReady onReturnToSetup={vi.fn()} />));
     expect(container.textContent).toContain("You can chat now. Finish setup to verify your first answer.");
     expect(container.textContent).toContain("Return to setup");
+  });
+});
+
+describe("ChatSetupGate", () => {
+  const withModel = onboardingFixture();
+  const withoutModel = {
+    ...withModel,
+    settings: { ...withModel.settings, llm: { ...withModel.settings.llm, activeProviderId: "", activeModel: "" } },
+  };
+  const gate = async (onboarding: { data?: OnboardingState; isError: boolean }, hidden = false) =>
+    act(async () => root.render(<ChatSetupGate onboarding={onboarding} hidden={hidden} onSetup={vi.fn()} />));
+
+  it("shows nothing while the setup read is loading", async () => {
+    await gate({ data: undefined, isError: false });
+    expect(container.textContent).toBe("");
+  });
+
+  it("shows nothing when the setup read failed, even with an earlier result", async () => {
+    await gate({ data: withoutModel, isError: true });
+    expect(container.textContent).toBe("");
+  });
+
+  it("shows nothing when setup is complete or the build editor is open", async () => {
+    await gate({ data: { ...withoutModel, completed: true }, isError: false });
+    expect(container.textContent).toBe("");
+    await gate({ data: withoutModel, isError: false }, true);
+    expect(container.textContent).toBe("");
+  });
+
+  it("asks for a model when the read succeeded and no model is ready", async () => {
+    await gate({ data: withoutModel, isError: false });
+    expect(container.textContent).toContain("Connect a model before you send your first message.");
+  });
+
+  it("keeps the advisory wording when a model is ready", async () => {
+    await gate({ data: withModel, isError: false });
+    expect(container.textContent).toContain("You can chat now.");
   });
 });

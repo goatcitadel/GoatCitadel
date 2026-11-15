@@ -32,9 +32,9 @@ describe("ChatTurnFailureCard provider reach failures", () => {
         hint="Check the gateway or network connection, then retry the turn."
       />,
     );
-    expect(container.textContent).toContain("Local test runtime stopped answering");
+    expect(container.textContent).toContain("Couldn't reach Local test runtime");
     expect(container.textContent).toContain(
-      "Check that Local test runtime is running and reachable, or choose another model, then retry.",
+      "The connection to Local test runtime dropped before it answered. Check that it is running and reachable, or choose another model, then retry.",
     );
     expect(container.textContent).not.toContain("Check the gateway or network connection");
     expect(container.querySelector('a[href^="/settings/models"][href$="#providers"]')?.textContent).toBe(
@@ -55,6 +55,38 @@ describe("ChatTurnFailureCard provider reach failures", () => {
     expect(container.querySelector('a[href^="/settings/models"][href$="#providers"]')).toBeNull();
   });
 
+  it("keeps the body lowercase mid-sentence when the provider has no label", async () => {
+    await render(
+      <ChatTurnFailureCard
+        failed
+        answered={false}
+        failureClass="network_interrupted"
+        providerId="other"
+        hint="Check the gateway or network connection, then retry the turn."
+      />,
+    );
+    expect(container.textContent).toContain("Couldn't reach the model provider");
+    expect(container.textContent).toContain(
+      "The connection to the model provider dropped before it answered. Check that it is running and reachable, or choose another model, then retry.",
+    );
+  });
+
+  it("says a named slow provider did not answer in time", async () => {
+    await render(
+      <ChatTurnFailureCard
+        failed
+        answered={false}
+        failureClass="provider_timeout"
+        providerId="ut11-local-unreachable"
+        hint="Wait a moment, then retry"
+      />,
+    );
+    expect(container.textContent).toContain("Local test runtime took too long to answer");
+    expect(container.textContent).toContain(
+      "Local test runtime did not answer in time. Check that it is running and reachable, or choose another model, then retry.",
+    );
+  });
+
   it("says a slow provider took too long, by name", async () => {
     await render(
       <ChatTurnFailureCard
@@ -66,5 +98,8 @@ describe("ChatTurnFailureCard provider reach failures", () => {
       />,
     );
     expect(container.textContent).toContain("The model provider took too long to answer");
+    expect(container.textContent).toContain(
+      "The model provider did not answer in time. Check that it is running and reachable, or choose another model, then retry.",
+    );
   });
 });

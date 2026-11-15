@@ -35,6 +35,19 @@ const PROVIDER_ACCOUNT_FAILURES = new Set<ChatTurnFailureClass>(["auth_required"
 const PROVIDER_REACH_FAILURES = new Set<ChatTurnFailureClass>(["network_interrupted", "provider_timeout"]);
 
 /**
+ * The words for a failure to reach the provider. The Cockpit cannot tell a provider that dropped from another
+ * network error the Gateway classed the same way, so a drop is worded as "couldn't reach", not as the provider's fault.
+ */
+function describeReachFailure(failureClass: ChatTurnFailureClass | undefined, label: string | undefined) {
+  const advice = "Check that it is running and reachable, or choose another model, then retry.";
+  const name = label ?? "the model provider";
+  const lead = label ?? "The model provider";
+  return failureClass === "provider_timeout"
+    ? { title: `${lead} took too long to answer`, body: `${lead} did not answer in time. ${advice}` }
+    : { title: `Couldn't reach ${name}`, body: `The connection to ${name} dropped before it answered. ${advice}` };
+}
+
+/**
  * The card under a failed or partial answer: what went wrong, what to do next, and the one action that fixes it when
  * the fix is not a retry (Retry stays with the turn's own actions below). A partial answer keeps the softer heading.
  */
@@ -59,20 +72,16 @@ export function ChatTurnFailureCard({
   const providerLabel = useProviderLabelLookup(Boolean(providerId));
   const known = failureClass && failureClass !== "unknown" ? failureClass : undefined;
   const reach = Boolean(known && providerId && PROVIDER_REACH_FAILURES.has(known));
-  const providerName = providerLabel(providerId) ?? "The model provider";
-  const reachTitle = known === "provider_timeout" ? "took too long to answer" : "stopped answering";
+  const reachWords = describeReachFailure(known, providerLabel(providerId));
   const title =
     reach && failed
-      ? `${providerName} ${reachTitle}`
+      ? reachWords.title
       : !failed
         ? "This answer may be incomplete"
         : ((known && FAILURE_TITLES[known]) ?? (answered ? null : "This response failed"));
   // A partial answer's heading does not name the cause, so the cause goes in the sentence instead.
   const cause = !failed && known ? `Cause: ${presentFailureClass(known)}. ` : "";
-  const body =
-    reach && failed
-      ? `Check that ${providerName} is running and reachable, or choose another model, then retry.`
-      : `${cause}${hint}`;
+  const body = reach && failed ? reachWords.body : `${cause}${hint}`;
   const Icon = failed ? CircleAlert : TriangleAlert;
   return (
     <div

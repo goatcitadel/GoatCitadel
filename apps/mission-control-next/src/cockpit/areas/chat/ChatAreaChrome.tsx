@@ -1,5 +1,4 @@
 import type { ChatSessionRecord, OnboardingState } from "@goatcitadel/contracts";
-import type { UseQueryResult } from "@tanstack/react-query";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
@@ -222,7 +221,7 @@ export function ChatSetupGate({
   hidden,
   onSetup,
 }: {
-  onboarding: Pick<UseQueryResult<OnboardingState>, "data" | "isError">;
+  onboarding: { data?: OnboardingState; isError: boolean };
   hidden: boolean;
   onSetup: () => void;
 }) {

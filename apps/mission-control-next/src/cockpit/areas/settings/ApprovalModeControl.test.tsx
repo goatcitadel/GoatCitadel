@@ -316,7 +316,7 @@ describe("cockpit tool approval rule", () => {
   it("explains Skip normal prompts on first run instead of only saying it is unavailable", async () => {
     await renderSafeOnly();
     expect(container.textContent).toContain(
-      "Skip normal prompts lets allowed tools run without asking you first. Setup keeps it off, so you see each risky step before it runs. You can turn it on later in Settings › Safety.",
+      "Skip normal prompts lets allowed tools run without normal prompts. Setup keeps it off, so normal prompts stay on. You can turn it on later in Settings › Safety.",
     );
     expect(container.textContent).not.toContain("Guided setup requires an approval rule");
   });

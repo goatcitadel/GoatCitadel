@@ -125,7 +125,7 @@ export function useHealthDigestStatus(
       deferOptionalSources,
     );
     const deferredNote = deferOptionalSources
-      ? "Managed local runtimes, integrations, channels and workers are checked on System › Health."
+      ? "The default model, managed local runtimes, integrations, channels and workers are checked on System › Health."
       : DEFERRED_NOTE;
     const title = hasDeferredHealthChecks(view.record) ? `${summary.sentence} ${deferredNote}` : summary.sentence;
     const staleSources = staleHealthSources(view.record);

@@ -217,4 +217,18 @@ describe("describeRuntimeService (SY-01)", () => {
     const critical = { ...external, diagnostics: [{ severity: "critical" }] } as typeof external;
     expect(describeRuntimeService(critical).label).toBe("Problem");
   });
+
+  it("shows a warning diagnostic on a running server without service control, and counts it as needing attention", () => {
+    const external = {
+      ...healthy.daemonStatus,
+      supported: false,
+      controllable: false,
+      diagnostics: [{ id: "requested_state_stopped_but_running", severity: "warn" }],
+    } as typeof healthy.daemonStatus;
+    expect(describeRuntimeService(external)).toMatchObject({ label: "Needs review", tone: "waiting" });
+    const service = deriveHealthChecks({ ...healthy, daemonStatus: external }).find((check) => check.id === "service");
+    expect(healthOverviewState([service!]).heading).toBe("1 check needs attention");
+    const info = { ...external, diagnostics: [{ id: "gateway_port_inspection", severity: "info" }] } as typeof external;
+    expect(describeRuntimeService(info).label).toBe("Running");
+  });
 });

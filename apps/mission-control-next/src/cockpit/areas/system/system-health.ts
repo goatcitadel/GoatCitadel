@@ -136,6 +136,9 @@ function deriveCurrentSystemHealthChecks(
     if (source.state !== "current")
       return unknown("default_model", "Default model", "Model setup could not be read.", "/settings/first-run");
     const state = source.value;
+    // A partial payload is unread setup, not an unset model.
+    if (!state.settings?.llm)
+      return unknown("default_model", "Default model", "Model setup could not be read.", "/settings/first-run");
     if (!state.settings.llm.activeProviderId || !state.settings.llm.activeModel)
       return {
         id: "default_model",

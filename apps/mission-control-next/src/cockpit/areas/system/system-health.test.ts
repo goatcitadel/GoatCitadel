@@ -137,6 +137,15 @@ describe("Default model check", () => {
     expect(check?.inspectPath).toBe("/settings/first-run");
   });
 
+  it("reads a payload without model settings as Unknown, never Not set up", () => {
+    const partial = { ...onboardingFixture(), settings: {} } as never;
+    const check = defaultModel({ ...missing, onboarding: { state: "current", value: partial } });
+    expect(check?.status).toEqual({ label: "Unknown", tone: "neutral" });
+    expect(check?.detail).toBe("Model setup could not be read.");
+    const noLlm = { ...onboardingFixture(), settings: { ...onboardingFixture().settings, llm: undefined } } as never;
+    expect(defaultModel({ ...missing, onboarding: { state: "current", value: noLlm } })?.status.label).toBe("Unknown");
+  });
+
   it("adds no check when the source is absent or deferred", () => {
     expect(defaultModel(missing)).toBeUndefined();
     expect(defaultModel({ ...missing, onboarding: { state: "deferred" } })).toBeUndefined();

@@ -254,7 +254,9 @@ it("shares one core health read across shell consumers and explicitly defers opt
   ])
     expect(read).not.toHaveBeenCalled();
   expect(status.label).not.toContain("·");
-  expect(status.title).toContain("Managed local runtimes, integrations, channels and workers are checked on System");
+  expect(status.title).toContain(
+    "The default model, managed local runtimes, integrations, channels and workers are checked on System",
+  );
   const scope = healthQueryScope(client, "workspace-a", getGatewayAccessRevision());
   const sources = client.getQueryData<SystemHealthSources>(healthDigestKey("workspace-a", scope[1], scope[2], true))!;
   expect(sources.npu.state).toBe("deferred");
