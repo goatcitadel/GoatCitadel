@@ -230,10 +230,9 @@ describe("Work task detail", () => {
     );
     await render();
     await vi.waitFor(() => expect(container.textContent).toContain("A run is handling this task. Review its run"));
-    expect(
-      [...container.querySelectorAll("a")].filter((link) => link.getAttribute("href")?.startsWith("/work/runs/run-1"))
-        .length,
-    ).toBeGreaterThan(1);
+    // The three owner notices each link it once; the page adds no second link of its own.
+    const links = [...container.querySelectorAll("a")].filter((link) => link.textContent === "Open linked run");
+    expect(links).toHaveLength(3);
   });
 });
 

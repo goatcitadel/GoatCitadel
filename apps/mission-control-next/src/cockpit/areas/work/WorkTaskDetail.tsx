@@ -14,8 +14,6 @@ import { EmptyState } from "../../ui/EmptyState";
 import { taskMatchesWorkspace } from "./work-tasks";
 import { TaskAssignmentControl } from "./TaskAssignmentControl";
 import { TaskDetailsEditor } from "./TaskDetailsEditor";
-import { taskConversationId, taskRunHref } from "./task-run-link";
-import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TimeText } from "../../ui/TimeText";
 import { TASK_ACTIVITY_LABELS, TASK_DELIVERABLE_LABELS, TASK_PRIORITY_LABELS } from "./work-vocabulary";
@@ -35,8 +33,6 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
     !taskQuery.isError && taskQuery.data && taskMatchesWorkspace(taskQuery.data, workspaceId)
       ? taskQuery.data
       : undefined;
-  const taskSessionId = task ? taskConversationId(task) : undefined;
-  const taskRunLink = task ? taskRunHref(task) : undefined;
   const activities = useQuery({
     queryKey: ["tasks", "work-task-activities", workspaceId, taskId],
     queryFn: () => fetchTaskActivities(taskId, workspaceId),
@@ -114,19 +110,6 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
             <p className="text-sm text-fg-secondary">
               This task is blocked. No blocker reason was recorded; review its activity.
             </p>
-          ) : null}
-          {taskRunLink ? (
-            <NativeOwnerLink scope={[workspaceId, taskId]} href={taskRunLink}>
-              Open linked run
-            </NativeOwnerLink>
-          ) : null}
-          {taskSessionId ? (
-            <NativeOwnerLink
-              scope={[workspaceId, taskId]}
-              href={`/chat?sessionId=${encodeURIComponent(taskSessionId)}`}
-            >
-              Open linked conversation
-            </NativeOwnerLink>
           ) : null}
           {task.description ? (
             // The heading and the text share one parent: browser proofs read the description beside its heading.
