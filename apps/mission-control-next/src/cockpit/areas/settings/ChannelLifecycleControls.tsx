@@ -44,6 +44,8 @@ interface ReviewWords {
 /** What the review dialog says, by what it would do (U-ST-006, U-MS-004). Turning a channel on or off is not red. */
 function reviewWords(
   action: "toggle" | "delete",
+  /** Whether the channel was on when the review opened, so the words cannot flip while it is open. */
+  wasEnabled: boolean | undefined,
   draft: ChannelSetupDraft | undefined,
   connection?: IntegrationConnection,
 ): ReviewWords {
@@ -57,7 +59,7 @@ function reviewWords(
           variant: "danger",
         };
   const name = draft?.label ?? connection?.label;
-  return connection?.enabled
+  return wasEnabled
     ? { title: `Turn off ${name}?`, confirm: "Turn off channel", keep: "Keep it on", variant: "secondary" }
     : { title: `Turn on ${name}?`, confirm: "Turn on channel", keep: "Keep it off", variant: "primary" };
 }
@@ -81,7 +83,12 @@ export function ChannelLifecycleControls({
   const id = draft?.draftId ?? connection!.connectionId;
   const channel = useChannelMutationState();
   const mutation = useIntegrationConnectionMutation(id);
-  const [review, setReview] = useState<{ action: "toggle" | "delete"; identity: string; epoch: number } | null>(null);
+  const [review, setReview] = useState<{
+    action: "toggle" | "delete";
+    identity: string;
+    epoch: number;
+    enabled?: boolean;
+  } | null>(null);
   const epoch = useRef(0);
   useEffect(() => {
     const invalidate = () => {
@@ -213,12 +220,20 @@ export function ChannelLifecycleControls({
   }
   // Removing a finished connection says what it does to the bot, its keys and its conversations before it asks.
   const removing = connection && review?.action === "delete" ? connection : undefined;
-  const words = reviewWords(review?.action ?? "toggle", draft, connection);
+  const words = reviewWords(
+    review?.action ?? "toggle",
+    review ? review.enabled : connection?.enabled,
+    draft,
+    connection,
+  );
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
         {connection && !removeOnly ? (
-          <Button disabled={locked} onClick={() => setReview({ action: "toggle", identity, epoch: epoch.current })}>
+          <Button
+            disabled={locked}
+            onClick={() => setReview({ action: "toggle", identity, epoch: epoch.current, enabled: connection.enabled })}
+          >
             Review {connection.enabled ? "disable" : "enable"} channel
           </Button>
         ) : null}
@@ -254,6 +269,7 @@ export function ChannelLifecycleControls({
               : "This affects the saved installation-wide connection and may stop its runtime. External messages and previously completed actions cannot be undone here."
         }
       >
+        {draft && review?.action === "delete" ? <p className="break-words text-sm">Draft: {draft.label}</p> : null}
         <TechnicalDetails>
           <p className="break-all font-mono text-xs">Reviewed version {draft?.revision ?? connection?.revision}</p>
         </TechnicalDetails>

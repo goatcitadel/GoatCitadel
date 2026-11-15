@@ -20,6 +20,14 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
   ...(await original<object>()),
   ...api,
 }));
+vi.mock("../../ui/TechnicalDetails", () => ({
+  TechnicalDetails: ({ children }: { children: React.ReactNode }) => (
+    <details>
+      <summary>Technical details</summary>
+      {children}
+    </details>
+  ),
+}));
 vi.mock("../../ui/Dialog", () => ({
   Dialog: ({ open, title, description, children }: ComponentProps<typeof Dialog>) =>
     open ? (
@@ -45,9 +53,13 @@ const missing = () =>
     status: 404,
     body: { code: "ENTITY_NOT_FOUND" },
   });
-// The dialog renders after the opener, so the last match is the dialog's own button when both share a name.
-const button = (name: string) =>
-  [...container.querySelectorAll("button")].filter((item) => item.textContent === name).at(-1)!;
+const dialog = () => container.querySelector("section[aria-label]");
+const buttonIn = (scope: ParentNode, name: string) =>
+  [...scope.querySelectorAll("button")].find((item) => item.textContent === name)!;
+/** A button that opens a review; it stays on the page while the dialog is open. */
+const opener = (name: string) => buttonIn(container, name);
+/** The dialog's own button while one is open (an opener may share its name), otherwise a button of the page. */
+const button = (name: string) => buttonIn(dialog() ?? container, name);
 async function click(name: string) {
   await act(async () => button(name).click());
 }
@@ -95,7 +107,7 @@ it("locks ambiguous canonical readback instead of allowing duplicate deletion", 
   expect(api.discardChannelSetupDraft).toHaveBeenCalledOnce();
   expect(reload).not.toHaveBeenCalled();
   expect(container.textContent).toContain("Outcome uncertain");
-  expect(button("Delete saved draft").disabled).toBe(true);
+  expect(opener("Delete saved draft").disabled).toBe(true);
 });
 it("does not dispatch after caller handoff during preflight", async () => {
   let finish!: (value: ChannelSetupDraft) => void;
@@ -225,7 +237,13 @@ it.each([
     expect(dialog).not.toBeNull();
     expect(button(confirm).className).not.toContain("border-status-failed");
     expect(button(keep)).toBeTruthy();
-    expect(dialog.textContent).not.toMatch(/reviewed version d/i);
+    // The revision sits inside Technical details and nowhere in the visible body of the dialog.
+    const details = dialog.querySelector("details")!;
+    expect(details.textContent).toMatch(/Reviewed version a{64}/);
+    const visible = dialog.cloneNode(true) as Element;
+    visible.querySelector("details")!.remove();
+    expect(visible.textContent).not.toMatch(/version/i);
+    expect(visible.textContent).not.toContain("a".repeat(64));
   },
 );
 
@@ -235,4 +253,29 @@ it("deleting a saved draft asks Delete this draft? with Delete draft and Keep dr
   expect(container.querySelector('section[aria-label="Delete this draft?"]')).not.toBeNull();
   expect(button("Delete draft").className).toContain("border-status-failed");
   expect(button("Keep draft")).toBeTruthy();
+});
+
+it("names the draft in the delete review (U-MS-004)", async () => {
+  await click("Delete saved draft");
+
+  expect(dialog()!.textContent).toContain("Reviewed channel");
+});
+
+it("keeps the review's words when the channel changes under an open dialog", async () => {
+  await renderConnection();
+  await click("Review disable channel");
+
+  await act(async () =>
+    root.render(
+      <ChannelLifecycleControls
+        workspaceId="a"
+        selection={{ connection: { ...fixtureConnection, enabled: false, revision: "b".repeat(64) } }}
+        reload={reload}
+      />,
+    ),
+  );
+
+  expect(container.querySelector('section[aria-label="Turn off Fixture?"]')).not.toBeNull();
+  expect(button("Turn off channel").disabled).toBe(true);
+  expect(dialog()!.textContent).toContain("The reviewed scope or record changed.");
 });
