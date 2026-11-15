@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState, type SetStateAction } from "react";
 import type { LlmProviderConfig } from "@goatcitadel/contracts";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import {
+  fetchChangePlan,
   fetchLlmConfig,
   createChangePlan,
   patchSettings,
@@ -30,6 +32,7 @@ import {
   type ProviderSaveDraft,
 } from "./provider-save-contract";
 import { prepareProviderSave, sendsProviderChanges } from "./provider-save-operation";
+import { confirmReviewedSettingsPlan } from "./provider-connection-actions";
 import { matchesProviderTransportReceipt } from "./provider-transport-receipt";
 import type { ProviderCatalog, ProviderNoticeSetter } from "./provider-section-types";
 import {
@@ -41,6 +44,40 @@ import {
   useProviderEditorEpoch,
   useProviderMutationState,
 } from "./provider-mutation-state";
+
+/** A reply that is a refusal from the Gateway (a 4xx), as opposed to an answer that never arrived. */
+function isRefusal(error: unknown): boolean {
+  const status = typeof error === "object" && error !== null && "status" in error ? error.status : undefined;
+  return typeof status === "number" && status >= 400 && status < 500;
+}
+
+/**
+ * Confirms a safe, just-created profile plan as its own tracked write, so a lost reply is checked against it. A
+ * refused confirmation leaves the plan open on the Gateway, so what it holds now is read again and handed back: the
+ * operator then sees its review card and can confirm or cancel it, instead of an orphaned plan nobody can reach. An
+ * answer that never arrived is not a refusal and stays an uncertain outcome.
+ */
+async function confirmOrKeepForReview(
+  created: Parameters<typeof confirmReviewedSettingsPlan>[0],
+  dispatch: typeof dispatchProviderMutation,
+) {
+  try {
+    return await dispatch(() => confirmReviewedSettingsPlan(created));
+  } catch (error) {
+    if (!isRefusal(error)) throw error;
+    // A read that must not join an older one. If it fails, the refusal itself is what the operator is told.
+    let current: Awaited<ReturnType<typeof fetchChangePlan>>;
+    try {
+      current = await withFreshReads(() =>
+        fetchChangePlan(created.planId, { workspaceId: created.origin.workspaceId }),
+      );
+    } catch {
+      throw error;
+    }
+    if (current.planId !== created.planId) throw error;
+    return current;
+  }
+}
 
 export function useProviderProfileEditor({
   config,
@@ -232,7 +269,7 @@ export function useProviderProfileEditor({
         transportConfirmed = true;
       } else {
         if (submitted.governedCreation && creationRequest) {
-          const plan = await dispatchProviderMutation(() =>
+          const created = await dispatchProviderMutation(() =>
             createChangePlan({
               workspaceId: "default",
               surface: "settings",
@@ -240,15 +277,20 @@ export function useProviderProfileEditor({
             }),
           );
           if (
-            plan.origin.workspaceId !== "default" ||
-            plan.origin.surface !== "settings" ||
-            !matchesProviderTargetRevision(plan, submitted, revision) ||
-            plan.status !== "awaiting_confirmation" ||
-            plan.requiredAction?.kind !== "confirmation"
+            created.origin.workspaceId !== "default" ||
+            created.origin.surface !== "settings" ||
+            !matchesProviderTargetRevision(created, submitted, revision) ||
+            created.status !== "awaiting_confirmation" ||
+            created.requiredAction?.kind !== "confirmation"
           )
             throw new Error(
               "The prepared provider plan does not match this reviewed profile and revision. Inspect the Gateway plan before another action.",
             );
+          // Pressing Apply reviewed provider profile is the confirmation of a plan the Gateway itself marked safe.
+          // Anything else keeps its review step, and a step that needs the key or a sign-in comes after this one.
+          // The confirmation is its own tracked write, so a lost reply is checked against it and not the creation.
+          const plan =
+            created.risk === "safe" ? await confirmOrKeepForReview(created, dispatchProviderMutation) : created;
           next = { ...latest, changePlanReceipt: plan };
         } else {
           const updated = await dispatchProviderMutation(() =>

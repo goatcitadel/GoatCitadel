@@ -10,12 +10,22 @@ vi.mock("./SettingsApprovalDialog", () => ({
     approvalId,
     title,
     reviewLabel,
+    dangerReview,
+    installationSetting,
   }: {
     approvalId: string;
     title?: string;
     reviewLabel?: string;
+    dangerReview?: boolean;
+    installationSetting?: boolean;
   }) => (
-    <button type="button" data-approval={approvalId} data-title={title}>
+    <button
+      type="button"
+      data-approval={approvalId}
+      data-title={title}
+      data-danger-review={String(dangerReview === true)}
+      data-installation-setting={String(installationSetting === true)}
+    >
       {reviewLabel}
     </button>
   ),
@@ -67,6 +77,20 @@ describe("WaitingSettingsChangeNotice", () => {
     expect(button.getAttribute("data-approval")).toBe("approval-7");
     expect(button.getAttribute("data-title")).toBe("Turn off it");
     expect(dialog.reopen).toHaveBeenCalledExactlyOnceWith("approval-7");
+  });
+
+  it("passes the two-step review and the install-wide rule only to the dialog of a caller that asks for them", async () => {
+    const waiting = { planId: "plan-7", approvalId: "approval-7", stage: "approval" } as const;
+    await show(waiting);
+    expect(container.querySelector("button")!.getAttribute("data-danger-review")).toBe("false");
+    expect(container.querySelector("button")!.getAttribute("data-installation-setting")).toBe("false");
+    await act(async () =>
+      root.render(
+        <WaitingSettingsChangeNotice waiting={waiting} onResolved={() => undefined} dangerReview installationSetting />,
+      ),
+    );
+    expect(container.querySelector("button")!.getAttribute("data-danger-review")).toBe("true");
+    expect(container.querySelector("button")!.getAttribute("data-installation-setting")).toBe("true");
   });
 
   it("says a change is still being applied, with nothing to click", async () => {

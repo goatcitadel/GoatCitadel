@@ -3,6 +3,7 @@ import type { useProviderModelCatalog } from "@goatcitadel/mission-control-share
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
 import type { MissionControlActiveSessionSurfaceProps } from "../MissionControlActiveSessionSurface";
 import { resolveProviderModelSelection } from "../chat-page-helpers";
+import { reasoningEffortsForSelection } from "./selected-model-reasoning-efforts";
 import { useChatDockWorkbenchController } from "../useChatDockWorkbenchController";
 import { useChatModelChangePlans } from "../useChatModelChangePlans";
 import type { useChatProviderRoutingController } from "../useChatProviderRoutingController";
@@ -42,7 +43,10 @@ type Input = {
     ReturnType<typeof useChatSessionControls>,
     "sessionControlPending" | "handleToggleArchiveSession"
   >;
-  providerCatalog: Pick<ReturnType<typeof useProviderModelCatalog>, "getCachedModels" | "loadModelsForProvider">;
+  providerCatalog: Pick<
+    ReturnType<typeof useProviderModelCatalog>,
+    "getCachedModels" | "loadModelsForProvider" | "providers"
+  >;
   selection: Pick<
     ReturnType<typeof useChatSessionSelection>,
     "selectedSessionId" | "userAdjustedModeOverrideRef" | "setModeOverride" | "modeOverride"
@@ -87,6 +91,8 @@ export function createChatSessionHeaderProps({
   | "modeOverridePending"
   | "onRequestProviderChange"
   | "onRequestModelChange"
+  | "onRequestModelChoice"
+  | "reasoningEffortsFor"
 > {
   const { handleToggleArchiveSession } = sessionControls;
   const { setModeOverride } = selection;
@@ -132,6 +138,17 @@ export function createChatSessionHeaderProps({
     },
     onRequestModelChange: (model) => {
       if (!blockHistoricalMutation()) requestThreadModelPatch({ model });
+    },
+    reasoningEffortsFor: (providerId, model) =>
+      reasoningEffortsForSelection(providerCatalog.providers, providerId, model),
+    onRequestModelChoice: (choice) => {
+      if (blockHistoricalMutation()) return;
+      if (choice.providerId) void loadModelsForProvider(choice.providerId);
+      requestThreadModelPatch({
+        ...(choice.providerId !== undefined ? { providerId: choice.providerId } : {}),
+        ...(choice.model !== undefined ? { model: choice.model } : {}),
+        ...(choice.thinkingLevel ? { thinkingLevel: choice.thinkingLevel } : {}),
+      });
     },
   };
 }

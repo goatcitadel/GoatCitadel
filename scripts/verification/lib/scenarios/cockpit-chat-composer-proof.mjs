@@ -285,7 +285,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           await page.getByRole("button", { name: `Remove ${fileName}`, exact: true }).waitFor();
           await draft.fill("");
 
-          stage = "review and confirm model";
+          stage = "change the model";
           await revealComposerOptions(page);
           let prefs = await read(`${sessionPath}/prefs`);
           const config = await read("/api/v1/llm/config");
@@ -313,7 +313,6 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
               await options.getByRole("combobox", { name: "Provider", exact: true }).selectOption(target.providerId);
               await closeComposerModelOptions(page, options);
             },
-            checkCancel: true,
           });
           const confirmedModelOptions = await openComposerModelOptions(page);
           await waitUntil(
@@ -323,7 +322,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           );
           assert.equal(await confirmedModelOptions.getByRole("combobox", { name: "Model", exact: true }).inputValue(), prefs.model);
           await closeComposerModelOptions(page, confirmedModelOptions);
-          stage = "review and confirm effort";
+          stage = "change the effort";
           await revealComposerOptions(page);
           prefs = await changePreferences({
             page,
@@ -677,17 +676,7 @@ async function chooseKeyboardSuggestion(page, draft, name) {
   await draft.press("Enter");
 }
 
-async function changePreferences({
-  page,
-  read,
-  sessionPath,
-  workspaceId,
-  sessionId,
-  before,
-  patch,
-  select,
-  checkCancel,
-}) {
+async function changePreferences({ page, read, sessionPath, workspaceId, sessionId, before, patch, select }) {
   const created = observePendingWait(
     page.waitForResponse(
       (response) =>
@@ -696,30 +685,28 @@ async function changePreferences({
         response.request().postDataJSON()?.request?.kind === "session_model",
     ),
   );
+  // A model change the Gateway marks safe is applied by the page when Done is pressed, so the confirmation is waited
+  // for before the choice is made: it follows the plan's creation within the same turn.
+  const confirmed = observePendingWait(
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        /^\/api\/v1\/change-plans\/[^/]+\/confirmations$/u.test(new URL(response.url()).pathname),
+    ),
+  );
   await select();
   const response = await created;
   assert.equal(response.ok(), true, `Session model review failed: HTTP ${response.status()} ${await response.text()}`);
   const plan = await response.json();
   assertComposerPlan({ plan, workspaceId, sessionId, before, patch });
   assert.equal(plan.status, "awaiting_confirmation");
-  assert.deepEqual(await read(`${sessionPath}/prefs`), before, "Preview already changed canonical preferences");
-  const review = page.getByRole("button", { name: "Review and confirm", exact: true });
-  await review.click();
-  const dialog = page.getByRole("dialog", { name: plan.requiredAction.title, exact: true });
-  await dialog.waitFor();
-  if (checkCancel) {
-    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-    assert.deepEqual(await read(`${sessionPath}/prefs`), before, "Closing review changed canonical preferences");
-    await review.click();
-  }
-  const confirmationPath = `/api/v1/change-plans/${encodeURIComponent(plan.planId)}/confirmations`;
-  const confirmed = observePendingWait(
-    page.waitForResponse(
-      (response) => response.request().method() === "POST" && new URL(response.url()).pathname === confirmationPath,
-    ),
-  );
-  await dialog.getByRole("button", { name: "Apply exact change", exact: true }).click();
+  assert.equal(plan.risk, "safe", "Only a plan the Gateway marks safe is applied without a review card.");
   const confirmedResponse = await confirmed;
+  assert.equal(
+    new URL(confirmedResponse.url()).pathname,
+    `/api/v1/change-plans/${encodeURIComponent(plan.planId)}/confirmations`,
+    "The page confirmed a different plan than the one it prepared.",
+  );
   assert.equal(confirmedResponse.ok(), true, "The exact model confirmation failed.");
   assertComposerConfirmation({
     plan,
@@ -743,7 +730,6 @@ async function changePreferences({
     "Confirmed preferences never settled",
   );
   assertComposerPlan({ plan, workspaceId, sessionId, before, patch, after });
-  await dialog.waitFor({ state: "hidden" });
   return after;
 }
 

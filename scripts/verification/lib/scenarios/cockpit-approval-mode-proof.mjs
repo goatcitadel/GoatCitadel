@@ -688,12 +688,19 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
           await panel
             .getByText("The draft remains unsaved until GoatCitadel confirms the change.", { exact: true })
             .waitFor();
+          // The approval opens in place on its own. This proof decides it in Inbox, so the in-place dialog is closed
+          // without a decision, and the page must offer no Continue step and make no write of its own.
+          const inPlaceApproval = page.getByRole("dialog");
+          await inPlaceApproval.waitFor();
+          await page.keyboard.press("Escape");
+          await inPlaceApproval.waitFor({ state: "hidden" });
           await panel.getByRole("button", { name: "Refresh approval change", exact: true }).click();
-          const continueChange = panel.getByRole("button", { name: "Continue approved change", exact: true });
-          await continueChange.click();
-          await panel
-            .getByText("The approval is not approved yet. Review the required approval first.", { exact: true })
-            .waitFor();
+          assert.equal(
+            await panel.getByRole("button", { name: "Continue approved change", exact: true }).count(),
+            0,
+            "An approval that opens in place has no Continue step.",
+          );
+          assert.equal(await panel.getByRole("link", { name: "Open in Inbox", exact: true }).count(), 1);
           assert.deepEqual(mutations, ["PATCH /api/v1/settings"], "An unapproved change attempted to resume.");
           await audit("pending");
           await approvalPage.addScriptTag({ path: axeSourcePath });

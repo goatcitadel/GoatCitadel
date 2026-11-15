@@ -63,7 +63,7 @@ const APPLY_POLL_ROUNDS = 12;
 const RECOVERY_LIMIT = 100;
 const SERVER_REF = "mcp_server:";
 
-const DECLINED = "You declined this install in Inbox. Nothing was changed.";
+const DECLINED = "You declined this install. Nothing was changed.";
 const EXPIRED = "This request expired after 15 minutes. Start again.";
 const WITHDRAWN = "This install was cancelled. Nothing was changed.";
 const UNFINISHED = "The install didn't finish.";
@@ -72,7 +72,7 @@ const NOT_FOUND = "The install finished, but the new app wasn't found. Reload to
 const INSTALL_STOPPED = "Install stopped. Nothing was changed.";
 const STOPPED_STILL_IN_INBOX = `${INSTALL_STOPPED} Its request is still in Inbox, where you can deny it.`;
 const NOT_STOPPED = "Couldn't stop the install. Reload to see where it stands.";
-const FOLLOWED_ELSEWHERE = "Another tab is following this install. It goes on there once you approve it in Inbox.";
+const FOLLOWED_ELSEWHERE = "Another tab is following this install. It goes on there once you approve it.";
 
 type RunContext = Pick<RunStart, "client" | "listKey">;
 
@@ -420,6 +420,8 @@ export interface ConnectorInstall {
   /** While signing in: asks for a new sign-in request in place of the one waiting (R94). */
   restartSignIn(): void;
   cancel(): void;
+  /** Reads the install's plan now, for after its approval was decided in place. The poll goes on as before. */
+  checkApproval(): void;
 }
 
 /**
@@ -454,6 +456,9 @@ export function useConnectorInstall(item: CapabilityConnectorItem): ConnectorIns
     },
     cancel: () => {
       if (ownerCustody === custody && id !== undefined) cancelFlow(id);
+    },
+    checkApproval: () => {
+      if (ownerCustody === custody && id !== undefined) void readPlan(id);
     },
   };
 }

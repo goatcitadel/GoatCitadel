@@ -15,6 +15,20 @@ export function isTerminalChangePlanStatus(status: ChangePlanRecord["status"]): 
   );
 }
 
+/**
+ * A model change for one Chat that the Gateway itself marked safe and that asks for nothing but a plain confirmation.
+ * Only the plan's own fields decide it: pressing Done is the operator's confirmation, and anything else (a higher risk,
+ * a credential, a sign-in, any other required action) keeps its review card.
+ */
+export function isSafeSessionModelConfirmation(plan: ChangePlanRecord): boolean {
+  return (
+    plan.request.kind === "session_model" &&
+    plan.risk === "safe" &&
+    plan.status === "awaiting_confirmation" &&
+    plan.requiredAction?.kind === "confirmation"
+  );
+}
+
 export function changePlanReceiptKey(plan: Pick<ChangePlanRecord, "planId" | "revision" | "status">): string {
   return `${plan.planId}:${plan.revision}:${plan.status}`;
 }
