@@ -5,10 +5,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildWindowsCommand,
   clampOption,
+  describeKeySaveFailure,
   isPromptCancellation,
   parseCommaSeparated,
   providerKeyMissing,
   quoteWindowsCommandArg,
+  resolveProviderKeyStatus,
   redactSecret,
   resolvePnpmCommandForPlatform,
   safeHostnameFromUrl,
@@ -121,5 +123,35 @@ describe("onboarding TUI helpers", () => {
       "failed for [hidden] twice: [hidden]",
     );
     expect(redactSecret("nothing to hide", "")).toBe("nothing to hide");
+  });
+
+  it("works out where the chosen provider's key comes from, in every state", () => {
+    const base = { apiKey: "", keySaved: false, apiKeyEnv: "GLM_API_KEY", env: {} as NodeJS.ProcessEnv };
+    expect(resolveProviderKeyStatus({ ...base, apiKey: "typed", keySaved: true })).toEqual({ kind: "typed_saved" });
+    expect(resolveProviderKeyStatus({ ...base, apiKey: "typed", env: { GLM_API_KEY: "k" } })).toEqual({
+      kind: "typed_not_saved",
+    });
+    expect(resolveProviderKeyStatus({ ...base, existing: { hasApiKey: true, apiKeySource: "keychain" } })).toEqual({
+      kind: "gateway",
+      source: "keychain",
+    });
+    expect(resolveProviderKeyStatus({ ...base, env: { GLM_API_KEY: "k" } })).toEqual({ kind: "environment" });
+    expect(resolveProviderKeyStatus(base)).toEqual({ kind: "missing" });
+    expect(resolveProviderKeyStatus({ ...base, apiKeyEnv: "" })).toEqual({ kind: "not_needed" });
+    expect(resolveProviderKeyStatus({ ...base, existing: { hasApiKey: false, apiKeySource: "none" } })).toEqual({
+      kind: "missing",
+    });
+  });
+
+  it("explains a failed key save in plain words without the route, status line or body", () => {
+    const raw = (status: number) =>
+      new Error(`POST /api/v1/secrets/providers/glm failed (${status}): {"error":"secret-body"}`);
+    expect(describeKeySaveFailure(raw(503))).toBe("no secure storage is available on this computer");
+    expect(describeKeySaveFailure(raw(401))).toBe("the Gateway refused it");
+    expect(describeKeySaveFailure(raw(409))).toBe("the Gateway refused it");
+    expect(describeKeySaveFailure(new TypeError("fetch failed"))).toBe("the Gateway could not be reached");
+    for (const text of [describeKeySaveFailure(raw(503)), describeKeySaveFailure(new Error("odd"))]) {
+      expect(text).not.toMatch(/api\/v1|secret-body|\(\d{3}\)/);
+    }
   });
 });

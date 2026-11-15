@@ -13,10 +13,13 @@ import { providerTemplates } from "@goatcitadel/contracts";
 import {
   buildWindowsCommand,
   clampOption,
+  describeKeySaveFailure,
   isPromptCancellation,
   parseCommaSeparated,
   providerKeyMissing,
+  type ProviderKeyStatus,
   redactSecret,
+  resolveProviderKeyStatus,
   resolvePnpmCommandForPlatform,
   safeHostnameFromUrl,
   validateHttpUrl,
@@ -164,13 +167,19 @@ async function run(): Promise<void> {
     const provider = await promptProviderAndModel(initialState, gatewayBaseUrl, auth);
     const runtimeDefaults = await promptRuntimeDefaults(initialState, provider.providerBaseUrl);
     const mesh = await promptMesh(initialState);
-    const keyMissing = providerKeyMissing({
-      // Only a key that will be saved counts: a typed key that is not saved is gone after this run.
-      apiKey: provider.saveProviderApiKeyToSecureStore ? provider.providerApiKey : "",
+    const keyStatus = resolveProviderKeyStatus({
+      apiKey: provider.providerApiKey,
+      keySaved: provider.saveProviderApiKeyToSecureStore,
       apiKeyEnv: provider.providerApiKeyEnv,
       env: process.env,
+      existing: initialState.settings.llm.providers.find((item) => item.providerId === provider.providerId),
     });
-    const completion = await promptCompletion(initialState, keyMissing);
+    // A typed key that is not saved is gone after this run, so it only counts if the environment has one.
+    const keyMissing =
+      keyStatus.kind === "missing" ||
+      (keyStatus.kind === "typed_not_saved" &&
+        providerKeyMissing({ apiKey: "", apiKeyEnv: provider.providerApiKeyEnv, env: process.env }));
+    const completion = await promptCompletion(initialState, keyMissing, keyStatus.kind === "missing");
 
     console.log();
     console.log(renderSection("Review and apply", "This is what GoatCitadel will write into runtime settings."));
@@ -189,7 +198,7 @@ async function run(): Promise<void> {
           value: runtimeDefaults.networkAllowlist.length > 0 ? runtimeDefaults.networkAllowlist.join(", ") : "none",
         },
         { key: "Mesh", value: mesh.enabled ? `${mesh.mode} (${mesh.nodeId || "auto"})` : "disabled" },
-        { key: "Provider key", value: describeProviderKey(provider, keyMissing) },
+        { key: "Provider key", value: describeProviderKey(keyStatus) },
         { key: "Mark complete", value: completion.markComplete ? `yes (${completion.completedBy})` : "no" },
       ]),
     );
@@ -269,10 +278,7 @@ async function run(): Promise<void> {
       } catch (keyError) {
         // The settings are already applied; say so, never claim the key was saved, and do not
         // mark setup complete for a provider that cannot answer yet.
-        const reason = redactSecret(
-          keyError instanceof Error ? keyError.message : String(keyError),
-          provider.providerApiKey,
-        );
+        const reason = redactSecret(describeKeySaveFailure(keyError), provider.providerApiKey);
         console.error(
           `Provider settings were saved, but the key was not: ${reason}. Add the key in Settings > Models > Providers & models, or run the wizard again.`,
         );
@@ -336,17 +342,25 @@ async function run(): Promise<void> {
   }
 }
 
-function describeProviderKey(
-  provider: { providerApiKey: string; saveProviderApiKeyToSecureStore: boolean },
-  keyMissing: boolean,
-): string {
-  if (keyMissing) {
-    return "none";
+function describeProviderKey(status: ProviderKeyStatus): string {
+  switch (status.kind) {
+    case "typed_saved":
+      return "saved to the OS secure store";
+    case "typed_not_saved":
+      return "typed here, not saved";
+    case "gateway":
+      return status.source === "keychain"
+        ? "already saved in the OS secure store"
+        : status.source === "env"
+          ? "already read by the gateway from its environment"
+          : "already saved in the gateway settings";
+    case "environment":
+      return "from the environment";
+    case "not_needed":
+      return "not needed for this provider";
+    case "missing":
+      return "none";
   }
-  if (provider.saveProviderApiKeyToSecureStore) {
-    return "saved to the OS secure store";
-  }
-  return provider.providerApiKey ? "typed here, not saved" : "from the environment";
 }
 
 async function promptGatewayBaseUrl(): Promise<string> {
@@ -907,10 +921,11 @@ async function promptMesh(
 async function promptCompletion(
   initialState: OnboardingState,
   keyMissing: boolean,
+  noKeyAnywhere: boolean,
 ): Promise<{ markComplete: boolean; completedBy: string }> {
   console.log();
   console.log(renderSection("5. Completion", "Choose whether this run should mark onboarding complete right now."));
-  if (keyMissing) {
+  if (noKeyAnywhere) {
     console.log("No provider key is set, so Chat will not answer until you add one.");
   }
   const markComplete = await confirm({

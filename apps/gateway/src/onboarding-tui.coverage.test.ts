@@ -338,6 +338,8 @@ describe("onboarding tui entrypoint coverage", () => {
     const printed = errorSpy.mock.calls.flat().join(" ");
     expect(printed).toContain("Add the key in Settings > Models > Providers & models, or run the wizard again.");
     expect(printed).not.toContain("typed-secret-key-123");
+    expect(printed).toContain("no secure storage is available on this computer");
+    expect(printed).not.toMatch(/api\/v1|\(503\)|keychain unavailable/);
     expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/v1/onboarding/complete"))).toBe(false);
     expect(errorSpy).not.toHaveBeenCalledWith("Onboarding wizard failed.");
     expect(process.exitCode).toBe(1);
@@ -369,6 +371,83 @@ describe("onboarding tui entrypoint coverage", () => {
       "No provider key is set, so Chat will not answer until you add one.",
     );
     expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/api/v1/onboarding/complete"))).toBe(false);
+  });
+
+  async function runKeyScenario(options: {
+    providerHasKey?: { source: "keychain" | "env" | "inline" };
+    typedKey?: string;
+    saveTypedKey?: boolean;
+  }): Promise<{ printed: string; completionDefault: boolean | undefined }> {
+    const state = structuredClone(wizardState);
+    if (options.providerHasKey) {
+      Object.assign(state.settings.llm.providers[0] as object, {
+        hasApiKey: true,
+        apiKeySource: options.providerHasKey.source,
+      });
+    }
+    if (options.typedKey) {
+      promptQueues.password = [options.typedKey];
+      promptQueues.confirm = [options.saveTypedKey ?? true];
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(state))
+      .mockResolvedValueOnce(json({ items: [{ id: "glm-5" }], source: "live" }))
+      .mockResolvedValueOnce(
+        json({
+          appliedAt: new Date().toISOString(),
+          state: { completed: false, checklist: [], settings: { revision: "r1" } },
+        }),
+      )
+      .mockResolvedValue(
+        json({
+          activeProviderId: "glm",
+          activeModel: "glm-5",
+          providers: [],
+          state: { completed: true, checklist: [] },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await import("./onboarding-tui.js");
+    await vi.waitFor(() =>
+      expect(confirmMock.mock.calls.some(([c]) => c?.message === "Apply onboarding now?")).toBe(true),
+    );
+    const completion = confirmMock.mock.calls.find(([c]) => c?.message === "Mark onboarding complete now?");
+    return { printed: logSpy.mock.calls.flat().join(" "), completionDefault: completion?.[0]?.default };
+  }
+
+  it("counts a key the Gateway already has as present", async () => {
+    delete process.env.GLM_API_KEY;
+    const result = await runKeyScenario({ providerHasKey: { source: "keychain" } });
+    expect(result.printed).not.toContain("No provider key is set");
+    expect(result.printed).toContain("already saved in the OS secure store");
+    expect(result.completionDefault).toBe(true);
+  });
+
+  it("counts a key from the environment as present and says so", async () => {
+    process.env.GLM_API_KEY = "from-environment";
+    const result = await runKeyScenario({});
+    expect(result.printed).not.toContain("No provider key is set");
+    expect(result.printed).toContain("from the environment");
+    expect(result.printed).not.toContain("from-environment");
+    expect(result.completionDefault).toBe(true);
+  });
+
+  it("says a typed key was saved", async () => {
+    const result = await runKeyScenario({ typedKey: "typed-secret-key-456", saveTypedKey: true });
+    expect(result.printed).toContain("saved to the OS secure store");
+    expect(result.printed).not.toContain("typed-secret-key-456");
+    expect(result.completionDefault).toBe(true);
+  });
+
+  it("says typed here, not saved, even when the environment holds a key", async () => {
+    process.env.GLM_API_KEY = "from-environment";
+    const result = await runKeyScenario({ typedKey: "typed-secret-key-789", saveTypedKey: false });
+    expect(result.printed).toContain("typed here, not saved");
+    expect(result.printed).not.toContain("typed-secret-key-789");
+    expect(result.printed).not.toContain("No provider key is set");
   });
 
   it("checks the gateway address and the model id before accepting them", async () => {
