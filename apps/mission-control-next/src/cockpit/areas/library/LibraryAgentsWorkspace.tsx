@@ -1,9 +1,10 @@
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAgents } from "@goatcitadel/mission-control-shared/api/operators-agents-files";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { revealTarget } from "../../app/reveal-target";
 
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
@@ -30,12 +31,32 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
     catalog = params.get("view") === "catalog";
   const creating = !agentId && params.get("view") === "create";
   const [search, setSearch] = useState("");
+  // Only an Open click moves focus to the editor; a deep link or a reload leaves it where it was.
+  const revealRequested = useRef<string | null>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const holder = editorRef.current;
+    if (!agentId || !holder || revealRequested.current !== agentId) return;
+    const reveal = () => {
+      if (!revealTarget(holder.querySelector("h2"), "self")) return false;
+      revealRequested.current = null;
+      return true;
+    };
+    if (reveal()) return;
+    // The profile loads after it opens, so its heading may not exist yet: wait for it.
+    const watcher = new MutationObserver(() => {
+      if (reveal()) watcher.disconnect();
+    });
+    watcher.observe(holder, { childList: true, subtree: true });
+    return () => watcher.disconnect();
+  }, [agentId]);
   const query = useQuery({
     queryKey: ["library", "agents", identity],
     queryFn: () => fetchAgents("all", 160),
     staleTime: 0,
   });
   function select(id?: string) {
+    revealRequested.current = id ?? null;
     const next = new URLSearchParams(route.search);
     if (id) next.set("agentId", id);
     else next.delete("agentId");
@@ -137,7 +158,9 @@ function AgentsWorkspace({ workspaceId, identity }: { workspaceId: string; ident
           {creating ? (
             <LibraryAgentEditor key="new" workspaceId={workspaceId} onClose={() => select()} />
           ) : agentId ? (
-            <LibraryAgentEditor key={`${workspaceId}:${agentId}`} workspaceId={workspaceId} agentId={agentId} />
+            <div ref={editorRef}>
+              <LibraryAgentEditor key={`${workspaceId}:${agentId}`} workspaceId={workspaceId} agentId={agentId} />
+            </div>
           ) : null}
         </>
       ) : (

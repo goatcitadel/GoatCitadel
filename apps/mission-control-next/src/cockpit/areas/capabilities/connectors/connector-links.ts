@@ -1,5 +1,6 @@
 import type { CapabilityConnectorItem } from "@goatcitadel/contracts";
-import { channelAdvancedSetupHref, connectorSetupHref } from "../../../app/routes";
+import { channelAdvancedSetupHref, CONNECTOR_SETUP_PATH, connectorSetupHref } from "../../../app/routes";
+import { webSearchKeyAnchor } from "../../settings/web-search-state";
 
 /** Where each kind of connector's detailed setup lives: Advanced setup, under this tab. */
 const MCP_SERVERS_HREF = connectorSetupHref("mcp");
@@ -43,7 +44,10 @@ export function connectorSettingsHref(item: CapabilityConnectorItem): string {
     case "mcp_server":
       return MCP_SERVERS_HREF;
     case "web_search":
-      return connectorSetupHref("web-search");
+      // A key that is still missing opens on its own field; Firecrawl's switch is at the top of the section.
+      return item.id === "web-search:search.brave" || item.id === "web-search:search.parallel"
+        ? `${CONNECTOR_SETUP_PATH}#${webSearchKeyAnchor(item.id.slice("web-search:".length) as "search.brave" | "search.parallel")}`
+        : connectorSetupHref("web-search");
     case "integration":
       return item.kind === "channel" ? channelAdvancedSetupHref() : connectorSetupHref("integrations");
   }

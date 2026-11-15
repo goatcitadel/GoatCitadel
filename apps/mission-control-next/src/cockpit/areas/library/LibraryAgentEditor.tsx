@@ -182,7 +182,9 @@ function AgentEditor({
   }
   return (
     <section className="grid gap-3 border-t border-line-subtle pt-4" aria-label="Agent profile editor">
-      <h2 className="text-base font-semibold">{item?.name ?? "New agent profile"}</h2>
+      <h2 tabIndex={-1} className="text-base font-semibold">
+        {item?.name ?? "New agent profile"}
+      </h2>
       <p className="text-sm text-fg-secondary">
         Installation-wide profile
         {item ? ` · ${item.lifecycleStatus} · ${item.isBuiltin ? "Built-in role" : "Custom role"}` : ""}. Default tools

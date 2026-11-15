@@ -3,11 +3,25 @@ import {
   WEB_SEARCH_NATIVE_ENGINES,
   isWebSearchEngineOrder,
   type ChangePlanRecord,
+  type WebSearchCredentialTargetId,
   type WebSearchNativeEngine,
 } from "@goatcitadel/contracts";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 
 export const WEB_SEARCH_ANCHOR = "web-search";
+const WEB_SEARCH_KEY_ANCHOR_PREFIX = "web-search-key-";
+
+/** The anchor of one key's row in Web & Search ("search.brave" becomes "web-search-key-brave"). */
+export function webSearchKeyAnchor(targetId: WebSearchCredentialTargetId): string {
+  return `${WEB_SEARCH_KEY_ANCHOR_PREFIX}${targetId.slice("search.".length)}`;
+}
+
+export function isWebSearchKeyAnchor(hash: string): boolean {
+  return (["search.firecrawl", "search.brave", "search.parallel"] as const).some(
+    (targetId) => webSearchKeyAnchor(targetId) === hash,
+  );
+}
+
 export const HOSTED_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
 export const LOCAL_FIRECRAWL_BASE_URL = "http://127.0.0.1:3002";
 
