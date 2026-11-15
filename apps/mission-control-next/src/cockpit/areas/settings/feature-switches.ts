@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS } from "@goatcitadel/contracts";
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 
-/** The features that ship turned off and have a switch on Settings › Advanced, in the order that section lists them. */
+/** The features that are off unless turned on, and have a switch on Settings › Advanced, in the order that section lists them. */
 export const FEATURE_SWITCH_FLAGS = [
   "memoryLifecycleAdminV1Enabled",
   "memoryMaintenanceV1Enabled",

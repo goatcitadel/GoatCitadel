@@ -65,6 +65,16 @@ afterEach(() => {
 });
 
 describe("cockpit Features switches", () => {
+  it("says the features are off unless turned on here, and that each row shows its state", async () => {
+    api.fetchSettings.mockResolvedValue({ revision: 4, features: { memoryLifecycleAdminV1Enabled: true } });
+    const { container, unmount } = await mount();
+    expect(container.textContent).toContain(
+      "These features are off unless you turn them on here, and each row shows its current state.",
+    );
+    expect(container.textContent).not.toContain("ship turned off");
+    unmount();
+  });
+
   it("brings the switch a link names into view", async () => {
     window.history.replaceState(null, "", "/settings/advanced?shell=cockpit#feature-switch-scheduler-review");
     api.fetchSettings.mockResolvedValue({ revision: 4, features: { cronReviewQueueV1Enabled: false } });
