@@ -159,9 +159,7 @@ describe("native first-run setup", () => {
     expect(container.textContent).not.toContain("Guided model owner ready");
     await click("Use a cloud provider");
     expect(button("Guided model owner ready")).toBeDefined();
-    expect(guided.rendered).toHaveBeenCalledWith(
-      expect.objectContaining({ enterChatLabel: "Continue to safety", showSteps: false }),
-    );
+    expect(guided.rendered).toHaveBeenCalledWith(expect.objectContaining({ enterChatLabel: "Continue to safety" }));
     await click("Advanced: edit provider profiles");
     expect(api.navigate).toHaveBeenCalledWith("/settings/models#providers");
     await click("Guided model owner ready");
@@ -309,7 +307,7 @@ describe("native first-run setup", () => {
     expect(container.textContent).toContain("Local demo for workspace-a");
     await click("Use a cloud provider");
     expect(container.textContent).not.toContain("Local demo for workspace-a");
-    expect(guided.rendered).toHaveBeenLastCalledWith(expect.objectContaining({ showSteps: false }));
+    expect(guided.rendered).toHaveBeenLastCalledWith(expect.not.objectContaining({ showReadinessNote: true }));
     expect(container.querySelectorAll("h1")).toHaveLength(1);
   });
 

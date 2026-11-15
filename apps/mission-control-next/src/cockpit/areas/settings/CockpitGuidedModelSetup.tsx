@@ -14,7 +14,6 @@ import { Field } from "../../ui/Field";
 import { MetricList } from "../../ui/MetricList";
 import { cockpitInputClass } from "../../ui/input-class";
 import { GuidedModelPlanDialog } from "./GuidedModelPlanDialog";
-import { GuidedModelSteps } from "./GuidedModelSteps";
 import { useGuidedModelSetup } from "./use-guided-model-setup";
 
 const SELECT = cockpitInputClass;
@@ -26,7 +25,7 @@ export function CockpitGuidedModelSetup({
   onEnterChat,
   enterChatLabel = "Enter Chat",
   onNoticeChange,
-  showSteps = true,
+  showReadinessNote = false,
 }: {
   onboarding: OnboardingState;
   reloadOnboarding: () => Promise<void>;
@@ -38,8 +37,8 @@ export function CockpitGuidedModelSetup({
    * unmounts the card when the re-read after a change fails. Without it the card shows its own (first run).
    */
   onNoticeChange?: (notice: string | null) => void;
-  /** First run lists its own steps, so it hides this card's step list and keeps one flat stepper. */
-  showSteps?: boolean;
+  /** Shows the sentence behind the Connection status, for a host that has no setup steps of its own. */
+  showReadinessNote?: boolean;
 }) {
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
@@ -78,7 +77,7 @@ export function CockpitGuidedModelSetup({
           Saved model defaults changed. Your selection is kept; confirming reviews the current saved setup.
         </Callout>
       ) : null}
-      {showSteps ? <GuidedModelSteps setup={setup} /> : null}
+      {showReadinessNote ? <p className="text-sm text-fg-secondary">{readiness.description}</p> : null}
       <MetricList
         label="Model setup status"
         items={[

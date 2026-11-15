@@ -96,18 +96,6 @@ afterEach(() => {
 });
 
 describe("shared guided model setup", () => {
-  it("numbers every step, marks the current one and states each step in words", async () => {
-    onboarding.settings.llm.activeModel = "";
-    catalog("ready");
-    await mount();
-    const steps = [...container.querySelectorAll('ol[aria-label="Model setup steps"] > li')];
-    expect(steps.map((step) => step.textContent)).toEqual([
-      expect.stringMatching(/^Step 1Done.*Connect a provider/u),
-      expect.stringMatching(/^Step 2Current.*Confirm your model/u),
-      expect.stringMatching(/^Step 3Not started.*Start the first Chat/u),
-    ]);
-    expect(steps.map((step) => step.getAttribute("aria-current"))).toEqual([null, "step", null]);
-  });
   it("is built from cockpit fields: each select is labelled and described, with no Classic classes", async () => {
     catalog("ready");
     await mount();
@@ -341,11 +329,18 @@ describe("shared guided model setup", () => {
     await act(async () => button("Continue to safety")!.click());
     expect(onEnterChat).toHaveBeenCalledTimes(1);
   });
-  it("hides its step list for first run, which shows one flat stepper of its own", async () => {
+  it("never shows a second step list", async () => {
     catalog("ready");
-    await mount({ showSteps: false });
+    await mount();
     expect(container.querySelector('ol[aria-label="Model setup steps"]')).toBeNull();
     expect(button("Enter Chat")).toBeDefined();
+  });
+  it("shows the sentence behind the Connection status only when the host asks for it", async () => {
+    catalog("ready");
+    await mount();
+    expect(container.textContent).not.toContain("Test provider has a saved credential.");
+    await mount({ showReadinessNote: true });
+    expect(container.textContent).toContain("Test provider has a saved credential.");
   });
   it("hands the notice to a host that keeps it and shows no second copy", async () => {
     onboarding.settings.llm.activeModel = "";
