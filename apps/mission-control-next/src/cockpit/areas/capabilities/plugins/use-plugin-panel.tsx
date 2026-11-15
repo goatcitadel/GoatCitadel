@@ -92,7 +92,7 @@ export function usePluginPanel(
       asked.current = { id, inspectorOpen: openInspector };
       openInspector({
         source: pluginPanelSource(id),
-        focusOnOpen: deliberate.take(),
+        focusOnOpen: deliberate.take(pluginPanelSource(id)),
         title,
         body: <PluginPanel pluginId={id} onInstall={onInstall} />,
       });
@@ -103,10 +103,10 @@ export function usePluginPanel(
   const linkedId = pluginIdFromSearch(search);
   return {
     open: (item) => {
-      deliberate.press();
+      deliberate.press(pluginPanelSource(item.pluginId));
       // The address already names it (the panel was closed without clearing it): there is nothing to move.
       if (linkedId === item.pluginId) show(item.pluginId, item.name);
-      else navigate(pluginItemHref(item.pluginId));
+      else deliberate.go(pluginPanelSource(item.pluginId), () => navigate(pluginItemHref(item.pluginId)));
     },
   };
 }

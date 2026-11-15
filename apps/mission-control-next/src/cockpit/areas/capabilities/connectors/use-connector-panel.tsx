@@ -47,7 +47,7 @@ export function useConnectorPanel(
       asked.current = { id, inspectorOpen: openInspector };
       openInspector({
         source: connectorPanelSource(id),
-        focusOnOpen: deliberate.take(),
+        focusOnOpen: deliberate.take(connectorPanelSource(id)),
         title: name,
         body: <ConnectorPanel itemId={id} onRemoved={onRemoved} />,
       });
@@ -78,10 +78,10 @@ export function useConnectorPanel(
 
   return {
     open: (item) => {
-      deliberate.press();
+      deliberate.press(connectorPanelSource(item.id));
       // The address already names it (the panel was closed without clearing it): there is nothing to move.
       if (linkedId === item.id) show(item.id, item.name);
-      else navigate(connectorItemHref(item.id));
+      else deliberate.go(connectorPanelSource(item.id), () => navigate(connectorItemHref(item.id)));
     },
   };
 }

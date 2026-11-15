@@ -105,7 +105,7 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
       asked.current = { key, inspectorOpen: openInspector };
       openInspector({
         source: skillInstallSource(key),
-        focusOnOpen: deliberate.take(),
+        focusOnOpen: deliberate.take(key),
         title: panelTitle,
         body: <SkillInstallPanel installKey={key} gitImport={gitImport} onMove={move} onDone={done} />,
       });
@@ -138,8 +138,8 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
 
   const install = (item: CapabilitySkillDiscoverItem) => {
     if (!isSkillInstallScopeCurrent(scope) || !item.install) return;
-    deliberate.press();
     const key = sourceDraftKey(item.install);
+    deliberate.press(key);
     // A second press while the first check runs shows that check rather than making another.
     if (readSkillInstall(key)?.state.phase !== "checking") {
       resetSkillInstall(key);
@@ -152,18 +152,17 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
     install,
     resume: (item) => {
       if (!isSkillInstallScopeCurrent(scope)) return;
-      deliberate.press();
       const checkId = item.installSnapshotId;
       // Every row on its way in names its check; one that doesn't (an older Gateway) is checked afresh instead.
       if (!checkId) return install(item);
       // A waiting step this page already follows opens its approval at once, as a skill row's Review button does.
       const followed = installOf(readSkillInstall(checkId)?.state);
       if (followed?.approvalId) reopenSettingsApproval(followed.approvalId);
-      navigate(installItemHref(checkId, view));
+      deliberate.go(checkId, () => navigate(installItemHref(checkId, view)));
     },
     importFromGit: () => {
       if (!isSkillInstallScopeCurrent(scope)) return;
-      deliberate.press();
+      deliberate.press(GIT_IMPORT_KEY);
       resetSkillInstall(GIT_IMPORT_KEY);
       show(GIT_IMPORT_KEY, GIT_IMPORT_TITLE, true);
     },

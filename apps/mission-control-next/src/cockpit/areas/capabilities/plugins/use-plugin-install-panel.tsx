@@ -136,7 +136,7 @@ function usePanelShow(custody: number) {
       asked.current = { key, inspectorOpen: openInspector };
       openInspector({
         source: pluginInstallSource(key),
-        focusOnOpen: deliberate.take(),
+        focusOnOpen: deliberate.take(key),
         title,
         body: <PluginInstallPanel installKey={key} {...panel} onMove={(to) => move(key, to)} />,
       });
@@ -216,8 +216,8 @@ export function usePluginInstallPanel(list: CapabilityPluginListResponse | undef
   return {
     install: (item) => {
       if (custody !== pluginInstallCustody()) return;
-      panels.deliberate.press();
       const key = draftPluginInstallKey(`built_in:${item.pluginId}`);
+      panels.deliberate.press(key);
       const before = readPluginInstall(key);
       // A second press while the first check runs shows that check rather than making another; one after a check whose
       // answer never came sends it again under its own key, so the Gateway hands that check back.
@@ -229,19 +229,17 @@ export function usePluginInstallPanel(list: CapabilityPluginListResponse | undef
     },
     resume: (item) => {
       if (custody !== pluginInstallCustody()) return;
-      panels.deliberate.press();
       // A waiting approval this page already follows opens at once.
       const followed = readPluginInstall(pluginInstallKey(item.pluginId))?.state;
       if (followed?.phase === "following" && followed.waitingApprovalId) {
         reopenSettingsApproval(followed.waitingApprovalId);
       }
-      navigate(pluginItemHref(item.pluginId));
+      panels.deliberate.go(pluginInstallKey(item.pluginId), () => navigate(pluginItemHref(item.pluginId)));
     },
     openSource: (kind) => {
       if (custody !== pluginInstallCustody()) return;
-      panels.deliberate.press();
       resetPluginInstall(draftPluginInstallKey(kind));
-      navigate(pluginSourceItemHref(kind));
+      panels.deliberate.go(draftPluginInstallKey(kind), () => navigate(pluginSourceItemHref(kind)));
     },
   };
 }

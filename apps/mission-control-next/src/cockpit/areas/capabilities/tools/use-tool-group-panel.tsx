@@ -45,7 +45,7 @@ export function useToolGroupPanel(groups: readonly CapabilityToolGroupItem[] | u
       asked.current = { id, inspectorOpen: openInspector };
       openInspector({
         source: toolPanelSource(id),
-        focusOnOpen: deliberate.take(),
+        focusOnOpen: deliberate.take(toolPanelSource(id)),
         title: label,
         body: <ToolGroupPanel groupId={id} />,
       });
@@ -75,11 +75,11 @@ export function useToolGroupPanel(groups: readonly CapabilityToolGroupItem[] | u
 
   return {
     open: (groupId) => {
-      deliberate.press();
+      deliberate.press(toolPanelSource(groupId));
       const group = groups?.find((entry) => entry.groupId === groupId);
       // The address already names it (the panel was closed without clearing it): there is nothing to move.
       if (linkedId === groupId && group) show(groupId, group.label);
-      else navigate(toolGroupItemHref(groupId));
+      else deliberate.go(toolPanelSource(groupId), () => navigate(toolGroupItemHref(groupId)));
     },
   };
 }

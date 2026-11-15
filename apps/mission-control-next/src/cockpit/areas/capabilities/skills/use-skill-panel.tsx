@@ -61,7 +61,7 @@ export function useSkillPanel(
       const announce = view === "discover";
       openInspector({
         source: skillPanelSource(id),
-        focusOnOpen: deliberate.take(),
+        focusOnOpen: deliberate.take(skillPanelSource(id)),
         title: name,
         body: <SkillPanel skillId={id} onTag={searchTag} announce={announce} />,
       });
@@ -96,12 +96,12 @@ export function useSkillPanel(
     // the id the Gateway gave it). The panel opens for it at once, and says the skill isn't in the list, rather than the
     // press doing nothing.
     open: (skillId, fallbackName) => {
-      deliberate.press();
+      deliberate.press(skillPanelSource(skillId));
       const item = items?.find((entry) => entry.skillId === skillId);
       // The address already names it (the panel was closed without clearing it): there is nothing to move.
       if (linkedId === skillId && item) show(skillId, item.name);
       else if (!item && fallbackName) show(skillId, fallbackName);
-      else navigate(skillItemHref(skillId, view));
+      else deliberate.go(skillPanelSource(skillId), () => navigate(skillItemHref(skillId, view)));
     },
   };
 }
