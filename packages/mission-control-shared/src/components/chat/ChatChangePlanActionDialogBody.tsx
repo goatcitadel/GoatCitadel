@@ -106,12 +106,14 @@ export function ChatChangePlanActionDialogBody({
                 autoComplete="off"
                 spellCheck={false}
                 value={secureValues[field.fieldId] ?? ""}
-                onChange={(event) =>
+                onChange={(event) => {
+                  // Read now: React clears currentTarget before a queued updater runs.
+                  const nextValue = event.currentTarget.value;
                   setSecureValues((current) => ({
                     ...current,
-                    [field.fieldId]: event.currentTarget.value,
-                  }))
-                }
+                    [field.fieldId]: nextValue,
+                  }));
+                }}
                 aria-describedby={`change-plan-secret-custody-${field.fieldId}`}
               />
               <small id={`change-plan-secret-custody-${field.fieldId}`}>
