@@ -112,7 +112,7 @@ describe("System activity reads as sentences (SY-01)", () => {
     expect(rows()[0]).toContain("Record");
     expect(rows()[0]).toContain("Open source");
     expect(rows()[1]).toContain("An approval is waiting for you");
-    expect(container.textContent).toContain("Showing 2 recent signals.");
+    expect(container.textContent).toContain("Showing 2 entries.");
     expect(container.textContent).toContain("96 background signals are hidden.");
     // Identifiers live only in technical details, and the retention caveat is stated once for the list.
     expect(rows()[0]).not.toContain("session-a");
@@ -139,5 +139,77 @@ describe("System activity reads as sentences (SY-01)", () => {
     await settle();
     expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(true);
     expect(container.querySelectorAll("ol > li")).toHaveLength(3);
+  });
+});
+
+describe("System activity older signals and counts (22.4)", () => {
+  async function settle() {
+    for (let pass = 0; pass < 5; pass += 1)
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+  }
+  const background = (id: string, at: string) =>
+    signal(id, "llamacpp_refreshed", at, { eventClass: "operational_signal" });
+
+  it("counts the entries listed, and says repeated background signals were merged", async () => {
+    window.sessionStorage.setItem(SHOW_BACKGROUND_KEY, "true");
+    api.fetchRealtimeEvents.mockResolvedValue({
+      items: [background("a", "2026-10-05T10:02:00.000Z"), background("b", "2026-10-05T10:01:30.000Z")],
+    });
+    await render();
+    await settle();
+    expect(container.textContent).toContain("Showing 1 entry from 2 signals; repeated background signals are merged.");
+  });
+
+  it("loads older signals with the cursor, lists them once, and ends with a Work history link", async () => {
+    const first = signal("n1", "approval_created", "2026-10-05T10:00:00.000Z", { eventClass: "domain_fact" });
+    const old = signal("o1", "approval_created", "2026-10-04T10:00:00.000Z", { eventClass: "domain_fact" });
+    api.fetchRealtimeEvents
+      .mockResolvedValueOnce({ items: [first], nextCursor: "c1" })
+      .mockResolvedValueOnce({ items: [first, old] });
+    await render();
+    await settle();
+    expect(container.textContent).not.toContain("Open Work history");
+    const load = [...container.querySelectorAll("button")].find((node) =>
+      node.textContent?.includes("Load older signals"),
+    )!;
+    await act(async () => load.click());
+    await settle();
+    expect(api.fetchRealtimeEvents).toHaveBeenLastCalledWith(100, "c1");
+    expect(container.querySelectorAll("ol > li")).toHaveLength(2);
+    expect(container.textContent).toContain("Showing 2 entries.");
+    expect(container.textContent).toContain("That is everything this installation keeps.");
+    expect(container.textContent).toContain("Open Work history");
+    expect(container.textContent).not.toContain("Load older signals");
+  });
+
+  it("shows the Work history link when no older signals exist from the start", async () => {
+    api.fetchRealtimeEvents.mockResolvedValue({
+      items: [signal("n1", "approval_created", "2026-10-05T10:00:00.000Z", { eventClass: "domain_fact" })],
+    });
+    await render();
+    await settle();
+    expect(container.textContent).toContain("Open Work history");
+  });
+
+  it("says older signals could not be loaded, and keeps the button to try again", async () => {
+    api.fetchRealtimeEvents
+      .mockResolvedValueOnce({
+        items: [signal("n1", "approval_created", "2026-10-05T10:00:00.000Z", { eventClass: "domain_fact" })],
+        nextCursor: "c1",
+      })
+      .mockRejectedValueOnce(new Error("boom"));
+    await render();
+    await settle();
+    const load = [...container.querySelectorAll("button")].find((node) =>
+      node.textContent?.includes("Load older signals"),
+    )!;
+    await act(async () => load.click());
+    await settle();
+    expect(container.textContent).toContain("Could not load older signals.");
+    expect(
+      [...container.querySelectorAll("button")].some((node) => node.textContent?.includes("Load older signals")),
+    ).toBe(true);
   });
 });

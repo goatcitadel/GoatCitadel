@@ -14,6 +14,8 @@ import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { RecentSessions } from "./RecentSessions";
+import { ActivityOlderFooter } from "./ActivityOlderFooter";
+import { mergeActivity, useOlderActivity } from "./use-older-activity";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import {
@@ -41,6 +43,13 @@ function writeShowBackground(value: boolean): void {
   } catch {
     // Best-effort: storage is unavailable, so the choice applies to this view only.
   }
+}
+
+function countLine(entries: number, signals: number): string {
+  const shown = `Showing ${plural(entries, "entry", "entries")}`;
+  return entries < signals
+    ? `${shown} from ${plural(signals, "signal")}; repeated background signals are merged.`
+    : `${shown}.`;
 }
 
 function ActivityItem({ row }: { row: ActivityRow }) {
@@ -104,7 +113,8 @@ export function SystemActivity() {
     queryFn: () => fetchRealtimeEvents(100),
     refetchInterval: streamOpen ? false : ACTIVITY_FALLBACK_MS,
   });
-  const items = events.data?.items ?? [];
+  const older = useOlderActivity(events.data?.nextCursor);
+  const items = mergeActivity(events.data?.items ?? [], older.pages);
   // SY-01: background status refreshes are hidden by default so what happened stays readable.
   const shown = showBackground ? items : items.filter((event) => !describeActivity(event).operational);
   const rows = collapseActivity(shown);
@@ -158,8 +168,7 @@ export function SystemActivity() {
         rows.length ? (
           <>
             <p className="text-xs text-fg-muted">
-              Showing {plural(shown.length, "recent signal")}
-              {events.data.nextCursor ? "; older signals are not shown" : ""}.
+              {countLine(rows.length, shown.length)}
               {hidden ? ` ${plural(hidden, "background signal")} ${hidden === 1 ? "is" : "are"} hidden.` : ""}
             </p>
             <ol className="divide-y divide-line-subtle">
@@ -178,6 +187,14 @@ export function SystemActivity() {
             }
           />
         )
+      ) : null}
+      {events.data ? (
+        <ActivityOlderFooter
+          hasMore={older.hasMore}
+          busy={older.busy}
+          error={older.error}
+          onLoad={() => void older.loadOlder()}
+        />
       ) : null}
       <RecentSessions />
     </section>
