@@ -62,7 +62,6 @@ import {
   executionProfileFromNormalizationProfile,
   resolveSustainedLocalCodingProfile,
 } from "./chat-turn-execution-profile.js";
-import { extractPrimaryUserTaskContent } from "./chat-agent-prompt-lab-contract.js";
 import { admitChatRouteWard, routeWardActionsFor } from "./chat-route-local-ward.js";
 import {
   resolveInheritedChatContextRefs,
@@ -83,15 +82,13 @@ import {
   type BasePromptCatalogScope,
 } from "./base-prompt-capability-catalog.js";
 import { buildCodeModeRequestTurnShape, loadCodeModeRequestEligibility } from "./code-mode-request-eligibility.js";
-import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
-import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
+import { buildOrchestrationPlan } from "../orchestration/router.js";
 import type {
   OrchestrationPlan as ModeOrchestrationPlan,
   OrchestrationRouterInput,
   OrchestrationStepExecutionResult,
 } from "../orchestration/types.js";
 import {
-  applyExecutionPlanDraftToOrchestrationPlan,
   buildExecutionPlanDraftFromOrchestrationPlan,
   buildPlanningModeSystemInstruction,
   buildRetrievalTrace,
@@ -109,7 +106,6 @@ import {
   type ResolvedRuntimeGuidance,
   scoreSpecialistCandidateMatch,
 } from "./chat-turn-planning-helpers.js";
-import { trimExecutionPlanDraftToPlan } from "./chat-planner-fanout.js";
 import { selectPlannerDraftModel, shouldSkipPlannerDraft } from "./chat-planner-fast-path.js";
 import {
   IMPROVEMENT_TUNE_DEFAULTS,
@@ -119,11 +115,7 @@ import {
 import { appendMobileContextParts, recordMobileContextTurnProvenance } from "./chat-turn-mobile-context.js";
 import { recordPreparedTurnDecisions } from "./chat-turn-runtime-decisions.js";
 import { buildSideChatSystemInstruction } from "./chat-turn-side-chat.js";
-import {
-  routeWithModelRouter,
-  shouldBypassOrchestrationWithModelRouter,
-  withModelRouterOrchestrationDecision,
-} from "./model-router-decision-service.js";
+import { routeWithModelRouter, withModelRouterOrchestrationDecision } from "./model-router-decision-service.js";
 import type {
   ActiveTurnAdmission,
   ChatStreamMutationLifecycle,
@@ -1909,86 +1901,6 @@ export async function resolvePreparedTurnOrchestration(
         : "Separate orchestration is bypassed: non-advisory Chat execution stays inside the admitted turn.",
   });
   return undefined;
-}
-
-/**
- * The fixed-template plan draft Plan first used before it asked the model. Live turns no longer reach it
- * (see resolvePreparedTurnOrchestration); it stays so the template path and its tests remain available.
- */
-export async function resolveTemplatePlanOrchestration(
-  host: ChatTurnPrepHost,
-  prepared: PreparedAgentChatTurn,
-): Promise<PreparedChatExecutionPlanResolution | undefined> {
-  const mode = prepared.effectiveMode;
-  const runtime = host.llmService.getRuntimeConfig({
-    useCache: true,
-  });
-  const capabilities = buildProviderCapabilityRegistry(runtime);
-  const policy = resolveModePolicy(mode);
-  const routerInput: OrchestrationRouterInput = {
-    task: {
-      sessionId: prepared.session.sessionId,
-      workspaceId: prepared.workspaceId,
-      mode,
-      // The objective is operator-facing and is echoed into delegated step
-      // prompts and synthesis fallbacks. On prompt-pack runs, keep it to the
-      // user's task: the Prompt Lab run contract must not leak into it. Live
-      // turns keep their content verbatim even when it happens to contain a
-      // "## User Task" heading.
-      objective:
-        prepared.normalized.normalizationProfile === "prompt_pack_harness"
-          ? extractPrimaryUserTaskContent(prepared.content) || prepared.content
-          : prepared.content,
-      prefs: prepared.prefs,
-      conversation: prepared.conversationMessages,
-      historyMessages: prepared.history,
-    },
-    runtime,
-    capabilities,
-    policy,
-  };
-  const advisoryOnly = prepared.prefs.planningMode === "advisory";
-  const modelRouterBypass = shouldBypassOrchestrationWithModelRouter({
-    routerInput,
-    decision: prepared.modelRouterDecision,
-    advisoryOnly,
-  });
-  if (modelRouterBypass.bypass) {
-    prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
-      decision: "bypassed",
-      reason: modelRouterBypass.reason,
-    });
-    return undefined;
-  }
-  if (!advisoryOnly && !shouldUseModeOrchestration(routerInput)) {
-    prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
-      decision: "bypassed",
-      reason:
-        "orchestration router suppressed a separate plan because the chat path is tool-backed or live-data handled directly",
-    });
-    return undefined;
-  }
-  prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
-    decision: "allowed",
-    reason: modelRouterBypass.reason,
-  });
-  const templatePlan = await applyApprovedSpecialistsToPlan(host, prepared, buildOrchestrationPlan(routerInput));
-  const executionPlanDraft = await generatePreparedExecutionPlanDraft(
-    host,
-    prepared,
-    routerInput,
-    templatePlan,
-    advisoryOnly,
-  );
-  const plan = applyExecutionPlanDraftToOrchestrationPlan(templatePlan, executionPlanDraft);
-  return {
-    routerInput,
-    orchestrationPlan: plan,
-    // Round-3 review M3: stage-leveling fallback can drop fan-out extras from
-    // the executed plan; trim the draft to match so the persisted
-    // execution-plan record cannot carry forever-pending phantom steps.
-    executionPlanDraft: trimExecutionPlanDraftToPlan(executionPlanDraft, plan),
-  };
 }
 
 export async function applyApprovedSpecialistsToPlan(
