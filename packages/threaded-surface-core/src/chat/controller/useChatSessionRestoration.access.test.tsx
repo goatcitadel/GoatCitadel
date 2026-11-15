@@ -132,8 +132,7 @@ it("the actual restoration owner keeps same-caller drafts and never hydrates ano
   expect(observed.attachments).toEqual([attachment]);
   expect(observed.queue).toEqual([queue]);
   await act(async () => renderer!.update(<Harness workspace="workspace-b" />));
-  // Nothing is stored for workspace-b, and text already typed into this conversation is not wiped by a key change.
-  expect(observed.draft).toBe("actor A unsent input");
+  expect(observed.draft).toBe("");
   await act(async () => renderer!.update(<Harness />));
   expect(observed.draft).toBe("actor A unsent input");
 });

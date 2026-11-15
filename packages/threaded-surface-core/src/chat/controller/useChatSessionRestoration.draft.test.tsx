@@ -6,6 +6,14 @@ import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
 import type { OutboundQueueItem } from "../useChatSurfaceOrchestration";
 import { useChatSessionRestoration } from "./useChatSessionRestoration";
 import { createDraftStorageKey } from "../useChatLocalPersistence";
+import {
+  beginChatSessionCreation,
+  chatSessionCreationKey,
+  publishChatSessionCreation,
+  resetChatSessionCreationForTests,
+  type ChatSessionCreation,
+} from "@goatcitadel/mission-control-shared/state/chat-session-creation";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchChatSessionGoal: vi.fn(async () => ({ goal: null })),
@@ -19,11 +27,15 @@ let renderer: ReactTestRenderer | undefined;
 let observed: { draft: string; setDraft: (text: string) => void };
 const originalWindow = globalThis.window;
 const values = new Map<string, string>();
-function Harness({ workspace = "a", session = "s1" }) {
+function Harness({ workspace = "a", session = "s1" as string | null, unstable = 0 }) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachmentRecord[]>([]);
   const [queue, setQueue] = useState<OutboundQueueItem[]>([]);
   const conflict = useRef(null);
+  const setterHolder = useRef<{ unstable: number; set: typeof setAttachments } | null>(null);
+  if (setterHolder.current?.unstable !== unstable)
+    setterHolder.current = { unstable, set: (value) => setAttachments(value) };
+  const stableSetter = setterHolder.current.set;
   useChatSessionRestoration({
     workspaceId: workspace,
     selection: { selectedSessionId: session },
@@ -31,7 +43,8 @@ function Harness({ workspace = "a", session = "s1" }) {
     setPinnedGoal: noop,
     sessionData: { thread: null, generatedArtifacts: null },
     setDraft,
-    setPendingAttachments: setAttachments,
+    // A fresh function each render stands for a dependency that is not stable.
+    setPendingAttachments: stableSetter,
     setPendingAttachmentModes: noop,
     pendingAttachments: attachments,
     activeGeneratedArtifact: null,
@@ -48,6 +61,7 @@ function Harness({ workspace = "a", session = "s1" }) {
 }
 beforeEach(() => {
   values.clear();
+  resetChatSessionCreationForTests();
   setGatewayCallerScope("actor-a");
   Object.defineProperty(globalThis, "window", {
     configurable: true,
@@ -67,25 +81,74 @@ afterEach(async () => {
   Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow });
 });
 
-it("keeps text typed into a conversation when only the storage key changes for the same conversation", async () => {
+const creationKey = (workspace = "a") => chatSessionCreationKey(getGatewayApiBaseUrl(), workspace);
+
+async function pressNew(): Promise<ChatSessionCreation> {
+  const attempt: ChatSessionCreation = { state: "pending", mode: "chat", message: "Creating" };
+  await act(async () => {
+    expect(beginChatSessionCreation(creationKey(), attempt)).toBe(true);
+  });
+  return attempt;
+}
+
+async function confirm(attempt: ChatSessionCreation, sessionId: string) {
+  await act(async () => {
+    attempt.sessionId = sessionId;
+    attempt.state = "confirmed";
+    publishChatSessionCreation(creationKey(), attempt);
+  });
+}
+
+it("keeps text typed while New creates the conversation, for the same caller and workspace", async () => {
   await act(async () => {
     renderer = create(<Harness />);
   });
-  await act(async () => observed.setDraft("typed"));
-  await act(async () => renderer!.update(<Harness workspace="b" />));
-  expect(observed.draft).toBe("typed");
+  const attempt = await pressNew();
+  await act(async () => observed.setDraft("eview typed early"));
+  await confirm(attempt, "s-new");
+  await act(async () => renderer!.update(<Harness session="s-new" />));
+  expect(observed.draft).toBe("eview typed early");
+  // The old conversation does not keep a copy of text that now belongs to the new one.
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 5)));
+  expect(values.get(createDraftStorageKey("a", "s1"))).toBeUndefined();
 });
 
-it("starts an empty draft in another conversation with nothing stored", async () => {
+it("does not carry a draft the box already held when New started", async () => {
   await act(async () => {
     renderer = create(<Harness />);
   });
-  await act(async () => observed.setDraft("typed"));
-  await act(async () => renderer!.update(<Harness session="s2" />));
+  await act(async () => observed.setDraft("older draft"));
+  const attempt = await pressNew();
+  await act(async () => observed.setDraft("older draft and more"));
+  await confirm(attempt, "s-new");
+  await act(async () => renderer!.update(<Harness session="s-new" />));
   expect(observed.draft).toBe("");
 });
 
-it("hydrates the stored draft of the conversation you switch to", async () => {
+it("drops typed text when the workspace changes", async () => {
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  const attempt = await pressNew();
+  await act(async () => observed.setDraft("typed"));
+  await confirm(attempt, "s-new");
+  await act(async () => renderer!.update(<Harness workspace="b" session="s-new" />));
+  expect(observed.draft).toBe("");
+});
+
+it("drops typed text when the caller changes on a mounted hook", async () => {
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  const attempt = await pressNew();
+  await act(async () => observed.setDraft("typed"));
+  await confirm(attempt, "s-new");
+  setGatewayCallerScope("actor-b");
+  await act(async () => renderer!.update(<Harness session="s-new" />));
+  expect(observed.draft).toBe("");
+});
+
+it("shows a different existing conversation's own draft, and an empty one otherwise", async () => {
   values.set(createDraftStorageKey("a", "s3"), "saved");
   await act(async () => {
     renderer = create(<Harness />);
@@ -93,4 +156,18 @@ it("hydrates the stored draft of the conversation you switch to", async () => {
   await act(async () => observed.setDraft("typed"));
   await act(async () => renderer!.update(<Harness session="s3" />));
   expect(observed.draft).toBe("saved");
+  await act(async () => renderer!.update(<Harness session="s2" />));
+  expect(observed.draft).toBe("");
+});
+
+it("never overwrites newer typing with a stored value when only another dependency changed", async () => {
+  values.set(createDraftStorageKey("a", "s1"), "stored");
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  expect(observed.draft).toBe("stored");
+  await act(async () => observed.setDraft("newer typing"));
+  values.set(createDraftStorageKey("a", "s1"), "stored again");
+  await act(async () => renderer!.update(<Harness unstable={1} />));
+  expect(observed.draft).toBe("newer typing");
 });

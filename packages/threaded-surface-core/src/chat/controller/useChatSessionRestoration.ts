@@ -1,5 +1,13 @@
 import type { ChatAttachmentRecord, ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { fetchChatSessionGoal } from "@goatcitadel/mission-control-shared/api/client";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  chatSessionCreationKey,
+  readChatSessionCreation,
+  useChatSessionCreation,
+  type ChatSessionCreation,
+} from "@goatcitadel/mission-control-shared/state/chat-session-creation";
 import { setDevDiagnosticsLatestTraceSummary } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { useEffect, useMemo, useRef } from "react";
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
@@ -53,6 +61,31 @@ type Input = {
   initialOutboundSessionCreationRef?: React.MutableRefObject<InitialOutboundSessionCreation | null>;
 };
 
+type DraftOwner = { key: string; workspaceId: string; caller: string };
+
+/**
+ * Whether the draft typed so far moves into the conversation that was just created. Only when the same caller and
+ * workspace typed it, the box was empty when New started, and the selected conversation is the one this New created.
+ */
+function carriedDraft(
+  previous: DraftOwner | null,
+  next: DraftOwner,
+  selectedSessionId: string | null,
+  start: { attempt: ChatSessionCreation; draft: string; key: string } | null,
+): boolean {
+  if (!previous || !start || !selectedSessionId || previous.key === next.key) return false;
+  const attempt = readChatSessionCreation(chatSessionCreationKey(getGatewayApiBaseUrl(), next.workspaceId));
+  return (
+    previous.workspaceId === next.workspaceId &&
+    previous.caller === next.caller &&
+    attempt === start.attempt &&
+    attempt.state === "confirmed" &&
+    attempt.sessionId === selectedSessionId &&
+    start.draft === "" &&
+    start.key === previous.key
+  );
+}
+
 /** Captures the queue transition baseline during render, hydrates scoped drafts, then installs persistence effects in the original order. */
 export function useChatSessionRestoration({
   workspaceId,
@@ -80,9 +113,19 @@ export function useChatSessionRestoration({
   const draftStorageKey = createDraftStorageKey(workspaceId, selection.selectedSessionId);
   const attachmentStorageKey = createAttachmentStorageKey(workspaceId, selection.selectedSessionId);
   const queueStorageKey = createQueueStorageKey(workspaceId, selection.selectedSessionId);
-  // The conversation whose draft was last hydrated: a storage key that settles later for the same conversation must
-  // not wipe what was typed meanwhile (the draft is saved 400 ms after typing).
-  const draftHydrationRef = useRef<{ sessionId: string | null | undefined }>({ sessionId: undefined });
+  // Which owner (caller, workspace, conversation) the draft was last hydrated for, and the draft as it was when
+  // the current New started: text typed while a new conversation is being created belongs to that conversation.
+  const draftHydrationRef = useRef<{ key: string; workspaceId: string; caller: string } | null>(null);
+  const creationAttempt = useChatSessionCreation(chatSessionCreationKey(getGatewayApiBaseUrl(), workspaceId));
+  const creationStartRef = useRef<{ attempt: ChatSessionCreation; draft: string; key: string } | null>(null);
+  if (
+    creationAttempt &&
+    (creationAttempt.state === "checking" || creationAttempt.state === "pending") &&
+    creationStartRef.current?.attempt !== creationAttempt
+  )
+    creationStartRef.current = { attempt: creationAttempt, draft, key: draftStorageKey };
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const queueHydrationTransitionRef = useRef<{
     key: string;
     baselineIds: ReadonlySet<string>;
@@ -174,17 +217,34 @@ export function useChatSessionRestoration({
       return;
     }
     const hydrationTransition = queueHydrationTransitionRef.current;
-    const sameConversation = draftHydrationRef.current.sessionId === selection.selectedSessionId;
-    draftHydrationRef.current = { sessionId: selection.selectedSessionId };
-    const keepTyped = (stored: string | null) => (current: string) => stored ?? (sameConversation ? current : "");
+    const owner = { key: draftStorageKey, workspaceId, caller: getGatewayCallerScope() };
+    const previousOwner = draftHydrationRef.current;
+    draftHydrationRef.current = owner;
+    // The same owner and key again (only another dependency changed): never replace newer typing with a stored value.
+    const sameOwnerKey = previousOwner?.key === owner.key;
+    const carried = carriedDraft(previousOwner, owner, selection.selectedSessionId, creationStartRef.current);
+    const hydrateDraft = (stored: string | null) => {
+      if (sameOwnerKey) return;
+      if (stored === null && carried) {
+        const text = draftRef.current;
+        setDraft(text);
+        // The text was saved under the conversation it was typed in; it belongs to the new one.
+        setTimeout(() => {
+          try {
+            if (window.localStorage.getItem(previousOwner!.key) === text)
+              window.localStorage.removeItem(previousOwner!.key);
+          } catch {
+            // Storage may be unavailable; the new conversation still has the text.
+          }
+        }, 0);
+        return;
+      }
+      setDraft(stored ?? "");
+    };
     try {
       const draftRaw = window.localStorage.getItem(draftStorageKey);
-      setDraft(
-        keepTyped(
-          draftRaw && isWithinStorageBudget(draftRaw) && draftRaw.length <= MAX_HYDRATED_MESSAGE_CHARS
-            ? draftRaw
-            : null,
-        ),
+      hydrateDraft(
+        draftRaw && isWithinStorageBudget(draftRaw) && draftRaw.length <= MAX_HYDRATED_MESSAGE_CHARS ? draftRaw : null,
       );
       const attachmentsRaw = window.localStorage.getItem(attachmentStorageKey);
       setPendingAttachments(
@@ -208,7 +268,7 @@ export function useChatSessionRestoration({
         }),
       );
     } catch {
-      setDraft(keepTyped(null));
+      hydrateDraft(null);
       setPendingAttachments([]);
       setQueuedOutbound((current) =>
         mergeHydratedOutboundQueue({
