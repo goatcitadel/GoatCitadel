@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { OperatorInboxItem } from "@goatcitadel/contracts";
+import type { DurableRunStatus, OperatorInboxItem } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import {
   fetchDurableDeadLetter,
@@ -32,8 +32,8 @@ async function readRecoveryEvidence(item: OperatorInboxItem): Promise<RunRecover
 }
 
 /** The notice takes the outcome's own tone, so a recovery that ended in failure is not coloured as done. */
-function recoveryNoticeClass(status: string): string {
-  const tone = presentRunStatus(status).tone;
+function recoveryNoticeClass(status: DurableRunStatus | ""): string {
+  const tone = status ? presentRunStatus(status).tone : "neutral";
   if (tone === "failed") return "text-status-failed";
   if (tone === "done") return "text-status-done";
   return "text-fg-secondary";
@@ -51,7 +51,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
   const [completed, setCompleted] = useState(false);
   // A sentence that sends the operator to the run carries its own link (IN-04), so the notice and error are nodes.
   const [notice, setNotice] = useState<ReactNode>("");
-  const [noticeStatus, setNoticeStatus] = useState("");
+  const [noticeStatus, setNoticeStatus] = useState<DurableRunStatus | "">("");
   const [error, setError] = useState<ReactNode>("");
   const openRun = (runId: string, purpose: string) => (
     <>
