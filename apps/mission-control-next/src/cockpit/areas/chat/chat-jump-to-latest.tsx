@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, type RefObject } from "react";
+import { createContext, useContext, useEffect } from "react";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 
 /** What the transcript is showing a card for: a decision that is waiting for you, or nothing. */
@@ -38,39 +38,20 @@ export function focusAfterJump(
   else scroller?.focus({ preventScroll: true });
 }
 
+/** The jump button. Moving focus afterwards is the transcript's job: this button unmounts when the jump follows output. */
 export function JumpToLatestButton({
   waiting,
   unread,
   onJump,
-  region,
-  composerRef,
-  scrollRef,
 }: {
   waiting: WaitingDecision;
   unread: number;
   onJump: () => void;
-  region: RefObject<HTMLElement | null>;
-  composerRef: RefObject<HTMLElement | null> | undefined;
-  scrollRef: RefObject<HTMLElement | null>;
 }) {
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
   return (
     <button
       type="button"
-      onClick={() => {
-        onJump();
-        // CH-18: the button unmounts once the reader is at the end, so focus moves on after the jump.
-        timer.current = setTimeout(
-          () => focusAfterJump(region.current, composerRef?.current ?? null, scrollRef.current, waiting),
-          0,
-        );
-      }}
+      onClick={onJump}
       className="absolute bottom-3 right-3 z-10 rounded-md border border-accent bg-overlay px-3 py-2 text-sm text-accent shadow-overlay"
     >
       {jumpLabel(waiting, unread)}

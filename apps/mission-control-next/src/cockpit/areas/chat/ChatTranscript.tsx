@@ -4,7 +4,12 @@ import { selectTurnCapabilitySuggestions } from "./turn-capability-suggestions";
 import type { ChannelConversationContext } from "./channel-conversation";
 import { useChannelReading } from "./use-channel-conversation";
 import { ChatInspectorLoadFailure } from "./ChatInspectorLoadFailure";
-import { JumpToLatestButton, WaitingDecisionContext, type WaitingDecision } from "./chat-jump-to-latest";
+import {
+  focusAfterJump,
+  JumpToLatestButton,
+  WaitingDecisionContext,
+  type WaitingDecision,
+} from "./chat-jump-to-latest";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { useDeferredVirtuoso } from "../../ui/DeferredVirtuoso";
@@ -242,12 +247,23 @@ export function ChatTranscript({
   const region = useRef<HTMLDivElement>(null);
   const [waiting, setWaiting] = useState<WaitingDecision>(null);
   const mounted = useRef(true);
+  // Owned here, not by the button: the jump can make the button unmount before the timer fires.
+  const focusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      if (focusTimer.current) clearTimeout(focusTimer.current);
     };
   }, []);
+  const jumpAndFocus = () => {
+    jumpToLatest();
+    // CH-18: the button unmounts once the reader is at the end, so focus moves on after the jump.
+    focusTimer.current = setTimeout(
+      () => focusAfterJump(region.current, props.composerRef?.current ?? null, scrollRef.current, waiting),
+      0,
+    );
+  };
   // A jump to a message is the reader moving, so the transcript stops following new output, as it does for Home.
   const markReaderJump = useCallback(() => {
     readingGesture.current = true;
@@ -347,16 +363,7 @@ export function ChatTranscript({
           virtuoso={virtuoso}
           onReaderJump={markReaderJump}
         />
-        {!props.followOutput ? (
-          <JumpToLatestButton
-            waiting={waiting}
-            unread={unread}
-            onJump={jumpToLatest}
-            region={region}
-            composerRef={props.composerRef}
-            scrollRef={scrollRef}
-          />
-        ) : null}
+        {!props.followOutput ? <JumpToLatestButton waiting={waiting} unread={unread} onJump={jumpAndFocus} /> : null}
         <div
           key={scopeKey}
           ref={bindScroller}

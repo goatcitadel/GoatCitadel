@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, type ComponentType, type ReactNode, type Ref } from "react";
+import { act, useState, type ComponentType, type ReactNode, type Ref } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -200,6 +200,41 @@ describe("ChatTranscript", () => {
           </InspectorProvider>,
         ),
       );
+
+    it("still moves focus when the jump makes the transcript follow output and the button unmounts", async () => {
+      const composer = document.createElement("textarea");
+      document.body.append(composer);
+      let flip = () => {};
+      function Follower() {
+        const [follow, setFollow] = useState(false);
+        flip = () => setFollow(true);
+        return (
+          <InspectorProvider>
+            <ChatTranscript
+              props={{
+                ...sessionProps([turn("follow-turn", true)]),
+                followOutput: follow,
+                composerRef: { current: composer },
+              }}
+            />
+          </InspectorProvider>
+        );
+      }
+      try {
+        await act(async () => renderWithProviders(<Follower />));
+        expect(jumpButton()).toBeDefined();
+        // The jump makes the transcript follow output, so the button unmounts with the same click.
+        const onClick = () => flip();
+        container.addEventListener("click", onClick, true);
+        await act(async () => jumpButton()!.click());
+        container.removeEventListener("click", onClick, true);
+        expect(jumpButton()).toBeUndefined();
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 5)));
+        expect(document.activeElement).toBe(composer);
+      } finally {
+        composer.remove();
+      }
+    });
 
     it("says plain Jump to latest for an approval that is already decided", async () => {
       vi.mocked(fetchApproval).mockResolvedValue({
