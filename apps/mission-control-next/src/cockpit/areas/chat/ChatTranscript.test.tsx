@@ -1582,6 +1582,6 @@ it("says when only the start of a sent text attachment was read", async () => {
     ),
   );
   const items = [...container.querySelectorAll('[aria-label="Sent attachments"] li')].map((li) => li.textContent);
-  expect(items[0]).toContain("Only its first 1,600 characters were read");
+  expect(items[0]).toContain("Only its first 1,600 characters may have been read");
   expect(items[1]).not.toContain("Only its first");
 });

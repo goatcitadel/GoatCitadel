@@ -165,7 +165,7 @@ export const Turn = memo(function Turn({
               <li key={file.attachmentId}>
                 {file.fileName} · {presentAttachmentType(file)} · {formatBytes(file.sizeBytes)}
                 {chatAttachmentPromptIsPartial(file)
-                  ? ` · Only its first ${CHAT_ATTACHMENT_PROMPT_PREVIEW_CHARS.toLocaleString("en-US")} characters were read`
+                  ? ` · Only its first ${CHAT_ATTACHMENT_PROMPT_PREVIEW_CHARS.toLocaleString("en-US")} characters may have been read`
                   : null}
               </li>
             ))}
