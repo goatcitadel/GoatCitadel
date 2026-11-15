@@ -9,7 +9,8 @@ import { gatewayAuthSettingsFixture } from "../../../features/native-routes/sett
 import { __resetOnboardingAttemptsForTests } from "../../../features/native-routes/settings/onboarding-completion-state";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
-import { __resetApprovalModeUncertaintyForTests } from "./approval-mode-state";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { __resetApprovalModeUncertaintyForTests, retainApprovalModeUncertainty } from "./approval-mode-state";
 import { FirstRunArea } from "./FirstRunArea";
 
 const api = vi.hoisted(() => ({
@@ -18,6 +19,7 @@ const api = vi.hoisted(() => ({
   fetchSettings: vi.fn(),
   patchSettings: vi.fn(),
   fetchChangePlan: vi.fn(),
+  fetchChangePlans: vi.fn(),
   navigate: vi.fn(),
   workspace: "workspace-a",
 }));
@@ -232,6 +234,44 @@ describe("native first-run setup", () => {
     await vi.waitFor(() => expect(container.textContent).toContain("Setup state unavailable"));
     expect(container.textContent).not.toContain("Configured for a first send");
     expect(api.completeOnboarding).not.toHaveBeenCalled();
+  });
+  it("settles an approval-rule save that was not confirmed when checks are refreshed", async () => {
+    // A lost answer left the rule unconfirmed; the Gateway has since answered that it was saved.
+    retainApprovalModeUncertainty({
+      message: "GoatCitadel didn't answer, so this save isn't confirmed yet.",
+      submitted: owner.settings.toolApprovalMode,
+      baseRevision: owner.settings.revision - 1,
+      previous: owner.settings.toolApprovalMode,
+      installation: getGatewayApiBaseUrl(),
+      checking: false,
+    });
+    api.fetchChangePlans.mockResolvedValue({ items: [] });
+    await render();
+    expect(container.textContent).toContain("Your last approval-rule save isn't confirmed yet.");
+    expect(container.textContent).not.toContain("Resolve the pending or uncertain approval-rule save");
+    expect(button("Finish setup and open Chat").disabled).toBe(true);
+    await click("Refresh checks");
+    await vi.waitFor(() =>
+      expect(container.textContent).not.toContain("Your last approval-rule save isn't confirmed yet."),
+    );
+    expect(container.textContent).not.toContain("Resolve the pending or uncertain approval-rule save");
+  });
+  it("keeps Finish held while the unconfirmed approval-rule save still cannot be checked", async () => {
+    retainApprovalModeUncertainty({
+      message: "GoatCitadel didn't answer, so this save isn't confirmed yet.",
+      // Not the saved rule, so reading the settings cannot settle it; the open changes are unreadable too.
+      submitted: owner.settings.toolApprovalMode === "approve_all" ? "approve_risky" : "approve_all",
+      baseRevision: owner.settings.revision - 1,
+      previous: owner.settings.toolApprovalMode,
+      installation: getGatewayApiBaseUrl(),
+      checking: false,
+    });
+    api.fetchChangePlans.mockRejectedValue(new Error("offline"));
+    await render();
+    await click("Refresh checks");
+    await vi.waitFor(() => expect(button("Refresh checks").disabled).toBe(false));
+    expect(container.textContent).toContain("Your last approval-rule save isn't confirmed yet.");
+    expect(button("Finish setup and open Chat").disabled).toBe(true);
   });
   it("preserves an uncertain completion lock after a native remount", async () => {
     api.completeOnboarding.mockRejectedValue(new Error("response lost"));

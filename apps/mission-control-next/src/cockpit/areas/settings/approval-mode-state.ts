@@ -45,9 +45,21 @@ export function isApprovalRevisionConflict(error: unknown, revision: number): bo
   );
 }
 
-// A lost response cannot establish whether the Gateway applied or queued this save.
-// Retain the lock across navigation; this is UI uncertainty, never canonical state.
-let uncertainMessage: string | undefined;
+/**
+ * A lost response cannot establish whether the Gateway applied or queued this save, so the rule keeps a record of the
+ * write until the saved rule and the open changes have been read again. It is retained across navigation (a lock
+ * that is UI uncertainty, never canonical state) and carries what that check needs.
+ */
+export interface ApprovalModeUncertainty {
+  message: string;
+  submitted: ToolApprovalMode;
+  baseRevision: number;
+  previous: ToolApprovalMode;
+  /** The Gateway the write went to; the check reads only that one. */
+  installation: string;
+  checking: boolean;
+}
+let uncertainRecord: ApprovalModeUncertainty | undefined;
 const listeners = new Set<() => void>();
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
@@ -55,18 +67,39 @@ const subscribe = (listener: () => void) => {
     listeners.delete(listener);
   };
 };
-export function useApprovalModeUncertainty() {
+function publish(record: ApprovalModeUncertainty | undefined) {
+  uncertainRecord = record;
+  for (const listener of listeners) listener();
+}
+export function useApprovalModeUncertainty(): ApprovalModeUncertainty | undefined {
   return useSyncExternalStore(
     subscribe,
-    () => uncertainMessage,
+    () => uncertainRecord,
     () => undefined,
   );
 }
-export function retainApprovalModeUncertainty(message: string) {
-  uncertainMessage = message;
-  for (const listener of listeners) listener();
+/** The record as it is now, for a check that must not act on a stale render. */
+export function currentApprovalModeUncertainty(): ApprovalModeUncertainty | undefined {
+  return uncertainRecord;
+}
+export function retainApprovalModeUncertainty(record: ApprovalModeUncertainty) {
+  publish(record);
+}
+export function clearApprovalModeUncertainty() {
+  publish(undefined);
+}
+/**
+ * What the saved rule says about a write whose answer was lost: it is saved when the rule is the submitted one at a
+ * newer revision, else it is waiting when an open change for it exists, else it was not saved.
+ */
+export function settleApprovalModeUncertainty(
+  record: ApprovalModeUncertainty,
+  latest: RuntimeSettingsResponse,
+  waiting: boolean,
+): "saved" | "waiting" | "not_saved" {
+  if (latest.toolApprovalMode === record.submitted && latest.revision > record.baseRevision) return "saved";
+  return waiting ? "waiting" : "not_saved";
 }
 export function __resetApprovalModeUncertaintyForTests() {
-  uncertainMessage = undefined;
-  for (const listener of listeners) listener();
+  publish(undefined);
 }

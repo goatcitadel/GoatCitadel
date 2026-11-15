@@ -9,16 +9,30 @@ import {
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
+import {
+  classifySettingsSaveFailure,
+  findActiveSettingsChange,
+  findWaitingSettingsChange,
+} from "../../../features/native-routes/settings/settings-save-outcome";
 import { useSettingsChange } from "../../../features/native-routes/settings/use-settings-change";
 import {
   APPROVAL_MODE_DRAFT_KEY,
+  clearApprovalModeUncertainty,
+  currentApprovalModeUncertainty,
   hasApprovalSettings,
   isApprovalMode,
   isApprovalRevisionConflict,
   matchesApprovalModePlan,
   retainApprovalModeUncertainty,
+  settleApprovalModeUncertainty,
   useApprovalModeUncertainty,
+  type ApprovalModeUncertainty,
 } from "./approval-mode-state";
+import type { WaitingSettingsNotice } from "./WaitingSettingsChangeNotice";
+
+const CHECKING_MESSAGE = "Checking whether your approval rule was saved…";
+const UNCONFIRMED_MESSAGE =
+  "GoatCitadel didn't answer, so this save isn't confirmed yet. Saving stays paused until the saved rule can be checked.";
 
 export interface ApprovalReview {
   mode: ToolApprovalMode;
@@ -53,6 +67,7 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
   const [busy, setBusy] = useState(false);
   const [review, setReview] = useState<ApprovalReview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [waiting, setWaiting] = useState<WaitingSettingsNotice | null>(null);
   const restricted = safeOnly || settings.data?.deploymentProfile === "remote_hardened";
   const installation = getGatewayApiBaseUrl();
   const identity = JSON.stringify([
@@ -88,6 +103,7 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     ready &&
     !settings.isFetching &&
     !locked &&
+    !waiting &&
     draft.isDirty &&
     !draft.hasRemoteChanges &&
     !(draft.value === "bypass" && restricted);
@@ -164,9 +180,34 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
         setNotice("Not saved: the settings changed since your draft started. Your draft is kept for review.");
         await settings.refetch();
       } else if (mutationAttempted) {
-        retainApprovalModeUncertainty(
-          "Save outcome is uncertain. Further saves are locked in this app session; inspect Settings activity before continuing.",
-        );
+        const failure = classifySettingsSaveFailure(error);
+        if (failure.kind === "waiting") {
+          // An earlier change to this rule is still open: lead to its approval and keep the draft.
+          await settings.refetch();
+          const found = (await findWaitingSettingsChange(failure.planId)) ?? {
+            planId: failure.planId,
+            unreadable: true as const,
+          };
+          if (isCurrent(intent.generation)) setWaiting(found);
+        } else if (failure.kind === "conflict") {
+          if (isCurrent(intent.generation)) {
+            setNotice("Not saved: the settings changed since your draft started. Your draft is kept for review.");
+            await settings.refetch();
+          }
+        } else if (failure.kind === "refused") {
+          if (isCurrent(intent.generation)) setNotice(`Not saved. ${failure.reason}`);
+        } else {
+          const record: ApprovalModeUncertainty = {
+            message: CHECKING_MESSAGE,
+            submitted: intent.mode,
+            baseRevision: intent.revision,
+            previous: current,
+            installation,
+            checking: true,
+          };
+          retainApprovalModeUncertainty(record);
+          void reconcileRecord(record);
+        }
       } else if (isCurrent(intent.generation)) {
         setNotice(`Could not confirm current approval settings. ${describeApiError(error).summary}`);
       }
@@ -176,6 +217,52 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
       if (live.current.mounted) setBusy(false);
     }
   }
+  /**
+   * After a save whose answer was lost: reads the saved rule and the open changes again. The lock lifts once either
+   * says what happened, and holds only while neither can be read; a failed read is never reported as "not saved".
+   */
+  async function reconcileRecord(start: ApprovalModeUncertainty): Promise<void> {
+    try {
+      await settleRecord(start);
+    } catch {
+      // Whatever went wrong, the write is still unconfirmed: keep saving paused rather than guess.
+      retainApprovalModeUncertainty({ ...start, message: UNCONFIRMED_MESSAGE, checking: false });
+    }
+  }
+  async function settleRecord(start: ApprovalModeUncertainty): Promise<void> {
+    const record = { ...start, message: CHECKING_MESSAGE, checking: true };
+    retainApprovalModeUncertainty(record);
+    const keepLocked = () =>
+      retainApprovalModeUncertainty({ ...record, message: UNCONFIRMED_MESSAGE, checking: false });
+    // Another Gateway cannot say whether this one applied the write.
+    if (getGatewayApiBaseUrl() !== record.installation) return keepLocked();
+    const latest = await fetchSettings().catch(() => undefined);
+    if (!latest || !hasApprovalSettings(latest) || getGatewayApiBaseUrl() !== record.installation) return keepLocked();
+    if (settleApprovalModeUncertainty(record, latest, false) === "saved") {
+      draft.acceptSaved(latest.toolApprovalMode, latest.revision, record.submitted);
+      clearApprovalModeUncertainty();
+      if (live.current.mounted) setNotice("Tool approval rule saved and confirmed by GoatCitadel.");
+      await settings.refetch();
+      return;
+    }
+    const active = await findActiveSettingsChange((plan) => matchesApprovalModePlan(plan, record.submitted));
+    if (active === "unreadable") return keepLocked();
+    const outcome = settleApprovalModeUncertainty(record, latest, Boolean(active));
+    clearApprovalModeUncertainty();
+    if (live.current.mounted) {
+      if (outcome === "waiting" && active) {
+        setWaiting(active);
+        setNotice(null);
+      } else {
+        setNotice("Your approval rule was not saved. Your draft is kept, so you can save it again.");
+      }
+    }
+    await settings.refetch();
+  }
+  const reconcile = async () => {
+    const record = currentApprovalModeUncertainty();
+    if (record && !record.checking) await reconcileRecord(record);
+  };
   const reviewCurrent = Boolean(
     review &&
     isCurrent(review.generation) &&
@@ -192,6 +279,13 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     draft,
     change,
     uncertain,
+    waiting,
+    /** Called once the waiting change was decided: the saved rule is read again. */
+    clearWaiting: () => {
+      setWaiting(null);
+      void settings.refetch();
+    },
+    reconcile,
     busy,
     review,
     setReview,

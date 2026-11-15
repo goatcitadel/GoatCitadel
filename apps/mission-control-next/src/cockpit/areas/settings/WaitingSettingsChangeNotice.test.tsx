@@ -29,8 +29,15 @@ import { WaitingSettingsChangeNotice } from "./WaitingSettingsChangeNotice";
 let root: Root;
 let container: HTMLDivElement;
 
-async function show(waiting: React.ComponentProps<typeof WaitingSettingsChangeNotice>["waiting"]) {
-  await act(async () => root.render(<WaitingSettingsChangeNotice waiting={waiting} onResolved={() => undefined} />));
+async function show(
+  waiting: React.ComponentProps<typeof WaitingSettingsChangeNotice>["waiting"],
+  subject?: "setting" | "rule",
+) {
+  await act(async () =>
+    root.render(
+      <WaitingSettingsChangeNotice waiting={waiting} onResolved={() => undefined} {...(subject ? { subject } : {})} />,
+    ),
+  );
 }
 
 beforeEach(() => {
@@ -68,5 +75,10 @@ describe("WaitingSettingsChangeNotice", () => {
     expect(container.textContent).toContain("One change to this setting is already waiting. Open Inbox to approve it.");
     expect(container.querySelector("a")?.getAttribute("href")).toContain("workspaceId=default");
     expect(dialog.reopen).not.toHaveBeenCalled();
+  });
+
+  it("names the approval rule when the change is to the rule", async () => {
+    await show({ planId: "plan-7", approvalId: "approval-7", applying: false }, "rule");
+    expect(container.textContent).toContain("One change to this rule is already waiting for your approval.");
   });
 });

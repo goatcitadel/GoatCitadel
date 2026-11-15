@@ -14,9 +14,13 @@ const api = vi.hoisted(() => ({
   fetchSettings: vi.fn(),
   patchSettings: vi.fn(),
   fetchChangePlan: vi.fn(),
+  fetchChangePlans: vi.fn(),
   base: "owner",
 }));
-vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ ...api, isApiRequestError: () => false }));
+vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+  ...api,
+  isApiRequestError: (value: unknown) => Boolean(value && typeof value === "object" && "status" in value),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({ getGatewayApiBaseUrl: () => api.base }));
 const deferred = <T,>() => {
   let resolve!: (value: T) => void;
@@ -199,7 +203,9 @@ describe("approval save review lifetime", () => {
       await pending;
     });
     await render("two");
-    expect(control.uncertain).toContain("uncertain");
+    // The lost answer is checked at once; with the Gateway not answering about open changes it stays unconfirmed.
+    await vi.waitFor(() => expect(control.uncertain?.checking).toBe(false));
+    expect(control.uncertain?.message).toContain("isn't confirmed yet");
     expect(control.canSave).toBe(false);
     await act(async () => control.requestSave());
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
@@ -211,5 +217,120 @@ describe("approval save review lifetime", () => {
     expect(control.canSave).toBe(false);
     await act(async () => control.requestSave());
     expect(api.patchSettings).not.toHaveBeenCalled();
+  });
+
+  describe("a save that does not apply cleanly", () => {
+    const waitingPlan = (planId: string, approvalId: string, mode = "approve_all") => ({
+      planId,
+      status: "awaiting_approval",
+      title: "Change the tool approval rule",
+      origin: { surface: "settings", workspaceId: "default" },
+      kind: "runtime_configuration",
+      request: { kind: "runtime_configuration", change: { operation: "tool_approval_mode", mode } },
+      target: { ownerId: "runtime_settings", resourceId: "tool_approval_mode", expectedRevision: 41 },
+      createdAt: "2026-11-15T10:00:00.000Z",
+      requiredAction: { kind: "approval", approvalId },
+    });
+
+    it("settles a lost save from the saved rule and unlocks", async () => {
+      await prepare();
+      api.patchSettings.mockImplementation(async () => {
+        owner = { ...owner, revision: owner.revision + 1, toolApprovalMode: "approve_risky" };
+        throw new Error("Failed to fetch");
+      });
+      api.fetchChangePlans.mockResolvedValue({ items: [] });
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() => expect(control.uncertain).toBeUndefined());
+      expect(control.locked).toBe(false);
+      expect(control.notice).toBe("Tool approval rule saved and confirmed by GoatCitadel.");
+      expect(api.patchSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the lock when the saved rule can't be read yet, and checks again on request", async () => {
+      await prepare();
+      api.patchSettings.mockImplementation(async () => {
+        api.fetchSettings.mockRejectedValue(new Error("Failed to fetch"));
+        throw new Error("Failed to fetch");
+      });
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() => expect(control.uncertain?.checking).toBe(false));
+      expect(control.uncertain?.message).toBe(
+        "GoatCitadel didn't answer, so this save isn't confirmed yet. Saving stays paused until the saved rule can be checked.",
+      );
+      expect(control.locked).toBe(true);
+      expect(control.notice ?? "").not.toContain("not saved");
+
+      // The Gateway answers on the next check: the write had been applied.
+      owner = { ...owner, revision: owner.revision + 1, toolApprovalMode: "approve_risky" };
+      api.fetchSettings.mockImplementation(async () => structuredClone(owner));
+      api.fetchChangePlans.mockResolvedValue({ items: [] });
+      await act(async () => control.reconcile());
+      await vi.waitFor(() => expect(control.uncertain).toBeUndefined());
+      expect(control.notice).toBe("Tool approval rule saved and confirmed by GoatCitadel.");
+      expect(api.patchSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the lock when the open changes can't be read, never reporting not saved", async () => {
+      await prepare();
+      api.patchSettings.mockRejectedValue(new Error("Failed to fetch"));
+      api.fetchChangePlans.mockRejectedValue(new Error("Failed to fetch"));
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() => expect(control.uncertain?.checking).toBe(false));
+      expect(control.locked).toBe(true);
+      expect(control.notice ?? "").not.toContain("was not saved");
+    });
+
+    it("says plainly when the rule was not saved", async () => {
+      await prepare();
+      api.patchSettings.mockRejectedValue(new Error("Failed to fetch"));
+      api.fetchChangePlans.mockResolvedValue({ items: [] });
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() =>
+        expect(control.notice).toBe("Your approval rule was not saved. Your draft is kept, so you can save it again."),
+      );
+      expect(control.uncertain).toBeUndefined();
+      expect(control.locked).toBe(false);
+      expect(control.draft.isDirty).toBe(true);
+    });
+
+    it("leads to the change a lost answer queued instead of unlocking into a second save", async () => {
+      await prepare();
+      api.patchSettings.mockRejectedValue(new Error("Failed to fetch"));
+      api.fetchChangePlans.mockResolvedValue({ items: [waitingPlan("plan-lost", "approval-lost", "approve_risky")] });
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() =>
+        expect(control.waiting).toMatchObject({ planId: "plan-lost", approvalId: "approval-lost" }),
+      );
+      expect(control.uncertain).toBeUndefined();
+      expect(control.canSave).toBe(false);
+      expect(api.patchSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("opens the waiting change a conflict names, whatever value it holds", async () => {
+      await prepare();
+      api.patchSettings.mockRejectedValue({
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: { resourceKind: "change_plan", resourceId: "plan-waiting" } },
+      });
+      api.fetchChangePlan.mockResolvedValue(waitingPlan("plan-waiting", "approval-waiting", "approve_all"));
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() =>
+        expect(control.waiting).toMatchObject({ planId: "plan-waiting", approvalId: "approval-waiting" }),
+      );
+      expect(control.uncertain).toBeUndefined();
+      expect(control.canSave).toBe(false);
+      expect(control.draft.value).toBe("approve_risky");
+      expect(api.patchSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows a plain refusal as not saved without locking", async () => {
+      await prepare();
+      api.patchSettings.mockRejectedValue({ status: 422, body: { error: "That rule is managed." } });
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() => expect(control.notice).toContain("Not saved."));
+      expect(control.uncertain).toBeUndefined();
+      expect(control.locked).toBe(false);
+      expect(api.fetchChangePlans).not.toHaveBeenCalled();
+    });
   });
 });

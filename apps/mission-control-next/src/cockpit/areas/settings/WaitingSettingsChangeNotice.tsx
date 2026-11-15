@@ -17,9 +17,12 @@ function isUnreadable(waiting: WaitingSettingsNotice): waiting is { planId: stri
 export function WaitingSettingsChangeNotice({
   waiting,
   onResolved,
+  subject = "setting",
 }: {
   waiting: WaitingSettingsNotice;
   onResolved: () => void;
+  /** What the change is to: the words that follow "this" in each sentence. */
+  subject?: "setting" | "rule";
 }) {
   const approvalId = isUnreadable(waiting) ? undefined : waiting.approvalId;
   useEffect(() => {
@@ -29,7 +32,7 @@ export function WaitingSettingsChangeNotice({
   if (isUnreadable(waiting))
     return (
       <p role="status" className="mt-3 text-sm text-status-waiting">
-        One change to this setting is already waiting.{" "}
+        One change to this {subject} is already waiting.{" "}
         <NativeOwnerLink href="/inbox?workspaceId=default" scope={waiting.planId}>
           Open Inbox
         </NativeOwnerLink>{" "}
@@ -39,7 +42,7 @@ export function WaitingSettingsChangeNotice({
   if (approvalId)
     return (
       <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-status-waiting">
-        <p role="status">One change to this setting is already waiting for your approval.</p>
+        <p role="status">One change to this {subject} is already waiting for your approval.</p>
         <SettingsApprovalDialog
           approvalId={approvalId}
           {...(waiting.title ? { title: waiting.title } : {})}
@@ -50,7 +53,7 @@ export function WaitingSettingsChangeNotice({
     );
   return (
     <p role="status" className="mt-3 text-sm text-status-waiting">
-      One change to this setting is still being applied. Refresh in a moment to see it.
+      One change to this {subject} is still being applied. Refresh in a moment to see it.
     </p>
   );
 }

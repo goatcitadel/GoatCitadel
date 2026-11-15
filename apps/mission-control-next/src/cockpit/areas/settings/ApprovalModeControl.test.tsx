@@ -15,7 +15,12 @@ import {
   llamaPlanFixture,
 } from "../../../features/native-routes/settings/llama-setup.test-support";
 
-const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), fetchChangePlan: vi.fn() }));
+const api = vi.hoisted(() => ({
+  fetchSettings: vi.fn(),
+  patchSettings: vi.fn(),
+  fetchChangePlan: vi.fn(),
+  fetchChangePlans: vi.fn(),
+}));
 const switchShellMock = vi.hoisted(() => vi.fn<typeof import("../../../shell-preference").switchShell>());
 vi.mock("../../../shell-preference", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../shell-preference")>()),
@@ -309,11 +314,12 @@ describe("cockpit tool approval rule", () => {
     await render();
     await choose("approve_risky");
     await click("Save approval rule");
-    expect(container.textContent).toContain("Save outcome is uncertain");
+    await vi.waitFor(() => expect(container.textContent).toContain("this save isn't confirmed yet"));
+    expect(container.textContent).not.toContain("was not saved");
     await act(async () => root.render(null));
     await render();
     await click("Refresh approval settings");
-    expect(container.textContent).toContain("Save outcome is uncertain");
+    expect(container.textContent).toContain("this save isn't confirmed yet");
     expect(button("Save approval rule").disabled).toBe(true);
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
     const recovery = [...container.querySelectorAll("a")].find(
@@ -327,12 +333,51 @@ describe("cockpit tool approval rule", () => {
     expect(container.querySelector('a[href*="shell=classic"]')).toBeNull();
   });
 
+  it("unlocks from Check saved rule once the saved rule and open changes can be read", async () => {
+    api.patchSettings.mockRejectedValue(new Error("Network error"));
+    api.fetchChangePlans.mockRejectedValue(new Error("Network error"));
+    await render();
+    await choose("approve_risky");
+    await click("Save approval rule");
+    await vi.waitFor(() => expect(button("Check saved rule")).toBeDefined());
+    expect(button("Save approval rule").disabled).toBe(true);
+    // The Gateway answers: the rule was never saved, so the draft stays and saving works again.
+    api.fetchChangePlans.mockResolvedValue({ items: [] });
+    await click("Check saved rule");
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain(
+        "Your approval rule was not saved. Your draft is kept, so you can save it again.",
+      ),
+    );
+    expect(button("Check saved rule")).toBeUndefined();
+    expect(button("Save approval rule").disabled).toBe(false);
+    expect(api.patchSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("leads to an earlier change that is still waiting instead of saying settings changed", async () => {
+    api.patchSettings.mockRejectedValue({
+      status: 409,
+      body: { code: "WRITE_CONFLICT", details: { resourceKind: "change_plan", resourceId: "plan-waiting" } },
+    });
+    api.fetchChangePlan.mockRejectedValue(new Error("offline"));
+    await render();
+    await choose("approve_risky");
+    await click("Save approval rule");
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("One change to this rule is already waiting. Open Inbox to approve it."),
+    );
+    expect(container.textContent).not.toContain("changed since your draft started");
+    expect(button("Save approval rule").disabled).toBe(true);
+    expect(container.textContent).toContain("Unsaved approval rule draft");
+    expect(api.patchSettings).toHaveBeenCalledTimes(1);
+  });
+
   it("locks mismatched completed settings instead of claiming success", async () => {
     api.patchSettings.mockResolvedValue({ ...owner, revision: 3 });
     await render();
     await choose("approve_risky");
     await click("Save approval rule");
-    expect(container.textContent).toContain("Save outcome is uncertain");
+    await vi.waitFor(() => expect(container.textContent).toContain("this save isn't confirmed yet"));
     expect(container.textContent).not.toContain("Tool approval rule saved");
   });
 
