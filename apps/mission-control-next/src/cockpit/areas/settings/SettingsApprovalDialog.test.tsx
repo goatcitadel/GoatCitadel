@@ -106,7 +106,7 @@ it("closes and settles the change after one Approve click", async () => {
   expect(dialog()).toBeNull();
 });
 
-it("holds back the Inbox toast only while it shows a loaded, pending approval", async () => {
+it("holds back the Inbox toast only while it is open on a loaded, pending approval", async () => {
   let loaded!: (value: ApprovalRequest) => void;
   fetchApproval.mockReset().mockImplementation(
     () =>
@@ -127,6 +127,13 @@ it("holds back the Inbox toast only while it shows a loaded, pending approval", 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
+  expect(dialog()).not.toBeNull();
+  expect(isApprovalHandledInPlace("approval-1")).toBe(true);
+  // Closed (its button may be off screen), the dialog no longer holds the toast back.
+  await act(async () => document.body.querySelector<HTMLButtonElement>('[aria-label="Close dialog"]')!.click());
+  expect(dialog()).toBeNull();
+  expect(isApprovalHandledInPlace("approval-1")).toBe(false);
+  await act(async () => button("Review approval")!.click());
   expect(isApprovalHandledInPlace("approval-1")).toBe(true);
   act(() => root.unmount());
   expect(isApprovalHandledInPlace("approval-1")).toBe(false);

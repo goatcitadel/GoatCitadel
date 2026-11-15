@@ -110,9 +110,13 @@ export function SettingsApprovalDialog({
     () => 0,
   );
 
-  // While this dialog shows a pending approval it is decided here, so its Inbox toast would only sit on top of it.
-  // Only once the record is loaded and still pending: while it loads, or if it can't be read, the toast stays.
-  useEffect(() => (pending ? registerApprovalHandledInPlace(approvalId) : undefined), [approvalId, pending]);
+  // While this dialog is open on a pending approval it is decided here, so its Inbox toast would sit on top of it.
+  // Only while the dialog is open on the loaded, still pending record: while it loads, if it can't be read, or once
+  // it is closed (the button that opens it again may be off screen), the toast stays.
+  useEffect(
+    () => (pending && open ? registerApprovalHandledInPlace(approvalId) : undefined),
+    [approvalId, pending, open],
+  );
 
   // Opens once per approval, and again after each ask to reopen it (which clears it from `offered`).
   useEffect(() => {
