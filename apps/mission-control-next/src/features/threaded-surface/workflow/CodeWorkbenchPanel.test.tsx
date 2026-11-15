@@ -779,7 +779,7 @@ describe("NextCodeWorkbenchPanel first step", () => {
   it("explains a failed worktree creation in a sentence (U-CH-043)", async () => {
     const error =
       'API error 400: {"error":"Command failed: git worktree add --detach C:\\runtime\\.worktrees\\s1 HEAD fatal: not a git repository (or any of the parent directories): .git"}';
-    const { renderer } = await render({ error });
+    const { renderer } = await render({ error, workbenchState: null });
     const banner = renderer.root.findByProps({ className: "mc-next-panel-banner warning" });
     expect(renderedText(banner)).toContain("This project's folder isn't a git repository");
     const details = banner.findByType("details");
@@ -789,6 +789,13 @@ describe("NextCodeWorkbenchPanel first step", () => {
       .map((child) => renderedText(child as ReactTestInstance))
       .join("");
     expect(outside).not.toContain("API error 400");
+  });
+
+  it("gives the same text from a ready worktree the generic sentence", async () => {
+    const error = 'API error 400: {"error":"fatal: not a git repository"}';
+    const { renderer } = await render({ error, workbenchState: { worktreeStatus: "ready" } });
+    const banner = renderer.root.findByProps({ className: "mc-next-panel-banner warning" });
+    expect(renderedText(banner)).not.toContain("Create worktree");
   });
 
   it("says how many files Revert all discards and that it can't be undone (U-CH-012)", async () => {

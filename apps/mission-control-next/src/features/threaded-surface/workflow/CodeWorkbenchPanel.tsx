@@ -1,6 +1,4 @@
 import { CodeWorkbenchToolbar } from "./CodeWorkbenchToolbar";
-import { describeWorkbenchError } from "./workbench-error-copy";
-import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { CodeWorkbenchRunLog } from "./CodeWorkbenchRunLog";
 import { CodeWorkbenchEditorPanes } from "./CodeWorkbenchEditorPanes";
 import { useCodeWorkbenchReviewPacket } from "./useCodeWorkbenchReviewPacket";
@@ -39,10 +37,12 @@ import {
 } from "react";
 
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 
 import { useOptionalStableHandler, useStableHandler } from "../useStableHandler";
 import { WorkbenchFileActionForm } from "./WorkbenchFileActionForm";
 import { WorkbenchFilePicker } from "./WorkbenchFilePicker";
+import { describeWorkbenchError } from "./workbench-error-copy";
 import { DEFAULT_VALIDATION_COMMAND } from "./WorkbenchValidationControls";
 import { WorkbenchFileTree } from "@goatcitadel/mission-control-shared/components/WorkbenchFileTree";
 import { WorkbenchMonacoEditor } from "@goatcitadel/mission-control-shared/components/WorkbenchMonacoEditor";
@@ -111,7 +111,9 @@ function ReadyCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
     [selectedTurn?.assistantMessage?.content],
   );
   const readyForRepoOps = workbenchState?.worktreeStatus === "ready";
-  const workbenchError = error ? describeWorkbenchError(error) : null;
+  const workbenchError = error
+    ? describeWorkbenchError(error, { worktreeCreation: !needsProjectBinding && !readyForRepoOps })
+    : null;
   const compactWorkbench = useMediaQuery("(max-width: 639px)");
   const [fileBrowserOpen, setFileBrowserOpen] = useState(false);
   const changedFiles = workbenchTree?.changedFiles ?? diff?.changedFiles ?? EMPTY_CHANGED_FILES;
