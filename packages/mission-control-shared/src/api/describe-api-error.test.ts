@@ -4,6 +4,8 @@ import {
   describeApiError,
   describeApiErrorText,
   GATEWAY_UNREACHABLE_SUMMARY,
+  describeSecretSaveError,
+  SECRET_STORE_SAVE_UNAVAILABLE_SUMMARY,
   SECRET_STORE_UNAVAILABLE_SUMMARY,
 } from "./describe-api-error";
 
@@ -113,7 +115,7 @@ describe("describeApiError", () => {
 });
 
 describe("describeApiError secret store", () => {
-  it("says plainly that this computer has no secure storage for keys, at any status", () => {
+  it("says it neutrally for any operation, with the Gateway's own plain reason", () => {
     for (const status of [422, 503]) {
       const described = describeApiError(
         httpError(status, {
@@ -121,9 +123,32 @@ describe("describeApiError secret store", () => {
           code: "SECRET_STORE_UNAVAILABLE",
         }),
       );
-      expect(described.summary).toBe(SECRET_STORE_UNAVAILABLE_SUMMARY);
+      expect(described.summary).toBe(
+        `${SECRET_STORE_UNAVAILABLE_SUMMARY} OS keychain backend is unavailable on this host.`,
+      );
+      expect(described.summary).not.toContain("environment variable");
       expect(described.retryable).toBe(false);
       expect(described.technical).toContain(String(status));
     }
+  });
+
+  it("drops a reason that is long or looks like a path or code", () => {
+    for (const error of [
+      "x".repeat(200),
+      "Failed at /home/user/key",
+      ["Failed at C:", "Users", "a"].join(String.fromCharCode(92)),
+      "TypeError: boom",
+    ]) {
+      expect(describeApiError(httpError(503, { error, code: "SECRET_STORE_UNAVAILABLE" })).summary).toBe(
+        SECRET_STORE_UNAVAILABLE_SUMMARY,
+      );
+    }
+  });
+
+  it("gives the save guidance only through the save helper", () => {
+    const refused = httpError(503, { error: "No keychain.", code: "SECRET_STORE_UNAVAILABLE" });
+    expect(describeSecretSaveError(refused)).toBe(SECRET_STORE_SAVE_UNAVAILABLE_SUMMARY);
+    expect(describeSecretSaveError(httpError(503, { error: "down" }))).toBeUndefined();
+    expect(describeSecretSaveError(new Error("x"))).toBeUndefined();
   });
 });

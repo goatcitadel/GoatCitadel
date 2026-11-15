@@ -11,8 +11,13 @@ export interface ApiErrorDescription {
 
 export const GATEWAY_UNREACHABLE_SUMMARY =
   "Can't reach the GoatCitadel gateway. Check that it's running, then try again.";
+/** True for any operation: the Gateway's own reason is added after it when it has a plain one. */
 export const SECRET_STORE_UNAVAILABLE_SUMMARY =
+  "This computer has no secure storage for keys, so GoatCitadel can't do this here.";
+/** Only where a key or token is being saved: setting it as an environment variable is the way around. */
+export const SECRET_STORE_SAVE_UNAVAILABLE_SUMMARY =
   "This computer has no secure storage for keys, so GoatCitadel can't save this one here. Set it as an environment variable on the computer running GoatCitadel instead.";
+const SECRET_STORE_REASON_MAX = 160;
 const DEFAULT_FALLBACK = "Something went wrong. Try again.";
 
 export function describeEvidenceReceiptError(error: unknown): string {
@@ -40,7 +45,7 @@ export function describeApiError(error: unknown, fallback = DEFAULT_FALLBACK): A
       return { summary: "The gateway sent a response Mission Control couldn't read. Try again.", technical };
     }
     if (readBodyCode(error.body) === "SECRET_STORE_UNAVAILABLE") {
-      return { summary: SECRET_STORE_UNAVAILABLE_SUMMARY, technical, retryable: false };
+      return { summary: secretStoreSummary(error.body), technical, retryable: false };
     }
     if (error.status === 401) {
       return { summary: summaryForStatus(401, undefined), technical, category: "authentication", retryable: false };
@@ -136,6 +141,25 @@ function readBodyMessage(body: unknown): string | undefined {
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return undefined;
+}
+
+/** The neutral sentence, then the Gateway's own plain reason when it gave a short one. */
+function secretStoreSummary(body: unknown): string {
+  const reason = readBodyMessage(body);
+  const plain = reason && reason.length <= SECRET_STORE_REASON_MAX && !looksTechnical(reason) && !/[\\/]/u.test(reason);
+  return plain
+    ? `${SECRET_STORE_UNAVAILABLE_SUMMARY} ${/[.!?]$/u.test(reason) ? reason : `${reason}.`}`
+    : SECRET_STORE_UNAVAILABLE_SUMMARY;
+}
+
+/**
+ * The sentence for a failed save of a key or token when the cause is missing secure storage, or undefined for any
+ * other failure. Only a save call site uses it: the environment variable advice is untrue for a read or a sign-in.
+ */
+export function describeSecretSaveError(error: unknown): string | undefined {
+  return isApiRequestError(error) && readBodyCode(error.body) === "SECRET_STORE_UNAVAILABLE"
+    ? SECRET_STORE_SAVE_UNAVAILABLE_SUMMARY
+    : undefined;
 }
 
 function readBodyCode(body: unknown): string | undefined {
