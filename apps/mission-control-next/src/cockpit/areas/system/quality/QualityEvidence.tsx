@@ -14,12 +14,15 @@ export function QualitySource({
   state,
   error,
   warnings = [],
+  emptyHint,
   children,
 }: {
   title: string;
   state: OpsQualityAvailabilityState;
   error?: string;
   warnings?: readonly string[];
+  /** Said after "none recorded yet" when nothing was ever recorded for this source (state `not_available`, no error). */
+  emptyHint?: string;
   children: ReactNode;
 }) {
   const available = state === "available" && !error;
@@ -32,8 +35,7 @@ export function QualitySource({
       <h2 className="text-base font-semibold text-fg">{title}</h2>
       {!available ? (
         <p role="status" className="text-sm text-fg-secondary">
-          {title}: {state === "unknown" ? "availability unknown" : "unavailable"}.
-          {error ? ` ${describeApiError(new Error(error)).summary}` : " No results are available for this source."}
+          {sourceStatusSentence(title, state, error, emptyHint)}
         </p>
       ) : (
         children
@@ -41,6 +43,19 @@ export function QualitySource({
       <QualityWarnings items={warnings.filter((item) => !globalWarnings.includes(item))} />
     </section>
   );
+}
+
+function sourceStatusSentence(
+  title: string,
+  state: OpsQualityAvailabilityState,
+  error: string | undefined,
+  emptyHint: string | undefined,
+): string {
+  if (state === "not_available" && !error) return `${title}: none recorded yet.${emptyHint ? ` ${emptyHint}` : ""}`;
+  const lead = `${title}: ${state === "unknown" ? "availability unknown" : "unavailable"}.`;
+  return error
+    ? `${lead} ${describeApiError(new Error(error)).summary}`
+    : `${lead} No results are available for this source.`;
 }
 
 /** Server-written warnings state scope and limits (a pack that can't load, no provider to compare), so they stay visible. */
