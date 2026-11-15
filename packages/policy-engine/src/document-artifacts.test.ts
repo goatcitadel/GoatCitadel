@@ -55,3 +55,27 @@ describe("createDocumentArtifact html markup", () => {
     );
   });
 });
+
+describe("createDocumentArtifact plain text", () => {
+  it("writes exactly the body when there are no sections", async () => {
+    const artifact = await createDocumentArtifact("txt", { title: "ut14-note.txt", body: "hello", sections: [] });
+    expect(artifact.data).toBe("hello\n");
+  });
+
+  it("keeps leading white space and ends with a single newline", async () => {
+    const artifact = await createDocumentArtifact("txt", { title: "note.txt", body: "  hello  \n\n", sections: [] });
+    expect(artifact.data).toBe("  hello\n");
+  });
+
+  it("falls back to the title when the body is empty", async () => {
+    const artifact = await createDocumentArtifact("txt", { title: "note.txt", body: "  ", sections: [] });
+    expect(artifact.data).toBe("note.txt\n");
+  });
+
+  it("keeps the title and sections layout when sections are given", async () => {
+    const artifact = await createDocumentArtifact("txt", input());
+    expect(String(artifact.data).startsWith("Launch plan\n\n")).toBe(true);
+    expect(artifact.data).toContain("Timeline");
+    expect(artifact.data).not.toContain("Summary");
+  });
+});

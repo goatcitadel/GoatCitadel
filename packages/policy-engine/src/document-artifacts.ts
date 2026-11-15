@@ -156,6 +156,15 @@ function buildMarkdown(input: DocumentArtifactInput): string {
 }
 
 function buildPlainText(input: DocumentArtifactInput): string {
+  if (input.sections.length === 0) {
+    // A plain-text file holds what was asked for: the body alone, or the title when there is no body.
+    const body = input.body?.trimEnd() ?? "";
+    return body.trim()
+      ? `${body}
+`
+      : `${input.title}
+`;
+  }
   return `${plainLines(input).join("\n").trimEnd()}\n`;
 }
 
