@@ -15,9 +15,13 @@ import {
 } from "react";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import { getGatewayAccessRevision, subscribeGatewayAccessChange } from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  getGatewayAccessRevision,
+  subscribeGatewayAccessChange,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { IconButton } from "../ui/IconButton";
+import { readInspectorWidth, writeInspectorWidth } from "./inspector-width-preference";
 import {
   createDeferredDialogRuntime,
   PendingDialog,
@@ -159,14 +163,21 @@ export function useInspector(): InspectorApi {
   return api;
 }
 
-export function InspectorPanel() {
+export function InspectorPanel({ area = "default" }: { area?: string }) {
   const { content, close } = useInspector();
   const isPhone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   // SH-02: 1024–1279px laptops get a non-modal panel over the page; only narrower widths and Expand are modal.
   const modal = useMediaQuery(RESPONSIVE_QUERIES.belowDesktop);
   const overlay = useMediaQuery(`(width < ${RESPONSIVE_BREAKPOINTS.wide}px)`);
   const panel = useRef<HTMLElement>(null);
-  const [width, setWidth] = useState(384);
+  const [stored, setStored] = useState(() => ({ area, width: readInspectorWidth(area) }));
+  // The width is remembered per area, so an area change reloads it (adjusting state during render, not in an effect).
+  if (stored.area !== area) setStored({ area, width: readInspectorWidth(area) });
+  const width = stored.area === area ? stored.width : readInspectorWidth(area);
+  const setWidth = (next: number) => {
+    setStored({ area, width: next });
+    writeInspectorWidth(area, next);
+  };
   const [expanded, setExpanded] = useState(false);
   const opened = useRef(false);
   const focusTarget = useRef<HTMLElement | null>(null);
@@ -224,7 +235,9 @@ export function InspectorPanel() {
         handoff={handoff}
       >
         <p data-inspector-body="true" role={failed ? "alert" : "status"} className="text-sm text-fg-muted">
-          {failed ? "Inspector controls could not load. Close the inspector to keep using the app." : "Loading inspector…"}
+          {failed
+            ? "Inspector controls could not load. Close the inspector to keep using the app."
+            : "Loading inspector…"}
         </p>
       </PendingDialog>
     );

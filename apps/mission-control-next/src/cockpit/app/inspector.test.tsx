@@ -27,6 +27,7 @@ function Probe() {
 }
 
 beforeEach(() => {
+  window.localStorage.removeItem("goatcitadel.cockpit.inspector.width.v1");
   // Existing docked-panel tests explicitly use a desktop viewport.
   vi.stubGlobal("matchMedia", (media: string) => ({
     media,
@@ -240,6 +241,29 @@ describe("inspector", () => {
     expect(container.querySelector("aside")).toBeNull();
   });
 
+  it("keeps the dragged width per area and reloads it when the area changes (U-GL-030)", async () => {
+    const tree = (area: string) => (
+      <InspectorProvider>
+        <Probe />
+        <InspectorPanel area={area} />
+      </InspectorProvider>
+    );
+    act(() => root.render(tree("work")));
+    act(() => api.open({ title: "Run", body: <p>Current run</p> }));
+    await vi.waitFor(() => expect(container.querySelector('[role="separator"]')).not.toBeNull());
+    const width = () => container.querySelector<HTMLDivElement>('[role="separator"]')!.getAttribute("aria-valuenow");
+    act(() =>
+      container
+        .querySelector('[role="separator"]')!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })),
+    );
+    expect(width()).toBe("392");
+    act(() => root.render(tree("chat")));
+    expect(width()).toBe("384");
+    act(() => root.render(tree("work")));
+    expect(width()).toBe("392");
+  });
+
   it("bounds keyboard resize and releases pointer capture when its current inspector closes", async () => {
     act(() =>
       root.render(
@@ -253,9 +277,9 @@ describe("inspector", () => {
     await vi.waitFor(() => expect(container.querySelector('[role="separator"]')).not.toBeNull());
     const separator = container.querySelector<HTMLDivElement>('[role="separator"]')!;
     act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
-    expect(separator.getAttribute("aria-valuenow")).toBe("480");
+    expect(separator.getAttribute("aria-valuenow")).toBe("560");
     act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
-    expect(separator.getAttribute("aria-valuenow")).toBe("480");
+    expect(separator.getAttribute("aria-valuenow")).toBe("560");
     act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
     expect(separator.getAttribute("aria-valuenow")).toBe("360");
     const capture = vi.fn(),
@@ -430,9 +454,7 @@ it("overlays a non-modal inspector on 1024–1279px laptops and returns focus on
   expect(document.activeElement).toBe(trigger);
   // Expand still offers the modal reading view.
   await act(async () => trigger.click());
-  await vi.waitFor(() =>
-    expect(container.querySelector('[aria-label="Expand inspector"]')).not.toBeNull(),
-  );
+  await vi.waitFor(() => expect(container.querySelector('[aria-label="Expand inspector"]')).not.toBeNull());
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Expand inspector"]')!.click());
   await vi.waitFor(() => {
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Canonical evidence");
@@ -449,13 +471,13 @@ it("expands a docked inspector without discarding selection", async () => {
     ),
   );
   await act(async () => api.open({ title: "Run", body: <p>Canonical evidence</p> }));
-  await vi.waitFor(() =>
-    expect(container.querySelector('[aria-label="Expand inspector"]')).not.toBeNull(),
-  );
+  await vi.waitFor(() => expect(container.querySelector('[aria-label="Expand inspector"]')).not.toBeNull());
   const expand = container.querySelector<HTMLButtonElement>('[aria-label="Expand inspector"]');
   expect(expand).not.toBeNull();
   await act(async () => expand!.click());
-  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Canonical evidence"));
+  await vi.waitFor(() =>
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Canonical evidence"),
+  );
   await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Restore docked inspector"]')!.click());
   expect(container.textContent).toContain("Canonical evidence");
 });

@@ -270,7 +270,7 @@ function CockpitShellContent({
               ) : null}
             </main>
           </EmbeddedPageHeaderProvider>
-          <InspectorPanel />
+          <InspectorPanel area={area} />
         </div>
         {!firstRun && !wide ? <MobileNavigationSlot onOpenPalette={openPaletteFrom} streamState={streamState} /> : null}
       </div>

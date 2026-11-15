@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useRef, type PointerEvent } from "react";
-export const INSPECTOR_MIN_WIDTH = 360;
-export const INSPECTOR_MAX_WIDTH = 480;
-export function clampInspectorWidth(value: number) {
-  return Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, value));
-}
+import { clampInspectorWidth, INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH } from "./inspector-width-preference";
 
 export function InspectorResizeHandle({ width, onChange }: { width: number; onChange: (width: number) => void }) {
   const drag = useRef<{ id: number; x: number; width: number; element: HTMLDivElement } | null>(null);
@@ -63,7 +59,7 @@ export function InspectorResizeHandle({ width, onChange }: { width: number; onCh
     >
       <span
         aria-hidden="true"
-        className="h-10 w-1 rounded-full bg-line-strong opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+        className="h-10 w-1 rounded-full bg-line-strong opacity-40 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
       />
     </div>
   );
