@@ -5,9 +5,7 @@ import {
   type PermissionProfileEditorDraft,
 } from "../../../features/native-routes/settings/helpers/permission-helpers";
 import { PERMISSION_CONTEXT_PRESENTATION } from "../../../features/native-routes/settings/sections/PermissionProfileDraftFields";
-
 import { Field } from "../../ui/Field";
-
 const inputClass = "mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-sm text-fg";
 const fieldClass = inputClass.replace("mt-1 ", "");
 export function PermissionProfileFields({
