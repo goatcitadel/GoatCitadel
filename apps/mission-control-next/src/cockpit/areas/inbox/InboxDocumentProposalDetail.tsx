@@ -209,7 +209,7 @@ export function InboxDocumentProposalDetail({ item, workspaceId }: { item: Opera
               {proposal.baseRevision ? ` · Base revision ${proposal.baseRevision}` : " · Base content hash recorded"}
             </p>
           </TechnicalDetails>
-          <div className="space-y-2 rounded-md border border-line bg-sunken p-3">
+          <div className="space-y-2 rounded-md bg-sunken p-3">
             <h4 className="font-medium text-fg">Replacement diff</h4>
             <DocumentProposalDiff diff={reviewable ? proposal.derivedDiff : proposal.derivedDiff.slice(0, 4_000)} />
           </div>
