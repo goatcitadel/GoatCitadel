@@ -276,3 +276,32 @@ it("marks the decision bar as an install-wide Settings approval only when the ow
   await render(vi.fn(), { installationSetting: true });
   expect(decisionBar).toHaveBeenLastCalledWith(expect.objectContaining({ installationSetting: true }));
 });
+
+it("hands focus back to the setting after the approval is decided (U-GL-047)", async () => {
+  const section = (saveDisabled: boolean, withDialog: boolean) => (
+    <QueryClientProvider client={client}>
+      <section>
+        <input type="checkbox" aria-label="Show model reasoning in Chat" />
+        <button type="button" disabled={saveDisabled}>
+          Save setting
+        </button>
+        {withDialog ? <SettingsApprovalDialog approvalId="approval-1" onResolved={vi.fn()} /> : null}
+      </section>
+    </QueryClientProvider>
+  );
+  await act(async () => root.render(section(false, false)));
+  button("Save setting")!.focus();
+  await act(async () => root.render(section(false, true)));
+  for (let tick = 0; tick < 5; tick += 1)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  expect(dialog()).not.toBeNull();
+  await act(async () => root.render(section(true, true)));
+  await act(async () => button("Approve once")!.click());
+  for (let tick = 0; tick < 3; tick += 1)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    });
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Show model reasoning in Chat");
+});
