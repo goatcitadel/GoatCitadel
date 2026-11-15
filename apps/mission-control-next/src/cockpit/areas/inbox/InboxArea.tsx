@@ -94,14 +94,19 @@ export function InboxArea() {
     [visibleItems, groupOf, filters],
   );
   // Empty groups are hidden; a group shows once it has a shown or read item or a known count (IN-10).
-  const expiredCount = projection?.items.filter((item) => groupOf(item) === "expired").length ?? 0;
+  // The Gateway already left out decisions that had expired when it read them; only later expiries are subtracted here.
+  const generatedAt = projection ? Date.parse(projection.generatedAt) : Number.NaN;
+  const expiredSinceReadCount =
+    projection?.items.filter(
+      (item) => groupOf(item) === "expired" && item.expiresAt && Date.parse(item.expiresAt) > generatedAt,
+    ).length ?? 0;
   const shownGroups = projection
     ? INBOX_VIEW_GROUPS.map((group) => {
         const allItems = projection.items.filter((item) => groupOf(item) === group.id);
         if (group.id === "expired") return { group, allItems, known: allItems.length, complete: true };
         const count = projection.counts[group.id];
         // Expired decisions are listed under Expired, so Needs decision counts only those still open (IN-05).
-        const known = group.id === "needs_decision" ? Math.max(0, count.known - expiredCount) : count.known;
+        const known = group.id === "needs_decision" ? Math.max(0, count.known - expiredSinceReadCount) : count.known;
         return { group, allItems, known, complete: count.complete };
       }).filter(({ allItems, known }) => allItems.length > 0 || known > 0)
     : [];
