@@ -93,7 +93,7 @@ const JSX_ONLY = new Set(["jsx-raw-id", "raw-iso-time", "raw-error-text"]);
 export const ROOT_BUDGETS = {
   cockpit: {},
   "native-settings": {
-    "humanize-token": 4,
+    "humanize-token": 3,
     "manual-humanize": 31,
     "local-date-format": 10,
     "optional-plural": 3,
