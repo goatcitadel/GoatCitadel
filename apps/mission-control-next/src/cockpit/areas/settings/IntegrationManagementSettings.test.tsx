@@ -94,7 +94,8 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 describe("native integration management", () => {
-  it("opens the add form on the catalog entry a Set up link asked for", async () => {
+  it("opens the add form on the catalog entry a Set up link asked for, then reports it handled once", async () => {
+    const handled = vi.fn();
     api.fetchIntegrationCatalog.mockResolvedValue({
       items: [
         { catalogId: saved.catalogId, kind: saved.kind, key: saved.key, label: "Fixture", operatorActions: [] },
@@ -103,10 +104,15 @@ describe("native integration management", () => {
     });
     await act(async () => {
       view = create(
-        <IntegrationManagementSettings workspaceId="default" createRequest={{ catalogId: "automation.gmail" }} />,
+        <IntegrationManagementSettings
+          workspaceId="default"
+          createRequest={{ catalogId: "automation.gmail" }}
+          onCreateRequestHandled={handled}
+        />,
       );
     });
     expect(view.root.findByProps({ "aria-label": "Integration catalog" }).props.value).toBe("automation.gmail");
+    expect(handled).toHaveBeenCalledTimes(1);
   });
 
   it("reviews a disabled new connection without writes and confirms exact owner readback", async () => {

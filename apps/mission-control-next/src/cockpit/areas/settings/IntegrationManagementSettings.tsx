@@ -26,12 +26,15 @@ export function IntegrationManagementSettings({
   workspaceId,
   selection = null,
   createRequest = null,
+  onCreateRequestHandled,
 }: {
   workspaceId: string;
   /** Set by the saved-integrations list; this owner keeps no second list or search box of its own. */
   selection?: IntegrationManagementSelection | null;
   /** A catalog entry to open the add form on, once (from an integration's Set up link). */
   createRequest?: { catalogId: string } | null;
+  /** Called once the request was acted on, or found to name nothing that can be added. */
+  onCreateRequestHandled?: () => void;
 }) {
   const s = useIntegrationSettings(workspaceId);
   const available = Boolean(
@@ -49,10 +52,11 @@ export function IntegrationManagementSettings({
   const requestedCatalogId = createRequest?.catalogId;
   const createable = s.createableCatalog.some((item) => item.catalogId === requestedCatalogId);
   useEffect(() => {
-    if (!requestedCatalogId || !available || !createable || handledCreate.current === requestedCatalogId) return;
+    if (!requestedCatalogId || !available || handledCreate.current === requestedCatalogId) return;
     handledCreate.current = requestedCatalogId;
-    createGuard.requestTransition(requestedCatalogId);
-  }, [available, createable, createGuard, requestedCatalogId]);
+    if (createable) createGuard.requestTransition(requestedCatalogId);
+    onCreateRequestHandled?.();
+  }, [available, createable, createGuard, onCreateRequestHandled, requestedCatalogId]);
   return (
     <section aria-label="Integration management" className="space-y-4 border-t border-line-subtle pt-4">
       <header>

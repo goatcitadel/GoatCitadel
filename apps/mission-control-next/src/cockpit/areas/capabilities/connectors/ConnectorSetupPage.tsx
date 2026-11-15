@@ -22,16 +22,24 @@ function SectionControls({
   section,
   workspaceId,
   addCatalogId,
+  onAddHandled,
 }: {
   section: string;
   workspaceId: string;
   addCatalogId?: string;
+  onAddHandled: () => void;
 }) {
   switch (section) {
     case "mcp":
       return <McpServersSettings workspaceId={workspaceId} />;
     case "integrations":
-      return <IntegrationConnectionsSettings workspaceId={workspaceId} addCatalogId={addCatalogId} />;
+      return (
+        <IntegrationConnectionsSettings
+          workspaceId={workspaceId}
+          addCatalogId={addCatalogId}
+          onAddHandled={onAddHandled}
+        />
+      );
     case "web-search":
       return <WebSearchSettings />;
     default:
@@ -51,6 +59,13 @@ export function ConnectorSetupPage() {
   const selected = selectedSettingsSection(PAGE, undefined, hash);
   const addCatalogId = new URLSearchParams(search).get(ADD_INTEGRATION_PARAM) || undefined;
   const headingId = useId();
+  // The add request is spent once the form opened: leave it in the address and a tab switch would open the form again.
+  const clearAddRequest = () => {
+    const next = new URLSearchParams(search);
+    next.delete(ADD_INTEGRATION_PARAM);
+    const query = next.toString();
+    navigate(`${CONNECTOR_SETUP_PATH}${query ? `?${query}` : ""}${hash ? `#${hash}` : ""}`, { replace: true });
+  };
   const openSection = (entry: SettingsIndexEntry) => navigate(`${CONNECTOR_SETUP_PATH}${search}#${entry.anchor}`);
   return (
     <section aria-labelledby={headingId} className="min-w-0 space-y-3">
@@ -75,6 +90,7 @@ export function ConnectorSetupPage() {
               section={entry.section}
               workspaceId={activeWorkspaceId ?? ""}
               addCatalogId={addCatalogId}
+              onAddHandled={clearAddRequest}
             />
           )}
         </SettingsSectionTabs>

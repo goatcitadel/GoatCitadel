@@ -26,10 +26,13 @@ const PAGE_SIZE = 20;
 export function IntegrationConnectionsSettings({
   workspaceId,
   addCatalogId,
+  onAddHandled,
 }: {
   workspaceId: string;
   /** A catalog entry a Set up link asked to add: opens management on its add form, once. */
   addCatalogId?: string;
+  /** Called once the add form has opened (or could not), so the request leaves the address. */
+  onAddHandled?: () => void;
 }) {
   const connections = useQuery({
     queryKey: ["settings", "integration-connections"],
@@ -56,10 +59,13 @@ export function IntegrationConnectionsSettings({
   };
   const leave = useDraftLeave();
   const ready = !connections.isError && Array.isArray(connections.data?.items);
+  // The request is kept here until management has acted on it, so removing it from the address does not lose it.
+  const [addRequest, setAddRequest] = useState<string | null>(null);
   const handledAdd = useRef<string | null>(null);
   useEffect(() => {
     if (!addCatalogId || !ready || handledAdd.current === addCatalogId) return;
     handledAdd.current = addCatalogId;
+    setAddRequest(addCatalogId);
     setManagementOpen(true);
   }, [addCatalogId, ready]);
   const control = useIntegrationEnabled({
@@ -99,7 +105,11 @@ export function IntegrationConnectionsSettings({
         <IntegrationManagementSettings
           workspaceId={workspaceId}
           selection={selection}
-          createRequest={addCatalogId ? { catalogId: addCatalogId } : null}
+          createRequest={addRequest ? { catalogId: addRequest } : null}
+          onCreateRequestHandled={() => {
+            setAddRequest(null);
+            onAddHandled?.();
+          }}
         />
       ) : null}
       <McpDraftLeave {...leave.dialogProps} />
