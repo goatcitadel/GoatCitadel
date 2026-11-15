@@ -1,6 +1,12 @@
 import type { CapabilityPluginDetail, CapabilityPluginDetailPiece } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
-import { uninstallApproval, uninstallConfirmLines } from "./plugin-uninstall-view";
+import {
+  UNINSTALL_REINSTALLABLE,
+  UNINSTALL_SKILL_STAYS,
+  uninstallApproval,
+  uninstallConfirmDescription,
+  uninstallConfirmLines,
+} from "./plugin-uninstall-view";
 
 const NOTES: CapabilityPluginDetailPiece = {
   pieceId: "notes",
@@ -32,6 +38,20 @@ function uninstalling(piece: CapabilityPluginDetailPiece): CapabilityPluginDetai
     pieces: [piece],
   };
 }
+
+describe("uninstallConfirmDescription", () => {
+  it("says up front that a plugin which added a skill can't come back", () => {
+    expect(uninstallConfirmDescription([{ ...NOTES, state: "added" }])).toBe(UNINSTALL_SKILL_STAYS);
+  });
+  it("keeps the reinstall promise when no skill of its own is left", () => {
+    const pack = { ...NOTES, pieceId: "pack", kind: "prompt_pack", state: "added" } as const;
+    expect(uninstallConfirmDescription([pack])).toBe(UNINSTALL_REINSTALLABLE);
+    expect(uninstallConfirmDescription([{ ...NOTES, check: { status: "already_there" }, state: "kept" }])).toBe(
+      UNINSTALL_REINSTALLABLE,
+    );
+    expect(uninstallConfirmDescription([{ ...NOTES, state: "failed" }])).toBe(UNINSTALL_REINSTALLABLE);
+  });
+});
 
 describe("uninstallConfirmLines", () => {
   const PLAYWRIGHT: CapabilityPluginDetailPiece = {
