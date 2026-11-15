@@ -16,7 +16,7 @@ const SOURCE_LABELS: Readonly<Record<KnowledgeDocumentSummary["sourceType"], str
   url: "Web page",
   text: "Pasted text",
   memory: "Memory",
-  external_source_snapshot: "External source snapshot",
+  external_source_snapshot: "External source copy",
 };
 
 /** Metadata only: titles, namespaces and dates of the stored sources. Removal needs a governed delete and is not offered here. */
@@ -34,12 +34,12 @@ export function LibraryKnowledgeSources({ workspaceId }: { workspaceId: string }
       description="What the AI can retrieve. Sources are shared by every workspace on this installation."
     >
       {documents.error ? (
-        <Callout tone="error">
+        <Callout announce={false} tone="error">
           Could not load knowledge sources. {describeApiError(documents.error).summary}{" "}
           <Button onClick={() => void documents.refetch()}>Try again</Button>
         </Callout>
       ) : null}
-      {documents.isPending ? <p role="status">Reading knowledge sources…</p> : null}
+      {documents.isPending ? <p>Reading knowledge sources…</p> : null}
       {items && !items.length ? (
         <EmptyState
           title="No knowledge sources yet"

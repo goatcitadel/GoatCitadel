@@ -173,7 +173,11 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
               />
             )}
           </Field>
-          {chooserError ? <Callout tone="error">{chooserError}</Callout> : null}
+          {chooserError ? (
+            <Callout announce={false} tone="error">
+              {chooserError}
+            </Callout>
+          ) : null}
           <p className="text-sm text-fg-secondary">Or type the path and paste the text below.</p>
           <Field label="Relative file path">
             {(props) => (
