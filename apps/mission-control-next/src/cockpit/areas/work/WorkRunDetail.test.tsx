@@ -306,3 +306,35 @@ it("says a run with no recorded workspace can't be shown or recovered, and that 
     "GoatCitadel has no workspace recorded for this run, so Work can't show or recover it. Its record is kept.",
   );
 });
+
+it("says the workspace list couldn't be read for a run in another workspace, and offers no switch", async () => {
+  const { fetchWorkspaces } = await import("@goatcitadel/mission-control-shared/api/workspaces");
+  vi.mocked(fetchWorkspaces).mockRejectedValueOnce(new Error("Gateway unreachable"));
+  document.body.appendChild(container);
+  root = createRoot(container);
+  api.fetch.mockResolvedValue({
+    run: {
+      runId: "run-a",
+      workflowKey: "chat.turn.execute",
+      status: "failed",
+      payload: { workspaceId: "workspace-other" },
+      metadata: {},
+    },
+    durable: { checkpoints: { state: "available", items: [] }, timeline: { state: "available", items: [] } },
+    toolCalls: { state: "available", items: [] },
+    providerUsage: { state: "unknown", items: [] },
+    approvals: { state: "available", items: [] },
+    errors: { state: "available", items: [] },
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <WorkRunDetail runId="run-a" />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain("Couldn't read your workspace list, so this can't be checked right now."),
+  );
+  expect(container.textContent).not.toContain("isn't in your list");
+});

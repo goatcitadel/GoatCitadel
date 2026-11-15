@@ -10,17 +10,33 @@ const route = vi.hoisted(() => ({
   hash: "",
   navigate: vi.fn(),
 }));
-const workspaces = vi.hoisted(() => ({ items: [] as Array<{ workspaceId: string; name?: string }> }));
-const citadels = vi.hoisted(() => ({ items: [] as Array<{ citadelId: string; name?: string }> }));
+const workspaces = vi.hoisted(() => ({
+  items: [] as Array<{ workspaceId: string; name?: string }>,
+  mode: "ok" as "ok" | "fail" | "pending",
+  calls: [] as unknown[][],
+}));
+const citadels = vi.hoisted(() => ({
+  items: [] as Array<{ citadelId: string; name?: string }>,
+  mode: "ok" as "ok" | "fail" | "pending",
+}));
 vi.mock("./use-cockpit-route", () => ({ useCockpitRoute: () => route }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeCitadelId: "citadel-active", activeWorkspaceId: "ws-active" }),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
-  fetchWorkspaces: vi.fn(async () => ({ items: workspaces.items })),
+  fetchWorkspaces: vi.fn(async (...args: unknown[]) => {
+    workspaces.calls.push(args);
+    if (workspaces.mode === "fail") throw new Error("Gateway unreachable");
+    if (workspaces.mode === "pending") return new Promise(() => undefined);
+    return { items: workspaces.items };
+  }),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/citadels", () => ({
-  listCitadels: vi.fn(async () => ({ items: citadels.items })),
+  listCitadels: vi.fn(async () => {
+    if (citadels.mode === "fail") throw new Error("Gateway unreachable");
+    if (citadels.mode === "pending") return new Promise(() => undefined);
+    return { items: citadels.items };
+  }),
 }));
 vi.mock("./ScopeSwitcher", () => ({
   ScopeSwitcher: ({ open, destination }: { open?: boolean; destination?: string }) =>
@@ -39,7 +55,10 @@ beforeEach(() => {
   route.hash = "";
   route.navigate.mockReset();
   workspaces.items = [];
+  workspaces.mode = "ok";
+  workspaces.calls = [];
   citadels.items = [];
+  citadels.mode = "ok";
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -120,4 +139,55 @@ it("shows nothing when the link asks for the open scope", async () => {
   route.search = "?workspaceId=ws-active";
   await render();
   expect(container.textContent).toBe("");
+});
+
+it("says the check failed, not that the workspace is missing, when the directory can't be read", async () => {
+  route.search = "?workspaceId=ws-default";
+  workspaces.mode = "fail";
+  await render();
+  expect(container.textContent).toContain("Couldn't check the workspace this link is for.");
+  expect(container.textContent).not.toContain("isn't in your list");
+  expect(buttonLabels()).toEqual(["Review linked scope", "Stay here"]);
+});
+
+it("says the check failed for a Citadel when the Citadel list can't be read", async () => {
+  route.search = "?citadelId=citadel-b";
+  citadels.mode = "fail";
+  await render();
+  expect(container.textContent).toContain("Couldn't check the Citadel this link is for.");
+  expect(buttonLabels()).toEqual(["Review linked scope", "Stay here"]);
+});
+
+it("says a Citadel that isn't in the list isn't", async () => {
+  route.search = "?citadelId=citadel-gone";
+  citadels.items = [{ citadelId: "citadel-b", name: "Studio" }];
+  await render();
+  expect(container.textContent).toContain("This link is for a Citadel that isn't in your list.");
+  expect(buttonLabels()).toEqual(["Review linked scope", "Stay here"]);
+});
+
+it("says it is checking while the directory is still being read, with no switch yet", async () => {
+  route.search = "?workspaceId=ws-default";
+  workspaces.mode = "pending";
+  await render();
+  expect(container.textContent).toContain("Checking the workspace this link is for…");
+  expect(buttonLabels()).toEqual(["Stay here"]);
+});
+
+it("names a workspace of another Citadel from that Citadel's list", async () => {
+  route.search = "?workspaceId=ws-b&citadelId=citadel-b";
+  workspaces.items = [{ workspaceId: "ws-b", name: "Studio floor" }];
+  await render();
+  expect(workspaces.calls.some((call) => call[2] === "citadel-b")).toBe(true);
+  expect(container.textContent).toContain("This link is for the Studio floor workspace, not the one you have open.");
+  await click("Switch to Studio floor");
+  expect(container.textContent).toContain("switcher for /inbox?workspaceId=ws-b&citadelId=citadel-b");
+});
+
+it("doesn't say workspace twice when the name already ends with it", async () => {
+  route.search = "?workspaceId=ws-default";
+  workspaces.items = [{ workspaceId: "ws-default", name: "Default Workspace" }];
+  await render();
+  expect(container.textContent).toContain("This link is for the Default Workspace, not the one you have open.");
+  expect(container.textContent).not.toContain("Workspace workspace");
 });

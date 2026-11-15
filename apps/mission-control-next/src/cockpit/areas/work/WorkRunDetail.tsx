@@ -21,7 +21,7 @@ import { MetricList } from "../../ui/MetricList";
 import { EmptyState } from "../../ui/EmptyState";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
-import { WorkspaceSwitchOffer } from "../../app/WorkspaceSwitchOffer";
+import { nameWithKind, WorkspaceSwitchOffer } from "../../app/WorkspaceSwitchOffer";
 import { workRunTitle } from "./work-board";
 import { RunEvidenceSections } from "./RunEvidenceSections";
 import { RunSignedReceipt } from "./RunSignedReceipt";
@@ -127,7 +127,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
             recordedWorkspaceId ? (
               <WorkspaceSwitchOffer
                 workspaceId={recordedWorkspaceId}
-                sentence={(name) => `This run is in the ${name} workspace.`}
+                sentence={(name) => `This run is in the ${nameWithKind(name, "workspace")}.`}
               />
             ) : undefined
           }

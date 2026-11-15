@@ -6,7 +6,7 @@ import { queryKeys } from "../data/query-keys";
 import { Button } from "../ui/Button";
 import { ScopeSwitcher } from "./ScopeSwitcher";
 import { useCockpitRoute } from "./use-cockpit-route";
-import { useWorkspaceDirectoryName } from "./WorkspaceSwitchOffer";
+import { nameWithKind, useWorkspaceDirectoryName } from "./WorkspaceSwitchOffer";
 
 /** The address without the scope it asked for, so the page stays in the scope that is open. */
 function withoutRequestedScope(pathname: string, search: string, hash: string) {
@@ -25,7 +25,7 @@ function useCitadelDirectoryName(citadelId: string, enabled: boolean) {
   });
   const items = (citadels.data as { items?: Array<{ citadelId: string; name?: string }> } | undefined)?.items;
   const name = Array.isArray(items) ? items.find((item) => item.citadelId === citadelId)?.name?.trim() : undefined;
-  return { name: name || undefined, loading: enabled && citadels.isPending };
+  return { name: name || undefined, loading: enabled && citadels.isPending, failed: enabled && citadels.isError };
 }
 
 /** Bookmarks request a view. Only the existing reviewed directory owner can select its scope. */
@@ -65,12 +65,15 @@ function LinkedScopeBanner({
   const workspace = useWorkspaceDirectoryName(workspaceId ?? "", citadelId ?? undefined);
   const citadel = useCitadelDirectoryName(citadelId ?? "", !workspaceId);
   const kind = workspaceId ? "workspace" : "Citadel";
-  const { name, loading } = workspaceId ? workspace : citadel;
+  const { name, loading, failed } = workspaceId ? workspace : citadel;
   const sentence = loading
     ? `Checking the ${kind} this link is for…`
-    : name
-      ? `This link is for the ${name} ${kind}, not the one you have open.`
-      : `This link is for ${kind === "workspace" ? "a workspace" : "a Citadel"} that isn't in your list.`;
+    : failed
+      ? `Couldn't check the ${kind} this link is for.`
+      : name
+        ? `This link is for the ${nameWithKind(name, kind)}, not the one you have open.`
+        : `This link is for ${kind === "workspace" ? "a workspace" : "a Citadel"} that isn't in your list.`;
+  const switchable = Boolean(name) && !failed;
   return (
     <section
       aria-label="Linked scope review"
@@ -79,7 +82,7 @@ function LinkedScopeBanner({
       <p className="min-w-0 flex-1 text-sm text-fg-secondary">{sentence}</p>
       {loading ? null : (
         <Button ref={trigger} onClick={() => setOpen(true)}>
-          {name ? `Switch to ${name}` : "Review linked scope"}
+          {switchable ? `Switch to ${name}` : "Review linked scope"}
         </Button>
       )}
       <Button onClick={() => navigate(withoutRequestedScope(pathname, search, hash), { replace: true })}>

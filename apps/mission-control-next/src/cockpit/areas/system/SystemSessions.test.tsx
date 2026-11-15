@@ -227,3 +227,43 @@ it("names another workspace's session, offers to switch to it, and mounts no con
     "switcher for /system/sessions?workspaceId=verification&extra=keep&sessionId=session-a#control",
   );
 });
+
+it("says the workspace list couldn't be read, not that the workspace is missing, and offers no switch", async () => {
+  const { fetchWorkspaces } = await import("@goatcitadel/mission-control-shared/api/workspaces");
+  vi.mocked(fetchWorkspaces).mockRejectedValueOnce(new Error("Gateway unreachable"));
+  const data = fixture.value.data as { sessions: Array<Record<string, unknown>> };
+  data.sessions = data.sessions.map((entry) => ({ ...entry, workspaceId: "verification" }));
+  fixture.search += "&sessionId=session-a";
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <SystemSessions />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() =>
+    expect(host.textContent).toContain("Couldn't read your workspace list, so this can't be checked right now."),
+  );
+  expect(host.textContent).not.toContain("isn't in your list");
+  expect([...host.querySelectorAll("button")].some((entry) => entry.textContent?.startsWith("Switch to"))).toBe(false);
+});
+
+it("doesn't say workspace twice when the name already ends with it", async () => {
+  const { fetchWorkspaces } = await import("@goatcitadel/mission-control-shared/api/workspaces");
+  vi.mocked(fetchWorkspaces).mockResolvedValueOnce({
+    items: [{ workspaceId: "verification", name: "Default Workspace" }],
+  } as never);
+  const data = fixture.value.data as { sessions: Array<Record<string, unknown>> };
+  data.sessions = data.sessions.map((entry) => ({ ...entry, workspaceId: "verification" }));
+  fixture.search += "&sessionId=session-a";
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <SystemSessions />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() =>
+    expect(host.textContent).toContain("This conversation is in the Default Workspace. Its controls work there."),
+  );
+});

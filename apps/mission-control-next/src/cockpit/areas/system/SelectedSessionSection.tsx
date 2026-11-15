@@ -1,6 +1,6 @@
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { OpsRuntimeData } from "../../../features/native-routes/ops/runtime-overview-model";
-import { WorkspaceSwitchOffer } from "../../app/WorkspaceSwitchOffer";
+import { nameWithKind, WorkspaceSwitchOffer } from "../../app/WorkspaceSwitchOffer";
 import { Button } from "../../ui/Button";
 import { MetricList } from "../../ui/MetricList";
 import { Section } from "../../ui/Section";
@@ -79,7 +79,9 @@ export function SelectedSessionSection({
       {elsewhere ? (
         <WorkspaceSwitchOffer
           workspaceId={elsewhere}
-          sentence={(name) => `This conversation is in the ${name} workspace. Its controls work there.`}
+          sentence={(name) =>
+            `This conversation is in the ${nameWithKind(name, "workspace")}. Its controls work there.`
+          }
         />
       ) : (
         <SessionControlManager key={sessionId} sessionId={sessionId} workspaceId={workspaceId} />

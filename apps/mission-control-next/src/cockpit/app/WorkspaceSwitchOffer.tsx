@@ -23,7 +23,12 @@ export function useWorkspaceDirectoryName(workspaceId: string, citadelId?: strin
   });
   const items = (workspaces.data as { items?: WorkspaceItem[] } | undefined)?.items;
   const name = Array.isArray(items) ? items.find((item) => item.workspaceId === workspaceId)?.name?.trim() : undefined;
-  return { name: name || undefined, loading: workspaces.isPending };
+  return { name: name || undefined, loading: workspaces.isPending, failed: workspaces.isError };
+}
+
+/** "Default Workspace" already says what it is: the word is added only when the name doesn't end with it. */
+export function nameWithKind(name: string, kind: "workspace" | "Citadel"): string {
+  return name.toLowerCase().endsWith(kind.toLowerCase()) ? name : `${name} ${kind}`;
 }
 
 /** The address of this page with the given scope set, for the switcher to pre-select. */
@@ -48,10 +53,16 @@ export function WorkspaceSwitchOffer({
   sentence: (name: string) => string;
 }) {
   const { pathname, search, hash } = useCockpitRoute();
-  const { name, loading } = useWorkspaceDirectoryName(workspaceId, citadelId);
+  const { name, loading, failed } = useWorkspaceDirectoryName(workspaceId, citadelId);
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   if (loading) return <p className="text-sm text-fg-secondary">Checking the workspace…</p>;
+  if (failed)
+    return (
+      <p className="text-sm text-fg-secondary">
+        Couldn&apos;t read your workspace list, so this can&apos;t be checked right now.
+      </p>
+    );
   if (!name) return <p className="text-sm text-fg-secondary">This workspace isn&apos;t in your list.</p>;
   return (
     <div className="flex flex-wrap items-center gap-3">
