@@ -3,13 +3,18 @@ export type { ComposerProps } from "./ChatTextComposer.types";
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "../../ui/Button";
-import { ChatComposerPhoneActions, ChatComposerTools } from "./ChatComposerTools";
-import { composerControlsProps, useComposerSources } from "./ChatComposerTools";
+import {
+  ChatComposerPhoneActions,
+  ChatComposerTools,
+  composerControlsProps,
+  useComposerSources,
+} from "./ChatComposerTools";
 import { ChatModelOptionsButton, type ModelOptionsRequest } from "./ChatComposerControls";
 import { ChatComposerModePills, ChatComposerPlusMenu } from "./ChatComposerPlusMenu";
 import { ComposerSuggestionsHint, composerDescribedBy } from "./ChatComposerSuggestionsHint";
 import { ChatComposerPalette } from "./ChatComposerPalette";
-import { channelReplyBlock, channelReplyPlaceholder, channelReplySubmitLabel } from "./channel-composer";
+import { channelReplyBlock, channelReplyPlaceholder } from "./channel-composer";
+import { composerSubmitLabel } from "./composer-submit-label";
 import { ChatRunVariables } from "./ChatRunVariables";
 import { committedCommandDraft, composerSendBlock, type ComposerSendBlock } from "./composer-send-block";
 import { isImeEnter } from "./ime";
@@ -140,21 +145,7 @@ export function ChatTextComposer({
   // A route check that settles quickly never flashes or re-announces its hint.
   const showRouteHint = useSettled(routeChecking, ROUTE_CHECK_HINT_DELAY_MS);
   const visibleReason = block && (!routeChecking || showRouteHint) ? block : null;
-  const submitLabel = props.hasActiveStream
-    ? props.midTurnDisposition === "steer"
-      ? "Steer response"
-      : "Queue message"
-    : localReady
-      ? command === "/schedule"
-        ? "Open schedules"
-        : command === "/timer"
-          ? "Open timer"
-          : "Show status"
-      : props.sending
-        ? "Sending…"
-        : props.editingTurnId
-          ? "Send edited message"
-          : channelReplySubmitLabel(props.channelReply);
+  const submitLabel = composerSubmitLabel(props, { ready: localReady, command });
   // On wider layouts a plain "why not" sits beside Send, where the eye already is; the long form keeps its own line.
   const reasonBesideSend = !phone && visibleReason !== null && visibleReason.kind !== "historical";
   const reasonNode = visibleReason ? (
