@@ -59,7 +59,7 @@ const REALISTIC_DIFF = ["--- a/src/foo.ts", "+++ b/src/foo.ts", "@@ -1,1 +1,1 @@
 
 describe("ChatToolArtifactInspector", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    apiMocks.fetchChatToolArtifact.mockReset();
     apiMocks.fetchChatToolArtifact.mockResolvedValue({
       artifact: { contentType: "application/json" },
       content: '{"ok":true}',
@@ -89,6 +89,60 @@ describe("ChatToolArtifactInspector", () => {
     expect(textOf(renderer.toJSON())).toContain('{"ok":true}');
   });
 
+  it.each([
+    { artifactId: "replacement", workspaceId: "workspace-a" },
+    { artifactId: "original", workspaceId: "workspace-b" },
+  ])("clears cached content when the mounted tool run changes scope to $workspaceId/$artifactId", async (scope) => {
+    apiMocks.fetchChatToolArtifact
+      .mockResolvedValueOnce({ artifact: { contentType: "text/plain" }, content: "Former artifact content" })
+      .mockResolvedValueOnce({ artifact: { contentType: "application/json" }, content: '{"current":true}' });
+    const run = createToolRun();
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatToolArtifactInspector artifactId="original" workspaceId="workspace-a" run={run} />);
+    });
+    await clickToggle(renderer);
+    expect(textOf(renderer.toJSON())).toContain("Former artifact content");
+
+    await act(async () => renderer.update(<ChatToolArtifactInspector {...scope} run={run} />));
+    expect(textOf(renderer.toJSON())).not.toContain("Former artifact content");
+    expect(textOf(renderer.toJSON())).not.toContain("Content type:");
+    expect(apiMocks.fetchChatToolArtifact).toHaveBeenCalledTimes(1);
+    await clickToggle(renderer);
+    expect(apiMocks.fetchChatToolArtifact).toHaveBeenLastCalledWith(scope.artifactId, scope.workspaceId);
+    expect(textOf(renderer.toJSON())).toContain('{"current":true}');
+    await act(async () => renderer.unmount());
+  });
+
+  it("ignores a late artifact response after the mounted tool run changes scope", async () => {
+    let resolvePrevious!: (value: { artifact: { contentType: string }; content: string }) => void;
+    apiMocks.fetchChatToolArtifact
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolvePrevious = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ artifact: { contentType: "text/plain" }, content: "Current artifact content" });
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<ChatToolArtifactInspector artifactId="original" workspaceId="workspace-a" />);
+    });
+    await clickToggle(renderer);
+    expect(textOf(renderer.toJSON())).toContain("Loading artifact");
+
+    await act(async () => {
+      renderer.update(<ChatToolArtifactInspector artifactId="replacement" workspaceId="workspace-b" />);
+    });
+    await clickToggle(renderer);
+    await act(async () => {
+      resolvePrevious({ artifact: { contentType: "text/plain" }, content: "Former artifact content" });
+    });
+    expect(apiMocks.fetchChatToolArtifact).toHaveBeenLastCalledWith("replacement", "workspace-b");
+    expect(textOf(renderer.toJSON())).toContain("Current artifact content");
+    expect(textOf(renderer.toJSON())).not.toContain("Former artifact content");
+    await act(async () => renderer.unmount());
+  });
   it("renders byte units and failed artifact loads", async () => {
     apiMocks.fetchChatToolArtifact.mockRejectedValueOnce(new Error("artifact missing"));
     const bytes = create(
