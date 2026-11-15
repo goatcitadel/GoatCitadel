@@ -203,6 +203,8 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
           rows,
           documentId,
         });
+        // A document saved without an approval step is a new stored source too.
+        if (documentId) void client.invalidateQueries({ queryKey: ["library", "knowledge-documents"] });
       }
     } catch (cause) {
       if (operation.current())
