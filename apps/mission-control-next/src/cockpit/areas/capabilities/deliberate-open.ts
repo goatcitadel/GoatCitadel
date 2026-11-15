@@ -27,6 +27,9 @@ export function takePress(press: Press | null, key: string, now: number): { took
 export function useDeliberateOpen() {
   const pressed = useRef<Press | null>(null);
   const { isTransitionPending } = useCockpitNavigation();
+  const pending = useRef(isTransitionPending);
+  pending.current = isTransitionPending;
+  // One object for the life of the hook: callbacks and effects that list it never re-run because of it.
   const api = useRef({
     /** Call where the operator's press starts an open of the panel `key`. */
     press(key: string) {
@@ -42,15 +45,13 @@ export function useDeliberateOpen() {
       pressed.current = result.press;
       return result.took;
     },
+    /** Presses `key` and moves the address; a move that went nowhere and is not under review ends the press. */
+    go(key: string, navigate: () => void) {
+      api.current.press(key);
+      const before = window.location.href;
+      navigate();
+      if (window.location.href === before && !pending.current()) api.current.clear();
+    },
   });
-  const pending = useRef(isTransitionPending);
-  pending.current = isTransitionPending;
-  /** Presses `key` and moves the address; a move that went nowhere and is not under review ends the press. */
-  const go = useRef((key: string, navigate: () => void) => {
-    api.current.press(key);
-    const before = window.location.href;
-    navigate();
-    if (window.location.href === before && !pending.current()) api.current.clear();
-  });
-  return { ...api.current, go: go.current };
+  return api.current;
 }

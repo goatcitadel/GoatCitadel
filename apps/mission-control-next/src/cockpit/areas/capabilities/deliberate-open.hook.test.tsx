@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it } from "vitest";
 import { CockpitNavigationContext } from "../../app/cockpit-navigation-context";
@@ -47,4 +47,22 @@ it("keeps the press while the leave review is still open", () => {
   page.api().go("skill:a", () => undefined);
   expect(page.api().take("skill:a")).toBe(true);
   page.unmount();
+});
+
+it("returns the same object on every render, so nothing that lists it re-runs", () => {
+  const seen: unknown[] = [];
+  let effects = 0;
+  function Probe({ tick }: { tick: number }) {
+    const deliberate = useDeliberateOpen();
+    seen.push(deliberate);
+    useEffect(() => {
+      effects += 1;
+    }, [deliberate]);
+    return <p>{tick}</p>;
+  }
+  const root = createRoot(document.createElement("div"));
+  for (const tick of [1, 2, 3]) act(() => root.render(<Probe tick={tick} />));
+  expect(new Set(seen).size).toBe(1);
+  expect(effects).toBe(1);
+  act(() => root.unmount());
 });
