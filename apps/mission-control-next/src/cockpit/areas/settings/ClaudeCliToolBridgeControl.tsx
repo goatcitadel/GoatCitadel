@@ -79,7 +79,7 @@ export function ClaudeCliToolBridgeControl() {
       <GovernedSettingLoadState
         governed={governed}
         loading="Loading setting…"
-        incomplete="GoatCitadel did not report this setting. Refresh, or update GoatCitadel, before changing it."
+        incomplete="GoatCitadel did not report this setting. Try again, or update GoatCitadel, before changing it."
       />
       {ready ? (
         <>

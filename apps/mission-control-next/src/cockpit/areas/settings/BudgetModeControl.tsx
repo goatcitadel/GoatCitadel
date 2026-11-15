@@ -69,7 +69,7 @@ export function BudgetModeControl() {
       <GovernedSettingLoadState
         governed={governed}
         loading="Loading budget preference…"
-        incomplete="GoatCitadel returned an incomplete budget setting. Refresh the current setting before changing this preference."
+        incomplete="GoatCitadel returned an incomplete budget setting. Try again to read the current setting before changing this preference."
       />
       {ready ? (
         <>
