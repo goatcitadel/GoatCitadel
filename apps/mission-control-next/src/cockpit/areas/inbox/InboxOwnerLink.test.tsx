@@ -86,14 +86,18 @@ function withAddress<T>(search: string, run: () => T): T {
 }
 
 it("opens the conversation an approval came from, not the Inbox again (U-IN-014)", () => {
-  const [link] = withAddress("?shell=cockpit&approvalId=a", () =>
-    renderLinks([{ ...decisionBase, source: { ...decisionBase.source, sessionId: "s1", turnId: "t1" } }]),
+  const [link] = withAddress("?shell=cockpit&approvalId=a&runId=old-run", () =>
+    renderLinks([
+      { ...decisionBase, source: { ...decisionBase.source, sessionId: "s1", turnId: "t1", runId: "r9", taskId: "k9" } },
+    ]),
   );
   expect(link?.textContent).toBe("Open in Chat");
   const target = new URL(link!.href);
   expect(target.pathname).toBe("/chat");
   expect(target.searchParams.get("sessionId")).toBe("s1");
   expect(target.searchParams.get("turnId")).toBe("t1");
+  expect(target.searchParams.has("runId")).toBe(false);
+  expect(target.searchParams.has("taskId")).toBe(false);
   expect(target.searchParams.get("workspaceId")).toBe("w");
   expect(target.searchParams.has("approvalId")).toBe(false);
 });

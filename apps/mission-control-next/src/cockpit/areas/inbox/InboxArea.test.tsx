@@ -1074,7 +1074,7 @@ it("links a change plan to its conversation without an inherited approval and re
   expect(target.searchParams.has("approvalId")).toBe(false);
   expect(target.searchParams.get("workspaceId")).toBe("default");
   expect(target.searchParams.get("citadelId")).toBe("citadel-a");
-  expect(target.searchParams.get("runId")).toBe("run-a");
+  expect(target.searchParams.has("runId")).toBe(false);
   expect(target.searchParams.get("sessionId")).toBe("session-a");
   expect(target.searchParams.getAll("keep")).toEqual(["one", "two"]);
   expect(target.hash).toBe("#evidence");
@@ -1311,6 +1311,17 @@ describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN
     expect(container.querySelector('[aria-label^="Inspector:"]')).toBeNull();
     expect(container.querySelector('[data-selected="true"]')).toBeNull();
     expect(window.location.search).toBe("?workspaceId=default&item=change_plan%3Agone");
+  });
+
+  it("dismisses the not-found line and removes the item from the address", async () => {
+    show([first]);
+    window.history.replaceState(null, "", "/inbox?workspaceId=default&item=change_plan%3Agone&shell=cockpit");
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    expect(container.textContent).toContain("The linked item is no longer in the current Inbox.");
+    await clickButton("Dismiss");
+    expect(container.textContent).not.toContain("The linked item is no longer in the current Inbox.");
+    expect(itemInAddress()).toBeNull();
+    expect(new URLSearchParams(window.location.search).get("workspaceId")).toBe("default");
   });
 
   it("keeps the workspace and other parameters in the address of an opened item", async () => {

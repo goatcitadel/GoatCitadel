@@ -65,7 +65,14 @@ export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem;
     destination.searchParams.set("runId", item.source.runId);
     area = "Work";
   }
-  for (const key of ["sessionId", "turnId", "runId", "taskId"] as const) {
+  // A conversation link names the conversation and turn only; the page's own run and task are not its context.
+  const names =
+    area === "Chat" ? (["sessionId", "turnId"] as const) : (["sessionId", "turnId", "runId", "taskId"] as const);
+  if (area === "Chat") {
+    carried.delete("runId");
+    carried.delete("taskId");
+  }
+  for (const key of names) {
     const value = item.source[key];
     if (value !== undefined) destination.searchParams.set(key, value);
   }

@@ -115,7 +115,10 @@ export function InboxArea() {
   const showBulkReject = hasOpenDecisions || bulkRejectScope === scopeKey;
   const { announce, region: announcer } = useInboxAnnouncer();
   const openNowRef = useRef<(...args: InboxOpenArguments) => void>(() => undefined);
-  const { selectedId, selectItem, highlight, inspect, takePending } = useInboxSelection(workspaceId, openNowRef);
+  const { selectedId, selectItem, highlight, inspect, takePending, clearAddress } = useInboxSelection(
+    workspaceId,
+    openNowRef,
+  );
   const [contextSelection, setContextSelection] = useState<{ scope: string; id: string } | null>(null);
   const [shortcutsEnabled, setShortcutsEnabled] = useInboxShortcutsPreference();
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
@@ -254,10 +257,15 @@ export function InboxArea() {
       !inbox.isFetching &&
       !linkedItem.startsWith("approval:") &&
       !projection.items.some((item) => item.id === linkedItem) ? (
-        <p role="status" className="text-sm text-fg-muted">
-          The linked item is no longer in the current Inbox. It may have been resolved or moved outside this view’s
-          coverage.
-        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <p role="status" className="text-sm text-fg-muted">
+            The linked item is no longer in the current Inbox. It may have been resolved or moved outside this view’s
+            coverage.
+          </p>
+          <Button size="sm" onClick={clearAddress}>
+            Dismiss
+          </Button>
+        </div>
       ) : null}
       {inbox.isLoading ? (
         <p role="status" className="text-sm text-fg-muted">

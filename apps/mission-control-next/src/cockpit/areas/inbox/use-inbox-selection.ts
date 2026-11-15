@@ -107,5 +107,8 @@ export function useInboxSelection(
     return open;
   }, []);
 
-  return { selectedId, selectItem, highlight, inspect, takePending };
+  /** Removes the item from the address (for a link to an item that is no longer listed). */
+  const clearAddress = useCallback(() => write(null), [write]);
+
+  return { selectedId, selectItem, highlight, inspect, takePending, clearAddress };
 }
