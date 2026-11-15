@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { preflightChatRoute } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { OutboundRequestPrefsSnapshot } from "./useChatSurfaceOrchestration";
+import { rememberPreflight } from "./route-preflight-cache";
 
 const PREFLIGHT_TTL_MS = 30_000;
 
@@ -87,6 +88,8 @@ export function useChatRoutePreflight(input: {
   } = input;
   const cacheRef = useRef(new Map<string, { fetchedAt: number; result: RoutingPreflightResult }>());
   const [result, setResult] = useState<RoutingPreflightResult | null>(null);
+  // The session the held result was read for; a result never carries over to another session.
+  const resultSessionIdRef = useRef<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const displayRequest = useMemo(
@@ -120,10 +123,8 @@ export function useChatRoutePreflight(input: {
       const next = await preflightChatRoute(targetSessionId, request, {
         originSurface: request.prefsOverride?.mode,
       });
-      cacheRef.current.set(cacheKey, {
-        fetchedAt: Date.now(),
-        result: next,
-      });
+      const now = Date.now();
+      rememberPreflight(cacheRef.current, cacheKey, { fetchedAt: now, result: next }, now, PREFLIGHT_TTL_MS);
       return next;
     },
     [],
@@ -132,13 +133,18 @@ export function useChatRoutePreflight(input: {
   useEffect(() => {
     const displaySessionId = sessionId;
     if (!displayRequest || !displayKey || !enabled || !displaySessionId) {
+      resultSessionIdRef.current = null;
       setResult(null);
       setError(null);
       setLoading(false);
       return;
     }
     let cancelled = false;
-    setResult(null);
+    if (resultSessionIdRef.current !== displaySessionId) {
+      resultSessionIdRef.current = null;
+      setResult(null);
+    }
+    // A new draft in the same session keeps the last result on screen while loading is true.
     setError(null);
     setLoading(true);
     const fetchDisplayPreflight = () => {
@@ -147,6 +153,7 @@ export function useChatRoutePreflight(input: {
           if (cancelled) {
             return;
           }
+          resultSessionIdRef.current = displaySessionId;
           setResult(next);
           setError(null);
         })
@@ -154,6 +161,9 @@ export function useChatRoutePreflight(input: {
           if (cancelled) {
             return;
           }
+          // A failed check must not leave the previous result standing as if it were current.
+          resultSessionIdRef.current = null;
+          setResult(null);
           setError(describeApiError(cause).summary);
         })
         .finally(() => {
@@ -203,6 +213,7 @@ export function useChatRoutePreflight(input: {
       const stale = !cached || Date.now() - cached.fetchedAt >= PREFLIGHT_TTL_MS;
       const next = await fetchPreflight(request, { force: override.force || stale, sessionId: targetSessionId });
       if (displayKey === cacheKey) {
+        resultSessionIdRef.current = targetSessionId;
         setResult(next);
         setError(null);
       }

@@ -139,6 +139,65 @@ describe("useChatRoutePreflight", () => {
     act(() => renderer.unmount());
   });
 
+  it("keeps the last result while a changed draft is checked, and drops it when the check fails", async () => {
+    vi.useFakeTimers();
+    let latest: ReturnType<typeof useChatRoutePreflight> | null = null;
+    function Harness(props: { content: string }) {
+      latest = useChatRoutePreflight({
+        sessionId: "session-1",
+        prefs: CHAT_PREFS,
+        content: props.content,
+        surfaceMode: "chat",
+        displayAction: "send",
+      });
+      return null;
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness content="first" />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+    });
+    const first = latest!.result;
+    expect(first).not.toBeNull();
+
+    let release!: (value: unknown) => void;
+    preflightChatRoute.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    await act(async () => {
+      renderer.update(<Harness content="second" />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+    });
+    expect(latest!.loading).toBe(true);
+    expect(latest!.result).toBe(first);
+
+    await act(async () => {
+      release({ ...first, selectionSource: "turn" });
+      await Promise.resolve();
+    });
+    expect(latest!.loading).toBe(false);
+    expect(latest!.result?.selectionSource).toBe("turn");
+
+    preflightChatRoute.mockRejectedValueOnce(new Error("route check failed"));
+    await act(async () => {
+      renderer.update(<Harness content="third" />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+    });
+    expect(latest!.error).toBeTruthy();
+    expect(latest!.result).toBeNull();
+    act(() => renderer.unmount());
+  });
+
   it("uses the locked Cowork surface when session prefs still say Chat", async () => {
     let latest: ReturnType<typeof useChatRoutePreflight> | null = null;
     function Harness() {
