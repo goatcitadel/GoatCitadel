@@ -381,6 +381,8 @@ export interface CronJobRecordResponse {
   endAt?: string;
   lastRunAt?: string;
   nextRunAt?: string;
+  /** Read-only. Set when the list worked out nextRunAt from the schedule because the scheduler has not recorded one yet. Never stored. */
+  nextRunProjected?: boolean;
   updatedAt?: string;
   workdir?: string;
   contextFrom?: string;

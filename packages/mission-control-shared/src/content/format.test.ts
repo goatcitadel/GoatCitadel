@@ -17,6 +17,8 @@ const NOW = Date.parse("2026-10-15T12:00:00Z");
 describe("format", () => {
   it("formats relative times and falls back to the date after a week", () => {
     expect(formatRelativeTime(NOW - 20_000, NOW)).toBe("just now");
+    expect(formatRelativeTime(NOW - 30_000, NOW)).toBe("just now");
+    expect(formatRelativeTime(NOW + 39_000, NOW)).toBe("in under a minute");
     expect(formatRelativeTime(NOW - 5 * 60_000, NOW)).toBe("5 minutes ago");
     expect(formatRelativeTime(NOW + 2 * 3_600_000, NOW)).toBe("in 2 hours");
     expect(formatRelativeTime(NOW - 86_400_000, NOW)).toBe("yesterday");

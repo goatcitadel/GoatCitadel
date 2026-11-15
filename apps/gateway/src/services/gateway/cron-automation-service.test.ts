@@ -671,6 +671,29 @@ describe("CronAutomationService job behavior", () => {
     await expect(service.runCronJobNow("custom-job")).rejects.toThrow("Cron job has no runnable handler: custom-job");
   });
 
+  it("lists a projected next run for an enabled job the scheduler has not run yet", async () => {
+    const cronJobs = new FakeCronJobs();
+    const service = createService(new FakeDb(), vi.fn(), { cronJobs });
+    cronJobs.upsert(buildTaskJob({ jobId: "daily-job", schedule: "0 3 * * * UTC" }));
+    cronJobs.upsert(
+      buildTaskJob({ jobId: "recorded-job", schedule: "0 3 * * * UTC", nextRunAt: "2030-01-01T03:00:00.000Z" }),
+    );
+    cronJobs.upsert(buildTaskJob({ jobId: "paused-job", schedule: "0 3 * * * UTC", enabled: false }));
+
+    const listed = new Map((await service.listCronJobs()).map((job) => [job.jobId, job]));
+
+    const projected = listed.get("daily-job")!;
+    expect(projected.nextRunProjected).toBe(true);
+    expect(new Date(projected.nextRunAt!).toISOString().slice(11, 19)).toBe("03:00:00");
+    expect(new Date(projected.nextRunAt!).getTime()).toBeGreaterThan(Date.now());
+    expect(listed.get("recorded-job")).toMatchObject({ nextRunAt: "2030-01-01T03:00:00.000Z" });
+    expect(listed.get("recorded-job")!.nextRunProjected).toBeUndefined();
+    expect(listed.get("paused-job")!.nextRunAt).toBeUndefined();
+    expect(listed.get("paused-job")!.nextRunProjected).toBeUndefined();
+    // Read-only: the stored row is untouched.
+    expect(cronJobs.get("daily-job")?.nextRunAt).toBeUndefined();
+  });
+
   it("creates, updates, pauses, and deletes non-system jobs with persisted realtime events", async () => {
     const db = new FakeDb();
     const cronJobs = new FakeCronJobs();

@@ -115,6 +115,34 @@ describe("schedule summary rendering", () => {
     expect(container.textContent).not.toContain("memory_consolidation");
   });
 
+  it("says a past next run is overdue and marks a projected one", () => {
+    const stale = buildJob({ nextRunAt: new Date(Date.now() - 23 * 60_000).toISOString() });
+    act(() =>
+      root.render(
+        <ul>
+          <WorkScheduleListItem job={stale} onReview={() => {}} />
+        </ul>,
+      ),
+    );
+    expect(container.textContent).toContain("Next run: Overdue, was due 23 minutes ago");
+
+    const projected = buildJob({
+      nextRunAt: new Date(Date.now() + 3 * 3_600_000).toISOString(),
+      nextRunProjected: true,
+    });
+    act(() => root.render(<WorkScheduleRecordDetails selected={projected} />));
+    expect(container.textContent).toMatch(/in 3 hours \(from its schedule\)/);
+
+    const recorded = buildJob({ nextRunAt: new Date(Date.now() + 3 * 3_600_000).toISOString() });
+    act(() => root.render(<WorkScheduleRecordDetails selected={recorded} />));
+    expect(container.textContent).not.toContain("from its schedule");
+
+    act(() => root.render(<WorkScheduleRecordDetails selected={buildJob({ enabled: false })} />));
+    expect(container.textContent).toContain("Paused");
+    act(() => root.render(<WorkScheduleRecordDetails selected={buildJob()} />));
+    expect(container.textContent).toContain("Not reported");
+  });
+
   it("shows the cadence in words and keeps the cron expression out of the default view", () => {
     const job = buildJob();
     act(() =>

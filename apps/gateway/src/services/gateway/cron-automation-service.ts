@@ -32,6 +32,7 @@ import {
   runAgentTurnCronJob,
 } from "./cron-agent-turn-support.js";
 import { normalizeCronJobCitadelId, resolveCronJobCitadelScope, type CronCitadelReader } from "./cron-citadel-scope.js";
+import { withProjectedNextRun } from "./cron-next-run-projection.js";
 import { normalizeNoAgentCronActionConfig, runNoAgentCronJob } from "./cron-no-agent-support.js";
 import {
   COST_REPORT_HOURLY_JOB_ID,
@@ -248,8 +249,11 @@ export class CronAutomationService {
     accessClass: string | undefined;
   }): Promise<CronJobRecord[]> {
     const { citadels, cronJobs } = this.deps.storage;
+    const now = new Date();
+    const projected = (jobs: CronJobRecord[]) =>
+      jobs.map((job) => withProjectedNextRun(job, now, computeNextCronRunAt));
     if (!citadel) {
-      return await cronJobs.list();
+      return projected(await cronJobs.list());
     }
     const scope: CitadelAccessScope = {
       citadelId: citadel.citadelId,
@@ -264,7 +268,7 @@ export class CronAutomationService {
     if (!(await citadels.getCitadel(citadel.citadelId))) {
       throw new NotFoundError(`Citadel ${citadel.citadelId} not found.`);
     }
-    return await cronJobs.listByCitadel(scope);
+    return projected(await cronJobs.listByCitadel(scope));
   }
 
   public async getCronJob(jobId: string): Promise<CronJobRecord> {

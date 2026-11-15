@@ -13,6 +13,27 @@ export function ScheduleTime({ value }: { value: string | undefined }) {
   return value ? <TimeText value={value} /> : <>Not reported</>;
 }
 
+const OVERDUE_AFTER_MS = 60_000;
+
+/** The next run of a schedule: paused, a time, overdue (the scheduler has not moved it on), or a gap. */
+export function ScheduleNextRun({ job, now = Date.now() }: { job: CronJobRecordResponse; now?: number }) {
+  if (!job.enabled) return <>Paused</>;
+  const due = job.nextRunAt ? Date.parse(job.nextRunAt) : Number.NaN;
+  if (Number.isFinite(due) && due < now - OVERDUE_AFTER_MS) {
+    return (
+      <>
+        Overdue, was due <TimeText value={job.nextRunAt} />
+      </>
+    );
+  }
+  return (
+    <>
+      <ScheduleTime value={job.nextRunAt} />
+      {job.nextRunAt && job.nextRunProjected ? " (from its schedule)" : ""}
+    </>
+  );
+}
+
 /**
  * The schedule in words. An expression the cockpit cannot word is the only description there is, so it stays
  * visible ("Custom schedule: *\/15 * * * *") instead of moving into technical details.
@@ -146,7 +167,7 @@ export function WorkScheduleListItem({
       <p className="mt-2 text-sm text-fg-secondary">
         <ScheduleWording expression={job.schedule} /> · {scheduleTimezoneSummary(job.schedule)}
         <br />
-        Next run: {job.enabled ? <ScheduleTime value={job.nextRunAt} /> : "Paused"}
+        Next run: <ScheduleNextRun job={job} />
       </p>
       <p className="mt-2 text-sm text-fg-secondary">
         Last outcome: {lastRunOutcomeLabel(job)}
@@ -182,7 +203,9 @@ export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecor
         </div>
         <div>
           <dt className="text-fg-muted">Next run</dt>
-          <dd className="text-fg">{selected.enabled ? <ScheduleTime value={selected.nextRunAt} /> : "Paused"}</dd>
+          <dd className="text-fg">
+            <ScheduleNextRun job={selected} />
+          </dd>
         </div>
         <div>
           <dt className="text-fg-muted">Last run</dt>
