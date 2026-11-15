@@ -7,7 +7,8 @@ import type {
   OperatorInboxResponse,
   OperatorInboxSourceCoverage,
 } from "@goatcitadel/contracts";
-import { isInstallWideApproval, NotFoundError } from "@goatcitadel/contracts";
+import { isInstallWideApproval, NotFoundError, redactSecretText } from "@goatcitadel/contracts";
+import { withoutControls } from "./plugin-plain-text.js";
 import { redactUrlForError } from "@goatcitadel/policy-engine";
 import { redactLocalHomePaths } from "./user-facing-failure-text.js";
 import type { AsyncStorage } from "@goatcitadel/storage";
@@ -117,7 +118,28 @@ function skillLifecycleApproval(
   return { ...(title ? { title: bounded(title) } : {}), summary: "Applies to every workspace." };
 }
 
-function approvalTargetSummary(preview: unknown): string {
+const SHELL_TOOLS = new Set(["shell.exec", "shell.exec_background"]);
+/** The most of a command's or code's first line an Inbox row names; the whole row is bounded again after the label. */
+const MAX_PREVIEW_LINE = 180;
+
+/**
+ * One safe line of text a model wrote as a command or as code: secrets and the home folder taken out first (so a cut
+ * can never leave half a token), then the first non-empty line with control and bidi characters removed and capped,
+ * followed by how many lines were left out.
+ */
+function previewLine(label: string, text: string): string | undefined {
+  const lines = redactLocalHomePaths(redactSecretText(text).value)
+    .split(/\r\n|[\r\n\u2028\u2029]/u)
+    .map(withoutControls)
+    .filter(Boolean);
+  const [first, ...rest] = lines;
+  if (!first) return undefined;
+  const line = first.length > MAX_PREVIEW_LINE ? `${first.slice(0, MAX_PREVIEW_LINE - 1)}…` : first;
+  const more = rest.length ? ` (and ${rest.length} more ${rest.length === 1 ? "line" : "lines"})` : "";
+  return bounded(`${label}: ${line}${more}`);
+}
+
+function approvalTargetSummary(preview: unknown, kind: string): string {
   const record = preview && typeof preview === "object" ? (preview as Record<string, unknown>) : {};
   const value = record.targets;
   const targets = Array.isArray(value) ? value.filter((target): target is string => typeof target === "string") : [];
@@ -125,12 +147,20 @@ function approvalTargetSummary(preview: unknown): string {
     return bounded(`Targets: ${targets.slice(0, 3).join(", ")}${targets.length > 3 ? "; more in review" : ""}`);
   const knowledge = knowledgeTargetSummary(record);
   if (knowledge) return bounded(knowledge);
-  // A tool approval's preview (policy-engine buildApprovalPreview) names its path or target; commands stay out.
+  // A tool approval's preview (policy-engine buildApprovalPreview) names its path or target. A command shows only for the two shell tools, as one redacted line.
   if (typeof record.toolName === "string") {
     if (typeof record.path === "string" && record.path.trim()) return bounded(`Path: ${record.path.trim()}`);
     // A URL target can carry credentials in its userinfo, path or query, so only its scheme and host are shown.
     if (typeof record.target === "string" && record.target.trim())
       return bounded(`Target: ${redactUrlForError(record.target)}`);
+    if (SHELL_TOOLS.has(record.toolName) && typeof record.command === "string") {
+      const command = previewLine("Command", record.command);
+      if (command) return command;
+    }
+  }
+  if (kind === "code_mode.run" && typeof record.codePreview === "string") {
+    const code = previewLine("Code", record.codePreview);
+    if (code) return code;
   }
   return "Review the requested action and its policy reason. Target details are available in the approval record.";
 }
@@ -294,7 +324,7 @@ export class InboxProjectionService {
             group: "needs_decision",
             title:
               plan?.title ?? skill?.title ?? `Review ${approvalKindWords(approval.linkage?.toolName ?? approval.kind)}`,
-            summary: plan?.summary ?? skill?.summary ?? approvalTargetSummary(approval.preview),
+            summary: plan?.summary ?? skill?.summary ?? approvalTargetSummary(approval.preview, approval.kind),
             createdAt: approval.createdAt,
             expiresAt: approval.expiresAt,
             riskLevel: approval.riskLevel,

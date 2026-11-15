@@ -246,6 +246,69 @@ describe("Gateway inbox projection", () => {
     expect(JSON.stringify(projection)).not.toContain("do-not-project");
   });
 
+  it("names a shell command and Code Mode code in the summary, redacted and on one line (U-IN-001, U-IN-016)", async () => {
+    const deps = dependencies();
+    const token = ["sk", "test".repeat(6)].join("-");
+    const base = {
+      status: "pending",
+      riskLevel: "danger",
+      payload: {},
+      linkage: { workspaceId: "workspace-a" },
+      createdAt: "2026-09-28T12:00:00.000Z",
+    };
+    const shell = (approvalId: string, command: string, tool = "shell.exec") => ({
+      ...base,
+      approvalId,
+      kind: tool,
+      preview: { toolName: tool, command },
+    });
+    vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
+      items: [
+        shell("plain", "pnpm test --filter api"),
+        shell("secret", `curl -H "Authorization: Bearer ${token}" https://example.invalid`),
+        shell("lines", "echo one\necho two\necho three", "shell.exec_background"),
+        shell("oneextra", "echo one\r\n\r\necho two"),
+        shell("long", `echo ${"x".repeat(400)}`),
+        shell("bidi", "echo \u202Egnp.exe\u202C\u0007 ok\u2028 done"),
+        shell("home", "cat C:\\Users\\someone\\notes.txt"),
+        {
+          ...base,
+          approvalId: "code",
+          kind: "code_mode.run",
+          riskLevel: "caution",
+          preview: { codePreview: 'const text = await docs.extract_text({ path: "saturday-plan.pdf" });' },
+        },
+        {
+          ...base,
+          approvalId: "codesecret",
+          kind: "code_mode.run",
+          preview: {
+            codePreview: `fetch("https://example.invalid", { headers: { Authorization: "Bearer ${token}" } })`,
+          },
+        },
+        {
+          ...base,
+          approvalId: "other",
+          kind: "custom.exec",
+          preview: { toolName: "custom.exec", command: "do-not-project-command" },
+        },
+      ],
+    } as never);
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+    const summary = (id: string) => projection.items.find((entry) => entry.id === `approval:${id}`)?.summary;
+    expect(summary("plain")).toBe("Command: pnpm test --filter api");
+    expect(summary("secret")).toContain("[REDACTED]");
+    expect(summary("codesecret")).toContain("[REDACTED]");
+    expect(JSON.stringify(projection)).not.toContain(token);
+    expect(summary("lines")).toBe("Command: echo one (and 2 more lines)");
+    expect(summary("oneextra")).toBe("Command: echo one (and 1 more line)");
+    expect(summary("long")!.length).toBeLessThanOrEqual(240);
+    expect(summary("bidi")).not.toMatch(/[\p{Cc}\u202A-\u202E\u2066-\u2069\u2028\u2029]/u);
+    expect(summary("home")).not.toContain("someone");
+    expect(summary("code")).toBe('Code: const text = await docs.extract_text({ path: "saturday-plan.pdf" });');
+    expect(summary("other")).not.toContain("do-not-project-command");
+  });
+
   it("keeps canonical ownership, risk, and workspace scope while omitting approval payloads", async () => {
     const deps = dependencies();
     vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
