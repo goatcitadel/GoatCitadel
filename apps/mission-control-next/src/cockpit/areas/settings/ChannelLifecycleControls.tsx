@@ -29,9 +29,38 @@ import {
   verifyIntegrationDeleted,
   verifyIntegrationReadback,
 } from "../../../features/native-routes/settings/sections/integration-editor-receipts";
-import { Button } from "../../ui/Button";
+import { Button, type ButtonVariant } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { REMOVE_CONSEQUENCE, removeChannelTitle } from "../chat/channel-remove-copy";
+
+interface ReviewWords {
+  title: string;
+  confirm: string;
+  keep: string;
+  variant: ButtonVariant;
+}
+
+/** What the review dialog says, by what it would do (U-ST-006, U-MS-004). Turning a channel on or off is not red. */
+function reviewWords(
+  action: "toggle" | "delete",
+  draft: ChannelSetupDraft | undefined,
+  connection?: IntegrationConnection,
+): ReviewWords {
+  if (action === "delete")
+    return draft
+      ? { title: "Delete this draft?", confirm: "Delete draft", keep: "Keep draft", variant: "danger" }
+      : {
+          title: removeChannelTitle(connection?.label ?? ""),
+          confirm: "Remove channel connection",
+          keep: "Keep connection",
+          variant: "danger",
+        };
+  const name = draft?.label ?? connection?.label;
+  return connection?.enabled
+    ? { title: `Turn off ${name}?`, confirm: "Turn off channel", keep: "Keep it on", variant: "secondary" }
+    : { title: `Turn on ${name}?`, confirm: "Turn on channel", keep: "Keep it off", variant: "primary" };
+}
 
 type Selection =
   | { draft: ChannelSetupDraft; connection?: never }
@@ -184,6 +213,7 @@ export function ChannelLifecycleControls({
   }
   // Removing a finished connection says what it does to the bot, its keys and its conversations before it asks.
   const removing = connection && review?.action === "delete" ? connection : undefined;
+  const words = reviewWords(review?.action ?? "toggle", draft, connection);
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
@@ -215,7 +245,7 @@ export function ChannelLifecycleControls({
         onOpenChange={(open) => {
           if (!open && !locked) setReview(null);
         }}
-        title={removing ? removeChannelTitle(removing.label) : "Review channel lifecycle change"}
+        title={words.title}
         description={
           removing
             ? REMOVE_CONSEQUENCE
@@ -224,16 +254,16 @@ export function ChannelLifecycleControls({
               : "This affects the saved installation-wide connection and may stop its runtime. External messages and previously completed actions cannot be undone here."
         }
       >
-        <p className="break-words text-sm">
-          {draft?.label ?? connection?.label} · reviewed version {draft?.revision ?? connection?.revision}
-        </p>
+        <TechnicalDetails>
+          <p className="break-all font-mono text-xs">Reviewed version {draft?.revision ?? connection?.revision}</p>
+        </TechnicalDetails>
         {!current() ? <p role="alert">The reviewed scope or record changed. Close and review again.</p> : null}
         <div className="mt-4 flex flex-wrap gap-2">
-          <Button variant="danger" disabled={locked || !current()} onClick={() => void confirm()}>
-            Apply reviewed channel change
+          <Button variant={words.variant} disabled={locked || !current()} onClick={() => void confirm()}>
+            {words.confirm}
           </Button>
           <Button disabled={locked} onClick={() => setReview(null)}>
-            Keep current channel state
+            {words.keep}
           </Button>
         </div>
       </Dialog>
