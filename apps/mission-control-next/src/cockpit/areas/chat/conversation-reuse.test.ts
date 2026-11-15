@@ -1,7 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+// @vitest-environment happy-dom
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
-import { findReusableEmptyConversation, startConversation } from "./conversation-reuse";
+import { createAttachmentStorageKey, createDraftStorageKey } from "@goatcitadel/threaded-surface-core";
+import { findReusableEmptyConversation, startConversation, unsentConversationId } from "./conversation-reuse";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  window.localStorage.clear();
+});
 
 const idle = {
   observedAt: "2026-11-01T00:00:00.000Z",
@@ -102,5 +109,61 @@ describe("startConversation", () => {
     startConversation(r, "w");
     expect(r.onCreateSession).toHaveBeenCalledTimes(1);
     expect(r.onSelectSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("a conversation that holds unsent work", () => {
+  it("names the open conversation only while text or attachments are in memory", () => {
+    const base = { draft: "", pendingAttachments: [], selectedSessionId: "s" };
+    expect(unsentConversationId(null)).toBeNull();
+    expect(unsentConversationId(base)).toBeNull();
+    expect(unsentConversationId({ ...base, draft: "  " })).toBeNull();
+    expect(unsentConversationId({ ...base, draft: "hi" })).toBe("s");
+    expect(unsentConversationId({ ...base, pendingAttachments: [{}] as never })).toBe("s");
+  });
+
+  it("is not reused when it is the selected one with typed text: a new one is created, the draft stays", () => {
+    const r = rail([session("s-typed")], { selectedSessionId: "s-typed" });
+    startConversation(r, "w", "s-typed");
+    expect(r.onCreateSession).toHaveBeenCalledTimes(1);
+    expect(r.onSelectSession).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse another empty conversation that has a stored draft", () => {
+    window.localStorage.setItem(createDraftStorageKey("w", "s-draft"), "half a thought");
+    expect(find([session("s-draft")])).toBeUndefined();
+  });
+
+  it("does not reuse another empty conversation that has stored attachments", () => {
+    window.localStorage.setItem(createAttachmentStorageKey("w", "s-att"), JSON.stringify([{ attachmentId: "a1" }]));
+    expect(find([session("s-att")])).toBeUndefined();
+  });
+
+  it("falls through to the next untouched conversation", () => {
+    window.localStorage.setItem(createDraftStorageKey("w", "newer"), "typed");
+    const sessions = [session("older"), session("newer", { updatedAt: "2026-11-02T00:00:00.000Z" })];
+    expect(find(sessions)).toBe("older");
+  });
+
+  it("ignores a blank stored draft and an empty attachment list", () => {
+    window.localStorage.setItem(createDraftStorageKey("w", "s"), "   ");
+    window.localStorage.setItem(createAttachmentStorageKey("w", "s"), "[]");
+    expect(find([session("s")])).toBe("s");
+  });
+
+  it("is not reused when storage cannot be read: a new one is created", () => {
+    vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    const r = rail([session("s-empty")]);
+    startConversation(r, "w");
+    expect(r.onCreateSession).toHaveBeenCalledTimes(1);
+    expect(r.onSelectSession).not.toHaveBeenCalled();
+  });
+
+  it("still reuses a truly untouched conversation", () => {
+    const r = rail([session("s-empty")], { selectedSessionId: "other" });
+    startConversation(r, "w", "other");
+    expect(r.onSelectSession).toHaveBeenCalledWith("s-empty");
   });
 });

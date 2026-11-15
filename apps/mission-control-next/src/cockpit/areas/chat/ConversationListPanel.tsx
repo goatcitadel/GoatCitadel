@@ -54,6 +54,7 @@ export function ConversationListPanel({
   onDone,
   onOpenProjects,
   messaging,
+  unsentSessionId,
 }: {
   rail: MissionThreadedSessionRailData;
   projectOptions?: readonly ChatProjectFilterOption[];
@@ -62,6 +63,8 @@ export function ConversationListPanel({
   /** Called after a conversation is chosen or created, so the sheet can close. */
   onDone?: () => void;
   messaging?: ConversationListMessaging;
+  /** The open conversation while it holds typed text or attachments: New never reuses it. */
+  unsentSessionId?: string | null;
 }) {
   const { activeWorkspaceId } = useUiPreferences();
   // Messaging lists the active channel conversations, so the list leaves them out while Messaging is shown and the
@@ -88,7 +91,7 @@ export function ConversationListPanel({
           <button
             type="button"
             onClick={() => {
-              startConversation(rail, activeWorkspaceId ?? undefined);
+              startConversation(rail, activeWorkspaceId ?? undefined, unsentSessionId);
               onDone?.();
             }}
             disabled={rail.creatingSession || rail.loading}
