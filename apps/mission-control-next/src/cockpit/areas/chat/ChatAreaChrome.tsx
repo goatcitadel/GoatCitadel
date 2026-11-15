@@ -12,6 +12,7 @@ import { presentDelegationRunStatus } from "./chat-vocabulary";
 import { projectFirstRunState } from "../settings/first-run-state";
 import type { ChannelConversationContext } from "./channel-conversation";
 import { startConversation } from "./conversation-reuse";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 
 type ActiveSession = MissionThreadedRenderSurfaceInput["activeSessionSurfaceProps"];
 
@@ -260,6 +261,7 @@ export function ChatEmptyState({
   /** Below the desktop rail the list is behind the header's Conversations button; the empty state offers it too. */
   onOpenConversations?: () => void;
 }) {
+  const { activeWorkspaceId } = useUiPreferences();
   // Only a plain Recent list with nothing in it is a first conversation; a search or the archive that found nothing is not.
   const first =
     rail.historyView === "active" &&
@@ -288,7 +290,10 @@ export function ChatEmptyState({
                 Show conversations
               </Button>
             ) : null}
-            <Button onClick={() => startConversation(rail)} disabled={rail.creatingSession}>
+            <Button
+              onClick={() => startConversation(rail, activeWorkspaceId ?? undefined)}
+              disabled={rail.creatingSession}
+            >
               {rail.creatingSession ? "Creating…" : "New conversation"}
             </Button>
           </div>
