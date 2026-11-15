@@ -12,31 +12,31 @@ export function cockpitScopeLine(citadelName: string, workspaceName: string | un
     : `${citadelName} / ${workspaceName ?? "Workspace"}`;
 }
 
-const ScopeLineContext = createContext<string | null>(null);
+const ScopeLineContext = createContext(false);
 
 /**
  * Below the desktop width the sidebar that names the workspace is not on screen, so pages say where they are. The
- * names are read only there; on a desktop this provides nothing and reads nothing.
+ * provider only decides whether that applies; the names are read by the line itself, so the shell reads nothing
+ * (and needs no query client) on a desktop.
  */
 export function ScopeLineProvider({ children }: { children: ReactNode }) {
   const small = useMediaQuery(RESPONSIVE_QUERIES.belowDesktop);
-  const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
-  const workspaceName = useWorkspaceName(activeCitadelId, activeWorkspaceId, small);
-  const citadelName = useCitadelName(activeCitadelId, small);
-  return (
-    <ScopeLineContext.Provider value={small ? cockpitScopeLine(citadelName, workspaceName) : null}>
-      {children}
-    </ScopeLineContext.Provider>
-  );
+  return <ScopeLineContext.Provider value={small}>{children}</ScopeLineContext.Provider>;
 }
 
-/** One quiet line under a page heading naming the Citadel and workspace; nothing outside a provider or on a desktop. */
-export function ScopeLine() {
-  const line = useContext(ScopeLineContext);
-  if (!line) return null;
+function ScopeLineText() {
+  const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
+  const workspaceName = useWorkspaceName(activeCitadelId, activeWorkspaceId);
+  const citadelName = useCitadelName(activeCitadelId, true);
+  const line = cockpitScopeLine(citadelName, workspaceName);
   return (
     <p data-cockpit-page-scope="" className="mt-1 truncate text-xs text-fg-muted">
       {line.startsWith("Loading") ? line : `In ${line}`}
     </p>
   );
+}
+
+/** One quiet line under a page heading naming the Citadel and workspace; nothing outside a provider or on a desktop. */
+export function ScopeLine() {
+  return useContext(ScopeLineContext) ? <ScopeLineText /> : null;
 }
