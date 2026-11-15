@@ -1,5 +1,6 @@
 import { createContext, useContext, type ReactNode } from "react";
 import { OverflowTabs } from "./OverflowTabs";
+import { ScopeLine } from "../app/scope-line";
 
 export interface AreaTab {
   id: string;
@@ -48,6 +49,7 @@ export function AreaHeader({
         <div className="min-w-0 flex-1 basis-64">
           <h1 className="font-display text-xl font-semibold text-fg">{title}</h1>
           {description ? <p className="mt-1 max-w-3xl text-sm text-fg-secondary">{description}</p> : null}
+          <ScopeLine />
           {children}
         </div>
         {/* min-w-0 max-w-full: a wide action row (search, links, buttons) wraps instead of overflowing a phone. */}
