@@ -1,4 +1,5 @@
 import type { ChatThinkingLevel } from "@goatcitadel/contracts";
+import { useRef } from "react";
 import { HeldChoiceNotice, useHeldChoice } from "./use-held-choice";
 
 const LEVELS: ReadonlyArray<{ value: ChatThinkingLevel; label: string }> = [
@@ -32,11 +33,13 @@ export function ThinkingLevelField({
     send: onApply,
     scope,
   });
+  const field = useRef<HTMLSelectElement>(null);
   return (
     <div {...held.wrapperProps}>
       <label className="mc-next-context-field">
         <span>Thinking</span>
         <select
+          ref={field}
           value={held.draft.level ?? value}
           onChange={(event) => {
             const level = event.target.value as ChatThinkingLevel;
@@ -51,7 +54,7 @@ export function ThinkingLevelField({
           ))}
         </select>
       </label>
-      {held.dirty ? <HeldChoiceNotice onApply={held.apply} /> : null}
+      {held.dirty ? <HeldChoiceNotice onApply={held.apply} focusTarget={() => field.current} /> : null}
     </div>
   );
 }

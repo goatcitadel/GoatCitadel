@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { HeldChoiceNotice, useHeldChoice } from "./use-held-choice";
 import { Info, Menu, PanelRight } from "lucide-react";
 import type { ChatMode } from "@goatcitadel/contracts";
@@ -281,6 +281,7 @@ export function CompactModelControl({
 }) {
   const [open, setOpen] = useState(false);
   const controlsId = useId();
+  const body = useRef<HTMLDivElement>(null);
   // With `onChoose` a pick is held until it is applied (Apply, focus leaving, closing the control), so arrowing
   // through a select sends nothing on the way. Escape discards it.
   const held = useHeldChoice<{ providerId?: string; model?: string }, ModelChoice>({
@@ -315,7 +316,7 @@ export function CompactModelControl({
         <span>Model</span>
         <strong>{providerModelSummary}</strong>
       </summary>
-      <div id={controlsId} className="mc-next-threaded-model-control-body">
+      <div id={controlsId} ref={body} className="mc-next-threaded-model-control-body">
         <ChatModelPicker
           providers={providers}
           providerId={held.draft.providerId ?? providerIdProp}
@@ -332,7 +333,9 @@ export function CompactModelControl({
           }
           onChangeModel={choosing ? (next) => held.hold((current) => ({ ...current, model: next })) : onChangeModel}
         />
-        {choosing && held.dirty ? <HeldChoiceNotice onApply={held.apply} /> : null}
+        {choosing && held.dirty ? (
+          <HeldChoiceNotice onApply={held.apply} focusTarget={() => body.current?.querySelector("select") ?? null} />
+        ) : null}
       </div>
     </details>
   );

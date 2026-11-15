@@ -147,3 +147,35 @@ it("sends nothing when it closes without a changed pick", async () => {
   await toggle(false);
   expect(onChoose).not.toHaveBeenCalled();
 });
+
+it("keeps the pick held when the whole window loses focus, and says so when it comes back", async () => {
+  await render();
+  await pick();
+  vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  await act(async () => {
+    select().dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
+  });
+  expect(onChoose).not.toHaveBeenCalled();
+  expect(text()).toContain("Not applied yet.");
+  vi.restoreAllMocks();
+});
+
+it("sends the pick once when focus moves to another element in the page", async () => {
+  await render();
+  await pick();
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  await act(async () => {
+    select().dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: document.getElementById("outside") }),
+    );
+  });
+  expect(onChoose).toHaveBeenCalledExactlyOnceWith({ providerId: "other", model: "other-b" });
+  vi.restoreAllMocks();
+});
+
+it("returns focus to the select after Apply", async () => {
+  await render();
+  await pick();
+  await act(async () => applyButton()!.click());
+  expect(document.activeElement).toBe(select());
+});

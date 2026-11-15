@@ -72,3 +72,31 @@ it("applies when focus leaves, discards on Escape and when the conversation chan
   expect(container.textContent).not.toContain("Not applied yet.");
   expect(onApply).not.toHaveBeenCalled();
 });
+
+it("keeps the pick held when the whole window loses focus, and applies when focus moves within the page", async () => {
+  await render();
+  await arrowTo("deep");
+  vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  await act(async () => {
+    select().dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
+  });
+  expect(onApply).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("Not applied yet.");
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  await act(async () => {
+    select().dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: document.getElementById("outside") }),
+    );
+  });
+  expect(onApply).toHaveBeenCalledExactlyOnceWith("deep");
+  vi.restoreAllMocks();
+});
+
+it("returns focus to the select after Apply", async () => {
+  await render();
+  await arrowTo("extended");
+  await act(async () =>
+    [...container.querySelectorAll("button")].find((node) => node.textContent === "Apply")!.click(),
+  );
+  expect(document.activeElement).toBe(select());
+});
