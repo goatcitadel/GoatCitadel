@@ -175,6 +175,7 @@ export function useFirstRunSetup(workspaceId: string | undefined) {
       query.refetch(),
       approval.settings.refetch(),
       approval.uncertain ? approval.reconcile() : undefined,
+      approval.recheckWaiting(),
     ]);
   }
   return {

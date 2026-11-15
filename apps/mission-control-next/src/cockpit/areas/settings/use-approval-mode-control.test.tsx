@@ -7,7 +7,7 @@ import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-share
 import { gatewayAuthSettingsFixture } from "../../../features/native-routes/settings/gateway-auth.test-support";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
-import { __resetApprovalModeUncertaintyForTests } from "./approval-mode-state";
+import { __resetApprovalModeUncertaintyForTests, retainApprovalModeUncertainty } from "./approval-mode-state";
 import { useApprovalModeControl } from "./use-approval-mode-control";
 
 const api = vi.hoisted(() => ({
@@ -331,6 +331,108 @@ describe("approval save review lifetime", () => {
       expect(control.uncertain).toBeUndefined();
       expect(control.locked).toBe(false);
       expect(api.fetchChangePlans).not.toHaveBeenCalled();
+    });
+
+    it("calls a change that finished between the two reads saved, never not saved", async () => {
+      await prepare();
+      api.patchSettings.mockImplementation(async () => {
+        // The plans read still sees the change being applied; by the settings read it has finished.
+        owner = { ...owner, revision: owner.revision + 1, toolApprovalMode: "approve_risky" };
+        throw new Error("Failed to fetch");
+      });
+      api.fetchChangePlans.mockResolvedValue({
+        items: [
+          {
+            ...waitingPlan("plan-late", "approval-late", "approve_risky"),
+            status: "applying",
+            requiredAction: undefined,
+          },
+        ],
+      });
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() => expect(control.uncertain).toBeUndefined());
+      expect(control.notice).toBe("Tool approval rule saved and confirmed by GoatCitadel.");
+      expect(control.waiting).toBeNull();
+      // The open changes are read before the saved rule.
+      const plansRead = api.fetchChangePlans.mock.invocationCallOrder[0]!;
+      const writeAt = api.patchSettings.mock.invocationCallOrder[0]!;
+      const afterWrite = api.fetchSettings.mock.invocationCallOrder.filter((order) => order > writeAt);
+      expect(afterWrite.every((order) => order > plansRead)).toBe(true);
+    });
+
+    it("shows nothing misleading when the named change finished before it was looked up", async () => {
+      await prepare();
+      api.patchSettings.mockRejectedValue({
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: { resourceKind: "change_plan", resourceId: "plan-waiting" } },
+      });
+      api.fetchChangePlan.mockResolvedValue({
+        ...waitingPlan("plan-waiting", "approval-waiting"),
+        status: "completed",
+      });
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() => expect(api.fetchChangePlan).toHaveBeenCalled());
+      await act(async () => undefined);
+      expect(control.waiting).toBeNull();
+      expect(control.notice).toBeNull();
+      expect(control.draft.value).toBe("approve_risky");
+    });
+
+    it("clears a held waiting change on a re-check once it was decided elsewhere", async () => {
+      await prepare();
+      api.patchSettings.mockRejectedValue({
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: { resourceKind: "change_plan", resourceId: "plan-waiting" } },
+      });
+      api.fetchChangePlan.mockResolvedValue(waitingPlan("plan-waiting", "approval-waiting"));
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() => expect(control.waiting).toMatchObject({ stage: "approval" }));
+      expect(control.notice).toBe("One change to this rule is already waiting for your approval.");
+      expect(control.canSave).toBe(false);
+      api.fetchChangePlan.mockResolvedValue({
+        ...waitingPlan("plan-waiting", "approval-waiting"),
+        status: "cancelled",
+      });
+      await act(async () => control.recheckWaiting());
+      await vi.waitFor(() => expect(control.waiting).toBeNull());
+      expect(control.notice).toBeNull();
+      await vi.waitFor(() => expect(control.canSave).toBe(true));
+    });
+
+    it("says a change the operator must review waits for review, not that it is being applied", async () => {
+      await prepare();
+      api.patchSettings.mockRejectedValue({
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: { resourceKind: "change_plan", resourceId: "plan-waiting" } },
+      });
+      api.fetchChangePlan.mockResolvedValue({
+        ...waitingPlan("plan-waiting", "approval-waiting"),
+        status: "awaiting_confirmation",
+        requiredAction: { kind: "confirmation" },
+      });
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() => expect(control.waiting).toMatchObject({ stage: "review" }));
+      expect(control.notice).toBe("One change to this rule is waiting for your review.");
+    });
+
+    it("does not let a record from another Gateway lock this one", async () => {
+      retainApprovalModeUncertainty({
+        message: "GoatCitadel didn't answer, so this save isn't confirmed yet.",
+        submitted: "approve_risky",
+        baseRevision: 40,
+        previous: "approve_all",
+        installation: "another-owner",
+        checking: false,
+      });
+      await render();
+      expect(control.uncertain).toBeUndefined();
+      expect(control.locked).toBe(false);
+      await act(async () => control.draft.setValue("approve_risky"));
+      expect(control.canSave).toBe(true);
+      // It still holds for the Gateway it belongs to.
+      api.base = "another-owner";
+      await render("two");
+      expect(control.uncertain?.installation).toBe("another-owner");
     });
   });
 });

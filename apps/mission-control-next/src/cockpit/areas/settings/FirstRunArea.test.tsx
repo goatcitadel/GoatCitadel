@@ -255,6 +255,10 @@ describe("native first-run setup", () => {
       expect(container.textContent).not.toContain("Your last approval-rule save isn't confirmed yet."),
     );
     expect(container.textContent).not.toContain("Resolve the pending or uncertain approval-rule save");
+    // Nothing holds Finish any more: once the current rule is reviewed, it can be pressed.
+    await safety();
+    await click("Keep current rule");
+    await vi.waitFor(() => expect(button("Finish setup and open Chat").disabled).toBe(false));
   });
   it("keeps Finish held while the unconfirmed approval-rule save still cannot be checked", async () => {
     retainApprovalModeUncertainty({

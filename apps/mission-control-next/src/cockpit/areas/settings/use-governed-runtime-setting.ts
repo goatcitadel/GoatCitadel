@@ -8,14 +8,16 @@ import { useSessionDraft } from "../../../features/native-routes/library/session
 import {
   classifySettingsSaveFailure,
   findActiveSettingsChange,
+  describeWaitingChange,
   findWaitingSettingsChange,
+  waitingNoticeFor,
+  type WaitingSettingsNotice,
 } from "../../../features/native-routes/settings/settings-save-outcome";
 import {
   settingsChangeIsConfirmed,
   useSettingsChange,
 } from "../../../features/native-routes/settings/use-settings-change";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
-import type { WaitingSettingsNotice } from "./WaitingSettingsChangeNotice";
 
 /** A single runtime setting value that one Settings control drafts and saves. */
 export type GovernedSettingValue = string | boolean;
@@ -154,7 +156,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
       } else if (failure.kind === "waiting") {
         // An earlier change to this setting is still open: lead to its approval and keep the draft.
         await settings.refetch();
-        setWaiting((await findWaitingSettingsChange(failure.planId)) ?? { planId: failure.planId, unreadable: true });
+        await followWaiting(failure.planId);
       } else if (failure.kind === "conflict") {
         await settings.refetch();
         setNotice({ tone: "waiting", message: options.copy.changedElsewhere });
@@ -173,19 +175,48 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
   }
 
   /**
-   * After a save whose answer was lost: reads the saved value and the open Settings changes again. Saving stays paused
-   * only while that cannot be read; a failed read is never reported as "not saved".
+   * Looks at the earlier change a conflict (or a refresh) names and says what it is: still open (shown, with its
+   * approval or link), finished (nothing to show; the saved setting speaks), not a Settings change (the ordinary
+   * conflict copy), or unreadable (kept, with its Inbox link).
+   */
+  async function followWaiting(planId: string): Promise<void> {
+    const lookup = await findWaitingSettingsChange(planId);
+    if (lookup.kind === "unreadable" && waiting && !("unreadable" in waiting)) return;
+    const held = waitingNoticeFor(lookup, planId);
+    setWaiting(held);
+    if (held) setNotice({ tone: "waiting", message: describeWaitingChange(held) });
+    else {
+      setNotice(lookup.kind === "foreign" ? { tone: "waiting", message: options.copy.changedElsewhere } : null);
+      await settings.refetch();
+    }
+  }
+
+  /**
+   * After a save whose answer was lost: reads the open Settings changes first and the saved value second, so a change
+   * that finishes in between shows up as the saved value, never as "not saved". Saving stays paused only while either
+   * cannot be read; a failed read is never reported as "not saved".
    */
   async function checkOutcome(): Promise<void> {
     const sent = attempt.current;
     if (!sent || checking.current) return;
     checking.current = true;
     setCheckingOutcome(true);
+    const keepLocked = () => setNotice({ tone: "failed", message: UNCONFIRMED_MESSAGE });
     try {
       const expected = options.normalize?.(sent.submitted) ?? sent.submitted;
+      const active = await findActiveSettingsChange(
+        (plan) =>
+          options.matchesPlan?.(plan, sent.submitted) ??
+          (plan.kind === "runtime_configuration" &&
+            plan.request.kind === "runtime_configuration" &&
+            plan.request.change.operation === options.operation &&
+            plan.target.ownerId === "runtime_settings"),
+      );
+      if (active === "unreadable") return keepLocked();
       const latest = await fetchSettings().catch(() => undefined);
       const savedValue = latest ? options.read(latest) : undefined;
-      if (latest && savedValue !== undefined && savedValue === expected && latest.revision > sent.baseRevision) {
+      if (!latest || savedValue === undefined) return keepLocked();
+      if (savedValue === expected && latest.revision > sent.baseRevision) {
         draft.acceptSaved(savedValue, latest.revision, sent.submitted);
         options.onSaved?.(savedValue);
         setOutcomeUncertain(false);
@@ -193,34 +224,17 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
         await settings.refetch();
         return;
       }
-      const active = latest
-        ? await findActiveSettingsChange(
-            (plan) =>
-              options.matchesPlan?.(plan, sent.submitted) ??
-              (plan.kind === "runtime_configuration" &&
-                plan.request.kind === "runtime_configuration" &&
-                plan.request.change.operation === options.operation &&
-                plan.target.ownerId === "runtime_settings"),
-          )
-        : "unreadable";
-      if (active === "unreadable") {
-        setNotice({ tone: "failed", message: UNCONFIRMED_MESSAGE });
-        return;
-      }
       setOutcomeUncertain(false);
       if (active) {
         setWaiting(active);
-        setNotice(null);
-      } else {
-        setNotice({ tone: "failed", message: NOT_SAVED_MESSAGE });
-      }
+        setNotice({ tone: "waiting", message: describeWaitingChange(active) });
+      } else setNotice({ tone: "failed", message: NOT_SAVED_MESSAGE });
       await settings.refetch();
     } finally {
       checking.current = false;
       setCheckingOutcome(false);
     }
   }
-
   return {
     settings,
     ready,
@@ -239,7 +253,10 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
     },
     checkOutcome,
     checkingOutcome,
-    clearNotice: () => setNotice(null),
+    // While a change is waiting, its sentence is the notice and stays until the change is settled.
+    clearNotice: () => {
+      if (!waiting) setNotice(null);
+    },
     /** Controls stay read-only while a save, a pending change or an unknown outcome is outstanding. */
     locked: busy || change.hasPending || outcomeUncertain,
     canSave:
@@ -254,10 +271,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
     refresh: () => {
       void settings.refetch();
       if (change.change) void change.refresh();
-      if (waiting)
-        void findWaitingSettingsChange(waiting.planId).then((found) => {
-          if (found) setWaiting(found);
-        });
+      if (waiting) void followWaiting(waiting.planId);
     },
     recoveryHref,
   };

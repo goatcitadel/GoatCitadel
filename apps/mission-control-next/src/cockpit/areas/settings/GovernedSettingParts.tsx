@@ -141,7 +141,11 @@ export function GovernedSettingChangeStatus<T extends GovernedSettingValue>({
         </p>
       ) : null}
       {governed.waiting ? (
-        <WaitingSettingsChangeNotice waiting={governed.waiting} onResolved={governed.clearWaiting} />
+        <WaitingSettingsChangeNotice
+          waiting={governed.waiting}
+          onResolved={governed.clearWaiting}
+          showSentence={false}
+        />
       ) : null}
       {governed.outcomeUncertain ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">

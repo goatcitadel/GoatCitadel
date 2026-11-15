@@ -2,9 +2,10 @@ import { useRef, useState } from "react";
 import {
   classifySettingsSaveFailure,
   findWaitingSettingsChange,
+  waitingNoticeFor,
+  type WaitingSettingsNotice,
   type SettingsSaveFailure,
 } from "../../../features/native-routes/settings/settings-save-outcome";
-import type { WaitingSettingsNotice } from "./WaitingSettingsChangeNotice";
 
 /**
  * What the Gateway said to a provider change request itself, apart from any read that follows it: an earlier change
@@ -42,11 +43,12 @@ export function useProviderCreateFailure(reload: () => Promise<unknown>) {
         return true;
       }
       if (seen?.kind !== "waiting") return false;
-      const found = (await findWaitingSettingsChange(seen.planId)) ?? {
-        planId: seen.planId,
-        unreadable: true as const,
-      };
-      if (stillCurrent()) setWaiting(found);
+      const lookup = await findWaitingSettingsChange(seen.planId);
+      // A change that finished meanwhile leaves nothing to show: the reloaded provider speaks for itself.
+      if (lookup.kind === "finished") void reload();
+      else if (lookup.kind === "foreign")
+        report("Provider settings changed. Review the latest version before creating a change.");
+      else if (stillCurrent()) setWaiting(waitingNoticeFor(lookup, seen.planId));
       return true;
     },
   };

@@ -10,8 +10,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 
 import {
   classifySettingsSaveFailure,
+  describeWaitingChange,
   findActiveSettingsChange,
   findWaitingSettingsChange,
+  waitingNoticeFor,
 } from "./settings-save-outcome";
 
 const http = (status: number, body?: unknown) => Object.assign(new Error("x"), { status, body, kind: "http" });
@@ -81,32 +83,69 @@ describe("classifySettingsSaveFailure", () => {
 });
 
 describe("findWaitingSettingsChange", () => {
-  it("finds a waiting Settings change and ignores finished or foreign plans", async () => {
+  it("finds a waiting Settings change and tells a finished or foreign plan apart", async () => {
     api.fetchChangePlan.mockResolvedValue(plan());
     expect(await findWaitingSettingsChange("plan-7")).toEqual({
-      planId: "plan-7",
-      approvalId: "approval-7",
-      title: "Turn off Claude Code CLI: reuse one process between tool steps",
-      applying: false,
+      kind: "open",
+      change: {
+        planId: "plan-7",
+        approvalId: "approval-7",
+        title: "Turn off Claude Code CLI: reuse one process between tool steps",
+        stage: "approval",
+      },
     });
     expect(api.fetchChangePlan).toHaveBeenCalledWith("plan-7", { workspaceId: "default" });
-    api.fetchChangePlan.mockResolvedValue(plan({ status: "completed" }));
-    expect(await findWaitingSettingsChange("plan-7")).toBeUndefined();
+    for (const status of ["completed", "failed", "cancelled", "applied"]) {
+      api.fetchChangePlan.mockResolvedValue(plan({ status }));
+      expect(await findWaitingSettingsChange("plan-7")).toEqual({ kind: "finished" });
+    }
     api.fetchChangePlan.mockResolvedValue(plan({ origin: { surface: "chat", workspaceId: "default" } }));
-    expect(await findWaitingSettingsChange("plan-7")).toBeUndefined();
+    expect(await findWaitingSettingsChange("plan-7")).toEqual({ kind: "foreign" });
     api.fetchChangePlan.mockResolvedValue(plan({ origin: { surface: "settings", workspaceId: "other" } }));
-    expect(await findWaitingSettingsChange("plan-7")).toBeUndefined();
+    expect(await findWaitingSettingsChange("plan-7")).toEqual({ kind: "foreign" });
     api.fetchChangePlan.mockRejectedValue(new Error("offline"));
-    expect(await findWaitingSettingsChange("plan-7")).toBeUndefined();
+    expect(await findWaitingSettingsChange("plan-7")).toEqual({ kind: "unreadable" });
   });
 
-  it("reports a change being applied without an approval to decide", async () => {
-    api.fetchChangePlan.mockResolvedValue(plan({ status: "verifying", requiredAction: undefined }));
-    expect(await findWaitingSettingsChange("plan-7")).toMatchObject({ planId: "plan-7", applying: true });
-    expect((await findWaitingSettingsChange("plan-7"))?.approvalId).toBeUndefined();
+  it("separates a change being applied from one that waits for the operator", async () => {
+    for (const status of ["applying", "verifying", "monitoring", "rolling_back"]) {
+      api.fetchChangePlan.mockResolvedValue(plan({ status, requiredAction: undefined }));
+      expect(await findWaitingSettingsChange("plan-7")).toMatchObject({ kind: "open", change: { stage: "applying" } });
+    }
+    for (const status of ["draft", "awaiting_input", "awaiting_confirmation", "staging"]) {
+      api.fetchChangePlan.mockResolvedValue(plan({ status, requiredAction: { kind: "confirmation" } }));
+      expect(await findWaitingSettingsChange("plan-7")).toMatchObject({ kind: "open", change: { stage: "review" } });
+    }
+    // An approval step with no approval to open is still something the operator must look at.
+    api.fetchChangePlan.mockResolvedValue(plan({ requiredAction: { kind: "approval" } }));
+    expect(await findWaitingSettingsChange("plan-7")).toMatchObject({ kind: "open", change: { stage: "review" } });
   });
 });
 
+describe("describeWaitingChange and waitingNoticeFor", () => {
+  it("says the true thing for each stage", () => {
+    expect(describeWaitingChange({ planId: "p", stage: "approval", approvalId: "a" })).toBe(
+      "One change to this setting is already waiting for your approval.",
+    );
+    expect(describeWaitingChange({ planId: "p", stage: "review" })).toBe(
+      "One change to this setting is waiting for your review.",
+    );
+    expect(describeWaitingChange({ planId: "p", stage: "applying" }, "rule")).toBe(
+      "One change to this rule is still being applied. Refresh in a moment to see it.",
+    );
+    expect(describeWaitingChange({ planId: "p", unreadable: true })).toBe(
+      "One change to this setting is already waiting.",
+    );
+  });
+
+  it("holds only an open or an unreadable plan", () => {
+    const change = { planId: "p", stage: "review" as const };
+    expect(waitingNoticeFor({ kind: "open", change }, "p")).toBe(change);
+    expect(waitingNoticeFor({ kind: "unreadable" }, "p")).toEqual({ planId: "p", unreadable: true });
+    expect(waitingNoticeFor({ kind: "finished" }, "p")).toBeNull();
+    expect(waitingNoticeFor({ kind: "foreign" }, "p")).toBeNull();
+  });
+});
 describe("findActiveSettingsChange", () => {
   it("returns the newest open matching Settings plan", async () => {
     api.fetchChangePlans.mockResolvedValue({

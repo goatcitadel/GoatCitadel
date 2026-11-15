@@ -54,14 +54,30 @@ export function classifySettingsSaveFailure(error: unknown): SettingsSaveFailure
   return { kind: "uncertain", reason: describeApiError(error).summary };
 }
 
+/**
+ * Where an open Settings change stands for the operator: `approval` has an approval to decide in place, `review` is a
+ * change the operator must act on (confirm, give input, review) and `applying` is being carried out by GoatCitadel.
+ */
+export type WaitingSettingsStage = "approval" | "review" | "applying";
+
 export interface WaitingSettingsChange {
   planId: string;
   approvalId?: string;
   title?: string;
-  applying: boolean;
+  stage: WaitingSettingsStage;
 }
 
-const APPLYING = new Set<string>(["applying", "verifying", "monitoring"]);
+/** A waiting change as the save hooks hold it: read, or named by the Gateway but not readable right now. */
+export type WaitingSettingsNotice = WaitingSettingsChange | { planId: string; unreadable: true };
+
+/** What a look at a named plan found: still open, finished, not a Settings change, or not readable. */
+export type WaitingLookup =
+  | { kind: "open"; change: WaitingSettingsChange }
+  | { kind: "finished" }
+  | { kind: "foreign" }
+  | { kind: "unreadable" };
+
+const APPLYING = new Set<string>(["applying", "verifying", "monitoring", "rolling_back"]);
 
 function isTerminal(plan: ChangePlanRecord): boolean {
   return changePlanPhaseForStatus(plan.status) === "terminal";
@@ -73,23 +89,41 @@ function isSettingsPlan(plan: ChangePlanRecord): boolean {
 
 function describeWaiting(plan: ChangePlanRecord): WaitingSettingsChange {
   const action = plan.requiredAction;
+  const approvalId = action?.kind === "approval" && action.approvalId ? action.approvalId : undefined;
+  const stage: WaitingSettingsStage = approvalId ? "approval" : APPLYING.has(plan.status) ? "applying" : "review";
   return {
     planId: plan.planId,
-    ...(action?.kind === "approval" && action.approvalId ? { approvalId: action.approvalId } : {}),
+    ...(approvalId ? { approvalId } : {}),
     ...(plan.title ? { title: plan.title } : {}),
-    applying: APPLYING.has(plan.status),
+    stage,
   };
 }
 
-/** The Settings change a conflict named, when it is still open; `undefined` when it is finished, foreign or unreadable. */
-export async function findWaitingSettingsChange(planId: string): Promise<WaitingSettingsChange | undefined> {
+/** Looks at the Settings change a conflict named. */
+export async function findWaitingSettingsChange(planId: string): Promise<WaitingLookup> {
+  let plan: ChangePlanRecord;
   try {
-    const plan = await fetchChangePlan(planId, { workspaceId: "default" });
-    if (!isSettingsPlan(plan) || isTerminal(plan)) return undefined;
-    return describeWaiting(plan);
+    plan = await fetchChangePlan(planId, { workspaceId: "default" });
   } catch {
-    return undefined;
+    return { kind: "unreadable" };
   }
+  if (!isSettingsPlan(plan)) return { kind: "foreign" };
+  if (isTerminal(plan)) return { kind: "finished" };
+  return { kind: "open", change: describeWaiting(plan) };
+}
+
+/** What a held waiting change becomes after a look: the open change, the unreadable stand-in, or nothing. */
+export function waitingNoticeFor(lookup: WaitingLookup, planId: string): WaitingSettingsNotice | null {
+  if (lookup.kind === "open") return lookup.change;
+  return lookup.kind === "unreadable" ? { planId, unreadable: true } : null;
+}
+
+/** The one sentence about a waiting change; `subject` is the words after "this". */
+export function describeWaitingChange(waiting: WaitingSettingsNotice, subject: "setting" | "rule" = "setting"): string {
+  if ("unreadable" in waiting) return `One change to this ${subject} is already waiting.`;
+  if (waiting.stage === "approval") return `One change to this ${subject} is already waiting for your approval.`;
+  if (waiting.stage === "review") return `One change to this ${subject} is waiting for your review.`;
+  return `One change to this ${subject} is still being applied. Refresh in a moment to see it.`;
 }
 
 /** The newest open Settings change that `matches`; `"unreadable"` when the plans could not be read. */

@@ -363,9 +363,8 @@ describe("cockpit tool approval rule", () => {
     await render();
     await choose("approve_risky");
     await click("Save approval rule");
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain("One change to this rule is already waiting. Open Inbox to approve it."),
-    );
+    await vi.waitFor(() => expect(container.textContent).toContain("One change to this rule is already waiting."));
+    expect(container.textContent).toContain("Open Inbox to approve it.");
     expect(container.textContent).not.toContain("changed since your draft started");
     expect(button("Save approval rule").disabled).toBe(true);
     expect(container.textContent).toContain("Unsaved approval rule draft");

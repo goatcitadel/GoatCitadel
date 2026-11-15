@@ -66,6 +66,7 @@ export function ApprovalModeEditor({
           onClick={() => {
             void settings.refetch();
             if (change.change) void change.refresh();
+            void control.recheckWaiting();
           }}
         >
           Refresh approval settings
@@ -194,7 +195,12 @@ export function ApprovalModeEditor({
         </p>
       ) : null}
       {control.waiting ? (
-        <WaitingSettingsChangeNotice waiting={control.waiting} onResolved={control.clearWaiting} subject="rule" />
+        <WaitingSettingsChangeNotice
+          waiting={control.waiting}
+          onResolved={control.clearWaiting}
+          subject="rule"
+          showSentence={false}
+        />
       ) : null}
       {uncertain ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">
