@@ -238,7 +238,9 @@ describe("NextCodeWorkbenchPanel inspector disclosures", () => {
     });
 
     expect(renderer!.root.findAllByProps({ className: "mc-next-code-session-inspector-section" })).toHaveLength(0);
-    await act(async () => { renderer!.root.findByProps({ className: "mc-next-panel-button mc-next-code-inspector-open" }).props.onClick(); });
+    await act(async () => {
+      renderer!.root.findByProps({ className: "mc-next-panel-button mc-next-code-inspector-open" }).props.onClick();
+    });
     const disclosures = renderer!.root.findAllByProps({ className: "mc-next-code-session-inspector-section" });
     expect(disclosures.length).toBeGreaterThan(0);
 
@@ -270,7 +272,10 @@ describe("NextCodeWorkbenchPanel inspector disclosures", () => {
       await Promise.resolve();
     });
     expect(inspectorTrigger.props["aria-expanded"]).toBe(true);
-    expect(renderer!.root.findByProps({ id: inspectorDrawerId }).findByProps({ className: "mc-next-detail-inspector" }).props.role).toBe("region");
+    expect(
+      renderer!.root.findByProps({ id: inspectorDrawerId }).findByProps({ className: "mc-next-detail-inspector" }).props
+        .role,
+    ).toBe("region");
 
     const moreMenuTrigger = findButtonByAriaLabel(renderer!.root, "More workbench actions");
     const moreMenuId = moreMenuTrigger.props["aria-controls"] as string;
@@ -662,50 +667,152 @@ describe("NextCodeWorkbenchPanel clipboard lifecycle", () => {
       await flushPromises();
     });
     await act(async () => {
-      renderer.root.findAllByProps({ role: "tab" }).find((tab) => renderedText(tab) === "Run log")!.props.onClick();
+      renderer.root
+        .findAllByProps({ role: "tab" })
+        .find((tab) => renderedText(tab) === "Run log")!
+        .props.onClick();
     });
     return renderer;
   }
 
-  it.each(["success", "failure"] as const)("reports a mounted clipboard %s after its actual promise settles", async (outcome) => {
-    let resolve!: () => void;
-    let reject!: (error: Error) => void;
-    const writeText = vi.fn(() => new Promise<void>((done, fail) => { resolve = done; reject = fail; }));
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    const renderer = await openRunLog("Exact run log A");
-    await act(async () => {
-      renderer.root.findAllByType("button").find((button) => renderedText(button) === "Copy")!.props.onClick();
-    });
-    expect(writeText).toHaveBeenCalledExactlyOnceWith("Exact run log A");
-    expect(renderedText(renderer.root)).not.toContain("Run log copied.");
-    await act(async () => {
-      if (outcome === "success") resolve();
-      else reject(new Error("Clipboard unavailable"));
-      await flushPromises();
-    });
-    expect(renderedText(renderer.root)).toContain(outcome === "success" ? "Run log copied." : "Run log copy failed.");
-    await act(async () => renderer.unmount());
+  it.each(["success", "failure"] as const)(
+    "reports a mounted clipboard %s after its actual promise settles",
+    async (outcome) => {
+      let resolve!: () => void;
+      let reject!: (error: Error) => void;
+      const writeText = vi.fn(
+        () =>
+          new Promise<void>((done, fail) => {
+            resolve = done;
+            reject = fail;
+          }),
+      );
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const renderer = await openRunLog("Exact run log A");
+      await act(async () => {
+        renderer.root
+          .findAllByType("button")
+          .find((button) => renderedText(button) === "Copy")!
+          .props.onClick();
+      });
+      expect(writeText).toHaveBeenCalledExactlyOnceWith("Exact run log A");
+      expect(renderedText(renderer.root)).not.toContain("Run log copied.");
+      await act(async () => {
+        if (outcome === "success") resolve();
+        else reject(new Error("Clipboard unavailable"));
+        await flushPromises();
+      });
+      expect(renderedText(renderer.root)).toContain(outcome === "success" ? "Run log copied." : "Run log copy failed.");
+      await act(async () => renderer.unmount());
+    },
+  );
+
+  it.each(["success", "failure"] as const)(
+    "settles a late clipboard %s after unmount without changing the new panel",
+    async (outcome) => {
+      let resolve!: () => void;
+      let reject!: (error: Error) => void;
+      const writeText = vi.fn(
+        () =>
+          new Promise<void>((done, fail) => {
+            resolve = done;
+            reject = fail;
+          }),
+      );
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const first = await openRunLog("Exact run log A");
+      await act(async () => {
+        first.root
+          .findAllByType("button")
+          .find((button) => renderedText(button) === "Copy")!
+          .props.onClick();
+      });
+      await act(async () => first.unmount());
+      const current = await openRunLog("Different run log B");
+      await act(async () => {
+        if (outcome === "success") resolve();
+        else reject(new Error("Clipboard unavailable"));
+        await flushPromises();
+      });
+      expect(writeText).toHaveBeenCalledExactlyOnceWith("Exact run log A");
+      expect(renderedText(current.root)).not.toContain("Run log copied.");
+      expect(renderedText(current.root)).not.toContain("Run log copy failed.");
+      await act(async () => current.unmount());
+    },
+  );
+});
+
+describe("NextCodeWorkbenchPanel first step", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it.each(["success", "failure"] as const)("settles a late clipboard %s after unmount without changing the new panel", async (outcome) => {
-    let resolve!: () => void;
-    let reject!: (error: Error) => void;
-    const writeText = vi.fn(() => new Promise<void>((done, fail) => { resolve = done; reject = fail; }));
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    const first = await openRunLog("Exact run log A");
+  async function render(overrides: Record<string, unknown>) {
+    const panel = buildCodePanel(overrides);
+    let renderer: ReactTestRenderer | null = null;
     await act(async () => {
-      first.root.findAllByType("button").find((button) => renderedText(button) === "Copy")!.props.onClick();
+      renderer = create(<NextCodeWorkbenchPanel panel={panel} />);
+      await Promise.resolve();
     });
-    await act(async () => first.unmount());
-    const current = await openRunLog("Different run log B");
+    return { panel, renderer: renderer! as ReactTestRenderer };
+  }
+
+  it("shows Create worktree next to the sentence that asks for it (U-CH-038)", async () => {
+    const { panel, renderer } = await render({ workbenchState: null });
+    const buttons = renderer.root
+      .findAllByType("button")
+      .filter((button) => renderedText(button) === "Create worktree");
+    expect(buttons).toHaveLength(1);
+    let node: ReactTestInstance | null = buttons[0]!;
+    while (node) {
+      expect(node.type).not.toBe("details");
+      node = node.parent;
+    }
+    await act(async () => buttons[0]!.props.onClick());
+    expect(panel.props.onCreateWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains a failed worktree creation in a sentence (U-CH-043)", async () => {
+    const error =
+      'API error 400: {"error":"Command failed: git worktree add --detach C:\\runtime\\.worktrees\\s1 HEAD fatal: not a git repository (or any of the parent directories): .git"}';
+    const { renderer } = await render({ error, workbenchState: null });
+    const banner = renderer.root.findByProps({ className: "mc-next-panel-banner warning" });
+    expect(renderedText(banner)).toContain("This project's folder isn't a git repository");
+    const details = banner.findByType("details");
+    expect(renderedText(details)).toContain("API error 400");
+    const outside = banner.children
+      .filter((child) => typeof child !== "string" && child.type !== "details")
+      .map((child) => renderedText(child as ReactTestInstance))
+      .join("");
+    expect(outside).not.toContain("API error 400");
+  });
+
+  it("gives the same text from a ready worktree the generic sentence", async () => {
+    const error = 'API error 400: {"error":"fatal: not a git repository"}';
+    const { renderer } = await render({ error, workbenchState: { worktreeStatus: "ready" } });
+    const banner = renderer.root.findByProps({ className: "mc-next-panel-banner warning" });
+    expect(renderedText(banner)).not.toContain("Create worktree");
+  });
+
+  it("says how many files Revert all discards and that it can't be undone (U-CH-012)", async () => {
+    const { renderer } = await render({
+      workbenchState: { worktreeStatus: "ready" },
+      workbenchTree: { items: [], changedFiles: ["a.ts", "b.ts", "c.ts", "d.ts"] },
+    });
     await act(async () => {
-      if (outcome === "success") resolve();
-      else reject(new Error("Clipboard unavailable"));
-      await flushPromises();
+      findButtonByAriaLabel(renderer.root, "More workbench actions").props.onClick();
     });
-    expect(writeText).toHaveBeenCalledExactlyOnceWith("Exact run log A");
-    expect(renderedText(current.root)).not.toContain("Run log copied.");
-    expect(renderedText(current.root)).not.toContain("Run log copy failed.");
-    await act(async () => current.unmount());
+    const revertAll = renderer.root.findAllByType("button").find((button) => renderedText(button) === "Revert all")!;
+    await act(async () => revertAll.props.onClick());
+    const modal = renderer.root.findAll(
+      (node) => node.props.title === "Revert all worktree changes?" && typeof node.props.message === "string",
+    )[0]!;
+    expect(modal.props.message).toBe(
+      "This discards the changes to 4 files in this conversation's worktree. You can't undo this here.",
+    );
   });
 });
