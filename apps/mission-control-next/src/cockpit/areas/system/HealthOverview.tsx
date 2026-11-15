@@ -168,6 +168,7 @@ export function HealthOverview() {
       ) : null}
       {health.isError ? (
         <EmptyState
+          tone="error"
           title="Health unavailable"
           description={describeApiError(health.error).summary}
           action={error.retryable === false ? null : <Button onClick={() => void health.refetch()}>Try again</Button>}

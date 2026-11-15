@@ -470,6 +470,32 @@ describe("useChatSurfaceOrchestration", () => {
     expect(latest!.snapshot().queuedOutbound).toHaveLength(0);
   });
 
+  it("says there was nothing to stop when the reply had already finished", async () => {
+    apiMocks.cancelChatTurn.mockResolvedValue({
+      sessionId: "session-1",
+      turnId: "turn-active-123456",
+      cancelled: false,
+      trace: { status: "completed" },
+    });
+    mountHarness({
+      activeStream: {
+        sessionId: "session-1",
+        streamToken: "stream-1",
+        turnId: "turn-active-123456",
+        controller: new AbortController(),
+      },
+    });
+
+    await act(async () => {
+      await latest!.controller.handleStopActiveTurn();
+    });
+    expect(latest!.pushNotice).toHaveBeenCalledWith(
+      "The reply had already finished, so there was nothing to stop.",
+      "neutral",
+    );
+    expect(latest!.setError).not.toHaveBeenCalled();
+  });
+
   it("stops active turns and reports cancel errors", async () => {
     apiMocks.cancelChatTurn.mockResolvedValue({
       sessionId: "session-1",

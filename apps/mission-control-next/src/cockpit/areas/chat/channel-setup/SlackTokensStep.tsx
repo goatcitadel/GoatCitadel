@@ -1,6 +1,7 @@
 import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
-import { SLACK_TOKEN_STEPS } from "./slack-setup-model";
+import { ChannelFailureText } from "./ChannelFailureText";
+import { SLACK_CATALOG_ID, SLACK_TOKEN_STEPS } from "./slack-setup-model";
 import { TokenField } from "./TokenField";
 
 /**
@@ -16,6 +17,7 @@ export function SlackTokensStep({
   busy,
   checking,
   error,
+  workspaceId,
   onCheck,
 }: {
   botToken: string;
@@ -27,6 +29,7 @@ export function SlackTokensStep({
   /** The check itself is in flight. */
   checking: boolean;
   error?: string;
+  workspaceId: string;
   onCheck: () => void;
 }) {
   const both = botToken.trim() !== "" && appToken.trim() !== "";
@@ -39,7 +42,14 @@ export function SlackTokensStep({
       </ol>
       {error ? (
         <Callout tone="error" announce={false}>
-          <p>{error}</p>
+          <p>
+            <ChannelFailureText
+              error={error}
+              channelName="Slack"
+              catalogId={SLACK_CATALOG_ID}
+              workspaceId={workspaceId}
+            />
+          </p>
         </Callout>
       ) : null}
       <form

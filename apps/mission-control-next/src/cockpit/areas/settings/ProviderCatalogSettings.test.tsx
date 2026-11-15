@@ -30,11 +30,14 @@ const provider: ProviderModelCatalogOption = {
 let catalog: ReturnType<typeof useProviderModelCatalog>;
 let root: Root;
 let container: HTMLDivElement;
-const render = (codexOAuthStatus?: Parameters<typeof ProviderCatalogSettings>[0]["codexOAuthStatus"]) =>
+const render = (
+  codexOAuthStatus?: Parameters<typeof ProviderCatalogSettings>[0]["codexOAuthStatus"],
+  providerId?: string | null,
+) =>
   act(async () =>
     root.render(
       <CockpitNavigationProvider>
-        <ProviderCatalogSettings codexOAuthStatus={codexOAuthStatus} />
+        <ProviderCatalogSettings codexOAuthStatus={codexOAuthStatus} providerId={providerId} />
       </CockpitNavigationProvider>,
     ),
   );
@@ -77,6 +80,24 @@ describe("cockpit provider catalog", () => {
     expect(container.textContent).not.toContain("Connected");
     await render();
     expect(container.textContent).toContain("Connected");
+  });
+  it("has its own provider chooser alone, and none when the host chooses the provider", async () => {
+    catalog.providers = [provider, { ...provider, providerId: "provider-b", label: "Provider B" }];
+    await render();
+    expect([...container.querySelectorAll("label")].some((label) => label.textContent === "Inspect provider")).toBe(
+      true,
+    );
+    await render(undefined, "provider-b");
+    expect([...container.querySelectorAll("label")].some((label) => label.textContent === "Inspect provider")).toBe(
+      false,
+    );
+    expect(container.textContent).toContain(
+      "Showing the catalog for Provider B. Choose another provider in the list above.",
+    );
+    await render(undefined, null);
+    expect(container.textContent).toContain(
+      "Showing the catalog for Provider A. Choose another provider in the list above.",
+    );
   });
   it("opens native provider management without reloading the document", async () => {
     window.history.replaceState(null, "", "/settings/models?shell=cockpit#provider-catalog");

@@ -5,6 +5,7 @@ import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals
 import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
+import { registerApprovalHandledInPlace } from "../../data/approvals-handled-in-place";
 import { queryKeys } from "../../data/query-keys";
 import { ApprovalDecisionBar } from "../inbox/ApprovalDecisionBar";
 import { ApprovalReviewSummary } from "../inbox/ApprovalReviewSummary";
@@ -55,6 +56,7 @@ export function SettingsApprovalDialog({
   reviewLabel = "Review approval",
   loadFailureHint = "Use Refresh change status, or decide it in Inbox.",
   installationSetting = false,
+  dangerReview = false,
   onResolved,
 }: {
   approvalId: string;
@@ -76,6 +78,13 @@ export function SettingsApprovalDialog({
    * workspace. The bar still checks that the approval itself is the install-wide Settings shape.
    */
   installationSetting?: boolean;
+  /**
+   * A danger-level approval keeps its two-step review here: the red "Review danger approval" button and then its
+   * confirmation, as in Inbox. Caution still approves in one click and nuclear keeps its typed confirmation. For a
+   * change the operator asked for that was decided in Inbox before it opened in place (a connector install, the tool
+   * approval rule, filesystem access); dialogs that don't set it keep the one-click danger approval.
+   */
+  dangerReview?: boolean;
   /** Called after a decision with the approval's re-read status, so the owner can report a denial as a denial. */
   onResolved: (status: ApprovalRequest["status"] | undefined) => Promise<unknown> | void;
 }) {
@@ -99,6 +108,14 @@ export function SettingsApprovalDialog({
     subscribeReopenAsks,
     () => reopenAsks.get(approvalId) ?? 0,
     () => 0,
+  );
+
+  // While this dialog is open on a pending approval it is decided here, so its Inbox toast would sit on top of it.
+  // Only while the dialog is open on the loaded, still pending record: while it loads, if it can't be read, or once
+  // it is closed (the button that opens it again may be off screen), the toast stays.
+  useEffect(
+    () => (pending && open ? registerApprovalHandledInPlace(approvalId) : undefined),
+    [approvalId, pending, open],
   );
 
   // Opens once per approval, and again after each ask to reopen it (which clears it from `offered`).
@@ -147,7 +164,7 @@ export function SettingsApprovalDialog({
           </details>
           <ApprovalDecisionBar
             compact
-            reviewedInPlace
+            reviewedInPlace={!(dangerReview && approval.riskLevel === "danger")}
             installationSetting={installationSetting}
             approval={approval}
             workspaceId={workspaceId}

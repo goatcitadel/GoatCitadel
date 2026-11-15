@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveChatNormalizationProfile, shouldUseQuickWebProfile } from "./chat-turn-execution-profile.js";
+import {
+  resolveChatNormalizationProfile,
+  resolveSustainedLocalCodingProfile,
+  shouldUseQuickWebProfile,
+} from "./chat-turn-execution-profile.js";
 
 describe("chat turn execution profile", () => {
   it("classifies short simple lookup prompts as quick_web", () => {
@@ -33,5 +37,16 @@ describe("chat turn execution profile", () => {
       const request = { content: "look up sushi etiquette", thinkingLevel };
       expect(resolveChatNormalizationProfile({ request })).toBe("live");
     }
+  });
+
+  it("never gives a Plan first turn the sustained coding profile", () => {
+    const coding = {
+      content: "Implement a sorting module in sorter.ts and run tests",
+      providerId: "ollama",
+      durableEnabled: true,
+      normalizationProfile: "live" as const,
+    };
+    expect(resolveSustainedLocalCodingProfile(coding)).toBe("sustained_local_coding");
+    expect(resolveSustainedLocalCodingProfile({ ...coding, advisoryPlanning: true })).toBe("standard");
   });
 });

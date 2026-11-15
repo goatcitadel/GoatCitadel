@@ -1,4 +1,9 @@
-import type { ChatThreadTurnRecord, ChatToolRunRecord, DesignAdvisory } from "@goatcitadel/contracts";
+import {
+  toolGroupForTool,
+  type ChatThreadTurnRecord,
+  type ChatToolRunRecord,
+  type DesignAdvisory,
+} from "@goatcitadel/contracts";
 import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
 import {
   getChatToolRunDiagnostics,
@@ -13,7 +18,9 @@ import { isAwaitingApprovedReceipt, toolRunTarget, type ToolRunTarget } from "./
 import { toolRunDuration, toolRunLineChanges } from "./chat-tool-run-change-stats";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { failureLine, failureReason } from "./code-mode-request-copy";
+import { toolHref } from "../capabilities/tools/tool-links";
 import { presentErrorText } from "../../lib/present-error";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 function activityLabel(tool: ChatToolRunRecord): string {
@@ -48,6 +55,23 @@ function toolRunSummaryText(tool: ChatToolRunRecord): string {
     (requestError ? failureLine(requestError) : "") ||
     getChatToolRunDiagnostics(tool).summary ||
     (tool.error ? presentErrorText(tool.error).summary : "")
+  );
+}
+
+/** The outcomes of an approval you or the clock ended: the call was stopped by that decision, not by a rule. */
+const APPROVAL_ENDED_OUTCOMES = new Set(["denied", "withdrawn", "expired"]);
+
+/**
+ * A blocked call that can link to the page showing why: not stopped by your own decision on its approval, and a tool in
+ * a group, since the group's panel is what names the rule. The record names no rule itself, so a tool in no group (a
+ * connector's) gets no link.
+ */
+function blockedByRule(tool: ChatToolRunRecord): boolean {
+  const outcome = tool.result?.approvalOutcome;
+  return (
+    tool.status === "blocked" &&
+    !(typeof outcome === "string" && APPROVAL_ENDED_OUTCOMES.has(outcome)) &&
+    toolGroupForTool(tool.toolName) !== undefined
   );
 }
 
@@ -146,6 +170,13 @@ export function ChatToolActivityBody({
             {finishing ? <p className="w-full">Finishing after your approval.</p> : null}
             {!finishing && (diagnostics.summary || tool.error || tool.failureGuidance) ? (
               <ChatToolRunSummary text={toolRunSummaryText(tool)} />
+            ) : null}
+            {blockedByRule(tool) ? (
+              <div className="w-full">
+                <NativeOwnerLink href={toolHref(tool.toolName)} scope={tool.sessionId} className="text-sm">
+                  See why it's blocked
+                </NativeOwnerLink>
+              </div>
             ) : null}
             {earlier.length ? <EarlierTries tries={earlier} /> : null}
             {/* The row shows the summary; the recorded failure stays reachable for technical review. */}

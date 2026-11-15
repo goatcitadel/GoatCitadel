@@ -48,6 +48,8 @@ export type ComposerProps = ChatMediaProps & {
     | "modelSwitchDisabled"
     | "onRequestProviderChange"
     | "onRequestModelChange"
+    | "onRequestModelChoice"
+    | "reasoningEffortsFor"
     | "currentThinkingLevel"
     | "onSetThinkingLevel"
     | "activePersonality"

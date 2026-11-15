@@ -8,11 +8,14 @@ import { TimeText } from "../../../ui/TimeText";
 import { EVAL_RUN_STATUS, MEASUREMENT_SOURCE } from "../system-vocabulary";
 import { QualityFacts, QualityNotes, QualitySource, QualityWarnings, qualityNumber } from "./QualityEvidence";
 
+const EVALUATIONS_EMPTY_HINT =
+  "None of the Cockpit's screens run a model evaluation yet; results appear here once one is recorded.";
+
 export function QualityEvaluations({ source }: { source: OpsQualitySnapshotResponse["evalProof"] }) {
   const [runId, setRunId] = useState<string | null>(null);
   const selected = source.items.find((run) => run.runId === runId);
   return (
-    <QualitySource title="Model evaluations" {...source}>
+    <QualitySource title="Model evaluations" emptyHint={EVALUATIONS_EMPTY_HINT} {...source}>
       <p className="text-sm text-fg-secondary">
         Stored runtime measurements and operator scores. Inspection does not call providers.
       </p>

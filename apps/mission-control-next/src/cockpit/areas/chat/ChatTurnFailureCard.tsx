@@ -2,6 +2,7 @@ import type { ChatTurnFailureClass } from "@goatcitadel/contracts";
 import { CircleAlert, TriangleAlert } from "lucide-react";
 import { Button } from "../../ui/Button";
 import { useProviderLabelLookup } from "../../data/use-model-label";
+import { SAFETY_RULES_HREF } from "../capabilities/tools/tool-links";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { presentFailureClass } from "./chat-vocabulary";
 
@@ -100,6 +101,11 @@ export function ChatTurnFailureCard({
         {known && (PROVIDER_ACCOUNT_FAILURES.has(known) || (reach && failed)) ? (
           <NativeOwnerLink href={MODEL_SETTINGS_HREF} scope="chat-turn-failure" className="text-sm">
             Open model providers
+          </NativeOwnerLink>
+        ) : null}
+        {known === "tool_blocked" ? (
+          <NativeOwnerLink href={SAFETY_RULES_HREF} scope="chat-turn-failure" className="text-sm">
+            Open tool rules
           </NativeOwnerLink>
         ) : null}
         {known === "context_too_long" && onNewConversation ? (

@@ -1212,7 +1212,8 @@
   animation: mcStreamingCursorPulse 1.1s ease-in-out infinite;
 }
 
-.mc-assistant-streaming-tail {
+.mc-assistant-streaming-tail,
+.mc-assistant-settled-tail {
   min-width: 0;
 }
 

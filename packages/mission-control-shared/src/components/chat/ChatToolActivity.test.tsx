@@ -375,6 +375,8 @@ describe("ChatLiveActivityRail", () => {
     );
     const text = renderedText(renderer);
     expect(text).toContain("✕");
+    // The record names no rule, so the fallback stays neutral.
+    expect(text).toContain("Blocked by policy or runtime guard.");
     const dangerGlyph = renderer.root.findAll(
       (node) =>
         typeof node.type === "string" &&

@@ -44,8 +44,8 @@
 
   .cockpit-chat-content
     .mc-assistant-streaming-markdown
-    > :is(.mc-assistant-markdown, .mc-assistant-streaming-tail)
-    + :is(.mc-assistant-markdown, .mc-assistant-streaming-tail) {
+    > :is(.mc-assistant-markdown, .mc-assistant-streaming-tail, .mc-assistant-settled-tail)
+    + :is(.mc-assistant-markdown, .mc-assistant-streaming-tail, .mc-assistant-settled-tail) {
     margin-top: 0.75rem;
   }
 

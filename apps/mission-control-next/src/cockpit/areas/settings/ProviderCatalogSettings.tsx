@@ -45,15 +45,31 @@ function catalogEvidence(provider: ProviderModelCatalogOption): { label: string;
 }
 
 /** The shared catalog owns discovery, freshness, and credential evidence. */
-export function ProviderCatalogSettings({ codexOAuthStatus }: { codexOAuthStatus?: StatusPresentation }) {
+export function ProviderCatalogSettings({
+  codexOAuthStatus,
+  providerId,
+}: {
+  codexOAuthStatus?: StatusPresentation;
+  /** Given by a host that already chooses the provider elsewhere (including `null` for none yet): no second chooser. */
+  providerId?: string | null;
+}) {
   const { navigate } = useCockpitRoute();
   const catalog = useProviderModelCatalog("system");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [ownSelectedId, setOwnSelectedId] = useState<string | null>(null);
+  const shared = providerId !== undefined;
+  const selectedId = shared ? providerId : ownSelectedId;
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<{ providerId: string; message: string } | null>(null);
   const refreshing = useRef(false);
+  // A provider chosen elsewhere starts its catalog on a fresh search and page.
+  const [seenProviderId, setSeenProviderId] = useState(providerId);
+  if (seenProviderId !== providerId) {
+    setSeenProviderId(providerId);
+    setQuery("");
+    setPage(0);
+  }
   const provider =
     catalog.providers.find((item) => item.providerId === selectedId) ??
     catalog.providers.find((item) => item.providerId === catalog.config?.activeProviderId) ??
@@ -131,30 +147,37 @@ export function ProviderCatalogSettings({ codexOAuthStatus }: { codexOAuthStatus
           ) : null}
           {provider && evidence ? (
             <>
-              <div className="mt-4">
-                <Field label="Inspect provider">
-                  {(fieldProps) => (
-                    <select
-                      {...fieldProps}
-                      value={provider.providerId}
-                      disabled={catalog.loading || refreshingId !== null}
-                      onChange={(event) => {
-                        setSelectedId(event.target.value);
-                        setQuery("");
-                        setPage(0);
-                      }}
-                      className={cockpitInputClass}
-                    >
-                      {catalog.providers.map((item) => (
-                        <option key={item.providerId} value={item.providerId}>
-                          {item.label}
-                          {item.providerId === catalog.config?.activeProviderId ? " (Chat default)" : ""}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                </Field>
-              </div>
+              {shared ? (
+                <p className="mt-4 text-sm text-fg-secondary">
+                  Showing the catalog for <strong className="text-fg">{provider.label}</strong>. Choose another provider
+                  in the list above.
+                </p>
+              ) : (
+                <div className="mt-4">
+                  <Field label="Inspect provider">
+                    {(fieldProps) => (
+                      <select
+                        {...fieldProps}
+                        value={provider.providerId}
+                        disabled={catalog.loading || refreshingId !== null}
+                        onChange={(event) => {
+                          setOwnSelectedId(event.target.value);
+                          setQuery("");
+                          setPage(0);
+                        }}
+                        className={cockpitInputClass}
+                      >
+                        {catalog.providers.map((item) => (
+                          <option key={item.providerId} value={item.providerId}>
+                            {item.label}
+                            {item.providerId === catalog.config?.activeProviderId ? " (Chat default)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </Field>
+                </div>
+              )}
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <StatusBadge status={connectionOverride ?? presentProviderReadiness(provider)} />
                 <span className="break-all text-xs text-fg-muted">{provider.sanitizedEndpointIdentity}</span>

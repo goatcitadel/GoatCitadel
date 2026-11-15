@@ -6,6 +6,7 @@ import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { Switch } from "../../../ui/Switch";
+import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
 import { inboxApprovalLink } from "../capability-links";
 import { OpenInPluginsLink } from "../plugins/FromPluginLink";
 import { pluginItemHref } from "../plugins/plugin-links";
@@ -41,9 +42,7 @@ function HeldOffNote({ holders }: { holders: Holders }) {
           </NativeOwnerLink>
         </Fragment>
       ))}
-      {holders.length === 1
-        ? ". Uninstalling it releases the hold."
-        : ". Uninstalling all of them releases the holds."}
+      {holders.length === 1 ? ". Uninstalling it releases the hold." : ". Uninstalling all of them releases the holds."}
       {" If the group stays off, you can switch it on here."}
     </p>
   );
@@ -136,6 +135,7 @@ export function GroupSwitchNotes({
   control,
   id,
   announce = true,
+  approveInPlace = true,
   className,
 }: {
   group: CapabilityToolGroupItem;
@@ -147,6 +147,11 @@ export function GroupSwitchNotes({
    * passes false and still shows the same words.
    */
   announce?: boolean;
+  /**
+   * Whether this view opens the approval a waiting change needs, so it is decided where the switch was pressed. A group
+   * shown more than once opens it in one view only; the others pass false and keep the link to Inbox.
+   */
+  approveInPlace?: boolean;
   className?: string;
 }) {
   // The store keeps a failure for the whole app session, so one can already stand when this view mounts (the tab
@@ -174,6 +179,16 @@ export function GroupSwitchNotes({
           <p>{group.state === "off" ? OFF_NOTE : ON_NOTE}</p>
         )}
       </div>
+      {control.waitingApprovalId && approveInPlace ? (
+        <SettingsApprovalDialog
+          approvalId={control.waitingApprovalId}
+          title="Approve this tool change?"
+          summary={`Switch ${group.label} ${control.waitingEnabled === false ? "off" : "on"}`}
+          reviewLabel="Review the change"
+          installationSetting
+          onResolved={() => control.checkApproval()}
+        />
+      ) : null}
       {control.failure ? (
         <div role={announceFailure ? "alert" : undefined} className="space-y-1 text-status-failed">
           <p>

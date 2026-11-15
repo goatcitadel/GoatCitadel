@@ -14,6 +14,7 @@ import { InspectorPanel, InspectorProvider } from "../../../app/inspector";
 import { queryKeys } from "../../../data/query-keys";
 import { ConnectorPanel } from "./ConnectorPanel";
 import { ConnectorsTab } from "./ConnectorsTab";
+import { resumeActionFor } from "./ConnectorResumeControls";
 import { prepareReadyDialogFixture } from "../../../../test/ready-dialog-fixture";
 
 prepareReadyDialogFixture();
@@ -198,6 +199,36 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("resumeActionFor", () => {
+  it("connects a saved server that never connected, without a sign-in step", () => {
+    const saved = { ...LINEAR, auth: "none", state: "needs_sign_in", reason: "not_connected" } as const;
+    expect(resumeActionFor(saved)).toEqual({ label: "Connect", from: "connect" });
+    expect(resumeActionFor({ ...saved, reason: "sign_in_needed" })).toEqual({ label: "Connect", from: "sign_in" });
+    expect(resumeActionFor({ ...LINEAR })).toBeUndefined();
+    // A server that is connecting has a connect running; a second button would start another.
+    expect(resumeActionFor({ ...saved, reason: "connecting" })).toBeUndefined();
+    // A requester-scoped server connects per chat, so it never gets a Connect that would always fail.
+    expect(resumeActionFor({ ...LINEAR, requesterScoped: true, state: "connected", reason: "ready" })).toBeUndefined();
+    expect(resumeActionFor({ ...saved, requesterScoped: true })).toBeUndefined();
+    // Its sign-in is still needed, and that runs the sign-in step only, never the global connect.
+    const perChat = { ...saved, requesterScoped: true };
+    expect(resumeActionFor({ ...perChat, reason: "sign_in_needed" })).toEqual({
+      label: "Connect",
+      from: "sign_in_only",
+    });
+    expect(resumeActionFor({ ...perChat, state: "sign_in_expired", reason: "sign_in_expired" })).toEqual({
+      label: "Reconnect",
+      from: "sign_in_only",
+    });
+    expect(resumeActionFor({ ...perChat, state: "broken", reason: "error" })).toBeUndefined();
+    // Static servers keep the full flow.
+    expect(resumeActionFor({ ...saved, state: "sign_in_expired", reason: "sign_in_expired" })).toEqual({
+      label: "Reconnect",
+      from: "sign_in",
+    });
+  });
+});
+
 describe("Connector panel", () => {
   it("shows the kind, category, state and reason", async () => {
     await renderPanel(LINEAR.id);
@@ -238,6 +269,20 @@ describe("Connector panel", () => {
     const target = new URL(advanced!.getAttribute("href")!, "http://cockpit.invalid");
     expect(target.pathname).toBe("/capabilities/connectors/advanced");
     expect(target.hash).toBe("#mcp-servers");
+  });
+
+  it("names the add form on the Advanced setup link of an integration that is not saved yet", async () => {
+    const gmail = item({
+      id: "integration:automation.gmail",
+      name: "Gmail and Google Calendar",
+      kind: "built_in",
+      source: "integration",
+      reason: "not_installed",
+      catalogId: "automation.gmail",
+    });
+    await renderPanel(gmail.id, [gmail]);
+    expect(link("Add Gmail and Google Calendar in Advanced setup")).toBeDefined();
+    expect(link("Advanced setup")).toBeUndefined();
   });
 
   it("explains when Chat can't use connectors yet, with a link to its switch", async () => {

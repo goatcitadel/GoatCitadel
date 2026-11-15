@@ -26,14 +26,25 @@ import { useProviderCodexSetup } from "../../../features/native-routes/settings/
 
 export function ProviderManagementSettings({
   onCodexOAuthStatusChange,
+  selectedProviderId,
+  onSelectedProviderChange,
 }: {
   onCodexOAuthStatusChange?: (status: StatusPresentation | undefined) => void;
+  /** Given with `onSelectedProviderChange` by a host that shares this choice with the catalog beside it. */
+  selectedProviderId?: string | null;
+  onSelectedProviderChange?: (providerId: string) => void;
 }) {
   const addReasonId = useId();
   const editReasonId = useId();
   const catalog = useProviderModelCatalog("system");
   const { activeWorkspaceId } = useUiPreferences();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [ownSelectedId, setOwnSelectedId] = useState<string | null>(null);
+  const controlled = onSelectedProviderChange !== undefined;
+  const selectedId = controlled ? (selectedProviderId ?? null) : ownSelectedId;
+  const setSelectedId = (providerId: string) => {
+    if (onSelectedProviderChange) onSelectedProviderChange(providerId);
+    else setOwnSelectedId(providerId);
+  };
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"selected" | "new">("selected");
   const [transportOpen, setTransportOpen] = useState(false);

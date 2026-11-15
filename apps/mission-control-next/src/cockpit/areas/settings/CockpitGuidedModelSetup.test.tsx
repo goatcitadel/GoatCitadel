@@ -108,7 +108,7 @@ describe("shared guided model setup", () => {
       modelProbeWarning: "fetch failed",
       modelRefreshStatus: "fresh",
     });
-    await mount({ showSteps: false });
+    await mount();
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
       "LM Studio has not answered at http://127.0.0.1:1234/v1. Start it, then check the connection again.",
     );
@@ -120,7 +120,7 @@ describe("shared guided model setup", () => {
       localCostPosture: "zero_cost_local_runtime",
       modelProbeState: "not_checked",
     });
-    await mount({ showSteps: false });
+    await mount();
     const line = container.querySelector('[role="status"]');
     expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
     catalog("ready", {
@@ -129,7 +129,7 @@ describe("shared guided model setup", () => {
       localCostPosture: "zero_cost_local_runtime",
       modelProbeState: "fallback",
     });
-    await mount({ showSteps: false });
+    await mount();
     expect(container.querySelector('[role="status"]')).toBe(line);
     expect(line?.textContent).toContain("has not answered");
     expect(line?.className).not.toContain("sr-only");
@@ -137,7 +137,7 @@ describe("shared guided model setup", () => {
   });
   it("keeps the empty status line in the accessibility tree, out of the layout", async () => {
     catalog("ready");
-    await mount({ showSteps: false });
+    await mount();
     const line = container.querySelector('[role="status"]');
     expect(line?.textContent).toBe("");
     expect(line?.className).toContain("sr-only");
@@ -154,7 +154,7 @@ describe("shared guided model setup", () => {
       modelRefreshFailed: true,
     };
     catalog("ready", failed);
-    await mount({ showSteps: false });
+    await mount();
     let resolveLoad: (models: string[]) => void = () => {};
     mocks.models.mockReturnValue(new Promise<string[]>((resolve) => (resolveLoad = resolve)));
     await act(async () => void button("Check connection")!.click());
@@ -162,17 +162,17 @@ describe("shared guided model setup", () => {
     expect(container.querySelector('[role="status"]')?.textContent).toBe("");
     catalog("ready", failed);
     await act(async () => resolveLoad([]));
-    await mount({ showSteps: false });
+    await mount();
     expect(container.querySelector('[role="status"]')?.textContent).toContain("has not answered");
   });
-  it("does not repeat the result under the button where the step list already shows it", async () => {
+  it("does not repeat the result under the button where the readiness note already shows it", async () => {
     catalog("ready", {
       label: "LM Studio",
       baseUrl: "http://127.0.0.1:1234/v1",
       localCostPosture: "zero_cost_local_runtime",
       modelProbeState: "fallback",
     });
-    await mount();
+    await mount({ showReadinessNote: true });
     const sentence =
       "LM Studio has not answered at http://127.0.0.1:1234/v1. Start it, then check the connection again.";
     expect(container.textContent?.split(sentence)).toHaveLength(2);
@@ -186,10 +186,10 @@ describe("shared guided model setup", () => {
       modelProbeState: "fallback",
       modelProbeWarning: "fetch failed",
     });
-    await mount({ showSteps: false });
+    await mount();
     expect(container.textContent).not.toContain("fetch failed");
     mocks.prefs.showTechnicalDetails = true;
-    await mount({ showSteps: false });
+    await mount();
     expect([...container.querySelectorAll("details")].map((item) => item.textContent).join(" ")).toContain(
       "fetch failed",
     );
@@ -204,7 +204,7 @@ describe("shared guided model setup", () => {
       modelProbeSource: "live",
       modelRefreshStatus: "stale",
     });
-    await mount({ showSteps: false });
+    await mount();
     expect(container.textContent).toContain("Ready");
     expect(container.textContent).not.toContain("stale");
     expect(container.querySelector('[role="status"]')?.textContent).toBe("");
@@ -220,7 +220,7 @@ describe("shared guided model setup", () => {
       modelRefreshFailed: true,
       modelProbeWarning: "fetch failed",
     });
-    await mount({ showSteps: false });
+    await mount();
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
       "LM Studio has not answered at http://127.0.0.1:1234/v1. Start it, then check the connection again.",
     );
@@ -234,14 +234,14 @@ describe("shared guided model setup", () => {
       modelProbeState: "error",
       modelProbeSource: "error_fallback",
     });
-    await mount({ showSteps: false });
+    await mount();
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
       "The connection check could not be completed. Check the address, then check the connection again.",
     );
   });
   it("shows the result and the notice together on first run", async () => {
     catalog("missing");
-    await mount({ showSteps: false });
+    await mount();
     await act(async () => button("Connect provider")!.click());
     const text = container.querySelector('[role="status"]')?.textContent;
     expect(text).toContain("Test provider needs a credential.");
@@ -265,7 +265,7 @@ describe("shared guided model setup", () => {
       localCostPosture: "zero_cost_local_runtime",
       modelProbeState: "not_checked",
     });
-    await mount({ showSteps: false });
+    await mount();
     expect(container.querySelector('[role="status"]')?.textContent).toBe("");
     catalog("ready", {
       label: "LM Studio",
@@ -274,20 +274,8 @@ describe("shared guided model setup", () => {
       modelProbeState: "ready",
       modelProbeSource: "live",
     });
-    await mount({ showSteps: false });
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
-  });
-  it("numbers every step, marks the current one and states each step in words", async () => {
-    onboarding.settings.llm.activeModel = "";
-    catalog("ready");
     await mount();
-    const steps = [...container.querySelectorAll('ol[aria-label="Model setup steps"] > li')];
-    expect(steps.map((step) => step.textContent)).toEqual([
-      expect.stringMatching(/^Step 1Done.*Connect a provider/u),
-      expect.stringMatching(/^Step 2Current.*Confirm your model/u),
-      expect.stringMatching(/^Step 3Not started.*Start the first Chat/u),
-    ]);
-    expect(steps.map((step) => step.getAttribute("aria-current"))).toEqual([null, "step", null]);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
   });
   it("is built from cockpit fields: each select is labelled and described, with no Classic classes", async () => {
     catalog("ready");
@@ -522,11 +510,18 @@ describe("shared guided model setup", () => {
     await act(async () => button("Continue to safety")!.click());
     expect(onEnterChat).toHaveBeenCalledTimes(1);
   });
-  it("hides its step list for first run, which shows one flat stepper of its own", async () => {
+  it("never shows a second step list", async () => {
     catalog("ready");
-    await mount({ showSteps: false });
+    await mount();
     expect(container.querySelector('ol[aria-label="Model setup steps"]')).toBeNull();
     expect(button("Enter Chat")).toBeDefined();
+  });
+  it("shows the sentence behind the Connection status only when the host asks for it", async () => {
+    catalog("ready");
+    await mount();
+    expect(container.textContent).not.toContain("Test provider has a saved credential.");
+    await mount({ showReadinessNote: true });
+    expect(container.textContent).toContain("Test provider has a saved credential.");
   });
   it("hands the notice to a host that keeps it and shows no second copy", async () => {
     onboarding.settings.llm.activeModel = "";

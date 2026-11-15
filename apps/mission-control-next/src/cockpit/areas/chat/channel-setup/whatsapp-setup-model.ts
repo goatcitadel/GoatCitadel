@@ -1,5 +1,6 @@
 import type { WhatsAppSetupCodeSender } from "@goatcitadel/contracts";
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { NO_KEY_STORE_SAID } from "./no-key-store";
 import { createSetupCode } from "./setup-code";
 import { hostChange, type TurnOnWording } from "./TurnOnStep";
 
@@ -206,9 +207,6 @@ export function whatsAppTurnOnChanges({
 
 /** The longest sentence of GoatCitadel's own that is passed on. Anything longer is not one of its fixed sentences. */
 const LONGEST_SENTENCE = 300;
-
-/** GoatCitadel's sentence when it has no secure storage for channel keys, whatever status it comes with. */
-const NO_KEY_STORE_SAID = "Secure channel credential storage is unavailable.";
 
 /**
  * What the page says for it: keys pasted here need secure storage, and the guide in Advanced channel setup takes

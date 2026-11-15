@@ -48,6 +48,7 @@ export function SystemQuality() {
       ) : null}
       {proof.isError ? (
         <EmptyState
+          tone="error"
           title="Quality proof unavailable"
           description={describeApiError(proof.error).summary}
           action={<Button onClick={() => void proof.refetch()}>Try again</Button>}

@@ -201,52 +201,25 @@ test("profile-free blocker proof retains authenticated actor, cryptographic admi
   );
 });
 
-test("planning completion requires the exact persisted advisory response and ordered dependencies", () => {
-  const plan = {
-    planId: "plan-1",
-    sessionId: "session-1",
-    turnId: "turn-1",
-    mode: "chat",
-    planningMode: "advisory",
-    advisoryOnly: true,
-    objective: "Plan the fixture.",
-    summary: "Deterministic plan.",
-    steps: [{ stepId: "step-1", index: 0, objective: "Inspect fixture." }],
-  };
-  const turn = {
-    turnId: "turn-1",
-    trace: { executionPlanId: "plan-1", executionPlan: plan },
-    assistantMessage: {
-      content:
-        "## Chat plan\n\nObjective: Plan the fixture.\n\nDeterministic plan.\n\nPlanned steps:\n1. Inspect fixture.",
-    },
-  };
-  validateCanonicalPlanningTurn(turn, "session-1", "Plan the fixture.");
-  assert.throws(() => validateCanonicalPlanningTurn(turn, "other", "Plan the fixture."), /exact advisory plan/u);
-  assert.throws(() => validateCanonicalPlanningTurn(turn, "session-1", "Different objective."), /exact advisory plan/u);
+test("planning completion requires the unique model reply with no drafted plan or tool run", () => {
+  const reply = "Deterministic plan reply: tidy, sort, restore.";
+  const turn = { turnId: "turn-1", trace: { toolRuns: [] }, assistantMessage: { content: reply } };
+  assert.equal(validateCanonicalPlanningTurn(turn), true);
   assert.throws(
-    () =>
-      validateCanonicalPlanningTurn(
-        { ...turn, assistantMessage: { content: "Verification stub reply." } },
-        "session-1",
-        "Plan the fixture.",
-      ),
-    /differs from its persisted exact plan/u,
+    () => validateCanonicalPlanningTurn({ ...turn, trace: { executionPlanId: "plan-1", executionPlan: {} } }),
+    /drafted a template plan/u,
   );
   assert.throws(
-    () =>
-      validateCanonicalPlanningTurn(
-        {
-          ...turn,
-          trace: {
-            ...turn.trace,
-            executionPlan: { ...plan, steps: [{ ...plan.steps[0], dependsOnStepIds: ["foreign"] }] },
-          },
-        },
-        "session-1",
-        "Plan the fixture.",
-      ),
-    /dependencies/u,
+    () => validateCanonicalPlanningTurn({ ...turn, trace: { toolRuns: [{ toolName: "fs.write" }] } }),
+    /ran a tool/u,
+  );
+  assert.throws(
+    () => validateCanonicalPlanningTurn({ ...turn, assistantMessage: { content: "Verification stub reply." } }),
+    /differs from the model reply/u,
+  );
+  assert.throws(
+    () => validateCanonicalPlanningTurn({ ...turn, assistantMessage: { content: "## Chat plan" } }),
+    /differs from the model reply/u,
   );
 });
 

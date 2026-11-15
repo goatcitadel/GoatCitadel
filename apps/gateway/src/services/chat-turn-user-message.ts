@@ -5,7 +5,12 @@
  * chat runtime.
  */
 
-import type { ChatAttachmentRecord, ChatInputPart, ChatMessageRecord } from "@goatcitadel/contracts";
+import {
+  CHAT_ATTACHMENT_PROMPT_PREVIEW_CHARS,
+  type ChatAttachmentRecord,
+  type ChatInputPart,
+  type ChatMessageRecord,
+} from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { isImageMimeType } from "./chat-turn-helpers.js";
 
@@ -97,8 +102,10 @@ function formatAttachmentPromptContext(
 
   const lines = attachments.map((attachment) => {
     const descriptor = `- ${attachment.fileName} (${attachment.mimeType}, ${attachment.sizeBytes} bytes)`;
-    if ((sentToVision === true || (typeof sentToVision !== "boolean" && sentToVision.has(attachment.attachmentId))) &&
-        isImageMimeType(attachment.mimeType)) {
+    if (
+      (sentToVision === true || (typeof sentToVision !== "boolean" && sentToVision.has(attachment.attachmentId))) &&
+      isImageMimeType(attachment.mimeType)
+    ) {
       return `${descriptor}\n  Preview: sent directly to a vision-capable model.`;
     }
     if (!attachment.extractPreview?.trim()) {
@@ -107,11 +114,18 @@ function formatAttachmentPromptContext(
         ? `${notExtracted} Code Mode can read it with docs.extract_text({ attachmentId }).`
         : notExtracted;
     }
-    const preview = attachment.extractPreview
-      .replace(/\r\n/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .slice(0, 1600);
-    return `${descriptor}\n  Preview:\n${preview}`;
+    const normalized = attachment.extractPreview.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n");
+    const shown = normalized.slice(0, CHAT_ATTACHMENT_PROMPT_PREVIEW_CHARS);
+    if (normalized.length <= CHAT_ATTACHMENT_PROMPT_PREVIEW_CHARS) {
+      return `${descriptor}\n  Preview:\n${shown}`;
+    }
+    const cutNotice =
+      `  Only the first ${CHAT_ATTACHMENT_PROMPT_PREVIEW_CHARS} characters of this file are included above; ` +
+      `the file has ${attachment.sizeBytes} bytes. Tell the user that you read only its start.`;
+    const fullRead = codeModeRequestEligible
+      ? ` Code Mode can read all of it with docs.extract_text({ attachmentId: "${attachment.attachmentId}" }).`
+      : "";
+    return `${descriptor}\n  Preview:\n${shown}\n${cutNotice}${fullRead}`;
   });
 
   return ["Attached file context (from uploaded attachments):", ...lines].join("\n");
@@ -177,7 +191,9 @@ export async function buildUserMessageContent(
 ): Promise<string | Array<Record<string, unknown>>> {
   const prompt = buildUserMessagePrompt(message);
   const attachments = await resolveMessageAttachments(deps, message);
-  const images = supportsVision ? await readImageMessageParts(deps, attachments) : { parts: [], sentIds: new Set<string>() };
+  const images = supportsVision
+    ? await readImageMessageParts(deps, attachments)
+    : { parts: [], sentIds: new Set<string>() };
   // Every attachment retains its bounded context, even when one image loads.
   // Only successfully included image parts may claim direct vision delivery.
   const attachmentContext = formatAttachmentPromptContext(attachments, images.sentIds, codeModeRequestEligible);

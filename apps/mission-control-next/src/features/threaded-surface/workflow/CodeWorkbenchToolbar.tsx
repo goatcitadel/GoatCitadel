@@ -93,6 +93,11 @@ export function CodeWorkbenchToolbar({
                 ? (projectName ?? "Current project")
                 : `${projectName ?? "Current project"} · Create a worktree to begin editing.`}
           </p>
+          {!needsProjectBinding && !readyForRepoOps ? (
+            <button type="button" className="mc-next-panel-button primary" onClick={onCreateWorktree} disabled={busy}>
+              Create worktree
+            </button>
+          ) : null}
         </div>
         <div className="mc-next-workbench-toolbar">
           <StatusChip tone={needsProjectBinding ? "warning" : "success"}>
@@ -170,14 +175,6 @@ export function CodeWorkbenchToolbar({
           <div className="mc-next-workbench-action-cluster" data-cluster="repo">
             <button type="button" className="mc-next-panel-button" onClick={onRefresh} disabled={loading || busy}>
               Refresh
-            </button>
-            <button
-              type="button"
-              className="mc-next-panel-button"
-              onClick={onCreateWorktree}
-              disabled={needsProjectBinding || readyForRepoOps || busy}
-            >
-              Create worktree
             </button>
             <button
               type="button"
