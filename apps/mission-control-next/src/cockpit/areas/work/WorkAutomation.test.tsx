@@ -15,8 +15,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal)
   exportActivepiecesWorkflowTemplate: vi.fn(),
   exportN8nWorkflowTemplate: vi.fn(),
 }));
+const preferences = vi.hoisted(() => ({ activeWorkspaceId: "default", showTechnicalDetails: false }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
-  useUiPreferences: () => ({ activeWorkspaceId: "default" }),
+  useUiPreferences: () => preferences,
 }));
 const workspaceNames = vi.hoisted(() => ({
   byId: { default: "Default workspace" } as Record<string, string | undefined>,
@@ -60,7 +61,10 @@ beforeEach(async () => {
     renderer = create(<WorkAutomation />);
   });
 });
-afterEach(() => act(() => renderer.unmount()));
+afterEach(() => {
+  preferences.showTechnicalDetails = false;
+  return act(() => renderer.unmount());
+});
 async function click(label: string) {
   const button = renderer.root.findAllByType("button").find((node) => node.children.join("") === label);
   expect(button).toBeDefined();
@@ -72,7 +76,26 @@ async function draft() {
   );
   await click("Preview automation recipe");
 }
+it("says features are missing in words and keeps the capability ids in technical details (U-WK-017)", async () => {
+  await draft();
+  const text = JSON.stringify(renderer.toJSON());
+  expect(text).toContain("Some features this automation needs are not set up here.");
+  expect(text).not.toContain("tool:unavailable");
+  expect(text).not.toContain("Missing capabilities");
+  preferences.showTechnicalDetails = true;
+  await act(async () => renderer.update(<WorkAutomation />));
+  expect(JSON.stringify(renderer.toJSON())).toContain("Missing: ");
+  expect(JSON.stringify(renderer.toJSON())).toContain("tool:unavailable");
+});
+
+it("says nothing is missing when the preview reports no missing capabilities", async () => {
+  vi.mocked(draftAutomationRecipe).mockResolvedValue({ ...preview, missingCapabilities: [] } as never);
+  await draft();
+  expect(JSON.stringify(renderer.toJSON())).toContain("Nothing missing.");
+});
+
 it("drafts through the Gateway and exercises both template export callbacks without scheduling", async () => {
+  preferences.showTechnicalDetails = true;
   await draft();
   expect(draftAutomationRecipe).toHaveBeenCalledWith(
     expect.objectContaining({ taskDescription: "Summarize evidence", workspaceId: "default" }),
@@ -165,6 +188,7 @@ it("shows both platforms' export results side by side", async () => {
 });
 
 it("hides a kept preview once the draft changes", async () => {
+  preferences.showTechnicalDetails = true;
   await draft();
   await act(async () => renderer.unmount());
   await act(async () => {
