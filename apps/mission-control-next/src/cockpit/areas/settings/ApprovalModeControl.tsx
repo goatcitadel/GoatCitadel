@@ -18,6 +18,7 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
+import { SettingsApprovalDialog } from "./SettingsApprovalDialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { presentChangeStatusLabel, presentDeploymentProfile } from "./settings-vocabulary";
 
@@ -170,16 +171,30 @@ export function ApprovalModeEditor({
               Refresh approval change
             </Button>
             {approval?.kind === "approval" && !confirmed ? (
-              <SettingsApprovalOwnerAction
-                plan={change.change.plan}
-                receipt={change.change.receipt}
-                owner="tool-approval"
-                workspaceId="default"
-                viewIdentity={draft.key}
-              />
+              <>
+                {/* The approval opens here; the Inbox copy stays one link away for whoever prefers it. */}
+                {approval.approvalId ? (
+                  <SettingsApprovalDialog
+                    approvalId={approval.approvalId}
+                    summary={`Change the approval rule to ${describeToolApprovalMode(draft.value)}`}
+                    onResolved={change.refresh}
+                  />
+                ) : null}
+                <SettingsApprovalOwnerAction
+                  plan={change.change.plan}
+                  receipt={change.change.receipt}
+                  owner="tool-approval"
+                  workspaceId="default"
+                  viewIdentity={draft.key}
+                  label="Open in Inbox"
+                />
+              </>
             ) : null}
           </div>
-          {!confirmed ? <ApprovedSettingsContinuation plan={change.change.plan} onSettled={change.refresh} /> : null}
+          {/* Approving applies the change (Gateway reconciliation); Continue is only for a card with no in-place approval. */}
+          {!confirmed && !(approval?.kind === "approval" && approval.approvalId) ? (
+            <ApprovedSettingsContinuation plan={change.change.plan} onSettled={change.refresh} />
+          ) : null}
           <TechnicalDetails label="Change record">
             <p className="break-all font-mono text-xs">
               Plan {change.change.receipt.planId} · version {change.change.receipt.revision}

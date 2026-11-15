@@ -34,6 +34,11 @@ vi.mock("../../ui/Dialog", () => ({
       </section>
     ) : null,
 }));
+vi.mock("./SettingsApprovalDialog", () => ({
+  SettingsApprovalDialog: (props: { approvalId: string; summary?: string }) => (
+    <section data-in-place-approval={props.approvalId}>{props.summary}</section>
+  ),
+}));
 const dialog = () => container.querySelector<HTMLElement>('[role="dialog"]');
 let owner: { revision: number; toolApprovalMode: ToolApprovalMode; deploymentProfile?: string };
 let root: Root;
@@ -180,6 +185,22 @@ describe("cockpit tool approval rule", () => {
     push.mockRestore();
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
     expect(button("Save approval rule").disabled).toBe(true);
+  });
+
+  it("opens the approval rule's approval in place, with the Inbox one link away and no Continue step", async () => {
+    pending("approve_risky");
+    await render();
+    await choose("approve_risky");
+    await click("Save approval rule");
+    await vi.waitFor(() => expect(container.querySelector('[data-in-place-approval="approval-1"]')).not.toBeNull());
+    expect(container.textContent).toContain("Change the approval rule to");
+    expect(container.querySelector('a[href^="/inbox?"]')?.textContent).toBe("Open in Inbox");
+    expect(
+      [...container.querySelectorAll("button")].some((item) => item.textContent === "Continue approved change"),
+    ).toBe(false);
+    // Nothing applied by the page itself: the save went out once and the draft stays unsaved until confirmed.
+    expect(api.patchSettings).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("draft remains unsaved");
   });
 
   it("rejects a change plan for a different approval mode", async () => {
