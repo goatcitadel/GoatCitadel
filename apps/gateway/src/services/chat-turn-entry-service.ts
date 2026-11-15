@@ -2249,6 +2249,11 @@ export async function cancelChatTurn(
       trace,
     };
   }
+  // A turn with no durable run that had already finished (completed or failed) has nothing to stop: leave its
+  // stream record untouched. A durable run keeps its idempotent terminal projection below.
+  if (!durableRunId && isChatTurnTerminalStatus(trace.status) && trace.status !== "cancelled") {
+    return { sessionId, turnId, cancelled: false, trace };
+  }
   // The durable owner snapshots output and commits withdrawal before abort
   // listeners can discard buffered text. A failed commit leaves work intact.
   if (trace.status === "cancelled" && active?.sessionId === sessionId && !active.controller.signal.aborted) {
