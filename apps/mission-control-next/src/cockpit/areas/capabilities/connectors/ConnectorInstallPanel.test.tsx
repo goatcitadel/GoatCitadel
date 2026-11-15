@@ -97,7 +97,9 @@ vi.mock("../../settings/SettingsApprovalDialog", () => ({
     onResolved: (status: undefined) => void;
   }) => (
     <section data-in-place-approval={props.approvalId} data-danger-review={String(props.dangerReview === true)}>
-      <button onClick={() => props.onResolved(undefined)}>Resolve in place</button>
+      <button type="button" onClick={() => props.onResolved(undefined)}>
+        Resolve in place
+      </button>
     </section>
   ),
 }));

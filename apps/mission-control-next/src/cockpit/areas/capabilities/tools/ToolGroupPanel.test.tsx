@@ -51,7 +51,9 @@ vi.mock("../../settings/SettingsApprovalDialog", () => ({
       data-installation-setting={String(props.installationSetting === true)}
     >
       <p>{props.summary}</p>
-      <button onClick={() => props.onResolved(undefined)}>Resolve in place</button>
+      <button type="button" onClick={() => props.onResolved(undefined)}>
+        Resolve in place
+      </button>
     </section>
   ),
   reopenSettingsApproval: vi.fn(),
