@@ -1718,6 +1718,8 @@ function resolvePackagedNodeExecutable() {
 }
 
 async function ensureGatewayReady({ packaged, endpoint, nodeExecutable }) {
+  // A reason recorded by an earlier start must not explain this one, even if this launch never reaches the spawn.
+  prepareGatewayStartupFailureRecord();
   const outcome = await establishLauncherEndpointReadiness({
     endpoint,
     timeoutMs: 180000,
