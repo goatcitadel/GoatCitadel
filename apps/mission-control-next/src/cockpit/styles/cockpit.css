@@ -345,7 +345,8 @@ html[data-shell="cockpit"] .mc-dialog-content {
   }
   /* The sheet pads its bottom edge for the home indicator (cockpit-safe-bottom), so the scroller gives that back. */
   .cockpit-sheet-scroll {
-    max-height: calc(85dvh - env(safe-area-inset-bottom, 0px));
+    min-height: 0;
+    flex: 1 1 auto;
   }
   .cockpit-dialog {
     max-height: calc(100dvh - 7rem);
