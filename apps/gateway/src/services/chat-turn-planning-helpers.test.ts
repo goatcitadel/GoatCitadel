@@ -509,6 +509,9 @@ describe("buildPlanningModeSystemInstruction readable steps", () => {
     expect(advisory.indexOf("Write the plan as a numbered list")).toBeGreaterThan(
       advisory.indexOf("If tools would help"),
     );
+    expect(advisory).toContain(
+      "Do not claim to have read files, run searches or looked anything up in this turn; no tools are available.",
+    );
     expect(buildPlanningModeSystemInstruction("off")).toBeUndefined();
   });
 });
