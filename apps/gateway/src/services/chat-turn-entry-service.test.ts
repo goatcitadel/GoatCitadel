@@ -1604,6 +1604,42 @@ describe("agentSendChatMessage", () => {
     expect(host.markChatTurnCancelled).not.toHaveBeenCalled();
   });
 
+  it("treats Stop on an already finished answer as nothing to stop", async () => {
+    const host = createHost({});
+    host.storage.chatTurnTraces.get = vi
+      .fn()
+      .mockReturnValueOnce(createTrace({ durable: { runId: "run-1" } }))
+      .mockReturnValue(createTrace({ status: "completed", durable: { runId: "run-1" } })) as never;
+    host.cancelDurableChatRun = vi.fn(async () => {
+      throw new Error("Durable Chat run run-1 cannot be cancelled because turn turn-1 is already completed.");
+    });
+    host.storage.durableRuns.getRun = vi.fn(() => ({ status: "running" })) as never;
+
+    await expect(cancelChatTurn(host, "session-1", "turn-1", "operator")).resolves.toEqual(
+      expect.objectContaining({
+        sessionId: "session-1",
+        turnId: "turn-1",
+        cancelled: false,
+        trace: expect.objectContaining({ status: "completed" }),
+      }),
+    );
+    expect(host.markChatTurnCancelled).not.toHaveBeenCalled();
+  });
+
+  it("treats Stop on a finished turn with no durable run as nothing to stop", async () => {
+    const host = createHost({});
+    const completed = createTrace({ status: "completed", assistantMessageId: "assistant-1" });
+    host.storage.chatTurnTraces.get = vi.fn(() => completed) as never;
+    host.getActiveChatTurnStream = vi.fn(() => undefined) as never;
+    host.markChatTurnCancelled = vi.fn(async () => completed) as never;
+
+    await expect(cancelChatTurn(host, "session-1", "turn-1", "operator")).resolves.toEqual(
+      expect.objectContaining({ cancelled: false, trace: expect.objectContaining({ status: "completed" }) }),
+    );
+    expect(host.persistChatStreamChunk).not.toHaveBeenCalled();
+    expect(host.completeActiveChatTurnStream).not.toHaveBeenCalled();
+  });
+
   it("cancels a just-launched durable stream before its trace row is visible", async () => {
     const host = createHost({});
     host.storage.chatTurnTraces.get = vi.fn(() => {

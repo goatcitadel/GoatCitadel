@@ -2214,6 +2214,16 @@ export async function cancelChatTurn(
       durableCancellation.status === "failed" ||
       durableCancellation.status === "dead_lettered");
   if (durableCancellationError && !durableTerminalWinner && durableCancellation?.status !== "cancelled") {
+    // The answer can finish while the durable run still reads "running". Stop is then a quiet no-op.
+    let latest: ChatTurnTraceRecord | undefined;
+    try {
+      latest = await storage.chatTurnTraces.get(turnId);
+    } catch {
+      // Without canonical turn truth, keep the original cancellation error.
+    }
+    if (latest && isChatTurnTerminalStatus(latest.status) && latest.status !== "cancelled") {
+      return { sessionId, turnId, cancelled: false, trace: latest };
+    }
     throw durableCancellationError;
   }
   const trace = await (durableTerminalWinner
@@ -2240,6 +2250,11 @@ export async function cancelChatTurn(
       cancelled: false,
       trace,
     };
+  }
+  // A turn with no durable run that had already finished (completed or failed) has nothing to stop: leave its
+  // stream record untouched. A durable run keeps its idempotent terminal projection below.
+  if (!durableRunId && isChatTurnTerminalStatus(trace.status) && trace.status !== "cancelled") {
+    return { sessionId, turnId, cancelled: false, trace };
   }
   // The durable owner snapshots output and commits withdrawal before abort
   // listeners can discard buffered text. A failed commit leaves work intact.

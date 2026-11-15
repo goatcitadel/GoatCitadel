@@ -1573,3 +1573,21 @@ it("tells a failure from a warning and a critical notice from a warning without 
   expect(attachments).toContain("brief.pdf · PDF");
   expect(attachments).not.toContain("application/pdf");
 });
+
+it("says when only the start of a sent text attachment was read", async () => {
+  const sent = turn("cut-attachment", true, "completed");
+  sent.userMessage.attachments = [
+    { attachmentId: "a1", fileName: "review.md", mimeType: "text/markdown", sizeBytes: 122000 },
+    { attachmentId: "a2", fileName: "small.md", mimeType: "text/markdown", sizeBytes: 1600 },
+  ] as never;
+  await act(async () =>
+    renderWithProviders(
+      <InspectorProvider>
+        <ChatTranscript props={sessionProps([sent])} />
+      </InspectorProvider>,
+    ),
+  );
+  const items = [...container.querySelectorAll('[aria-label="Sent attachments"] li')].map((li) => li.textContent);
+  expect(items[0]).toContain("Only its first 1,600 characters may have been read");
+  expect(items[1]).not.toContain("Only its first");
+});
