@@ -193,4 +193,33 @@ describe("ChatTurnAgentRunner Plan first turn", () => {
     await build(resolveOff).run({ ...planFirstInput(prompt), subagentPolicy: "ask_when_useful", planningMode: "off" });
     expect(resolveOff).toHaveBeenCalledTimes(1);
   });
+  it("asks the model for the plan on a local file access follow-up, not the no-file-tools fallback", async () => {
+    const plan = "1. List what is needed. 2. Review it.";
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValue({
+        model: "glm-5",
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: plan } }],
+      });
+    const runner = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool: vi.fn() as never,
+    });
+    const content = "What do you need for local file access?";
+
+    const result = await runner.run({
+      ...planFirstInput(content),
+      planningMode: "advisory",
+      historyMessages: [
+        { role: "user", content: String.raw`I want you to organize the files in C:\Users\me\Desktop\Downloads` },
+        { role: "assistant", content: "I could not actually organize that folder from this environment." },
+        { role: "user", content },
+      ],
+    });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(result.assistantContent).toBe(plan);
+  });
 });
