@@ -89,6 +89,7 @@ export interface OperatorInboxResponse {
   generatedAt: string;
   items: OperatorInboxItem[];
   coverage: OperatorInboxSourceCoverage[];
+  /** `needs_decision` counts only decisions still open at `generatedAt`; an expired one stays listed but is not counted. */
   counts: Record<OperatorInboxGroup, OperatorInboxCount>;
 }
 

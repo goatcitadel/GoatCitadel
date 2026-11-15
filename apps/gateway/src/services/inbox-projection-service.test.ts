@@ -309,6 +309,30 @@ describe("Gateway inbox projection", () => {
     expect(summary("other")).not.toContain("do-not-project-command");
   });
 
+  it("counts only decisions still open and keeps expired ones listed (U-IN-011)", async () => {
+    const deps = dependencies();
+    const base = {
+      status: "pending",
+      riskLevel: "caution",
+      payload: {},
+      preview: {},
+      kind: "memory.write",
+      linkage: { workspaceId: "workspace-a" },
+      createdAt: "2026-09-28T12:00:00.000Z",
+    };
+    vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
+      items: [
+        { ...base, approvalId: "expired", expiresAt: "2000-01-01T00:00:00.000Z" },
+        { ...base, approvalId: "open", expiresAt: "2999-01-01T00:00:00.000Z" },
+      ],
+    } as never);
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+    expect(projection.items.map((item) => item.id)).toEqual(
+      expect.arrayContaining(["approval:expired", "approval:open"]),
+    );
+    expect(projection.counts.needs_decision.known).toBe(1);
+  });
+
   it("keeps canonical ownership, risk, and workspace scope while omitting approval payloads", async () => {
     const deps = dependencies();
     vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({

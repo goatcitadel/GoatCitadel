@@ -1204,7 +1204,8 @@ describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN
       expiresAt: "2020-01-01T00:00:00Z",
       source: { workspaceId: "default", approvalId: "old" },
     };
-    show([first, expired], { needs_decision: { known: 2, complete: true } });
+    // The Gateway did not count this decision: it had expired before the projection was read.
+    show([first, expired], { needs_decision: { known: 1, complete: true } });
     await renderUpdates(new QueryClient());
     expect(container.querySelector('[data-inbox-count="needs_decision"]')?.textContent).toBe("1");
     expect(container.querySelector('[data-inbox-count="expired"]')?.textContent).toBe("1");
@@ -1213,5 +1214,36 @@ describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN
     expect([...(group?.querySelectorAll("[data-tone]") ?? [])].map((node) => node.textContent)).toContain("Expired");
     const decisions = container.querySelector('section[aria-labelledby="inbox-needs_decision"]');
     expect(decisions?.textContent).not.toContain("Old write");
+  });
+
+  it("subtracts only decisions that expired after the Gateway counted them (U-IN-011)", async () => {
+    const decision = (id: string, expiresAt: string): OperatorInboxItem => ({
+      ...first,
+      id: `approval:${id}`,
+      title: id,
+      expiresAt,
+      source: { workspaceId: "default", approvalId: id },
+    });
+    const generated = Date.now() - 10 * 60_000;
+    inboxMock.result = {
+      data: {
+        ...projection,
+        generatedAt: new Date(generated).toISOString(),
+        items: [
+          decision("before", new Date(generated - 60_000).toISOString()),
+          decision("since", new Date(Date.now() - 5 * 60_000).toISOString()),
+          decision("open", "2999-01-01T00:00:00Z"),
+        ],
+        counts: { ...projection.counts, needs_decision: { known: 2, complete: true } },
+      },
+      isLoading: false,
+      isError: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    };
+    await renderUpdates(new QueryClient());
+    expect(container.querySelector('[data-inbox-count="needs_decision"]')?.textContent).toBe("1");
+    const group = container.querySelector('section[aria-labelledby="inbox-expired"]');
+    expect(group?.querySelectorAll("[data-inbox-item]")).toHaveLength(2);
   });
 });
