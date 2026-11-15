@@ -5,28 +5,33 @@ import { Tooltip } from "./Tooltip";
 export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> {
   label: string;
   icon: ReactNode;
-  /** False for a close button the dialog focuses by itself, so its first Escape closes the dialog, not a tooltip. */
-  nameOnFocus?: boolean;
 }
 
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
-  { label, icon, className, type = "button", nameOnFocus = true, ...props },
+  { label, icon, className, type = "button", ...props },
   ref,
 ) {
+  const button = (
+    <button
+      ref={ref}
+      type={type}
+      aria-label={label}
+      className={cn(
+        "inline-flex size-8 items-center justify-center rounded-md text-fg-secondary transition-colors enabled:hover:bg-sunken enabled:hover:text-fg disabled:cursor-not-allowed disabled:text-fg-muted disabled:opacity-60",
+        props.disabled && "pointer-events-none",
+        className,
+      )}
+      {...props}
+      // The tooltip says what the accessible name already says; do not read it twice.
+      aria-describedby={props["aria-describedby"]}
+    >
+      {icon}
+    </button>
+  );
+  // A disabled button fires no pointer events, so its wrapper carries the tooltip and the not-allowed cursor.
   return (
-    <Tooltip label={label} openOnFocus={nameOnFocus}>
-      <button
-        ref={ref}
-        type={type}
-        aria-label={label}
-        className={cn(
-          "inline-flex size-8 items-center justify-center rounded-md text-fg-secondary transition-colors enabled:hover:bg-sunken enabled:hover:text-fg disabled:cursor-not-allowed disabled:text-fg-muted disabled:opacity-60",
-          className,
-        )}
-        {...props}
-      >
-        {icon}
-      </button>
+    <Tooltip label={label}>
+      {props.disabled ? <span className="inline-flex cursor-not-allowed rounded-md">{button}</span> : button}
     </Tooltip>
   );
 });

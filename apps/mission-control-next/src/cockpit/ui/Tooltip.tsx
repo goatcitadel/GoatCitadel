@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
+import { useTooltipOpensOnFocus } from "./tooltip-focus";
 
 const LONG_PRESS_MS = 500;
 
@@ -7,16 +8,8 @@ const LONG_PRESS_MS = 500;
  * Names a control on hover and keyboard focus (Radix), and on a touch long-press, which Radix does not handle.
  * The label is also shown to assistive technology through the tooltip's description.
  */
-export function Tooltip({
-  label,
-  children,
-  openOnFocus = true,
-}: {
-  label: string;
-  children: ReactNode;
-  /** False for a control that takes focus by itself (a dialog's close button): Escape must reach the dialog, not a tooltip. */
-  openOnFocus?: boolean;
-}) {
+export function Tooltip({ label, children }: { label: string; children: ReactNode }) {
+  const openOnFocus = useTooltipOpensOnFocus();
   const [open, setOpen] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const cancelPress = useCallback(() => {
