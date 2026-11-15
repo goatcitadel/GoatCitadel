@@ -111,6 +111,9 @@ export function describeChatUiError(
     } else {
       summary = `The provider request failed before the current step could finish.${retryNote}`;
     }
+  } else if (normalized.includes("already in progress for session")) {
+    summary =
+      "Another window is sending in this conversation. Your message is still in the box; send it again when that answer finishes.";
   } else if (normalized.includes("approval")) {
     summary = "The run is waiting for approval before it can continue.";
   } else if (normalized.includes("user input")) {

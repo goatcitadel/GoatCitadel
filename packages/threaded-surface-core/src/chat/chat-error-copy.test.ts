@@ -108,3 +108,16 @@ describe("describeChatUiError", () => {
     expect(formatChatUiError("plain failure", "other")).toBe("plain failure");
   });
 });
+
+describe("a send while another window is sending (U-CH-022)", () => {
+  const raw =
+    "A chat turn write is already in progress for session session-1. Wait for the current send to finish and retry.";
+
+  it("says so in plain words and keeps the Gateway text as the raw error", () => {
+    expect(describeChatUiError(raw, "send")).toEqual({
+      summary:
+        "Another window is sending in this conversation. Your message is still in the box; send it again when that answer finishes.",
+      raw,
+    });
+  });
+});
