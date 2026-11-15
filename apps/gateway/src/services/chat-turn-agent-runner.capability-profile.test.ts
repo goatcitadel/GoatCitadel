@@ -1567,8 +1567,8 @@ describe("ChatTurnAgentRunner Plan first with a frozen capability profile", () =
   });
 
   it("runs no synthetic quick-web search for a Plan first quick-web profile with browser.search admitted", async () => {
-    const profile = buildProfile({ toolAutonomy: "manual", webMode: "quick" });
     const content = "please look up the best way to eat sushi";
+    const profile = buildProfile({ toolAutonomy: "manual", webMode: "quick", content });
     const { runner, invokeTool } = buildRunner(profile, planReply);
 
     await runner.run({
@@ -1590,5 +1590,56 @@ describe("ChatTurnAgentRunner Plan first with a frozen capability profile", () =
     await runner.run({ ...buildInput(profile), planningMode: "off" });
 
     expect(completionRequests[0]?.tools).toEqual([TOOL_DEFINITION]);
+  });
+  it("still fails closed on a mismatched or revoked frozen profile under Plan first", async () => {
+    const profile = buildProfile({ trustedSkill: true });
+    const plainProfile = buildProfile();
+    const reply = { model: "model-a", choices: [{ index: 0, message: { role: "assistant", content: "1. Do it." } }] };
+
+    const mismatched = buildRunner(plainProfile, reply);
+    await expect(
+      mismatched.runner.run({
+        ...buildInput(plainProfile),
+        content: "A different request.",
+        historyMessages: [{ role: "user" as const, content: "A different request." }],
+        planningMode: "advisory",
+      }),
+    ).rejects.toThrow(/content does not match/);
+    expect(mismatched.createChatCompletion).not.toHaveBeenCalled();
+
+    const revokedRunner = new ChatTurnAgentRunner({
+      storage: createProfileStorage(profile, [TRUSTED_SKILL_LIFECYCLE]) as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      // The skill is gone from the live callable catalog.
+      listCapabilityCatalog: () => buildCatalogSnapshot(false).callableEntries,
+      createChatCompletion: vi.fn(async () => reply as never),
+      invokeTool: vi.fn() as never,
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+    });
+    await expect(revokedRunner.run({ ...buildInput(profile), planningMode: "advisory" })).rejects.toThrow(
+      /no longer in the current callable catalog/,
+    );
+  });
+
+  it("accepts a valid frozen profile under Plan first even though its autonomy differs, offering no tools", async () => {
+    const profile = buildProfile({ trustedSkill: true, toolAutonomy: "safe_auto" });
+    const reply = { model: "model-a", choices: [{ index: 0, message: { role: "assistant", content: "1. Do it." } }] };
+    const completionRequests: ChatCompletionRequest[] = [];
+    const runner = new ChatTurnAgentRunner({
+      storage: createProfileStorage(profile, [TRUSTED_SKILL_LIFECYCLE]) as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      listCapabilityCatalog: () => liveCallableCatalog(profile),
+      createChatCompletion: vi.fn(async (request: ChatCompletionRequest) => {
+        completionRequests.push(request);
+        return reply as never;
+      }),
+      invokeTool: vi.fn() as never,
+      evaluateToolAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+    });
+
+    const result = await runner.run({ ...buildInput(profile), toolAutonomy: "manual", planningMode: "advisory" });
+
+    expect(result.assistantContent).toBe("1. Do it.");
+    for (const request of completionRequests) expect(request.tools ?? []).toEqual([]);
   });
 });

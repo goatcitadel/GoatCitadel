@@ -815,7 +815,10 @@ async function toolSchemaFromCapabilityProfile(
   assertExact("thinking level", profile.selection.thinkingLevel, input.thinkingLevel);
   assertExact("speed mode", profile.selection.speedMode, input.speedMode ?? "standard");
   assertExact("subagent policy", profile.selection.subagentPolicy, input.subagentPolicy ?? "ask_when_useful");
-  assertExact("tool autonomy", profile.selection.toolAutonomy, input.toolAutonomy);
+  // Plan first runs under manual autonomy whatever autonomy the profile froze; every other check still applies.
+  if (input.planningMode !== "advisory") {
+    assertExact("tool autonomy", profile.selection.toolAutonomy, input.toolAutonomy);
+  }
   assertExact("operator identity", profile.identity.operatorId, input.operatorId);
   assertExact("auth actor identity", profile.identity.authActorId, input.authActorId);
   assertExact("auth actor source", profile.identity.authActorSource, input.authActorSource);
@@ -848,6 +851,10 @@ async function toolSchemaFromCapabilityProfile(
     }
     return tool.providerDefinition;
   });
+  if (input.planningMode === "advisory") {
+    // Verified like any turn, but Plan first is offered no tools.
+    return { tools: [], modelToCanonical: new Map(), canonicalToModel: new Map(), policyDecisions: [] };
+  }
   return {
     tools,
     modelToCanonical,
@@ -2464,23 +2471,24 @@ export class ChatTurnAgentRunner {
       input.capabilityProfile && this.deps.listCapabilityCatalog
         ? await this.deps.listCapabilityCatalog("callable", input.capabilityProfile.identity.workspaceId)
         : undefined;
-    const admittedToolSchema = planFirstNoTools
-      ? ({
-          tools: [],
-          modelToCanonical: new Map(),
-          canonicalToModel: new Map(),
-          policyDecisions: [],
-        } satisfies ResolvedChatTurnToolSchema)
-      : input.capabilityProfile
-        ? await toolSchemaFromCapabilityProfile(
-            input,
-            input.capabilityProfile,
-            storage,
-            liveCallableEntries,
-            this.deps.revalidateRequesterTool,
-            this.deps.revalidateMeshTool,
-          )
-        : await this.resolveCapabilityToolSchema(input);
+    const admittedToolSchema =
+      planFirstNoTools && !input.capabilityProfile
+        ? ({
+            tools: [],
+            modelToCanonical: new Map(),
+            canonicalToModel: new Map(),
+            policyDecisions: [],
+          } satisfies ResolvedChatTurnToolSchema)
+        : input.capabilityProfile
+          ? await toolSchemaFromCapabilityProfile(
+              input,
+              input.capabilityProfile,
+              storage,
+              liveCallableEntries,
+              this.deps.revalidateRequesterTool,
+              this.deps.revalidateMeshTool,
+            )
+          : await this.resolveCapabilityToolSchema(input);
     const routedContextToolSchema = await this.filterRoutedContextCapabilityToolSchema(input, admittedToolSchema);
     const filteredToolSchema = await this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema);
     if (
