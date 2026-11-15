@@ -7,6 +7,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
+import { FeatureOffNotice } from "../settings/FeatureOffNotice";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -44,9 +45,17 @@ export function MemoryMaintenanceView({
   return (
     <>
       {!data?.maintenanceEnabled || !data.maintenanceDurableReady ? (
-        <Callout announce={false}>
-          Memory maintenance needs the maintenance and resumable runs features turned on. Controls stay locked.
-        </Callout>
+        data && !data.maintenanceEnabled ? (
+          <FeatureOffNotice flag="memoryMaintenanceV1Enabled" />
+        ) : data ? (
+          <Callout announce={false}>
+            Memory maintenance needs resumable runs, which are turned off on this installation. Controls stay locked.
+          </Callout>
+        ) : (
+          <Callout announce={false}>
+            Memory maintenance can't be shown until memory has been read. Controls stay locked.
+          </Callout>
+        )
       ) : (
         <>
           {data.maintenanceStatus?.policy ? (

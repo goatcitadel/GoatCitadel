@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { TraceMemoryCandidateRecord } from "@goatcitadel/contracts";
 import { fetchTraceMemoryCandidates } from "@goatcitadel/mission-control-shared/api/memory";
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { LibraryMemoryProposals } from "./LibraryMemoryProposals";
 
 vi.mock("@goatcitadel/mission-control-shared/api/memory", () => ({
@@ -70,4 +71,27 @@ it("labels proposal status, source and reference count in plain words", async ()
   expect(container.textContent).toContain("Proposed by an agent · 1 source reference");
   expect(container.textContent).not.toContain("agent_proposed");
   expect(container.textContent).not.toContain("No proposals waiting for review.");
+});
+
+it("says memory administration is turned off and links to its switch when proposals are refused for that reason", async () => {
+  vi.mocked(fetchTraceMemoryCandidates).mockRejectedValue(
+    new ApiRequestError("off", {
+      kind: "http",
+      method: "GET",
+      path: "/api/v1/memory/trace-candidates",
+      status: 409,
+      body: { code: "FEATURE_DISABLED", details: { flag: "memoryLifecycleAdminV1Enabled" } },
+    }),
+  );
+  await render();
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain("Memory administration is turned off on this installation."),
+  );
+  expect(container.textContent).not.toContain("This feature is turned off for this installation.");
+  const link = [...container.querySelectorAll("a")].find(
+    (entry) => entry.textContent === "Turn it on in Settings › Advanced",
+  );
+  expect(new URL(link!.getAttribute("href")!, "http://cockpit.invalid").hash).toBe(
+    "#feature-switch-memory-administration",
+  );
 });

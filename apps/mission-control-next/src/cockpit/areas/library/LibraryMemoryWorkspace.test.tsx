@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { LibraryMemoryWorkspace } from "./LibraryMemoryWorkspace";
 
 const api = vi.hoisted(() => ({ load: vi.fn(), fetchMemoryItems: vi.fn() }));
@@ -161,4 +162,34 @@ it("filters status and namespace on the server and opens an item in a closable s
   await act(async () => button("Close memory item")!.click());
   await vi.waitFor(() => expect(container.querySelector('[role="dialog"]')).toBeNull());
   expect(window.location.search).not.toContain("itemId");
+});
+
+it("says memory administration is turned off and links to its switch when the Gateway refuses the list for that reason", async () => {
+  api.load.mockRejectedValue(
+    new ApiRequestError("off", {
+      kind: "http",
+      method: "GET",
+      path: "/api/v1/memory/items",
+      status: 409,
+      body: { code: "FEATURE_DISABLED", details: { flag: "memoryLifecycleAdminV1Enabled" } },
+    }),
+  );
+  await render();
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain("Memory administration is turned off on this installation."),
+  );
+  expect(container.textContent).not.toContain("This feature is turned off for this installation.");
+  const link = [...container.querySelectorAll("a")].find(
+    (entry) => entry.textContent === "Turn it on in Settings › Advanced",
+  );
+  expect(new URL(link!.getAttribute("href")!, "http://cockpit.invalid").hash).toBe(
+    "#feature-switch-memory-administration",
+  );
+});
+
+it("keeps the plain error for a refusal that names no listed switch", async () => {
+  api.load.mockRejectedValue(new Error("Gateway exploded"));
+  await render();
+  await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+  expect(container.textContent).not.toContain("Turn it on in Settings › Advanced");
 });

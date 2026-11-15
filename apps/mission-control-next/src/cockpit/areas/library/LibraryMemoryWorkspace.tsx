@@ -6,6 +6,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
+import { FeatureOffNotice, listedFeatureFlag } from "../settings/FeatureOffNotice";
 import { Field } from "../../ui/Field";
 import { loadLibraryResources } from "./library-resources";
 import { LibraryMemoryEditor } from "./LibraryMemoryEditor";
@@ -82,14 +83,14 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
   // An empty first page only proves absence when no record was withheld and no page remains.
   const nothingRemembered = Boolean(
     list.data &&
-      !listed &&
-      !list.data.withheldCount &&
-      !list.data.nextCursor &&
-      !list.isError &&
-      !query &&
-      !namespace &&
-      status === "active" &&
-      cursors.length < 2,
+    !listed &&
+    !list.data.withheldCount &&
+    !list.data.nextCursor &&
+    !list.isError &&
+    !query &&
+    !namespace &&
+    status === "active" &&
+    cursors.length < 2,
   );
   const paged = cursors.length > 1 || Boolean(list.data?.nextCursor);
   return (
@@ -193,7 +194,8 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
         </>
       )}
       {list.isFetching ? <p role="status">Reading memory directory…</p> : null}
-      {list.error ? (
+      {list.error && listedFeatureFlag(list.error) ? <FeatureOffNotice flag={listedFeatureFlag(list.error)!} /> : null}
+      {list.error && !listedFeatureFlag(list.error) ? (
         <Callout tone="error">
           {stalePage
             ? "Memory changed while paging. Reload the directory to read the current records."

@@ -18,6 +18,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { LibraryApproval } from "./LibraryApproval";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
+import { FeatureOffNotice } from "../settings/FeatureOffNotice";
 import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
@@ -150,13 +151,7 @@ function EngineeringLearnings({ workspaceId }: { workspaceId: string }) {
         Engineering learnings availability is unknown. {describeApiError(settings.error).summary}
       </Callout>
     );
-  if (!enabled)
-    return (
-      <Callout announce={false}>
-        Engineering learnings is disabled in this runtime. Direct links and technical details do not enable this
-        feature.
-      </Callout>
-    );
+  if (!enabled) return <FeatureOffNotice flag="engineeringLearningsV1Enabled" />;
   return (
     <section className="grid gap-3 border-t border-line-subtle pt-4" aria-label="Engineering learnings">
       <h2 className="text-base font-semibold">Engineering learnings</h2>

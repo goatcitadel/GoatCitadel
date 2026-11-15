@@ -741,7 +741,7 @@ describe("scheduler review and run evidence", () => {
     await render();
     const region = await vi.waitFor(() => {
       const found = container.querySelector<HTMLElement>('[aria-label="Scheduler review"]');
-      expect(found?.textContent).toContain("Scheduler review is switched off in runtime settings");
+      expect(found?.textContent).toContain("Scheduler review is turned off on this installation");
       return found!;
     });
     expect(fetchCronReviewQueue).not.toHaveBeenCalled();
@@ -774,7 +774,7 @@ describe("scheduler review and run evidence", () => {
     });
     const region = await vi.waitFor(() => {
       const found = container.querySelector<HTMLElement>('[aria-label="Scheduler review"]');
-      expect(found?.textContent).toContain("Scheduler review is switched off in runtime settings");
+      expect(found?.textContent).toContain("Scheduler review is turned off on this installation");
       return found!;
     });
     expect(region.textContent).not.toContain("Child run failed");
@@ -796,7 +796,7 @@ describe("scheduler review and run evidence", () => {
     await act(async () => refresh.click());
     await vi.waitFor(() =>
       expect(container.querySelector('[aria-label="Scheduler review"]')?.textContent).toContain(
-        "Scheduler review is switched off in runtime settings",
+        "Scheduler review is turned off on this installation",
       ),
     );
     expect(fetchSettings).toHaveBeenCalledTimes(2);

@@ -12,6 +12,7 @@ import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings"
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
+import { FeatureOffNotice, listedFeatureFlag } from "../settings/FeatureOffNotice";
 import { Dialog } from "../../ui/Dialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -110,7 +111,12 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
       }
     >
       {query.isFetching ? <p role="status">Reading memory proposals…</p> : null}
-      {query.error ? <Callout tone="error">{describeApiError(query.error).summary}</Callout> : null}
+      {query.error && listedFeatureFlag(query.error) ? (
+        <FeatureOffNotice flag={listedFeatureFlag(query.error)!} />
+      ) : null}
+      {query.error && !listedFeatureFlag(query.error) ? (
+        <Callout tone="error">{describeApiError(query.error).summary}</Callout>
+      ) : null}
       {operation.locked && operation.attempt?.message ? (
         <Callout tone="warning">{operation.attempt.message}</Callout>
       ) : null}
