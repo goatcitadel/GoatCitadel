@@ -115,7 +115,9 @@ export function ChatToolActivityBody({
         const changes = toolRunLineChanges(tool);
         const duration = toolRunDuration(tool);
         const requestError = failedRequestError(tool);
-        const finishing = isAwaitingApprovedReceipt(tool, live);
+        // A failure already on record is never hidden behind "finishing": the row keeps its failure status and summary.
+        const finishing =
+          isAwaitingApprovedReceipt(tool, live) && !diagnostics.hasFailureSignal && !tool.failureGuidance;
         return (
           <li key={key} data-tool-run-id={tool.toolRunId} className="flex flex-wrap justify-between gap-2 py-2">
             <span className="min-w-0 text-fg-secondary">

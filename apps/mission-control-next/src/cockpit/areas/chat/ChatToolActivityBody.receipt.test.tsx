@@ -51,8 +51,8 @@ afterEach(() => {
   client.clear();
 });
 
-async function render(live: boolean) {
-  const turn = { turnId: "turn-1", toolRuns: [approved] } as unknown as ChatThreadTurnRecord;
+async function render(live: boolean, run: ChatToolRunRecord = approved) {
+  const turn = { turnId: "turn-1", toolRuns: [run] } as unknown as ChatThreadTurnRecord;
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -67,6 +67,25 @@ it("says the turn is finishing after an approval while it still runs (U-CH-047)"
   expect(container.textContent).toContain("Finishing after your approval.");
   expect(container.textContent).not.toContain("Outcome uncertain");
   expect(container.textContent).not.toContain("canonical effect receipt");
+});
+
+it("keeps a recorded failure visible while the turn still runs after an approval", async () => {
+  const failed = {
+    ...approved,
+    toolName: "shell.exec",
+    args: { command: "make build" },
+    result: { exitCode: 2 },
+  } as unknown as ChatToolRunRecord;
+  await render(true, failed);
+  expect(container.textContent).toContain("Needs review");
+  expect(container.textContent).toContain("Command exited with code 2");
+  expect(container.textContent).not.toContain("Finishing after your approval.");
+});
+
+it("keeps a recorded error visible while the turn still runs after an approval", async () => {
+  const failed = { ...approved, error: "Disk full" } as unknown as ChatToolRunRecord;
+  await render(true, failed);
+  expect(container.textContent).not.toContain("Finishing after your approval.");
 });
 
 it("shows the recorded uncertain outcome once the turn is no longer running (U-CH-047)", async () => {
