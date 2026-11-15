@@ -602,7 +602,7 @@ function resolveToolsUnavailableReason(input: {
   advisoryPlanning: boolean;
   missingRequiredProjectBinding: boolean;
 }): BaseAgentToolsUnavailableReason | undefined {
-  if (input.effectiveToolAutonomy !== "manual" || (input.quickWebTurn && !input.advisoryPlanning)) return undefined;
+  if (input.effectiveToolAutonomy !== "manual" || input.quickWebTurn) return undefined;
   if (input.capabilityProfileToolAutonomy !== undefined) return "capability_profile";
   if (input.advisoryPlanning) return "advisory_planning";
   if (input.missingRequiredProjectBinding) return "project_binding_required";
@@ -808,7 +808,7 @@ export async function prepareAgentChatTurn(
       }
     : { ...normalizedCandidate, subagentPolicy: "off" };
   const executionProfile = executionProfileFromNormalizationProfile(normalized.normalizationProfile);
-  const quickWebTurn = executionProfile === "quick_web";
+  let quickWebTurn = executionProfile === "quick_web";
   if (!options?.skipProviderPreparation && !systemHeartbeatPosture && branchKind !== "retry") {
     await prepCanonicalWrite(host, options?.turnAdmission, () => host.maybeAutoTitleChatSession(sessionId, content));
   }
@@ -927,7 +927,7 @@ export async function prepareAgentChatTurn(
     userMessage = existingUserMessage;
   }
 
-  const resolvedGuidancePromise = quickWebTurn
+  let resolvedGuidancePromise = quickWebTurn
     ? Promise.resolve({
         workspaceId,
         globalFilesUsed: [],
@@ -935,7 +935,7 @@ export async function prepareAgentChatTurn(
         truncated: false,
       } satisfies Partial<ResolvedRuntimeGuidance>)
     : host.resolveRuntimeGuidance(workspaceId);
-  const threadKnowledgeContextPromise: Promise<ResolvedThreadKnowledgeContext> =
+  let threadKnowledgeContextPromise: Promise<ResolvedThreadKnowledgeContext> =
     quickWebTurn || options?.skipProviderPreparation
       ? Promise.resolve({ systemInstruction: undefined, citations: [], attachments: [] })
       : host.resolveThreadKnowledgeContext(sessionId, content);
@@ -995,10 +995,21 @@ export async function prepareAgentChatTurn(
         toolAutonomy: boundCapabilityProfile.selection.toolAutonomy,
       }
     : { ...persistedPrefs, subagentPolicy: "off" };
-  // Plan first writes its plan from the model alone: a simple-lookup message must not switch the turn to the quick
-  // web profile, which keeps web tools under manual autonomy.
-  if (prefs.planningMode === "advisory" && normalized.normalizationProfile === "quick_web") {
-    normalized = { ...normalized, normalizationProfile: "live" };
+  // Plan first writes its plan from the model alone. A simple-lookup message must not make it a quick web turn
+  // (which keeps web tools under manual autonomy and skips guidance, thread knowledge and history): the saved
+  // mode is only known here, so undo the quick-web choices made above.
+  if (prefs.planningMode === "advisory" && quickWebTurn) {
+    quickWebTurn = false;
+    normalized = boundCapabilityProfile
+      ? { ...normalized, normalizationProfile: "live" }
+      : {
+          ...normalizeAgentInputFromSend({ ...input, content, normalizationProfile: "live" }),
+          subagentPolicy: "off",
+        };
+    resolvedGuidancePromise = host.resolveRuntimeGuidance(workspaceId);
+    threadKnowledgeContextPromise = options?.skipProviderPreparation
+      ? Promise.resolve({ systemInstruction: undefined, citations: [], attachments: [] })
+      : host.resolveThreadKnowledgeContext(sessionId, content);
   }
   const effectiveProviderRoute = boundCapabilityProfile
     ? undefined

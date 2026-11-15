@@ -950,6 +950,42 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(prepared.normalized.normalizationProfile).toBe("live");
     expect(prepared.effectiveToolAutonomy).toBe("manual");
     expect(harness.readGuidance()).toContain("Planning mode is active");
+    // A normal turn everywhere: workspace guidance, thread knowledge and the conversation path are all kept.
+    expect(harness.host.resolveRuntimeGuidance).toHaveBeenCalled();
+    expect(harness.host.resolveThreadKnowledgeContext).toHaveBeenCalled();
+    expect(harness.host.buildDefaultChatPersonalityOverlay).toHaveBeenCalled();
+    expect(harness.readGuidance()).not.toContain("quick web answer");
+  });
+
+  it("keeps the earlier turns of the conversation for a Plan first turn that mentions a lookup", async () => {
+    const harness = createHost("chat", { planningMode: "advisory", toolAutonomy: "safe_auto" });
+    const priorUser = {
+      messageId: "user-prior",
+      sessionId: "session-1",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      content: "Earlier question",
+      timestamp: "2026-05-04T00:00:00.000Z",
+    } as ChatMessageRecord;
+    vi.mocked(harness.host.loadChatTurnSessionState).mockResolvedValue({
+      activeLeafTurnId: "turn-prior",
+      traces: [],
+      tracesById: new Map([
+        ["turn-prior", { turnId: "turn-prior", sessionId: "session-1", userMessageId: "user-prior" }],
+      ]),
+      messages: [],
+      messagesById: new Map([["user-prior", priorUser]]),
+      childrenByTurnId: new Map(),
+      turnLineageById: new Map([["turn-prior", { turnId: "turn-prior" }]]),
+    } as never);
+
+    const prepared = await prepareAgentChatTurn(harness.host, "session-1", {
+      content: "please look up the best way to eat sushi and plan what we discussed",
+    });
+
+    expect(prepared.conversationMessages.map((message) => message.messageId)).toContain("user-prior");
+    expect(vi.mocked(harness.host.buildLlmMessagesFromBranchPath).mock.calls[0]?.[1]).toEqual(["turn-prior"]);
   });
 
   it("ingests attachment references and applies autonomy overrides after code inputs normalize to Chat", async () => {

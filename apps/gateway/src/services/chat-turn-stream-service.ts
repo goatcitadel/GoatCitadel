@@ -1216,7 +1216,6 @@ export async function executeDelegatedPlanStep(
       subagentPolicy: "off",
       retrievalMode: prepared.autonomy.retrievalMode,
       toolAutonomy: prepared.effectiveToolAutonomy,
-      planningMode: prepared.prefs.planningMode,
       normalizationProfile: prepared.normalized.normalizationProfile,
       operatorId: input.operatorId,
       authActorId: input.authActorId,

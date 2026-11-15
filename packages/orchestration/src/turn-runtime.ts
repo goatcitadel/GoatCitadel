@@ -2,6 +2,7 @@ import type {
   ChatCompletionRequest,
   ChatMode,
   ChatNormalizationProfile,
+  ChatPlanningMode,
   ChatRetrievalMode,
   ChatSpeedMode,
   ChatSubagentPolicy,
@@ -37,6 +38,8 @@ export interface TurnRuntimeRequest {
   speedMode?: ChatSpeedMode;
   subagentPolicy?: ChatSubagentPolicy;
   toolAutonomy: "safe_auto" | "manual";
+  /** Plan first: the model writes the plan with no tools (the Gateway also forces manual autonomy). */
+  planningMode?: ChatPlanningMode;
   normalizationProfile?: ChatNormalizationProfile;
   executionProfile?: ChatTurnExecutionProfile;
   operatorId?: string;
