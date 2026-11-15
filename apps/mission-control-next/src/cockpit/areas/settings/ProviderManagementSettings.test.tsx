@@ -236,6 +236,35 @@ describe("native provider owner composition", () => {
       expect(api.confirmChangePlan).not.toHaveBeenCalled();
       expect(button("Review required step")).toBeTruthy();
     });
+    it("hands a plan back for review when the Gateway refuses its confirmation, never calling it a settings change", async () => {
+      let plan: Record<string, unknown>;
+      api.createChangePlan.mockImplementation(async (input) => (plan = prepared(input, "safe")));
+      api.confirmChangePlan.mockRejectedValue({ status: 409, body: { code: "STATE_CONFLICT" } });
+      api.fetchChangePlan.mockImplementation(async () => plan);
+      await addProfile();
+      expect(api.confirmChangePlan).toHaveBeenCalledOnce();
+      expect(api.fetchChangePlan).toHaveBeenCalledWith("new-plan", { workspaceId: "default" });
+      expect(container.textContent).not.toContain("Provider settings changed elsewhere");
+      expect(container.textContent).not.toContain("Provider saved and confirmed");
+      expect(button("Review required step")).toBeTruthy();
+    });
+    it("finishes the profile when the confirmation answers completed", async () => {
+      let plan: Record<string, unknown>;
+      api.createChangePlan.mockImplementation(async (input) => (plan = prepared(input, "safe")));
+      api.confirmChangePlan.mockImplementation(async () => {
+        config = {
+          ...config,
+          revision: 8,
+          providers: [...config.providers, { ...saved, providerId: "new-fixture", hasApiKey: false }],
+          providerConfigs: [...config.providerConfigs, { ...saved, providerId: "new-fixture" }],
+        };
+        return { ...plan, revision: 2, status: "completed", requiredAction: undefined, evidenceRefs: [] };
+      });
+      api.fetchChangePlan.mockImplementation(async () => ({ ...plan, revision: 2, status: "completed" }));
+      await addProfile();
+      expect(api.confirmChangePlan).toHaveBeenCalledOnce();
+      expect(button("Review required step")).toBeUndefined();
+    });
     it("keeps the owner locked and says so when the confirmation is lost", async () => {
       let plan: Record<string, unknown>;
       api.createChangePlan.mockImplementation(async (input) => (plan = prepared(input, "safe")));

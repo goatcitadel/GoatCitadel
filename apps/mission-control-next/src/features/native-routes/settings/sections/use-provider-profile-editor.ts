@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, type SetStateAction } from "react";
 import type { LlmProviderConfig } from "@goatcitadel/contracts";
 import {
+  fetchChangePlan,
   fetchLlmConfig,
   createChangePlan,
   patchSettings,
@@ -42,6 +43,32 @@ import {
   useProviderEditorEpoch,
   useProviderMutationState,
 } from "./provider-mutation-state";
+
+/** A reply that is a refusal from the Gateway (a 4xx), as opposed to an answer that never arrived. */
+function isRefusal(error: unknown): boolean {
+  const status = typeof error === "object" && error !== null && "status" in error ? error.status : undefined;
+  return typeof status === "number" && status >= 400 && status < 500;
+}
+
+/**
+ * Confirms a safe, just-created profile plan as its own tracked write, so a lost reply is checked against it. A
+ * refused confirmation leaves the plan open on the Gateway, so what it holds now is read again and handed back: the
+ * operator then sees its review card and can confirm or cancel it, instead of an orphaned plan nobody can reach. An
+ * answer that never arrived is not a refusal and stays an uncertain outcome.
+ */
+async function confirmOrKeepForReview(
+  created: Parameters<typeof confirmReviewedSettingsPlan>[0],
+  dispatch: typeof dispatchProviderMutation,
+) {
+  try {
+    return await dispatch(() => confirmReviewedSettingsPlan(created));
+  } catch (error) {
+    if (!isRefusal(error)) throw error;
+    const current = await fetchChangePlan(created.planId, { workspaceId: created.origin.workspaceId });
+    if (current.planId !== created.planId) throw error;
+    return current;
+  }
+}
 
 export function useProviderProfileEditor({
   config,
@@ -254,9 +281,7 @@ export function useProviderProfileEditor({
           // Anything else keeps its review step, and a step that needs the key or a sign-in comes after this one.
           // The confirmation is its own tracked write, so a lost reply is checked against it and not the creation.
           const plan =
-            created.risk === "safe"
-              ? await dispatchProviderMutation(() => confirmReviewedSettingsPlan(created))
-              : created;
+            created.risk === "safe" ? await confirmOrKeepForReview(created, dispatchProviderMutation) : created;
           next = { ...latest, changePlanReceipt: plan };
         } else {
           const updated = await dispatchProviderMutation(() =>
