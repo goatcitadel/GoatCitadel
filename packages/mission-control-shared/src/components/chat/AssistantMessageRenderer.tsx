@@ -135,7 +135,8 @@ export function AssistantMessageBody({
   );
 }
 
-const LINK_REFERENCE_DEFINITION = /^ {0,3}\[[^\]]+\]:\s/m;
+// Markdown allows a definition with nothing between the colon and its address ("[docs]:https://…").
+const LINK_REFERENCE_DEFINITION = /^ {0,3}\[[^\]]+\]:/m;
 const FOOTNOTE_REFERENCE = /\[\^[^\]]+\]/;
 
 /** Link reference definitions and footnotes reach across blocks, so such content stays one block. */

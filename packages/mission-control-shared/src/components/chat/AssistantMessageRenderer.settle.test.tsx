@@ -129,6 +129,7 @@ describe("a finished streamed answer renders its last lines as final text", () =
 describe("canSettleInBlocks", () => {
   it("is false for link reference definitions and footnotes, true otherwise", () => {
     expect(canSettleInBlocks("See [docs].\n\n[docs]: https://example.invalid")).toBe(false);
+    expect(canSettleInBlocks("[docs]:https://example.invalid\n\nSee [docs].\n")).toBe(false);
     expect(canSettleInBlocks("A note[^1].\n\n[^1]: Text")).toBe(false);
     expect(canSettleInBlocks("Plain.\n\nSecond.")).toBe(true);
   });
