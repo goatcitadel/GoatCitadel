@@ -232,6 +232,23 @@ it("describes the item with plain status, namespace and scope words, keeping ide
   expect(container.textContent).not.toContain("user_prefs");
   expect(container.textContent).not.toContain("m-a");
 });
+it("says why the item was remembered and links the conversation without showing its id", async () => {
+  vi.mocked(fetchMemoryItems).mockResolvedValue({
+    items: [{ ...item, metadata: { sourceSessionId: "s-1", source: "approved_memory_lifecycle" } }],
+    total: 1,
+    snapshotAt: "now",
+  });
+  await render();
+  const details = [...container.querySelectorAll("details")].find((node) =>
+    node.textContent?.includes("Memory provenance"),
+  )!;
+  expect(details.open).toBe(true);
+  expect(details.textContent).toContain("Remembered from a conversation.");
+  expect(details.textContent).toContain("Saved through a change you approved.");
+  const link = [...details.querySelectorAll("a")].find((node) => node.textContent === "Open conversation");
+  expect(link?.getAttribute("href")).toMatch(/\?sessionId=s-1(&|$)/u);
+  expect(details.textContent).not.toContain("s-1");
+});
 it("keeps global memory read-only here because the Gateway only mutates exact workspace-owned items", async () => {
   const { workspaceId: _owned, ...global } = item;
   vi.mocked(fetchMemoryItems).mockResolvedValue({ items: [global as MemoryItemRecord], total: 1, snapshotAt: "now" });

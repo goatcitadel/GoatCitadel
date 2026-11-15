@@ -23,6 +23,8 @@ import { Field } from "../../ui/Field";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { recordView } from "../../data/record-view";
 import { TimeText } from "../../ui/TimeText";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { describeMemoryProvenance } from "./library-memory-provenance";
 import { formatSeconds } from "@goatcitadel/mission-control-shared/content/format";
 import { memoryNamespaceLabel, memoryScopeLabel, presentMemoryLifecycle } from "./library-vocabulary";
 import {
@@ -179,6 +181,7 @@ function MemoryEditor({
     setReview({ action, item, draft: { ...draft.value } });
   }
   const scope = memoryScopeLabel(item, workspaceId);
+  const provenance = describeMemoryProvenance(item.metadata);
   // The Gateway refuses approved mutations unless the item is exactly workspace-owned (409), so do not offer them.
   const globalItem = !item.workspaceId;
   return (
@@ -269,8 +272,19 @@ function MemoryEditor({
         <Button onClick={() => void refresh()}>Refresh memory record</Button>
         <Button onClick={() => setHistoryOpen((value) => !value)}>Memory history</Button>
       </div>
-      <details className="break-words text-sm text-fg-secondary">
+      <details open className="break-words text-sm text-fg-secondary">
         <summary>Memory provenance</summary>
+        {provenance.lines.map((line) => (
+          <p key={line}>{line}</p>
+        ))}
+        {provenance.conversationId ? (
+          <NativeOwnerLink
+            href={`/chat?sessionId=${encodeURIComponent(provenance.conversationId)}`}
+            scope={["memory-provenance", item.itemId]}
+          >
+            Open conversation
+          </NativeOwnerLink>
+        ) : null}
         <p>
           <TimeText prefix="Created" value={item.createdAt} /> · <TimeText prefix="Updated" value={item.updatedAt} />
         </p>
