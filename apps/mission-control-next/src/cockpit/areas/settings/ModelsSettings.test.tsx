@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,12 +15,37 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: undefined }),
 }));
-vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: vi.fn() }) }));
-vi.mock("./ProviderCatalogSettings", () => ({ ProviderCatalogSettings: () => <p>Expert catalog owner</p> }));
+const navigate = vi.hoisted(() => vi.fn());
+vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate }) }));
+vi.mock("../../ui/NativeOwnerLink", () => ({
+  NativeOwnerLink: ({ href, children, className }: { href: string; children: ReactNode; className?: string }) => (
+    <a href={href} className={className}>
+      {children}
+    </a>
+  ),
+}));
+vi.mock("./ProviderCatalogSettings", () => ({
+  ProviderCatalogSettings: ({ providerId }: { providerId?: string | null }) => (
+    <p>Expert catalog owner for {String(providerId)}</p>
+  ),
+}));
 vi.mock("./ProviderConnectionSettings", () => ({
   ProviderConnectionSettings: () => <p>Standalone connection editor</p>,
 }));
-vi.mock("./ProviderManagementSettings", () => ({ ProviderManagementSettings: () => <p>One provider page</p> }));
+vi.mock("./ProviderManagementSettings", () => ({
+  ProviderManagementSettings: ({
+    onSelectedProviderChange,
+  }: {
+    onSelectedProviderChange?: (providerId: string) => void;
+  }) => (
+    <>
+      <p>One provider page</p>
+      <button type="button" onClick={() => onSelectedProviderChange?.("provider-b")}>
+        Pick provider B
+      </button>
+    </>
+  ),
+}));
 vi.mock("./ProviderRoutingSettings", () => ({ ProviderRoutingSettings: () => null }));
 vi.mock("./ProviderAdviceSettings", () => ({ ProviderAdviceSettings: () => null }));
 // Like the real owner after a completed change: it reports the result, then re-reads onboarding.
@@ -28,11 +53,20 @@ vi.mock("./CockpitGuidedModelSetup", () => ({
   CockpitGuidedModelSetup: ({
     onNoticeChange,
     reloadOnboarding,
+    onEnterChat,
+    enterChatLabel = "Enter Chat",
+    showReadinessNote,
   }: {
     onNoticeChange?: (notice: string | null) => void;
     reloadOnboarding: () => Promise<void>;
+    onEnterChat: () => void;
+    enterChatLabel?: string;
+    showReadinessNote?: boolean;
   }) => (
     <>
+      <button type="button" data-show-readiness-note={String(showReadinessNote)} onClick={onEnterChat}>
+        {enterChatLabel}
+      </button>
       <button type="button" onClick={() => onNoticeChange?.("Change applied and verified.")}>
         Report change
       </button>
@@ -57,6 +91,7 @@ async function settleUntil(done: () => boolean) {
 
 beforeEach(() => {
   api.fetchOnboardingState.mockReset();
+  navigate.mockReset();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -68,6 +103,17 @@ afterEach(() => {
   client.clear();
   clearAllDirty();
 });
+
+async function render() {
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ModelsSettings />
+      </QueryClientProvider>,
+    ),
+  );
+  await settleUntil(() => button("Report change") !== undefined || container.textContent!.includes("unavailable"));
+}
 
 describe("Models settings", () => {
   it.each([
@@ -86,14 +132,14 @@ describe("Models settings", () => {
       ),
     );
     await settleUntil(() => button("Report change") !== undefined);
-    expect(container.textContent).not.toContain("Expert catalog owner");
+    expect(container.textContent).not.toContain("Expert catalog owner for null");
     const expand = button("Advanced provider configuration")!;
     expect(expand).toBeDefined();
     expect(expand.getAttribute("aria-expanded")).toBe("false");
     await act(async () => expand.click());
-    expect(container.textContent).toContain("Expert catalog owner");
-    expect(container.textContent!.indexOf("Guided model setup")).toBeLessThan(
-      container.textContent!.indexOf("Expert catalog owner"),
+    expect(container.textContent).toContain("Expert catalog owner for null");
+    expect(container.textContent!.indexOf("Chat model")).toBeLessThan(
+      container.textContent!.indexOf("Expert catalog owner for null"),
     );
     setSectionDirty(key, true, "Provider profile");
     await act(async () => expand.click());
@@ -102,13 +148,13 @@ describe("Models settings", () => {
       [...document.querySelectorAll("button")].find((item) => item.textContent === "Cancel")!.click(),
     );
     expect(expand.getAttribute("aria-expanded")).toBe("true");
-    expect(container.textContent).toContain("Expert catalog owner");
+    expect(container.textContent).toContain("Expert catalog owner for null");
     await act(async () => expand.click());
     await act(async () =>
       [...document.querySelectorAll("button")].find((item) => item.textContent === "Discard changes")!.click(),
     );
     expect(expand.getAttribute("aria-expanded")).toBe("false");
-    expect(container.textContent).not.toContain("Expert catalog owner");
+    expect(container.textContent).not.toContain("Expert catalog owner for null");
     setSectionDirty("unrelated:editor", true, "Other editor");
     await act(async () => expand.click());
     await act(async () => expand.click());
@@ -149,6 +195,54 @@ describe("Models settings", () => {
     const text = container.textContent!;
     expect(text).toContain("One provider page");
     expect(text).not.toContain("Standalone connection editor");
-    expect(text.indexOf("One provider page")).toBeLessThan(text.indexOf("Expert catalog owner"));
+    expect(text.indexOf("One provider page")).toBeLessThan(text.indexOf("Expert catalog owner for null"));
+  });
+  it("shows one setup status instead of a second step list, linking to Get started", async () => {
+    api.fetchOnboardingState.mockResolvedValue({ ...onboardingFixture(), completed: false });
+    await render();
+    expect(container.querySelector('[aria-label="Model setup steps"]')).toBeNull();
+    expect(container.querySelector('[data-show-readiness-note="true"]')).not.toBeNull();
+    expect(container.textContent).toContain(
+      "Setup isn't finished. After you confirm a model here, Get started asks for your safety settings and a test message.",
+    );
+    expect(container.querySelector('a[href="/settings/first-run"]')?.textContent).toBe("Open setup");
+  });
+  it.each([
+    ["pending", "Setup is recorded. Send a test message in Chat to verify the first answer."],
+    ["verified", "Setup is done and your first Chat answer is verified."],
+  ])("says what is left once setup is finished and the first answer is %s", async (status, sentence) => {
+    api.fetchOnboardingState.mockResolvedValue({
+      ...onboardingFixture(),
+      completed: true,
+      firstTask: { status, checkedAt: "2026-09-30T00:00:00.000Z" },
+    });
+    await render();
+    expect(container.textContent).toContain(sentence);
+    expect(container.querySelector('a[href="/settings/first-run"]')).toBeNull();
+    expect(button("Enter Chat")).toBeDefined();
+    await act(async () => button("Enter Chat")!.click());
+    expect(navigate).toHaveBeenCalledWith("/chat");
+  });
+  it("shows no setup status while setup has not been read", async () => {
+    api.fetchOnboardingState.mockRejectedValue(new Error("Gateway unavailable"));
+    await render();
+    expect(container.textContent).toContain("Model setup unavailable");
+    expect(container.textContent).not.toContain("Setup isn't finished");
+    expect(container.textContent).not.toContain("Setup is recorded");
+    expect(container.textContent).not.toContain("Setup is done");
+  });
+  it("continues setup, not Chat, after the model step while setup is unfinished", async () => {
+    api.fetchOnboardingState.mockResolvedValue({ ...onboardingFixture(), completed: false });
+    await render();
+    await act(async () => button("Continue setup")!.click());
+    expect(navigate).toHaveBeenCalledWith("/settings/first-run");
+  });
+  it("passes one provider choice from the editor to the catalog", async () => {
+    api.fetchOnboardingState.mockResolvedValue(onboardingFixture());
+    await render();
+    await act(async () => button("Advanced provider configuration")!.click());
+    expect(container.textContent).toContain("Expert catalog owner for null");
+    await act(async () => button("Pick provider B")!.click());
+    expect(container.textContent).toContain("Expert catalog owner for provider-b");
   });
 });

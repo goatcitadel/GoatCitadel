@@ -365,6 +365,20 @@ describe("native provider owner composition", () => {
       "Remove saved API credential",
     );
   });
+  it("reports a chosen provider to its host and shows the host's choice when it is given one", async () => {
+    const onSelectedProviderChange = vi.fn();
+    await act(async () => {
+      root.render(
+        <ProviderManagementSettings selectedProviderId="other" onSelectedProviderChange={onSelectedProviderChange} />,
+      );
+    });
+    const radio = container.querySelector<HTMLInputElement>("input[type=radio][value=fixture]")!;
+    expect(radio.checked).toBe(false);
+    await act(async () => radio.click());
+    expect(onSelectedProviderChange).toHaveBeenCalledWith("fixture");
+    // The host owns the choice: nothing moves until it passes the new one back.
+    expect(container.querySelector<HTMLInputElement>("input[type=radio][value=fixture]")!.checked).toBe(false);
+  });
   it("says why blocked provider actions are disabled and ties each reason to its control", async () => {
     api.fetchProviderSecretStatus.mockResolvedValue({ providerId: "fixture", hasSecret: false, source: "none" });
     await render();
