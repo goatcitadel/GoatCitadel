@@ -13,7 +13,12 @@ import { RiskBadge } from "../../ui/RiskBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
-import { canReviewConnectionPlan, connectionPlanCompleted, useProviderConnectionCustody } from "./provider-connection-state";
+import { WaitingSettingsChangeNotice } from "./WaitingSettingsChangeNotice";
+import {
+  canReviewConnectionPlan,
+  connectionPlanCompleted,
+  useProviderConnectionCustody,
+} from "./provider-connection-state";
 import { useProviderConnectionEditor } from "./use-provider-connection-editor";
 import {
   AWS_SIGV4_CREDENTIAL_HELP,
@@ -363,6 +368,9 @@ function ProviderConnectionEditor({
         <p role="alert" className="text-sm text-status-failed">
           {editor.error}
         </p>
+      ) : null}
+      {editor.waiting ? (
+        <WaitingSettingsChangeNotice waiting={editor.waiting} onResolved={editor.clearWaiting} />
       ) : null}
       {attempt?.uncertain || (plan && !canReviewConnectionPlan(plan) && !connectionPlanCompleted(plan)) ? (
         <NativeOwnerLink
