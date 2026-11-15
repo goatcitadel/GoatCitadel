@@ -309,6 +309,11 @@ describe("Gateway inbox projection", () => {
     expect(summary("home")).toBe("Command: cat ~\\notes.txt");
     expect(summary("code")).toBe('Code: const text = await docs.extract_text({ path: "saturday-plan.pdf" });');
     expect(summary("other")).not.toContain("do-not-project-command");
+    // The Cockpit keeps these kinds out of a toast by their tool id, so it is carried even without a linkage tool.
+    const tool = (id: string) => projection.items.find((entry) => entry.id === `approval:${id}`)?.source.toolName;
+    expect(tool("notool")).toBe("shell.exec");
+    expect(tool("code")).toBe("code_mode.run");
+    expect(tool("other")).toBeUndefined();
   });
 
   it("counts only decisions still open and keeps expired ones listed (U-IN-011)", async () => {

@@ -119,6 +119,15 @@ function skillLifecycleApproval(
 }
 
 const SHELL_TOOLS = new Set(["shell.exec", "shell.exec_background"]);
+const SUMMARY_ONLY_KINDS = new Set([...SHELL_TOOLS, "code_mode.run"]);
+
+/**
+ * The tool id an Inbox item carries. The two shell tools and a code run are named by their approval kind when the linkage
+ * holds no tool, so the Cockpit knows to keep their command or code out of a toast.
+ */
+function approvalToolName(linkedTool: string | undefined, kind: string): string | undefined {
+  return linkedTool || (SUMMARY_ONLY_KINDS.has(kind) ? kind : undefined);
+}
 
 function approvalTargetSummary(preview: unknown, kind: string): string {
   const record = preview && typeof preview === "object" ? (preview as Record<string, unknown>) : {};
@@ -315,7 +324,9 @@ export class InboxProjectionService {
               workspaceId,
               approvalId: approval.approvalId,
               ...(isInstallWideApproval(approval) ? { installWide: true as const } : {}),
-              ...(!plan && approval.linkage?.toolName ? { toolName: approval.linkage.toolName } : {}),
+              ...(!plan && approvalToolName(approval.linkage?.toolName, approval.kind)
+                ? { toolName: approvalToolName(approval.linkage?.toolName, approval.kind) }
+                : {}),
               ...(plan?.planId ? { planId: plan.planId } : {}),
               ...(approval.linkage?.sessionId ? { sessionId: approval.linkage.sessionId } : {}),
               ...(approval.linkage?.turnId ? { turnId: approval.linkage.turnId } : {}),
