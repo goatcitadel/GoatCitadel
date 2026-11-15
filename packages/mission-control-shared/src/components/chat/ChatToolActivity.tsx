@@ -149,7 +149,7 @@ function getToolRunActivityFallback(status: ChatThreadTurnRecord["toolRuns"][num
     case "approval_required":
       return "Waiting for operator approval.";
     case "blocked":
-      return "Blocked by your tool rules.";
+      return "Blocked by policy or runtime guard.";
     case "failed":
       return "Tool failed; open details for evidence.";
     case "started":

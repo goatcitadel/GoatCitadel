@@ -54,6 +54,13 @@ describe("ChatToolActivityBody blocked tools", () => {
     }
   });
 
+  it("offers no link for a tool in no group, where the Tools tab has no panel to show", async () => {
+    await render(
+      <ChatToolActivityBody turn={turnWith({ toolName: "mcp.example.lookup" })} showTechnicalDetails={false} />,
+    );
+    expect(seeWhy()).toHaveLength(0);
+  });
+
   it("offers no link for a tool that was not blocked", async () => {
     await render(<ChatToolActivityBody turn={turnWith({ status: "failed" })} showTechnicalDetails={false} />);
     expect(seeWhy()).toHaveLength(0);

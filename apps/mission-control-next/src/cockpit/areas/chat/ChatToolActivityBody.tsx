@@ -1,4 +1,9 @@
-import type { ChatThreadTurnRecord, ChatToolRunRecord, DesignAdvisory } from "@goatcitadel/contracts";
+import {
+  toolGroupForTool,
+  type ChatThreadTurnRecord,
+  type ChatToolRunRecord,
+  type DesignAdvisory,
+} from "@goatcitadel/contracts";
 import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
 import {
   getChatToolRunDiagnostics,
@@ -56,10 +61,18 @@ function toolRunSummaryText(tool: ChatToolRunRecord): string {
 /** The outcomes of an approval you or the clock ended: the call was stopped by that decision, not by a rule. */
 const APPROVAL_ENDED_OUTCOMES = new Set(["denied", "withdrawn", "expired"]);
 
-/** A blocked call stopped by a rule (not by your own decision on its approval) can link to where that rule is. */
+/**
+ * A blocked call that can link to the page showing why: not stopped by your own decision on its approval, and a tool in
+ * a group, since the group's panel is what names the rule. The record names no rule itself, so a tool in no group (a
+ * connector's) gets no link.
+ */
 function blockedByRule(tool: ChatToolRunRecord): boolean {
   const outcome = tool.result?.approvalOutcome;
-  return tool.status === "blocked" && !(typeof outcome === "string" && APPROVAL_ENDED_OUTCOMES.has(outcome));
+  return (
+    tool.status === "blocked" &&
+    !(typeof outcome === "string" && APPROVAL_ENDED_OUTCOMES.has(outcome)) &&
+    toolGroupForTool(tool.toolName) !== undefined
+  );
 }
 
 /** The failed tries before a tool's latest one: folded under its row, never dropped. */
