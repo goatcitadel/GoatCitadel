@@ -175,7 +175,6 @@ export function ChatAreaView({
     inspectorTab.current = "files";
     open({
       source: "chat",
-      focusOnOpen: true,
       title: "Conversation",
       body: <DeferredChatInspector input={input} targetTurnId={pending.turnId} initialTab="files" />,
     });
@@ -210,6 +209,7 @@ export function ChatAreaView({
     if (turnId) active?.onSelectTurn(turnId);
     open({
       source: "chat",
+      focusOnOpen: true,
       title: "Conversation",
       body: (
         <DeferredChatInspector
