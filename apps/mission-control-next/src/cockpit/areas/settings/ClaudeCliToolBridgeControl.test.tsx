@@ -591,5 +591,27 @@ describe("cockpit Claude Code CLI tool setting", () => {
         unmount();
       }
     });
+
+    it("is not fooled by a change that finishes after the open changes were read", async () => {
+      // The settings still hold the old value until the open changes have been read; afterwards they hold the new one.
+      let written = false;
+      api.fetchSettings.mockImplementation(async () =>
+        written && api.fetchChangePlans.mock.calls.length > 0 ? settingsAt(5, false) : settingsAt(4, true),
+      );
+      api.patchSettings.mockImplementation(async () => {
+        written = true;
+        throw { status: 503, kind: "http", body: {} };
+      });
+      api.fetchChangePlans.mockResolvedValue({ items: [] });
+      const { container, unmount } = await mount();
+      try {
+        await vi.waitFor(() => expect(container.textContent).toContain("Current: On"));
+        await toggleAndSave(container);
+        await vi.waitFor(() => expect(container.textContent).toContain("Setting saved."));
+        expect(container.textContent).not.toContain("was not saved");
+      } finally {
+        unmount();
+      }
+    });
   });
 });

@@ -434,5 +434,88 @@ describe("approval save review lifetime", () => {
       await render("two");
       expect(control.uncertain?.installation).toBe("another-owner");
     });
+
+    it("drops the waiting sentence when the change is decided in place", async () => {
+      await prepare();
+      api.patchSettings.mockRejectedValue({
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: { resourceKind: "change_plan", resourceId: "plan-waiting" } },
+      });
+      api.fetchChangePlan.mockResolvedValue(waitingPlan("plan-waiting", "approval-waiting"));
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() => expect(control.waiting).toMatchObject({ stage: "approval" }));
+      expect(control.notice).toBe("One change to this rule is already waiting for your approval.");
+      await act(async () => control.clearWaiting());
+      expect(control.waiting).toBeNull();
+      expect(control.notice).toBeNull();
+      await vi.waitFor(() => expect(control.canSave).toBe(true));
+    });
+
+    it("is not fooled by a change that finishes after the open changes were read", async () => {
+      await prepare();
+      // The settings still hold the old rule until the open changes have been read; afterwards they hold the new one.
+      let written = false;
+      api.fetchSettings.mockImplementation(async () =>
+        structuredClone(
+          written && api.fetchChangePlans.mock.calls.length > 0
+            ? { ...owner, revision: owner.revision + 1, toolApprovalMode: "approve_risky" }
+            : owner,
+        ),
+      );
+      api.patchSettings.mockImplementation(async () => {
+        written = true;
+        throw new Error("Failed to fetch");
+      });
+      api.fetchChangePlans.mockResolvedValue({ items: [] });
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() => expect(control.notice).toBe("Tool approval rule saved and confirmed by GoatCitadel."));
+      expect(control.uncertain).toBeUndefined();
+    });
+
+    it("drops a lookup that finishes after another Gateway was chosen", async () => {
+      await prepare();
+      api.patchSettings.mockRejectedValue({
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: { resourceKind: "change_plan", resourceId: "plan-waiting" } },
+      });
+      const lookup = deferred<unknown>();
+      api.fetchChangePlan.mockReturnValue(lookup.promise);
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() => expect(api.fetchChangePlan).toHaveBeenCalled());
+      api.base = "other-owner";
+      await render("two");
+      await act(async () => {
+        lookup.resolve(waitingPlan("plan-waiting", "approval-waiting"));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(control.waiting).toBeNull();
+      expect(control.notice).toBeNull();
+    });
+
+    it("keeps each Gateway's unconfirmed save while another Gateway loses and settles its own", async () => {
+      retainApprovalModeUncertainty({
+        message: "GoatCitadel didn't answer, so this save isn't confirmed yet.",
+        submitted: "approve_risky",
+        baseRevision: 40,
+        previous: "approve_all",
+        installation: "owner",
+        checking: false,
+      });
+      // Gateway B: its own save is lost and then settled as not saved.
+      api.base = "gateway-b";
+      await prepare();
+      api.patchSettings.mockRejectedValue(new Error("Failed to fetch"));
+      api.fetchChangePlans.mockResolvedValue({ items: [] });
+      await act(async () => void control.requestSave());
+      await vi.waitFor(() =>
+        expect(control.notice).toBe("Your approval rule was not saved. Your draft is kept, so you can save it again."),
+      );
+      expect(control.uncertain).toBeUndefined();
+      // Back on Gateway A: still locked, with its own message.
+      api.base = "owner";
+      await render("three");
+      expect(control.uncertain?.message).toBe("GoatCitadel didn't answer, so this save isn't confirmed yet.");
+      expect(control.locked).toBe(true);
+    });
   });
 });

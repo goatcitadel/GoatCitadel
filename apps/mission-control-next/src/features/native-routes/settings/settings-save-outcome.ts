@@ -56,9 +56,10 @@ export function classifySettingsSaveFailure(error: unknown): SettingsSaveFailure
 
 /**
  * Where an open Settings change stands for the operator: `approval` has an approval to decide in place, `review` is a
- * change the operator must act on (confirm, give input, review) and `applying` is being carried out by GoatCitadel.
+ * change the Inbox lists for the operator to act on (confirm, give input), `credential` needs a secret that Inbox
+ * cannot take, `preparing` is not ready for anyone yet (draft, staging) and `applying` is being carried out.
  */
-export type WaitingSettingsStage = "approval" | "review" | "applying";
+export type WaitingSettingsStage = "approval" | "review" | "credential" | "preparing" | "applying";
 
 export interface WaitingSettingsChange {
   planId: string;
@@ -78,6 +79,8 @@ export type WaitingLookup =
   | { kind: "unreadable" };
 
 const APPLYING = new Set<string>(["applying", "verifying", "monitoring", "rolling_back"]);
+// Not listed in Inbox and not ready for the operator: nothing to click yet.
+const PREPARING = new Set<string>(["draft", "staging"]);
 
 function isTerminal(plan: ChangePlanRecord): boolean {
   return changePlanPhaseForStatus(plan.status) === "terminal";
@@ -90,7 +93,15 @@ function isSettingsPlan(plan: ChangePlanRecord): boolean {
 function describeWaiting(plan: ChangePlanRecord): WaitingSettingsChange {
   const action = plan.requiredAction;
   const approvalId = action?.kind === "approval" && action.approvalId ? action.approvalId : undefined;
-  const stage: WaitingSettingsStage = approvalId ? "approval" : APPLYING.has(plan.status) ? "applying" : "review";
+  const stage: WaitingSettingsStage = approvalId
+    ? "approval"
+    : action?.kind === "secure_input"
+      ? "credential"
+      : APPLYING.has(plan.status)
+        ? "applying"
+        : PREPARING.has(plan.status)
+          ? "preparing"
+          : "review";
   return {
     planId: plan.planId,
     ...(approvalId ? { approvalId } : {}),
@@ -118,11 +129,18 @@ export function waitingNoticeFor(lookup: WaitingLookup, planId: string): Waiting
   return lookup.kind === "unreadable" ? { planId, unreadable: true } : null;
 }
 
+/** What a waiting change is to: the words that follow "this" in its sentence. */
+export type WaitingSubject = "setting" | "rule" | "provider";
+
 /** The one sentence about a waiting change; `subject` is the words after "this". */
-export function describeWaitingChange(waiting: WaitingSettingsNotice, subject: "setting" | "rule" = "setting"): string {
+export function describeWaitingChange(waiting: WaitingSettingsNotice, subject: WaitingSubject = "setting"): string {
   if ("unreadable" in waiting) return `One change to this ${subject} is already waiting.`;
   if (waiting.stage === "approval") return `One change to this ${subject} is already waiting for your approval.`;
   if (waiting.stage === "review") return `One change to this ${subject} is waiting for your review.`;
+  if (waiting.stage === "credential")
+    return `One change to this ${subject} is waiting for its credential. Finish or cancel it where you started it.`;
+  if (waiting.stage === "preparing")
+    return `One change to this ${subject} is being prepared. Refresh in a moment to see it.`;
   return `One change to this ${subject} is still being applied. Refresh in a moment to see it.`;
 }
 

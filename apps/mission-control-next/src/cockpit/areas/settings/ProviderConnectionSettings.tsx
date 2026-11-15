@@ -123,7 +123,7 @@ function ProviderConnectionEditor({
   const endpointCheck = useBlurValidation((value) => urlFieldError(value, { required: true }));
   const route = useCockpitRoute();
   const [credentialStorage, setCredentialStorage] = useState<"keychain" | "env">("keychain");
-  const { draft, attempt, blocked } = editor;
+  const { draft, attempt, blocked, waitingPanel } = editor;
   const credentialEditable =
     !provider.authMode || provider.authMode === "api-key" || isBedrockCredentialMode(provider.authMode);
   const sigV4 = provider.authMode === "aws-sigv4";
@@ -369,8 +369,13 @@ function ProviderConnectionEditor({
           {editor.error}
         </p>
       ) : null}
-      {editor.waiting ? (
-        <WaitingSettingsChangeNotice waiting={editor.waiting} onResolved={editor.clearWaiting} />
+      {waitingPanel.waiting ? (
+        <WaitingSettingsChangeNotice
+          waiting={waitingPanel.waiting}
+          onResolved={waitingPanel.clearWaiting}
+          onCheckAgain={waitingPanel.recheck}
+          subject="provider"
+        />
       ) : null}
       {attempt?.uncertain || (plan && !canReviewConnectionPlan(plan) && !connectionPlanCompleted(plan)) ? (
         <NativeOwnerLink

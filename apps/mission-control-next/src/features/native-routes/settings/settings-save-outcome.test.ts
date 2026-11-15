@@ -112,10 +112,20 @@ describe("findWaitingSettingsChange", () => {
       api.fetchChangePlan.mockResolvedValue(plan({ status, requiredAction: undefined }));
       expect(await findWaitingSettingsChange("plan-7")).toMatchObject({ kind: "open", change: { stage: "applying" } });
     }
-    for (const status of ["draft", "awaiting_input", "awaiting_confirmation", "staging"]) {
+    for (const status of ["awaiting_input", "awaiting_confirmation"]) {
       api.fetchChangePlan.mockResolvedValue(plan({ status, requiredAction: { kind: "confirmation" } }));
       expect(await findWaitingSettingsChange("plan-7")).toMatchObject({ kind: "open", change: { stage: "review" } });
     }
+    // Not ready for anyone and not listed in Inbox: nothing for the operator to open yet.
+    for (const status of ["draft", "staging"]) {
+      api.fetchChangePlan.mockResolvedValue(plan({ status, requiredAction: undefined }));
+      expect(await findWaitingSettingsChange("plan-7")).toMatchObject({ kind: "open", change: { stage: "preparing" } });
+    }
+    // A secret Inbox cannot take is the operator's to enter where the change was started.
+    api.fetchChangePlan.mockResolvedValue(
+      plan({ status: "awaiting_input", requiredAction: { kind: "secure_input", actionId: "a" } }),
+    );
+    expect(await findWaitingSettingsChange("plan-7")).toMatchObject({ kind: "open", change: { stage: "credential" } });
     // An approval step with no approval to open is still something the operator must look at.
     api.fetchChangePlan.mockResolvedValue(plan({ requiredAction: { kind: "approval" } }));
     expect(await findWaitingSettingsChange("plan-7")).toMatchObject({ kind: "open", change: { stage: "review" } });

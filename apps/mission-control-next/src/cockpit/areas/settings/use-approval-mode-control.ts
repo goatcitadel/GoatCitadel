@@ -66,9 +66,8 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     reload: () => settings.refetch(),
   });
   const installation = getGatewayApiBaseUrl();
-  // A record belongs to the Gateway its save went to: on another installation it locks nothing and says nothing.
-  const retained = useApprovalModeUncertainty();
-  const uncertain = retained?.installation === installation ? retained : undefined;
+  // Each Gateway keeps its own record of an unconfirmed save; another installation's record locks nothing here.
+  const uncertain = useApprovalModeUncertainty(installation);
   const [busy, setBusy] = useState(false);
   const [review, setReview] = useState<ApprovalReview | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -246,7 +245,7 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     const latest = await fetchSettings().catch(() => undefined);
     if (!latest || !hasApprovalSettings(latest) || getGatewayApiBaseUrl() !== record.installation) return keepLocked();
     const outcome = settleApprovalModeUncertainty(record, latest, Boolean(active));
-    clearApprovalModeUncertainty();
+    clearApprovalModeUncertainty(record.installation);
     if (live.current.mounted) {
       if (outcome === "saved") {
         draft.acceptSaved(latest.toolApprovalMode, latest.revision, record.submitted);
@@ -259,8 +258,8 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     await settings.refetch();
   }
   const reconcile = async () => {
-    const record = currentApprovalModeUncertainty();
-    if (record && !record.checking && record.installation === getGatewayApiBaseUrl()) await reconcileRecord(record);
+    const record = currentApprovalModeUncertainty(getGatewayApiBaseUrl());
+    if (record && !record.checking) await reconcileRecord(record);
   };
   /**
    * Looks at the earlier change a conflict (or a refresh) names: still open (shown), finished (nothing to show; the
@@ -268,6 +267,7 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
    */
   async function followWaiting(planId: string): Promise<void> {
     const lookup = await findWaitingSettingsChange(planId);
+    if (!live.current.mounted || getGatewayApiBaseUrl() !== installation) return;
     if (lookup.kind === "unreadable" && waiting && !("unreadable" in waiting)) return;
     const held = waitingNoticeFor(lookup, planId);
     setWaiting(held);
@@ -300,6 +300,9 @@ export function useApprovalModeControl({ scope = "installation", safeOnly = fals
     waiting,
     /** Called once the waiting change was decided: the saved rule is read again. */
     clearWaiting: () => {
+      // The waiting sentence goes with the change; a notice set since stays.
+      const sentence = waiting ? describeWaitingChange(waiting, "rule") : undefined;
+      setNotice((shown) => (shown === sentence ? null : shown));
       setWaiting(null);
       void settings.refetch();
     },

@@ -24,6 +24,7 @@ vi.mock("../../ui/NativeOwnerLink", () => ({
   NativeOwnerLink: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a>,
 }));
 
+import type { WaitingSubject } from "../../../features/native-routes/settings/settings-save-outcome";
 import { WaitingSettingsChangeNotice } from "./WaitingSettingsChangeNotice";
 
 let root: Root;
@@ -31,7 +32,7 @@ let container: HTMLDivElement;
 
 async function show(
   waiting: React.ComponentProps<typeof WaitingSettingsChangeNotice>["waiting"],
-  subject?: "setting" | "rule",
+  subject?: WaitingSubject,
   showSentence?: boolean,
 ) {
   await act(async () =>
@@ -104,5 +105,18 @@ describe("WaitingSettingsChangeNotice", () => {
     expect(container.textContent).toBe("Review the waiting change");
     await show({ planId: "plan-7", stage: "applying" }, "setting", false);
     expect(container.textContent).toBe("");
+  });
+
+  it("has nothing to click for a change being prepared or waiting for a credential", async () => {
+    await show({ planId: "plan-7", stage: "preparing" });
+    expect(container.textContent).toContain(
+      "One change to this setting is being prepared. Refresh in a moment to see it.",
+    );
+    expect(container.querySelector("a, button")).toBeNull();
+    await show({ planId: "plan-7", stage: "credential" }, "provider");
+    expect(container.textContent).toContain(
+      "One change to this provider is waiting for its credential. Finish or cancel it where you started it.",
+    );
+    expect(container.querySelector("a, button")).toBeNull();
   });
 });

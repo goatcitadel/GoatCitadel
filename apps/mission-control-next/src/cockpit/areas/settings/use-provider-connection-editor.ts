@@ -56,7 +56,7 @@ export function useProviderConnectionEditor(
   const currentCustody = () => getProviderConnectionCustody() === custody;
   const attempt = useProviderConnectionAttempt(id);
   const [error, setError] = useState("");
-  const createFailure = useProviderCreateFailure(reload);
+  const createFailure = useProviderCreateFailure(reload, currentCustody, setError);
   const [dialog, setDialog] = useState<ChangePlanRecord | null>(null);
   const reading = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -143,9 +143,8 @@ export function useProviderConnectionEditor(
       setProviderConnectionAttempt(id, { ...next, busy: false, verified: connectionPlanCompleted(plan) });
       if (canReviewConnectionPlan(plan)) setDialog(plan);
     } catch {
-      if (!currentCustody()) return;
       // A refusal or an earlier change still waiting created nothing, so neither leaves an uncertain lock.
-      const settled = await createFailure.settle(currentCustody, setError);
+      const settled = currentCustody() && (await createFailure.settle());
       if (!currentCustody()) return;
       if (settled) setProviderConnectionAttempt(id, undefined);
       else if (submitted)
@@ -167,6 +166,7 @@ export function useProviderConnectionEditor(
 
   async function refresh() {
     if (!currentCustody()) return;
+    void createFailure.panel.recheck();
     const current = readProviderConnectionAttempt(id);
     if (!current?.plan || current.busy || reading.current) return;
     reading.current = true;
@@ -410,8 +410,7 @@ export function useProviderConnectionEditor(
     attempt,
     blocked,
     error,
-    waiting: createFailure.waiting,
-    clearWaiting: createFailure.clearWaiting,
+    waitingPanel: createFailure.panel,
     dialog,
     setDialog,
     refreshing,

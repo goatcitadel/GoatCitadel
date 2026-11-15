@@ -751,7 +751,7 @@ describe("cockpit provider connection editing", () => {
     });
     await click("Review endpoint change");
     await vi.waitFor(() =>
-      expect(container.textContent).toContain("One change to this setting is already waiting for your approval."),
+      expect(container.textContent).toContain("One change to this provider is already waiting for your approval."),
     );
     expect(container.textContent).toContain("Approval approval-provider opens here");
     expect(container.textContent).not.toContain("Change creation outcome is uncertain");
@@ -762,6 +762,100 @@ describe("cockpit provider connection editing", () => {
     expect(button("Review endpoint change").disabled).toBe(false);
   });
 
+  /** Asks for a review while an earlier change to this provider is open: the Gateway names that plan in a conflict. */
+  async function meetOpenChange(plan: Record<string, unknown>) {
+    await render();
+    await editEndpoint();
+    attempts.paths.push("/api/v1/change-plans");
+    api.createChangePlan.mockRejectedValueOnce(
+      new ApiRequestError("conflict", {
+        kind: "http",
+        method: "POST",
+        path: "/api/v1/change-plans",
+        status: 409,
+        body: {
+          code: "WRITE_CONFLICT",
+          details: { resourceKind: "change_plan", resourceId: "plan-provider", currentRevision: 4 },
+        },
+      }),
+    );
+    api.fetchChangePlan.mockResolvedValue({
+      ...currentPlan,
+      planId: "plan-provider",
+      origin: { surface: "settings", workspaceId: "default" },
+      ...plan,
+    });
+    await click("Review endpoint change");
+  }
+  const links = () => [...container.querySelectorAll("a")].map((item) => item.textContent);
+
+  it("says a change that needs a credential is waiting for it, with no Inbox loop", async () => {
+    await meetOpenChange({
+      status: "awaiting_input",
+      requiredAction: {
+        kind: "secure_input",
+        actionId: "a",
+        actionNonce: "n",
+        targetId: "provider-a",
+        title: "Enter credential",
+        fields: [],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain(
+        "One change to this provider is waiting for its credential. Finish or cancel it where you started it.",
+      ),
+    );
+    expect(links().some((text) => text?.includes("Open Inbox"))).toBe(false);
+    expect(container.textContent).not.toContain("being applied");
+  });
+
+  it("says a change that is still being prepared is being prepared, with nothing to open", async () => {
+    await meetOpenChange({ status: "staging", requiredAction: undefined });
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain(
+        "One change to this provider is being prepared. Refresh in a moment to see it.",
+      ),
+    );
+    expect(links().some((text) => text?.includes("Open Inbox"))).toBe(false);
+  });
+
+  it("clears the waiting notice on Check again once the change finished elsewhere", async () => {
+    await meetOpenChange({
+      status: "awaiting_approval",
+      requiredAction: { kind: "approval", approvalId: "approval-provider" },
+    });
+    await vi.waitFor(() => expect(container.textContent).toContain("already waiting for your approval"));
+    api.fetchChangePlan.mockResolvedValue({
+      ...currentPlan,
+      planId: "plan-provider",
+      status: "cancelled",
+      origin: { surface: "settings", workspaceId: "default" },
+    });
+    await click("Check again");
+    await vi.waitFor(() => expect(container.textContent).not.toContain("already waiting"));
+    expect(container.textContent).not.toContain("Check again");
+  });
+
+  it("swaps the waiting notice for the changed-settings copy when the change is not a Settings change", async () => {
+    await meetOpenChange({
+      status: "awaiting_approval",
+      requiredAction: { kind: "approval", approvalId: "approval-provider" },
+    });
+    await vi.waitFor(() => expect(container.textContent).toContain("already waiting for your approval"));
+    api.fetchChangePlan.mockResolvedValue({
+      ...currentPlan,
+      planId: "plan-provider",
+      origin: { surface: "chat", workspaceId: "default" },
+    });
+    await click("Check again");
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain(
+        "Provider settings changed. Review the latest version before creating a change.",
+      ),
+    );
+    expect(container.textContent).not.toContain("already waiting");
+  });
   it("shows the Gateway's refusal of a plan creation as not saved, without an uncertain lock", async () => {
     await render();
     await editEndpoint();

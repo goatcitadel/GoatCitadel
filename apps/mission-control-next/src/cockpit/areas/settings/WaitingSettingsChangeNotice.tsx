@@ -2,7 +2,9 @@ import { useEffect } from "react";
 import {
   describeWaitingChange,
   type WaitingSettingsNotice,
+  type WaitingSubject,
 } from "../../../features/native-routes/settings/settings-save-outcome";
+import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { reopenSettingsApproval, SettingsApprovalDialog } from "./SettingsApprovalDialog";
 
@@ -20,12 +22,15 @@ export function WaitingSettingsChangeNotice({
   onResolved,
   subject = "setting",
   showSentence = true,
+  onCheckAgain,
 }: {
   waiting: WaitingSettingsNotice;
   onResolved: () => void;
   /** What the change is to: the words that follow "this" in each sentence. */
-  subject?: "setting" | "rule";
+  subject?: WaitingSubject;
   showSentence?: boolean;
+  /** A control with no refresh of its own offers a "Check again" that looks at the waiting change once more. */
+  onCheckAgain?: () => void;
 }) {
   const approvalId = "unreadable" in waiting || waiting.stage !== "approval" ? undefined : waiting.approvalId;
   useEffect(() => {
@@ -53,6 +58,11 @@ export function WaitingSettingsChangeNotice({
     <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-status-waiting">
       {showSentence ? <p>{describeWaitingChange(waiting, subject)}</p> : null}
       {action}
+      {onCheckAgain ? (
+        <Button size="sm" onClick={onCheckAgain}>
+          Check again
+        </Button>
+      ) : null}
     </div>
   );
 }

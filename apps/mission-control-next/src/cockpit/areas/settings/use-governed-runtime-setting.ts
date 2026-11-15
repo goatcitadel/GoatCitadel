@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ChangePlanRecord } from "@goatcitadel/contracts";
 import { fetchSettings, patchSettings } from "@goatcitadel/mission-control-shared/api/client";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
@@ -101,6 +102,15 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
   // The write that may or may not have been applied, kept so its outcome can be checked once the answer is lost.
   const attempt = useRef<{ submitted: T; baseRevision: number } | null>(null);
   const checking = useRef(false);
+  // A lookup that finishes after the control went away, or after another Gateway was chosen, must not land here.
+  const installation = getGatewayApiBaseUrl();
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const confirmed = settingsChangeIsConfirmed(change.change);
 
   /**
@@ -181,6 +191,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
    */
   async function followWaiting(planId: string): Promise<void> {
     const lookup = await findWaitingSettingsChange(planId);
+    if (!mounted.current || getGatewayApiBaseUrl() !== installation) return;
     if (lookup.kind === "unreadable" && waiting && !("unreadable" in waiting)) return;
     const held = waitingNoticeFor(lookup, planId);
     setWaiting(held);
@@ -248,6 +259,9 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
     waiting,
     /** Called once the waiting change was decided: the control reads the saved setting again. */
     clearWaiting: () => {
+      // The waiting sentence goes with the change; a notice set since stays.
+      const sentence = waiting ? describeWaitingChange(waiting) : undefined;
+      setNotice((shown) => (shown && shown.message === sentence ? null : shown));
       setWaiting(null);
       void settings.refetch();
     },

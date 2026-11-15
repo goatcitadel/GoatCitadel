@@ -255,4 +255,30 @@ describe("PublicWebAddressField", () => {
     expect(input().value).toBe("https://goat.example.com");
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
   });
+
+  it("drops the waiting sentence once the change is decided in place, and saving works again", async () => {
+    api.patchSettings.mockRejectedValue({
+      status: 409,
+      kind: "http",
+      body: { code: "WRITE_CONFLICT", details: { resourceKind: "change_plan", resourceId: "plan-1" } },
+    });
+    api.fetchChangePlan.mockResolvedValue({
+      ...planFor("awaiting_approval", "https://other.example.com"),
+      requiredAction: { kind: "approval", approvalId: "approval-1" },
+    });
+    await show();
+    await vi.waitFor(() => expect(input().value).toBe("https://old.example.com"));
+    await type("https://goat.example.com");
+    await act(async () => button("Save address")!.click());
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("One change to this setting is already waiting for your approval."),
+    );
+    expect(button("Save address")!.disabled).toBe(true);
+
+    // The waiting change is decided in the in-place dialog.
+    await act(async () => button("Decide approved")!.click());
+    await vi.waitFor(() => expect(container.textContent).not.toContain("already waiting"));
+    expect(button("Decide approved")).toBeUndefined();
+    await vi.waitFor(() => expect(button("Save address")!.disabled).toBe(false));
+  });
 });

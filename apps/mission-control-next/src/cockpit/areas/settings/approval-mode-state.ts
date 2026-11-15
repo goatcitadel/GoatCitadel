@@ -59,7 +59,8 @@ export interface ApprovalModeUncertainty {
   installation: string;
   checking: boolean;
 }
-let uncertainRecord: ApprovalModeUncertainty | undefined;
+// One record per Gateway: a lost write on one installation must never overwrite, clear or be cleared by another's.
+const uncertainRecords = new Map<string, ApprovalModeUncertainty>();
 const listeners = new Set<() => void>();
 const subscribe = (listener: () => void) => {
   listeners.add(listener);
@@ -67,28 +68,29 @@ const subscribe = (listener: () => void) => {
     listeners.delete(listener);
   };
 };
-function publish(record: ApprovalModeUncertainty | undefined) {
-  uncertainRecord = record;
+function publish() {
   for (const listener of listeners) listener();
 }
-export function useApprovalModeUncertainty(): ApprovalModeUncertainty | undefined {
+/** The record of the given installation's unconfirmed save, if it has one. */
+export function useApprovalModeUncertainty(installation: string): ApprovalModeUncertainty | undefined {
   return useSyncExternalStore(
     subscribe,
-    () => uncertainRecord,
+    () => uncertainRecords.get(installation),
     () => undefined,
   );
 }
-/** The record as it is now, for a check that must not act on a stale render. */
-export function currentApprovalModeUncertainty(): ApprovalModeUncertainty | undefined {
-  return uncertainRecord;
+/** The installation's record as it is now, for a check that must not act on a stale render. */
+export function currentApprovalModeUncertainty(installation: string): ApprovalModeUncertainty | undefined {
+  return uncertainRecords.get(installation);
 }
 export function retainApprovalModeUncertainty(record: ApprovalModeUncertainty) {
-  publish(record);
+  uncertainRecords.set(record.installation, record);
+  publish();
 }
-export function clearApprovalModeUncertainty() {
-  publish(undefined);
-}
-/**
+export function clearApprovalModeUncertainty(installation: string) {
+  uncertainRecords.delete(installation);
+  publish();
+} /**
  * What the saved rule says about a write whose answer was lost: it is saved when the rule is the submitted one at a
  * newer revision, else it is waiting when an open change for it exists, else it was not saved.
  */
@@ -101,5 +103,6 @@ export function settleApprovalModeUncertainty(
   return waiting ? "waiting" : "not_saved";
 }
 export function __resetApprovalModeUncertaintyForTests() {
-  publish(undefined);
+  uncertainRecords.clear();
+  publish();
 }
