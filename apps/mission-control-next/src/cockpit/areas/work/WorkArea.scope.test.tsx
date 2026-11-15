@@ -8,7 +8,8 @@ import { WorkArea } from "./WorkArea";
 
 vi.mock("./WorkWaitingDecisions", () => ({ WorkWaitingDecisions: () => null }));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({
-  fetchObserveRunTrace: vi.fn(), fetchDurableRunHistory: vi.fn(),
+  fetchObserveRunTrace: vi.fn(),
+  fetchDurableRunHistory: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "workspace-a" }),
@@ -38,10 +39,20 @@ afterEach(() => {
 describe("Work run detail scope", () => {
   it("withholds a foreign run and its title from a direct link", async () => {
     vi.mocked(fetchObserveRunTrace).mockResolvedValue({
-      run: { runId: "foreign-run", payload: { workspaceId: "workspace-b" }, metadata: { objective: "PRIVATE FOREIGN OBJECTIVE" } },
+      run: {
+        runId: "foreign-run",
+        payload: { workspaceId: "workspace-b" },
+        metadata: { objective: "PRIVATE FOREIGN OBJECTIVE" },
+      },
     } as never);
-    await act(async () => root.render(<QueryClientProvider client={client}><WorkArea /></QueryClientProvider>));
-    await vi.waitFor(() => expect(container.textContent).toContain("Run outside this workspace"));
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <WorkArea />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.textContent).toContain("Run in another workspace"));
     expect(container.textContent).not.toContain("PRIVATE FOREIGN OBJECTIVE");
     expect(container.textContent).not.toContain("Run controls");
   });
