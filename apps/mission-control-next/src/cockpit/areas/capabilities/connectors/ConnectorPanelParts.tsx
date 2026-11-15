@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
 import type { CapabilityConnectorItem } from "@goatcitadel/contracts";
-import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { FromPluginLink } from "../plugins/FromPluginLink";
 import { CHAT_CONNECTORS_SETTINGS_HREF, WORKSPACE_CAPABILITIES_HREF } from "./connector-links";
 import {
+  CONNECTOR_NO_REASON_LINE,
   chatBlockLine,
   connectorCategoryLabel,
   connectorKindLabel,
@@ -21,8 +21,8 @@ import {
  * under a control that had it (`usePanelFocus`), such as the install panel turning into the saved server's view.
  */
 export function ConnectorHeader({ item }: { item: CapabilityConnectorItem }) {
-  const { showTechnicalDetails } = useUiPreferences();
-  const state = presentConnectorState(item, "panel", { technicalDetailsShown: showTechnicalDetails });
+  const state = presentConnectorState(item, "panel");
+  const failure = item.state === "broken" ? item.lastError?.trim() : undefined;
   return (
     <div
       data-focus-landing
@@ -42,6 +42,11 @@ export function ConnectorHeader({ item }: { item: CapabilityConnectorItem }) {
         <StatusBadge status={state} />
         <span className="text-sm text-fg-secondary">{state.reason}</span>
       </div>
+      {item.state === "broken" ? (
+        <p className="break-words text-sm text-fg-secondary">
+          {failure ? `What went wrong: ${failure}` : CONNECTOR_NO_REASON_LINE}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -106,7 +111,6 @@ export function TechnicalRows({
     ["Catalog", item.catalogId],
     ["Hosts", item.networkHosts.join(", ")],
     ["Saved version", item.serverRevision],
-    ["Last error", item.lastError],
     ...extra,
   ];
   const rows = all.filter((row): row is [string, string] => Boolean(row[1]));
