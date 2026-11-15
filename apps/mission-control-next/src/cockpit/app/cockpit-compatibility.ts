@@ -228,7 +228,10 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
     return native("/settings/models");
   }
   if (!area || (area === "chat" && parts.length === 1)) return native();
-  if ((area === "cowork" || area === "code") && parts.length === 1) {
+  // The retired Cowork workspace page was Chat under another name: it resolves exactly as /cowork does.
+  const coworkWorkspace = area === "cowork" && parts.length === 2 && section === "workspace";
+  if ((area === "cowork" || area === "code") && (parts.length === 1 || coworkWorkspace)) {
+    if (coworkWorkspace) url.pathname = "/cowork";
     const route = parseAppRoute(url);
     return native(new URL(buildAppHref(route), url).pathname);
   }
