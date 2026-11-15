@@ -11,6 +11,7 @@ import {
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Field } from "../../ui/Field";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { MetricList } from "../../ui/MetricList";
 import { cockpitInputClass } from "../../ui/input-class";
 import { GuidedModelPlanDialog } from "./GuidedModelPlanDialog";
@@ -67,7 +68,8 @@ export function CockpitGuidedModelSetup({
   // What the last check found, shown on every surface once the provider is not ready. Not while a check runs
   // (the button says so) and not once ready. It shares the one status line with the notice, so the page gains
   // no extra live region.
-  const checkResult = !providerReady && readiness.state !== "checking" ? readiness.description : null;
+  // Where the step list is shown it already carries this sentence, so it is not repeated.
+  const checkResult = !showSteps && !providerReady && readiness.state !== "checking" ? readiness.description : null;
   const statusText = [checkResult, notice].filter(Boolean).join(" ");
   const PrimaryIcon = setup.primary.kind === "enter" ? Play : PlugZap;
   // Offer the better-supported provider as a one-click switch, only when the list has it.
@@ -229,11 +231,11 @@ export function CockpitGuidedModelSetup({
           </Button>
         ) : null}
       </div>
-      {statusText ? (
-        <p role="status" className="text-sm text-fg-secondary">
-          {statusText}
-        </p>
-      ) : null}
+      {/* Always mounted, so a sentence added later is announced; only its text changes. */}
+      <p role="status" className="text-sm text-fg-secondary empty:hidden">
+        {statusText}
+      </p>
+      {!providerReady && readiness.detail ? <TechnicalDetails>{readiness.detail}</TechnicalDetails> : null}
       {setup.actionError && !setup.dialogPlan ? <Callout tone="error">{setup.actionError}</Callout> : null}
       {setup.latestPlan ? (
         <ChatChangePlanCard

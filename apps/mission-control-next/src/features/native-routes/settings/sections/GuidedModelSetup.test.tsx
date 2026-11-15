@@ -215,7 +215,8 @@ describe("first-run readiness truth", () => {
     );
     expect(view.host.querySelector(".mc-next-settings-wizard-step.complete")).toBeNull();
     expect(view.host.textContent).toContain("Not verified");
-    expect(view.host.textContent).toContain("llama.cpp runtime is disabled in assistant config");
+    expect(view.host.textContent).toContain("llama.cpp has not answered at http://127.0.0.1:8080/v1.");
+    expect(view.host.textContent).not.toContain("disabled in assistant config");
     expect(view.button("Confirm model")).toBeUndefined();
     await act(async () => view.button("Check connection")!.click());
     expect(mocks.models).toHaveBeenCalledWith("llamacpp", { force: true });

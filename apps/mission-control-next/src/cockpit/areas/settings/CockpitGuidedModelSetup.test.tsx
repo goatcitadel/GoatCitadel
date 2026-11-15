@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   reload: vi.fn(),
   plans: vi.fn(),
   create: vi.fn(),
+  prefs: { showTechnicalDetails: false },
 }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
   useProviderModelCatalog: mocks.catalog,
@@ -35,7 +36,7 @@ vi.mock("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard"
   ChatChangePlanCard: (props: { plan: { status: string } }) => <p>Plan card: {props.plan.status}</p>,
 }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
-  useUiPreferences: () => ({ activeWorkspaceId: undefined }),
+  useUiPreferences: () => ({ activeWorkspaceId: undefined, showTechnicalDetails: mocks.prefs.showTechnicalDetails }),
 }));
 vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: vi.fn() }) }));
 
@@ -72,6 +73,7 @@ const mount = (props: Partial<Parameters<typeof CockpitGuidedModelSetup>[0]> = {
   });
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.prefs.showTechnicalDetails = false;
   __resetSessionDraftsForTests();
   onboarding = onboardingFixture();
   onboarding.settings.llm.activeProviderId = "test";
@@ -108,8 +110,121 @@ describe("shared guided model setup", () => {
     });
     await mount({ showSteps: false });
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
-      "LM Studio has not answered at http://127.0.0.1:1234/v1 (fetch failed). Start it, then check the connection again.",
+      "LM Studio has not answered at http://127.0.0.1:1234/v1. Start it, then check the connection again.",
     );
+  });
+  it("keeps one always-mounted status line, so a result added later is announced", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "not_checked",
+    });
+    await mount({ showSteps: false });
+    const line = container.querySelector('[role="status"]');
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "fallback",
+    });
+    await mount({ showSteps: false });
+    expect(container.querySelector('[role="status"]')).toBe(line);
+    expect(line?.textContent).toContain("has not answered");
+  });
+  it("does not repeat the result under the button where the step list already shows it", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "fallback",
+    });
+    await mount();
+    const sentence =
+      "LM Studio has not answered at http://127.0.0.1:1234/v1. Start it, then check the connection again.";
+    expect(container.textContent?.split(sentence)).toHaveLength(2);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
+  });
+  it("keeps the raw reason out of the sentence and inside Technical details", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "fallback",
+      modelProbeWarning: "fetch failed",
+    });
+    await mount({ showSteps: false });
+    expect(container.textContent).not.toContain("fetch failed");
+    mocks.prefs.showTechnicalDetails = true;
+    await mount({ showSteps: false });
+    expect([...container.querySelectorAll("details")].map((item) => item.textContent).join(" ")).toContain(
+      "fetch failed",
+    );
+    expect(container.querySelector('[role="status"]')?.textContent).not.toContain("fetch failed");
+  });
+  it("keeps a ready result Ready after its list has gone stale", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "ready",
+      modelProbeSource: "live",
+      modelRefreshStatus: "stale",
+    });
+    await mount({ showSteps: false });
+    expect(container.textContent).toContain("Ready");
+    expect(container.textContent).not.toContain("stale");
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
+  });
+  it("says a refresh that failed after the runtime had answered did not answer, not that the list is stale", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "fallback",
+      modelProbeSource: "live",
+      modelRefreshStatus: "stale",
+      modelRefreshFailed: true,
+      modelProbeWarning: "fetch failed",
+    });
+    await mount({ showSteps: false });
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(
+      "LM Studio has not answered at http://127.0.0.1:1234/v1. Start it, then check the connection again.",
+    );
+    expect(container.textContent).not.toContain("stale");
+  });
+  it("says a check that could not be completed is not a server that is down", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "error",
+      modelProbeSource: "error_fallback",
+    });
+    await mount({ showSteps: false });
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(
+      "The connection check could not be completed. Check the address, then check the connection again.",
+    );
+  });
+  it("shows the result and the notice together on first run", async () => {
+    catalog("missing");
+    await mount({ showSteps: false });
+    await act(async () => button("Connect provider")!.click());
+    const text = container.querySelector('[role="status"]')?.textContent;
+    expect(text).toContain("Test provider needs a credential.");
+    expect(text).toContain("Change applied and verified.");
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
+  });
+  it("never says a runtime is not running before any check has run", async () => {
+    catalog("ready", {
+      label: "LM Studio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      localCostPosture: "zero_cost_local_runtime",
+      modelProbeState: "not_checked",
+    });
+    await mount();
+    expect(container.textContent).not.toMatch(/not running|has not answered|stale/u);
   });
   it("shows no check result while a check has not run, and none once the runtime answered", async () => {
     catalog("ready", {
@@ -119,7 +234,7 @@ describe("shared guided model setup", () => {
       modelProbeState: "not_checked",
     });
     await mount({ showSteps: false });
-    expect(container.querySelector('[role="status"]')).toBeNull();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
     catalog("ready", {
       label: "LM Studio",
       baseUrl: "http://127.0.0.1:1234/v1",
@@ -128,7 +243,7 @@ describe("shared guided model setup", () => {
       modelProbeSource: "live",
     });
     await mount({ showSteps: false });
-    expect(container.querySelector('[role="status"]')).toBeNull();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
   });
   it("numbers every step, marks the current one and states each step in words", async () => {
     onboarding.settings.llm.activeModel = "";
@@ -388,6 +503,6 @@ describe("shared guided model setup", () => {
     await mount({ onNoticeChange });
     await act(async () => button("Confirm model")!.click());
     expect(onNoticeChange).toHaveBeenCalledWith("Change applied and verified.");
-    expect(container.querySelector('[role="status"]')).toBeNull();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("");
   });
 });

@@ -91,6 +91,7 @@ type GuidedReadinessProvider = Pick<ProviderModelCatalogOption, "providerId" | "
       | "modelProbeSource"
       | "modelProbeWarning"
       | "modelRefreshStatus"
+      | "modelRefreshFailed"
     >
   >;
 
@@ -99,6 +100,8 @@ export interface GuidedProviderReadiness {
   /** Short status for the card summary. */
   label: string;
   description: string;
+  /** The raw reason a check gave, for the Technical details disclosure only; never ordinary text. */
+  detail?: string;
   /** Which existing Gateway evidence proved readiness; null until something did. */
   evidence: "credential" | "local_endpoint" | "local_login" | null;
 }
@@ -114,8 +117,9 @@ function readiness(
   state: GuidedProviderReadiness["state"],
   description: string,
   evidence: GuidedProviderReadiness["evidence"] = null,
+  detail?: string,
 ): GuidedProviderReadiness {
-  return { state, label: READINESS_LABELS[state], description, evidence };
+  return { state, label: READINESS_LABELS[state], description, evidence, ...(detail ? { detail } : {}) };
 }
 
 /**
@@ -182,6 +186,18 @@ function resolveLocalEndpointReadiness(provider: GuidedReadinessProvider): Guide
   if (provider.modelProbeState === "ready" && provider.modelProbeSource === "live") {
     return readiness("ready", `${provider.label} answered at ${endpoint}.`, "local_endpoint");
   }
+  const warning = provider.modelProbeWarning?.trim();
+  // The last refresh failed, even if an earlier one answered: that is a failure, not an old list.
+  if (provider.modelRefreshFailed) return unreachableReadiness(provider, warning);
+  if (provider.modelProbeState === "error") {
+    // The check itself failed (a failed read, a refused request): the server was never shown to be down.
+    return readiness(
+      "not_verified",
+      "The connection check could not be completed. Check the address, then check the connection again.",
+      null,
+      warning,
+    );
+  }
   if (provider.modelRefreshStatus === "stale") {
     return readiness(
       "not_verified",
@@ -197,10 +213,15 @@ function resolveLocalEndpointReadiness(provider: GuidedReadinessProvider): Guide
       `${provider.label} answered at ${endpoint} but reported no models. Load a model, then check the connection again.`,
     );
   }
-  const warning = provider.modelProbeWarning?.trim();
+  return unreachableReadiness(provider, warning);
+}
+
+function unreachableReadiness(provider: GuidedReadinessProvider, warning: string | undefined): GuidedProviderReadiness {
   return readiness(
     "not_verified",
-    `${provider.label} has not answered at ${endpoint}${warning ? ` (${warning})` : ""}. Start it, then check the connection again.`,
+    `${provider.label} has not answered at ${provider.baseUrl}. Start it, then check the connection again.`,
+    null,
+    warning,
   );
 }
 
