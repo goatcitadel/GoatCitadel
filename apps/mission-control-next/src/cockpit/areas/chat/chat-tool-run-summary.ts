@@ -197,3 +197,14 @@ export function summarizeTurnToolRuns(runs: readonly ChatToolRunRecord[], live: 
   );
   return clauses.map((text, index) => (index === 0 ? text : lowerFirst(text))).join(", ");
 }
+
+/**
+ * Whether running this tool again may change something outside the chat. A recorded outcome that changed or may have
+ * changed something says yes; a recorded potential decides next; with none recorded only a tool known to explore says no.
+ */
+export function mayChangeThingsOnRetry(run: ChatToolRunRecord): boolean {
+  if (run.effectOutcomeKind === "concrete" || run.effectOutcomeKind === "uncertain") return true;
+  if (run.effectPotential === "none") return false;
+  if (run.effectPotential === "unknown") return true;
+  return toolCategory(run.toolName) !== "explore";
+}

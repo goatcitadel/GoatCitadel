@@ -4,10 +4,7 @@ import { turnReadsDraft, useTurnActions } from "./use-turn-actions";
 import { selectTurnCapabilitySuggestions } from "./turn-capability-suggestions";
 import type { ChannelConversationContext } from "./channel-conversation";
 import { useChannelReading } from "./use-channel-conversation";
-import {
-  hasUnsettledChatContextMutation,
-  CHAT_CONTEXT_RELOAD_NOTE,
-} from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
+import { ChatInspectorLoadFailure } from "./ChatInspectorLoadFailure";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { useDeferredVirtuoso } from "../../ui/DeferredVirtuoso";
@@ -242,6 +239,13 @@ export function ChatTranscript({
     [scrollRef, onNativeScroll, onReadingGesture],
   );
   const virtuoso = useRef<VirtuosoHandle>(null);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   // A jump to a message is the reader moving, so the transcript stops following new output, as it does for Home.
   const markReaderJump = useCallback(() => {
     readingGesture.current = true;
@@ -401,18 +405,7 @@ export function ChatTranscript({
               <button type="button" onClick={retryVirtualization} className="text-accent underline">
                 Try again
               </button>{" "}
-              ·{" "}
-              <button
-                type="button"
-                disabled={hasUnsettledChatContextMutation()}
-                title={hasUnsettledChatContextMutation() ? CHAT_CONTEXT_RELOAD_NOTE : undefined}
-                onClick={() => {
-                  if (!hasUnsettledChatContextMutation()) window.location.reload();
-                }}
-                className="text-accent underline"
-              >
-                Reload app
-              </button>
+              · <ChatInspectorLoadFailure current={() => mounted.current} />
             </p>
           ) : (
             <p role="status" className="p-3 text-sm text-fg-muted">

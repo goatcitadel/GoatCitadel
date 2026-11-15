@@ -1,6 +1,6 @@
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
-import { summarizeTurnToolRuns, toolRunTarget } from "./chat-tool-run-summary";
+import { mayChangeThingsOnRetry, summarizeTurnToolRuns, toolRunTarget } from "./chat-tool-run-summary";
 import { summarizeShellCommand } from "./summarize-shell-command";
 import {
   countLineChanges,
@@ -159,5 +159,27 @@ describe("tool run change stats", () => {
     // Approved and run: the span includes the wait for the operator.
     expect(toolRunDuration({ ...run("fs.write"), approvalId: "a-1" })).toBeUndefined();
     expect(toolRunDuration(run("fs.delete", {}, "blocked"))).toBeUndefined();
+  });
+});
+
+describe("mayChangeThingsOnRetry", () => {
+  const withEffect = (toolName: string, extra: Record<string, unknown>) =>
+    ({ ...run(toolName), ...extra }) as ChatToolRunRecord;
+
+  it("is false for an executed read with no recorded potential, true for a write with none", () => {
+    expect(mayChangeThingsOnRetry(run("fs.read"))).toBe(false);
+    expect(mayChangeThingsOnRetry(run("fs.write"))).toBe(true);
+    expect(mayChangeThingsOnRetry(run("some.unknown_tool"))).toBe(true);
+  });
+
+  it("trusts a recorded potential, and a concrete or uncertain outcome beats it", () => {
+    expect(mayChangeThingsOnRetry(withEffect("fs.write", { effectPotential: "none" }))).toBe(false);
+    expect(mayChangeThingsOnRetry(withEffect("fs.read", { effectPotential: "unknown" }))).toBe(true);
+    expect(
+      mayChangeThingsOnRetry(withEffect("fs.read", { effectPotential: "none", effectOutcomeKind: "concrete" })),
+    ).toBe(true);
+    expect(
+      mayChangeThingsOnRetry(withEffect("fs.read", { effectPotential: "none", effectOutcomeKind: "uncertain" })),
+    ).toBe(true);
   });
 });
