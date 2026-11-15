@@ -9,6 +9,7 @@ import {
 } from "@goatcitadel/threaded-surface-core";
 import { ChatConversationsSheet } from "./ChatConversationsSheet";
 import { ChatEmptyState, ChatSessionHeader, ChatSetupGate } from "./ChatAreaChrome";
+import { ChatHostStatus } from "./ChatHostStatus";
 import { ChatTranscript } from "./ChatTranscript";
 import { ChatNoticeText } from "./ChatNoticeText";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
@@ -67,6 +68,7 @@ export function ChatArea({
         lockSurface
         hidePageHeader
         renderWhileLoading
+        ownsFrameStatus
         secondaryEvidenceEnabled={inspectorSource === "chat"}
         restorePinnedGoal={false}
         routeSearch={search}
@@ -335,6 +337,7 @@ export function ChatAreaView({
           onInspect={() => (inspectorContent?.source === "chat" ? close() : openInspector())}
           onFork={active && latestTurnId ? () => active.onStartNewThreadFromTurn(latestTurnId) : undefined}
         />
+        <ChatHostStatus status={input.hostStatus} />
         {active ? (
           <DeferredProjectAssignmentReview active={active} search={search} identity={inspectorIdentity} />
         ) : null}
