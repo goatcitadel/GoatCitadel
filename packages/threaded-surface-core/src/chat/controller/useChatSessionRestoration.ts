@@ -260,7 +260,8 @@ export function useChatSessionRestoration({
             if (window.localStorage.getItem(previousOwner!.key) === text)
               window.localStorage.removeItem(previousOwner!.key);
           } catch {
-            // Storage refused the write or is unavailable: the source copy stays, the new conversation still has the text.
+            // Intentionally ignored: storage refused the write or is unavailable, so the source copy is kept and the
+            // new conversation still holds the text in memory.
           }
         }, 0);
         return;
