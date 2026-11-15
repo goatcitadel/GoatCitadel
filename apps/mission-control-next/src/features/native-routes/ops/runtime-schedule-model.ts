@@ -5,6 +5,15 @@ import type {
   WorkflowRecipeN8nTemplateExportResponse,
 } from "@goatcitadel/contracts";
 
+/** A schedule's next run as text; a time the list worked out from the schedule says so instead of reading as recorded. */
+export function formatScheduleNextRun(
+  job: { nextRunAt?: string; nextRunProjected?: boolean },
+  missing: string,
+): string {
+  if (!job.nextRunAt) return missing;
+  return job.nextRunProjected ? `${formatDateTime(job.nextRunAt)} (from its schedule)` : formatDateTime(job.nextRunAt);
+}
+
 export const CRON_ACTION_OPTIONS = [
   "task",
   "improvement",
