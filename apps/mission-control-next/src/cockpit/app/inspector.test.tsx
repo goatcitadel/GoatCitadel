@@ -264,6 +264,36 @@ describe("inspector", () => {
     expect(width()).toBe("392");
   });
 
+  it("stores a dragged width once, when the drag ends", async () => {
+    act(() =>
+      root.render(
+        <InspectorProvider>
+          <Probe />
+          <InspectorPanel area="work" />
+        </InspectorProvider>,
+      ),
+    );
+    act(() => api.open({ title: "Run", body: <p>Current run</p> }));
+    await vi.waitFor(() => expect(container.querySelector('[role="separator"]')).not.toBeNull());
+    const separator = container.querySelector<HTMLDivElement>('[role="separator"]')!;
+    Object.defineProperties(separator, {
+      setPointerCapture: { value: vi.fn() },
+      hasPointerCapture: { value: () => true },
+      releasePointerCapture: { value: vi.fn() },
+    });
+    const key = "goatcitadel.cockpit.inspector.width.v1";
+    const pointer = (type: string, clientX: number) =>
+      act(() => separator.dispatchEvent(new PointerEvent(type, { pointerId: 3, button: 0, clientX, bubbles: true })));
+    pointer("pointerdown", 600);
+    pointer("pointermove", 580);
+    pointer("pointermove", 560);
+    pointer("pointermove", 540);
+    expect(separator.getAttribute("aria-valuenow")).toBe("444");
+    expect(window.localStorage.getItem(key)).toBeNull();
+    pointer("pointerup", 540);
+    expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual({ work: 444 });
+  });
+
   it("bounds keyboard resize and releases pointer capture when its current inspector closes", async () => {
     act(() =>
       root.render(

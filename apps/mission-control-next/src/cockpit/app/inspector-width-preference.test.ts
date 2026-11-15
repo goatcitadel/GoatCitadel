@@ -22,3 +22,20 @@ it("ignores a stored value outside the range", () => {
   expect(readInspectorWidth("work")).toBe(384);
   expect(readInspectorWidth("chat")).toBe(384);
 });
+
+it("keeps working when storage throws on read and on write", () => {
+  const original = Object.getOwnPropertyDescriptor(window, "localStorage")!;
+  const denied = () => {
+    throw new Error("denied");
+  };
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: { getItem: denied, setItem: denied },
+  });
+  try {
+    expect(readInspectorWidth("work")).toBe(384);
+    expect(() => writeInspectorWidth("work", 500)).not.toThrow();
+  } finally {
+    Object.defineProperty(window, "localStorage", original);
+  }
+});

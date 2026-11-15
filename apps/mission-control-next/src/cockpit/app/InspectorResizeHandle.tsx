@@ -1,18 +1,34 @@
 import { useCallback, useEffect, useRef, type PointerEvent } from "react";
 import { clampInspectorWidth, INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH } from "./inspector-width-preference";
 
-export function InspectorResizeHandle({ width, onChange }: { width: number; onChange: (width: number) => void }) {
-  const drag = useRef<{ id: number; x: number; width: number; element: HTMLDivElement } | null>(null);
+export function InspectorResizeHandle({
+  width,
+  onChange,
+  onCommit,
+}: {
+  width: number;
+  onChange: (width: number) => void;
+  /** Called once when a drag ends and after each keyboard step, so the width is stored once, not on every move. */
+  onCommit?: (width: number) => void;
+}) {
+  const drag = useRef<{ id: number; x: number; width: number; last: number; element: HTMLDivElement } | null>(null);
+  const commit = useRef(onCommit);
+  useEffect(() => {
+    commit.current = onCommit;
+  });
   const stop = useCallback(() => {
     const current = drag.current;
     drag.current = null;
     if (current?.element.hasPointerCapture(current.id)) current.element.releasePointerCapture(current.id);
+    if (current && current.last !== current.width) commit.current?.(current.last);
   }, []);
   useEffect(() => stop, [stop]);
   const move = (event: PointerEvent<HTMLDivElement>) => {
     const current = drag.current;
-    if (current && current.id === event.pointerId)
-      onChange(clampInspectorWidth(current.width + current.x - event.clientX));
+    if (current && current.id === event.pointerId) {
+      current.last = clampInspectorWidth(current.width + current.x - event.clientX);
+      onChange(current.last);
+    }
   };
   return (
     <div
@@ -31,7 +47,7 @@ export function InspectorResizeHandle({ width, onChange }: { width: number; onCh
         if (event.button !== 0 || drag.current) return;
         event.preventDefault();
         event.currentTarget.focus();
-        drag.current = { id: event.pointerId, x: event.clientX, width, element: event.currentTarget };
+        drag.current = { id: event.pointerId, x: event.clientX, width, last: width, element: event.currentTarget };
         event.currentTarget.setPointerCapture(event.pointerId);
       }}
       onPointerMove={move}
@@ -54,6 +70,7 @@ export function InspectorResizeHandle({ width, onChange }: { width: number; onCh
         if (next !== null) {
           event.preventDefault();
           onChange(clampInspectorWidth(next));
+          onCommit?.(clampInspectorWidth(next));
         }
       }}
     >
