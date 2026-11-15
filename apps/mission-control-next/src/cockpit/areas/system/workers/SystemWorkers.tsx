@@ -47,7 +47,7 @@ function WorkersPage({ workspaceId, workspaceName }: { workspaceId: string; work
         }
       >
         <p className="mt-1 text-xs text-fg-muted">
-          Held back from this release: this page shows saved worker records, and live worker status is not connected.
+          This page shows saved worker records. Live worker status is not part of this release.
         </p>
       </AreaHeader>
       {selection.invalid ? (
