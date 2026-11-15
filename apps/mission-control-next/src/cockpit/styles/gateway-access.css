@@ -18,12 +18,12 @@
   line-height: 1.25;
   margin-bottom: 0.5rem;
 }
-.cockpit-access .gateway-access-check {
+.cockpit-access .gateway-access-row .gateway-access-check {
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
-.cockpit-access .gateway-access-check input[type="checkbox"] {
+.cockpit-access .gateway-access-row .gateway-access-check input[type="checkbox"] {
   width: 1.25rem;
   min-height: 1.25rem;
   height: 1.25rem;
