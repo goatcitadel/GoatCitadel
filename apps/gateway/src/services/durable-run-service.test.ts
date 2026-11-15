@@ -4633,6 +4633,28 @@ describe("DurableRunService", () => {
     );
   });
 
+  it.each([
+    ["too long", "w".repeat(513)],
+    ["has a control character", "workspace"],
+  ])("leaves the workspace off the realtime event when the recorded id %s", async (_label, badId) => {
+    const scoped = createRun("run-paused-bad-scope", "queued");
+    const run = { ...scoped, payload: { ...scoped.payload, workspaceId: badId } };
+    const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);
+    const publishRealtime = vi.fn();
+    const service = new DurableRunService(
+      createContext(runs, [], [], { publishRealtime }) as unknown as ServiceContext,
+    );
+
+    await service.pauseDurableRun(run.runId, "operator-1");
+
+    expect(publishRealtime).toHaveBeenCalledWith(
+      "system",
+      "durable",
+      expect.objectContaining({ type: "durable_run_paused" }),
+      expect.objectContaining({ links: { runId: run.runId } }),
+    );
+  });
+
   it("leaves the workspace off the realtime event when the run records none", async () => {
     const run = createRun("run-paused-unscoped", "queued");
     const runs = new Map<string, DurableRunRecord>([[run.runId, run]]);

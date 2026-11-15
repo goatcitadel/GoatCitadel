@@ -48,6 +48,7 @@ import { trackBackgroundTask } from "./background-scheduler.js";
 import type { DurableWorkflowExecutorRegistry } from "./durable-execution-service.js";
 import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.js";
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
+import { validIdentifier } from "./inbox-change-signal.js";
 import { runWorkspaceId } from "./inbox-projection-model.js";
 import { projectDurableBackgroundTaskRail } from "./durable-background-task-projection.js";
 import { verifySettledChatWaitingAuthority } from "./chat-durable-waiting-authority.js";
@@ -629,7 +630,8 @@ function buildDurableRealtimeOptions(
   return {
     eventClass: "domain_fact",
     eventAuthority: "retained_stream",
-    links: { runId, ...(workspaceId ? { workspaceId } : {}) },
+    // Only an id the Inbox change signal accepts: an invalid one would drop that signal instead of widening it.
+    links: { runId, ...(validIdentifier(workspaceId) ? { workspaceId } : {}) },
   };
 }
 
