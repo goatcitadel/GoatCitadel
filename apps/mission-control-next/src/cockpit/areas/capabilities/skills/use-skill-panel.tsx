@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { useDeliberateOpen } from "../deliberate-open";
 import type { CapabilitySkillItem } from "@goatcitadel/contracts";
 import { useInspector } from "../../../app/inspector";
 import { useCockpitRoute } from "../../../app/use-cockpit-route";
@@ -50,6 +51,7 @@ export function useSkillPanel(
     [onSearch, closeInspector],
   );
 
+  const deliberate = useDeliberateOpen();
   const show = useCallback(
     (id: string, name: string) => {
       asked.current = { id, inspectorOpen: openInspector };
@@ -59,11 +61,12 @@ export function useSkillPanel(
       const announce = view === "discover";
       openInspector({
         source: skillPanelSource(id),
+        focusOnOpen: deliberate.take(),
         title: name,
         body: <SkillPanel skillId={id} onTag={searchTag} announce={announce} />,
       });
     },
-    [openInspector, searchTag, view],
+    [openInspector, searchTag, view, deliberate],
   );
 
   useEffect(() => {
@@ -93,6 +96,7 @@ export function useSkillPanel(
     // the id the Gateway gave it). The panel opens for it at once, and says the skill isn't in the list, rather than the
     // press doing nothing.
     open: (skillId, fallbackName) => {
+      deliberate.press();
       const item = items?.find((entry) => entry.skillId === skillId);
       // The address already names it (the panel was closed without clearing it): there is nothing to move.
       if (linkedId === skillId && item) show(skillId, item.name);

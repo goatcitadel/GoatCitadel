@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useDeliberateOpen } from "../deliberate-open";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CapabilityPluginListItem, CapabilityPluginListResponse } from "@goatcitadel/contracts";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -116,6 +117,7 @@ function usePanelShow(custody: number) {
   const { navigate } = useCockpitRoute();
   // The panel this page last asked the inspector for, and with which inspector.
   const asked = useRef<{ key: string; inspectorOpen: typeof openInspector } | null>(null);
+  const deliberate = useDeliberateOpen();
 
   const move = useCallback(
     (from: string, to: string) => {
@@ -134,13 +136,14 @@ function usePanelShow(custody: number) {
       asked.current = { key, inspectorOpen: openInspector };
       openInspector({
         source: pluginInstallSource(key),
+        focusOnOpen: deliberate.take(),
         title,
         body: <PluginInstallPanel installKey={key} {...panel} onMove={(to) => move(key, to)} />,
       });
     },
-    [openInspector, move, custody],
+    [openInspector, move, custody, deliberate],
   );
-  return { show, asked, openInspector, content };
+  return { show, asked, openInspector, content, deliberate };
 }
 
 /** Opens the panel the address names, once per inspector, and clears the address when that panel is closed. */
@@ -180,7 +183,19 @@ function useAddressPanel(target: PanelTarget | undefined, panels: ReturnType<typ
       ...(targetForm ? { form: targetForm } : {}),
       ...(targetWorkspaceId ? { pluginWorkspaceId: targetWorkspaceId } : {}),
     });
-  }, [openKey, content, targetKey, targetTitle, targetForm, targetWorkspaceId, show, asked, openInspector, navigate, custody]);
+  }, [
+    openKey,
+    content,
+    targetKey,
+    targetTitle,
+    targetForm,
+    targetWorkspaceId,
+    show,
+    asked,
+    openInspector,
+    navigate,
+    custody,
+  ]);
 }
 
 /**
@@ -201,6 +216,7 @@ export function usePluginInstallPanel(list: CapabilityPluginListResponse | undef
   return {
     install: (item) => {
       if (custody !== pluginInstallCustody()) return;
+      panels.deliberate.press();
       const key = draftPluginInstallKey(`built_in:${item.pluginId}`);
       const before = readPluginInstall(key);
       // A second press while the first check runs shows that check rather than making another; one after a check whose
@@ -213,6 +229,7 @@ export function usePluginInstallPanel(list: CapabilityPluginListResponse | undef
     },
     resume: (item) => {
       if (custody !== pluginInstallCustody()) return;
+      panels.deliberate.press();
       // A waiting approval this page already follows opens at once.
       const followed = readPluginInstall(pluginInstallKey(item.pluginId))?.state;
       if (followed?.phase === "following" && followed.waitingApprovalId) {
@@ -222,6 +239,7 @@ export function usePluginInstallPanel(list: CapabilityPluginListResponse | undef
     },
     openSource: (kind) => {
       if (custody !== pluginInstallCustody()) return;
+      panels.deliberate.press();
       resetPluginInstall(draftPluginInstallKey(kind));
       navigate(pluginSourceItemHref(kind));
     },

@@ -41,6 +41,9 @@ const ESCAPE_OWNERS =
 const INSPECTOR_SURFACE = '[data-inspector-mode], [data-inspector-body="true"]';
 const controlsLoader = createDeferredDialogRuntime(() => import("./inspector-panel-controls"));
 
+/** An update of an open panel is never a new open, so it cannot ask for focus. */
+const quiet = (next: InspectorContent): InspectorContent => (next.focusOnOpen ? { ...next, focusOnOpen: false } : next);
+
 export function InspectorProvider({ children }: { children: ReactNode }) {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
   const installation = getGatewayApiBaseUrl();
@@ -93,7 +96,7 @@ export function InspectorProvider({ children }: { children: ReactNode }) {
       if (registered.current?.token === token && registered.current.content.source === source)
         registered.current = { token, content: next };
       setSelection((value) =>
-        value?.token === token && value.content.source === source ? { token, content: next } : value,
+        value?.token === token && value.content.source === source ? { token, content: quiet(next) } : value,
       );
     },
     [current, token],
@@ -103,7 +106,7 @@ export function InspectorProvider({ children }: { children: ReactNode }) {
       if (!current() || next.source !== source) return;
       registered.current = { token, content: next };
       setSelection((value) =>
-        value?.token === token && value.content.source === source ? { token, content: next } : value,
+        value?.token === token && value.content.source === source ? { token, content: quiet(next) } : value,
       );
     },
     [current, token],
@@ -162,7 +165,9 @@ export function useInspector(): InspectorApi {
   return api;
 }
 
-const TEXT_FIELD = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+// Where the operator is typing: a focus move never takes them out of it, whatever the opener asked for.
+const TYPING =
+  'input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"]), textarea, [contenteditable]:not([contenteditable="false"])';
 
 export function InspectorPanel() {
   const { content, close } = useInspector();
@@ -190,15 +195,17 @@ export function InspectorPanel() {
     if ((!active || active === document.body) && focusTarget.current?.isConnected) focusTarget.current.focus();
   }, [shown]);
   const floating = shown && overlay && !modal && !expanded && !isPhone;
-  const keepFocus = useRef(false);
-  keepFocus.current = Boolean(content?.keepFocus);
   const inline = shown && !modal && !expanded && !isPhone;
+  const inlineRef = useRef(inline);
+  inlineRef.current = inline;
+  const handled = useRef(new WeakSet<InspectorContent>());
   useEffect(() => {
-    if (!inline) return;
-    // A text field that opened the panel (a filter box) keeps the operator's typing; anything else hands focus in.
-    if (keepFocus.current || focusTarget.current?.matches(TEXT_FIELD)) return;
+    // Only the open the operator asked for, once. An address reopen, a resize or Expand then Restore never moves focus.
+    if (!content?.focusOnOpen || handled.current.has(content)) return;
+    handled.current.add(content);
+    if (!inlineRef.current || document.activeElement?.matches(TYPING)) return;
     panel.current?.focus({ preventScroll: true });
-  }, [inline]);
+  }, [content]);
   if (!content) return null;
   const body = (
     <div

@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { Dialog } from "../ui/Dialog";
 import { InspectorPanel, InspectorProvider, useInspector } from "./inspector";
@@ -17,6 +18,9 @@ function ScopeProbe() {
   preferences = useUiPreferences();
   return <Probe />;
 }
+type Listener = (event: MediaQueryListEvent) => void;
+// The one query a test can flip: a window that crosses the laptop breakpoint.
+const narrow = { matches: false, listeners: new Set<Listener>() };
 let root: Root;
 let container: HTMLDivElement;
 let api: ReturnType<typeof useInspector>;
@@ -28,12 +32,17 @@ function Probe() {
 
 beforeEach(() => {
   // Existing docked-panel tests explicitly use a desktop viewport.
-  vi.stubGlobal("matchMedia", (media: string) => ({
-    media,
-    matches: false,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-  }));
+  narrow.matches = false;
+  narrow.listeners.clear();
+  vi.stubGlobal("matchMedia", (media: string) => {
+    const watched = media === RESPONSIVE_QUERIES.belowDesktop;
+    return {
+      media,
+      matches: watched ? narrow.matches : false,
+      addEventListener: (_: string, listener: Listener) => watched && narrow.listeners.add(listener),
+      removeEventListener: (_: string, listener: Listener) => watched && narrow.listeners.delete(listener),
+    };
+  });
   installation.value = "http://inspector.invalid";
   window.history.replaceState(null, "", "/chat?sessionId=current&shell=cockpit");
   container = document.createElement("div");
@@ -88,54 +97,70 @@ describe("inspector", () => {
     expect(container.querySelector('[aria-label="Inspector: Run"]')).toBeNull();
   });
 
-  it("moves focus into the docked inspector when a row opens it (U-GL-039)", () => {
+  const renderWith = (extra: React.ReactNode) =>
     act(() => {
       root.render(
         <InspectorProvider>
           <Probe />
-          <button type="button">Open record</button>
+          {extra}
           <InspectorPanel />
         </InspectorProvider>,
       );
     });
-    const opener = container.querySelector("button")!;
-    opener.focus();
-    act(() => api.open({ title: "Run", body: <p>Steps</p> }));
+
+  it("moves focus into the docked inspector when the operator opens it by hand (U-GL-039)", () => {
+    renderWith(<button type="button">Open record</button>);
+    container.querySelector("button")!.focus();
+    act(() => api.open({ title: "Run", body: <p>Steps</p>, focusOnOpen: true }));
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Inspector");
   });
 
-  it("leaves focus where it is when the opener asks the panel to keep it", () => {
-    act(() => {
-      root.render(
-        <InspectorProvider>
-          <Probe />
-          <button type="button">Row</button>
-          <InspectorPanel />
-        </InspectorProvider>,
-      );
-    });
-    const row = container.querySelector("button")!;
-    row.focus();
-    act(() => api.open({ title: "Run", body: <p>Steps</p>, keepFocus: true }));
-    expect(container.querySelector('[aria-label="Inspector: Run"]')).not.toBeNull();
-    expect(document.activeElement).toBe(row);
-  });
-
-  it("leaves focus in a text field that opened the inspector", () => {
-    act(() => {
-      root.render(
-        <InspectorProvider>
-          <Probe />
-          <input aria-label="Filter" />
-          <InspectorPanel />
-        </InspectorProvider>,
-      );
-    });
-    const filter = container.querySelector("input")!;
-    filter.focus();
+  it("leaves focus alone for an open nobody pressed (an address, a reload, a list walk)", () => {
+    renderWith(<button type="button">Chip</button>);
+    const chip = container.querySelector("button")!;
+    chip.focus();
     act(() => api.open({ title: "Run", body: <p>Steps</p> }));
     expect(container.querySelector('[aria-label="Inspector: Run"]')).not.toBeNull();
+    expect(document.activeElement).toBe(chip);
+    // Closed by an address write and opened again from the address: still the chip.
+    act(() => api.close());
+    act(() => api.open({ title: "Run", body: <p>Steps</p> }));
+    expect(document.activeElement).toBe(chip);
+  });
+
+  it("takes focus once: an update of the open panel, even one that repeats the flag, never moves it again", () => {
+    renderWith(<button type="button">Chip</button>);
+    act(() => api.open({ source: "x:1", title: "Run", body: <p>Steps</p>, focusOnOpen: true }));
+    const chip = container.querySelector("button")!;
+    chip.focus();
+    act(() => api.updateIfOpen("x:1", { source: "x:1", title: "Run", body: <p>More</p>, focusOnOpen: true }));
+    expect(container.querySelector('[aria-label="Inspector: Run"]')?.textContent).toContain("More");
+    expect(document.activeElement).toBe(chip);
+  });
+
+  it("leaves focus in a text field the operator is typing in, whatever the opener asked", () => {
+    renderWith(<input aria-label="Filter" />);
+    const filter = container.querySelector("input")!;
+    filter.focus();
+    act(() => api.open({ title: "Run", body: <p>Steps</p>, focusOnOpen: true }));
+    expect(container.querySelector('[aria-label="Inspector: Run"]')).not.toBeNull();
     expect(document.activeElement).toBe(filter);
+  });
+
+  it("does not move focus when the window crosses a breakpoint with the panel open", () => {
+    renderWith(<input aria-label="Composer" />);
+    const composer = container.querySelector("input")!;
+    act(() => api.open({ title: "Run", body: <p>Steps</p>, focusOnOpen: true }));
+    composer.focus();
+    for (const matches of [true, false]) {
+      act(() => {
+        narrow.matches = matches;
+        narrow.listeners.forEach((listener) => listener({ matches } as MediaQueryListEvent));
+      });
+      composer.focus();
+    }
+    expect(container.querySelector('[aria-label="Inspector: Run"]')).not.toBeNull();
+    expect(document.activeElement).toBe(composer);
   });
 
   it("Escape outside the inspector does not close it", () => {
@@ -452,7 +477,10 @@ it("overlays a non-modal inspector on 1024–1279px laptops and returns focus on
     root.render(
       <InspectorProvider>
         <Probe />
-        <button type="button" onClick={() => api.open({ title: "Run", body: <p>Canonical evidence</p> })}>
+        <button
+          type="button"
+          onClick={() => api.open({ title: "Run", body: <p>Canonical evidence</p>, focusOnOpen: true })}
+        >
           Inspect laptop
         </button>
         <button type="button">Page control</button>

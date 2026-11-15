@@ -30,12 +30,7 @@ export function useInboxShortcuts({
   orderedItems: OperatorInboxItem[];
   selectedId: string | null;
   select: (id: string) => void;
-  inspect: (
-    item: OperatorInboxItem,
-    focusAction?: "approve" | "deny",
-    explicitDetails?: boolean,
-    keepFocus?: boolean,
-  ) => void;
+  inspect: (item: OperatorInboxItem, focusAction?: "approve" | "deny", explicitDetails?: boolean) => void;
   inspectorShowsInboxItem: boolean;
   groupOf: (item: OperatorInboxItem) => InboxViewGroupId;
   listHandles: MutableRefObject<Map<string, WindowedRecordListHandle>>;
@@ -99,7 +94,7 @@ export function useInboxShortcuts({
       }
       list?.focusRecord(nextItem.id, "[data-inbox-detail]");
       // The open inspector follows the selection, so it never describes a different item than the list (IN-08).
-      if (inspectorShowsInboxItem && nextItem.id !== selectedId) inspect(nextItem, undefined, false, true);
+      if (inspectorShowsInboxItem && nextItem.id !== selectedId) inspect(nextItem);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);

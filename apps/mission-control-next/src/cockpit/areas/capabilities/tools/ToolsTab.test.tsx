@@ -422,6 +422,20 @@ describe("Tools tab", () => {
     expect(route.navigate).toHaveBeenLastCalledWith("/capabilities/tools?item=group%3Acore");
   });
 
+  it("takes focus into the panel for a pressed View button, not for an address that names a group (U-GL-039)", async () => {
+    await render();
+    await click(button("View Git", rowOf("Git")));
+    route.search = "?item=group%3Agit";
+    await render();
+    expect(inspector.open).toHaveBeenLastCalledWith(expect.objectContaining({ focusOnOpen: true }));
+    // The same page opened again from the address alone (a reload, or a chip that writes the address) leaves focus.
+    inspector.open.mockClear();
+    route.search = "?item=group%3Afiles";
+    await render();
+    expect(inspector.open).toHaveBeenCalledTimes(1);
+    expect(inspector.open).toHaveBeenLastCalledWith(expect.objectContaining({ focusOnOpen: false }));
+  });
+
   it("says under the switch what on and off mean", async () => {
     api.fetchCapabilityTools.mockResolvedValue(listOf({ git: { state: "off" } }));
     await render();

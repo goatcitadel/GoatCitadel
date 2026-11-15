@@ -1181,6 +1181,9 @@ describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN
     show([first, second], { needs_decision: { known: 2, complete: true } });
     await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
     await act(async () => details("approval:test").click());
+    // Opening by hand hands focus to the panel; walking the list afterwards does not.
+    expect(document.activeElement?.closest("aside")).not.toBeNull();
+    document.querySelector<HTMLElement>('[data-inbox-row="approval:test"] [data-inbox-detail]')?.focus();
     await press("j");
     expect(container.querySelector('[aria-label="Inspector: Second write"]')).not.toBeNull();
     expect(document.activeElement?.closest("[data-inbox-row]")?.getAttribute("data-inbox-row")).toBe("approval:second");

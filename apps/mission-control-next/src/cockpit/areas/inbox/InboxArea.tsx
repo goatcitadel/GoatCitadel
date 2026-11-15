@@ -183,10 +183,11 @@ export function InboxArea() {
   const decisionRef = useRef(decisionFocus.onDecision);
   decisionRef.current = decisionFocus.onDecision;
   const openNow = useCallback(
-    (item: OperatorInboxItem, focusAction?: "approve" | "deny", explicitDetails = false, keepFocus = false) =>
+    (item: OperatorInboxItem, focusAction?: "approve" | "deny", explicitDetails = false) =>
       inspector.open({
         source: `inbox:${item.id}`,
-        keepFocus,
+        // Details (click, Enter or the O shortcut) is the operator opening it; a J or K follow keeps focus on the row.
+        focusOnOpen: explicitDetails,
         title: inboxItemTitle(item),
         body: (
           <InboxInspectorBody

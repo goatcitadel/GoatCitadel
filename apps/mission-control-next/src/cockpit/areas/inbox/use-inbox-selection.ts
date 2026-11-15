@@ -5,12 +5,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useInspector } from "../../app/inspector";
 import { inboxSelectionHref } from "./inbox-selection-url";
 
-export type InboxOpenArguments = [
-  item: OperatorInboxItem,
-  focusAction?: "approve" | "deny",
-  explicitDetails?: boolean,
-  keepFocus?: boolean,
-];
+export type InboxOpenArguments = [item: OperatorInboxItem, focusAction?: "approve" | "deny", explicitDetails?: boolean];
 
 const itemInAddress = () => new URLSearchParams(readCockpitLocation().search).get("item");
 

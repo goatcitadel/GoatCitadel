@@ -5,10 +5,11 @@ export interface InspectorContent {
   body: ReactNode;
   source?: string;
   /**
-   * The panel opens for a move the operator is making elsewhere (J and K walking a list), so it must not take focus
-   * from the list. Without it, a panel that opens docked or floating takes focus.
+   * Set only by an open the operator asked for by hand (a click or Enter on a row or an Inspect control): the docked
+   * or floating panel then takes focus once. An open from an address, a reload, a refetch or a list walk leaves focus
+   * where it is. The panel acts on it once per content, so an update of the same panel never moves focus again.
    */
-  keepFocus?: boolean;
+  focusOnOpen?: boolean;
 }
 export interface InspectorApi {
   content: InspectorContent | null;

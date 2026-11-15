@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { useDeliberateOpen } from "../deliberate-open";
 import type { CapabilityToolGroupItem, ToolGroupId } from "@goatcitadel/contracts";
 import { useInspector } from "../../../app/inspector";
 import { useCockpitRoute } from "../../../app/use-cockpit-route";
@@ -18,9 +19,9 @@ import {
  * reload doesn't bring the panel back. An address that names no group, or one the list doesn't have, is left alone.
  *
  * The inspector closes whenever the address changes, so the panel always opens after the move, never before it. It
- * also takes keyboard focus back to the button that opened it when it closes (it keeps the focused control when it
- * opens), so nothing here moves focus: a group has two View buttons, its row's and its Most used card's, and
- * whichever was pressed gets focus back.
+ * also takes keyboard focus back to the button that opened it when it closes: a group has two View buttons, its row's
+ * and its Most used card's, and whichever was pressed gets focus back. A pressed View button also takes focus into the
+ * panel once (`focusOnOpen`); a panel opened from the address alone leaves focus where it is.
  *
  * The panel reads only sources that start with the Tools prefix, and the Connectors tab reads only its own, so
  * neither opens the other's panel.
@@ -38,12 +39,18 @@ export function useToolGroupPanel(groups: readonly CapabilityToolGroupItem[] | u
   const asked = useRef<{ id: ToolGroupId; inspectorOpen: typeof openInspector } | null>(null);
   const shown = useRef<ToolGroupId | null>(null);
 
+  const deliberate = useDeliberateOpen();
   const show = useCallback(
     (id: ToolGroupId, label: string) => {
       asked.current = { id, inspectorOpen: openInspector };
-      openInspector({ source: toolPanelSource(id), title: label, body: <ToolGroupPanel groupId={id} /> });
+      openInspector({
+        source: toolPanelSource(id),
+        focusOnOpen: deliberate.take(),
+        title: label,
+        body: <ToolGroupPanel groupId={id} />,
+      });
     },
-    [openInspector],
+    [openInspector, deliberate],
   );
 
   useEffect(() => {
@@ -68,6 +75,7 @@ export function useToolGroupPanel(groups: readonly CapabilityToolGroupItem[] | u
 
   return {
     open: (groupId) => {
+      deliberate.press();
       const group = groups?.find((entry) => entry.groupId === groupId);
       // The address already names it (the panel was closed without clearing it): there is nothing to move.
       if (linkedId === groupId && group) show(groupId, group.label);
