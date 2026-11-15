@@ -14,6 +14,7 @@ import { InspectorPanel, InspectorProvider } from "../../../app/inspector";
 import { queryKeys } from "../../../data/query-keys";
 import { ConnectorPanel } from "./ConnectorPanel";
 import { ConnectorsTab } from "./ConnectorsTab";
+import { resumeActionFor } from "./ConnectorResumeControls";
 import { prepareReadyDialogFixture } from "../../../../test/ready-dialog-fixture";
 
 prepareReadyDialogFixture();
@@ -196,6 +197,15 @@ afterEach(() => {
   container.remove();
   client.clear();
   vi.unstubAllGlobals();
+});
+
+describe("resumeActionFor", () => {
+  it("connects a saved server that never connected, without a sign-in step", () => {
+    const saved = { ...LINEAR, auth: "none", state: "needs_sign_in", reason: "not_connected" } as const;
+    expect(resumeActionFor(saved)).toEqual({ label: "Connect", from: "connect" });
+    expect(resumeActionFor({ ...saved, reason: "sign_in_needed" })).toEqual({ label: "Connect", from: "sign_in" });
+    expect(resumeActionFor({ ...LINEAR })).toBeUndefined();
+  });
 });
 
 describe("Connector panel", () => {

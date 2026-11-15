@@ -24,6 +24,12 @@ const SIGN_IN_AGAIN = { label: "Sign in again", from: "sign_in" } as const;
 const signInFailed = (state: ConnectorInstallState) =>
   state.phase === "failed" && (state.step === "sign_in" || state.step === "finish_sign_in") && !state.signInBlocked;
 
+/** The button a row calls for. A saved server that never connected only connects: its sign-in is already ready. */
+export function resumeActionFor(item: CapabilityConnectorItem): { label: string; from: ResumeFrom } | undefined {
+  if (item.reason === "not_connected" && item.state === "needs_sign_in") return { label: "Connect", from: "connect" };
+  return RESUME[item.state];
+}
+
 const STEPS: Readonly<Record<ResumeFrom, readonly InstallStepId[]>> = {
   sign_in: ["sign_in", "switch_on", "connect"],
   connect: ["connect"],
@@ -46,7 +52,7 @@ export function ConnectorResumeControls({
   usePanelFocus(anchor, "primary");
   // While a registration refusal is shown, a button that signs in again would only be refused the same way.
   const blocked = install.state.phase === "failed" && install.state.signInBlocked === true;
-  const stateButton = RESUME[item.state];
+  const stateButton = resumeActionFor(item);
   const own = blocked && stateButton?.from === "sign_in" ? undefined : stateButton;
   const resume = own ?? (signInFailed(install.state) ? SIGN_IN_AGAIN : undefined);
   // The button last pressed here says which steps its flow runs. A flow this view didn't start, with no button of the
