@@ -2,6 +2,7 @@ import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { NETWORK_ALLOWLIST_LINK } from "../capabilities/connectors/connector-links";
+import type { FirecrawlGapCause } from "./web-search-state";
 
 /**
  * The warning above Firecrawl's form while the Gateway (or this page's preview of it) refuses the address, with the
@@ -17,18 +18,19 @@ export function FirecrawlAllowlistGap({
 }: {
   host: string;
   source: "draft" | "gateway";
-  cause: "not_listed" | "refused";
+  cause: FirecrawlGapCause;
   disabled: boolean;
   busy: boolean;
   onAdd: () => void;
 }) {
-  if (cause === "refused") {
-    // Listing it again changes nothing: the address itself is one GoatCitadel never allows for this service.
+  if (cause !== "not_listed") {
+    // Listing it again changes nothing, so there is no Add button.
     return (
       <Callout tone="warning" announce={false}>
         <p>
-          {host} can't be used for Firecrawl. It is a private or reserved address that GoatCitadel does not allow for
-          this service, even when it is on the outbound allowlist.
+          {cause === "reserved"
+            ? `${host} can't be used for Firecrawl. It is a private or reserved address that GoatCitadel does not allow for this service, even when it is on the outbound allowlist.`
+            : `GoatCitadel refused ${host} although it is on the outbound allowlist. Run the connection test to see why.`}
         </p>
       </Callout>
     );

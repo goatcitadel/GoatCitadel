@@ -58,6 +58,28 @@ describe("allowlist preview matches the Gateway", () => {
   });
 });
 
+describe("reserved addresses the page refuses like the Gateway", () => {
+  it.each([
+    "http://192.0.2.5:3002",
+    "http://192.88.99.1:3002",
+    "http://198.51.100.7:3002",
+    "http://203.0.113.9:3002",
+    "http://metadata.google.internal",
+    "http://[fec0::1]:3002",
+    "http://[2001:db8::1]:3002",
+    "http://[ff02::1]:3002",
+  ])("refuses %s even when listed", (url) => {
+    const host = new URL(url).host;
+    expect(isBaseUrlAllowlisted(url, [host, new URL(url).hostname])).toBe(false);
+  });
+  it("judges an IPv4-mapped address by its IPv4 part", () => {
+    const publicMapped = new URL("http://[::ffff:8.8.8.8]:8080");
+    expect(isBaseUrlAllowlisted(publicMapped.href, [publicMapped.host])).toBe(true);
+    expect(isBaseUrlAllowlisted("http://[::ffff:127.0.0.1]:8080", ["[::ffff:7f00:1]:8080"])).toBe(false);
+    expect(isBaseUrlAllowlisted("http://[::ffff:10.0.0.1]:8080", ["[::ffff:a00:1]:8080"])).toBe(false);
+  });
+});
+
 describe("firecrawlAllowlistGap", () => {
   const lan = {
     enabled: true,
@@ -106,12 +128,24 @@ describe("firecrawlAllowlistGap", () => {
         allowlist: ["127.0.0.1:9"],
         saved: { enabled: true, baseUrl: loopback.baseUrl, baseUrlAllowlisted: false },
       }),
-    ).toEqual({ host: "127.0.0.1:9", source: "gateway", cause: "refused" });
+    ).toEqual({ host: "127.0.0.1:9", source: "gateway", cause: "reserved" });
     expect(firecrawlAllowlistGap({ draft: loopback, draftDirty: true, allowlist: ["127.0.0.1:9"] })).toEqual({
       host: "127.0.0.1:9",
       source: "draft",
-      cause: "refused",
+      cause: "reserved",
     });
+  });
+  it("says only refused for a listed public host the Gateway still refuses", () => {
+    const hosted = { ...lan, baseUrl: "https://api.firecrawl.dev" } as const;
+    expect(
+      firecrawlAllowlistGap({
+        draft: hosted,
+        draftDirty: false,
+        allowlist: ["api.firecrawl.dev"],
+        lastCheck: "blocked",
+        saved: { enabled: true, baseUrl: hosted.baseUrl, baseUrlAllowlisted: true },
+      }),
+    ).toEqual({ host: "api.firecrawl.dev", source: "gateway", cause: "refused" });
   });
   it("uses the draft preview while the form has unsaved edits", () => {
     expect(firecrawlAllowlistGap({ draft: lan, draftDirty: true, allowlist: ["192.168.0.199"] })).toEqual({

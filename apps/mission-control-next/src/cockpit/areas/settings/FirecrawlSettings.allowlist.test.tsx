@@ -195,3 +195,22 @@ it("offers no add button for a listed address the Gateway still refuses as priva
     ),
   ).toBe(false);
 });
+
+it("says only that a listed public host was refused, and to run the test, with no Add button", async () => {
+  const hosted = settingsWith(["api.firecrawl.dev"], 3);
+  hosted.web.firecrawl.baseUrl = "https://api.firecrawl.dev";
+  hosted.web.firecrawl.baseUrlAllowlisted = false;
+  api.fetchSettings.mockResolvedValue(hosted);
+  await renderPage();
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain(
+      "GoatCitadel refused api.firecrawl.dev although it is on the outbound allowlist. Run the connection test to see why.",
+    ),
+  );
+  expect(container.textContent).not.toContain("private or reserved");
+  expect(
+    [...container.querySelectorAll("button")].some((element) =>
+      /Add .* to the outbound allowlist/u.test(element.textContent ?? ""),
+    ),
+  ).toBe(false);
+});
