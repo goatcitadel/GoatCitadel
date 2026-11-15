@@ -64,18 +64,25 @@ export function beginChannelOperation() {
       expectedRevision?: number,
     ): Promise<T> {
       let transport: TrackedAttempt | undefined;
+      // Only the write's own rejection can be a refusal; a failed check after it says nothing about the write.
+      let refused = false;
       try {
-        const result = await dispatchTrackedMutation(CHANNEL_ROUTE_PATTERNS, dispatch, (tracked) => {
-          transport = tracked;
-        });
+        const result = await dispatchTrackedMutation(
+          CHANNEL_ROUTE_PATTERNS,
+          () =>
+            dispatch().catch((cause: unknown) => {
+              refused = classifySettingsSaveFailure(cause).kind === "refused";
+              throw cause;
+            }),
+          (tracked) => {
+            transport = tracked;
+          },
+        );
         await validate(result);
         return result;
       } catch (cause) {
         // A plain Gateway refusal applied nothing: the caller shows its reason and the page stays usable.
-        if (
-          !isChannelPrecommitConflict(cause, draftId, connectionId, expectedRevision) &&
-          classifySettingsSaveFailure(cause).kind !== "refused"
-        )
+        if (!isChannelPrecommitConflict(cause, draftId, connectionId, expectedRevision) && !refused)
           publish({
             pending: true,
             uncertain: transport

@@ -136,3 +136,17 @@ it("keeps the lock for a refusal that says it was committed, and for a lost or f
     expect(beginChannelOperation()).toBeUndefined();
   }
 });
+it("locks as uncertain when the read-back after an applied write is refused", async () => {
+  const operation = beginChannelOperation()!;
+  const refusal = { status: 404, body: { error: "That record no longer exists." } };
+  // The write itself went through; only the check that follows it was refused.
+  await expect(
+    operation.write(
+      () => Promise.resolve("written"),
+      () => Promise.reject(refusal),
+    ),
+  ).rejects.toBe(refusal);
+  operation.finish();
+  expect(readChannelMutationState().uncertain).toBeDefined();
+  expect(beginChannelOperation()).toBeUndefined();
+});
