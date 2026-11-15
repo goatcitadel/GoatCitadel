@@ -1,4 +1,5 @@
 import { NOTIFICATION_EVENT_TYPES, type NotificationTargetKind } from "@goatcitadel/contracts";
+import { NOTIFICATION_EVENT_TYPE_LABELS } from "./notification-vocabulary";
 import type { NotificationRoutingOwner } from "../../../features/native-routes/settings/sections/use-notification-routing";
 import { integrationInputClass } from "./IntegrationFormFields";
 import { INTEGRATION_CONNECTION_STATUS_LABELS } from "./settings-vocabulary";
@@ -116,7 +117,7 @@ export function NotificationRoutingFields({ owner: s }: { owner: NotificationRou
                   checked={s.ruleForm.eventTypes.includes(type)}
                   onChange={() => s.toggleEventType(type)}
                 />
-                {type}
+                {NOTIFICATION_EVENT_TYPE_LABELS[type]}
               </label>
             ))}
           </fieldset>

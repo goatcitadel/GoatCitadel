@@ -33,7 +33,7 @@ export const RULES = [
   {
     id: "manual-humanize",
     pattern: /\.replace(?:All)?\(\s*(?:["'`]_["'`]|\/_\/g)\s*,\s*["'`] ["'`]\s*\)/g,
-    budget: 7,
+    budget: 6,
     help: "underscore-stripping is humanizeToken by hand; use a typed presenter",
   },
   {
