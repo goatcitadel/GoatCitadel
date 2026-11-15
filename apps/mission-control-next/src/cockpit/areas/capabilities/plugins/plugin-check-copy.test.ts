@@ -64,6 +64,13 @@ describe("plugin check copy", () => {
     );
   });
 
+  it("names the repeated piece id when the Gateway gave one", () => {
+    expect(manifestRefusalLines("DUPLICATE_PIECE_ID", 'Two pieces share the id "skill-2".')).toEqual([
+      "Two of its pieces have the same id, skill-2. Give each piece its own id.",
+      CANT_BE_INSTALLED,
+    ]);
+  });
+
   it("keeps the refusal's own sentence for a code it has no words for, and still says it can't be installed", () => {
     expect(
       manifestRefusalLines("SOMETHING_NEW", "This built-in plugin's manifest names a different plugin id."),
