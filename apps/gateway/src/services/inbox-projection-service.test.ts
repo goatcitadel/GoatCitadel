@@ -300,14 +300,14 @@ describe("Gateway inbox projection", () => {
     expect(summary("plain")).toBe("Command: pnpm (open it to see the full command)");
     expect(summary("notool")).toBe("Command: pnpm (open it to see the full command)");
     expect(summary("secret")).toBe("Command: curl (open it to see the full command)");
-    expect(summary("codesecret")).toBe("Code to run, 1 line (open it to see the code)");
+    expect(summary("codesecret")).toBe("Code to run (open it to see the code)");
     expect(JSON.stringify(projection)).not.toContain(token);
     expect(summary("lines")).toBe("Command: echo, 3 lines (open it to see the full command)");
     expect(summary("oneextra")).toBe("Command: echo, 2 lines (open it to see the full command)");
     expect(summary("long")).toBe("Command: echo (open it to see the full command)");
     expect(summary("bidi")).toBe("Command: echo, 2 lines (open it to see the full command)");
     expect(summary("home")).toBe("Command: cat (open it to see the full command)");
-    expect(summary("code")).toBe("Code to run, 1 line (open it to see the code)");
+    expect(summary("code")).toBe("Code to run (open it to see the code)");
     expect(summary("other")).not.toContain("do-not-project-command");
     // The Cockpit keeps a summary that names a command or code out of a toast, by this flag.
     const named = (id: string) => projection.items.find((entry) => entry.id === `approval:${id}`)?.summaryNamesCommand;

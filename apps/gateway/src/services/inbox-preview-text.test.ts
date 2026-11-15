@@ -63,11 +63,11 @@ describe("shellCommandSummary", () => {
 });
 
 describe("codeRunSummary", () => {
-  it("says how very long of code will run, and shows none of it", () => {
+  it("says code will run with no line count (its preview is compacted), and shows none of it", () => {
     const code = ["const a = 1;", `const key = "${pw}";`, "run(a);", "done();"].join(NL);
-    expect(codeRunSummary(code)).toBe("Code to run, 4 lines (open it to see the code)");
-    expect(codeRunSummary(`run("${pw}");`)).toBe("Code to run, 1 line (open it to see the code)");
-    expect(codeRunSummary(`${"x".repeat(20_000)}${NL}y`)).toBe("Code to run, very long (open it to see the code)");
+    expect(codeRunSummary(code)).toBe("Code to run (open it to see the code)");
+    expect(codeRunSummary(`run("${pw}");`)).toBe("Code to run (open it to see the code)");
+    expect(codeRunSummary(`${"x".repeat(20_000)}${NL}y`)).toBe("Code to run (open it to see the code)");
     expect(codeRunSummary("  ")).toBeUndefined();
     expect(codeRunSummary(code)).not.toContain(pw);
   });

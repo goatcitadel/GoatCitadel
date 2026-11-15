@@ -1,7 +1,7 @@
 /*
  * What an Inbox row says about a shell command or a code run it asks to approve. The row never shows the command's
  * arguments or the code's text: a model wrote them, they can carry a credential in forms no filter lists completely, and
- * partly hiding a shell line can hide its tail. The row names the kind of thing (the program, how many lines) and the
+ * partly hiding a shell line can hide its tail. The row names the kind of thing (the program, how many lines a command has) and the
  * approval detail shows the full text. Nothing here uses a regular expression on that text: each scan is bounded.
  */
 
@@ -87,10 +87,11 @@ export function shellCommandSummary(command: string): string | undefined {
   return `Command${program ? `: ${program}` : ""}${count} (open it to see the full command)`;
 }
 
-/** The summary of a code run approval, or undefined when the code holds no text. */
+/**
+ * The summary of a code run approval, or undefined when the code holds no text. It gives no line count: the text an
+ * approval carries is a compacted, shortened preview of the source, so a count taken from it would be untrue.
+ */
 export function codeRunSummary(code: string): string | undefined {
-  const lines = countLines(code);
-  if (lines === 0) return undefined;
-  const count = lines === "long" ? "very long" : lines === 1 ? "1 line" : `${lines} lines`;
-  return `Code to run, ${count} (open it to see the code)`;
+  if (countLines(code) === 0) return undefined;
+  return "Code to run (open it to see the code)";
 }
