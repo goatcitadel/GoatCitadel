@@ -1,22 +1,24 @@
 import { useMemo } from "react";
 import type { ShellCommandExplanation } from "@goatcitadel/contracts";
+import type { ApprovalCommandPreview } from "@goatcitadel/mission-control-shared/content/approval-generic-evidence";
 import { explainShellCommand } from "@goatcitadel/mission-control-shared";
 
 export interface ShellExplanationListProps {
-  readonly commands: readonly string[];
+  readonly commands: readonly ApprovalCommandPreview[];
   readonly explanations?: readonly ShellCommandExplanation[];
 }
 
 export function ShellExplanationList({ commands, explanations }: ShellExplanationListProps) {
-  const resolved = useMemo<readonly ShellCommandExplanation[]>(() => {
-    if (commands.length === 0) {
-      return [];
-    }
-    if (explanations && explanations.length === commands.length) {
-      return explanations;
-    }
-    return commands.map((cmd) => explainShellCommand(cmd));
-  }, [commands, explanations]);
+  const resolved = useMemo(
+    () =>
+      commands.map(({ text, truncated }) => ({
+        text,
+        explanation: truncated
+          ? undefined
+          : (explanations?.find((explanation) => explanation.command === text) ?? explainShellCommand(text)),
+      })),
+    [commands, explanations],
+  );
 
   if (resolved.length === 0) {
     return null;
@@ -24,9 +26,16 @@ export function ShellExplanationList({ commands, explanations }: ShellExplanatio
 
   return (
     <div className="mc-next-approvals-shell-list">
-      {resolved.map((exp, idx) => (
-        <ShellExplanationCard key={`${exp.command}-${idx}`} explanation={exp} />
-      ))}
+      {resolved.map(({ text, explanation }, idx) =>
+        explanation ? (
+          <ShellExplanationCard key={idx} explanation={explanation} />
+        ) : (
+          <div key={idx} className="mc-next-approvals-shell-card">
+            <p>Command preview is shortened.</p>
+            <code className="mc-next-approvals-shell-raw">{text}</code>
+          </div>
+        ),
+      )}
     </div>
   );
 }

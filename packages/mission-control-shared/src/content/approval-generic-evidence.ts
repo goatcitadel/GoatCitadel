@@ -8,6 +8,11 @@ export interface ApprovalTargetEntry {
   value: string;
 }
 
+export interface ApprovalCommandPreview {
+  text: string;
+  truncated?: boolean;
+}
+
 export interface ApprovalEvidenceModel {
   scopeSummary?: string;
   consequence?: string;
@@ -16,6 +21,7 @@ export interface ApprovalEvidenceModel {
   /** The same targets as label/value pairs, when they carry labels (generic and Citadel Ward models). Absent otherwise. */
   targetEntries?: ApprovalTargetEntry[];
   commands: string[];
+  commandPreviews?: ApprovalCommandPreview[];
   changes: ApprovalEvidenceBlock[];
   supporting: string[];
 }
@@ -127,6 +133,7 @@ function collectApprovalEvidence(
     targets: Set<string>;
     targetEntries: Map<string, ApprovalTargetEntry>;
     commands: Set<string>;
+    shellCommands: Set<string>;
     supporting: Set<string>;
     changes: ApprovalEvidenceBlock[];
     seenBlocks: Set<string>;
@@ -137,6 +144,11 @@ function collectApprovalEvidence(
     return;
   }
 
+  const addShellCommand = (command: string) => {
+    if (!collector.exact && collector.shellCommands.size < 4 && command.trim()) {
+      collector.shellCommands.add(command);
+    }
+  };
   const visited = new Set<unknown>();
   const stack: unknown[] = [source];
 
@@ -226,6 +238,7 @@ function collectApprovalEvidence(
           addTarget(collector, humanizeKey(key), value);
         } else if (isLikelyCommandKey(key) && value.trim()) {
           collector.commands.add(`${humanizeKey(key)}: ${collector.exact ? value : truncateLine(value, 140)}`);
+          addShellCommand(value);
         } else if (key === "content" && (record.toolName === "memory.write" || record.toolName === "memory.upsert")) {
           // The server's allowlisted, redacted memory body is review evidence even on one line.
           pushEvidenceBlock(collector.changes, collector.seenBlocks, "Memory content", value, collector.exact, true);
@@ -244,6 +257,7 @@ function collectApprovalEvidence(
               `${(collector.exact ? strings : strings.slice(0, 4)).join(", ")}${!collector.exact && strings.length > 4 ? "…" : ""}`,
             );
           } else if (isLikelyCommandKey(key)) {
+            strings.slice(0, 3).forEach(addShellCommand);
             collector.commands.add(
               `${humanizeKey(key)}: ${(collector.exact ? strings : strings.slice(0, 3)).join(" | ")}${!collector.exact && strings.length > 3 ? "…" : ""}`,
             );
@@ -279,6 +293,7 @@ function buildEvidence(sources: Array<unknown>, exact: boolean): ApprovalEvidenc
   const targets = new Set<string>();
   const targetEntries = new Map<string, ApprovalTargetEntry>();
   const commands = new Set<string>();
+  const shellCommands = new Set<string>();
   const supporting = new Set<string>();
   const changes: ApprovalEvidenceBlock[] = [];
   const seenBlocks = new Set<string>();
@@ -288,6 +303,7 @@ function buildEvidence(sources: Array<unknown>, exact: boolean): ApprovalEvidenc
       targets,
       targetEntries,
       commands,
+      shellCommands,
       supporting,
       changes,
       seenBlocks,
@@ -304,6 +320,14 @@ function buildEvidence(sources: Array<unknown>, exact: boolean): ApprovalEvidenc
     targets: targetLines,
     targetEntries: targetLines.map((line) => targetEntries.get(line) ?? { label: "Target", value: line }),
     commands: exact ? [...commands] : [...commands].slice(0, 4),
+    ...(shellCommands.size
+      ? {
+          commandPreviews: [...shellCommands].map((command) => {
+            const text = truncateLine(command, 140);
+            return { text, truncated: text !== command };
+          }),
+        }
+      : {}),
     supporting: exact ? [...supporting] : [...supporting].slice(0, 4),
     changes: exact ? changes : changes.slice(0, 4),
   };

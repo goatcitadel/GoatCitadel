@@ -669,8 +669,8 @@ function ApprovalInspectorCard(props: {
                   ))}
                 </ul>
               ) : null}
-              {evidence.commands.length > 0 ? (
-                <ShellExplanationList commands={evidence.commands} explanations={approval.shellExplanations} />
+              {evidence.commandPreviews?.length ? (
+                <ShellExplanationList commands={evidence.commandPreviews} explanations={approval.shellExplanations} />
               ) : null}
               {evidence.supporting.length > 0 ? (
                 <ul className="mc-next-approvals-compact-list">
