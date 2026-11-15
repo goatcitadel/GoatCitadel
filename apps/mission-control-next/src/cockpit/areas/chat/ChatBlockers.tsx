@@ -139,6 +139,15 @@ export function ChatBlockers({ props }: { props: Blockers }) {
       : undefined;
   const input = props.pendingUserInput;
   const questionScope = input ? JSON.stringify([workspaceId, props.selectedSessionId, input.promptId]) : "";
+  // Skipping hides an optional question on this screen only; the Gateway keeps the prompt and nothing is sent.
+  const [skipped, setSkipped] = useState<ReadonlySet<string>>(new Set());
+  const setQuestionSkipped = (skip: boolean) =>
+    setSkipped((current) => {
+      const next = new Set(current);
+      if (skip) next.add(questionScope);
+      else next.delete(questionScope);
+      return next;
+    });
   // The persisted record outranks the retained prompt: once it is decided, the card reports the decision
   // instead of asking for one while Chat waits for the queue to clear it.
   const decided = reviewedApproval && reviewedApproval.status !== "pending" ? reviewedApproval : undefined;
@@ -270,26 +279,37 @@ export function ChatBlockers({ props }: { props: Blockers }) {
         </section>
       ) : null}
       {/* CH-N06: blockers only render inside the Chat transcript, so no "open in Chat" link. */}
-      {input ? (
+      {input && skipped.has(questionScope) ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-fg-secondary">
+          <p>You skipped “{input.title || "this question"}”. The work goes on without your answer.</p>
+          <Button variant="ghost" size="sm" onClick={() => setQuestionSkipped(false)}>
+            Show the question again
+          </Button>
+        </div>
+      ) : input ? (
         <DeferredChatLeaf
           key={questionScope}
           identity={questionScope}
           label="Answer controls"
           fallback={
-            <section
-              aria-label="Pending question"
-              className="mt-3 border-l-2 border-status-waiting pl-3 text-sm"
-            >
+            <section aria-label="Pending question" className="mt-3 border-l-2 border-status-waiting pl-3 text-sm">
               <h3 className="font-semibold text-fg">{input.title || "Your input is needed"}</h3>
               {isBackgroundChatUserInputPrompt(input) ? (
                 <p className="mt-1 text-xs text-fg-muted">Optional · Work continues</p>
               ) : null}
               <p className="mt-1 text-fg-secondary">{input.question}</p>
-              <p aria-busy="true" className="mt-2 text-xs text-fg-muted">Loading answer controls…</p>
+              <p aria-busy="true" className="mt-2 text-xs text-fg-muted">
+                Loading answer controls…
+              </p>
             </section>
           }
         >
-          <ChatPendingQuestion prompt={input} pending={props.userInputPending} onSubmit={props.onSubmitUserInput} />
+          <ChatPendingQuestion
+            prompt={input}
+            pending={props.userInputPending}
+            onSubmit={props.onSubmitUserInput}
+            onSkip={() => setQuestionSkipped(true)}
+          />
         </DeferredChatLeaf>
       ) : null}
     </div>
