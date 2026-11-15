@@ -71,6 +71,7 @@ const STATE_LABELS: Readonly<Record<CapabilityConnectorState, string>> = {
 /** A reason that needs its own badge word, said in place of the state's. */
 const REASON_STATE_LABELS: Readonly<Partial<Record<CapabilityConnectorReason, string>>> = {
   not_connected: "Not connected",
+  connecting: "Connecting",
 };
 
 const STATE_TONES: Readonly<Record<CapabilityConnectorState, StatusTone>> = {
@@ -85,6 +86,7 @@ const STATE_TONES: Readonly<Record<CapabilityConnectorState, StatusTone>> = {
 const REASON_LINES: Readonly<Record<CapabilityConnectorReason, string>> = {
   ready: "Ready to use",
   not_connected: "Saved, not connected yet",
+  connecting: "Connecting now",
   sign_in_needed: "Sign in to finish setup",
   sign_in_expired: "Sign in again to keep using it",
   error: "Stopped working; open it to see why",
@@ -311,7 +313,8 @@ export function connectorAction(item: CapabilityConnectorItem): { kind: Connecto
     case "sign_in_expired":
       return { kind: "reconnect", label: "Reconnect" };
     case "needs_sign_in":
-      return { kind: "connect", label: "Connect" };
+      // A server that is already connecting has nothing to start; its panel shows how it is going.
+      return item.reason === "connecting" ? { kind: "manage", label: "Manage" } : { kind: "connect", label: "Connect" };
     case "turned_off":
       return { kind: "turn_back_on", label: "Turn back on" };
     case "available":

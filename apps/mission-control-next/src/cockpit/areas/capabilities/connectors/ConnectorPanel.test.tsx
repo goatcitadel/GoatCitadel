@@ -205,6 +205,11 @@ describe("resumeActionFor", () => {
     expect(resumeActionFor(saved)).toEqual({ label: "Connect", from: "connect" });
     expect(resumeActionFor({ ...saved, reason: "sign_in_needed" })).toEqual({ label: "Connect", from: "sign_in" });
     expect(resumeActionFor({ ...LINEAR })).toBeUndefined();
+    // A server that is connecting has a connect running; a second button would start another.
+    expect(resumeActionFor({ ...saved, reason: "connecting" })).toBeUndefined();
+    // A requester-scoped server connects per chat, so it never gets a Connect that would always fail.
+    expect(resumeActionFor({ ...LINEAR, requesterScoped: true, state: "connected", reason: "ready" })).toBeUndefined();
+    expect(resumeActionFor({ ...saved, requesterScoped: true })).toBeUndefined();
   });
 });
 

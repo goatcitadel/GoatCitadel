@@ -289,7 +289,14 @@ function serverVerdict(server: McpServerRecord): Verdict {
   if (server.status === "error") {
     return { state: "broken", reason: "error" };
   }
-  // Saved but never connected (or still connecting) is not the same as connected.
+  // A requester-scoped server never joins the global connection and works per chat, so its status says nothing.
+  if (server.connectionMode === "requester_scoped") {
+    return { state: "connected", reason: "ready" };
+  }
+  // Saved but never connected is not the same as connected, and one that is connecting says so.
+  if (server.status === "connecting") {
+    return { state: "needs_sign_in", reason: "connecting" };
+  }
   if (server.status !== "connected") {
     return { state: "needs_sign_in", reason: "not_connected" };
   }

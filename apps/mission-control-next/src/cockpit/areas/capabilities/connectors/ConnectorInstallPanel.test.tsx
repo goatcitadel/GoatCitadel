@@ -855,6 +855,24 @@ describe("Saved server sign-in and connect", () => {
     expect(flows.start).not.toHaveBeenCalled();
   });
 
+  it("runs only the connect step for a saved server that never connected", async () => {
+    const saved = { ...SAVED_LINEAR, state: "needs_sign_in", reason: "not_connected", auth: "none" } as const;
+    await renderPanel(saved.id, [saved]);
+    await act(async () => button("Connect")?.click());
+    expect(flows.resume).toHaveBeenCalledExactlyOnceWith(saved.id, "connect");
+    expect(steps().some((step) => step.startsWith("Sign in"))).toBe(false);
+  });
+
+  it("offers no Connect while a saved server is connecting, and none for a requester-scoped one", async () => {
+    const connecting = { ...SAVED_LINEAR, state: "needs_sign_in", reason: "connecting" } as const;
+    await renderPanel(connecting.id, [connecting]);
+    expect(button("Connect")).toBeUndefined();
+    const perChat = { ...SAVED_LINEAR, state: "connected", reason: "ready", requesterScoped: true } as const;
+    await renderPanel(perChat.id, [perChat]);
+    expect(button("Connect")).toBeUndefined();
+    expect(button("Try again")).toBeUndefined();
+  });
+
   it("leaves a service that isn't a saved server to its Advanced setup link", async () => {
     const gmail = item({
       id: "integration:conn-gmail",

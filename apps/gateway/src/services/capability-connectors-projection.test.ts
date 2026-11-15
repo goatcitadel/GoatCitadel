@@ -146,11 +146,23 @@ function only(items: readonly CapabilityConnectorItem[]): CapabilityConnectorIte
 
 describe("buildCapabilityConnectors", () => {
   it("says a saved server that never connected is not connected yet", () => {
+    const row = only(buildCapabilityConnectors(input({ servers: [server({ status: "disconnected" })] })));
+    expect(row.state).toBe("needs_sign_in");
+    expect(row.reason).toBe("not_connected");
+  });
+
+  it("keeps a requester-scoped server connected: it never joins the global connection and works per chat", () => {
     for (const status of ["disconnected", "connecting"] as const) {
-      const row = only(buildCapabilityConnectors(input({ servers: [server({ status })] })));
-      expect(row.state, status).toBe("needs_sign_in");
-      expect(row.reason, status).toBe("not_connected");
+      const row = only(
+        buildCapabilityConnectors(input({ servers: [server({ status, connectionMode: "requester_scoped" })] })),
+      );
+      expect(row, status).toMatchObject({ state: "connected", reason: "ready", requesterScoped: true });
     }
+  });
+
+  it("says a server that is connecting is connecting, not that it never connected", () => {
+    const row = only(buildCapabilityConnectors(input({ servers: [server({ status: "connecting" })] })));
+    expect(row).toMatchObject({ state: "needs_sign_in", reason: "connecting" });
   });
 
   it("keeps Connected for a server whose last connection worked", () => {
@@ -1001,9 +1013,9 @@ describe("buildCapabilityConnectors", () => {
       },
       {
         condition: "saved server that is connecting with ready sign-in",
-        expected: "needs_sign_in / not_connected",
+        expected: "needs_sign_in / connecting",
         state: "needs_sign_in",
-        reason: "not_connected",
+        reason: "connecting",
         build: () =>
           input({
             servers: [server({ status: "connecting", authState: { authType: "oauth2", readiness: "ready" } })],

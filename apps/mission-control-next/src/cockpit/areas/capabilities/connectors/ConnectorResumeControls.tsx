@@ -26,6 +26,8 @@ const signInFailed = (state: ConnectorInstallState) =>
 
 /** The button a row calls for. A saved server that never connected only connects: its sign-in is already ready. */
 export function resumeActionFor(item: CapabilityConnectorItem): { label: string; from: ResumeFrom } | undefined {
+  // A requester-scoped server connects per chat and a connecting one is already on its way: neither has a button.
+  if (item.requesterScoped === true || item.reason === "connecting") return undefined;
   if (item.reason === "not_connected" && item.state === "needs_sign_in") return { label: "Connect", from: "connect" };
   return RESUME[item.state];
 }
