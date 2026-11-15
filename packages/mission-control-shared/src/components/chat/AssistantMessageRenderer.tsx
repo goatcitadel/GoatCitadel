@@ -614,7 +614,9 @@ function StreamingMarkdown({
           <AssistantStreamingTailContext.Provider value={!settled}>
             <MemoizedMarkdownBlock
               content={tail}
-              tree={tailTree}
+              // A finished answer parses its tail as final text: the streaming display rules (held-back table rows,
+              // half-typed links, healed bold) no longer apply.
+              tree={settled ? undefined : tailTree}
               role="assistant"
               components={assistantMarkdownComponents}
               fadeNewWords={!settled && streamPresentationMode === "smooth"}
