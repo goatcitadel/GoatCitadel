@@ -34,6 +34,13 @@ import {
 } from "./skill-hub-lifecycle-service.js";
 import { skillHubOperationFingerprint } from "./skill-hub-operation-identity.js";
 
+/** Names a test treats as shipped with GoatCitadel, on top of the real list. */
+const bundledNames = vi.hoisted(() => new Set<string>());
+vi.mock("./plugin-skill-name-rules.js", async (original) => {
+  const actual = await original<typeof import("./plugin-skill-name-rules.js")>();
+  return { ...actual, isBundledSkillName: (name: string) => bundledNames.has(name) || actual.isBundledSkillName(name) };
+});
+
 interface Harness {
   rootDir: string;
   storage: Storage;
@@ -1141,6 +1148,90 @@ describe("SkillHubLifecycleService", () => {
       expect(result.settlement.result).toMatchObject({ code: "candidate_not_revoked", boundaryCrossed: false });
       await expect(fs.stat(path.join(runtimeDir, "SKILL.md"))).resolves.toBeTruthy();
       expect(harness.storage.skillLifecycle.find("extra:demo")?.lifecycleState).toBe("revoked");
+    }, 90_000);
+
+    it("moves nothing when a link sits inside the skill's folder", async () => {
+      const { harness, extraRoot, runtimeDir } = await revokedHarness();
+      const outside = path.join(harness.rootDir, "outside-inner");
+      await fs.mkdir(outside, { recursive: true });
+      await fs.writeFile(path.join(outside, "keep.txt"), "outside data\n", "utf8");
+      // A junction needs no privilege on Windows; elsewhere this is a plain directory symlink.
+      await fs.symlink(outside, path.join(runtimeDir, "inner"), process.platform === "win32" ? "junction" : "dir");
+
+      const result = await harness.lifecycle.applyApprovedOperation(
+        await approve(harness, removeTemplate(harness, "operation-remove")),
+      );
+
+      expect(result.settlement.disposition).toBe("manual_reconciliation");
+      expect(result.settlement.result).toMatchObject({ code: "runtime_removal_unverifiable", boundaryCrossed: false });
+      await expect(fs.stat(path.join(runtimeDir, "SKILL.md"))).resolves.toBeTruthy();
+      expect(await fs.readFile(path.join(outside, "keep.txt"), "utf8")).toBe("outside data\n");
+      expect(await scratchEntries(extraRoot)).toEqual([]);
+      expect(harness.storage.skillLifecycle.find("extra:demo")?.lifecycleState).toBe("revoked");
+    }, 90_000);
+
+    it("refuses at apply time a skill named like one that ships with GoatCitadel", async () => {
+      const { harness, runtimeDir } = await revokedHarness();
+      bundledNames.add("demo");
+      try {
+        const result = await harness.lifecycle.applyApprovedOperation(
+          await approve(harness, removeTemplate(harness, "operation-remove")),
+        );
+
+        expect(result.settlement.disposition).toBe("blocked");
+        expect(result.settlement.result).toMatchObject({ code: "bundled_skill", boundaryCrossed: false });
+        await expect(fs.stat(path.join(runtimeDir, "SKILL.md"))).resolves.toBeTruthy();
+        expect(harness.storage.skillLifecycle.find("extra:demo")?.lifecycleState).toBe("revoked");
+      } finally {
+        bundledNames.delete("demo");
+      }
+    }, 90_000);
+
+    it("finishes on the retry when the outer transaction fails to commit after the move", async () => {
+      const { harness, extraRoot, runtimeDir } = await revokedHarness();
+      let depth = 0;
+      let failOuterCommit = true;
+      const storage = new Proxy(harness.asyncStorage, {
+        get(target, key, receiver) {
+          if (key !== "runImmediateTransaction") return Reflect.get(target, key, receiver);
+          return async <T>(work: () => T | Promise<T>) =>
+            await target.runImmediateTransaction(async () => {
+              depth += 1;
+              try {
+                const value = await work();
+                const settled = harness.storage.skillHubOperations.findSettlementByOperationId("operation-remove");
+                if (depth === 1 && failOuterCommit && settled) {
+                  failOuterCommit = false;
+                  throw new Error("simulated commit failure of the outer transaction");
+                }
+                return value;
+              } finally {
+                depth -= 1;
+              }
+            });
+        },
+      });
+      harness.lifecycle = new SkillHubLifecycleService({
+        rootDir: harness.rootDir,
+        candidateRoot: "data/capability-candidates",
+        skillsExtraRoot: "skills/extra",
+        artifactStore: harness.artifactStore,
+        storage,
+        filesystem: sharedFilesystem,
+      });
+      const request = await approve(harness, removeTemplate(harness, "operation-remove"));
+
+      await expect(harness.lifecycle.applyApprovedOperation(request)).rejects.toThrow(/outer transaction/);
+      // Nothing committed: the record is there, no settlement, and the folder waits at its recovery path.
+      expect(harness.storage.skillHubOperations.findSettlementByOperationId("operation-remove")).toBeUndefined();
+      expect(harness.storage.skillLifecycle.find("extra:demo")?.lifecycleState).toBe("revoked");
+      expect(await fs.stat(runtimeDir).catch(() => null)).toBeNull();
+      expect(await scratchEntries(extraRoot)).toHaveLength(1);
+
+      const retried = await harness.lifecycle.applyApprovedOperation(request);
+      expect(retried.settlement.disposition).toBe("applied");
+      expect(harness.storage.skillLifecycle.find("extra:demo")).toBeUndefined();
+      expect(await scratchEntries(extraRoot)).toEqual([]);
     }, 90_000);
 
     it("refuses a removal while an installed plugin still lists the skill", async () => {
