@@ -209,7 +209,8 @@ export function Sidebar({
               onPointerEnter={() => preload(entry.area)}
               onFocus={() => preload(entry.area)}
               onPointerDown={() => preload(entry.area)}
-              className="relative flex h-8 items-center gap-2 rounded-md px-2 text-sm text-fg-secondary hover:bg-sunken aria-[current=page]:bg-sunken aria-[current=page]:text-fg"
+              data-current-row=""
+              className="relative flex h-8 items-center gap-2 rounded-md px-2 text-sm text-fg-secondary hover:bg-sunken aria-[current=page]:bg-sunken aria-[current=page]:font-medium aria-[current=page]:text-fg"
             >
               <Icon aria-hidden="true" className="size-4 shrink-0" />
               <span className={collapsed ? "sr-only" : "flex-1 text-left"}>{entry.label}</span>
@@ -288,6 +289,7 @@ export function Sidebar({
             aria-label="Settings and account"
             // ST-11: Settings has no Areas entry, so its gear is the sidebar's current item while Settings is open.
             aria-current={current === "settings" ? "page" : undefined}
+            data-current-row=""
             className="rounded-md p-1 text-fg-muted hover:bg-sunken aria-[current=page]:bg-sunken aria-[current=page]:text-fg"
             onPointerEnter={() => preload("settings")}
             onFocus={() => preload("settings")}

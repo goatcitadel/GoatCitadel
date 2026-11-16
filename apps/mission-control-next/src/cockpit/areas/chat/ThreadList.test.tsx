@@ -228,6 +228,8 @@ it.each([0, 1, 99, 100, 1000])(
     expect(viewportContract.threshold).toBe(100);
     expect(viewportContract.bounded).toBe(true);
     const selected = container.querySelector<HTMLButtonElement>('[aria-current="page"]')!;
+    // U-GL-005: the current row carries the marker hook for the accent edge.
+    expect(selected.hasAttribute("data-current-row")).toBe(true);
     selected.focus();
     await act(async () =>
       root.render(

@@ -41,6 +41,11 @@ html[data-shell="cockpit"] .cockpit-target {
   html[data-shell="cockpit"] :is([role="tab"][aria-selected="true"], [data-cockpit-tabbar] [aria-current="page"]) {
     box-shadow: inset 0 -2px var(--cockpit-accent);
   }
+  /* The current sidebar or list row keeps its tint and adds an edge, so it reads differently from a hovered row.
+     Forced colours drop box-shadow; the Highlight outline on the current item further down carries the mark there. */
+  html[data-shell="cockpit"] [data-current-row][aria-current="page"] {
+    box-shadow: inset 2px 0 var(--cockpit-accent);
+  }
 }
 html[data-shell="cockpit"] :is([data-highlighted], [cmdk-item][data-selected="true"]) {
   outline: 2px solid var(--cockpit-accent);
