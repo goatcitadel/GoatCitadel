@@ -79,6 +79,19 @@ function shouldIncludeRetryNote(source: ChatErrorSource | null | undefined): boo
   return source === "send" || source === "edit" || source === "image_generate" || source === "image_edit";
 }
 
+/**
+ * The Gateway holds one write lease per conversation and names the holder ("...wait for the current agent-send to
+ * finish..."). It cannot tell this window from another, so a send blocked by another send says only that another
+ * message is still being sent; any other holder or source gets the neutral sentence.
+ */
+function describeWriteConflict(value: string, source: ChatErrorSource | null | undefined): string {
+  const holder = /wait for the current (\S+) to finish/i.exec(value)?.[1] ?? "";
+  if (source === "send" && holder.toLowerCase().startsWith("agent-send")) {
+    return "Another message is still being sent in this conversation. Your message is still in the box; send it again when that one finishes.";
+  }
+  return "Another change to this conversation is still finishing. Try again in a moment.";
+}
+
 export function describeChatUiError(
   value?: string | null,
   source: ChatErrorSource | null = "other",
@@ -112,8 +125,7 @@ export function describeChatUiError(
       summary = `The provider request failed before the current step could finish.${retryNote}`;
     }
   } else if (normalized.includes("already in progress for session")) {
-    summary =
-      "Another window is sending in this conversation. Your message is still in the box; send it again when that answer finishes.";
+    summary = describeWriteConflict(value, source);
   } else if (normalized.includes("approval")) {
     summary = "The run is waiting for approval before it can continue.";
   } else if (normalized.includes("user input")) {

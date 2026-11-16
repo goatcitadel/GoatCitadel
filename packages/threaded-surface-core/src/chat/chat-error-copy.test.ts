@@ -109,15 +109,31 @@ describe("describeChatUiError", () => {
   });
 });
 
-describe("a send while another window is sending (U-CH-022)", () => {
-  const raw =
-    "A chat turn write is already in progress for session session-1. Wait for the current send to finish and retry.";
+describe("a write conflict on the conversation (U-CH-022)", () => {
+  const conflict = (holder: string) =>
+    `A chat turn write is already in progress for session session-1. Wait for the current ${holder} to finish and retry.`;
+  const MESSAGE =
+    "Another message is still being sent in this conversation. Your message is still in the box; send it again when that one finishes.";
+  const NEUTRAL = "Another change to this conversation is still finishing. Try again in a moment.";
 
-  it("says so in plain words and keeps the Gateway text as the raw error", () => {
-    expect(describeChatUiError(raw, "send")).toEqual({
-      summary:
-        "Another window is sending in this conversation. Your message is still in the box; send it again when that answer finishes.",
-      raw,
-    });
+  it.each(["agent-send", "agent-send/stream"])("says another message is being sent when a send meets %s", (holder) => {
+    expect(describeChatUiError(conflict(holder), "send")).toEqual({ summary: MESSAGE, raw: conflict(holder) });
   });
+
+  it.each(["edit-turn", "retry-turn", "chat.undo", "integration-reply"])(
+    "does not claim another message when a send meets %s",
+    (holder) => {
+      expect(describeChatUiError(conflict(holder), "send")?.summary).toBe(NEUTRAL);
+    },
+  );
+
+  it.each(["edit", "approval", "user_input", "branch_select", "refresh", "other"] as const)(
+    "uses the neutral sentence for source %s",
+    (source) => {
+      expect(describeChatUiError(conflict("agent-send"), source)).toEqual({
+        summary: NEUTRAL,
+        raw: conflict("agent-send"),
+      });
+    },
+  );
 });
