@@ -325,6 +325,37 @@ it("withholds a reveal changed during transport and clears revealed values after
   await act(async () => control.refresh());
   expect(control.revealed).toEqual({});
 });
+it("withholds a reveal when fresh metadata differs despite an older pending read", async () => {
+  owner = stored();
+  await mount();
+  await act(async () => control.inspect("secret"));
+  const before = owner;
+  const stale = deferred<Response>();
+  const reply = deferred<string>();
+  const fetchMock = vi.fn().mockReturnValueOnce(stale.promise).mockResolvedValueOnce(Response.json(initial()));
+  vi.stubGlobal("fetch", fetchMock);
+  api.read.mockResolvedValueOnce(before).mockImplementationOnce(getCitadelVaultSnapshot);
+  api.reveal.mockReturnValueOnce(reply.promise);
+
+  let pending!: Promise<void>;
+  await act(async () => {
+    pending = control.reveal("secret");
+  });
+  expect(api.reveal).toHaveBeenCalledExactlyOnceWith("citadel", "secret");
+  const background = getCitadelVaultSnapshot("citadel");
+  expect(fetchMock).toHaveBeenCalledOnce();
+  await act(async () => reply.resolve("synthetic-opened-value"));
+  const readsBeforeStaleResponse = fetchMock.mock.calls.length;
+  await act(async () => {
+    stale.resolve(Response.json(before));
+    expect(await background).toEqual(before);
+    await pending;
+  });
+
+  expect(control.revealed).toEqual({});
+  expect(control.revealErrors.secret).toBeTruthy();
+  expect(readsBeforeStaleResponse).toBe(2);
+});
 it("still reveals when only key versions and counts changed during transport", async () => {
   owner = stored();
   await mount();

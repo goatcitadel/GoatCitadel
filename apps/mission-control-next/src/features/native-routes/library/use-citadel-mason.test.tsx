@@ -3,6 +3,7 @@ import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MasonSession } from "@goatcitadel/contracts";
+import { getMasonSession } from "@goatcitadel/mission-control-shared/api/citadels-operations";
 import { useMasonEditor } from "./use-mason-editor";
 import { masonAttempt, masonAttemptKey, resetMasonAttemptsForTests } from "./mason-session-state";
 import { __resetSessionDraftsForTests } from "./session-drafts";
@@ -10,7 +11,10 @@ import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view
 import { deferredMason, masonBlueprint, masonSession, masonSummary } from "./mason.test-support";
 const api = vi.hoisted(() => ({ base: "http://one", createMasonSession: vi.fn(), getMasonSession: vi.fn(), getMasonSetupQuestions: vi.fn(), sendMasonMessage: vi.fn(), updateMasonSessionAnswers: vi.fn(), draftMasonBlueprint: vi.fn(), draftBlueprintFromMasonSession: vi.fn(), reviewMasonBlueprint: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
-vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({ getGatewayApiBaseUrl: () => api.base }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
+  getGatewayApiBaseUrl: () => api.base,
+}));
 let root: Root, container: HTMLDivElement, scope: string, owner: MasonSession, control: ReturnType<typeof useMasonEditor>;
 function Harness() { control = useMasonEditor(scope); return <p>{control.attempt.message}</p>; }
 async function render(next = scope) { scope = next; await act(async () => root.render(<StrictMode><Harness /></StrictMode>)); }
@@ -25,8 +29,60 @@ beforeEach(async () => {
   api.draftMasonBlueprint.mockResolvedValue(masonBlueprint); api.draftBlueprintFromMasonSession.mockImplementation(async () => { owner = { ...owner, status: "drafted" }; return masonBlueprint; }); api.reviewMasonBlueprint.mockResolvedValue(masonSummary);
   container = document.createElement("div"); document.body.append(container); root = createRoot(container); await render();
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); resetMasonAttemptsForTests(); __resetSessionDraftsForTests(); __resetSessionViewStateForTests(); });
+afterEach(async () => { await act(async () => root.unmount()); container.remove(); resetMasonAttemptsForTests(); __resetSessionDraftsForTests(); __resetSessionViewStateForTests(); vi.unstubAllGlobals(); });
 describe("shared Mason session owner", () => {
+  it.each(["answer save", "message", "Blueprint draft"])(
+    "settles the %s despite an older session read",
+    async (action) => {
+      await start();
+      if (action === "Blueprint draft") {
+        await input();
+        await act(async () => { expect(await control.saveAnswers()).toBe(true); });
+      } else if (action === "message") {
+        await act(async () => control.changeMessage("Run my team"));
+      } else {
+        await input();
+      }
+
+      const before = owner;
+      const stale = deferredMason<Response>();
+      const release = deferredMason<void>();
+      const fetchMock = vi.fn().mockReturnValueOnce(stale.promise).mockImplementationOnce(async () => Response.json(owner));
+      vi.stubGlobal("fetch", fetchMock);
+      api.getMasonSession.mockResolvedValueOnce(before).mockImplementationOnce(getMasonSession);
+      const mutation = action === "Blueprint draft" ? api.draftBlueprintFromMasonSession
+        : action === "message" ? api.sendMasonMessage : api.updateMasonSessionAnswers;
+      const callsBefore = mutation.mock.calls.length;
+      const commit = mutation.getMockImplementation()!;
+      mutation.mockImplementationOnce(async (...args) => {
+        await release.promise;
+        return commit(...args);
+      });
+
+      let pending!: Promise<boolean | void>;
+      await act(async () => {
+        pending = action === "Blueprint draft" ? control.draftAndReview()!
+          : action === "message" ? control.sendMessage() : control.saveAnswers();
+      });
+      expect(mutation).toHaveBeenCalledTimes(callsBefore + 1);
+      const background = getMasonSession(before.sessionId);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      await act(async () => release.resolve());
+      const readsBeforeStaleResponse = fetchMock.mock.calls.length;
+      await act(async () => {
+        stale.resolve(Response.json(before));
+        expect(await background).toEqual(before);
+        await pending;
+      });
+
+      expect(control.attempt.phase).toBe("idle");
+      expect(control.session).toEqual(owner);
+      expect(readsBeforeStaleResponse).toBe(2);
+      if (action === "Blueprint draft") expect(control.review?.session.status).toBe("drafted");
+      if (action === "answer save") expect(control.answersDraft.isDirty).toBe(false);
+      if (action === "message") expect(control.messageDraft.value).toBe("");
+    },
+  );
   it("creates and independently reads the global session without inventing a Citadel binding", async () => {
     await start(); expect(control.session).toEqual(owner); expect(api.createMasonSession).toHaveBeenCalledExactlyOnceWith(); expect(control.locked).toBe(false);
   });

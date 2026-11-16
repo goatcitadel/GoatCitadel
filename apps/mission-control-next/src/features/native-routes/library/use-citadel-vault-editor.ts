@@ -5,6 +5,7 @@ import {
   revealCitadelVaultSecret,
   storeCitadelVaultSecret,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { useSessionDraft } from "./session-drafts";
 import { useDraftLeave } from "./DraftLeaveDialog";
 import { describeVaultError, useCitadelVaultReview } from "./useCitadelVaultReview";
@@ -128,7 +129,7 @@ export function useCitadelVaultEditor(citadelId: string) {
         throw new Error("Changed metadata");
       const value = await revealCitadelVaultSecret(citadelId, secretId);
       if (!current()) return;
-      const after = await getCitadelVaultSnapshot(citadelId);
+      const after = await withFreshReads(() => getCitadelVaultSnapshot(citadelId));
       if (!current()) return;
       if (typeof value !== "string" || !hasVaultSnapshot(after, citadelId) || !sameVaultReview(before, after))
         throw new Error("Changed metadata");
