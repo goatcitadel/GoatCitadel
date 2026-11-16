@@ -1308,6 +1308,28 @@ describe("SkillHubLifecycleService", () => {
       expect(await scratchEntries(extraRoot)).toEqual([]);
     }, 90_000);
 
+    it("refuses a removal for a lineage with more versions than it can check", async () => {
+      const { harness, runtimeDir } = await revokedHarness();
+      const revoked = harness.storage.candidateSkillVersions.get("version-demo-1");
+      for (let index = 2; index <= 101; index += 1) {
+        harness.storage.candidateSkillVersions.upsert({
+          ...revoked,
+          versionId: `version-demo-${index}`,
+          supersedesVersionId: `version-demo-${index - 1}`,
+          // Inserted inactive, as the repository requires; the version count alone refuses the removal.
+          lifecycleState: "candidate",
+        });
+      }
+
+      const result = await harness.lifecycle.applyApprovedOperation(
+        await approve(harness, removeTemplate(harness, "operation-remove")),
+      );
+
+      expect(result.settlement.disposition).toBe("blocked");
+      expect(result.settlement.result).toMatchObject({ code: "lineage_too_large", boundaryCrossed: false });
+      await expect(fs.stat(path.join(runtimeDir, "SKILL.md"))).resolves.toBeTruthy();
+    }, 90_000);
+
     it("refuses a removal while an installed plugin still lists the skill", async () => {
       const { harness, runtimeDir } = await revokedHarness();
       await new CapabilityPluginStore(harness.asyncStorage.systemSettings).update("demo-plugin", () => ({

@@ -238,19 +238,17 @@ export const LINEAGE_VERSION_LIMIT = 100;
  * Why the intent's candidate lineage must not be removed now, or nothing when it may. A lineage that already has an
  * applied removal is refused: a removed lineage's runtime fence is gone, so a copy installed later from the same check
  * starts again at the same revisions, and only this tells an approval for the removed lineage apart from one for the
- * copy. A lineage with a version that is not revoked (or more versions than can be read) is refused too, as the guard
- * required when the removal was asked for.
+ * copy. A lineage with a version that is not revoked is refused too, as the guard required when the removal was asked
+ * for, and so is one with more versions than can be read (`lineage_too_large`), which can't be proven all revoked.
  */
 function lineageBlock(
   intent: SkillHubOperationIntentRecord,
   lineage: RuntimeRemovalContext["lineage"],
-): "lineage_already_removed" | "candidate_not_revoked" | undefined {
+): "lineage_already_removed" | "lineage_too_large" | "candidate_not_revoked" | undefined {
   if (lineage.removedCandidateIds.includes(intent.targetCandidateId!)) return "lineage_already_removed";
   const { versions } = lineage;
-  if (versions.length > LINEAGE_VERSION_LIMIT || versions.some((version) => version.lifecycleState !== "revoked")) {
-    return "candidate_not_revoked";
-  }
-  return undefined;
+  if (versions.length > LINEAGE_VERSION_LIMIT) return "lineage_too_large";
+  return versions.some((version) => version.lifecycleState !== "revoked") ? "candidate_not_revoked" : undefined;
 }
 
 export interface RuntimeRemovalContext {

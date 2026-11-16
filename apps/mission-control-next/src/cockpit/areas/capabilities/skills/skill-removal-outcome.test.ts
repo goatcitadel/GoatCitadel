@@ -11,7 +11,7 @@ describe("removalOutcomeNote", () => {
       "Not removed. The skill's folder no longer matches the files GoatCitadel checked, so nothing was deleted. Put the checked files back or delete the folder yourself, then remove the skill again.",
     );
     expect(removalOutcomeNote({ disposition: "manual_reconciliation", reason: "runtime_removal_unverifiable" })).toBe(
-      "Not removed. GoatCitadel couldn't confirm the skill's folder holds only the files it checked, so nothing was deleted. Replace the folder with the checked files or delete it yourself, then remove the skill again.",
+      "Not removed. GoatCitadel couldn't confirm the skill's folder holds only the files it checked, or couldn't move it aside, so nothing was deleted. Check the skill's folder: replace it with the checked files or delete it yourself, then remove the skill again.",
     );
     expect(removalOutcomeNote({ disposition: "manual_reconciliation" })).toContain("nothing was deleted");
   });
@@ -23,10 +23,22 @@ describe("removalOutcomeNote", () => {
     expect(removalOutcomeNote({ disposition: "blocked", reason: "stale_aggregate_revision" })).toBe(
       "Not removed. The skill changed after you asked. Remove it again if you still want it gone.",
     );
+    expect(removalOutcomeNote({ disposition: "blocked", reason: "skill_not_revoked" })).toBe(
+      "Not removed. The skill no longer reads as revoked, so nothing was deleted.",
+    );
+    // A refusal no retry can change never tells the operator to try again.
+    for (const reason of ["lineage_too_large", "artifact_tamper", "bundled_skill"]) {
+      const note = removalOutcomeNote({ disposition: "blocked", reason });
+      expect(note).toContain("can't be removed here");
+      expect(note).not.toMatch(/again/u);
+    }
     for (const reason of [
       "artifact_tamper",
       "bundled_skill",
       "skill_not_revoked",
+      "candidate_not_revoked",
+      "lineage_too_large",
+      "runtime_not_from_check",
       "lineage_already_removed",
       undefined,
     ]) {

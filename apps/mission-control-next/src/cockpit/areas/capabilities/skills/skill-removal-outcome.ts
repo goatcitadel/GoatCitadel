@@ -4,16 +4,25 @@ type Settlement = NonNullable<SkillHubOperatorApprovalSummary["settlement"]>;
 
 const FOLDER_CHANGED =
   "Not removed. The skill's folder no longer matches the files GoatCitadel checked, so nothing was deleted. Put the checked files back or delete the folder yourself, then remove the skill again.";
+/** The folder could not be proven the check's own (a link, an unreadable entry) or could not be moved aside. */
 const FOLDER_UNPROVEN =
-  "Not removed. GoatCitadel couldn't confirm the skill's folder holds only the files it checked, so nothing was deleted. Replace the folder with the checked files or delete it yourself, then remove the skill again.";
+  "Not removed. GoatCitadel couldn't confirm the skill's folder holds only the files it checked, or couldn't move it aside, so nothing was deleted. Check the skill's folder: replace it with the checked files or delete it yourself, then remove the skill again.";
 const NEEDS_A_LOOK =
   "Not removed. The skill's folder needs a look before it can be removed, and nothing was deleted. Check it, then remove the skill again.";
 
 const BLOCKED_BY_REASON: Readonly<Record<string, string>> = {
-  artifact_tamper: "Not removed. The files GoatCitadel checked for this skill have changed, so it won't act on them.",
+  artifact_tamper:
+    "Not removed. The files GoatCitadel checked for this skill have changed, so it won't act on them, and this skill can't be removed here.",
   plugin_still_installed: "Not removed. An installed plugin still lists this skill. Uninstall the plugin first.",
-  bundled_skill: "Not removed. This skill has the same name as one that ships with GoatCitadel.",
-  skill_not_revoked: "Not removed. The skill was switched on again.",
+  bundled_skill:
+    "Not removed. This skill has the same name as one that ships with GoatCitadel, so it can't be removed here.",
+  // Its record is missing, switched on, or a version of it isn't revoked: none reads as a revoked skill.
+  skill_not_revoked: "Not removed. The skill no longer reads as revoked, so nothing was deleted.",
+  candidate_not_revoked: "Not removed. Another version of this skill isn't revoked, so nothing was deleted.",
+  lineage_too_large:
+    "Not removed. This skill has more versions than GoatCitadel can check, so it can't be removed here.",
+  runtime_not_from_check:
+    "Not removed. The skill in use was installed from a different check than the one this removal names, so nothing was deleted.",
   lineage_already_removed:
     "Not removed. This copy of the skill was installed after an earlier removal. Remove it again.",
 };
