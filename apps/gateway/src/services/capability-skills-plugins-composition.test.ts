@@ -46,6 +46,33 @@ function wire(deploymentProfile: DeploymentProfile, skipSetting: boolean) {
   return { plugins: composeCapabilitySkillsAndPlugins(owners).capabilityPlugins, isFeatureEnabled };
 }
 
+describe("the skill removal cleanup count, as composed", () => {
+  it("never creates the skills folder on a read, and answers none when it is missing", async () => {
+    const rootDir = tempDir("gc-cleanup-count-");
+    const listSkillHubRemovalCleanupFailures = vi.fn(async () => [{ summary: { operationId: "operation-1" } }]);
+    const owners = {
+      config: {
+        rootDir,
+        assistant: { dataDir: "data", deploymentProfile: "local_dev" },
+        toolPolicy: { tools: {}, hooks: {} },
+      },
+      features: { isFeatureEnabled: vi.fn(async () => false) },
+      records: {
+        systemSettings: { get: vi.fn(async () => undefined), compareAndSet: vi.fn() },
+        governanceJourneyEvents: { listSkillHubRemovalCleanupFailures },
+      },
+      changePlanAdapters: { register: vi.fn() },
+      isClosing: () => true,
+    } as unknown as CapabilitySkillsAndPluginsOwners;
+
+    const { removalCleanup } = composeCapabilitySkillsAndPlugins(owners).capabilitySkills;
+
+    await expect(removalCleanup.countLeftovers()).resolves.toBe(0);
+    expect(listSkillHubRemovalCleanupFailures).toHaveBeenCalledOnce();
+    expect(fs.existsSync(path.join(rootDir, "skills", "extra"))).toBe(false);
+  });
+});
+
 describe("the Plugins list, as composed", () => {
   it.each([
     ["local_dev", true, true],

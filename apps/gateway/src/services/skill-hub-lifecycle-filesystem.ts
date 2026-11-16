@@ -32,6 +32,9 @@ interface BoundNode {
 
 class SkillHubLifecycleContentMismatchError extends Error {}
 
+/** A staging or recovery folder of one Skill Hub operation (see `projectionScratch`). */
+const SKILL_HUB_SCRATCH_NAME = /^\.skill-hub-[0-9a-f]{24}\.(?:staging|backup)$/u;
+
 /**
  * Filesystem boundary for lifecycle projections outside the immutable artifact store.
  *
@@ -227,6 +230,41 @@ export class SkillHubLifecycleFilesystem {
       throw new Error("Skill Hub lifecycle cleanup did not remove its bound directory.");
     }
     await this.assertDirectoryBinding(parentBinding, signal);
+  }
+
+  /**
+   * The names of Skill Hub's own staging and recovery folders (`.skill-hub-<token>.staging` or `.backup`) directly in a
+   * managed root, in name order. It only reads: each name is still checked through `pathKind` and `directoryMatches`
+   * before anything is done with it.
+   */
+  public async listScratchDirectories(managedRoot: string, signal: AbortSignal): Promise<string[]> {
+    const resolvedRoot = this.assertManagedRoot(managedRoot);
+    await this.ensureManagedRoot(resolvedRoot, signal);
+    const binding = await this.captureDirectoryBinding(resolvedRoot, signal);
+    const names = (await this.filesystem.readdir(resolvedRoot, signal))
+      .filter((name) => SKILL_HUB_SCRATCH_NAME.test(name))
+      .sort();
+    await this.assertDirectoryBinding(binding, signal);
+    return names;
+  }
+
+  /**
+   * What is at `target`, read only: unlike `pathKind` it never creates the managed root (a missing root, or a missing
+   * parent, means nothing is there) and it answers `link` for a symlink, junction or reparse point instead of throwing.
+   * Containment is checked the same way; any other failure (permissions, an unreadable entry) throws.
+   */
+  public async peekKind(
+    managedRoot: string,
+    target: string,
+    signal: AbortSignal,
+  ): Promise<"directory" | "missing" | "link" | "other"> {
+    const resolvedRoot = this.assertManagedRoot(managedRoot);
+    const targetPath = this.assertContained(resolvedRoot, target, false);
+    if (!(await this.tryLstat(resolvedRoot, signal))) return "missing";
+    const stat = await this.tryLstat(targetPath, signal);
+    if (!stat) return "missing";
+    if (stat.symbolicLink || stat.reparsePoint) return "link";
+    return stat.kind === "directory" ? "directory" : "other";
   }
 
   public async pathKind(

@@ -101,6 +101,7 @@ function owners(overrides: Partial<CapabilitySkillsOwners> = {}): CapabilitySkil
       createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("install_inactive", "pending") })),
     },
     skillHubSnapshots: { find: vi.fn(async () => undefined) },
+    skillHubSettlements: { findSettlementByOperationId: vi.fn(async () => undefined) },
     pluginRecords: { list: vi.fn(async () => []), listRemoved: vi.fn(async () => []) },
     skillSources: {
       readSourceCatalog: vi.fn(async () => ({ providers: [], items: [] })),

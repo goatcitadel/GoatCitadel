@@ -1,4 +1,5 @@
 import {
+  ConflictError,
   NotFoundError,
   SKILL_HUB_LIFECYCLE_APPROVAL_KIND,
   SKILL_LIFECYCLE_APPROVAL_KIND,
@@ -7,20 +8,29 @@ import {
   isTrustedGitForgeUrl,
   type ApprovalRequest,
   type ApprovalResolveInput,
+  type CandidateSkillVersionRecord,
   type CapabilitySkillActionOutcome,
   type CapabilitySkillInstall,
   type CapabilitySkillOperationRequest,
+  type CapabilitySkillRemovalOutcome,
+  type CapabilitySkillRemovalRead,
+  type CapabilitySkillRemovalRequest,
   type CapabilitySkillReviewRequest,
   type CapabilitySkillStateRequest,
   type DeploymentProfile,
+  type SkillHubOperationSettlementRecord,
+  type SkillLifecycleRecord,
   type SkillRuntimeState,
 } from "@goatcitadel/contracts";
 import { ApprovalExpiredAfterCommitError } from "./approval-lifecycle-service.js";
 import type { StoredPlugin } from "./capability-plugin-store.js";
 import { buildCapabilitySkillInstall } from "./capability-skill-install-projection.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
+import { isBundledSkillName } from "./plugin-skill-name-rules.js";
+import { leftoverPluginBlock } from "./skill-leftover-binding.js";
 import {
   PLUGIN_SKILL_STEP_DECLINED_NOTE,
+  PluginOwnedError,
   PluginSkillNeedsInstallError,
   pluginSkillSource,
 } from "./plugin-owned-refusal.js";
@@ -54,6 +64,9 @@ const UNTRUSTED_GIT_HOST_MESSAGE = "GoatCitadel installs skills only from GitHub
 const SOURCE_REFUSED_MESSAGE = "GoatCitadel can't check a skill from this source.";
 const CHECK_FAILED_MESSAGE = "This skill didn't pass GoatCitadel's checks.";
 const UNREADABLE_CHECK_MESSAGE = "This skill's check can't be read right now.";
+const NOT_REMOVABLE_MESSAGE = "This skill can't be removed.";
+const OTHER_WORKSPACE_MESSAGE = "This skill was added in another workspace. Remove it there.";
+const REMOVAL_NOT_FOUND_MESSAGE = "This removal wasn't found.";
 /** The review's own refusal codes are upper snake case; anything else names the request field it came in on. */
 const REVIEW_CODE = /^[A-Z][A-Z0-9_]*$/u;
 /** The request fields a refused source comes in on: the address (unsafe, unreadable, not allowed) or the pack. */
@@ -92,7 +105,7 @@ export interface CapabilitySkillActionSources {
    * One approval as the Inbox reads it: where it stands, and the state the skill was in when the owner made it
    * (`preview.currentState`, written in the same commit as the change it binds).
    */
-  readApproval(approvalId: string): Promise<Pick<ApprovalRequest, "preview" | "status">>;
+  readApproval(approvalId: string): Promise<Pick<ApprovalRequest, "kind" | "preview" | "status">>;
   /** One event on the approvals audit stream. */
   appendApprovalAudit(event: string, payload: Record<string, unknown>): Promise<void>;
   /** The install's deployment profile, read on every switch and step. */
@@ -123,7 +136,96 @@ export interface CapabilitySkillActionSources {
   ): Promise<{ sourceProvider: string; sourceRef: string; workspaceId: string } | undefined>;
   /** The plugin records, read through the Plugins tab's one store: which plugin lists a check as its skill. */
   listPluginRecords(): Promise<readonly PluginSkillListing[]>;
+  /** One loaded skill's runtime record (its state and where it came from), or undefined for a skill the list doesn't hold. */
+  readSkillLifecycle(workspaceId: string, skillId: string): Promise<CapabilitySkillLifecycleRead | undefined>;
+  /** The ids of the skills plugin uninstalls removed, as the Skills tab reads them for "Removed with <plugin>". */
+  listSkillsRemovedWithPlugins(): Promise<ReadonlySet<string>>;
+  /** Skill Hub's settlement of one operation, by its id, once its effect has settled. */
+  findSkillHubSettlement(operationId: string): Promise<SkillHubSettlementRead | undefined>;
+  /**
+   * For a skill with no runtime record: the check of the newest version of its one lineage that was never removed
+   * (`newestLeftoverCheck`), or undefined when there is none, or more than one lineage.
+   */
+  findLeftoverCheck(workspaceId: string, skillId: string): Promise<string | undefined>;
+  /** The uninstalled plugins remembered, with the skill ids each uninstall removed. */
+  listRemovedPlugins(): Promise<ReadonlyArray<{ pluginId: string; skillIds: readonly string[] }>>;
 }
+
+/** Why a skill with no runtime record isn't a left-over GoatCitadel removes from a plugin's check. */
+export type LeftoverRemovalRefusal =
+  | "bundled_skill"
+  | "has_record"
+  | "not_left_by_plugin"
+  | "plugin_installed"
+  | "lineage_unclear"
+  | "version_switched_on";
+
+export type LeftoverRemovalVerdict =
+  | { removable: true; snapshotId: string }
+  | { removable: false; reason: LeftoverRemovalRefusal };
+
+/** Each refusal in plain words, true wherever it is shown (the request's 409 and the plugin check's line). */
+export const LEFTOVER_REFUSAL_MESSAGES: Readonly<Record<LeftoverRemovalRefusal, string>> = {
+  bundled_skill:
+    "GoatCitadel can't remove it from here, because it has the same name as a skill that ships with GoatCitadel.",
+  has_record: "It now has a record in Capabilities › Skills, so GoatCitadel doesn't remove it from here.",
+  not_left_by_plugin: "GoatCitadel can't remove it from here, because no uninstalled plugin left it behind.",
+  plugin_installed: "GoatCitadel can't remove it from here while the plugin that added it is still installed.",
+  lineage_unclear:
+    "GoatCitadel can't remove it from here, because more than one installed copy of this skill matches it.",
+  version_switched_on: "GoatCitadel can't remove it from here, because a version of it was switched on before.",
+};
+
+/** What `newestLeftoverCheck` reads of a candidate version. */
+export type LeftoverCandidateVersion = Pick<
+  CandidateSkillVersionRecord,
+  | "candidateId"
+  | "versionId"
+  | "sourceKind"
+  | "lineageStatus"
+  | "workspaceId"
+  | "title"
+  | "upstreamSnapshotId"
+  | "updatedAt"
+>;
+
+/**
+ * The check of the newest version (by last update, then version id, as Skill Hub orders them) of the one governed Skill
+ * Hub lineage in the workspace whose skill is `skillId` and that was never removed. Undefined for any other skill id, no
+ * such lineage, or more than one.
+ */
+export function newestLeftoverCheck(
+  versions: readonly LeftoverCandidateVersion[],
+  removedCandidateIds: ReadonlySet<string>,
+  workspaceId: string,
+  skillId: string,
+): string | undefined {
+  if (!skillId.startsWith("extra:")) return undefined;
+  const name = skillId.slice("extra:".length);
+  const lineage = versions.filter(
+    (version) =>
+      version.sourceKind === "upstream_hub" &&
+      version.lineageStatus === "governed" &&
+      version.workspaceId === workspaceId &&
+      version.title === name &&
+      version.upstreamSnapshotId !== undefined &&
+      !removedCandidateIds.has(version.candidateId),
+  );
+  if (new Set(lineage.map((version) => version.candidateId)).size !== 1) return undefined;
+  const newest = [...lineage].sort(
+    (left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.versionId.localeCompare(left.versionId),
+  )[0];
+  return newest?.upstreamSnapshotId;
+}
+
+/** What a removal's read takes from Skill Hub's settlement of its operation. */
+export type SkillHubSettlementRead = Pick<
+  SkillHubOperationSettlementRecord,
+  "workspaceId" | "approvalId" | "operationId" | "disposition" | "result"
+>;
+
+/** What a removal reads of a skill's runtime record. */
+export type CapabilitySkillLifecycleRead = Pick<SkillLifecycleRecord, "lifecycleState" | "provenance">;
 
 /** What a plugin record says about its skills, for a step on one of them. */
 export type PluginSkillListing = Pick<
@@ -289,6 +391,149 @@ export class CapabilitySkillActionsService {
   }
 
   /**
+   * Asks to remove one revoked skill a plugin left behind: Skill Hub's approval owner creates the check's `remove`
+   * approval with the operator as requester (with the plugin's pass when the check came from a plugin that is now
+   * uninstalled). No skip applies: whatever the operator's setting or the deployment profile, the removal waits for the
+   * operator's approval and its danger review, because it deletes files. Only that approval's effect removes anything.
+   * A left-over never switched on has no record: its removal is asked for on the newest check of its one lineage that
+   * was never removed (`findLeftoverCheck`). Refused before any approval, as a 409: a skill that is neither a revoked
+   * Skill Hub install nor such a left-over (`not_removable`), one added in another workspace (`other_workspace`), and
+   * one an installed plugin still lists (`PLUGIN_OWNED`).
+   */
+  public async requestRemoval(
+    input: CapabilitySkillRemovalRequest & { actorId: string },
+  ): Promise<CapabilitySkillRemovalOutcome> {
+    const record = await this.sources.readSkillLifecycle(input.workspaceId, input.skillId);
+    // The same rule the Skills tab's `removable` uses: a revoked Skill Hub skill that a plugin uninstall left behind.
+    // One that was never switched on has no record: the one rule `leftoverRemoval` decides it, as the plugin check does.
+    let snapshotId: string | undefined;
+    if (record) {
+      const removedWithPlugin = (await this.sources.listSkillsRemovedWithPlugins()).has(input.skillId);
+      snapshotId =
+        record.lifecycleState === "revoked" && record.provenance?.source === "extra" && removedWithPlugin
+          ? record.provenance.sourceRef
+          : undefined;
+      if (snapshotId && isBundledSkillName(input.skillId.slice("extra:".length))) {
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: LEFTOVER_REFUSAL_MESSAGES.bundled_skill,
+          details: { reason: "bundled_skill" },
+        });
+      }
+    } else {
+      const verdict = await this.leftoverRemoval(input.workspaceId, input.skillId);
+      if (!verdict.removable) {
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: LEFTOVER_REFUSAL_MESSAGES[verdict.reason],
+          details: { reason: verdict.reason },
+        });
+      }
+      snapshotId = verdict.snapshotId;
+    }
+    const snapshot = snapshotId ? await this.sources.findSkillHubSnapshot(snapshotId) : undefined;
+    if (!snapshotId || !snapshot) throw notRemovable();
+    if (snapshot.workspaceId !== input.workspaceId) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: OTHER_WORKSPACE_MESSAGE,
+        details: { reason: "other_workspace" },
+      });
+    }
+    const plugins = await this.sources.listPluginRecords();
+    const owner = plugins.find((plugin) =>
+      plugin.pieces.some((piece) => piece.kind === "skill" && piece.skillSnapshotId === snapshotId),
+    );
+    if (owner) throw new PluginOwnedError({ pluginId: owner.pluginId, name: owner.name });
+    const source = pluginSkillSource(snapshot);
+    const step: CreateSkillHubOperatorApprovalInput = {
+      workspaceId: input.workspaceId,
+      snapshotId,
+      operationKind: "remove",
+      actorId: input.actorId,
+    };
+    const { approval } = source?.pluginId
+      ? await this.sources.createSkillHubApproval(step, { pluginPass: { pluginId: source.pluginId } })
+      : await this.sources.createSkillHubApproval(step);
+    const { approvalId } = approval;
+    const { workspaceId } = input;
+    // The same request hands back the approval it already made; an approved one is never resolved again. Otherwise it
+    // waits: a removal deletes files, so no setting skips its approval.
+    return { status: approval.status === "approved" ? "approved" : "waiting", approvalId, workspaceId };
+  }
+
+  /**
+   * Whether a skill with no runtime record is a left-over GoatCitadel removes from a plugin's check: the one rule the
+   * removal request and the plugin check share. It must not be named like a bundled skill, have no record, be named by
+   * an uninstalled plugin's tombstone, have exactly one lineage that was never removed (bound to its newest version's
+   * check), that check must have come with that very uninstalled plugin and no record of the plugin may exist now, and
+   * Skill Hub's own guard must allow its `remove` (every version a candidate or revoked). It only reads.
+   */
+  public async leftoverRemoval(workspaceId: string, skillId: string): Promise<LeftoverRemovalVerdict> {
+    const name = skillId.startsWith("extra:") ? skillId.slice("extra:".length) : undefined;
+    if (!name) return { removable: false, reason: "not_left_by_plugin" };
+    if (isBundledSkillName(name)) return { removable: false, reason: "bundled_skill" };
+    if (await this.sources.readSkillLifecycle(workspaceId, skillId)) return { removable: false, reason: "has_record" };
+    const removed = await this.sources.listRemovedPlugins();
+    if (!removed.some((tombstone) => tombstone.skillIds.includes(skillId))) {
+      return { removable: false, reason: "not_left_by_plugin" };
+    }
+    const snapshotId = await this.sources.findLeftoverCheck(workspaceId, skillId);
+    if (!snapshotId) return { removable: false, reason: "lineage_unclear" };
+    const snapshot = await this.sources.findSkillHubSnapshot(snapshotId);
+    if (!snapshot || snapshot.workspaceId !== workspaceId) return { removable: false, reason: "not_left_by_plugin" };
+    const block = leftoverPluginBlock(snapshot, skillId, { plugins: await this.sources.listPluginRecords(), removed });
+    if (block) return { removable: false, reason: block };
+    const { items } = await this.sources.listSkillHub({ workspaceId, snapshotIds: [snapshotId] });
+    const guard = items.find((item) => item.snapshotId === snapshotId)?.actions.remove;
+    if (!guard?.allowed) {
+      const blockers = guard?.blockers ?? [];
+      return {
+        removable: false,
+        reason: blockers.includes("CANDIDATE_NOT_REVOKED") ? "version_switched_on" : "lineage_unclear",
+      };
+    }
+    return { removable: true, snapshotId };
+  }
+
+  /**
+   * One removal, read by the approval the panel tracks: the approval's status and, once the effect has settled, the
+   * settlement Skill Hub recorded for that approval's own operation (never another approval's). It only reads. An
+   * approval that is not a Skill Hub removal in this workspace is not found (404), so no other approval can be read here.
+   */
+  public async readRemoval(input: { workspaceId: string; approvalId: string }): Promise<CapabilitySkillRemovalRead> {
+    const approval = await this.sources.readApproval(input.approvalId);
+    const intent = (approval.preview as { intent?: Record<string, unknown> } | undefined)?.intent;
+    if (
+      approval.kind !== SKILL_HUB_LIFECYCLE_APPROVAL_KIND ||
+      intent?.operationKind !== "remove" ||
+      intent.workspaceId !== input.workspaceId ||
+      typeof intent.operationId !== "string"
+    ) {
+      throw new NotFoundError(REMOVAL_NOT_FOUND_MESSAGE);
+    }
+    const read: CapabilitySkillRemovalRead = { approvalId: input.approvalId, approvalStatus: approval.status };
+    const settlement = await this.sources.findSkillHubSettlement(intent.operationId);
+    if (
+      !settlement ||
+      settlement.approvalId !== input.approvalId ||
+      settlement.workspaceId !== input.workspaceId ||
+      settlement.operationId !== intent.operationId
+    ) {
+      return read;
+    }
+    const { code, otherScratchFolders } = settlement.result;
+    return {
+      ...read,
+      settlement: {
+        disposition: settlement.disposition,
+        ...(typeof code === "string" ? { reason: code } : {}),
+        ...(typeof otherScratchFolders === "number" && otherScratchFolders > 0 ? { otherScratchFolders } : {}),
+      },
+    };
+  }
+
+  /**
    * Removes one switched-on skill a plugin's uninstall takes away: Skill Hub's approval owner creates the check's
    * `revoke` approval with the plugin's pass and the operator as requester, and this resolves that same approval as the
    * operator, so its own effect revokes the skill. Revoking only takes power away (Phase 3, Q1 A), so the skip setting
@@ -348,11 +593,15 @@ export class CapabilitySkillActionsService {
   ): Promise<CapabilitySkillActionOutcome | undefined> {
     try {
       const listings = await this.sources.listPluginRecords();
-      if (listings.some((plugin) =>
-        plugin.pluginId === pass.pluginId &&
-        plugin.installPlanId === pass.installPlanId &&
-        listsSkillStep(plugin, input),
-      )) return undefined;
+      if (
+        listings.some(
+          (plugin) =>
+            plugin.pluginId === pass.pluginId &&
+            plugin.installPlanId === pass.installPlanId &&
+            listsSkillStep(plugin, input),
+        )
+      )
+        return undefined;
     } catch (error) {
       this.reportFailure?.("plugin_records", error);
       return { status: "waiting", approvalId };
@@ -462,6 +711,14 @@ export class CapabilitySkillActionsService {
 }
 
 /** Whether a plugin record lets this check take its steps: in this workspace, installing or installed, and listing it. */
+function notRemovable(): ConflictError {
+  return new ConflictError({
+    code: "STATE_CONFLICT",
+    message: NOT_REMOVABLE_MESSAGE,
+    details: { reason: "not_removable" },
+  });
+}
+
 function listsSkillStep(
   plugin: PluginSkillListing,
   input: Pick<CapabilitySkillOperationRequest, "workspaceId" | "snapshotId">,

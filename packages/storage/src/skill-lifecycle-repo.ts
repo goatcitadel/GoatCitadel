@@ -20,6 +20,8 @@ export class SkillLifecycleRepository {
   private readonly upsertStmt;
   private readonly getStmt;
   private readonly listStmt;
+  private readonly deleteStmt;
+  private readonly deleteSavedStateStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
@@ -38,6 +40,8 @@ export class SkillLifecycleRepository {
     `);
     this.getStmt = db.prepare("SELECT * FROM skill_lifecycle WHERE skill_id = ?");
     this.listStmt = db.prepare("SELECT * FROM skill_lifecycle ORDER BY updated_at DESC, skill_id ASC");
+    this.deleteStmt = db.prepare("DELETE FROM skill_lifecycle WHERE skill_id = ?");
+    this.deleteSavedStateStmt = db.prepare("DELETE FROM skill_state WHERE skill_id = ?");
   }
 
   public upsert(input: SkillLifecycleRecord): SkillLifecycleRecord {
@@ -65,6 +69,19 @@ export class SkillLifecycleRepository {
   public find(skillId: string): SkillLifecycleRecord | undefined {
     const row = toSkillLifecycleRow(this.getStmt.get(skillId));
     return row ? mapSkillLifecycleRow(row) : undefined;
+  }
+
+  /** Removes the runtime record of one skill. Only the governed Skill Hub removal calls this. */
+  public delete(skillId: string): boolean {
+    return this.deleteStmt.run(skillId).changes > 0;
+  }
+
+  /**
+   * Removes one skill's saved runtime state (its `skill_state` row: on, paused or off, and its note), so a later install
+   * of the same skill starts clean. Only the governed Skill Hub removal calls this, in the transaction of `delete`.
+   */
+  public deleteSavedState(skillId: string): boolean {
+    return this.deleteSavedStateStmt.run(skillId).changes > 0;
   }
 
   public list(): SkillLifecycleRecord[] {

@@ -190,6 +190,35 @@ describe("CapabilitySystemService", () => {
     expect(harness.storage.skillLifecycle.find("invalid-import")?.provenance?.commitSha).toBeUndefined();
   });
 
+  it("writes no record or fence for a loaded imported skill whose folder is already gone", async () => {
+    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "goat-skill-gone-"));
+    tempRoots.push(parent);
+    const presentDir = path.join(parent, "present");
+    await fs.mkdir(presentDir);
+    const base = { declaredTools: [], requires: [], keywords: [], mtime: "2026-11-15T00:00:00.000Z" };
+    const loadedSkills: LoadedSkill[] = [
+      // The loader read it before a governed removal moved its folder aside and deleted its record.
+      {
+        ...base,
+        skillId: "extra:gone",
+        name: "gone",
+        source: "extra",
+        dir: path.join(parent, "gone"),
+        instructionBody: "",
+      },
+      { ...base, skillId: "extra:present", name: "present", source: "extra", dir: presentDir, instructionBody: "" },
+    ];
+    const harness = await createHarness({ loadedSkills });
+
+    const listed = await harness.service.listSkills();
+    await harness.service.listCatalog("inspectable");
+
+    expect(listed.map((skill) => skill.skillId)).toEqual(["extra:present"]);
+    expect(harness.storage.skillLifecycle.find("extra:gone")).toBeUndefined();
+    expect(harness.storage.skillAggregateRevisions.get("runtime_skill", "extra:gone")).toBeUndefined();
+    expect(harness.storage.skillLifecycle.find("extra:present")).toBeDefined();
+  });
+
   it("backfills skill lifecycle once per loaded skill set, not on every catalog build", async () => {
     const skill: LoadedSkill = {
       skillId: "memo-skill",

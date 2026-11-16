@@ -44,24 +44,49 @@ function uninstalling(piece: CapabilityPluginDetailPiece): CapabilityPluginDetai
 }
 
 describe("uninstallConfirmDescription", () => {
-  it("says up front that a plugin which added a skill can't come back", () => {
-    expect(uninstallConfirmDescription([{ ...NOTES, state: "added" }])).toBe(UNINSTALL_SKILL_STAYS);
+  it("says up front that a skill it added stays until you remove it, and the plugin can't come back before", () => {
+    expect(uninstallConfirmDescription([{ ...NOTES, state: "added" }], "Meeting tools")).toBe(UNINSTALL_SKILL_STAYS);
+    expect(UNINSTALL_SKILL_STAYS).toBe(
+      "This can't be undone here. A skill it added stays until you remove it in Capabilities › Skills. Until then it can't be installed again.",
+    );
+  });
+  it("says a skill revoked before the uninstall stays until you remove it", () => {
+    expect(uninstallConfirmDescription([{ ...NOTES, state: "removed" }], "Meeting tools")).toBe(UNINSTALL_SKILL_STAYS);
+  });
+  it("does not promise a removal for a skill that was never switched on", () => {
+    expect(uninstallConfirmDescription([{ ...NOTES, state: "installed_off" }], "Meeting tools")).toBe(
+      `This can't be undone here. ${NOTES.label} was never switched on, so it stays after the uninstall. To install Meeting tools again, check Meeting tools again and remove ${NOTES.label} there.`,
+    );
+    expect(
+      uninstallConfirmDescription(
+        [
+          { ...NOTES, state: "installed_off" },
+          { ...NOTES, pieceId: "b", state: "added" },
+        ],
+        "Meeting tools",
+      ),
+    ).toBe(UNINSTALL_SKILL_STAYS);
   });
   it("keeps the reinstall promise when no skill of its own is left", () => {
     const pack = { ...NOTES, pieceId: "pack", kind: "prompt_pack", state: "added" } as const;
-    expect(uninstallConfirmDescription([pack])).toBe(UNINSTALL_REINSTALLABLE);
-    expect(uninstallConfirmDescription([{ ...NOTES, check: { status: "already_there" }, state: "kept" }])).toBe(
-      UNINSTALL_REINSTALLABLE,
-    );
-    expect(uninstallConfirmDescription([{ ...NOTES, state: "failed" }])).toBe(UNINSTALL_REINSTALLABLE);
+    expect(uninstallConfirmDescription([pack], "Meeting tools")).toBe(UNINSTALL_REINSTALLABLE);
+    expect(
+      uninstallConfirmDescription([{ ...NOTES, check: { status: "already_there" }, state: "kept" }], "Meeting tools"),
+    ).toBe(UNINSTALL_REINSTALLABLE);
+    expect(uninstallConfirmDescription([{ ...NOTES, state: "failed" }], "Meeting tools")).toBe(UNINSTALL_REINSTALLABLE);
   });
   it("does not promise a reinstall when a skill's state can't be read", () => {
-    expect(uninstallConfirmDescription([{ ...NOTES, state: "unknown" }])).toBe(UNINSTALL_SKILL_UNKNOWN);
+    expect(uninstallConfirmDescription([{ ...NOTES, state: "unknown" }], "Meeting tools")).toBe(
+      UNINSTALL_SKILL_UNKNOWN,
+    );
     expect(
-      uninstallConfirmDescription([
-        { ...NOTES, state: "unknown" },
-        { ...NOTES, pieceId: "b", state: "added" },
-      ]),
+      uninstallConfirmDescription(
+        [
+          { ...NOTES, state: "unknown" },
+          { ...NOTES, pieceId: "b", state: "added" },
+        ],
+        "Meeting tools",
+      ),
     ).toBe(UNINSTALL_SKILL_STAYS);
   });
 });

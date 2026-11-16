@@ -22,7 +22,8 @@ import {
   computeSkillHubOperationResultSha256,
 } from "./skill-hub-operation-repo.js";
 import { SkillHubSnapshotRepository, type SkillHubSnapshotCreateInput } from "./skill-hub-snapshot-repo.js";
-import { createDatabase } from "./sqlite.js";
+import { DatabaseSync } from "node:sqlite";
+import { __sqliteInternals, createDatabase } from "./sqlite.js";
 
 const opened: DatabaseClient[] = [];
 const files: string[] = [];
@@ -367,6 +368,112 @@ describe("SkillHubOperationRepository", () => {
       },
     );
   });
+
+  it("accepts a remove intent with or without a runtime record, but never without its candidate", () => {
+    const { db, operations, manifest } = createStore();
+    const removal = removeIntent(manifest, "1");
+    insertApproval(db, removal);
+    assertCanonicalEqual(operations.createIntent(removal), removal);
+
+    // A skill never switched on has no runtime record: its removal expects the runtime absent.
+    const neverOnBase = {
+      ...withoutRequestHash(removeIntent(manifest, "2")),
+      expectedRuntimeAbsent: true,
+      expectedRuntimeRevision: undefined,
+    };
+    const neverOn = { ...neverOnBase, requestSha256: computeSkillHubOperationRequestSha256(neverOnBase) };
+    insertApproval(db, neverOn);
+    assertCanonicalEqual(operations.createIntent(neverOn), neverOn);
+
+    const noCandidateBase = {
+      ...withoutRequestHash(removeIntent(manifest, "3")),
+      expectedCandidateAbsent: true,
+      expectedCandidateRevision: undefined,
+    };
+    const noCandidate = { ...noCandidateBase, requestSha256: computeSkillHubOperationRequestSha256(noCandidateBase) };
+    insertApproval(db, noCandidate);
+    assert.throws(() => operations.createIntent(noCandidate), TypeError);
+  });
+
+  it("lists only the candidates of applied removals in the workspace", () => {
+    const { db, operations, manifest } = createStore();
+    const request = (suffix: string, targetCandidateId: string): SkillHubOperationIntentRecord => {
+      const requested = removeIntent(manifest, suffix, { targetCandidateId });
+      insertApproval(db, requested);
+      return operations.createIntent(requested);
+    };
+    const applied = request("applied", "candidate-a");
+    const blocked = request("blocked", "candidate-b");
+    request("waiting", "candidate-c");
+    settle(db, operations, applied, "applied");
+    settle(db, operations, blocked, "blocked");
+
+    assert.deepEqual(operations.listAppliedRemovalCandidateIds("workspace-1"), ["candidate-a"]);
+    assert.deepEqual(operations.listAppliedRemovalCandidateIds("workspace-2"), []);
+  });
+
+  it("an upgraded SQLite database accepts a remove intent and keeps every settlement linked", () => {
+    const { db, operations, manifest } = createStore();
+    const revoke = intent(manifest, {
+      operationId: "operation-old-revoke",
+      idempotencyKey: "operation:old-revoke",
+      approvalId: "approval-old-revoke",
+      operationKind: "revoke",
+      expectedCandidateRevision: 1,
+      expectedRuntimeRevision: 1,
+      expectedCandidateAbsent: false,
+      expectedRuntimeAbsent: false,
+    });
+    insertApproval(db, revoke);
+    settle(db, operations, operations.createIntent(revoke), "applied");
+    db.close();
+    opened.splice(0);
+    const dbPath = files.at(-1) as string;
+
+    // Node accepts `defensive` (needed to edit the stored schema) before its type declarations list it.
+    const writableSchema = { defensive: false } as ConstructorParameters<typeof DatabaseSync>[1];
+    const legacy = new DatabaseSync(dbPath, writableSchema);
+    legacy.exec("PRAGMA writable_schema = ON;");
+    legacy
+      .prepare(
+        `UPDATE sqlite_master SET sql = replace(replace(sql, '''activate'', ''revoke'', ''remove''', '''activate'', ''revoke'''),
+           '(operation_kind = ''remove'' AND expected_candidate_absent = 0)' || char(10) || '      OR (operation_kind = ''revoke''',
+           '(operation_kind = ''revoke''')
+         WHERE type = 'table' AND name = 'skill_hub_operation_intents'`,
+      )
+      .run();
+    legacy.exec("PRAGMA writable_schema = OFF;");
+    legacy.close();
+
+    const old = new DatabaseSync(dbPath);
+    try {
+      old.exec("PRAGMA foreign_keys = ON;");
+      const before = removeIntent(manifest, "before");
+      insertApproval(old as never, before);
+      assert.throws(() => insertRawIntent(old as never, before), /CHECK constraint/u);
+      old.exec("PRAGMA foreign_keys = OFF;");
+      old.exec("BEGIN IMMEDIATE;");
+      __sqliteInternals.applySchemaMigrationForTest(281, old);
+      old.exec("COMMIT;");
+      old.exec("PRAGMA foreign_keys = ON;");
+      assert.deepEqual(old.prepare("PRAGMA foreign_key_check").all(), []);
+      assert.equal(
+        (old.prepare("SELECT COUNT(*) AS count FROM skill_hub_operation_settlements").get() as { count: number }).count,
+        1,
+      );
+    } finally {
+      old.close();
+    }
+
+    const reopened = createDatabase({ dbPath });
+    opened.push(reopened);
+    const reopenedOperations = new SkillHubOperationRepository(reopened);
+    const removal = removeIntent(manifest, "after");
+    insertApproval(reopened, removal);
+    assertCanonicalEqual(reopenedOperations.createIntent(removal), removal);
+    assert.ok(reopenedOperations.findSettlementByOperationId("operation-old-revoke"));
+    assert.deepEqual(reopened.prepare("PRAGMA foreign_key_check").all(), []);
+  });
 });
 
 function createStore(): {
@@ -419,6 +526,51 @@ function intent(
     ...overrides,
   };
   return { ...base, requestSha256: computeSkillHubOperationRequestSha256(base) };
+}
+
+function removeIntent(
+  manifest: SkillContentIntegrityManifest,
+  suffix: string,
+  overrides: Partial<Omit<SkillHubOperationIntentRecord, "requestSha256">> = {},
+): SkillHubOperationIntentRecord {
+  return intent(manifest, {
+    operationId: `operation-remove-${suffix}`,
+    idempotencyKey: `operation:remove:${suffix}`,
+    approvalId: `approval-remove-${suffix}`,
+    operationKind: "remove",
+    expectedCandidateRevision: 2,
+    expectedRuntimeRevision: 3,
+    expectedCandidateAbsent: false,
+    expectedRuntimeAbsent: false,
+    ...overrides,
+  });
+}
+
+/** Settles an intent with the evidence and Journey records the settlement binds to. */
+function settle(
+  db: DatabaseClient,
+  operations: SkillHubOperationRepository,
+  operation: SkillHubOperationIntentRecord,
+  disposition: SkillHubOperationSettlementRecord["disposition"],
+): void {
+  const result = { status: disposition };
+  const resultSha256 = computeSkillHubOperationResultSha256(result);
+  const id = operation.operationId;
+  insertEvidenceAndJourney(db, operation, "artifact-1", `evidence-${id}`, `journey-${id}`, resultSha256);
+  operations.createSettlement({
+    settlementId: `settlement-${id}`,
+    operationId: id,
+    workspaceId: operation.workspaceId,
+    approvalId: operation.approvalId,
+    contentTreeSha256: operation.contentTreeSha256,
+    disposition,
+    observedTreeSha256: disposition === "applied" ? operation.contentTreeSha256 : "f".repeat(64),
+    evidenceEnvelopeId: `evidence-${id}`,
+    journeyEventId: `journey-${id}`,
+    result,
+    resultSha256,
+    settledAt: "2026-07-13T18:05:00.000Z",
+  });
 }
 
 function insertApproval(

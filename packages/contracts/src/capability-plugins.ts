@@ -83,7 +83,16 @@ export function isCapabilityPluginIgnoredPart(value: unknown): value is Capabili
 export type CapabilityPluginPieceCheck =
   | { status: "ready" }
   | { status: "already_there" }
-  | { status: "blocked"; code: string; message: string };
+  | {
+      status: "blocked";
+      code: string;
+      message: string;
+      /**
+       * A skill an earlier install of this plugin left behind and never switched on: the skill id its removal is asked
+       * for (`POST /api/v1/capabilities/skills/removals`), here, where nothing else lists it. Absent otherwise.
+       */
+      removableSkillId?: string;
+    };
 
 export interface CapabilityPluginPieceView {
   pieceId: string;

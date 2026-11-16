@@ -5,6 +5,9 @@ import type {
   CapabilitySkillInstall,
   CapabilitySkillInstallsResponse,
   CapabilitySkillOperationRequest,
+  CapabilitySkillRemovalOutcome,
+  CapabilitySkillRemovalRead,
+  CapabilitySkillRemovalRequest,
   CapabilitySkillReviewRequest,
   CapabilitySkillStateRequest,
   CapabilitySkillsResponse,
@@ -125,4 +128,29 @@ export async function requestCapabilitySkillOperation(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+/**
+ * Asks to remove one revoked skill a plugin left behind. The outcome says whether the removal's approval was granted
+ * already or waits for the operator, and the workspace that approval belongs to. No setting skips a removal's approval.
+ */
+export async function requestCapabilitySkillRemoval(
+  input: CapabilitySkillRemovalRequest,
+): Promise<CapabilitySkillRemovalOutcome> {
+  return request<CapabilitySkillRemovalOutcome>("/api/v1/capabilities/skills/removals", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/** One removal, read by its approval in its workspace: the approval's status, and how the removal settled once it has. */
+export async function fetchCapabilitySkillRemoval(
+  input: { workspaceId: string; approvalId: string },
+  options: { signal?: AbortSignal } = {},
+): Promise<CapabilitySkillRemovalRead> {
+  const query = new URLSearchParams({ workspaceId: input.workspaceId });
+  return request<CapabilitySkillRemovalRead>(
+    `/api/v1/capabilities/skills/removals/${encodeURIComponent(input.approvalId)}?${query}`,
+    { cache: "no-store", ...(options.signal ? { signal: options.signal } : {}) },
+  );
 }

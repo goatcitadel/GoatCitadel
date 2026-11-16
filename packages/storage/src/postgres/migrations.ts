@@ -11,6 +11,7 @@ import { MAIL_DRAFTS_POSTGRES_SQL, MAIL_DRAFTS_SCHEMA_CONVERGENCE_POSTGRES_SQL }
 import { PAUSE_DORMANT_NO_AGENT_CRON_JOBS_POSTGRES_SQL } from "../pause-dormant-no-agent-cron.js";
 import { RESET_CHAT_REVIEW_DEPTH_POSTGRES_SQL } from "../chat-review-depth-reset-migration.js";
 import { MOBILE_PUSH_APPROVAL_RESOLVED_POSTGRES_SQL } from "../mobile-push-classification-migration.js";
+import { SKILL_HUB_REMOVE_OPERATION_POSTGRES_SQL } from "../skill-hub-remove-operation-migration.js";
 import { CHAT_ROUTED_CONTEXT_ADMISSION_POSTGRES_SQL } from "../chat-routed-context-admission-schema.js";
 import { HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL } from "../heartbeat-feature-binding-schema.js";
 import { COMMITMENT_OCCURRENCE_POSTGRES_SQL } from "../commitment-occurrence-schema.js";
@@ -15384,6 +15385,14 @@ END
 $approval_file_schema_convergence$;
     `,
     integritySha256: "a0e564660459fcfb4846661dc4905abbaac38835a88dd6ab47d46719627d8139",
+  },
+  {
+    // Parity with SQLite v281: a governed removal of a skill a plugin left behind is the operation kind `remove`.
+    // Replaces the two operation_kind CHECKs on the intents; rows are unchanged.
+    version: 233,
+    name: "skill_hub_remove_operation_kind",
+    sql: SKILL_HUB_REMOVE_OPERATION_POSTGRES_SQL,
+    integritySha256: "e96e1d832500daef2d69ae95ef6072d79e9f6540eeccb57e83168afb21dfe30d",
   },
 ];
 

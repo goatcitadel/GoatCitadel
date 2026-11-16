@@ -174,6 +174,8 @@ export function buildCapabilitySkillItems(input: {
         ...(pendingApprovalId ? { pendingApprovalId } : {}),
         ...(fromPlugin ? { fromPlugin: { pluginId: fromPlugin.pluginId, name: fromPlugin.name } } : {}),
         ...(removedWith ? { removedWithPlugin: { name: removedWith.name } } : {}),
+        // Revoked and listed by no installed plugin: the AI can't use it and GoatCitadel can remove it.
+        ...(removedWith && skill.lifecycleState === "revoked" ? { removable: true } : {}),
       };
     })
     .sort((a, b) => compareCodeUnits(a.name, b.name) || compareCodeUnits(a.skillId, b.skillId));

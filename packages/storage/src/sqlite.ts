@@ -130,6 +130,7 @@ import { createRemoteWorkerMeshNodeAdmissionSchema } from "./sqlite/remote-worke
 import { upgradeGovernedRemediationRecipeBinding } from "./sqlite/governed-remediation-recipe-binding.js";
 import { createMobilePushSchema } from "./sqlite/mobile-push-schema.js";
 import { upgradeMobilePushDeliveryClassificationsSqlite } from "./mobile-push-classification-migration.js";
+import { upgradeSkillHubOperationKindsSqlite } from "./skill-hub-remove-operation-migration.js";
 import { createMobileApprovalKeySchema } from "./sqlite/mobile-approval-key-schema.js";
 import { BoundedStatementCache } from "./sqlite-statement-cache.js";
 
@@ -7571,6 +7572,12 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         version: 280,
         name: "managed_project_file_revisions",
         up: (db) => db.exec(MANAGED_PROJECT_FILE_SCHEMA_SQL),
+      },
+      // A skill a plugin left behind can be removed through a governed Skill Hub step (operation kind `remove`).
+      {
+        version: 281,
+        name: "skill_hub_remove_operation_kind",
+        up: upgradeSkillHubOperationKindsSqlite,
       },
     ],
   },

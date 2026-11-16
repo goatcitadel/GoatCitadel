@@ -98,7 +98,7 @@ function UninstallConfirmation({
       open={open}
       onOpenChange={onOpenChange}
       title={`Uninstall ${detail.name}?`}
-      description={uninstallConfirmDescription(detail.pieces)}
+      description={uninstallConfirmDescription(detail.pieces, detail.name)}
     >
       <div className="space-y-3 text-sm text-fg-secondary">
         <ul className="space-y-1">

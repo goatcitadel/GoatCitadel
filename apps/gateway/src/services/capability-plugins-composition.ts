@@ -29,7 +29,11 @@ import {
 import { pluginSecretLogs } from "./capability-plugin-secret-logs.js";
 import { pluginUninstallSources } from "./capability-plugin-uninstall-composition.js";
 import { CapabilityPluginsRouteService, type CapabilityPluginsSource } from "./capability-plugins-route-service.js";
-import type { PluginUninstallRevokeInput, PluginUninstallRevokeOutcome } from "./capability-skill-actions-service.js";
+import type {
+  LeftoverRemovalVerdict,
+  PluginUninstallRevokeInput,
+  PluginUninstallRevokeOutcome,
+} from "./capability-skill-actions-service.js";
 import type { CapabilitySkillsOwners } from "./capability-skills-composition.js";
 import { TEMP_REMOVAL_OPTIONS, lookUpHostAddresses } from "./hardened-git.js";
 import { HookSecretCustodyService } from "./hook-secret-custody-service.js";
@@ -111,6 +115,8 @@ export interface CapabilityPluginsOwners extends CapabilityPluginInstallOwners {
    * the plugin switched on, and never asks Skill Hub or approves anything itself.
    */
   revokeSkill(input: PluginUninstallRevokeInput): Promise<PluginUninstallRevokeOutcome>;
+  /** The Skills tab's rule for a never-switched-on left-over: whether its removal is offered on a plugin's check. */
+  readLeftoverRemoval(workspaceId: string, skillId: string): Promise<LeftoverRemovalVerdict>;
   /**
    * The Inbox's owner: one approval, to tell whether a skill's removal still waits for it, and the waiting approvals,
    * page by page, where a skill's own step left waiting is found.
@@ -284,6 +290,7 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
       }
     },
     lookupHost: (hostname) => lookUpHostAddresses(hostname),
+    readLeftoverRemoval: (workspaceId, skillId) => owners.readLeftoverRemoval(workspaceId, skillId),
     readSkillCheck: async (workspaceId, snapshotId) =>
       (await readSkillChecks(workspaceId, [snapshotId])).get(snapshotId),
     findInstalled: (pluginId) => store.get(pluginId),
