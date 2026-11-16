@@ -3,6 +3,7 @@ import type {
   DocsIngestInput,
   KnowledgeApprovalResult,
   KnowledgeApprovalResultQuery,
+  KnowledgeDocumentListResponse,
   EmbeddingIndexInput,
   EmbeddingQueryInput,
   MemoryBatchMutationRequest,
@@ -149,9 +150,18 @@ export async function knowledgeEmbeddingsIndex(
   });
 }
 
-export async function fetchKnowledgeApprovalResult(approvalId: string, input: KnowledgeApprovalResultQuery): Promise<KnowledgeApprovalResult> {
-  const query = new URLSearchParams({ workspaceId: input.workspaceId, sessionId: input.sessionId, toolName: input.toolName });
-  return request<KnowledgeApprovalResult>(`/api/v1/knowledge/approvals/${encodeURIComponent(approvalId)}/result?${query}`);
+export async function fetchKnowledgeApprovalResult(
+  approvalId: string,
+  input: KnowledgeApprovalResultQuery,
+): Promise<KnowledgeApprovalResult> {
+  const query = new URLSearchParams({
+    workspaceId: input.workspaceId,
+    sessionId: input.sessionId,
+    toolName: input.toolName,
+  });
+  return request<KnowledgeApprovalResult>(
+    `/api/v1/knowledge/approvals/${encodeURIComponent(approvalId)}/result?${query}`,
+  );
 }
 
 export async function knowledgeEmbeddingsQuery(
@@ -558,4 +568,14 @@ function buildStructuredMemoryParams(input?: {
   if (input?.query) params.set("query", input.query);
   params.set("limit", String(Math.max(1, Math.min(input?.limit ?? 100, 500))));
   return params;
+}
+
+export async function fetchKnowledgeDocuments(
+  query: { namespace?: string; limit?: number } = {},
+): Promise<KnowledgeDocumentListResponse> {
+  const params = new URLSearchParams();
+  if (query.namespace) params.set("namespace", query.namespace);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  const suffix = params.size ? `?${params}` : "";
+  return request<KnowledgeDocumentListResponse>(`/api/v1/knowledge/documents${suffix}`);
 }

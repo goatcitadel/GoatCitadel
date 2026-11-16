@@ -84,3 +84,86 @@ it("shows the question immediately and never mounts an answer form for a retired
     host.remove();
   }
 });
+
+function blockerProps(pendingUserInput: ChatUserInputPromptRecord | null) {
+  return {
+    pendingApproval: null,
+    pendingUserInput,
+    selectedSessionId: "conversation-skip",
+    approvalPending: false,
+    userInputPending: false,
+    onApprovePending: vi.fn(),
+    onDenyPending: vi.fn(),
+    onSubmitUserInput: vi.fn(),
+    onRefreshThread: vi.fn(),
+  };
+}
+
+async function renderSkippable(prompt: ChatUserInputPromptRecord) {
+  questionCode.release();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers props={blockerProps(prompt)} />
+      </QueryClientProvider>,
+    ),
+  );
+  const cleanup = async () => {
+    await act(async () => root.unmount());
+    client.clear();
+    host.remove();
+  };
+  return { host, cleanup };
+}
+
+function press(host: HTMLElement, name: string) {
+  const button = [...host.querySelectorAll("button")].find((candidate) => candidate.textContent === name);
+  expect(button, name).toBeDefined();
+  return act(async () => button!.click());
+}
+
+it("replaces a skipped optional question with a line you can undo, and nothing is sent", async () => {
+  const prompt: ChatUserInputPromptRecord = {
+    promptId: "prompt-skip",
+    turnId: "turn-a",
+    kind: "text",
+    title: "Pick a name",
+    question: "What name?",
+    required: false,
+    delivery: "background",
+  };
+  const { host, cleanup } = await renderSkippable(prompt);
+  try {
+    await vi.waitFor(() => expect(host.querySelector('form[aria-label="Pending question"]')).not.toBeNull());
+    await press(host, "Skip question");
+    expect(host.querySelector("form")).toBeNull();
+    expect(host.textContent).toContain("You skipped “Pick a name”. The work goes on without your answer.");
+    await press(host, "Show the question again");
+    await vi.waitFor(() => expect(host.querySelector('form[aria-label="Pending question"]')).not.toBeNull());
+    expect(host.textContent).not.toContain("You skipped");
+  } finally {
+    await cleanup();
+  }
+});
+
+it("offers no skip for a question that holds the turn", async () => {
+  const prompt: ChatUserInputPromptRecord = {
+    promptId: "prompt-hold",
+    turnId: "turn-a",
+    kind: "text",
+    title: "Pick",
+    question: "Which?",
+    required: true,
+  };
+  const { host, cleanup } = await renderSkippable(prompt);
+  try {
+    await vi.waitFor(() => expect(host.querySelector('form[aria-label="Pending question"]')).not.toBeNull());
+    expect(host.textContent).not.toContain("Skip question");
+  } finally {
+    await cleanup();
+  }
+});

@@ -145,6 +145,43 @@ describe("cockpit saved-board editor", () => {
     expect(container.querySelector('[aria-label="Draft live widget preview"]')).toBeNull();
     expect(container.querySelector("input")?.value).toBe("Operator board");
   });
+  it("previews the unsaved layout at the columns, rows and sizes it will be saved with", async () => {
+    vi.mocked(fetchHealthSummary).mockResolvedValue({
+      daemonStatus: { running: true },
+      systemVitals: { hostname: "BLD", memoryUsedBytes: 50, memoryTotalBytes: 100 },
+    } as never);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <CockpitBoardEditor
+            workspaceId="workspace-a"
+            accessAvailable
+            board={board({
+              placements: [{ widgetId: "runtime-1", kind: "runtime_truth_summary", x: 2, y: 1, width: 4, height: 2 }],
+            })}
+            onClose={onClose}
+            onSaved={onSaved}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    await click("Preview live widgets");
+    const grid = container.querySelector<HTMLElement>('[aria-label="Operator board preview widget grid"]');
+    expect(grid).not.toBeNull();
+    const placement = grid!.querySelector<HTMLElement>(".cockpit-saved-board-placement");
+    expect(placement?.style.getPropertyValue("--board-column-start")).toBe("3");
+    expect(placement?.style.getPropertyValue("--board-column-span")).toBe("4");
+    expect(placement?.style.getPropertyValue("--board-row-start")).toBe("2");
+    expect(placement?.style.getPropertyValue("--board-row-span")).toBe("2");
+    expect(container.querySelector('[aria-label="Draft live widget preview"]')?.textContent).toContain(
+      "Unsaved layout preview.",
+    );
+  });
+  it("labels the preview of a board with no name yet as a new board", async () => {
+    await render(false);
+    await click("Preview live widgets");
+    expect(container.querySelector('[aria-label="New board preview widget grid"]')).not.toBeNull();
+  });
   it("retains the editor and blocks saving when the current access read is unavailable", async () => {
     await render();
     await click("Review changes");

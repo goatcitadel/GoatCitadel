@@ -50,13 +50,13 @@ async function setup(path = "proof.txt") {
     ),
   );
   for (const [selector, value] of [
-    ["input", path],
+    ['input:not([type="file"])', path],
     ["textarea", "proof"],
   ]) {
     const input = container.querySelector(selector!)!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(
-        selector === "input" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype,
+        selector !== "textarea" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype,
         "value",
       )!.set!.call(input, value);
       input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -83,8 +83,50 @@ it("retains a successful owner receipt inside the actual portal after query inva
   expect(dialog.textContent).toContain("GoatCitadel accepted proof.txt (5 B)");
   expect(dialog.textContent).not.toContain("private");
   expect(uploadFile).toHaveBeenCalledExactlyOnceWith("proof.txt", "proof", { expectAbsent: true });
-  await click("Upload file");
+  expect(cta("Upload file")).toBeUndefined();
+  await click("Close");
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(uploadFile).toHaveBeenCalledTimes(1);
+});
+async function choose(file: File) {
+  const chooser = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(chooser, "files", { value: [file], configurable: true });
+  await act(async () => {
+    chooser.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+const pathInput = () => container.querySelector<HTMLInputElement>('input:not([type="file"])')!;
+async function renderForm() {
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <LibraryFileUpload workspaceId="one" citadelId="personal" />
+      </QueryClientProvider>,
+    ),
+  );
+}
+it("fills the path and the text from a chosen file", async () => {
+  await renderForm();
+  await choose(new File(["hello"], "note.txt"));
+  await vi.waitFor(() => expect(container.querySelector("textarea")?.value).toBe("hello"));
+  expect(pathInput().value).toBe("note.txt");
+  expect(container.textContent).toContain("Or type the path and paste the text below.");
+});
+it("keeps a path that was already typed when a file is chosen", async () => {
+  await renderForm();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(pathInput(), "docs/mine.txt");
+    pathInput().dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await choose(new File(["hello"], "note.txt"));
+  await vi.waitFor(() => expect(container.querySelector("textarea")?.value).toBe("hello"));
+  expect(pathInput().value).toBe("docs/mine.txt");
+});
+it("says why a chosen file was refused and leaves the form alone", async () => {
+  await renderForm();
+  await choose(new File(["a\u0000b"], "x.bin"));
+  await vi.waitFor(() => expect(container.textContent).toContain("isn't plain text"));
+  expect(container.querySelector("textarea")?.value).toBe("");
 });
 it.each([
   ["./proof.txt", "proof.txt"],
@@ -196,13 +238,13 @@ it("keeps the cautious wording when the file check cannot run or is still runnin
     ),
   );
   for (const [selector, value] of [
-    ["input", "proof.txt"],
+    ['input:not([type="file"])', "proof.txt"],
     ["textarea", "proof"],
   ]) {
     const input = container.querySelector(selector!)!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(
-        selector === "input" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype,
+        selector !== "textarea" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype,
         "value",
       )!.set!.call(input, value);
       input.dispatchEvent(new Event("input", { bubbles: true }));

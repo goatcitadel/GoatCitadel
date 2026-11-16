@@ -299,11 +299,16 @@ it("hands focus back to the setting after the approval is decided (U-GL-047)", a
   expect(dialog()).not.toBeNull();
   await act(async () => root.render(section(true, true)));
   await act(async () => button("Approve once")!.click());
-  for (let tick = 0; tick < 3; tick += 1)
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    });
-  expect(document.activeElement?.getAttribute("aria-label")).toBe("Show model reasoning in Chat");
+  // Focus returns after the dialog closes, over several renders: wait for it instead of a fixed delay.
+  await vi.waitFor(
+    async () => {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      });
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Show model reasoning in Chat");
+    },
+    { timeout: 3000 },
+  );
 });
 
 const withSetting = (dialog: boolean, saveDisabled = false) => (

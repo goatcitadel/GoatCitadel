@@ -21,12 +21,39 @@ import {
   type BackupReview,
 } from "./health-backup-action";
 
+function LatestBackupLocation({
+  latestBackup,
+}: {
+  latestBackup: { createdAt: string; outputPath?: string } | null | undefined;
+}) {
+  if (latestBackup === undefined) return null;
+  if (latestBackup === null)
+    return <p className="text-xs text-fg-muted">Backups are saved in this installation's backup folder.</p>;
+  if (!latestBackup.outputPath)
+    return (
+      <p className="text-xs text-fg-muted">
+        Latest backup saved <TimeText value={latestBackup.createdAt} />.
+      </p>
+    );
+  return (
+    <div className="grid gap-1 text-xs text-fg-muted">
+      <p>
+        Latest backup saved <TimeText value={latestBackup.createdAt} /> in this folder:
+      </p>
+      <p className="break-all font-mono text-xs">{latestBackup.outputPath}</p>
+    </div>
+  );
+}
+
 export function HealthBackupAction({
   onRefresh,
   readAvailable = true,
+  latestBackup,
 }: {
   onRefresh?: () => unknown | Promise<unknown>;
   readAvailable?: boolean;
+  /** The latest listed backup; null when the read found none; undefined when it was not read (nothing is said). */
+  latestBackup?: { createdAt: string; outputPath?: string } | null;
 }) {
   const [open, setOpen] = useState(false),
     [reading, setReading] = useState(false),
@@ -106,6 +133,7 @@ export function HealthBackupAction({
           Backup status is unavailable or refreshing. Back up now needs a current status check.
         </p>
       ) : null}
+      <LatestBackupLocation latestBackup={latestBackup} />
       {message ? (
         <Callout tone={attempt.phase === "uncertain" || attempt.phase === "failed" ? "error" : "info"}>
           {message}

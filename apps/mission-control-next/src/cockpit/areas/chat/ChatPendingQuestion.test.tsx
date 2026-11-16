@@ -40,6 +40,44 @@ describe("Cockpit optional question", () => {
     }
   });
 
+  it("offers Skip question for an optional background prompt and calls onSkip", async () => {
+    const container = document.createElement("div"),
+      root = createRoot(container),
+      skip = vi.fn();
+    try {
+      await act(async () => {
+        root.render(<ChatPendingQuestion prompt={prompt} pending={false} onSubmit={vi.fn()} onSkip={skip} />);
+      });
+      const button = [...container.querySelectorAll("button")].find((b) => b.textContent === "Skip question");
+      expect(button).toBeDefined();
+      expect(button!.getAttribute("type")).toBe("button");
+      await act(async () => button!.click());
+      expect(skip).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it("offers no Skip question for a blocking prompt", async () => {
+    const container = document.createElement("div"),
+      root = createRoot(container);
+    try {
+      await act(async () => {
+        root.render(
+          <ChatPendingQuestion
+            prompt={{ ...prompt, required: true, delivery: undefined }}
+            pending={false}
+            onSubmit={vi.fn()}
+            onSkip={vi.fn()}
+          />,
+        );
+      });
+      expect(container.textContent).not.toContain("Skip question");
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it.each([true, undefined])("does not label required or legacy input as background (%s)", async (required) => {
     const container = document.createElement("div"),
       root = createRoot(container);

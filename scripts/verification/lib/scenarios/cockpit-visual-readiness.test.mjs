@@ -85,6 +85,8 @@ test("chat capture waits for the transcript to sit at its latest turn", async ()
   assert.equal(atLatest({ scrollTop: 740 }), true);
   assert.equal(atLatest({ scrollTop: 0 }), false);
   assert.equal(atLatest({ buttons: [button("Jump to latest · 2 new messages")] }), false);
+  assert.equal(atLatest({ buttons: [button("Jump to the approval waiting for you")] }), false);
+  assert.equal(atLatest({ buttons: [button("Jump to the question waiting for you")] }), false);
   assert.equal(atLatest({ buttons: [button("Approve once")] }), true);
   assert.equal(atLatest({ found: false }), false);
 
