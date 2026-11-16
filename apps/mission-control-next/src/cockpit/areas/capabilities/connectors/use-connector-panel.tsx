@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { useDeliberateOpen } from "../deliberate-open";
 import type { CapabilityConnectorItem } from "@goatcitadel/contracts";
 import { useInspector } from "../../../app/inspector";
 import { useCockpitRoute } from "../../../app/use-cockpit-route";
@@ -40,16 +41,18 @@ export function useConnectorPanel(
   const asked = useRef<{ id: string; inspectorOpen: typeof openInspector } | null>(null);
   const shown = useRef<string | null>(null);
 
+  const deliberate = useDeliberateOpen();
   const show = useCallback(
     (id: string, name: string) => {
       asked.current = { id, inspectorOpen: openInspector };
       openInspector({
         source: connectorPanelSource(id),
+        focusOnOpen: deliberate.take(connectorPanelSource(id)),
         title: name,
         body: <ConnectorPanel itemId={id} onRemoved={onRemoved} />,
       });
     },
-    [openInspector, onRemoved],
+    [openInspector, onRemoved, deliberate],
   );
 
   useEffect(() => {
@@ -75,9 +78,10 @@ export function useConnectorPanel(
 
   return {
     open: (item) => {
+      deliberate.press(connectorPanelSource(item.id));
       // The address already names it (the panel was closed without clearing it): there is nothing to move.
       if (linkedId === item.id) show(item.id, item.name);
-      else navigate(connectorItemHref(item.id));
+      else deliberate.go(connectorPanelSource(item.id), () => navigate(connectorItemHref(item.id)));
     },
   };
 }

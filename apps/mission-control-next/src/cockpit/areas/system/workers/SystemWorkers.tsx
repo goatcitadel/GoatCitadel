@@ -41,7 +41,7 @@ function WorkersPage({ workspaceId, workspaceName }: { workspaceId: string; work
         title="Workers"
         description="Remote workers, their assignments and spending budgets."
         actions={
-          <Button size="sm" disabled={registry.loading} onClick={() => void registry.reload()}>
+          <Button size="sm" loading={registry.loading} onClick={() => void registry.reload()}>
             <RefreshCw aria-hidden="true" className="size-4" /> Refresh<span className="sr-only"> workers</span>
           </Button>
         }

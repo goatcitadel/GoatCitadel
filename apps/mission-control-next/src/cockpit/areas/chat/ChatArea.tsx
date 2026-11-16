@@ -3,10 +3,8 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { useQuery } from "@tanstack/react-query";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { fetchOnboardingState } from "@goatcitadel/mission-control-shared/api/client";
-import {
-  MissionThreadedControllerHost,
-  type MissionThreadedRenderSurfaceInput,
-} from "@goatcitadel/threaded-surface-core";
+import { MissionThreadedControllerHost } from "@goatcitadel/threaded-surface-core";
+import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
 import { ChatConversationsSheet } from "./ChatConversationsSheet";
 import { unsentConversationId } from "./conversation-reuse";
 import { ChatEmptyState, ChatSessionHeader, ChatSetupGate } from "./ChatAreaChrome";
@@ -210,6 +208,7 @@ export function ChatAreaView({
     if (turnId) active?.onSelectTurn(turnId);
     open({
       source: "chat",
+      focusOnOpen: true,
       title: "Conversation",
       body: (
         <DeferredChatInspector

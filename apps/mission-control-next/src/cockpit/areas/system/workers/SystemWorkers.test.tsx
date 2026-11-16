@@ -134,3 +134,15 @@ it("says assignments are unavailable when they could not be read, not that they 
   await vi.waitFor(() => expect(text()).toContain("Assignments are unavailable"));
   expect(text()).not.toContain("loading or unavailable");
 });
+
+it("keeps focus on Refresh while the workers reload (U-GL-047)", async () => {
+  await render();
+  registry.value = { ...(registry.value as object), loading: true };
+  await render();
+  const refresh = [...host.querySelectorAll("button")].find((node) => node.textContent?.includes("Refresh"))!;
+  refresh.focus();
+  await act(async () => refresh.click());
+  expect(refresh.disabled).toBe(false);
+  expect(refresh.getAttribute("aria-busy")).toBe("true");
+  expect(document.activeElement).toBe(refresh);
+});

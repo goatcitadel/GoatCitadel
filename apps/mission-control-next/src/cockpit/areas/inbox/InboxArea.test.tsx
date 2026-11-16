@@ -238,6 +238,19 @@ describe("viewed Updates presentation", () => {
     expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
   });
 
+  it("keeps focus on Refresh while the Inbox reloads (U-GL-047)", async () => {
+    const data = updateProjection();
+    inboxMock.result = { data, isLoading: false, isError: false, isFetching: true, refetch: vi.fn() };
+    await renderUpdates(new QueryClient());
+    const refresh = [...container.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === "Refresh");
+    if (!refresh) throw new Error("Missing Refresh button");
+    refresh.focus();
+    await act(async () => refresh.click());
+    expect(refresh.disabled).toBe(false);
+    expect(refresh.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(refresh);
+  });
+
   it("keeps Mark all shown updates read available during a background refetch", async () => {
     const data = updateProjection();
     inboxMock.result = { data, isLoading: false, isError: false, isFetching: true, refetch: vi.fn() };
@@ -1162,6 +1175,19 @@ describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN
     await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Close inspector"]')!.click());
     expect(itemInAddress()).toBeNull();
     expect(window.history.length).toBe(before);
+  });
+
+  it("keeps focus on the list row when J moves the docked inspector to the next item (U-GL-039)", async () => {
+    show([first, second], { needs_decision: { known: 2, complete: true } });
+    await renderUpdates(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+    await act(async () => details("approval:test").click());
+    // Opening by hand hands focus to the panel; walking the list afterwards does not.
+    expect(document.activeElement?.closest("aside")).not.toBeNull();
+    document.querySelector<HTMLElement>('[data-inbox-row="approval:test"] [data-inbox-detail]')?.focus();
+    await press("j");
+    expect(container.querySelector('[aria-label="Inspector: Second write"]')).not.toBeNull();
+    expect(document.activeElement?.closest("[data-inbox-row]")?.getAttribute("data-inbox-row")).toBe("approval:second");
+    expect(document.activeElement?.closest("aside")).toBeNull();
   });
 
   it("leaves the Inbox on Back after an item was opened and closed", async () => {

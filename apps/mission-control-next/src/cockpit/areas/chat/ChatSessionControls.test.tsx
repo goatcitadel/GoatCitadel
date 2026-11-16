@@ -45,6 +45,22 @@ describe("Chat session controls", () => {
     expect(context.onRenameSession).toHaveBeenCalledOnce();
   });
 
+  it.each(["Escape", "Cancel", "Save"])("returns focus to Rename conversation after %s (U-GL-048)", async (how) => {
+    await act(async () => root.render(<ChatSessionTitle title="Original title" dock={dock()} />));
+    await act(async () =>
+      (container.querySelector('button[aria-label="Rename conversation"]') as HTMLButtonElement).click(),
+    );
+    const input = container.querySelector("input") as HTMLInputElement;
+    input.focus();
+    await act(async () => {
+      if (how === "Escape") input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      else if (how === "Cancel")
+        [...container.querySelectorAll("button")].find((node) => node.textContent === "Cancel")?.click();
+      else (container.querySelector('button[type="submit"]') as HTMLButtonElement).click();
+    });
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Rename conversation");
+  });
+
   it("the conversation h1 contains only the title", async () => {
     await act(async () => root.render(<ChatSessionTitle title="Original title" dock={dock()} />));
     const heading = container.querySelector("h1")!;
