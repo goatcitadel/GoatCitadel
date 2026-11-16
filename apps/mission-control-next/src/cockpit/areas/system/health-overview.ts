@@ -1,6 +1,7 @@
 import type { HealthSummaryResponse } from "@goatcitadel/mission-control-shared/api/types";
 import type { StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { describeRuntimeService } from "@goatcitadel/mission-control-shared/content/runtime-service";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { BackupTrustState } from "./backup-trust";
 
 /** Runtime controls and backup records live on the native System › Runtime page. */
@@ -139,7 +140,7 @@ function skillCleanupChecks(cleanup: HealthSummaryResponse["skillRemovalCleanup"
       detail:
         count === 1
           ? "A removed skill's folder is still in GoatCitadel's skills folder because deleting it failed. The skill itself is already removed, and GoatCitadel keeps trying to delete the folder."
-          : `The folders of ${count} removed skills are still in GoatCitadel's skills folder because deleting them failed. The skills themselves are already removed, and GoatCitadel keeps trying to delete the folders.`,
+          : `The folders of ${plural(count, "removed skill")} are still in GoatCitadel's skills folder because deleting them failed. The skills themselves are already removed, and GoatCitadel keeps trying to delete the folders.`,
       inspectPath: "/library/journey",
     },
   ];

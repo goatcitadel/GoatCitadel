@@ -1,4 +1,5 @@
 import type { CapabilitySkillRemovalRead } from "@goatcitadel/contracts";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 
 type Settlement = NonNullable<CapabilitySkillRemovalRead["settlement"]>;
 
@@ -42,9 +43,8 @@ export function removalLeftoversNote(
 ): string | undefined {
   const count = settlement.otherScratchFolders ?? 0;
   if (settlement.disposition !== "applied" || count < 1) return undefined;
-  return count === 1
-    ? "Removed. GoatCitadel left 1 temporary folder in the skills folder that it couldn't confirm was its own."
-    : `Removed. GoatCitadel left ${count} temporary folders in the skills folder that it couldn't confirm were its own.`;
+  const verb = count === 1 ? "was" : "were";
+  return `Removed. GoatCitadel left ${plural(count, "temporary folder")} in the skills folder that it couldn't confirm ${verb} its own.`;
 }
 
 /**
