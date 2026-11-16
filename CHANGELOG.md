@@ -6,7 +6,7 @@ All notable changes to GoatCitadel are documented in this file.
 
 ### Added
 
-- A skill a plugin left behind can be removed from Capabilities › Skills (**Remove skill**, `POST /api/v1/capabilities/skills/removals`). It is a Skill Hub `remove` step that always waits for your approval, with the two-step review, even when "Apply my Settings and Capabilities changes without asking first" is on, and it deletes only the skill's runtime folder (when it still matches its check) and runtime record. The check and every approval, settlement and evidence record stay, and the same source can be checked and installed again afterwards.
+- A skill a plugin left behind can be removed from Capabilities › Skills (**Remove skill**, `POST /api/v1/capabilities/skills/removals`). It is a Skill Hub `remove` step that always waits for your approval, with the two-step review, even when "Apply my Settings and Capabilities changes without asking first" is on, and it deletes only the skill's runtime folder (when it still matches its check), its runtime record and its saved state (on or off, pinned, use counts), so installing it again starts clean. The check and every approval, settlement and evidence record stay, and the same source can be checked and installed again afterwards.
 - Channel setup warns when a channel's provider hosts aren't allowed on the network.
 - A new connection's webhook address shows before Finalize.
 - The diagnostic for a dropped message names the sender.

@@ -11,6 +11,7 @@ import {
 import { SkillAggregateRevisionRepository } from "./skill-aggregate-revision-repo.js";
 import { SkillLifecycleRepository } from "./skill-lifecycle-repo.js";
 import { __sqliteInternals } from "./sqlite.js";
+import { SystemSettingsRepository } from "./system-settings-repo.js";
 import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
 
 const SQLITE_VERSION = 281;
@@ -112,6 +113,36 @@ describe("runtime skill record deletion", () => {
     assert.equal(revisions.get("runtime_skill", "extra:meeting-notes"), undefined);
     assert.equal(revisions.get("runtime_skill", "extra:other")?.revision, 1);
     assert.throws(() => revisions.deleteFence("runtime_skill", "extra:meeting-notes", 2));
+  });
+
+  it("deleteSavedState and a setting's delete remove exactly one skill's saved state", () => {
+    const db = tempDbs.open({ dbPath: tempDbs.path("goatcitadel-skill-remove-state") });
+    const lifecycle = new SkillLifecycleRepository(db);
+    const settings = new SystemSettingsRepository(db);
+    const now = "2026-11-15T00:00:00.000Z";
+    for (const skillId of ["extra:meeting-notes", "extra:other"]) {
+      db.prepare("INSERT INTO skill_state (skill_id, state, note, updated_at) VALUES (?, 'sleep', 'kept', ?)").run(
+        skillId,
+        now,
+      );
+    }
+    settings.set("curator_idle_skill_snapshot_v1:extra:meeting-notes", { skillId: "extra:meeting-notes" }, now);
+    settings.set("curator_idle_skill_snapshot_v1:extra:other", { skillId: "extra:other" }, now);
+
+    assert.equal(lifecycle.deleteSavedState("extra:meeting-notes"), true);
+    assert.equal(lifecycle.deleteSavedState("extra:meeting-notes"), false);
+    const left = db.prepare("SELECT skill_id AS skillId FROM skill_state ORDER BY skill_id").all() as Array<{
+      skillId: string;
+    }>;
+    assert.deepEqual(
+      left.map((row) => row.skillId),
+      ["extra:other"],
+    );
+
+    assert.equal(settings.delete("curator_idle_skill_snapshot_v1:extra:meeting-notes"), true);
+    assert.equal(settings.delete("curator_idle_skill_snapshot_v1:extra:meeting-notes"), false);
+    assert.equal(settings.get("curator_idle_skill_snapshot_v1:extra:meeting-notes"), undefined);
+    assert.ok(settings.get("curator_idle_skill_snapshot_v1:extra:other"));
   });
 });
 

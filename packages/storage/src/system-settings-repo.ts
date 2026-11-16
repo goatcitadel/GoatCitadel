@@ -27,6 +27,7 @@ export class SystemSettingsRepository {
   private readonly upsertStmt;
   private readonly insertIfAbsentStmt;
   private readonly getForUpdateStmt;
+  private readonly deleteStmt;
 
   public constructor(
     private readonly db: DatabaseClient,
@@ -48,6 +49,12 @@ export class SystemSettingsRepository {
         value_json = excluded.value_json,
         updated_at = excluded.updated_at
     `);
+    this.deleteStmt = db.prepare("DELETE FROM system_settings WHERE setting_key = ?");
+  }
+
+  /** Removes one setting. True when it was there. */
+  public delete(key: string): boolean {
+    return this.deleteStmt.run(key).changes > 0;
   }
 
   public get<T = unknown>(key: string): SystemSettingRecord<T> | undefined {

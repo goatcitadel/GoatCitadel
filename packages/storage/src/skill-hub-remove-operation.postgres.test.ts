@@ -5,6 +5,9 @@ import { Pool } from "pg";
 import { PostgresDatabaseClient } from "./postgres/client.js";
 import { runPostgresMigrations } from "./postgres/migrator.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
+import { PostgresSyncDatabaseClient } from "./postgres/sync.js";
+import { SkillLifecycleRepository } from "./skill-lifecycle-repo.js";
+import { SystemSettingsRepository } from "./system-settings-repo.js";
 
 const postgresConnectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
 const postgresIt = postgresConnectionString ? it : it.skip;
@@ -14,6 +17,8 @@ const NOW = "2026-11-15T00:00:00.000Z";
 interface Scope {
   pool: Pool;
   migrations: PostgresDatabaseClient;
+  connectionString: string;
+  database: string;
   teardown(): Promise<void>;
 }
 
@@ -30,6 +35,8 @@ async function createScope(label: string): Promise<Scope> {
   return {
     pool,
     migrations,
+    connectionString: scopedUrl.toString(),
+    database,
     teardown: async () => {
       await migrations.close().catch(() => undefined);
       await adminPool.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`).catch(() => undefined);
@@ -132,6 +139,44 @@ describe("Skill Hub remove operation kind on live PostgreSQL", () => {
         assert.equal(migrated.latestVersion, MIGRATION_VERSION);
         await assertConverged(scope.pool);
       } finally {
+        await scope.teardown();
+      }
+    },
+  );
+
+  postgresIt(
+    "a removal's saved-state deletes remove exactly one skill's state row and one setting",
+    { timeout: 300_000 },
+    async () => {
+      const scope = await createScope("state");
+      let client: PostgresSyncDatabaseClient | undefined;
+      try {
+        await runPostgresMigrations(scope.migrations, POSTGRES_MIGRATIONS);
+        await scope.pool.query(`
+          INSERT INTO skill_state (skill_id, state, note, updated_at) VALUES
+            ('extra:demo', 'sleep', 'mine', '${NOW}'), ('extra:other', 'enabled', NULL, '${NOW}');
+        `);
+        client = new PostgresSyncDatabaseClient({
+          connectionString: scope.connectionString,
+          database: scope.database,
+          applicationName: "gc-skill-hub-remove-state",
+          pool: { max: 1, connectionTimeoutMs: 10_000 },
+        });
+        const lifecycle = new SkillLifecycleRepository(client);
+        const settings = new SystemSettingsRepository(client);
+        settings.set("curator_idle_skill_snapshot_v1:extra:demo", { skillId: "extra:demo" }, NOW);
+
+        assert.equal(lifecycle.deleteSavedState("extra:demo"), true);
+        assert.equal(lifecycle.deleteSavedState("extra:demo"), false);
+        assert.equal(settings.delete("curator_idle_skill_snapshot_v1:extra:demo"), true);
+        assert.equal(settings.delete("curator_idle_skill_snapshot_v1:extra:demo"), false);
+        const left = await scope.pool.query<{ skill_id: string }>("SELECT skill_id FROM skill_state ORDER BY skill_id");
+        assert.deepEqual(
+          left.rows.map((row) => row.skill_id),
+          ["extra:other"],
+        );
+      } finally {
+        client?.close();
         await scope.teardown();
       }
     },

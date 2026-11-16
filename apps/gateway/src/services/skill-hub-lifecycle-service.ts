@@ -32,6 +32,7 @@ import { CapabilityPluginStore } from "./capability-plugin-store.js";
 import { pluginSkillSource } from "./plugin-owned-refusal.js";
 import { takesPowerAway } from "./skill-hub-operation-power.js";
 import {
+  deleteSkillSavedState,
   ownedSkillBlock,
   finishAppliedProjection,
   LINEAGE_VERSION_LIMIT,
@@ -620,7 +621,7 @@ export class SkillHubLifecycleService {
             ).revision;
           }
         } else if (intent.operationKind === "remove") {
-          // The candidate lineage is history: fenced above, never advanced. The runtime record and its fence go.
+          // The candidate lineage is history: fenced above, never advanced. The record, its fence and saved state go.
           candidateRevision = intent.expectedCandidateRevision;
           if (!(await storage.skillLifecycle.delete(intent.skillId))) {
             throw new ConflictError({ message: "Skill Hub runtime record is already gone." });
@@ -630,6 +631,7 @@ export class SkillHubLifecycleService {
             intent.skillId,
             intent.expectedRuntimeRevision!,
           );
+          await deleteSkillSavedState(storage, intent.skillId, now);
         } else {
           const currentCandidate = await storage.candidateSkillVersions.get(intent.targetVersionId!);
           const candidateChanged = currentCandidate.lifecycleState !== "revoked";

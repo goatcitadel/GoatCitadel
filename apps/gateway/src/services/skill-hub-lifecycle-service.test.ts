@@ -1040,6 +1040,74 @@ describe("SkillHubLifecycleService", () => {
       expect(reactivated.settlement.disposition).toBe("applied");
     }, 90_000);
 
+    it("deletes the skill's saved state with its record, so a reinstall starts clean", async () => {
+      const { harness } = await revokedHarness();
+      const now = "2026-11-15T00:00:00.000Z";
+      harness.storage.db
+        .prepare("INSERT INTO skill_state (skill_id, state, note, updated_at) VALUES (?, 'sleep', 'mine', ?)")
+        .run("extra:demo", now);
+      harness.storage.systemSettings.set("skill_state_metadata_v1", {
+        "extra:demo": { pinned: true, usageCount: 7, lastUsedAt: now },
+        "extra:other": { usageCount: 2 },
+      });
+      harness.storage.systemSettings.set("curator_idle_skill_snapshot_v1:extra:demo", {
+        skillId: "extra:demo",
+        priorState: "enabled",
+      });
+
+      const result = await harness.lifecycle.applyApprovedOperation(
+        await approve(harness, removeTemplate(harness, "operation-remove")),
+      );
+
+      expect(result.settlement.disposition).toBe("applied");
+      const stateRow = harness.storage.db.prepare("SELECT state FROM skill_state WHERE skill_id = ?").get("extra:demo");
+      expect(stateRow).toBeUndefined();
+      expect(harness.storage.systemSettings.get("skill_state_metadata_v1")?.value).toEqual({
+        "extra:other": { usageCount: 2 },
+      });
+      expect(harness.storage.systemSettings.get("curator_idle_skill_snapshot_v1:extra:demo")).toBeUndefined();
+
+      // Reinstalled and switched on again: none of the earlier state comes back.
+      const lineage = { targetCandidateId: "candidate-demo-r1", targetVersionId: "version-demo-1-r1" };
+      await approveAndApply(harness, {
+        ...template(harness, "install_inactive", "operation-reinstall", {
+          expectedCandidateAbsent: true,
+          expectedRuntimeAbsent: true,
+        }),
+        ...lineage,
+      });
+      const reactivated = await approveAndApply(harness, {
+        ...template(harness, "activate", "operation-reactivate", {
+          expectedCandidateAbsent: false,
+          expectedCandidateRevision: 1,
+          expectedRuntimeAbsent: true,
+        }),
+        ...lineage,
+      });
+      expect(reactivated.settlement.disposition).toBe("applied");
+      const skillStates = new SkillStateService(
+        {
+          storage: harness.asyncStorage,
+          systemSettings: harness.asyncStorage.systemSettings,
+          skillAggregateRevisions: harness.asyncStorage.skillAggregateRevisions,
+        },
+        {
+          listSkills: async () => [],
+          recordAutonomousMutation: vi.fn(),
+          recordDevDiagnostic: vi.fn(),
+          publishRealtime: vi.fn(),
+        },
+      );
+      // The Gateway gives a newly loaded skill its default row, as for any skill it has never seen.
+      await skillStates.ensureSkillStates(["extra:demo"]);
+      const state = (await skillStates.readSkillStates()).get("extra:demo");
+      expect(state).toMatchObject({ state: "enabled" });
+      expect(state?.note).toBeUndefined();
+      expect(state?.pinned).toBeUndefined();
+      expect(state?.usageCount).toBeUndefined();
+      expect(await skillStates.restoreCuratorIdleSnapshot("extra:demo")).toBe(false);
+    }, 90_000);
+
     it("puts the folder back when the commit fails after it was moved", async () => {
       const loaded: { loader?: SkillsService } = {};
       const { harness, extraRoot, runtimeDir } = await revokedHarness({

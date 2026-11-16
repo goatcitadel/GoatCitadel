@@ -42,9 +42,9 @@ import {
   type SkillLifecycleApprovalBindingV1,
   type SkillLifecycleSubjectKind,
 } from "./skill-governance-journey-producer.js";
+import { curatorIdleSnapshotKey, SKILL_STATE_METADATA_SETTING_KEY } from "./skill-state-keys.js";
 
 const SKILL_ACTIVATION_POLICY_SETTING_KEY = "skill_activation_policy_v1";
-const SKILL_STATE_METADATA_SETTING_KEY = "skill_state_metadata_v1";
 const SKILL_ACTIVATION_POLICY_AGGREGATE_ID = "global";
 const SKILL_LIFECYCLE_APPROVAL_TTL_MS = 15 * 60_000;
 /**
@@ -1515,10 +1515,6 @@ function isSkillRuntimeState(value: unknown): value is SkillRuntimeState {
 function normalizeRequesterId(requesterId: string | undefined): string {
   const normalized = requesterId?.trim();
   return normalized && normalized.length <= 256 ? normalized : "operator";
-}
-
-function curatorIdleSnapshotKey(skillId: string): string {
-  return `curator_idle_skill_snapshot_v1:${skillId}`;
 }
 
 function clamp01(value: number): number {

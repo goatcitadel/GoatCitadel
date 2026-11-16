@@ -4,14 +4,16 @@ import {
   SKILL_HUB_LIFECYCLE_JOURNEY_EVENT_TYPE,
   SKILL_HUB_LIFECYCLE_JOURNEY_SOURCE_KIND,
   SKILL_HUB_LIFECYCLE_JOURNEY_SUBJECT_KIND,
+  ConflictError,
   type CandidateSkillVersionRecord,
   type SkillContentIntegrityManifest,
   type SkillHubOperationIntentRecord,
   type SkillHubOperationSettlementDisposition,
   type SkillLifecycleRecord,
 } from "@goatcitadel/contracts";
-import type { GovernanceJourneyEventRecord } from "@goatcitadel/storage";
+import type { AsyncStorage, GovernanceJourneyEventRecord } from "@goatcitadel/storage";
 import { isBundledSkillName } from "./plugin-skill-name-rules.js";
+import { curatorIdleSnapshotKey, SKILL_STATE_METADATA_SETTING_KEY } from "./skill-state-keys.js";
 import type { StoredPlugin } from "./capability-plugin-store.js";
 import type { SkillHubLifecycleFilesystem } from "./skill-hub-lifecycle-filesystem.js";
 import type { SkillHubLifecycleApplyResult } from "./skill-hub-lifecycle-service.js";
@@ -225,6 +227,36 @@ export async function restoreStagedRemoval(
       "Skill Hub removal failed and its moved folder could not be put back; it stays at its recovery path.",
       { cause: restoreError },
     );
+  }
+}
+
+/** What deleting a removed skill's saved state touches. */
+export interface SkillSavedStateStorage {
+  skillLifecycle: Pick<AsyncStorage["skillLifecycle"], "deleteSavedState">;
+  systemSettings: Pick<AsyncStorage["systemSettings"], "get" | "compareAndSet" | "delete">;
+}
+
+/**
+ * Deletes one removed skill's saved state, inside the removal's own transaction: its `skill_state` row (on, paused or
+ * off, and its note), its share of the skill metadata setting (pinned, use counts, last use) and the curator's
+ * idle-archive snapshot, so a later install of the same skill starts clean. The metadata is rewritten only when it still
+ * reads as it did (compare and set); when something else changed it meanwhile, the whole removal rolls back and retries.
+ */
+export async function deleteSkillSavedState(
+  storage: SkillSavedStateStorage,
+  skillId: string,
+  now: string,
+): Promise<void> {
+  await storage.skillLifecycle.deleteSavedState(skillId);
+  await storage.systemSettings.delete(curatorIdleSnapshotKey(skillId));
+  const metadata = await storage.systemSettings.get<unknown>(SKILL_STATE_METADATA_SETTING_KEY);
+  const value = metadata?.value;
+  if (!metadata || !value || typeof value !== "object" || Array.isArray(value) || !Object.hasOwn(value, skillId)) {
+    return;
+  }
+  const rest = Object.fromEntries(Object.entries(value).filter(([id]) => id !== skillId));
+  if (!(await storage.systemSettings.compareAndSet(SKILL_STATE_METADATA_SETTING_KEY, metadata, rest, now))) {
+    throw new ConflictError({ message: "A removed skill's saved state changed while it was being deleted." });
   }
 }
 
