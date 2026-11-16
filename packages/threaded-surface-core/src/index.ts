@@ -32,6 +32,7 @@ export {
   type MidTurnDisposition,
 } from "./chat/chat-page-pure-helpers";
 export type { MissionThreadedBtwSideChatProps } from "./chat/useBtwSideChatController";
+export { createAttachmentStorageKey, createDraftStorageKey } from "./chat/useChatLocalPersistence";
 export { buildOrchestrationCommandSuggestions } from "./chat-command-suggestions";
 export {
   ComposerPaletteSourceRegistry,

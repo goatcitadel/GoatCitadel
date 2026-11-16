@@ -39,5 +39,20 @@ export function workRunTitle(run: DurableRunRecord): string {
   if (run.workflowKey === "chat.turn.execute") return "Chat turn";
   if (run.workflowKey === "orchestration.plan.execute") return "Supervised plan";
   if (run.workflowKey === "proactive.tick") return "Background work";
+  if (run.workflowKey === "chat.post_commit.effect") return postCommitTitle(run.metadata?.effect);
+  if (run.workflowKey === "approval.wait") return "Waiting for an approval";
+  if (run.workflowKey === "connector.delivery") return "Connector delivery";
+  if (run.workflowKey === "hook.delivery") return "Hook delivery";
   return "Workflow run";
+}
+
+const POST_COMMIT_TITLES: Readonly<Record<string, string>> = {
+  commitments: "Follow-up commitments after a Chat reply",
+  background_review: "Background review after a Chat reply",
+  memory_maintenance: "Memory upkeep after a Chat reply",
+};
+
+function postCommitTitle(effect: unknown): string {
+  const known = typeof effect === "string" && Object.hasOwn(POST_COMMIT_TITLES, effect);
+  return known ? POST_COMMIT_TITLES[effect]! : "Background work after a Chat reply";
 }

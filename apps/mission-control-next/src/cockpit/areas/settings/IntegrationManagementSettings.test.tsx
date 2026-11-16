@@ -28,6 +28,14 @@ vi.mock("../../data/use-workspace-name", () => ({
   useWorkspaceName: () => undefined,
   useActiveWorkspaceLabel: () => "Current workspace",
 }));
+const prefs = vi.hoisted(() => ({ showTechnicalDetails: false }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", async (original) => {
+  const actual = await original<typeof import("@goatcitadel/mission-control-shared/state/ui-preferences")>();
+  return {
+    ...actual,
+    useUiPreferences: () => ({ ...actual.useUiPreferences(), showTechnicalDetails: prefs.showTechnicalDetails }),
+  };
+});
 vi.mock("../../ui/Dialog", () => ({
   Dialog: ({ open, title, children }: { open: boolean; title: string; children: ReactNode }) =>
     open ? (
@@ -66,6 +74,7 @@ const change = async (label: string, value: string) => {
 };
 beforeEach(() => {
   vi.resetAllMocks();
+  prefs.showTechnicalDetails = false;
   __resetSessionDraftsForTests();
   __resetFormDirtyRegistryForTests();
   __resetSessionViewStateForTests();
@@ -94,6 +103,27 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 describe("native integration management", () => {
+  it("opens the add form on the catalog entry a Set up link asked for, then reports it handled once", async () => {
+    const handled = vi.fn();
+    api.fetchIntegrationCatalog.mockResolvedValue({
+      items: [
+        { catalogId: saved.catalogId, kind: saved.kind, key: saved.key, label: "Fixture", operatorActions: [] },
+        { catalogId: "automation.gmail", kind: "automation", key: "gmail", label: "Gmail", operatorActions: [] },
+      ],
+    });
+    await act(async () => {
+      view = create(
+        <IntegrationManagementSettings
+          workspaceId="default"
+          createRequest={{ catalogId: "automation.gmail" }}
+          onCreateRequestHandled={handled}
+        />,
+      );
+    });
+    expect(view.root.findByProps({ "aria-label": "Integration catalog" }).props.value).toBe("automation.gmail");
+    expect(handled).toHaveBeenCalledTimes(1);
+  });
+
   it("reviews a disabled new connection without writes and confirms exact owner readback", async () => {
     await act(async () => {
       view = create(<IntegrationManagementSettings workspaceId="default" />);
@@ -116,8 +146,8 @@ describe("native integration management", () => {
     });
     expect(api.fetchIntegrationConnection).toHaveBeenCalledWith(saved.connectionId);
     expect(text(view.root)).toContain("Connection Reviewed fixture created.");
-    expect(text(view.root)).toContain("Configured status: Connected");
-    expect(text(view.root)).toContain("Connectivity unverified");
+    expect(text(view.root)).toContain("Saved status: Set up, not checked");
+    expect(text(view.root)).toContain("Not checked yet");
   });
   it("offers no plugin trust view", async () => {
     await act(async () => {
@@ -134,7 +164,7 @@ describe("native integration management", () => {
     expect(text(view.root)).not.toContain("Plugin trust");
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("plugins"))).toBe(false);
   });
-  it("cancels deletion without calling the owner", async () => {
+  it("keeps the reviewed version out of the delete dialog while technical details are off", async () => {
     api.fetchIntegrationConnections.mockResolvedValue({ items: [saved] });
     await act(async () => {
       view = create(
@@ -145,7 +175,33 @@ describe("native integration management", () => {
       );
     });
     await click("Delete integration connection");
-    expect(text(view.root)).toContain("Reviewed version:");
+    expect(text(view.root.findByProps({ role: "dialog" }))).not.toContain("Reviewed version");
+  });
+  it("cancels deletion without calling the owner", async () => {
+    api.fetchIntegrationConnections.mockResolvedValue({ items: [saved] });
+    await act(async () => {
+      view = create(
+        <IntegrationManagementSettings
+          workspaceId="default"
+          selection={{ connectionId: saved.connectionId, nonce: 1 }}
+        />,
+      );
+    });
+    prefs.showTechnicalDetails = true;
+    await act(async () =>
+      view.update(
+        <IntegrationManagementSettings
+          workspaceId="default"
+          selection={{ connectionId: saved.connectionId, nonce: 1 }}
+        />,
+      ),
+    );
+    await click("Delete integration connection");
+    const dialog = view.root.findByProps({ role: "dialog" });
+    const details = dialog.findAllByType("details");
+    expect(details).toHaveLength(1);
+    expect(text(details[0]!)).toContain("Reviewed version: " + saved.revision);
+    expect(text(dialog).replace(text(details[0]!), "")).not.toContain("Reviewed version");
     await click("Keep integration");
     expect(api.deleteIntegrationConnection).not.toHaveBeenCalled();
   });

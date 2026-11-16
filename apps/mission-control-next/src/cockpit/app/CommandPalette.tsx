@@ -138,11 +138,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   }, [open]);
   const visibleAttempt =
     newChat.attempt &&
-    !(
-      newChat.attempt === attemptAtOpen &&
-      newChat.attempt.state === "confirmed" &&
-      !newChat.attempt.message.includes("Opening it failed")
-    )
+    !(newChat.attempt === attemptAtOpen && newChat.attempt.state === "confirmed" && !newChat.attempt.openFailed)
       ? newChat.attempt
       : undefined;
   // Labels such as "Work › Schedules" are compared as plain words, so "work schedules" matches them.

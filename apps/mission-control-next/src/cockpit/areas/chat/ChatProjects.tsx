@@ -76,9 +76,7 @@ function ProjectsWorkspace({ workspaceId, citadelId }: { workspaceId: string; ci
     <section aria-label="Projects in Chat" className={`${AREA_COLUMN} grid min-w-0 gap-4 p-4 md:p-6`}>
       <AreaHeader
         title="Projects"
-        description={
-          <span title={workspaceId}>Organize Chat context for {workspaceName ?? `workspace ${workspaceId}`}.</span>
-        }
+        description={<span title={workspaceId}>Organize Chat context for {workspaceName ?? "this workspace"}.</span>}
         actions={
           <>
             <Button variant="primary" onClick={startCreate}>

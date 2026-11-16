@@ -209,6 +209,13 @@ describe("sticky prompt", () => {
     await frame();
 
     const sticky = container.querySelector<HTMLButtonElement>("[data-chat-sticky-prompt]")!;
+    // A solid strip with its own edge, and a scroller that pads under it (U-CH-028).
+    const strip = sticky.parentElement!;
+    expect(strip.className).toContain("bg-canvas");
+    expect(strip.className).toContain("border-b");
+    expect(strip.className).not.toContain("pointer-events-none");
+    expect(sticky.className).not.toContain("shadow-overlay");
+    expect(scroller.hasAttribute("data-sticky-prompt")).toBe(true);
     expect(sticky.getAttribute("aria-label")).toBe(
       "Back to message 2: Summarise the quarterly report and list every risk the auditors raised in…",
     );
@@ -222,5 +229,6 @@ describe("sticky prompt", () => {
     await act(async () => scroller.dispatchEvent(new Event("scroll")));
     await frame();
     expect(container.querySelector("[data-chat-sticky-prompt]")).toBeNull();
+    expect(scroller.hasAttribute("data-sticky-prompt")).toBe(false);
   });
 });

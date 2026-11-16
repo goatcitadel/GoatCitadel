@@ -184,12 +184,15 @@ function AutomationWorkspace({ workspaceId }: { workspaceId: string }) {
             {" iterations."}
           </p>
           <p>
-            Missing capabilities:{" "}
             {preview.missingCapabilities.length
-              ? preview.missingCapabilities.join(", ")
-              : "None reported by the preview"}
-            .
+              ? "Some features this automation needs are not set up here."
+              : "Nothing missing."}
           </p>
+          {preview.missingCapabilities.length ? (
+            <TechnicalDetails>
+              <p className="font-mono text-xs">Missing: {preview.missingCapabilities.join(", ")}</p>
+            </TechnicalDetails>
+          ) : null}
           <ul>
             {preview.proofChecklist.map((item) => (
               <li key={item}>{item}</li>

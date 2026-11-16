@@ -257,7 +257,7 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
           await row.waitFor({ state: "hidden" });
           stage = "same-document remount retains viewed state";
           await nav.getByRole("link", { name: "Work", exact: true }).click();
-          await page.getByRole("heading", { name: "Work", exact: true }).waitFor();
+          await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
           await nav.getByRole("link", { name: /^Inbox/u }).click();
           await updates.getByRole("button", { name: "Show read updates (1)", exact: true }).waitFor();
           await row.waitFor({ state: "hidden" });

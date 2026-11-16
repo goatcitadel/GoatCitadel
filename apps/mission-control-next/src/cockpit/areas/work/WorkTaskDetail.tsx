@@ -14,9 +14,9 @@ import { EmptyState } from "../../ui/EmptyState";
 import { taskMatchesWorkspace } from "./work-tasks";
 import { TaskAssignmentControl } from "./TaskAssignmentControl";
 import { TaskDetailsEditor } from "./TaskDetailsEditor";
-import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TimeText } from "../../ui/TimeText";
+import { useCockpitTitleDetail } from "../../app/cockpit-title-detail";
 import { TASK_ACTIVITY_LABELS, TASK_DELIVERABLE_LABELS, TASK_PRIORITY_LABELS } from "./work-vocabulary";
 import { ListLimitFooter, useListLimit } from "./WorkListLimit";
 
@@ -34,8 +34,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
     !taskQuery.isError && taskQuery.data && taskMatchesWorkspace(taskQuery.data, workspaceId)
       ? taskQuery.data
       : undefined;
-  const taskSessionId =
-    task?.proactiveContext?.sessionId ?? task?.agenticContext?.childSessionId ?? task?.agenticContext?.parentSessionId;
+  useCockpitTitleDetail(task?.title);
   const activities = useQuery({
     queryKey: ["tasks", "work-task-activities", workspaceId, taskId],
     queryFn: () => fetchTaskActivities(taskId, workspaceId),
@@ -113,22 +112,6 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
             <p className="text-sm text-fg-secondary">
               This task is blocked. No blocker reason was recorded; review its activity.
             </p>
-          ) : null}
-          {task.proactiveContext?.durableRunId || task.agenticContext?.durableRunId ? (
-            <NativeOwnerLink
-              scope={[workspaceId, taskId]}
-              href={`/work/runs/${encodeURIComponent((task.proactiveContext?.durableRunId ?? task.agenticContext?.durableRunId)!)}`}
-            >
-              Open linked run
-            </NativeOwnerLink>
-          ) : null}
-          {taskSessionId ? (
-            <NativeOwnerLink
-              scope={[workspaceId, taskId]}
-              href={`/chat?sessionId=${encodeURIComponent(taskSessionId)}`}
-            >
-              Open linked conversation
-            </NativeOwnerLink>
           ) : null}
           {task.description ? (
             // The heading and the text share one parent: browser proofs read the description beside its heading.

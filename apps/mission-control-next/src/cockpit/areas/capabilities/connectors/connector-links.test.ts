@@ -7,7 +7,6 @@ import {
   connectorSettingsHref,
   readLinkedConnectorId,
   savedConnectorForTemplate,
-  WORKSPACE_CAPABILITIES_HREF,
 } from "./connector-links";
 
 function item(overrides: Partial<CapabilityConnectorItem>): CapabilityConnectorItem {
@@ -45,10 +44,6 @@ describe("connectorSettingsHref", () => {
 describe("settings links", () => {
   it("points the Chat line at the MCP section, where Chat availability is shown", () => {
     expect(CHAT_CONNECTORS_SETTINGS_HREF).toBe("/capabilities/connectors/advanced#mcp-servers");
-  });
-
-  it("points the hidden line at the workspace capabilities", () => {
-    expect(WORKSPACE_CAPABILITIES_HREF).toBe("/settings/citadel#workspace-capabilities");
   });
 });
 
@@ -91,5 +86,34 @@ describe("savedConnectorForTemplate", () => {
     expect(savedConnectorForTemplate([saved], "mcp-template:notion")).toBeUndefined();
     expect(savedConnectorForTemplate([saved], "mcp-server:srv-1")).toBeUndefined();
     expect(savedConnectorForTemplate(undefined, "mcp-template:linear")).toBeUndefined();
+  });
+});
+
+describe("web search key links", () => {
+  it("links Brave Search's Advanced setup to its key field", () => {
+    const brave = item({ id: "web-search:search.brave", source: "web_search" });
+    expect(connectorSettingsHref(brave)).toBe("/capabilities/connectors/advanced#web-search-key-brave");
+    const parallel = item({ id: "web-search:search.parallel", source: "web_search" });
+    expect(connectorSettingsHref(parallel)).toBe("/capabilities/connectors/advanced#web-search-key-parallel");
+    const firecrawl = item({ id: "web-search:search.firecrawl", source: "web_search" });
+    expect(connectorSettingsHref(firecrawl)).toBe("/capabilities/connectors/advanced#web-search");
+  });
+});
+
+describe("add an integration links", () => {
+  it("opens the add form for a catalog row that is not saved yet", () => {
+    const gmail = item({
+      id: "integration:automation.gmail",
+      source: "integration",
+      kind: "built_in",
+      reason: "not_installed",
+      catalogId: "automation.gmail",
+    });
+    expect(connectorSettingsHref(gmail)).toBe(
+      "/capabilities/connectors/advanced?addIntegration=automation.gmail#integration-connections",
+    );
+    expect(connectorSettingsHref({ ...gmail, reason: "ready" })).toBe(
+      "/capabilities/connectors/advanced#integration-connections",
+    );
   });
 });

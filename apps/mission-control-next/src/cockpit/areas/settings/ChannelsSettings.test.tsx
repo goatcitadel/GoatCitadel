@@ -37,7 +37,7 @@ let container: HTMLDivElement;
 function definition(key: string, label: string): ChannelSetupDefinition {
   return {
     catalog: { catalogId: `channel.${key}`, key, label, description: `Connect GoatCitadel to ${label}.` },
-    wizard: { difficulty: "easy", estimatedMinutes: 10 },
+    wizard: { difficulty: "easy", estimatedMinutes: 10, steps: [] },
   } as unknown as ChannelSetupDefinition;
 }
 
@@ -163,7 +163,16 @@ describe("Telegram is set up in Chat, not here", () => {
   const pathOf = (link: HTMLAnchorElement | undefined) =>
     new URL(link!.getAttribute("href")!, "http://cockpit.invalid").pathname;
   function draft(catalogId: string, label: string, extra: Record<string, unknown> = {}) {
-    return { draftId: `${catalogId}:${label}`, catalogId, label, revision: 1, lifecycleMode: "create", ...extra };
+    return {
+      draftId: `${catalogId}:${label}`,
+      catalogId,
+      label,
+      revision: 1,
+      lifecycleMode: "create",
+      createdAt: "2026-11-14T10:00:00.000Z",
+      updatedAt: "2026-11-14T10:00:00.000Z",
+      ...extra,
+    };
   }
 
   beforeEach(() => {
@@ -231,6 +240,28 @@ describe("Telegram is set up in Chat, not here", () => {
     // The rest go on in Settings, where they were made or where a saved channel is changed.
     expect(buttonNamed("Edit Settings bot")).toBeDefined();
     expect(buttonNamed("Edit Saved bot")).toBeDefined();
+  });
+
+  it("continues an unfinished setup instead of saving another draft", async () => {
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [draft("channel.slack", "Settings bot", { draft: {} })] });
+    await mount("?channel=channel.slack");
+    const button = buttonNamed("Continue guided setup");
+    expect(button).toBeDefined();
+    await act(async () => button!.click());
+    expect(api.createChannelSetupDraft).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Opened your unfinished Slack setup.");
+    // The editor shows the draft that already existed, not a new one.
+    expect(container.querySelector('section[aria-label="New channel setup"]')).toBeNull();
+    expect(container.querySelector('input[aria-label="Search channels"]')).toBeNull();
+    expect(buttonNamed("Back to channels")).toBeDefined();
+  });
+
+  it("tells drafts apart by kind and time, without version numbers", async () => {
+    api.fetchChannelSetupDrafts.mockResolvedValue({ items: [draft("channel.slack", "Settings bot", { draft: {} })] });
+    await mount("");
+    const row = container.querySelector('section[aria-label="Saved channel drafts"] li')!;
+    expect(row.textContent).toContain("Settings bot · New setup · Updated");
+    expect(row.textContent).not.toMatch(/version \d/u);
   });
 
   it("continues an unfinished Telegram setup in Chat, and edits the rest here", async () => {

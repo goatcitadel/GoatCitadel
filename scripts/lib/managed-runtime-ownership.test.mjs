@@ -395,6 +395,12 @@ test("real concurrent packaged launches serialize and start one process per mana
   assert.equal(starts.filter((entry) => entry.service === "mission-control").length, 1);
   assert.equal(starts.find((entry) => entry.service === "gateway").databaseDriver, "postgres");
   assert.equal(starts.find((entry) => entry.service === "mission-control").gatewayOrigin, `http://127.0.0.1:${gatewayPort}`);
+  // The launcher gives the Gateway (and only the Gateway) the record path, inside its runtime logs folder.
+  assert.equal(
+    starts.find((entry) => entry.service === "gateway").startupFailureFile,
+    path.join(installRoot, "runtime", "logs", "gateway-startup-failure.json"),
+  );
+  assert.equal(starts.find((entry) => entry.service === "mission-control").startupFailureFile, undefined);
   for (const entry of starts) {
     const identity = queryProcessCreationIdentity(entry.pid);
     assert.equal(identity.status, "running");
@@ -589,6 +595,35 @@ test("stop leaves identity-unproven live processes and metadata untouched", asyn
   assert.ok(isProcessAlive(sentinel.pid));
 });
 
+test("status carries the Gateway's recorded start failure only while the Gateway is not answering", async (t) => {
+  const [gatewayPort, uiPort] = await reservePorts(2);
+  const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-launcher-ownership-startup-failure-"));
+  t.after(() => removeOwnedTestRoot(installRoot));
+  materializePackagedFixture(installRoot);
+  const fixtureLauncher = materializeLauncherCodeFixture(path.join(installRoot, "launcher-code"), gatewayPort, uiPort);
+  const launcherEnv = { ...process.env, GOATCITADEL_HOME: installRoot };
+
+  const without = await runLauncher(["status", "--json"], launcherEnv, fixtureLauncher);
+  assert.equal(without.status, 0, without.stderr || without.stdout);
+  assert.equal("startupFailure" in JSON.parse(without.stdout), false);
+
+  const logDir = path.join(installRoot, "runtime", "logs");
+  fs.mkdirSync(logDir, { recursive: true });
+  const record = {
+    version: 1,
+    summary: "The local database did not start within 180 seconds. Open Logs shows its last messages.",
+    retryable: true,
+    at: "2026-11-15T10:00:00.000Z",
+  };
+  fs.writeFileSync(path.join(logDir, "gateway-startup-failure.json"), JSON.stringify(record), "utf8");
+  const withRecord = await runLauncher(["status", "--json"], launcherEnv, fixtureLauncher);
+  assert.equal(withRecord.status, 0, withRecord.stderr || withRecord.stdout);
+  const payload = JSON.parse(withRecord.stdout);
+  assert.deepEqual(payload.startupFailure, { summary: record.summary, retryable: true, at: record.at });
+  assert.equal(payload.readiness.gateway, false);
+  assert.ok(payload.status === "stopped" || payload.status === "stale");
+});
+
 function createLauncherFixtureServer(requests) {
   return http.createServer((request, response) => {
     requests.push(`${request.method}:${request.url}`);
@@ -630,7 +665,7 @@ function materializeManagedPackagedFixture(installRoot) {
     "const service = process.env.GOATCITADEL_MANAGED_SERVICE;",
     'const port = Number(service === "gateway" ? process.env.GATEWAY_PORT : process.env.GOATCITADEL_UI_PORT);',
     'const host = service === "gateway" ? process.env.GATEWAY_HOST : process.env.GOATCITADEL_UI_HOST;',
-    'fs.appendFileSync(process.env.GC_TEST_MANAGED_START_LOG, JSON.stringify({ service, pid: process.pid, databaseDriver: process.env.GOATCITADEL_DATABASE_DRIVER, gatewayOrigin: process.env.GOATCITADEL_UI_GATEWAY_ORIGIN }) + "\\n");',
+    'fs.appendFileSync(process.env.GC_TEST_MANAGED_START_LOG, JSON.stringify({ service, pid: process.pid, databaseDriver: process.env.GOATCITADEL_DATABASE_DRIVER, gatewayOrigin: process.env.GOATCITADEL_UI_GATEWAY_ORIGIN, startupFailureFile: process.env.GOATCITADEL_STARTUP_FAILURE_FILE }) + "\\n");',
     "const server = http.createServer((request, response) => {",
     '  response.setHeader("content-type", "application/json");',
     '  if (request.url === "/health") {',
@@ -662,7 +697,7 @@ function materializeLauncherCodeFixture(codeRoot, gatewayPort, uiPort) {
   const source = fs.readFileSync(launcherPath, "utf8");
   const fixtureLauncher = path.join(launcherDir, "goatcitadel.mjs");
   fs.writeFileSync(fixtureLauncher, source, "utf8");
-  for (const helper of ["managed-runtime-lifecycle.mjs", "managed-runtime-ownership.mjs", "ui-target.mjs", "installed-runtime-settings.mjs"]) {
+  for (const helper of ["managed-runtime-lifecycle.mjs", "managed-runtime-ownership.mjs", "ui-target.mjs", "installed-runtime-settings.mjs", "gateway-startup-failure.mjs"]) {
     fs.copyFileSync(path.join(repoRoot, "scripts", "lib", helper), path.join(helperDir, helper));
   }
   return fixtureLauncher;

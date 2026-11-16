@@ -700,6 +700,10 @@ describe("PromptPacksWorkbenchPage", () => {
     );
     expect(promptPackMocks.autoScorePromptPackTest).toHaveBeenCalledWith("pack-1", "test-1", { runId: "run-new" });
     expect(promptPackMocks.exportPromptPackReport).toHaveBeenCalledWith("pack-1");
+    // U-LB-015: the success line names the run and the score, never the saved log's file path.
+    expect(readNodeText(renderer.root)).toContain("Ran TEST-01.");
+    expect(readNodeText(renderer.root)).not.toContain("Saved log to");
+    expect(readNodeText(renderer.root)).not.toContain("artifacts/prompt-packs");
 
     await selectDetailTab(renderer, "Output");
     expect(readNodeText(renderer.root)).toContain("Assistant output");

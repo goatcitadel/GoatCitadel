@@ -75,8 +75,9 @@ export async function runMemoryEnumerationScenario(context, stack, deps) {
       });
       const search = async () => {
         await page.getByRole("combobox", { name: "Memory status", exact: true }).selectOption("all");
-        await page.getByRole("textbox", { name: "Search memory", exact: true }).fill(query);
-        const [response] = await Promise.all([memoryResponse(), page.getByRole("button", { name: "Apply memory filter", exact: true }).click()]);
+        const searchBox = page.getByRole("textbox", { name: "Search memory", exact: true });
+        await searchBox.fill(query);
+        const [response] = await Promise.all([memoryResponse(), searchBox.press("Enter")]);
         return response.json();
       };
       const inspectPage = async value => {

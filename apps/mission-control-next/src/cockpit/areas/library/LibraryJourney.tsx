@@ -51,7 +51,7 @@ const PAGE_SIZE = 50;
 // Flat, hairline-separated regions (DESIGN.md › Page anatomy).
 const CARD =
   "grid min-w-0 grid-cols-1 content-start gap-3 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0";
-const INPUT = "w-full min-w-0 rounded-md border border-line bg-raised p-2";
+const INPUT = "w-full min-w-0 rounded-md border border-line-control bg-raised p-2";
 
 const pick = <T extends string>(value: string | null, allowed: readonly (readonly [T, string])[], fallback: T): T =>
   allowed.some(([id]) => id === value) ? (value as T) : fallback;

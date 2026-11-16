@@ -170,6 +170,7 @@ export function FilesystemWriteRootsControl() {
     });
   }
 
+  const readFailed = settings.isError || Boolean(settings.data && !ready);
   const reviewCurrent = Boolean(review && review.revision === revision && !settings.isFetching);
 
   return (
@@ -188,16 +189,6 @@ export function FilesystemWriteRootsControl() {
             {DENY_WINS_COPY}
           </p>
         </div>
-        <Button
-          size="sm"
-          disabled={settings.isFetching || busy}
-          onClick={() => {
-            void settings.refetch();
-            if (change.change) void change.refresh();
-          }}
-        >
-          Refresh
-        </Button>
       </div>
       {settings.isLoading ? <p className="mt-3 text-sm text-fg-muted">Loading filesystem access…</p> : null}
       {settings.isError ? (
@@ -208,6 +199,19 @@ export function FilesystemWriteRootsControl() {
           GoatCitadel did not report write roots or tool access. Update or restart GoatCitadel, then refresh before
           changing these settings.
         </p>
+      ) : null}
+      {readFailed ? (
+        <Button
+          size="sm"
+          className="mt-2"
+          disabled={settings.isFetching || busy}
+          onClick={() => {
+            void settings.refetch();
+            if (change.change) void change.refresh();
+          }}
+        >
+          Try again
+        </Button>
       ) : null}
       {ready && settings.data ? (
         <>

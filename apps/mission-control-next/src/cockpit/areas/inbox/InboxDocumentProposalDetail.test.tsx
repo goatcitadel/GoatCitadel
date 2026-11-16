@@ -144,6 +144,13 @@ function button(label: string): HTMLButtonElement {
 }
 
 describe("Inbox document proposal", () => {
+  it("shows the replacement diff as a plain code block with no border (U-IN-002)", async () => {
+    await renderDetail();
+    const heading = [...container.querySelectorAll("h4")].find((item) => item.textContent === "Replacement diff");
+    expect(heading?.parentElement?.className).toContain("bg-sunken");
+    expect(heading?.parentElement?.className).not.toMatch(/(^|\s)border(\s|$)/);
+  });
+
   it("shows the derived diff, re-reads both owners, and applies only after confirmation", async () => {
     await renderDetail();
     expect(container.textContent).toContain("-Before");

@@ -126,13 +126,32 @@ export function presentBrowserErrand(state: BrowserErrandState, outcome?: Browse
   return outcome ? browserErrandOutcomes[outcome] : status("Done", "done");
 }
 
+const TOKEN_ACRONYMS: Readonly<Record<string, string>> = {
+  mcp: "MCP",
+  url: "URL",
+  urls: "URLs",
+  api: "API",
+  oauth: "OAuth",
+  id: "ID",
+  ids: "IDs",
+  llm: "LLM",
+  http: "HTTP",
+  https: "HTTPS",
+  ui: "UI",
+  json: "JSON",
+  ai: "AI",
+};
+
 export function humanizeToken(value: string): string {
   const words = value
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .split(/[_.\s-]+/)
     .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
+    .map((word) => {
+      const lower = word.toLowerCase();
+      return TOKEN_ACRONYMS[lower] ?? lower;
+    })
+    .join(" ");
   return words ? words[0]!.toUpperCase() + words.slice(1) : "";
 }
 
@@ -141,6 +160,11 @@ export function presentRunStatus(
   options: { waitingOnOperator?: boolean } = {},
 ): StatusPresentation {
   return value === "waiting" && options.waitingOnOperator ? status("Waiting on you", "waiting") : runStatuses[value];
+}
+
+/** A run that can no longer change on its own: Done, Failed, Cancelled, or Failed and needing recovery. */
+export function isFinishedRunStatus(value: DurableRunStatus): boolean {
+  return value === "completed" || value === "failed" || value === "cancelled" || value === "dead_lettered";
 }
 
 export function presentChatTurnStatus(value: ChatTurnLifecycleStatus | string): StatusPresentation {

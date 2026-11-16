@@ -61,7 +61,8 @@ function ConversationRow({
         type="button"
         onClick={() => onSelect(conversation.sessionId)}
         aria-current={selected ? "page" : undefined}
-        className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-sunken aria-[current=page]:bg-sunken ${ROW_TARGET}`}
+        data-current-row=""
+        className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-sunken aria-[current=page]:bg-sunken aria-[current=page]:font-medium ${ROW_TARGET}`}
       >
         <span className="min-w-0 flex-1">
           {/* The operator's own conversation with the bot reads "You", whatever their name on the channel. */}

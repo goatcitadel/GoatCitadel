@@ -152,6 +152,12 @@ export type IntegrationWebhookRouteLike = {
     message: string;
   }>;
   emitChannelActivity: (input: ChannelActivityInput) => Promise<ChannelActivityResult>;
+  /**
+   * Remembers, briefly and in memory, a sender this connection turned away, so channel setup can offer to allow them.
+   * Optional-typed so route-level test harnesses keep compiling, but a REQUIRED member of the integration-webhook
+   * route port, so the real gateway composition cannot drop it.
+   */
+  recordDroppedSender?: (input: { connectionId: string; senderId: string }) => void;
   recordDevDiagnostic?: (input: {
     level: "info" | "warn" | "error";
     category: string;
@@ -358,6 +364,17 @@ function readableSenderId(actorId: string | undefined): string {
 }
 
 /**
+ * The sender id setup may offer to allow, or undefined. Sender ids come from outside parties, so one is offered only
+ * when it reads exactly as it was sent: nothing control, invisible or direction-changing in it (it could look like
+ * another id on the button), no surrounding blanks, not cut short and not empty (it could never match once allowed).
+ */
+export function recordableSenderId(actorId: string | undefined): string | undefined {
+  const readable = readableSenderId(actorId);
+  if (!readable || readable !== actorId || /\p{Cf}/u.test(readable)) return undefined;
+  return readable;
+}
+
+/**
  * The text System › Diagnostics shows when a message is dropped because its sender isn't allowed. The setup guides
  * send an operator who doesn't know their own sender id here, and that page shows the message and not the event's
  * context, so the id has to be in the message itself. The channel is named the way Settings names it.
@@ -378,7 +395,10 @@ export function describeDroppedSender(channel: string, actorId: string | undefin
  * media download or transcription subprocess.
  */
 function evaluateInboundWebhookAccess(
-  integrationWebhooks: Pick<IntegrationWebhookRouteLike, "acceptInboundChannelEvent" | "recordDevDiagnostic">,
+  integrationWebhooks: Pick<
+    IntegrationWebhookRouteLike,
+    "acceptInboundChannelEvent" | "recordDevDiagnostic" | "recordDroppedSender"
+  >,
   options: InboundWebhookDispatchOptions,
 ) {
   const inboundAccess = evaluateChannelInboundAccess({
@@ -426,6 +446,10 @@ function evaluateInboundWebhookAccess(
         allowedSenderCount: inboundAccess.allowedSenders.length,
       },
     });
+    const droppedSenderId = recordableSenderId(options.message.actorId);
+    if (!hasInvalidConfig && options.connectionId && droppedSenderId) {
+      integrationWebhooks.recordDroppedSender?.({ connectionId: options.connectionId, senderId: droppedSenderId });
+    }
     return {
       allowed: false as const,
       response: {
@@ -445,7 +469,10 @@ function evaluateInboundWebhookAccess(
 }
 
 export async function dispatchInboundWebhookMessage(
-  integrationWebhooks: Pick<IntegrationWebhookRouteLike, "acceptInboundChannelEvent" | "recordDevDiagnostic">,
+  integrationWebhooks: Pick<
+    IntegrationWebhookRouteLike,
+    "acceptInboundChannelEvent" | "recordDevDiagnostic" | "recordDroppedSender"
+  >,
   options: InboundWebhookDispatchOptions,
 ) {
   const gate = evaluateInboundWebhookAccess(integrationWebhooks, options);

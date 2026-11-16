@@ -2,6 +2,7 @@ import type { ChannelSetupDraft, ChannelSetupFieldDefinition, ChannelSetupIssue 
 import { updateFieldValue, SECRET_REDACTION_MARKER, isFieldVisible, hasFieldValue } from "./channel-wizard-model";
 import { ChannelRichBlocks } from "../../../../cockpit/areas/settings/ChannelWizardContent";
 import { Button } from "../../../../cockpit/ui/Button";
+import { ChannelSenderListField } from "./ChannelSenderListField";
 import { ChannelStructuredField } from "./ChannelStructuredField";
 
 export const channelInputClass =
@@ -122,6 +123,18 @@ export function ChannelWizardFields({
               </dl>
             ) : null}
           </div>
+        ) : field.type === "sender-list" && draft.connectionId ? (
+          <ChannelSenderListField
+            connectionId={draft.connectionId}
+            field={field}
+            value={value}
+            id={id}
+            describedBy={common["aria-describedby"]}
+            invalid={common["aria-invalid"]}
+            disabled={disabled}
+            inputClassName={channelInputClass}
+            onChange={change}
+          />
         ) : field.type === "target-list" || field.type === "sender-list" ? (
           <ChannelStructuredField
             field={field}

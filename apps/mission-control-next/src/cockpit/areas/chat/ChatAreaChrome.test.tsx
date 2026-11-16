@@ -6,13 +6,28 @@ import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/re
 import type { ChatSessionRecord, OnboardingState } from "@goatcitadel/contracts";
 import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
-import { ChatHeaderSubtitle, ChatSessionHeader, ChatSetupBanner, ChatSetupGate } from "./ChatAreaChrome";
+import { ScopeLineProvider } from "../../app/scope-line";
+import {
+  ChatEmptyState,
+  ChatHeaderSubtitle,
+  ChatSessionHeader,
+  ChatSetupBanner,
+  ChatSetupGate,
+} from "./ChatAreaChrome";
 import type { ChannelConversationContext } from "./channel-conversation";
 
 const media = vi.hoisted(() => ({ phone: false }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({
   useMediaQuery: (query: string) =>
     media.phone && (query === RESPONSIVE_QUERIES.phone || query === RESPONSIVE_QUERIES.belowDesktop),
+}));
+
+vi.mock("../../data/use-citadel-name", () => ({ useCitadelNameRead: () => ({ phase: "ready", name: "Personal" }) }));
+vi.mock("../../data/use-workspace-name", () => ({
+  useWorkspaceNameRead: () => ({ phase: "ready", name: "Sandbox" }),
+}));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
+  useUiPreferences: () => ({ activeCitadelId: "personal", activeWorkspaceId: "sandbox" }),
 }));
 
 const outage = vi.hoisted(() => ({ recover: vi.fn() }));
@@ -69,7 +84,7 @@ function input(): MissionThreadedRenderSurfaceInput {
   } as unknown as MissionThreadedRenderSurfaceInput;
 }
 
-function renderHeader(build = false) {
+function renderHeader(build = false, railYields = false) {
   const view = input();
   const onOpenProjects = vi.fn();
   const onToggle = vi.fn();
@@ -85,6 +100,7 @@ function renderHeader(build = false) {
         onOpenProjects={onOpenProjects}
         onOpenConversations={onOpenConversations}
         onInspect={vi.fn()}
+        railYields={railYields}
       />,
     ),
   );
@@ -93,6 +109,34 @@ function renderHeader(build = false) {
 }
 
 describe("ChatSessionHeader", () => {
+  it("shows the workspace below desktop width and not at desktop width (U-GL-027)", () => {
+    const render = () =>
+      act(() =>
+        root.render(
+          <ScopeLineProvider>
+            <ChatSessionHeader
+              input={input()}
+              active={null}
+              session={session}
+              selectedSessionId="session-1"
+              buildEditor={null}
+              onOpenProjects={vi.fn()}
+              onOpenConversations={vi.fn()}
+              onInspect={vi.fn()}
+            />
+          </ScopeLineProvider>,
+        ),
+      );
+    media.phone = true;
+    render();
+    expect(container.querySelector("header [data-cockpit-page-scope]")?.textContent).toBe("In Personal / Sandbox");
+    act(() => root.unmount());
+    root = createRoot(container);
+    media.phone = false;
+    render();
+    expect(container.querySelector("[data-cockpit-page-scope]")).toBeNull();
+  });
+
   it("hands the active conversation's error and refresh to the outage recovery (U-CH-026)", () => {
     const onDismissError = vi.fn();
     const onRefreshThread = vi.fn();
@@ -147,7 +191,7 @@ describe("ChatSessionHeader", () => {
       (button) => button.textContent === "Conversations",
     )!;
     expect(conversations.parentElement).toBe(header);
-    expect(conversations.className).toContain("md:hidden");
+    expect(conversations.className).toContain("lg:hidden");
     expect(conversations.getAttribute("aria-haspopup")).toBe("dialog");
     expect(header.querySelector("select")).toBeNull();
     expect(header.querySelector('button[aria-label="New conversation"]')?.parentElement).toBe(header);
@@ -156,6 +200,22 @@ describe("ChatSessionHeader", () => {
     expect(header.querySelector('button[aria-label="Conversation actions"]')).not.toBeNull();
     await act(async () => conversations.click());
     expect(onOpenConversations).toHaveBeenCalledOnce();
+  });
+
+  it("shows Conversations and New until the rail appears at 1280 px, or 1600 px with the inspector open (U-CH-002)", () => {
+    const find = (header: HTMLElement) => ({
+      conversations: [...header.querySelectorAll("button")].find((button) => button.textContent === "Conversations")!,
+      create: header.querySelector('button[aria-label="New conversation"]')!,
+    });
+    const normal = find(renderHeader().header);
+    expect(normal.conversations.className).toContain("lg:hidden");
+    expect(normal.conversations.className).not.toContain("md:hidden");
+    expect(normal.create.className).toContain("lg:hidden");
+    const yielding = find(renderHeader(false, true).header);
+    expect(yielding.conversations.className).toContain("xl:hidden");
+    expect(yielding.conversations.className).not.toContain("lg:hidden");
+    expect(yielding.create.className).toContain("xl:hidden");
+    expect(yielding.create.className).not.toContain("lg:hidden");
   });
 
   it("accessible name starts with the visible text", () => {
@@ -411,5 +471,32 @@ describe("ChatSetupGate", () => {
   it("keeps the advisory wording when a model is ready", async () => {
     await gate({ data: withModel, isError: false });
     expect(container.textContent).toContain("You can chat now.");
+  });
+});
+
+describe("ChatEmptyState", () => {
+  function renderEmpty(rail: Partial<MissionThreadedRenderSurfaceInput["sessionRail"]>) {
+    const base = input().sessionRail;
+    act(() => root.render(<ChatEmptyState rail={{ ...base, selectedSessionId: null, ...rail }} />));
+  }
+
+  it("invites the first conversation when the list is empty", () => {
+    renderEmpty({ missionSessions: [], search: "" });
+    expect(container.textContent).toContain("Start your first conversation");
+    expect(container.textContent).toContain("Ask GoatCitadel anything. Your conversations will be listed here.");
+    expect(container.textContent).not.toContain("Choose a conversation");
+  });
+
+  it("keeps Choose a conversation when there are conversations", () => {
+    renderEmpty({ search: "" });
+    expect(container.textContent).toContain("Choose a conversation");
+    expect(container.textContent).not.toContain("Start your first conversation");
+  });
+
+  it("keeps Choose a conversation for a search or the archive that found nothing", () => {
+    renderEmpty({ missionSessions: [], search: "zebra" });
+    expect(container.textContent).toContain("Choose a conversation");
+    renderEmpty({ missionSessions: [], search: "", historyView: "archived" });
+    expect(container.textContent).toContain("Choose a conversation");
   });
 });

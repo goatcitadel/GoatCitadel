@@ -2,6 +2,7 @@ import type { ComponentProps, ReactNode, RefObject } from "react";
 import { X } from "lucide-react";
 import { Drawer } from "vaul";
 import { IconButton } from "./IconButton";
+import { NoFocusTooltips } from "./tooltip-focus";
 
 export function SheetDrawerRuntime({
   open,
@@ -35,19 +36,29 @@ export function SheetDrawerRuntime({
           onCloseAutoFocus={onCloseAutoFocus}
           className={
             side
-              ? "fixed inset-y-0 right-0 z-50 h-full w-full max-w-2xl overflow-hidden border-l border-line bg-overlay"
-              : "cockpit-sheet cockpit-safe-bottom fixed inset-x-0 bottom-0 z-50 overflow-hidden rounded-t-lg border border-line bg-overlay"
+              ? "fixed inset-y-0 right-0 z-50 flex h-full w-full max-w-2xl flex-col overflow-hidden border-l border-line bg-overlay"
+              : "cockpit-sheet cockpit-safe-bottom fixed inset-x-0 bottom-0 z-50 flex flex-col overflow-hidden rounded-t-lg border border-line bg-overlay"
           }
         >
-          <div className={side ? "h-full overflow-y-auto p-4" : "cockpit-sheet-scroll overflow-y-auto p-4"}>
-            <div className="mb-3 flex items-center justify-between gap-4">
+          <NoFocusTooltips>
+            {side ? null : <Drawer.Handle className="mx-auto mt-2 shrink-0" />}
+            {/* The title and close button sit outside the scroller so a long sheet never scrolls them away. */}
+            <div data-sheet-header="" className="flex shrink-0 items-center justify-between gap-4 px-4 pb-3 pt-4">
               <Drawer.Title className="font-display text-md font-semibold text-fg">{title}</Drawer.Title>
               <Drawer.Close asChild>
                 <IconButton ref={sdkClose} label={closeLabel} icon={<X aria-hidden="true" className="size-4" />} />
               </Drawer.Close>
             </div>
-            {children}
-          </div>
+            <div
+              className={
+                side
+                  ? "min-h-0 flex-1 overflow-y-auto px-4 pb-4"
+                  : "cockpit-sheet-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-4"
+              }
+            >
+              {children}
+            </div>
+          </NoFocusTooltips>
         </Drawer.Content>
       </Drawer.Portal>
     </Drawer.Root>

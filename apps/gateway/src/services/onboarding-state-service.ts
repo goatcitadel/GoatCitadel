@@ -14,6 +14,7 @@ import type { GatewayRuntimeConfig } from "../config.js";
 import type { LlmService } from "./llm-service.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { recordOnboardingCompletion } from "./onboarding-completion-service.js";
+import { isProviderLikelyLocal } from "../provider-locality.js";
 import type * as settingsAuthService from "./settings-auth-service.js";
 
 const log = logger.child("onboarding-state-service");
@@ -98,7 +99,8 @@ export function getOnboardingState(runtime: OnboardingStateHost): OnboardingStat
     requireMtls: runtime.config.assistant.mesh.security.requireMtls,
     tailnetEnabled: runtime.config.assistant.mesh.security.tailnet.enabled,
   };
-  const toolApprovalMode = runtime.config.toolPolicy.tools.approvalMode ?? runtime.config.assistant.toolApprovalMode ?? "approve_risky";
+  const toolApprovalMode =
+    runtime.config.toolPolicy.tools.approvalMode ?? runtime.config.assistant.toolApprovalMode ?? "approve_risky";
   const budgetMode = runtime.config.budgets.mode;
   const networkAllowlist = runtime.config.toolPolicy.sandbox.networkAllowlist;
   const activeProvider = llm.providers.find((provider) => provider.providerId === llm.activeProviderId);
@@ -597,13 +599,4 @@ function isAuthConfiguredForMode(auth: RuntimeSettings["auth"]): boolean {
     return auth.tokenConfigured;
   }
   return auth.basicConfigured;
-}
-
-function isProviderLikelyLocal(baseUrl: string): boolean {
-  try {
-    const url = new URL(baseUrl);
-    return ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
-  } catch {
-    return false;
-  }
 }

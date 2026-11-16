@@ -47,7 +47,14 @@ export function CapabilitiesArea() {
       navigate={(href) => navigate(href)}
     >
       <section className={`${AREA_PAGE} min-h-full`}>
-        <AreaHeader title="Capabilities" description="Everything GoatCitadel's AI can use, in one place." />
+        <AreaHeader
+          title={
+            connectorSetup
+              ? "Advanced setup"
+              : (CAPABILITIES_TABS.find((entry) => entry.id === tab)?.label ?? "Capabilities")
+          }
+          description="Everything GoatCitadel's AI can use, in one place."
+        />
         {tab === "skills" ? <SkillsTab /> : null}
         {tab === "plugins" ? <PluginsTab /> : null}
         {tab === "connectors" && connectorSetup ? (

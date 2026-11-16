@@ -278,7 +278,7 @@ export async function runCockpitMcpPolicyRequestsProof({ context, browser, stack
           });
           await editor.getByRole("button", { name: "Close editor", exact: true }).click();
           stage = "record saved configuration diagnostics without execution";
-          await panel.getByRole("button", { name: `Inspect ${label}`, exact: true }).click();
+          await panel.getByRole("button", { name: `Connect and inspect ${label}`, exact: true }).click();
           const inspection = page.getByRole("dialog", { name: "MCP server inspection", exact: true });
           const reportPromise = page.waitForResponse(
             (response) =>

@@ -168,7 +168,8 @@ describe("cockpit task details editor", () => {
 
   it("does not edit runtime-owned task details", async () => {
     await render(task({ agenticContext: { runId: "run-a" } }));
-    expect(container.textContent).toContain("A runtime execution owns this task");
+    expect(container.textContent).toContain("A run is handling this task, but no link to it was recorded.");
+    expect(container.textContent).toContain("before editing board details.");
     expect(container.querySelector<HTMLInputElement>("input")).toBeNull();
     expect(updateTask).not.toHaveBeenCalled();
   });

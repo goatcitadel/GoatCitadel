@@ -91,7 +91,7 @@ export function inboxItemKindLabel(kind: OperatorInboxItem["kind"]): string {
     case "failed_run":
       return "Failed run";
     case "dead_letter":
-      return "Stopped run";
+      return "Run that needs recovery";
     case "runtime_health":
       return "Runtime health";
     case "backup_trust":

@@ -42,7 +42,7 @@ export function LibraryGovernanceRoute({
       ) : section === "citadel-blueprint" ? (
         <CitadelBlueprintSettings key={citadelId} citadelId={citadelId} />
       ) : section === "citadel" ? (
-        <CitadelMasonSettings key={citadelId} citadelId={citadelId} />
+        <CitadelMasonSettings key={citadelId} citadelId={citadelId} embeddedHeading />
       ) : section === "citadel-wards" ? (
         <CitadelWardsSettings key={citadelId} citadelId={citadelId} />
       ) : section === "citadel-council" ? (

@@ -14,6 +14,7 @@ import { scheduleCadence, scheduleTimezoneSummary } from "./schedule-cadence";
 import { TimeText } from "../../ui/TimeText";
 import { presentScheduleAction } from "./work-vocabulary";
 import { ScheduleTiming } from "./ScheduleTiming";
+import { TaskDestination } from "./WorkScheduleSummary";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 export function WorkScheduleEditor({
@@ -200,7 +201,12 @@ export function WorkScheduleEditor({
             </p>
             <p>
               Action: {presentScheduleAction(review.value.action)}. Destination:{" "}
-              {review.value.workdir || "Not specified"}. Context: {review.value.contextFrom || "Not specified"}. End:{" "}
+              {review.value.action === "task" ? (
+                <TaskDestination job={job} />
+              ) : (
+                `${review.value.workdir || "Not specified"}.`
+              )}{" "}
+              Context: {review.value.contextFrom || "Not specified"}. End:{" "}
               {review.value.endAt ? <TimeText value={review.value.endAt} absolute /> : "No end date"}.{" "}
               {scheduleTimezoneSummary(review.value.schedule)}
               Displayed dates use your browser timezone. Review expires after one minute.

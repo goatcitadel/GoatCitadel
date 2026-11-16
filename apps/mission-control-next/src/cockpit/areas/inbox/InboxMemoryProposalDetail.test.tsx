@@ -135,6 +135,15 @@ describe("Inbox memory proposal review", () => {
     ).toBe(false);
   });
 
+  it("shows the source excerpt as a plain block with no border (U-IN-002)", async () => {
+    await render();
+    const excerpt = [...container.querySelectorAll("details")].find(
+      (item) => item.querySelector("summary")?.textContent === "Source excerpt",
+    );
+    expect(excerpt?.className).toContain("bg-sunken");
+    expect(excerpt?.className).not.toMatch(/(^|\s)border(\s|$)/);
+  });
+
   it("shows the current proposal and promotes in place after a fresh owner read", async () => {
     await render();
     expect(container.textContent).toContain("Proposed insight: Use the project style guide.");

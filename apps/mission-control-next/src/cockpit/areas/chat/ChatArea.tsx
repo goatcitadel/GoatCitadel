@@ -3,12 +3,12 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { useQuery } from "@tanstack/react-query";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { fetchOnboardingState } from "@goatcitadel/mission-control-shared/api/client";
-import {
-  MissionThreadedControllerHost,
-  type MissionThreadedRenderSurfaceInput,
-} from "@goatcitadel/threaded-surface-core";
-import { ChatConversationsSheet } from "./ChatConversationsSheet";
+import { MissionThreadedControllerHost } from "@goatcitadel/threaded-surface-core";
+import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
+import { ChatConversationRail } from "./ChatConversationRail";
+import { unsentConversationId } from "./conversation-reuse";
 import { ChatEmptyState, ChatSessionHeader, ChatSetupGate } from "./ChatAreaChrome";
+import { CHAT_SHELL_FRAME } from "./ChatHostStatus";
 import { ChatTranscript } from "./ChatTranscript";
 import { ChatNoticeText } from "./ChatNoticeText";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
@@ -18,7 +18,6 @@ import { artifactInspectorHistoryMatches, buildEditorTurnId, inspectorTabFor } f
 import { chatSelectionHref } from "./chat-selection-evidence";
 import type { ChatInspectorTab } from "./chat-inspector-evidence";
 import { readCockpitHistory } from "../../app/cockpit-history";
-import { ThreadList } from "./ThreadList";
 import { useInspector } from "../../app/inspector";
 import { InspectorSourceContext } from "../../app/inspector-context";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
@@ -64,9 +63,7 @@ export function ChatArea({
         workspaceId={activeWorkspaceId ?? "default"}
         getChatApprovalModeIntent={getChatApprovalModeIntent}
         surface="chat"
-        lockSurface
-        hidePageHeader
-        renderWhileLoading
+        {...CHAT_SHELL_FRAME}
         secondaryEvidenceEnabled={inspectorSource === "chat"}
         restorePinnedGoal={false}
         routeSearch={search}
@@ -209,6 +206,7 @@ export function ChatAreaView({
     if (turnId) active?.onSelectTurn(turnId);
     open({
       source: "chat",
+      focusOnOpen: true,
       title: "Conversation",
       body: (
         <DeferredChatInspector
@@ -293,19 +291,15 @@ export function ChatAreaView({
   useEffect(() => () => closeIfOpen("chat"), [closeIfOpen]);
   return (
     <section aria-label="Chat" className="flex min-h-0 min-w-0 flex-1">
-      <ThreadList
+      <ChatConversationRail
         rail={input.sessionRail}
         projectOptions={input.contextDockProps?.projectOptions}
         onOpenProjects={openProjects}
         messaging={messaging}
-      />
-      <ChatConversationsSheet
-        open={conversationsOpen}
-        onOpenChange={setConversationsOpen}
-        rail={input.sessionRail}
-        projectOptions={input.contextDockProps?.projectOptions}
-        onOpenProjects={openProjects}
-        messaging={messaging}
+        yieldToInspector={Boolean(inspectorContent)}
+        sheetOpen={conversationsOpen}
+        onSheetOpenChange={setConversationsOpen}
+        unsentSessionId={unsentConversationId(active)}
       />
       <ChatMainColumn messaging={messagingView(rest, search)} channelConversation={isChannelConversation(session)}>
         <ChatSessionHeader
@@ -334,6 +328,7 @@ export function ChatAreaView({
           inspecting={inspectorContent?.source === "chat"}
           onInspect={() => (inspectorContent?.source === "chat" ? close() : openInspector())}
           onFork={active && latestTurnId ? () => active.onStartNewThreadFromTurn(latestTurnId) : undefined}
+          railYields={Boolean(inspectorContent)}
         />
         {active ? (
           <DeferredProjectAssignmentReview active={active} search={search} identity={inspectorIdentity} />
@@ -377,7 +372,11 @@ export function ChatAreaView({
             />
           </div>
         ) : (
-          <ChatEmptyState rail={input.sessionRail} onOpenConversations={() => setConversationsOpen(true)} />
+          <ChatEmptyState
+            rail={input.sessionRail}
+            onOpenConversations={() => setConversationsOpen(true)}
+            railYields={Boolean(inspectorContent)}
+          />
         )}
         {active?.sessionStatusPanel ? (
           <DeferredSessionStatusPanel key={selectedSessionId} hidden={buildOpen} panel={active.sessionStatusPanel} />

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { isModifiedClick } from "../lib/modified-click";
+import { useScrollEdges } from "./use-scroll-edges";
 
 export interface OverflowTab {
   id: string;
@@ -11,6 +12,17 @@ export interface OverflowTab {
 
 /** A strip this long cannot fit a phone, so on a phone it becomes a section picker. */
 export const PICKER_MIN_TABS = 6;
+
+/** The row's scroll position that shows the tab with the least movement. */
+export function nearestScrollLeft(
+  row: { scrollLeft: number; clientWidth: number },
+  tab: { offsetLeft: number; offsetWidth: number },
+): number {
+  if (tab.offsetLeft < row.scrollLeft) return tab.offsetLeft;
+  const tabEnd = tab.offsetLeft + tab.offsetWidth;
+  if (tabEnd > row.scrollLeft + row.clientWidth) return tabEnd - row.clientWidth;
+  return row.scrollLeft;
+}
 
 /**
  * One row of view tabs that never wraps or clips silently (DESIGN.md › Page anatomy): it scrolls sideways, the hidden
@@ -30,28 +42,13 @@ export function OverflowTabs({
 }) {
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const picker = phone && tabs.length >= PICKER_MIN_TABS;
-  const row = useRef<HTMLElement>(null);
-  const [edges, setEdges] = useState({ start: false, end: false });
+  const { ref: row, ...edges } = useScrollEdges<HTMLElement>([tabs.length, picker]);
   useEffect(() => {
+    // Set the row's own scroll position: scrollIntoView would also move the keyboard start point (U-GL-046).
     const element = row.current;
-    if (!element) return undefined;
-    const measure = () =>
-      setEdges({
-        start: element.scrollLeft > 1,
-        end: element.scrollLeft + element.clientWidth < element.scrollWidth - 1,
-      });
-    measure();
-    element.addEventListener("scroll", measure, { passive: true });
-    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
-    observer?.observe(element);
-    return () => {
-      element.removeEventListener("scroll", measure);
-      observer?.disconnect();
-    };
-  }, [tabs.length, picker]);
-  useEffect(() => {
-    row.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [current, picker]);
+    const currentTab = element?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (element && currentTab) element.scrollLeft = nearestScrollLeft(element, currentTab);
+  }, [row, current, picker]);
   if (picker) {
     const selected = tabs.find((tab) => tab.id === current);
     return (
@@ -78,7 +75,7 @@ export function OverflowTabs({
       aria-label={label}
       data-overflow-start={edges.start || undefined}
       data-overflow-end={edges.end || undefined}
-      className="cockpit-area-tabs cockpit-overflow-fade flex gap-1 overflow-x-auto border-b border-line-subtle"
+      className="cockpit-area-tabs cockpit-overflow-fade relative flex gap-1 overflow-x-auto border-b border-line-subtle"
     >
       {tabs.map((tab) => (
         <a

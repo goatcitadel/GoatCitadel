@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJobRecordResponse } from "@goatcitadel/mission-control-shared/api/types";
 import {
   lastRunFailureReason,
@@ -11,6 +11,13 @@ import {
   WorkScheduleListItem,
   WorkScheduleRecordDetails,
 } from "./WorkScheduleSummary";
+
+vi.mock("../../data/use-workspace-name", () => ({
+  useWorkspaceNameLookup: () => (workspaceId?: string) => (workspaceId === "ws-c" ? "Research" : undefined),
+}));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
+  useUiPreferences: () => ({ activeCitadelId: undefined }),
+}));
 
 function buildJob(overrides: Partial<CronJobRecordResponse> = {}): CronJobRecordResponse {
   return {
@@ -113,6 +120,59 @@ describe("schedule summary rendering", () => {
     expect(alert?.textContent).toBe("Last scheduled run failed. Backup target is full.");
     expect(container.textContent).not.toContain(output);
     expect(container.textContent).not.toContain("memory_consolidation");
+  });
+
+  it("names the workspace the next run files into, read from the Gateway's current answer", () => {
+    const task = (extra = {}) => buildJob({ action: "task", ...extra });
+    act(() => root.render(<WorkScheduleRecordDetails selected={task({ taskDestinationWorkspaceId: "ws-c" })} />));
+    expect(container.textContent).toContain("Action: Task. Destination: Research's task list.");
+
+    // The last run filed elsewhere; the sentence follows the current destination, not the last run.
+    const moved = task({
+      taskDestinationWorkspaceId: "ws-c",
+      lastRunOutput: JSON.stringify({ result: "ok", workspaceId: "ws-old" }),
+    });
+    act(() => root.render(<WorkScheduleRecordDetails selected={moved} />));
+    expect(container.textContent).toContain("Destination: Research's task list.");
+
+    act(() => root.render(<WorkScheduleRecordDetails selected={task({ taskDestinationWorkspaceId: "default" })} />));
+    expect(container.textContent).toContain("Destination: the default workspace's task list.");
+  });
+
+  it("says the destination could not be read when the Gateway sent none, and never guesses", () => {
+    act(() => root.render(<WorkScheduleRecordDetails selected={buildJob({ action: "task", citadelId: "team" })} />));
+    expect(container.textContent).toContain("Destination: could not be read.");
+    expect(container.textContent).not.toContain("Installation-wide");
+    act(() => root.render(<WorkScheduleRecordDetails selected={buildJob({ action: "task" })} />));
+    expect(container.textContent).toContain("Installation-wide · Action: Task. Destination: could not be read.");
+  });
+
+  it("says a past next run is overdue and marks a projected one", () => {
+    const stale = buildJob({ nextRunAt: new Date(Date.now() - 23 * 60_000).toISOString() });
+    act(() =>
+      root.render(
+        <ul>
+          <WorkScheduleListItem job={stale} onReview={() => {}} />
+        </ul>,
+      ),
+    );
+    expect(container.textContent).toContain("Next run: Overdue, was due 23 minutes ago");
+
+    const projected = buildJob({
+      nextRunAt: new Date(Date.now() + 3 * 3_600_000).toISOString(),
+      nextRunProjected: true,
+    });
+    act(() => root.render(<WorkScheduleRecordDetails selected={projected} />));
+    expect(container.textContent).toMatch(/in 3 hours \(from its schedule\)/);
+
+    const recorded = buildJob({ nextRunAt: new Date(Date.now() + 3 * 3_600_000).toISOString() });
+    act(() => root.render(<WorkScheduleRecordDetails selected={recorded} />));
+    expect(container.textContent).not.toContain("from its schedule");
+
+    act(() => root.render(<WorkScheduleRecordDetails selected={buildJob({ enabled: false })} />));
+    expect(container.textContent).toContain("Paused");
+    act(() => root.render(<WorkScheduleRecordDetails selected={buildJob()} />));
+    expect(container.textContent).toContain("Not reported");
   });
 
   it("shows the cadence in words and keeps the cron expression out of the default view", () => {

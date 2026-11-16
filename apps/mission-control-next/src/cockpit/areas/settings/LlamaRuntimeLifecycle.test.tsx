@@ -78,7 +78,8 @@ describe("cockpit llama.cpp lifecycle", () => {
     await render();
     const lifecycle = container.querySelector('[aria-label="llama.cpp lease lifecycle"]')!;
     expect(lifecycle.textContent).toContain("Lifecycle: Active");
-    expect(lifecycle.textContent).toContain("Ownership: Owned by GoatCitadel");
+    expect(lifecycle.textContent).toContain("Process: Started by GoatCitadel");
+    expect(lifecycle.textContent).not.toContain("Ownership");
     expect(lifecycle.textContent).toContain("Active requests: 2 (chat 2)");
     expect(lifecycle.textContent).toContain("Kept running by: API");
     expect(lifecycle.textContent).toContain("Latest probe: healthy");
@@ -104,6 +105,11 @@ describe("cockpit llama.cpp lifecycle", () => {
     await render({ status: external });
     expect(button("Review stop")).toBeUndefined();
     expect(container.textContent).toContain("No GoatCitadel-owned llama.cpp process is running.");
+    expect(container.textContent).toContain("Process: Started outside GoatCitadel; GoatCitadel only watches it");
+    const idle = status();
+    idle.leaseDiagnostics!.ownership = "none";
+    await render({ status: idle });
+    expect(container.textContent).toContain("Process: Not running under GoatCitadel");
   });
 
   it("re-reads the runtime before a reviewed stop and warns about active requests", async () => {

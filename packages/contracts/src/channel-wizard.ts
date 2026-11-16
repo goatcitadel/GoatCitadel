@@ -384,3 +384,14 @@ export interface ChannelSetupFinalizeResult {
   validation: ChannelSetupValidationResult;
   test?: ChannelSetupTestResult;
 }
+
+/** A sender a channel's inbound gate turned away, kept briefly in memory so setup can offer to allow them. */
+export interface ChannelDroppedSender {
+  senderId: string;
+  droppedAt: string;
+}
+
+export interface ChannelDroppedSendersResponse {
+  connectionId: string;
+  items: ChannelDroppedSender[];
+}

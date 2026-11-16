@@ -81,6 +81,8 @@ function createStreamRuntime(host: ChannelStreamRuntimeHost, runtimeKey: object)
       {
         acceptInboundChannelEvent: (input) => host.acceptInboundChannelEvent(input),
         recordDevDiagnostic,
+        // The route composition owns the one dropped-sender log; its port is provided here with the update handlers.
+        recordDroppedSender: (input) => channelUpdateHandlers.get(runtimeKey)?.webhooks.recordDroppedSender?.(input),
       },
       {
         channel: connection.key,

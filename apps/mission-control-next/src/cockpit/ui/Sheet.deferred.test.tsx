@@ -177,6 +177,7 @@ beforeEach(async () => {
             </div>
           );
         },
+        Handle: () => <div data-vaul-handle="" />,
         Title: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
         Close: ({ children }: { children: ReactElement<{ onClick?: (event: MouseEvent) => void }> }) => {
           const owner = useContext(sdk);

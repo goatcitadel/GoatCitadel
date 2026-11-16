@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
+import { useDeliberateOpen } from "../deliberate-open";
 import type { CapabilityPluginListItem, CapabilityPluginListResponse } from "@goatcitadel/contracts";
 import { useInspector } from "../../../app/inspector";
 import { useCockpitRoute } from "../../../app/use-cockpit-route";
@@ -85,24 +86,27 @@ export function usePluginPanel(
   const { open: openInspector } = useInspector();
   const { search, navigate } = useCockpitRoute();
   const asked = useRef<{ id: string; inspectorOpen: unknown } | null>(null);
+  const deliberate = useDeliberateOpen();
   const show = useCallback(
     (id: string, title: string) => {
       asked.current = { id, inspectorOpen: openInspector };
       openInspector({
         source: pluginPanelSource(id),
+        focusOnOpen: deliberate.take(pluginPanelSource(id)),
         title,
         body: <PluginPanel pluginId={id} onInstall={onInstall} />,
       });
     },
-    [openInspector, onInstall],
+    [openInspector, onInstall, deliberate],
   );
   useAddressPanel(usePanelPlugin(search, list), show, asked);
   const linkedId = pluginIdFromSearch(search);
   return {
     open: (item) => {
+      deliberate.press(pluginPanelSource(item.pluginId));
       // The address already names it (the panel was closed without clearing it): there is nothing to move.
       if (linkedId === item.pluginId) show(item.pluginId, item.name);
-      else navigate(pluginItemHref(item.pluginId));
+      else deliberate.go(pluginPanelSource(item.pluginId), () => navigate(pluginItemHref(item.pluginId)));
     },
   };
 }

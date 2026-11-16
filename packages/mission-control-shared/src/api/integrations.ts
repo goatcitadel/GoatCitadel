@@ -51,6 +51,7 @@ export {
   fetchChannelSetupDrafts,
   createChannelSetupDraft,
   fetchChannelSetupDraft,
+  fetchChannelDroppedSenders,
   reviewChannelSetupConnection,
   updateChannelSetupDraft,
   submitChannelSetupDraftSecrets,

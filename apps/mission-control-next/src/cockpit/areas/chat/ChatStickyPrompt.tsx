@@ -15,12 +15,12 @@ export function ChatStickyPrompt({
   onJump: () => void;
 }) {
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-0 z-10 px-3 pt-2 sm:px-6">
+    <div className="absolute inset-x-0 top-0 z-10 border-b border-line-subtle bg-canvas px-3 py-1.5 sm:px-6">
       <button
         type="button"
         onClick={onJump}
         aria-label={`Back to message ${position}: ${promptStart}`}
-        className="pointer-events-auto mx-auto flex w-full max-w-3xl items-center gap-2 rounded-md border border-line-subtle bg-overlay px-3 py-1.5 text-left text-sm text-fg-secondary shadow-overlay hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        className="mx-auto flex w-full max-w-3xl items-center gap-2 rounded-md border border-line-subtle bg-overlay px-3 py-1.5 text-left text-sm text-fg-secondary hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         data-chat-sticky-prompt
       >
         <ArrowUp aria-hidden="true" className="size-4 shrink-0 text-fg-muted" />

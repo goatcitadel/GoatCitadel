@@ -114,12 +114,14 @@ export function WorkBoard() {
         : workColumnStatus(taskView, taskBoard ? matchingTasks(group).length : undefined, "tasks", {
             shown: visibleTasks(group).length,
             matching: Boolean(query),
+            partial: tasks.hasNextPage,
           }),
       kind === "task"
         ? null
         : workColumnStatus(runView, board ? matchingRuns(group).length : undefined, "runs", {
             shown: visibleRuns(group).length,
             matching: Boolean(query),
+            partial: runs.hasNextPage,
           }),
     ]
       .filter(Boolean)
@@ -161,7 +163,7 @@ export function WorkBoard() {
   return (
     <section className={`${AREA_PAGE} min-h-full`}>
       <AreaHeader
-        title="Work"
+        title="Board"
         description="Workspace tasks and recent Chat or supervised plan runs."
         actions={
           <>

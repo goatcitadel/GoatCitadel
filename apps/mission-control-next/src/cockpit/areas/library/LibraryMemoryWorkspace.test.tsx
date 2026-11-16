@@ -16,6 +16,10 @@ vi.mock("./library-resources", async (original) => ({
   ...(await original<typeof import("./library-resources")>()),
   loadLibraryResources: api.load,
 }));
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", async (original) => ({
+  ...(await original<object>()),
+  fetchWorkspaces: async () => ({ items: [] }),
+}));
 vi.mock("./LibraryMemoryProposals", () => ({ LibraryMemoryProposals: () => <p>proposals</p> }));
 vi.mock("./LibraryMemoryBatch", () => ({ LibraryMemoryBatch: () => <p>bulk actions</p> }));
 vi.mock("./LibraryMemoryEditor", () => ({
@@ -87,13 +91,13 @@ it("leads an empty memory directory with one empty state and no filters, bulk ac
   expect(container.querySelector('input[type="search"], input:not([type])')).toBeNull();
   expect(container.textContent).not.toContain("bulk actions");
   expect(button("Previous memory page")).toBeUndefined();
-  expect(button("Apply memory filter")).toBeUndefined();
+  expect(container.querySelector("form")).toBeNull();
   expect(container.textContent).not.toContain("0 matching records");
   expect(button("Refresh memory directory")).toBeDefined();
   expect(container.textContent).toContain("proposals");
   await act(async () => button("Show all statuses")!.click());
   await vi.waitFor(() => expect(api.load).toHaveBeenLastCalledWith(expect.objectContaining({ status: "all" })));
-  expect(button("Apply memory filter")).toBeDefined();
+  expect(container.querySelector("form")).not.toBeNull();
 });
 
 it.each([undefined, "next"])("discloses withheld records on an otherwise empty first page (%s)", async (nextCursor) => {
@@ -226,4 +230,39 @@ it("reads the directory again, without a reload, once memory administration is t
   await vi.waitFor(() => expect(container.textContent).toContain("No active memories"));
   expect(api.load.mock.calls.length).toBeGreaterThan(readsWhileOff);
   expect(container.textContent).not.toContain("turned off on this installation");
+});
+
+it("filters memory as you type, after a short pause, with no apply button", async () => {
+  api.load.mockResolvedValue({ items: [], coverage: "0 matching records", total: 0 });
+  await render();
+  await vi.waitFor(() => expect(api.load).toHaveBeenCalled());
+  vi.useFakeTimers();
+  try {
+    const search = container.querySelector<HTMLInputElement>("form input")!;
+    api.load.mockClear();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "alpha");
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(299);
+    });
+    expect(api.load).not.toHaveBeenCalledWith(expect.objectContaining({ query: "alpha" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2);
+    });
+    expect(api.load.mock.calls.filter(([input]) => input.query === "alpha")).toHaveLength(1);
+    expect(button("Apply memory filter")).toBeUndefined();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("refreshes the proposals too when the directory is refreshed, since their section may be hidden", async () => {
+  api.load.mockResolvedValue({ items: [], coverage: "0 matching records" });
+  await render();
+  await vi.waitFor(() => expect(container.textContent).toContain("No active memories"));
+  const invalidate = vi.spyOn(client, "invalidateQueries");
+  await act(async () => button("Refresh memory directory")!.click());
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["library", "memory-proposals", "one"] });
 });

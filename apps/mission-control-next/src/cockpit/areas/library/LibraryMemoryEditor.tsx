@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { MemoryItemRecord } from "@goatcitadel/contracts";
 import {
@@ -23,6 +23,8 @@ import { Field } from "../../ui/Field";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { recordView } from "../../data/record-view";
 import { TimeText } from "../../ui/TimeText";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { describeMemoryProvenance } from "./library-memory-provenance";
 import { formatSeconds } from "@goatcitadel/mission-control-shared/content/format";
 import { memoryNamespaceLabel, memoryScopeLabel, presentMemoryLifecycle } from "./library-vocabulary";
 import {
@@ -32,6 +34,12 @@ import {
   noApprovalNeededMessage,
   TextWithInboxLink,
 } from "./LibraryMemoryEditorParts";
+
+type MemoryReview = {
+  item: MemoryItemRecord;
+  action: "save" | "forget";
+  draft: { title: string; content: string; pinned: boolean; ttl: string };
+};
 
 export function LibraryMemoryEditor({ itemId, workspaceId }: { itemId: string; workspaceId: string }) {
   const access = useLibraryOperation(JSON.stringify(["memory-item", workspaceId, itemId]));
@@ -102,9 +110,11 @@ function MemoryEditor({
         : "Memory administration is disabled.";
   const [historyOpen, setHistoryOpen] = useState(false),
     [busy, setBusy] = useState(false);
-  const [review, setReview] = useSessionViewState<
-    { item: MemoryItemRecord; action: "save" | "forget"; draft: typeof draft.value } | undefined
-  >(operation.presentationScope + ":review", undefined);
+  const requesting = useRef(false);
+  const [review, setReview] = useSessionViewState<MemoryReview | undefined>(
+    operation.presentationScope + ":review",
+    undefined,
+  );
   const [outcome, setOutcome] = useSessionViewState<
     { error: boolean; text: string; request?: MemoryLifecyclePendingApproval } | undefined
   >(operation.presentationScope + ":outcome", undefined);
@@ -119,8 +129,9 @@ function MemoryEditor({
   async function refresh() {
     await client.invalidateQueries({ queryKey: ["library"] });
   }
-  async function submit() {
-    if (!review || !available || !enabled || operation.locked || outcome || reviewStale) return;
+  /** Resolves true once the request has an outcome to show; false when no request was made. */
+  async function submit(review: MemoryReview): Promise<boolean> {
+    if (!available || !enabled || operation.locked || !sameMemoryItem(review.item, item)) return false;
     setBusy(true);
     try {
       const result = await operation.run(
@@ -156,29 +167,40 @@ function MemoryEditor({
             throw new Error("Approval receipt does not match the reviewed memory item. Check Inbox before retrying.");
         },
       );
-      if (!result) return;
+      if (!result) return false;
       const approval = result.pendingApproval;
       setOutcome({
         error: !approval && review.action === "save",
         text: noApprovalNeededMessage(review.action),
         request: approval ?? undefined,
       });
+      return true;
     } catch (cause) {
-      if (operation.current())
-        setOutcome({
-          error: true,
-          text: `${describeApiError(cause).summary} Submission is not confirmed; check Inbox and refresh before retrying. Your draft is retained.`,
-        });
+      if (!operation.current()) return false;
+      setOutcome({
+        error: true,
+        text: `${describeApiError(cause).summary} Submission is not confirmed; check Inbox and refresh before retrying. Your draft is retained.`,
+      });
+      return true;
     } finally {
       setBusy(false);
     }
   }
-  function start(action: "save" | "forget") {
-    if (operation.locked || !operation.current()) return;
+  async function requestChange(action: "save" | "forget") {
+    if (operation.locked || !operation.current() || busy || requesting.current) return;
+    requesting.current = true;
+    const next: MemoryReview = { action, item, draft: { ...draft.value } };
     setOutcome(undefined);
-    setReview({ action, item, draft: { ...draft.value } });
+    setReview(next);
+    try {
+      // A dialog that says a change was requested must not stay open when no request was made.
+      if (!(await submit(next))) setReview(undefined);
+    } finally {
+      requesting.current = false;
+    }
   }
   const scope = memoryScopeLabel(item, workspaceId);
+  const provenance = describeMemoryProvenance(item.metadata);
   // The Gateway refuses approved mutations unless the item is exactly workspace-owned (409), so do not offer them.
   const globalItem = !item.workspaceId;
   return (
@@ -243,6 +265,7 @@ function MemoryEditor({
       </label>
       <div className="flex flex-wrap gap-2">
         <Button
+          variant="primary"
           disabled={
             globalItem ||
             !enabled ||
@@ -252,16 +275,16 @@ function MemoryEditor({
             item.status !== "active" ||
             !draft.value.title.trim()
           }
-          onClick={() => start("save")}
+          onClick={() => void requestChange("save")}
         >
-          Review memory changes
+          Request edit approval
         </Button>
         <Button
           variant="danger"
           disabled={globalItem || !enabled || !available || busy || item.status !== "active"}
-          onClick={() => start("forget")}
+          onClick={() => void requestChange("forget")}
         >
-          Review forget
+          Request forget approval
         </Button>
         <Button disabled={busy} variant="ghost" onClick={draft.discard}>
           Discard memory changes
@@ -269,8 +292,19 @@ function MemoryEditor({
         <Button onClick={() => void refresh()}>Refresh memory record</Button>
         <Button onClick={() => setHistoryOpen((value) => !value)}>Memory history</Button>
       </div>
-      <details className="break-words text-sm text-fg-secondary">
+      <details open className="break-words text-sm text-fg-secondary">
         <summary>Memory provenance</summary>
+        {provenance.lines.map((line) => (
+          <p key={line}>{line}</p>
+        ))}
+        {provenance.conversationId ? (
+          <NativeOwnerLink
+            href={`/chat?sessionId=${encodeURIComponent(provenance.conversationId)}`}
+            scope={["memory-provenance", item.itemId]}
+          >
+            Open conversation
+          </NativeOwnerLink>
+        ) : null}
         <p>
           <TimeText prefix="Created" value={item.createdAt} /> · <TimeText prefix="Updated" value={item.updatedAt} />
         </p>
@@ -311,8 +345,8 @@ function MemoryEditor({
         onOpenChange={(open) => {
           if (!open && !busy) setReview(undefined);
         }}
-        title={review?.action === "forget" ? "Forget memory" : "Request memory changes"}
-        description="This requests a governed approval; submission is not a completed memory write."
+        title={review?.action === "forget" ? "Forget requested" : "Memory change requested"}
+        description="Nothing changes until it is approved."
       >
         <div className="grid gap-3">
           <p className="break-words">
@@ -344,17 +378,7 @@ function MemoryEditor({
           {outcome?.request ? (
             <LibraryApproval approvalId={outcome.request.approvalId} workspaceId={workspaceId} onRefresh={refresh} />
           ) : null}
-          <Button
-            variant={review?.action === "forget" ? "danger" : "primary"}
-            disabled={busy || Boolean(outcome) || reviewStale || !available || !enabled}
-            onClick={() => void submit()}
-          >
-            {busy
-              ? "Requesting approval…"
-              : review?.action === "forget"
-                ? "Request forget approval"
-                : "Request edit approval"}
-          </Button>
+          {busy ? <p>Requesting approval…</p> : null}
         </div>
       </Dialog>
     </>

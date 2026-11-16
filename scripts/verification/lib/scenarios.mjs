@@ -3792,8 +3792,9 @@ export async function runMemoryTruthLane(context, _options = {}) {
           await showAllStatuses.or(memoryStatus).first().waitFor({ timeout: 15000 });
           if (await showAllStatuses.isVisible()) await showAllStatuses.click();
           await memoryStatus.selectOption("all");
-          await page.getByRole("textbox", { name: "Search memory", exact: true }).fill(memoryTitle);
-          await page.getByRole("button", { name: "Apply memory filter", exact: true }).click();
+          const memorySearch = page.getByRole("textbox", { name: "Search memory", exact: true });
+          await memorySearch.fill(memoryTitle);
+          await memorySearch.press("Enter");
           await page.getByRole("button", { name: `Open ${memoryTitle}`, exact: true }).click();
           await page.getByRole("heading", { name: memoryTitle, exact: false }).first().waitFor({ timeout: 15000 });
           if ((await page.getByText(foreignTitle, { exact: false }).count()) > 0) {

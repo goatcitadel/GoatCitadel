@@ -46,6 +46,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/cron", () => ({
   fetchCronReviewQueue: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/settings", () => ({ fetchSettings: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [{ workspaceId: "ws-c", name: "Research" }] })),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/durable")>()),
   fetchObserveRunTrace: vi.fn(),
@@ -529,6 +532,33 @@ describe("Work schedules", () => {
     expect(window.history.state).toMatchObject({ evidence: "schedule-record-recovery" });
   });
 
+  it("says the same destination and next run in the review dialog as in the detail", async () => {
+    const task = job({
+      nextRunAt: new Date(Date.now() + 3 * 3_600_000).toISOString(),
+      nextRunProjected: true,
+      taskDestinationWorkspaceId: "ws-c",
+    });
+    vi.mocked(fetchCronJobs).mockResolvedValue({ items: [task] });
+    vi.mocked(fetchCronJob).mockResolvedValue(task);
+    await render();
+    await review();
+    await click("Pause");
+    const dialog = container.querySelector('[role="dialog"]')!;
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Destination: Research's task list."));
+    expect(dialog.textContent).toContain("Next run: in 3 hours (from its schedule)");
+  });
+
+  it("names the same destination in the edit review", async () => {
+    const task = job({ taskDestinationWorkspaceId: "ws-c" });
+    vi.mocked(fetchCronJobs).mockResolvedValue({ items: [task] });
+    vi.mocked(fetchCronJob).mockResolvedValue(task);
+    await render();
+    await review();
+    await click("Review schedule changes");
+    const dialog = container.querySelector('[role="dialog"]')!;
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Destination: Research's task list."));
+  });
+
   it("names schedule deletion plainly and offers Pause instead", async () => {
     vi.mocked(deleteCronJob).mockResolvedValue({ deleted: true, jobId: "job-a" } as never);
     await render();
@@ -703,7 +733,7 @@ describe("scheduler review and run evidence", () => {
           runId: "run-12345678",
           severity: "high",
           status: "open",
-          summary: { trigger: "scheduled", warning: "Child run failed" },
+          summary: { trigger: "scheduled_run", warning: "Child run failed" },
           createdAt: "2026-10-07T09:00:00.000Z",
           updatedAt: "2026-10-07T09:05:00.000Z",
         },
@@ -716,7 +746,7 @@ describe("scheduler review and run evidence", () => {
       return region!;
     });
     // The schedule list names the job; ids stay in technical details.
-    expect(queue.textContent).toContain("Daily review · Scheduled");
+    expect(queue.textContent).toContain("Daily review · On its schedule");
     expect(queue.textContent).toContain("High severity");
     expect(queue.textContent).not.toContain("job-a");
     expect(queue.textContent).not.toContain("run-12345678");

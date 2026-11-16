@@ -437,3 +437,29 @@ ConvertTo-Json -InputObject @($results) -Compress
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), cases.map(({ label }) => ({ label, exact: true })));
 });
+
+test("the optional runtimes say what they are and that setup downloads them (U-FR-011)", () => {
+  const iss = renderSample();
+  assert.match(
+    iss,
+    /Name: "chromium"; Description: "Chromium runtime for browser errands \(downloaded during setup; needs internet\)"; Types: full/u,
+  );
+  assert.match(
+    iss,
+    /Name: "voice"; Description: "Local voice runtime for transcribing voice messages \(downloaded during setup; needs internet; you can add it later in Settings\)"; Types: /u,
+  );
+});
+
+test("a silent install still skips both runtimes", () => {
+  const iss = renderSample();
+  assert.match(iss, /\(not WizardSilent\(\)\) and IsComponentSelected\('chromium'\)/u);
+  assert.match(iss, /\(not WizardSilent\(\)\) and IsComponentSelected\('voice'\)/u);
+});
+
+test("the default type installs Chromium and leaves the voice runtime for later (U-FR-011)", () => {
+  const iss = renderSample();
+  assert.match(iss, /\[Types\]\r?\nName: "full"; Description: "Full installation"\r?\nName: "everything"; Description: "Full installation with local voice"\r?\n/u);
+  assert.match(iss, /Name: "core"; Description: "Core runtime"; Types: full everything custom; Flags: fixed/u);
+  assert.match(iss, /Name: "chromium"; [^\n]*; Types: full everything custom/u);
+  assert.match(iss, /Name: "voice"; [^\n]*; Types: everything\r?\n/u);
+});

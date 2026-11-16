@@ -145,7 +145,7 @@ import type {
 import type {
   BackupCreateResponse,
   BackupManifestFileRecord,
-  BackupManifestRecord,
+  BackupListedRecord,
   BackupVerifyResponse,
   AuthRuntimeSettings,
   CompanionAuditEventRecord,
@@ -2082,8 +2082,8 @@ export class GatewayService {
         }
       },
       runHandlers: {
-        task: async (job, _context?) => {
-          const task = await this.createCronInboxTask(job);
+        task: async (job, _context, scope) => {
+          const task = await this.createCronInboxTask(job, { workspaceId: scope?.workspaceId });
           return { taskId: task.taskId };
         },
         agentTurn: async (input) => await this.runCronAgentTurn(input),
@@ -9134,7 +9134,7 @@ export class GatewayService {
     };
   }
 
-  public async listBackups(limit = 50): Promise<BackupManifestRecord[]> {
+  public async listBackups(limit = 50): Promise<BackupListedRecord[]> {
     return this.backupRetentionService.listBackups(limit);
   }
 

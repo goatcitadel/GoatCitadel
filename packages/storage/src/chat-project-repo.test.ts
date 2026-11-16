@@ -151,10 +151,48 @@ describe("ChatProjectRepository", () => {
       /workspaceId contains unsupported characters/,
     );
     assert.throws(() => repo.create({ name: "Project", workspacePath: " " }), /workspacePath is required/);
-    assert.throws(() => repo.create({ name: "Project", workspacePath: "/absolute" }), /relative and jailed/);
-    assert.throws(() => repo.create({ name: "Project", workspacePath: "../escape" }), /relative and jailed/);
-    assert.throws(() => repo.create({ name: "Project", workspacePath: ".." }), /relative and jailed/);
-    assert.throws(() => repo.create({ name: "Project", workspacePath: "safe/../escape" }), /relative and jailed/);
+    assert.throws(
+      () => repo.create({ name: "Project", workspacePath: "/absolute" }),
+      /folder inside the workspace folder/,
+    );
+    assert.throws(
+      () => repo.create({ name: "Project", workspacePath: "../escape" }),
+      /folder inside the workspace folder/,
+    );
+    assert.throws(() => repo.create({ name: "Project", workspacePath: ".." }), /folder inside the workspace folder/);
+    assert.throws(
+      () => repo.create({ name: "Project", workspacePath: "safe/../escape" }),
+      /folder inside the workspace folder/,
+    );
+    assert.throws(
+      () => repo.create({ name: "Project", workspacePath: "safe/.." }),
+      /folder inside the workspace folder/,
+    );
+    assert.throws(
+      () => repo.create({ name: "Project", workspacePath: "C:/Windows/Temp/x" }),
+      /folder inside the workspace folder/,
+    );
+    assert.throws(() => repo.create({ name: "Project", workspacePath: "C:\\x" }), /folder inside the workspace folder/);
+  });
+
+  it("keeps a stored project with a drive path loading and renamable, but refuses a new drive path", () => {
+    const { db, repo } = createStore();
+    const legacy = repo.create({ name: "Legacy", workspacePath: "repo" });
+    db.prepare("UPDATE chat_projects SET workspace_path = ? WHERE project_id = ?").run("C:/legacy", legacy.projectId);
+
+    const loaded = repo.get(legacy.projectId);
+    assert.equal(loaded.workspacePath, "C:/legacy");
+    const renamed = repo.updateWithRevision(
+      legacy.projectId,
+      { name: "Renamed", workspacePath: "C:/legacy" },
+      loaded.revision,
+    );
+    assert.equal(renamed.name, "Renamed");
+    assert.equal(renamed.workspacePath, "C:/legacy");
+    assert.throws(
+      () => repo.updateWithRevision(legacy.projectId, { workspacePath: "D:/other" }, renamed.revision),
+      /folder inside the workspace folder/,
+    );
   });
 
   it("filters malformed rows from direct lookups and dynamic lists", () => {

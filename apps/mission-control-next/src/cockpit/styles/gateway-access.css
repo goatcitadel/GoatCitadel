@@ -15,6 +15,20 @@
 .cockpit-access .gateway-access-title {
   font-size: var(--text-2xl);
   font-weight: 700;
+  line-height: 1.25;
+  margin-bottom: 0.5rem;
+}
+.cockpit-access .gateway-access-row .gateway-access-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.cockpit-access .gateway-access-row .gateway-access-check input[type="checkbox"] {
+  width: 1.25rem;
+  min-height: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  accent-color: var(--cockpit-accent);
 }
 .cockpit-access .gateway-access-card > * + * {
   margin-top: 1rem;
@@ -77,23 +91,6 @@
 .cockpit-access .gateway-access-error {
   color: var(--cockpit-failed);
 }
-.cockpit-access .gc-switch-root {
-  min-width: 3rem;
-}
-.cockpit-access .gc-switch-root[data-state="checked"] {
-  background: var(--cockpit-accent);
-  color: var(--cockpit-accent-ink);
-}
-.cockpit-access .gc-switch-thumb {
-  display: block;
-  width: 0.75rem;
-  height: 0.75rem;
-  background: currentColor;
-  border-radius: 50%;
-}
-.cockpit-access .gc-switch-root[data-state="checked"] .gc-switch-thumb {
-  margin-left: auto;
-}
 @media (forced-colors: active) {
   .cockpit-access :is(.gateway-access-card, input, select, button) {
     border-color: ButtonText;
@@ -102,8 +99,5 @@
   }
   .cockpit-access :focus-visible {
     outline-color: Highlight;
-  }
-  .cockpit-access .gc-switch-root[data-state="checked"] {
-    outline: 2px solid Highlight;
   }
 }

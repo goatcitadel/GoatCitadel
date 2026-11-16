@@ -85,11 +85,22 @@ export async function performScheduleOperation(
   if (!sameScheduleReview(current, operation.job)) {
     throw new Error("This schedule changed during review. Inspect its latest settings before acting.");
   }
+  // A Task schedule's destination is read fresh, not stored, so the revision does not cover it: a run files its task
+  // where the destination points now, which must be where the review showed.
+  if (
+    operation.kind === "run" &&
+    (current.taskDestinationWorkspaceId ?? null) !== (operation.job.taskDestinationWorkspaceId ?? null)
+  ) {
+    throw new Error(
+      "This schedule's task destination changed during review. Inspect its latest destination before running.",
+    );
+  }
   markDispatched();
   if (operation.kind === "edit") {
     const job = await updateCronJob(current.jobId, { ...operation.input, expectedRevision: current.revision });
     const expected = { ...current, ...operation.input, revision: job.revision } as CronJobRecordResponse;
-    if (operation.input.description !== undefined) expected.description = operation.input.description.trim() || undefined;
+    if (operation.input.description !== undefined)
+      expected.description = operation.input.description.trim() || undefined;
     if (job.revision <= current.revision || !sameScheduleReview(job, expected))
       throw new Error("The schedule edit receipt did not match the reviewed draft.");
     const saved = await fetchCronJob(current.jobId, fresh());

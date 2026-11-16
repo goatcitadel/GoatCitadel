@@ -39,7 +39,7 @@ const seeWhy = () =>
 
 describe("ChatToolActivityBody blocked tools", () => {
   it("links a tool blocked by a rule to the Capabilities tool panel", async () => {
-    await render(<ChatToolActivityBody turn={turnWith({})} showTechnicalDetails={false} />);
+    await render(<ChatToolActivityBody turn={turnWith({})} showTechnicalDetails={false} live={false} />);
     const links = seeWhy();
     expect(links).toHaveLength(1);
     expect(links[0]!.getAttribute("href")).toMatch(/^\/capabilities\/tools/u);
@@ -48,7 +48,11 @@ describe("ChatToolActivityBody blocked tools", () => {
   it("offers no link when you denied, withdrew or let the approval expire", async () => {
     for (const approvalOutcome of ["denied", "withdrawn", "expired"] as const) {
       await render(
-        <ChatToolActivityBody turn={turnWith({ result: { approvalOutcome } })} showTechnicalDetails={false} />,
+        <ChatToolActivityBody
+          turn={turnWith({ result: { approvalOutcome } })}
+          showTechnicalDetails={false}
+          live={false}
+        />,
       );
       expect(seeWhy(), approvalOutcome).toHaveLength(0);
     }
@@ -56,13 +60,19 @@ describe("ChatToolActivityBody blocked tools", () => {
 
   it("offers no link for a tool in no group, where the Tools tab has no panel to show", async () => {
     await render(
-      <ChatToolActivityBody turn={turnWith({ toolName: "mcp.example.lookup" })} showTechnicalDetails={false} />,
+      <ChatToolActivityBody
+        turn={turnWith({ toolName: "mcp.example.lookup" })}
+        showTechnicalDetails={false}
+        live={false}
+      />,
     );
     expect(seeWhy()).toHaveLength(0);
   });
 
   it("offers no link for a tool that was not blocked", async () => {
-    await render(<ChatToolActivityBody turn={turnWith({ status: "failed" })} showTechnicalDetails={false} />);
+    await render(
+      <ChatToolActivityBody turn={turnWith({ status: "failed" })} showTechnicalDetails={false} live={false} />,
+    );
     expect(seeWhy()).toHaveLength(0);
   });
 });

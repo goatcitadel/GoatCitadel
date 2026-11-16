@@ -109,3 +109,17 @@ it("ST-R01: renders routing as a flat section with plain copy, not a card", asyn
   expect(text).toContain("Notification destinations and rules for this workspace.");
   expect(text).not.toContain("Workspace-owned");
 });
+
+it("U-ST-013: shows the latest test, events and a removed destination in plain words", async () => {
+  setOwner(null);
+  owner.current.rules = [
+    { ...rule, eventTypes: ["approval.requested", "turn.failed"], targetIds: ["target-1", "gone-9"] },
+  ];
+  owner.current.testDelivery = () => ({ status: "suppressed_present" });
+  await mount();
+  const shown = text(renderer!.root);
+  expect(shown).toContain("Latest test for Ops pager: Held because you were here.");
+  expect(shown).toContain("An approval is waiting, A Chat answer failed");
+  expect(shown).toContain("A removed destination");
+  expect(shown).not.toMatch(/approval\.requested|suppressed_present|gone-9/);
+});

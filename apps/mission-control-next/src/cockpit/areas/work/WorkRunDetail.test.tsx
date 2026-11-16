@@ -186,6 +186,40 @@ it.each([
   expect(container.textContent?.includes("Owner-reported tool failure")).toBe(heading === "Recorded run errors");
   expect(container.querySelector('[aria-label="Recorded run errors"] a')).toBeNull();
 });
+it("23.2: leads with the approval wait and the recorded errors before the run history", async () => {
+  document.body.appendChild(container);
+  root = createRoot(container);
+  api.fetch.mockResolvedValue({
+    run: {
+      runId: "run-a",
+      workflowKey: "chat.turn.execute",
+      status: "waiting",
+      updatedAt: "2026-10-05T00:00:00Z",
+      payload: { workspaceId: "workspace-a" },
+    },
+    durable: { checkpoints: { state: "available", items: [] }, timeline: { state: "available", items: [] } },
+    toolCalls: { state: "available", items: [] },
+    providerUsage: { state: "unknown", items: [] },
+    approvals: {
+      state: "available",
+      items: [{ approvalId: "ap-1", kind: "tool.invoke", status: "pending", riskLevel: "caution" }],
+    },
+    errors: { state: "available", items: [{ source: "tool", id: "error-a", message: "Owner-reported tool failure" }] },
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <WorkRunDetail runId="run-a" />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).toContain("This run is waiting for your approval."));
+  const inbox = [...container.querySelectorAll("a")].find((link) => link.textContent?.trim() === "Open in Inbox")!;
+  expect(new URL(inbox.href).pathname).toBe("/inbox");
+  const errors = container.querySelector('[aria-label="Recorded run errors"]')!;
+  const history = [...container.querySelectorAll("h2")].find((item) => item.textContent === "Run history")!;
+  expect(errors.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
 it("shows a recorded zero provider cost instead of Unknown", async () => {
   document.body.appendChild(container);
   root = createRoot(container);

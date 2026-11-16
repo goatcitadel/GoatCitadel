@@ -18,6 +18,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
+import { EmptyState } from "../../ui/EmptyState";
 import { Field } from "../../ui/Field";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { AGENT_CATALOG_STATE, AGENT_PARSE_STATUS } from "./library-vocabulary";
@@ -102,6 +103,8 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
       if (access.current()) setBusy(false);
     }
   }
+  const agents = query.data?.items.filter((item) => item.workspaceId === workspaceId) ?? [];
+  const catalogEmpty = Boolean(query.data) && !query.error && agents.length === 0;
   return (
     <section className="grid gap-3" aria-label="Imported agent catalog">
       <h2 className="text-base font-semibold">Imported agent catalog</h2>
@@ -141,48 +144,58 @@ function ImportedCatalog({ workspaceId }: { workspaceId: string }) {
           </Button>
         </div>
       </details>
-      <Field label="Search imported agents">
-        {(props) => (
-          <input
-            {...props}
-            className="rounded-md border border-line bg-raised p-2"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        )}
-      </Field>
+      {catalogEmpty ? (
+        <EmptyState
+          title="No imported agents"
+          description="Open Import agent catalog to bring some in."
+          headingLevel={3}
+        />
+      ) : null}
+      {agents.length ? (
+        <Field label="Search imported agents">
+          {(props) => (
+            <input
+              {...props}
+              className="rounded-md border border-line bg-raised p-2"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          )}
+        </Field>
+      ) : null}
       <div>
         <Button disabled={query.isFetching} onClick={() => void query.refetch()}>
           Refresh imported catalog
         </Button>
       </div>
-      <ul className="divide-y divide-line-subtle">
-        {query.data?.items
-          .filter(
-            (item) =>
-              item.workspaceId === workspaceId &&
+      {agents.length ? (
+        <ul className="divide-y divide-line-subtle">
+          {agents
+            .filter((item) =>
               `${item.definition.frontmatter.name} ${item.division}`.toLowerCase().includes(search.toLowerCase()),
-          )
-          .map((item) => (
-            <li key={item.entryId} className="space-y-1 py-3">
-              <h3>{item.definition.frontmatter.name}</h3>
-              <p className="text-sm text-fg-secondary">
-                {item.division} · {AGENT_CATALOG_STATE[item.state]} · {AGENT_PARSE_STATUS[item.definition.parseStatus]}
-              </p>
-              <Button
-                size="sm"
-                onClick={() =>
-                  route.requestTransition((review) => {
-                    if (review.isCurrent())
-                      review.navigate(`/library/agents?view=catalog&entryId=${encodeURIComponent(item.entryId)}`);
-                  })
-                }
-              >
-                Inspect {item.definition.frontmatter.name}
-              </Button>
-            </li>
-          ))}
-      </ul>
+            )
+            .map((item) => (
+              <li key={item.entryId} className="space-y-1 py-3">
+                <h3>{item.definition.frontmatter.name}</h3>
+                <p className="text-sm text-fg-secondary">
+                  {item.division} · {AGENT_CATALOG_STATE[item.state]} ·{" "}
+                  {AGENT_PARSE_STATUS[item.definition.parseStatus]}
+                </p>
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    route.requestTransition((review) => {
+                      if (review.isCurrent())
+                        review.navigate(`/library/agents?view=catalog&entryId=${encodeURIComponent(item.entryId)}`);
+                    })
+                  }
+                >
+                  Inspect {item.definition.frontmatter.name}
+                </Button>
+              </li>
+            ))}
+        </ul>
+      ) : null}
       {entryId && entry.isPending ? <p role="status">Reading imported definition…</p> : null}
       {entry.error ? <Callout tone="error">{describeApiError(entry.error).summary}</Callout> : null}
       {entryId && !entry.isPending && !entry.error && !selected ? (

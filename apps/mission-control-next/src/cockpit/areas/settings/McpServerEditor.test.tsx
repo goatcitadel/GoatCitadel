@@ -194,6 +194,12 @@ describe("native saved MCP editor", () => {
     await click("Save reviewed MCP configuration");
     await vi.waitFor(() => expect(container.textContent).toContain("Peer label"));
     expect(api.updateMcpServer).not.toHaveBeenCalled();
+    expect(container.textContent).toContain(
+      "The saved configuration changed. Your draft started from an older version; review the saved one before applying your draft.",
+    );
+    expect(container.querySelector('[aria-label="Current MCP server review"]')?.textContent).not.toContain(
+      "retained draft",
+    );
     expect(container.textContent).toContain("Unsaved MCP server draft");
     await click("Use current server review");
     expect(api.updateMcpServer).not.toHaveBeenCalled();

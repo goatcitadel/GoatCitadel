@@ -15,9 +15,14 @@ import {
 } from "react";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import { getGatewayAccessRevision, subscribeGatewayAccessChange } from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  getGatewayAccessRevision,
+  subscribeGatewayAccessChange,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { IconButton } from "../ui/IconButton";
+import { readInspectorWidth, writeInspectorWidth } from "./inspector-width-preference";
+import { NoFocusTooltips } from "../ui/tooltip-focus";
 import {
   createDeferredDialogRuntime,
   PendingDialog,
@@ -37,6 +42,9 @@ const ESCAPE_OWNERS =
 /** The docked or overlay panel (its header and body), or the body inside the phone sheet or expanded dialog. */
 const INSPECTOR_SURFACE = '[data-inspector-mode], [data-inspector-body="true"]';
 const controlsLoader = createDeferredDialogRuntime(() => import("./inspector-panel-controls"));
+
+/** An update of an open panel is never a new open, so it cannot ask for focus. */
+const quiet = (next: InspectorContent): InspectorContent => (next.focusOnOpen ? { ...next, focusOnOpen: false } : next);
 
 export function InspectorProvider({ children }: { children: ReactNode }) {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
@@ -90,7 +98,7 @@ export function InspectorProvider({ children }: { children: ReactNode }) {
       if (registered.current?.token === token && registered.current.content.source === source)
         registered.current = { token, content: next };
       setSelection((value) =>
-        value?.token === token && value.content.source === source ? { token, content: next } : value,
+        value?.token === token && value.content.source === source ? { token, content: quiet(next) } : value,
       );
     },
     [current, token],
@@ -100,7 +108,7 @@ export function InspectorProvider({ children }: { children: ReactNode }) {
       if (!current() || next.source !== source) return;
       registered.current = { token, content: next };
       setSelection((value) =>
-        value?.token === token && value.content.source === source ? { token, content: next } : value,
+        value?.token === token && value.content.source === source ? { token, content: quiet(next) } : value,
       );
     },
     [current, token],
@@ -159,14 +167,23 @@ export function useInspector(): InspectorApi {
   return api;
 }
 
-export function InspectorPanel() {
+// Where the operator is typing: a focus move never takes them out of it, whatever the opener asked for.
+const TYPING =
+  'input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"]), select, textarea, [contenteditable]:not([contenteditable="false"])';
+
+export function InspectorPanel({ area = "default" }: { area?: string }) {
   const { content, close } = useInspector();
   const isPhone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   // SH-02: 1024–1279px laptops get a non-modal panel over the page; only narrower widths and Expand are modal.
   const modal = useMediaQuery(RESPONSIVE_QUERIES.belowDesktop);
   const overlay = useMediaQuery(`(width < ${RESPONSIVE_BREAKPOINTS.wide}px)`);
   const panel = useRef<HTMLElement>(null);
-  const [width, setWidth] = useState(384);
+  const [stored, setStored] = useState(() => ({ area, width: readInspectorWidth(area) }));
+  // The width is remembered per area, so an area change reloads it (adjusting state during render, not in an effect).
+  if (stored.area !== area) setStored({ area, width: readInspectorWidth(area) });
+  const width = stored.width;
+  // The live width stays in state while dragging; the handle commits it to storage once, when the drag ends.
+  const setWidth = (next: number) => setStored({ area, width: next });
   const [expanded, setExpanded] = useState(false);
   const opened = useRef(false);
   const focusTarget = useRef<HTMLElement | null>(null);
@@ -185,9 +202,17 @@ export function InspectorPanel() {
     if ((!active || active === document.body) && focusTarget.current?.isConnected) focusTarget.current.focus();
   }, [shown]);
   const floating = shown && overlay && !modal && !expanded && !isPhone;
+  const inline = shown && !modal && !expanded && !isPhone;
+  const inlineRef = useRef(inline);
+  inlineRef.current = inline;
+  const handled = useRef(new WeakSet<InspectorContent>());
   useEffect(() => {
-    if (floating) panel.current?.focus({ preventScroll: true });
-  }, [floating]);
+    // Only the open the operator asked for, once. An address reopen, a resize or Expand then Restore never moves focus.
+    if (!content?.focusOnOpen || handled.current.has(content)) return;
+    handled.current.add(content);
+    if (!inlineRef.current || document.activeElement?.matches(TYPING)) return;
+    panel.current?.focus({ preventScroll: true });
+  }, [content]);
   if (!content) return null;
   const body = (
     <div
@@ -224,7 +249,9 @@ export function InspectorPanel() {
         handoff={handoff}
       >
         <p data-inspector-body="true" role={failed ? "alert" : "status"} className="text-sm text-fg-muted">
-          {failed ? "Inspector controls could not load. Close the inspector to keep using the app." : "Loading inspector…"}
+          {failed
+            ? "Inspector controls could not load. Close the inspector to keep using the app."
+            : "Loading inspector…"}
         </p>
       </PendingDialog>
     );
@@ -234,23 +261,31 @@ export function InspectorPanel() {
       ref={panel}
       // The body region carries "Inspector: <title>"; the landmark stays generic so the two names differ.
       aria-label="Inspector"
-      tabIndex={floating ? -1 : undefined}
+      tabIndex={-1}
       data-inspector-mode={floating ? "overlay" : "docked"}
       style={{ width }}
       className={`cockpit-inspector flex max-w-full shrink-0 flex-col border-l border-line-subtle bg-raised ${
         floating ? "absolute inset-y-0 right-0 z-30 shadow-overlay" : "relative"
       }`}
     >
-      {controls ? <controls.InspectorResizeHandle width={width} onChange={setWidth} /> : null}
-      <header className="flex h-12 items-center justify-between gap-2 border-b border-line-subtle px-3">
-        <h2 title={content.title} className="min-w-0 truncate text-base font-medium text-fg">
-          {content.title}
-        </h2>
-        <div className="flex shrink-0 gap-1">
-          {controls ? <controls.InspectorExpandButton onExpand={() => setExpanded(true)} /> : null}
-          <IconButton label="Close inspector" icon={<X className="size-4" aria-hidden="true" />} onClick={close} />
-        </div>
-      </header>
+      {controls ? (
+        <controls.InspectorResizeHandle
+          width={width}
+          onChange={setWidth}
+          onCommit={(next) => writeInspectorWidth(area, next)}
+        />
+      ) : null}
+      <NoFocusTooltips>
+        <header className="flex h-12 items-center justify-between gap-2 border-b border-line-subtle px-3">
+          <h2 title={content.title} className="min-w-0 truncate text-base font-medium text-fg">
+            {content.title}
+          </h2>
+          <div className="flex shrink-0 gap-1">
+            {controls ? <controls.InspectorExpandButton onExpand={() => setExpanded(true)} /> : null}
+            <IconButton label="Close inspector" icon={<X className="size-4" aria-hidden="true" />} onClick={close} />
+          </div>
+        </header>
+      </NoFocusTooltips>
       {failed ? (
         <p role="status" className="px-3 pt-2 text-sm text-fg-muted">
           Resize and expand controls could not load. The selected details are still available.

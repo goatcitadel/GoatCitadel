@@ -72,7 +72,7 @@ export async function runCockpitMcpRegistrationProof({ context, browser, stack, 
         await capture("created"); await registration.getByRole("button", { name: "Close registration", exact: true }).click();
         stage = "inspect exact cached owner without execution";
         await panel.getByRole("searchbox", { name: "Search MCP servers", exact: true }).fill(label);
-        await panel.getByRole("button", { name: `Inspect ${label}`, exact: true }).click();
+        await panel.getByRole("button", { name: `Connect and inspect ${label}`, exact: true }).click();
         const inspection = page.getByRole("dialog", { name: "MCP server inspection", exact: true });
         await inspection.getByText(receipt.serverId, { exact: true }).waitFor();
         assert.deepEqual((await api(`${serverRoute}/tools`)).items, []);

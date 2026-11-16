@@ -110,6 +110,22 @@ async function click(label: string): Promise<void> {
 }
 
 describe("cockpit task assignment", () => {
+  it("links the run a runtime-owned task records before changing ownership", async () => {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <TaskAssignmentControl
+            task={task({ agenticContext: { durableRunId: "run-1" } as TaskRecord["agenticContext"] })}
+            workspaceId="workspace-a"
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    expect(container.textContent).toContain("A run is handling this task. Review its run before changing ownership.");
+    const link = [...container.querySelectorAll("a")].find((item) => item.textContent === "Open linked run");
+    expect(link?.getAttribute("href")).toMatch(/^\/work\/runs\/run-1/);
+  });
+
   it("saves a board assignment with fresh preflight and no risk dialog", async () => {
     const saved = task({ revision: 3, assignedAgentId: "agent-a" });
     vi.mocked(updateTask).mockResolvedValue(saved);

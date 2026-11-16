@@ -14,6 +14,18 @@ export { COCKPIT_LOCATION_EVENT };
 const listeners = new Set<() => void>();
 let generation = 0;
 
+/**
+ * The number of the history entry on show. Each pushed address and each Back or Forward lands on another number; a
+ * replace keeps it. A visit is told apart by reading this when a page renders, not by counting events: the browser
+ * has already put the entry's state in place before any popstate listener runs, so no listener order can make a
+ * render see a stale answer.
+ */
+export function cockpitHistoryPosition(): number | null {
+  const state: unknown = window.history.state;
+  const value = state && typeof state === "object" ? (state as Record<string, unknown>)[SHELL_HISTORY_POSITION] : null;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function locationChanged() {
   generation += 1;
   listeners.forEach((listener) => listener());

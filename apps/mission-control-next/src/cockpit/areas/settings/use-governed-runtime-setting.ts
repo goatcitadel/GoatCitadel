@@ -96,13 +96,26 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
       options.onSaved?.(savedValue);
       return clean;
     },
-    reload: () => settings.refetch(),
+    reload: () => reread(),
   });
   const [busy, setBusy] = useState(false);
+  // Only this control's own reads (Try again, its save's re-read) hold its Save. A background refetch of the shared
+  // settings query (the minute poll, another control's re-read) does not: save() reads the saved settings itself
+  // before writing and compares the revision, so a moment-old shown value cannot be saved over a newer one.
+  const [ownReads, setOwnReads] = useState(0);
+  const readingOwn = ownReads > 0;
   const [outcomeUncertain, setOutcomeUncertain] = useState(false);
   const [notice, setNotice] = useState<GovernedSettingNotice | null>(null);
   const [waiting, setWaiting] = useState<WaitingSettingsNotice | null>(null);
   const [checkingOutcome, setCheckingOutcome] = useState(false);
+  async function reread() {
+    setOwnReads((count) => count + 1);
+    try {
+      return await settings.refetch();
+    } finally {
+      if (mounted.current) setOwnReads((count) => count - 1);
+    }
+  }
   // The write that may or may not have been applied, kept so its outcome can be checked once the answer is lost.
   const attempt = useRef<{ submitted: T; baseRevision: number; transport?: TrackedAttempt } | null>(null);
   const checking = useRef(false);
@@ -126,7 +139,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
     if (
       !ready ||
       !settings.data ||
-      settings.isFetching ||
+      readingOwn ||
       draft.hasRemoteChanges ||
       !(value === undefined ? draft.isDirty : value !== current) ||
       outcomeUncertain ||
@@ -141,7 +154,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
     try {
       const latest = await fetchSettings();
       if (latest.revision !== baseRevision || options.read(latest) !== current) {
-        await settings.refetch();
+        await reread();
         setNotice({ tone: "waiting", message: options.copy.staleDraft });
         return false;
       }
@@ -160,13 +173,13 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
         tone: accepted ? "done" : "waiting",
         message: accepted ? options.copy.saved : "Change submitted. Review its status before another save.",
       });
-      await settings.refetch();
+      await reread();
       return accepted;
     } catch (error) {
       const failure = classifySettingsSaveFailure(error);
       if (!mutationAttempted) {
         if (failure.kind === "conflict" || failure.kind === "waiting") {
-          await settings.refetch();
+          await reread();
           setNotice({ tone: "waiting", message: options.copy.changedElsewhere });
         } else {
           setNotice({
@@ -176,10 +189,10 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
         }
       } else if (failure.kind === "waiting") {
         // An earlier change to this setting is still open: lead to its approval and keep the draft.
-        await settings.refetch();
+        await reread();
         await followWaiting(failure.planId);
       } else if (failure.kind === "conflict") {
-        await settings.refetch();
+        await reread();
         setNotice({ tone: "waiting", message: options.copy.changedElsewhere });
       } else if (failure.kind === "refused") {
         setNotice({ tone: "failed", message: `Not saved. ${failure.reason}` });
@@ -209,7 +222,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
     if (held) setNotice({ tone: "waiting", message: describeWaitingChange(held) });
     else {
       setNotice(lookup.kind === "foreign" ? { tone: "waiting", message: options.copy.changedElsewhere } : null);
-      await settings.refetch();
+      await reread();
     }
   }
 
@@ -248,7 +261,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
         options.onSaved?.(savedValue);
         setOutcomeUncertain(false);
         setNotice({ tone: "done", message: options.copy.saved });
-        await settings.refetch();
+        await reread();
         return;
       }
       if (!active && !finished) return keepLocked();
@@ -257,7 +270,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
         setWaiting(active);
         setNotice({ tone: "waiting", message: describeWaitingChange(active) });
       } else setNotice({ tone: "failed", message: NOT_SAVED_MESSAGE });
-      await settings.refetch();
+      await reread();
     } finally {
       checking.current = false;
       setCheckingOutcome(false);
@@ -271,6 +284,8 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
     change,
     confirmed,
     busy,
+    /** This control's own re-read is running (not the shared minute poll). */
+    reading: readingOwn,
     outcomeUncertain,
     notice,
     waiting,
@@ -280,7 +295,7 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
       const sentence = waiting ? describeWaitingChange(waiting) : undefined;
       setNotice((shown) => (shown && shown.message === sentence ? null : shown));
       setWaiting(null);
-      void settings.refetch();
+      void reread();
     },
     checkOutcome,
     checkingOutcome,
@@ -294,13 +309,13 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
       draft.isDirty &&
       !draft.hasRemoteChanges &&
       !busy &&
-      !settings.isFetching &&
+      !readingOwn &&
       !change.hasPending &&
       !outcomeUncertain &&
       !waiting,
     save,
     refresh: () => {
-      void settings.refetch();
+      void reread();
       if (change.change) void change.refresh();
       if (waiting) void followWaiting(waiting.planId);
     },

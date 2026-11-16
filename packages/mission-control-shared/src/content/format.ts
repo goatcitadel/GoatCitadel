@@ -39,13 +39,16 @@ export function formatClockTime(value: string | number | Date | null | undefined
     : new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(epoch);
 }
 
-/** "just now", "5 minutes ago", "in 2 hours", "yesterday"; older than a week falls back to the date. */
+/**
+ * "just now", "in under a minute", "5 minutes ago", "in 2 hours", "yesterday"; older than a week falls back to the
+ * date. A time less than a minute ahead never reads "just now", which would say it had already happened.
+ */
 export function formatRelativeTime(value: string | number | Date | null | undefined, now = Date.now()): string {
   const epoch = toEpoch(value);
   if (epoch === undefined) return TIME_UNAVAILABLE;
   const delta = epoch - now;
   const distance = Math.abs(delta);
-  if (distance < MINUTE) return "just now";
+  if (distance < MINUTE) return delta > 0 ? "in under a minute" : "just now";
   const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
   const sign = delta < 0 ? -1 : 1;
   if (distance < HOUR) return rtf.format(sign * Math.round(distance / MINUTE), "minute");

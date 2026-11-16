@@ -1,6 +1,11 @@
 import { Command } from "cmdk";
 import type { ReactNode, Ref } from "react";
-import { CommandPaletteCoverage, CommandPaletteResults, PALETTE_ITEM_CLASS } from "./CommandPaletteResults";
+import {
+  CommandPaletteCoverage,
+  CommandPaletteResults,
+  PALETTE_GROUP_CLASS,
+  PALETTE_ITEM_CLASS,
+} from "./CommandPaletteResults";
 import type { PaletteObject } from "./command-palette-search";
 import type { useCommandPaletteSearch } from "./use-command-palette-search";
 import { Button } from "../ui/Button";
@@ -82,7 +87,7 @@ export function CommandPaletteView({
         <Command.List aria-busy={search.loading}>
           {/* cmdk overrides a `hidden` prop on Group, so an empty group is left out instead of hidden. */}
           {commandMatches ? (
-            <Command.Group heading="Commands" className="text-xs text-fg-muted">
+            <Command.Group heading="Commands" className={PALETTE_GROUP_CLASS}>
               {matches("New chat conversation") ? (
                 <Command.Item
                   value="new-chat"
@@ -107,7 +112,7 @@ export function CommandPaletteView({
             </Command.Group>
           ) : null}
           {destinations.length ? (
-            <Command.Group heading="Go to" className="text-xs text-fg-muted">
+            <Command.Group heading="Go to" className={PALETTE_GROUP_CLASS}>
               {destinations.map((entry) => (
                 <Command.Item
                   key={entry.key}
@@ -121,7 +126,7 @@ export function CommandPaletteView({
             </Command.Group>
           ) : null}
           {preferenceMatches ? (
-            <Command.Group heading="Preferences" className="text-xs text-fg-muted">
+            <Command.Group heading="Preferences" className={PALETTE_GROUP_CLASS}>
               {matches(THEME_SEARCH_TERMS)
                 ? otherThemeOptions(theme).map((option) => (
                     <Command.Item
@@ -147,7 +152,7 @@ export function CommandPaletteView({
             </Command.Group>
           ) : null}
           {settingsMatches.length ? (
-            <Command.Group heading="Settings" className="text-xs text-fg-muted">
+            <Command.Group heading="Settings" className={PALETTE_GROUP_CLASS}>
               {settingsMatches.map((entry) => (
                 <Command.Item
                   key={entry.section}

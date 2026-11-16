@@ -148,6 +148,9 @@ describe("MessagingSection", () => {
     );
     expect(button("Family group").getAttribute("aria-current")).toBe("page");
     expect(button("Ada").getAttribute("aria-current")).toBeNull();
+    // U-GL-005: the current row carries the marker hook and a heavier weight, not only the hover tint.
+    expect(button("Family group").hasAttribute("data-current-row")).toBe(true);
+    expect(button("Family group").className).toContain("aria-[current=page]:font-medium");
     await act(async () => button("Ada").click());
     expect(onSelectSession).toHaveBeenCalledWith("sess-2");
     await act(async () => button("Family group").click());

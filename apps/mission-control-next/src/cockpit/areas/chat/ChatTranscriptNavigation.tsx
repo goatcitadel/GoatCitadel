@@ -1,4 +1,4 @@
-import { useCallback, useMemo, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, type RefObject } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { ChatStickyPrompt } from "./ChatStickyPrompt";
@@ -46,6 +46,13 @@ export function ChatTranscriptNavigation({
   );
   const stickyIndex = position.promptHidden ? turnKeys.indexOf(position.currentTurnId ?? "") : -1;
   const sticky = stickyIndex >= 0 ? entries[stickyIndex] : undefined;
+  const stickyShown = Boolean(sticky);
+  // While the bar covers the top edge, scrolling a turn into view leaves room for it (styles/chat-display.css).
+  useEffect(() => {
+    if (!scroller || !stickyShown) return undefined;
+    scroller.setAttribute("data-sticky-prompt", "");
+    return () => scroller.removeAttribute("data-sticky-prompt");
+  }, [scroller, stickyShown]);
   return (
     <>
       {sticky ? (

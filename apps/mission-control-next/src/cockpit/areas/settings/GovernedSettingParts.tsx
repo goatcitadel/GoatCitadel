@@ -14,12 +14,17 @@ export function GovernedSettingLoadState<T extends GovernedSettingValue>({
   governed,
   loading,
   incomplete,
+  tryAgain = true,
 }: {
   governed: GovernedRuntimeSetting<T>;
   loading: string;
   incomplete: string;
+  /** A section that reads once for many rows offers one Try again of its own and turns the rows' off. */
+  tryAgain?: boolean;
 }) {
   const { settings, ready } = governed;
+  const failed = settings.isError;
+  const incompleteRead = Boolean(settings.data) && !settings.isError && !ready;
   return (
     <>
       {settings.isLoading ? (
@@ -36,6 +41,11 @@ export function GovernedSettingLoadState<T extends GovernedSettingValue>({
         <p role="alert" className="mt-3 text-sm text-status-failed">
           {incomplete}
         </p>
+      ) : null}
+      {tryAgain && (failed || incompleteRead) ? (
+        <Button size="sm" className="mt-2" disabled={governed.reading || governed.busy} onClick={governed.refresh}>
+          Try again
+        </Button>
       ) : null}
     </>
   );
@@ -146,6 +156,7 @@ export function GovernedSettingChangeStatus<T extends GovernedSettingValue>({
           waiting={governed.waiting}
           onResolved={governed.clearWaiting}
           showSentence={false}
+          onCheckAgain={governed.refresh}
         />
       ) : null}
       {governed.outcomeUncertain ? (

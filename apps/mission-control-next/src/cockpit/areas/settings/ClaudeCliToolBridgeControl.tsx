@@ -1,9 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
 import { CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS, type ChangePlanRecord } from "@goatcitadel/contracts";
-import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { Button } from "../../ui/Button";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { useGovernedSettingsQuery } from "./governed-settings-query";
 import { useGovernedRuntimeSetting } from "./use-governed-runtime-setting";
 import {
   GovernedSettingChangeStatus,
@@ -40,11 +39,7 @@ const matchesPlan = (plan: ChangePlanRecord, submitted: boolean) =>
   plan.target.ownerId === "runtime_settings";
 
 export function ClaudeCliToolBridgeControl() {
-  const query = useQuery({
-    queryKey: ["system", "settings-claude-cli-tool-bridge"],
-    queryFn: fetchSettings,
-    refetchInterval: 60_000,
-  });
+  const query = useGovernedSettingsQuery();
   const governed = useGovernedRuntimeSetting<boolean>({
     settings: query,
     draftKey: "features:system:claude-cli-tool-bridge",
@@ -80,14 +75,11 @@ export function ClaudeCliToolBridgeControl() {
             tools. Turn it off to stop offering GoatCitadel tools to the Claude Code CLI.
           </p>
         </div>
-        <Button size="sm" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>
-          Refresh
-        </Button>
       </div>
       <GovernedSettingLoadState
         governed={governed}
         loading="Loading setting…"
-        incomplete="GoatCitadel did not report this setting. Refresh, or update GoatCitadel, before changing it."
+        incomplete="GoatCitadel did not report this setting. Try again, or update GoatCitadel, before changing it."
       />
       {ready ? (
         <>

@@ -169,7 +169,7 @@ export function ConnectorsTab() {
       ) : null}
       <p className="text-sm text-fg-secondary">
         Every MCP server setting, integration connection and web search key is in{" "}
-        <NativeOwnerLink href={connectorSetupHref()} scope={workspaceId}>
+        <NativeOwnerLink href={connectorSetupHref()} scope={workspaceId} className="cockpit-target">
           Advanced setup
         </NativeOwnerLink>
         .

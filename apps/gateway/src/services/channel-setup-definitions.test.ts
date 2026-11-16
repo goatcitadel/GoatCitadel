@@ -2054,17 +2054,15 @@ describe("the shared guide builder", () => {
   });
 
   describe("the sender step (A7, A8)", () => {
-    // The gateway names a dropped message's sender in System › Diagnostics (describeDroppedSender), so these guides
-    // say where to find an id they don't show anywhere else.
+    // The gateway keeps the sender a bot turned away and the sender step lists it with a button to allow them, so
+    // these guides point there for an id they don't show anywhere else.
     const FIND_SENDER_ID =
-      'Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".';
-    // With diagnostics off the list route answers 404, and System › Diagnostics shows a red "Diagnostics unavailable: …"
-    // alert (SystemDiagnostics.tsx), not an empty page. The sender step comes before Finalize, so it says to finish first.
-    const DIAGNOSTICS_ON_DOCKER =
-      'If you don\'t know an id yet, finish setup first; you can add it any time with Edit setup. On a Docker install, System › Diagnostics shows "Diagnostics unavailable" until you set GOATCITADEL_DEV_DIAGNOSTICS_ENABLED=true where GoatCitadel starts and restart GoatCitadel.';
+      "Don't know the id? Finish setup and message the bot once. Then open Edit setup and come back to this step: the sender it turned away is listed here with a button to allow them.";
+    // The sender step comes before Finalize, so it says to finish first.
+    const FINISH_FIRST = "If you don't know an id yet, finish setup first; you can add it any time with Edit setup.";
     /** What the first message says after the operator finishes and messages the bot (Slack, WhatsApp and the rest). */
-    const FIND_SENDER_ID_AFTER_FINISHING = (name: string) =>
-      `If the bot doesn't answer your message, open System › Diagnostics, find "Dropped a ${name} message from …", and add that id under Who may message this bot with Edit setup.`;
+    const FIND_SENDER_ID_AFTER_FINISHING =
+      "If the bot doesn't answer your message, open Edit setup and go to Who may message this bot: the sender it turned away is listed there with a button to allow them.";
     const SENDER_ID_IN_DIAGNOSTICS = [
       "slack",
       "whatsapp",
@@ -2111,19 +2109,14 @@ describe("the shared guide builder", () => {
       }
     });
 
-    it("says once, on the sender step, that a Docker install needs diagnostics switched on first", () => {
+    it("says once, on the sender step, to finish setup first, and no longer sends anyone to Docker diagnostics", () => {
       for (const key of SENDER_ID_IN_DIAGNOSTICS) {
         const paragraphs = (senderStep(key)?.body ?? []).flatMap((block) =>
           block.kind === "paragraph" ? [block.text] : [],
         );
-        expect(paragraphs, key).toContain(DIAGNOSTICS_ON_DOCKER);
-        expect(paragraphs.join("\n").match(/GOATCITADEL_DEV_DIAGNOSTICS_ENABLED/gu), key).toHaveLength(1);
+        expect(paragraphs, key).toContain(FINISH_FIRST);
+        expect(paragraphs.join(" "), key).not.toContain("GOATCITADEL_DEV_DIAGNOSTICS_ENABLED");
       }
-      expect(
-        senderStep("telegram")
-          ?.body?.map((block) => JSON.stringify(block))
-          .join("\n"),
-      ).not.toContain("GOATCITADEL_DEV_DIAGNOSTICS_ENABLED");
     });
 
     it("quotes the diagnostic the way the gateway words it", () => {
@@ -2134,29 +2127,20 @@ describe("the shared guide builder", () => {
       }
     });
 
-    it("tells the person, in the first message after they finish, to look for the dropped message and add its id", () => {
+    it("tells the person, in the first message after they finish, to open Edit setup and allow the turned away sender", () => {
       for (const key of SENDER_ID_IN_DIAGNOSTICS.filter((candidate) => candidate !== "qqbot")) {
         const text = firstMessageText(key);
-        // The channel's name in the quote is the one the gateway puts in the real message.
-        const named =
-          describeDroppedSender(key, "THE-ID")
-            .split(" message from ")[0]
-            ?.replace(/^Dropped a /u, "") ?? "";
-
-        expect(text, key).toContain(FIND_SENDER_ID_AFTER_FINISHING(named));
-        expect(text, key).toMatch(new RegExp(`find "Dropped a ${named} message from …"`, "u"));
+        expect(text, key).toContain(FIND_SENDER_ID_AFTER_FINISHING);
         // It asks for the bot's answer to the person's own message, never a test message (R49).
         expect(text, key).not.toMatch(/Dropped a [^"]*arrived/u);
+        expect(text, key).not.toContain("System › Diagnostics");
       }
     });
 
-    it("keeps the Docker note to the sender step, so each guide says it once (QQ also repeats it in its walkthrough)", () => {
+    it("keeps the Docker diagnostics setting out of every guide", () => {
       for (const key of SENDER_ID_IN_DIAGNOSTICS) {
         const occurrences = JSON.stringify(guide(key)).match(/GOATCITADEL_DEV_DIAGNOSTICS_ENABLED/gu) ?? [];
-        expect(occurrences, key).toHaveLength(key === "qqbot" ? 2 : 1);
-      }
-      for (const key of SENDER_ID_IN_DIAGNOSTICS.filter((candidate) => candidate !== "qqbot")) {
-        expect(firstMessageText(key), key).not.toContain("GOATCITADEL_DEV_DIAGNOSTICS_ENABLED");
+        expect(occurrences, key).toHaveLength(0);
       }
     });
 

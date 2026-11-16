@@ -374,7 +374,7 @@ describe("visible Chat session", () => {
     Object.assign(surface.sessionRail, { availableFolders: [], historyView: "active", search: "" });
     await act(async () => root.render(view(surface)));
     const show = [...container.querySelectorAll("button")].find((b) => b.textContent === "Show conversations")!;
-    expect(show.className).toContain("md:hidden");
+    expect(show.className).toContain("lg:hidden");
     await act(async () => show.click());
     expect(document.querySelector('[role="dialog"][aria-label="Conversations"]')).not.toBeNull();
     await act(async () => root.unmount());
@@ -412,10 +412,10 @@ it("contains native compact side chat in the positioned conversation host with b
   const conversationHost = container.querySelector('[data-testid="transcript"]')!.parentElement!.parentElement!;
   expect(conversationHost.classList.contains("relative")).toBe(true);
   expect(conversationHost.classList.contains("flex-col")).toBe(true);
-  await act(async () => { await vi.dynamicImportSettled(); });
-  await vi.waitFor(() =>
-    expect(container.querySelector('[data-testid="btw-side-chat-panel"]')).not.toBeNull(),
-  );
+  await act(async () => {
+    await vi.dynamicImportSettled();
+  });
+  await vi.waitFor(() => expect(container.querySelector('[data-testid="btw-side-chat-panel"]')).not.toBeNull());
   const panel = container.querySelector('[data-testid="btw-side-chat-panel"]')!;
   // The lazy leaf's static retention wrapper must not become its containing block.
   expect(panel.parentElement?.parentElement).toBe(conversationHost);

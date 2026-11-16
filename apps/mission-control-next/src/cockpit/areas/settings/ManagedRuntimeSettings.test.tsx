@@ -252,7 +252,8 @@ describe("native managed runtime configuration", () => {
     expect(confirmation.open).toBe(true);
     expect(confirmation.confirmDisabled).toBe(true);
     expect(confirmation.message).toContain("This review is no longer current.");
-    expect(confirmation.message).toContain("close this dialog, then refresh and review your retained draft");
+    expect(confirmation.message).toContain("then refresh. Your draft started from an older version.");
+    expect(confirmation.message).not.toMatch(/revision|retained draft/i);
     act(() => confirmation.onCancel());
     expect(confirmation.open).toBe(false);
     expect(api.patchSettings).not.toHaveBeenCalled();

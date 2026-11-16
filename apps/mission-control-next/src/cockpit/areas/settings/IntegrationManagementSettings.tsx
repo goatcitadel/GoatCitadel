@@ -3,6 +3,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { useIntegrationSettings } from "../../../features/native-routes/settings/sections/use-integration-settings";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { IntegrationConnectionEditor } from "./IntegrationConnectionEditor";
 import { IntegrationConnectionDetails } from "./IntegrationConnectionDetails";
@@ -25,10 +26,16 @@ const MANAGEMENT_VIEWS = [
 export function IntegrationManagementSettings({
   workspaceId,
   selection = null,
+  createRequest = null,
+  onCreateRequestHandled,
 }: {
   workspaceId: string;
   /** Set by the saved-integrations list; this owner keeps no second list or search box of its own. */
   selection?: IntegrationManagementSelection | null;
+  /** A catalog entry to open the add form on, once (from an integration's Set up link). */
+  createRequest?: { catalogId: string } | null;
+  /** Called once the request was acted on, or found to name nothing that can be added. */
+  onCreateRequestHandled?: () => void;
 }) {
   const s = useIntegrationSettings(workspaceId);
   const available = Boolean(
@@ -41,6 +48,16 @@ export function IntegrationManagementSettings({
     handledSelection.current = selection.nonce;
     selectionGuard.requestTransition(selection.connectionId);
   }, [available, selection, selectionGuard]);
+  const handledCreate = useRef<string | null>(null);
+  const createGuard = s.createCatalogGuard;
+  const requestedCatalogId = createRequest?.catalogId;
+  const createable = s.createableCatalog.some((item) => item.catalogId === requestedCatalogId);
+  useEffect(() => {
+    if (!requestedCatalogId || !available || handledCreate.current === requestedCatalogId) return;
+    handledCreate.current = requestedCatalogId;
+    if (createable) createGuard.requestTransition(requestedCatalogId);
+    onCreateRequestHandled?.();
+  }, [available, createable, createGuard, onCreateRequestHandled, requestedCatalogId]);
   return (
     <section aria-label="Integration management" className="space-y-4 border-t border-line-subtle pt-4">
       <header>
@@ -118,7 +135,9 @@ export function IntegrationManagementSettings({
           if (!open && !s.deletePending) s.setPendingDeleteConnection(null);
         }}
       >
-        <p className="break-all text-xs text-fg-muted">Reviewed version: {s.pendingDeleteConnection?.revision}</p>
+        <TechnicalDetails>
+          <p className="break-all text-xs text-fg-muted">Reviewed version: {s.pendingDeleteConnection?.revision}</p>
+        </TechnicalDetails>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button
             variant="danger"

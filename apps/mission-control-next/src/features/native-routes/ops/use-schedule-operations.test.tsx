@@ -198,6 +198,16 @@ describe("shared schedule operation admission", () => {
     expect(control.message).toContain("changed during review");
     expect(control.locked(job().jobId)).toBe(false);
   });
+  it("does not run a Task schedule whose destination changed after the review", async () => {
+    vi.mocked(fetchCronJob).mockResolvedValue(job({ taskDestinationWorkspaceId: "workspace-b" }));
+    await mount();
+    await act(async () => {
+      await control.execute({ kind: "run", job: job({ taskDestinationWorkspaceId: "workspace-a" }) });
+    });
+    expect(runCronJobNow).not.toHaveBeenCalled();
+    expect(control.message).toContain("task destination changed during review");
+    expect(control.locked(job().jobId)).toBe(false);
+  });
   it("preserves numeric CAS and independently confirms paused configuration", async () => {
     const saved = job({ revision: 4, enabled: false });
     vi.mocked(pauseCronJob).mockResolvedValue(saved);

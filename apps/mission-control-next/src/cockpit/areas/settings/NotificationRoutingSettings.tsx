@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { IntegrationConnection } from "@goatcitadel/contracts";
+import type { IntegrationConnection, NotificationEventType } from "@goatcitadel/contracts";
 import { useNotificationRouting } from "../../../features/native-routes/settings/sections/use-notification-routing";
 import type { NotificationReview } from "../../../features/native-routes/settings/sections/use-notification-routing-actions";
 import { Button } from "../../ui/Button";
@@ -12,6 +12,7 @@ import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import {
   NOTIFICATION_DELIVERY_POLICY_LABELS,
   NOTIFICATION_DELIVERY_STATUS_LABELS,
+  NOTIFICATION_EVENT_TYPE_LABELS,
   NOTIFICATION_LIFECYCLE_LABELS,
   NOTIFICATION_TARGET_KIND_LABELS,
 } from "./notification-vocabulary";
@@ -110,7 +111,8 @@ export function NotificationRoutingSettings({
                 </TechnicalDetails>
                 {s.testDelivery(target.targetId) ? (
                   <p role="status" className="my-2 text-sm">
-                    Latest test for {target.label}: {s.testDelivery(target.targetId)!.status.replaceAll("_", " ")}.{" "}
+                    Latest test for {target.label}:{" "}
+                    {NOTIFICATION_DELIVERY_STATUS_LABELS[s.testDelivery(target.targetId)!.status] ?? "Unknown"}.{" "}
                     {s.testPending(target.targetId)
                       ? "Refresh delivery status before another send."
                       : "Confirmed by GoatCitadel."}
@@ -152,14 +154,15 @@ export function NotificationRoutingSettings({
                 <p className="my-2 text-sm">
                   {NOTIFICATION_DELIVERY_POLICY_LABELS[rule.deliveryPolicy] ?? "Unknown delivery policy"}
                 </p>
-                <p className="break-words text-sm text-fg-secondary">{rule.eventTypes.join(", ")}</p>
+                <p className="break-words text-sm text-fg-secondary">
+                  {rule.eventTypes
+                    .map((type) => NOTIFICATION_EVENT_TYPE_LABELS[type as NotificationEventType] ?? "Another event")
+                    .join(", ")}
+                </p>
                 <p className="my-2 break-words text-sm">
                   Destinations:{" "}
                   {rule.targetIds
-                    .map(
-                      (id) =>
-                        s.targets.find((target) => target.targetId === id)?.label ?? `Unavailable destination ${id}`,
-                    )
+                    .map((id) => s.targets.find((target) => target.targetId === id)?.label ?? "A removed destination")
                     .join(", ")}
                 </p>
                 <Button

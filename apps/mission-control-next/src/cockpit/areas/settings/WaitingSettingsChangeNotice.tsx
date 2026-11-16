@@ -61,7 +61,7 @@ export function WaitingSettingsChangeNotice({
         {"unreadable" in waiting ? "Open Inbox to approve it." : "Open Inbox to review it."}
       </NativeOwnerLink>
     );
-  if (!showSentence && !action) return null;
+  if (!showSentence && !action && !onCheckAgain) return null;
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-status-waiting">
       {showSentence ? <p>{describeWaitingChange(waiting, subject)}</p> : null}

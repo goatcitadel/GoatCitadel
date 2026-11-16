@@ -22,6 +22,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({
   controlDurableBackgroundTask: vi.fn(),
   fetchDurableBackgroundTaskRail: vi.fn(),
 }));
+const preferences = vi.hoisted(() => ({ showTechnicalDetails: true }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/state/ui-preferences")>()),
+  useUiPreferences: () => preferences,
+}));
 const callbacks = vi.hoisted(() => ({ confirm: undefined as ComponentProps<"button">["onClick"] }));
 vi.mock("../../ui/Button", () => ({
   Button: ({ children, ...props }: ComponentProps<"button">) => {
@@ -148,6 +153,7 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
+  preferences.showTechnicalDetails = true;
   await act(async () => {
     root.unmount();
   });
@@ -156,6 +162,19 @@ afterEach(async () => {
   __resetSessionDraftsForTests();
   __resetFormDirtyRegistryForTests();
   vi.restoreAllMocks();
+});
+
+it("keeps the task and watcher versions out of the visible dialog text (U-CH-013)", async () => {
+  preferences.showTechnicalDetails = false;
+  await click(container, "Cancel task");
+  expect(dialog().textContent).not.toContain("Task version");
+  expect(dialog().textContent).not.toContain("Watcher version");
+  preferences.showTechnicalDetails = true;
+  await click(dialog(), "Keep running");
+  await click(container, "Cancel task");
+  const details = dialog().querySelector("details");
+  expect(details?.querySelector("summary")?.textContent).toBe("Technical details");
+  expect(details?.textContent).toContain("Task version 3 · Watcher version 5");
 });
 
 it("keeps an owner conflict visible inside the dialog through refresh and requires a fresh review", async () => {

@@ -53,10 +53,16 @@ async function open(riskLevel: string, dangerReview: boolean) {
       </QueryClientProvider>,
     ),
   );
-  for (let tick = 0; tick < 8; tick += 1)
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+  // The decision buttons load after the dialog opens: wait for them instead of a fixed number of ticks.
+  await vi.waitFor(
+    async () => {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(labels().some((label) => label !== "Review approval" && label !== "Close dialog")).toBe(true);
+    },
+    { timeout: 5000 },
+  );
   return onResolved;
 }
 

@@ -259,9 +259,7 @@ describe("cockpit runtime authority map", () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
       "Runtime authority unavailable: The scoped runtime authority envelope is unavailable.",
     );
-    const reload = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent === "Reload authority",
-    )!;
+    const reload = [...container.querySelectorAll("button")].find((button) => button.textContent === "Reload")!;
     await act(async () => reload.click());
     expect(projection.value.reload).toHaveBeenCalledOnce();
   });
@@ -272,20 +270,22 @@ describe("cockpit runtime authority map", () => {
     projection.value.reload = vi.fn(() => new Promise<undefined>((resolve) => (settle = () => resolve(undefined))));
     await render();
     const button = () =>
-      [...container.querySelectorAll("button")].find((item) => /authority$/.test(item.textContent ?? ""))!;
+      [...container.querySelectorAll("button")].find(
+        (item) => item.textContent === "Reload" || item.textContent === "Reloading",
+      )!;
     await act(async () => button().click());
-    expect(button().textContent).toBe("Reloading authority");
+    expect(button().textContent).toBe("Reloading");
     expect(button().disabled).toBe(true);
     expect(container.querySelector('[role="status"]')?.textContent).toContain("Reloading runtime authority");
     await act(async () => settle());
-    expect(button().textContent).toBe("Reload authority");
+    expect(button().textContent).toBe("Reload");
     expect(button().disabled).toBe(false);
   });
 
   it("uses section headings below the page title", async () => {
     projection.value.data = { items: [item()] };
     await render();
-    expect(container.querySelector("h2")?.textContent).toBe("Runtime authority map");
+    expect(container.querySelector("h2")?.textContent).toBe("Where GoatCitadel's records come from");
     expect(container.querySelector("li h3")?.textContent).toBe("Durable run ledger");
   });
 
@@ -318,8 +318,7 @@ describe("cockpit runtime authority map", () => {
     await render();
     expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading runtime authority");
     expect(
-      [...container.querySelectorAll("button")].find((button) => button.textContent === "Reloading authority")!
-        .disabled,
+      [...container.querySelectorAll("button")].find((button) => button.textContent === "Reloading")!.disabled,
     ).toBe(true);
   });
 });

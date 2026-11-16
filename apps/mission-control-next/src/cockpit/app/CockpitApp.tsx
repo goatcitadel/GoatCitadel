@@ -66,7 +66,11 @@ function GatedCockpit() {
   return (
     <QueryClientProvider client={queryClient}>
       {!ready ? (
-        <CockpitAccessGate access={gatewayAccess} busy={gatewayBusy} onRetry={() => void retryGatewayAccess()} />
+        <CockpitAccessGate
+          access={gatewayAccess}
+          busy={gatewayBusy}
+          onRetry={(submission) => void retryGatewayAccess(submission)}
+        />
       ) : null}
       {hasMounted.current ? (
         <div data-cockpit-ready={ready ? "true" : "false"} hidden={!ready} inert={!ready} aria-hidden={!ready}>

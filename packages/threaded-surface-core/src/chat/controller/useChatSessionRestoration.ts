@@ -1,5 +1,13 @@
 import type { ChatAttachmentRecord, ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { fetchChatSessionGoal } from "@goatcitadel/mission-control-shared/api/client";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  chatSessionCreationKey,
+  readChatSessionCreation,
+  useChatSessionCreation,
+  type ChatSessionCreation,
+} from "@goatcitadel/mission-control-shared/state/chat-session-creation";
 import { setDevDiagnosticsLatestTraceSummary } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { useEffect, useMemo, useRef } from "react";
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
@@ -53,6 +61,41 @@ type Input = {
   initialOutboundSessionCreationRef?: React.MutableRefObject<InitialOutboundSessionCreation | null>;
 };
 
+type DraftOwner = { key: string; workspaceId: string; caller: string };
+/** The box as New started: one attempt, one conversation key, nothing in it, nothing stored for it. */
+type CreationStart = { attempt: ChatSessionCreation; key: string; settled: boolean };
+
+function nothingStoredFor(key: string): boolean {
+  try {
+    return !window.localStorage.getItem(key);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the draft typed so far moves into the conversation that was just created. Only when the selection goes
+ * directly from the conversation New started in to the one that New created, for the same caller and workspace; the
+ * start is dropped on any other key change, so nothing carries later.
+ */
+function carriedDraft(
+  previous: DraftOwner | null,
+  next: DraftOwner,
+  selectedSessionId: string | null,
+  start: CreationStart | null,
+): boolean {
+  if (!previous || !start || !selectedSessionId || previous.key === next.key) return false;
+  const attempt = readChatSessionCreation(chatSessionCreationKey(getGatewayApiBaseUrl(), next.workspaceId));
+  return (
+    previous.workspaceId === next.workspaceId &&
+    previous.caller === next.caller &&
+    attempt === start.attempt &&
+    attempt.state === "confirmed" &&
+    attempt.sessionId === selectedSessionId &&
+    start.key === previous.key
+  );
+}
+
 /** Captures the queue transition baseline during render, hydrates scoped drafts, then installs persistence effects in the original order. */
 export function useChatSessionRestoration({
   workspaceId,
@@ -80,6 +123,28 @@ export function useChatSessionRestoration({
   const draftStorageKey = createDraftStorageKey(workspaceId, selection.selectedSessionId);
   const attachmentStorageKey = createAttachmentStorageKey(workspaceId, selection.selectedSessionId);
   const queueStorageKey = createQueueStorageKey(workspaceId, selection.selectedSessionId);
+  // Which owner (caller, workspace, conversation) the draft was last hydrated for, and the draft as it was when
+  // the current New started: text typed while a new conversation is being created belongs to that conversation.
+  const draftHydrationRef = useRef<{ key: string; workspaceId: string; caller: string } | null>(null);
+  const creationAttempt = useChatSessionCreation(chatSessionCreationKey(getGatewayApiBaseUrl(), workspaceId));
+  const creationStartRef = useRef<CreationStart | null>(null);
+  const consideredAttemptRef = useRef<ChatSessionCreation | null>(null);
+  if (
+    creationAttempt &&
+    (creationAttempt.state === "checking" || creationAttempt.state === "pending") &&
+    consideredAttemptRef.current !== creationAttempt
+  ) {
+    consideredAttemptRef.current = creationAttempt;
+    // Only a box that has been hydrated for this key, is empty and has nothing stored can start a carry; an attempt
+    // that starts before hydration, or in the render of a key change, gets none.
+    creationStartRef.current =
+      draftHydrationRef.current?.key === draftStorageKey && draft === "" && nothingStoredFor(draftStorageKey)
+        ? { attempt: creationAttempt, key: draftStorageKey, settled: false }
+        : null;
+  }
+  const attachmentKeyRef = useRef<string | null>(null);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const queueHydrationTransitionRef = useRef<{
     key: string;
     baselineIds: ReadonlySet<string>;
@@ -171,18 +236,53 @@ export function useChatSessionRestoration({
       return;
     }
     const hydrationTransition = queueHydrationTransitionRef.current;
+    const hydratedAttachmentKey = attachmentKeyRef.current;
+    attachmentKeyRef.current = attachmentStorageKey;
+    const owner = { key: draftStorageKey, workspaceId, caller: getGatewayCallerScope() };
+    const previousOwner = draftHydrationRef.current;
+    draftHydrationRef.current = owner;
+    // The same owner and key again (only another dependency changed): never replace newer typing with a stored value.
+    const sameOwnerKey = previousOwner?.key === owner.key;
+    const carried = carriedDraft(previousOwner, owner, selection.selectedSessionId, creationStartRef.current);
+    // Any key change ends the start, carrying or not: a later selection can never claim it.
+    if (!sameOwnerKey) creationStartRef.current = null;
+    const hydrateDraft = (stored: string | null) => {
+      if (sameOwnerKey) return;
+      if (stored === null && carried) {
+        const text = draftRef.current;
+        setDraft(text);
+        // The text was saved under the conversation it was typed in; it belongs to the new one. It is written under
+        // the new key first and the matching source copy is removed only once that write held, so a refused write
+        // leaves the text on disk where it was.
+        setTimeout(() => {
+          try {
+            window.localStorage.setItem(draftStorageKey, text);
+            if (window.localStorage.getItem(previousOwner!.key) === text)
+              window.localStorage.removeItem(previousOwner!.key);
+          } catch {
+            // Intentionally ignored: storage refused the write or is unavailable, so the source copy is kept and the
+            // new conversation still holds the text in memory.
+          }
+        }, 0);
+        return;
+      }
+      setDraft(stored ?? "");
+    };
     try {
       const draftRaw = window.localStorage.getItem(draftStorageKey);
-      setDraft(
-        draftRaw && isWithinStorageBudget(draftRaw) && draftRaw.length <= MAX_HYDRATED_MESSAGE_CHARS ? draftRaw : "",
+      hydrateDraft(
+        draftRaw && isWithinStorageBudget(draftRaw) && draftRaw.length <= MAX_HYDRATED_MESSAGE_CHARS ? draftRaw : null,
       );
-      const attachmentsRaw = window.localStorage.getItem(attachmentStorageKey);
-      setPendingAttachments(
-        parseHydratedChatAttachments(attachmentsRaw, {
-          workspaceId,
-          sessionId: selection.selectedSessionId,
-        }),
-      );
+      // The same key again never replaces attachments added since with the stored copy.
+      if (hydratedAttachmentKey !== attachmentStorageKey) {
+        const attachmentsRaw = window.localStorage.getItem(attachmentStorageKey);
+        setPendingAttachments(
+          parseHydratedChatAttachments(attachmentsRaw, {
+            workspaceId,
+            sessionId: selection.selectedSessionId,
+          }),
+        );
+      }
       const queueRaw = window.localStorage.getItem(queueStorageKey);
       const hydratedQueue = parseHydratedOutboundQueue(queueRaw, {
         workspaceId,
@@ -198,8 +298,8 @@ export function useChatSessionRestoration({
         }),
       );
     } catch {
-      setDraft("");
-      setPendingAttachments([]);
+      hydrateDraft(null);
+      if (hydratedAttachmentKey !== attachmentStorageKey) setPendingAttachments([]);
       setQueuedOutbound((current) =>
         mergeHydratedOutboundQueue({
           hydrated: [],
@@ -227,6 +327,20 @@ export function useChatSessionRestoration({
     initialOutboundSessionCreationRef,
     workspaceId,
   ]);
+
+  // The start lives only across the commit that shows the created conversation as confirmed and the one that selects
+  // it (the creator selects it in the same task); an error, or any later commit on the same key, ends it.
+  useEffect(() => {
+    const start = creationStartRef.current;
+    if (!start) return;
+    if (creationAttempt !== start.attempt) {
+      creationStartRef.current = null;
+      return;
+    }
+    if (creationAttempt.state === "checking" || creationAttempt.state === "pending") return;
+    if (creationAttempt.state !== "confirmed" || start.settled) creationStartRef.current = null;
+    else start.settled = true;
+  });
 
   useEffect(() => {
     setPendingAttachmentModes((current) => reconcilePendingAttachmentModes(current, pendingAttachments));

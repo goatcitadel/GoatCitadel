@@ -8,6 +8,7 @@ import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { readCockpitLocation } from "../../app/cockpit-back-guard";
+import { TaskOwnerNotice } from "./TaskOwnerNotice";
 
 export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord; workspaceId: string }) {
   const { search, hash } = typeof window === "undefined" ? { search: "", hash: "" } : readCockpitLocation();
@@ -66,7 +67,7 @@ export function TaskAssignmentControl({ task, workspaceId }: { task: TaskRecord;
       ) : null}
       {executionOwned ? (
         <p className="mt-2 text-sm text-fg-muted">
-          A runtime execution owns this task. Review its run before changing ownership.
+          <TaskOwnerNotice task={task} workspaceId={workspaceId} before="changing ownership" />
         </p>
       ) : null}
       {task.status === "done" ? (
