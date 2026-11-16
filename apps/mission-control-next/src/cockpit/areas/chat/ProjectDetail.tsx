@@ -12,6 +12,7 @@ import {
 import { projectWorkspacePathProblem } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
+import { useWorkspaceName } from "../../data/use-workspace-name";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
@@ -39,6 +40,7 @@ export function ProjectDetail({
   togglePin: () => void;
 }) {
   const route = useCockpitRoute();
+  const workspaceName = useWorkspaceName(citadelId, workspaceId) ?? "this workspace";
   const access = useProjectAccess(JSON.stringify([citadelId, workspaceId, project]));
   const [editing, setEditing] = useState(false),
     [error, setError] = useState(""),
@@ -261,7 +263,7 @@ export function ProjectDetail({
           if (!open) setReview(null);
         }}
         title={review?.action === "restore" ? "Restore project" : "Archive project"}
-        description={`Review ${project.name} in workspace ${workspaceId}.`}
+        description={`Review ${project.name} in ${workspaceName}.`}
       >
         <p className="mb-3 text-sm">
           {review?.action === "restore"
@@ -271,6 +273,7 @@ export function ProjectDetail({
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => setReview(null)}>Cancel</Button>
           <Button
+            variant="primary"
             disabled={busy || !available || review?.token !== access.token}
             onClick={() => {
               if (review) void action(review.action);

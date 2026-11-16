@@ -10,6 +10,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
 import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
+import { useWorkspaceName } from "../../data/use-workspace-name";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
 import { Field } from "../../ui/Field";
@@ -53,6 +54,7 @@ export function ProjectEditor({
   onClose: () => void;
   refresh: () => Promise<unknown>;
 }) {
+  const workspaceName = useWorkspaceName(citadelId, workspaceId) ?? "this workspace";
   const access = useProjectAccess(JSON.stringify([citadelId, workspaceId, project?.projectId ?? "create"]));
   const draft = useSessionDraft(
     projectDraftKey({ citadelId, workspaceId, projectId: project?.projectId }),
@@ -130,8 +132,8 @@ export function ProjectEditor({
     >
       <h2 className="text-lg font-semibold">{project ? "Edit project" : "Create project"}</h2>
       <p className="text-sm text-fg-secondary">
-        Workspace {workspaceId}. Project context and its workspace path apply to future work; existing conversation
-        history remains retained.
+        In {workspaceName}. Project context and its workspace path apply to future work; existing conversation history
+        remains retained.
       </p>
       <UnattributedDraftRecovery editor={draft} />
       {error ? <Callout tone="error">{error}</Callout> : null}
