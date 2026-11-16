@@ -83,6 +83,13 @@ it("lists workers by name and status without raw IDs or Classic words", async ()
   expect(host.querySelector(".cockpit-embedded-classic")).toBeNull();
 });
 
+it("says live worker status is not part of this release (U-SY-001)", async () => {
+  await render();
+  expect(host.querySelector("[data-area-header]")?.textContent).toContain(
+    "This page shows saved worker records. Live worker status is not part of this release.",
+  );
+});
+
 it("selects a worker by writing it to the URL, keeping other parameters and the hash", async () => {
   await render();
   const row = [...host.querySelectorAll("button")].find((node) => node.textContent?.startsWith("Build box"))!;

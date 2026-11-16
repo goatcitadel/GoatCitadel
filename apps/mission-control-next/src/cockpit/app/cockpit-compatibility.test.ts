@@ -188,7 +188,6 @@ describe("Cockpit compatibility coverage", () => {
     "/work/unknown",
     "/library/unknown",
     "/cowork/unknown",
-    "/cowork/workspace",
     "/ops/unknown",
     "/settings/unknown",
   ])("reports missing %s", (href) => {
@@ -198,11 +197,15 @@ describe("Cockpit compatibility coverage", () => {
   it.each(
     Object.values(RAIL_ITEMS)
       .flat()
-      // The Cowork workspace is a Classic-only rail alias for Chat; Cockpit has no such path (pinned missing above).
-      .filter((item) => item.area !== "cowork" || item.section !== "workspace")
       .map((item) => `/${item.area}${item.section ? `/${item.section}` : ""}`),
   )("opens rail destination %s natively", (href) => {
     expect(resolveCockpitCompatibility(href).kind).toBe("native");
+  });
+  it("opens the retired Cowork workspace in Chat, keeping query and fragment (U-CH-017)", () => {
+    const cowork = resolveCockpitCompatibility("/cowork?workspaceId=w#latest");
+    expect(resolveCockpitCompatibility("/cowork/workspace?workspaceId=w#latest")).toEqual(cowork);
+    expect(cowork).toMatchObject({ kind: "native" });
+    expect((cowork as { href: string }).href.startsWith("/chat")).toBe(true);
   });
   it("opens the retired Ops root on the System overview", () => {
     expect(resolveCockpitCompatibility("/ops?workspaceId=w")).toEqual({

@@ -45,7 +45,11 @@ function WorkersPage({ workspaceId, workspaceName }: { workspaceId: string; work
             <RefreshCw aria-hidden="true" className="size-4" /> Refresh<span className="sr-only"> workers</span>
           </Button>
         }
-      />
+      >
+        <p className="mt-1 text-xs text-fg-muted">
+          This page shows saved worker records. Live worker status is not part of this release.
+        </p>
+      </AreaHeader>
       {selection.invalid ? (
         <div className="text-sm text-fg-secondary">
           <p>This link does not identify one worker and its assignment.</p>

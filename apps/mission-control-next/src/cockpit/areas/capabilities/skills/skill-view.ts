@@ -11,7 +11,6 @@ import {
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { StatusPresentation, StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import type { CategoryOption } from "../CategoryFilter";
-import { WORKSPACE_CAPABILITIES_HREF } from "../connectors/connector-links";
 import type { SkillSwitch } from "./use-skill-switch";
 
 // Wording and ordering for the list the Gateway already built. Nothing here decides whether a skill is usable: the
@@ -123,8 +122,8 @@ export function presentSkillState(
     return {
       label: "Left out of this workspace",
       tone: "waiting",
-      reason: "This workspace's skill choices leave it out, so the AI can't use it here.",
-      link: { label: "Change this workspace's skills", href: WORKSPACE_CAPABILITIES_HREF },
+      reason:
+        "This workspace's skill choices leave it out, so the AI can't use it here. Changing a workspace's skill choices is not available in this release.",
       kind: "left_out",
     };
   }

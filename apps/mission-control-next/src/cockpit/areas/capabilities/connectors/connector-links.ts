@@ -11,9 +11,6 @@ const MCP_SERVERS_HREF = connectorSetupHref("mcp");
  */
 export const CHAT_CONNECTORS_SETTINGS_HREF = MCP_SERVERS_HREF;
 
-/** Where an operator lets this workspace's AI use an app the workspace hides. */
-export const WORKSPACE_CAPABILITIES_HREF = "/settings/citadel#workspace-capabilities";
-
 /** The address parameter that opens Advanced setup's add form on one catalog entry. */
 export const ADD_INTEGRATION_PARAM = "addIntegration";
 

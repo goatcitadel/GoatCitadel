@@ -7,7 +7,6 @@ import {
   connectorSettingsHref,
   readLinkedConnectorId,
   savedConnectorForTemplate,
-  WORKSPACE_CAPABILITIES_HREF,
 } from "./connector-links";
 
 function item(overrides: Partial<CapabilityConnectorItem>): CapabilityConnectorItem {
@@ -45,10 +44,6 @@ describe("connectorSettingsHref", () => {
 describe("settings links", () => {
   it("points the Chat line at the MCP section, where Chat availability is shown", () => {
     expect(CHAT_CONNECTORS_SETTINGS_HREF).toBe("/capabilities/connectors/advanced#mcp-servers");
-  });
-
-  it("points the hidden line at the workspace capabilities", () => {
-    expect(WORKSPACE_CAPABILITIES_HREF).toBe("/settings/citadel#workspace-capabilities");
   });
 });
 

@@ -287,12 +287,11 @@ describe("Skills tab", () => {
       }
     });
 
-    it("points a left-out skill to this workspace's skill settings", async () => {
+    it("does not link a left-out skill to a held-back page", async () => {
       await render();
 
-      const link = linkIn(rowOf("Mailer"), "Change this workspace's skills");
-      expect(link?.getAttribute("href")).toContain("/settings/citadel");
-      expect(link?.getAttribute("href")).toContain("#workspace-capabilities");
+      expect(linkIn(rowOf("Mailer"), "Change this workspace's skills")).toBeUndefined();
+      expect(rowOf("Mailer").textContent).toContain("is not available in this release");
     });
 
     it("shows the wait with a Review button that opens the skill's panel", async () => {
