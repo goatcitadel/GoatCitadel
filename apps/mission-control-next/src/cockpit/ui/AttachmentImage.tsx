@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Callout } from "./Callout";
 import { buildGatewayUrl, readGatewayAuthHeaders } from "@goatcitadel/mission-control-shared/api/client-core";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
@@ -56,11 +57,7 @@ export function AttachmentImage({
   );
 
   if (failure) {
-    return (
-      <p role="alert" className="text-sm text-status-failed">
-        {failure}
-      </p>
-    );
+    return <Callout tone="error">{failure}</Callout>;
   }
   if (!blobUrl) {
     return (

@@ -17,7 +17,7 @@ export function DocumentLibraryLink({ proposal }: { proposal: DocumentPatchPropo
     <NativeOwnerLink
       href={proposal.targetKind === "personal_note" ? "/library/notes" : "/library/artifacts"}
       scope={[proposal.workspaceId, proposal.proposalId]}
-      className="inline-flex min-h-6 w-fit items-center text-sm font-medium text-accent hover:underline"
+      className="cockpit-target w-fit text-sm font-medium text-accent hover:underline"
     >
       {documentLibraryLabel(proposal.targetKind)}
     </NativeOwnerLink>

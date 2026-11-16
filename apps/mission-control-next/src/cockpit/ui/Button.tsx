@@ -13,8 +13,8 @@ const VARIANTS: Readonly<Record<ButtonVariant, string>> = {
 };
 
 const SIZES: Readonly<Record<ButtonSize, string>> = {
-  sm: "h-7 px-2.5 text-sm",
-  md: "h-9 px-3.5 text-base",
+  sm: "min-h-7 px-2.5 py-1 text-sm",
+  md: "min-h-9 px-3.5 py-1.5 text-base",
 };
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

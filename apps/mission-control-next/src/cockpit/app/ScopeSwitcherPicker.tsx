@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useState } from "react";
 import { Button } from "../ui/Button";
+import { Callout } from "../ui/Callout";
 import { Dialog } from "../ui/Dialog";
 import { CHECKING_FOR_CHANGES } from "../data/record-view";
 import { useCockpitScope } from "./use-cockpit-scope";
@@ -39,11 +40,7 @@ export function ScopeSwitcherPicker({
   useLayoutEffect(() => onBusyChange(owner.busy), [onBusyChange, owner.busy]);
   return (
     <>
-      {owner.error ? (
-        <p role="alert" className="break-words text-xs text-status-failed">
-          {owner.error}
-        </p>
-      ) : null}
+      {owner.error ? <Callout tone="error">{owner.error}</Callout> : null}
       <Dialog
         open={open}
         onOpenChange={setOpen}
@@ -103,11 +100,7 @@ export function ScopeSwitcherPicker({
               {CHECKING_FOR_CHANGES}
             </p>
           ) : null}
-          {owner.directoryError ? (
-            <p role="alert" className="text-sm text-status-failed">
-              {owner.directoryError}
-            </p>
-          ) : null}
+          {owner.directoryError ? <Callout tone="error">{owner.directoryError}</Callout> : null}
           {owner.citadels.length === 500 || owner.workspaces.length === 500 ? (
             <p className="text-xs text-fg-muted">Showing up to 500 active records from each directory.</p>
           ) : null}
