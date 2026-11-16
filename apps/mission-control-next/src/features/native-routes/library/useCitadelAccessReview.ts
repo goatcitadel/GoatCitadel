@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExter
 import type { CitadelAccessSnapshot } from "@goatcitadel/contracts";
 import { getCitadelAccessSnapshot } from "@goatcitadel/mission-control-shared/api/client";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { getErrorMessage } from "../shared/native-helpers";
 import { sameBlueprintValue } from "./citadel-blueprint-binding";
 import {
@@ -153,7 +154,7 @@ export function useCitadelAccessReview(citadelId: string) {
           (change && !accessMutationMatches(before, saved, change))
         )
           throw new Error("The access owner did not acknowledge the reviewed change.");
-        const confirmed = await read();
+        const confirmed = await withFreshReads(read);
         if (!sameBlueprintValue(saved, confirmed))
           throw new Error("The saved access rules could not be independently confirmed.");
         setAccessAttempt(key, { phase: "idle" });

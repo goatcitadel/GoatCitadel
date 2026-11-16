@@ -3,12 +3,16 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CitadelAccessSnapshot } from "@goatcitadel/contracts";
+import { getCitadelAccessSnapshot } from "@goatcitadel/mission-control-shared/api/citadels-operations";
 import { useCitadelAccessReview } from "./useCitadelAccessReview";
 import { __resetCitadelAccessAttemptsForTests, accessAttempt } from "./citadel-access-state";
 import { overviewStructure } from "./citadel-overview.test-support";
 const api = vi.hoisted(() => ({ base: "http://one", getCitadelAccessSnapshot: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
-vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({ getGatewayApiBaseUrl: () => api.base }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
+  getGatewayApiBaseUrl: () => api.base,
+}));
 let root: Root, container: HTMLDivElement, scope: string, control: ReturnType<typeof useCitadelAccessReview>, owner: CitadelAccessSnapshot;
 const fixture = (id = "one"): CitadelAccessSnapshot => ({ citadelId: id, revision: "a".repeat(64), structure: { ...overviewStructure(), citadelId: id }, council: [], wards: [], passages: [], members: [], integrations: [] });
 function Harness() { control = useCitadelAccessReview(scope); return <p>{control.error}</p>; }
@@ -17,8 +21,38 @@ const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = n
 const changed = () => ({ ...owner, revision: "b".repeat(64), wards: [{ wardId: "ward", citadelId: scope, name: "Deny", actionPattern: "shell.*", effect: "deny" as const, createdAt: "now" }] });
 const change = { type: "add_ward" as const, ward: { name: "Deny", actionPattern: "shell.*", effect: "deny" as const } };
 beforeEach(async () => { vi.resetAllMocks(); __resetCitadelAccessAttemptsForTests(); api.base = "http://one"; scope = "one"; owner = fixture(); api.getCitadelAccessSnapshot.mockImplementation(async () => structuredClone(owner)); container = document.createElement("div"); document.body.append(container); root = createRoot(container); await render(); });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
+afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 describe("shared Citadel access admission", () => {
+  it("confirms a committed access change while an older access read is still pending", async () => {
+    const before = owner;
+    const after = changed();
+    const stale = deferred<Response>();
+    const reply = deferred<CitadelAccessSnapshot>();
+    const write = vi.fn(() => reply.promise);
+    const fetchMock = vi.fn().mockReturnValueOnce(stale.promise).mockResolvedValueOnce(Response.json(after));
+    vi.stubGlobal("fetch", fetchMock);
+    api.getCitadelAccessSnapshot.mockResolvedValueOnce(before).mockImplementationOnce(getCitadelAccessSnapshot);
+
+    let pending!: Promise<CitadelAccessSnapshot | null>;
+    await act(async () => { pending = control.run(before.revision, write, { change }); });
+    expect(write).toHaveBeenCalledOnce();
+    const background = getCitadelAccessSnapshot("one");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    await act(async () => reply.resolve(after));
+    const readsBeforeStaleResponse = fetchMock.mock.calls.length;
+    let confirmed!: CitadelAccessSnapshot | null;
+    await act(async () => {
+      stale.resolve(Response.json(before));
+      expect(await background).toEqual(before);
+      confirmed = await pending;
+    });
+
+    expect(confirmed).toEqual(after);
+    expect(readsBeforeStaleResponse).toBe(2);
+    expect(control.snapshot).toEqual(after);
+    expect(control.ready).toBe(true);
+  });
+
   it("admits once after exact preflight and confirms the actual receipt by independent read", async () => {
     const reply = deferred<CitadelAccessSnapshot>(), write = vi.fn(() => reply.promise); let pending!: Promise<CitadelAccessSnapshot | null>;
     await act(async () => { pending = control.run(owner.revision, write, { change }); }); expect(write).toHaveBeenCalledTimes(1);

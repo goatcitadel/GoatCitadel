@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import type { CitadelBlueprint, CitadelBlueprintValidationResult, CitadelStructureSnapshot } from "@goatcitadel/contracts";
 import { exportCitadelBlueprint, getCitadelStructureSnapshot, importCitadelBlueprint, isApiRequestError, listCitadels, validateCitadelBlueprint } from "@goatcitadel/mission-control-shared/api/client";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { useSessionDraft } from "./session-drafts";
 import { useDraftLeave } from "./DraftLeaveDialog";
 import { blueprintImportMatches, hasBlueprintStructure, isBlueprintPrewriteConflict, sameBlueprintValue } from "./citadel-blueprint-binding";
@@ -124,7 +125,7 @@ export function useCitadelBlueprint(activeCitadelId: string) {
       const receipt = await importCitadelBlueprint(activeCitadelId, parsed.blueprint as CitadelBlueprint, before.revision);
       if (getGatewayApiBaseUrl() !== installation) throw new Error("The Gateway installation changed after import dispatch.");
       if (!blueprintImportMatches(before, parsed.blueprint as CitadelBlueprint, receipt)) throw new Error("The Blueprint owner did not acknowledge the reviewed import.");
-      const after = await getCitadelStructureSnapshot(activeCitadelId);
+      const after = await withFreshReads(() => getCitadelStructureSnapshot(activeCitadelId));
       if (getGatewayApiBaseUrl() !== installation) throw new Error("The Gateway installation changed during import readback.");
       if (!hasBlueprintStructure(after, activeCitadelId) || !sameBlueprintValue(after, receipt)) throw new Error("The imported structure could not be independently confirmed.");
       confirmed = true; setAttempt({ phase: "idle" });

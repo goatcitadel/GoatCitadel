@@ -3,6 +3,7 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CitadelBlueprint, CitadelStructureSnapshot } from "@goatcitadel/contracts";
+import { getCitadelStructureSnapshot } from "@goatcitadel/mission-control-shared/api/citadels";
 import { useCitadelBlueprint } from "./use-citadel-blueprint";
 import { __resetBlueprintAttemptsForTests, blueprintLocked } from "./citadel-blueprint-state";
 import { __resetSessionDraftsForTests } from "./session-drafts";
@@ -10,7 +11,10 @@ import { blueprintImportMatches } from "./citadel-blueprint-binding";
 
 const api = vi.hoisted(() => ({ base: "http://gateway-one", exportCitadelBlueprint: vi.fn(), getCitadelStructureSnapshot: vi.fn(), importCitadelBlueprint: vi.fn(), listCitadels: vi.fn(), validateCitadelBlueprint: vi.fn(), isApiRequestError: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
-vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({ getGatewayApiBaseUrl: () => api.base }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
+  getGatewayApiBaseUrl: () => api.base,
+}));
 vi.mock("@goatcitadel/mission-control-shared/components/ui/GCModal", () => ({ GCModal: ({ children }: { children: ReactNode }) => <>{children}</> }));
 export const blueprint: CitadelBlueprint = { schemaVersion: "goatcitadel.blueprint.v1", metadata: { name: "Reviewed structure" },
   charter: { purpose: "Reviewed purpose", kind: "team", goals: ["Goal"], boundaries: ["Boundary"], successDefinition: ["Success"], riskPosture: "balanced", modelPolicyDefault: "hybrid_guarded" },
@@ -31,9 +35,40 @@ beforeEach(async () => {
   api.importCitadelBlueprint.mockImplementation(async () => { saved = receipt(saved); return structuredClone(saved); });
   container = document.createElement("div"); document.body.append(container); root = createRoot(container); await render();
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); __resetBlueprintAttemptsForTests(); __resetSessionDraftsForTests(); });
+afterEach(async () => { await act(async () => root.unmount()); container.remove(); __resetBlueprintAttemptsForTests(); __resetSessionDraftsForTests(); vi.unstubAllGlobals(); });
 
 describe("shared Blueprint lifecycle", () => {
+  it("confirms a committed import while an older structure read is still pending", async () => {
+    await prepare();
+    const before = saved;
+    const after = receipt(before);
+    const stale = deferred<Response>();
+    const write = deferred<CitadelStructureSnapshot>();
+    const fetchMock = vi.fn().mockReturnValueOnce(stale.promise).mockResolvedValueOnce(Response.json(after));
+    vi.stubGlobal("fetch", fetchMock);
+    api.getCitadelStructureSnapshot.mockResolvedValueOnce(before).mockImplementationOnce(getCitadelStructureSnapshot);
+    api.importCitadelBlueprint.mockReturnValueOnce(write.promise);
+
+    let pending!: Promise<boolean>;
+    await act(async () => { pending = control.applyImport(); });
+    expect(api.importCitadelBlueprint).toHaveBeenCalledExactlyOnceWith("one", blueprint, before.revision);
+    const background = getCitadelStructureSnapshot("one");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    await act(async () => write.resolve(after));
+    const readsBeforeStaleResponse = fetchMock.mock.calls.length;
+    let confirmed!: boolean;
+    await act(async () => {
+      stale.resolve(Response.json(before));
+      expect(await background).toEqual(before);
+      confirmed = await pending;
+    });
+
+    expect(confirmed).toBe(true);
+    expect(readsBeforeStaleResponse).toBe(2);
+    expect(control.importState.done).toBe(true);
+    expect(control.locked).toBe(false);
+  });
+
   it("cancels Gateway installation round trips during preflight without writes", async () => {
     await prepare(); const read = deferred<CitadelStructureSnapshot>(); api.getCitadelStructureSnapshot.mockReturnValueOnce(read.promise);
     let pending!: Promise<boolean>; await act(async () => { pending = control.applyImport(); });
