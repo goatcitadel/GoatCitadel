@@ -144,7 +144,7 @@ export function HealthOverview() {
   return (
     <section className={AREA_PAGE}>
       <AreaHeader
-        title="System"
+        title="Health"
         description="Service status as each part of the system reports it, and what each check can confirm."
         actions={
           <Button

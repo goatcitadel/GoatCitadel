@@ -1,4 +1,5 @@
 import { RAIL_GROUPS, readRouteSectionLabel } from "../../app/route-navigation-metadata";
+import { CAPABILITIES_TABS } from "../areas/capabilities/capabilities-tabs";
 import { SYSTEM_IMPROVEMENT_VIEW, SYSTEM_VIEWS } from "../areas/system/system-views";
 import { WORK_VIEWS } from "../areas/work/work-views";
 
@@ -21,10 +22,14 @@ const labelsById = (views: ReadonlyArray<{ id: string; label: string }>) =>
 const COCKPIT_TAB_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   system: labelsById([...SYSTEM_VIEWS, SYSTEM_IMPROVEMENT_VIEW]),
   work: labelsById(WORK_VIEWS),
+  capabilities: { ...labelsById(CAPABILITIES_TABS), advanced: "Advanced setup" },
+  settings: { "first-run": "Get started" },
 };
 
 /** "GoatCitadel Inbox", "GoatCitadel Settings · Get started": the same prefix and labels the classic shell uses. */
-export function cockpitDocumentTitle(areaLabel: string, section?: string, area?: string): string {
+export function cockpitDocumentTitle(areaLabel: string, section?: string, area?: string, detail?: string): string {
+  // The record the page has open (a conversation or run name) names the page better than its tab.
+  if (detail) return `GoatCitadel ${areaLabel} · ${detail}`;
   const slug = section ? decodeSection(section) : "";
   const sectionLabel = slug ? (routeModelLabel(area, slug) ?? humanizeSection(slug)) : "";
   return sectionLabel ? `GoatCitadel ${areaLabel} · ${sectionLabel}` : `GoatCitadel ${areaLabel}`;

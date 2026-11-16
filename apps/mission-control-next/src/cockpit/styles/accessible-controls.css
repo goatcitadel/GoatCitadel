@@ -44,6 +44,11 @@ html[data-shell="cockpit"] :focus-visible {
   outline: 2px solid var(--cockpit-accent) !important;
   outline-offset: 2px !important;
 }
+/* The page region takes focus by itself when the area changes (and from the skip link). It is a container with no
+   action of its own, so it shows no ring; the next Tab lands on a real control. */
+html[data-shell="cockpit"] #main-content:focus-visible {
+  outline: none !important;
+}
 html[data-shell="cockpit"] ::selection {
   color: var(--cockpit-accent-ink);
   background: var(--cockpit-accent);

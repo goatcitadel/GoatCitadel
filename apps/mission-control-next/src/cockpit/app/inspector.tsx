@@ -21,6 +21,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { IconButton } from "../ui/IconButton";
+import { NoFocusTooltips } from "../ui/tooltip-focus";
 import {
   createDeferredDialogRuntime,
   PendingDialog,
@@ -262,15 +263,17 @@ export function InspectorPanel() {
       }`}
     >
       {controls ? <controls.InspectorResizeHandle width={width} onChange={setWidth} /> : null}
-      <header className="flex h-12 items-center justify-between gap-2 border-b border-line-subtle px-3">
-        <h2 title={content.title} className="min-w-0 truncate text-base font-medium text-fg">
-          {content.title}
-        </h2>
-        <div className="flex shrink-0 gap-1">
-          {controls ? <controls.InspectorExpandButton onExpand={() => setExpanded(true)} /> : null}
-          <IconButton label="Close inspector" icon={<X className="size-4" aria-hidden="true" />} onClick={close} />
-        </div>
-      </header>
+      <NoFocusTooltips>
+        <header className="flex h-12 items-center justify-between gap-2 border-b border-line-subtle px-3">
+          <h2 title={content.title} className="min-w-0 truncate text-base font-medium text-fg">
+            {content.title}
+          </h2>
+          <div className="flex shrink-0 gap-1">
+            {controls ? <controls.InspectorExpandButton onExpand={() => setExpanded(true)} /> : null}
+            <IconButton label="Close inspector" icon={<X className="size-4" aria-hidden="true" />} onClick={close} />
+          </div>
+        </header>
+      </NoFocusTooltips>
       {failed ? (
         <p role="status" className="px-3 pt-2 text-sm text-fg-muted">
           Resize and expand controls could not load. The selected details are still available.
