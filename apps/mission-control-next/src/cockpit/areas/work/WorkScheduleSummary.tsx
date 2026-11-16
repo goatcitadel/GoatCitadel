@@ -1,10 +1,12 @@
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import type { ScheduleAction } from "../../../features/native-routes/ops/schedule-operation";
 import type { CronJobRecordResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { Button } from "../../ui/Button";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
+import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { CUSTOM_SCHEDULE, scheduleCadence, scheduleTimezoneSummary } from "./schedule-cadence";
@@ -14,6 +16,9 @@ import { presentScheduleAction, presentScheduleReason } from "./work-vocabulary"
 export function ScheduleTime({ value }: { value: string | undefined }) {
   return value ? <TimeText value={value} /> : <>Not reported</>;
 }
+
+const ENABLED_STATUS: StatusPresentation = { label: "Enabled", tone: "done" };
+const PAUSED_STATUS: StatusPresentation = { label: "Paused", tone: "neutral" };
 
 const OVERDUE_AFTER_MS = 60_000;
 
@@ -171,18 +176,13 @@ export function WorkScheduleListItem({
   onReview: () => void;
 }) {
   return (
-    <li
-      aria-current={selected ? "true" : undefined}
-      className="rounded-lg border border-line bg-raised p-4 aria-[current=true]:border-accent"
-    >
+    <li aria-current={selected ? "true" : undefined} className="py-4 aria-[current=true]:bg-sunken">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h2 className="text-sm font-semibold text-fg">{job.name}</h2>
           <p className="mt-1 text-xs text-fg-muted">{presentScheduleAction(job.action)}</p>
         </div>
-        <span className="rounded-full border border-line px-2 py-0.5 text-xs text-fg-secondary">
-          {job.enabled ? "Enabled" : "Paused"}
-        </span>
+        <StatusBadge status={job.enabled ? ENABLED_STATUS : PAUSED_STATUS} />
       </div>
       <p className="mt-2 text-sm text-fg-secondary">
         <ScheduleWording expression={job.schedule} /> · {scheduleTimezoneSummary(job.schedule)}
