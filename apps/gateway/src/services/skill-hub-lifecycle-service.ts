@@ -889,21 +889,21 @@ export class SkillHubLifecycleService {
     skillName: string,
     signal: AbortSignal,
   ): Promise<SkillHubLifecycleApplyResult> {
+    const { storage, reloadSkills, afterRuntimeProjection } = this.options;
     return await runRuntimeRemoval({
       intent,
       candidate,
-      record: await this.options.storage.skillLifecycle.find(intent.skillId),
+      storage,
       manifest: artifact.manifest,
       skillName,
       signal,
       artifactVerifies: await this.artifactStillVerifies(artifact.bundleRelPath, artifact.manifest),
       filesystem: this.filesystem,
       root: this.skillsExtraRoot,
-      settle: (disposition, observedTreeSha256, result) =>
-        this.settle(intent, artifact.artifactId, disposition, observedTreeSha256, result),
+      settle: (disposition, tree, result) => this.settle(intent, artifact.artifactId, disposition, tree, result),
       commit: (staged, detail) => this.applyCanonicalMutation(intent, candidate, artifact.artifactId, staged, detail),
-      reloadSkills: this.options.reloadSkills,
-      afterStage: this.options.afterRuntimeProjection,
+      reloadSkills,
+      afterStage: afterRuntimeProjection,
     });
   }
 
@@ -915,11 +915,10 @@ export class SkillHubLifecycleService {
   ): Promise<void> {
     if (settlement.disposition !== "applied" || !["activate", "remove"].includes(intent.operationKind)) return;
     const { storage, reloadSkills } = this.options;
-    const journey = storage.governanceJourneyEvents;
     await finishAppliedProjection(this.filesystem, this.skillsExtraRoot, {
       intent,
       signal,
-      journey,
+      journey: storage.governanceJourneyEvents,
       now: this.now(),
       reloadSkills,
     });

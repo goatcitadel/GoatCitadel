@@ -221,11 +221,29 @@ export async function restoreStagedRemoval(
   }
 }
 
+/** What the records say about the candidate lineage a removal names, read just before it applies. */
+export interface RemovalLineage {
+  /**
+   * The lineage already has an applied removal in the intent's workspace. A removed lineage's runtime fence is gone, so a
+   * copy installed later from the same check starts again at the same revisions: only this tells an approval for the
+   * removed lineage apart from one for the copy.
+   */
+  alreadyRemoved: boolean;
+}
+
+async function readRemovalLineage(
+  storage: Pick<AsyncStorage, "skillHubOperations">,
+  intent: SkillHubOperationIntentRecord,
+): Promise<RemovalLineage> {
+  const removed = await storage.skillHubOperations.listAppliedRemovalCandidateIds(intent.workspaceId);
+  return { alreadyRemoved: removed.includes(intent.targetCandidateId!) };
+}
+
 export interface RuntimeRemovalContext {
   intent: SkillHubOperationIntentRecord;
   candidate: CandidateSkillVersionRecord;
-  /** The skill's lifecycle record as it is now. */
-  record: SkillLifecycleRecord | undefined;
+  /** Where the skill's lifecycle record and its lineage's removals are read, just before anything is decided. */
+  storage: Pick<AsyncStorage, "skillLifecycle" | "skillHubOperations">;
   manifest: SkillContentIntegrityManifest;
   skillName: string;
   signal: AbortSignal;
@@ -267,7 +285,15 @@ export async function runRuntimeRemoval(context: RuntimeRemovalContext): Promise
   if (!context.artifactVerifies) {
     return await context.settle("blocked", UNKNOWN_TREE_SHA256, { code: "artifact_tamper", boundaryCrossed: false });
   }
-  const recordBlock = removalRecordBlock(intent, context.record, context.candidate);
+  const lineage = await readRemovalLineage(context.storage, intent);
+  if (lineage.alreadyRemoved) {
+    return await context.settle("blocked", intent.contentTreeSha256, {
+      code: "lineage_already_removed",
+      boundaryCrossed: false,
+    });
+  }
+  const record = await context.storage.skillLifecycle.find(intent.skillId);
+  const recordBlock = removalRecordBlock(intent, record, context.candidate);
   if (recordBlock) {
     return await context.settle("blocked", intent.contentTreeSha256, { code: recordBlock, boundaryCrossed: false });
   }

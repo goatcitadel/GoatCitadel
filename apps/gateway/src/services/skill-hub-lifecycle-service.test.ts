@@ -1076,6 +1076,52 @@ describe("SkillHubLifecycleService", () => {
       expect(await scratchEntries(extraRoot)).toEqual([]);
     }, 90_000);
 
+    it("never lets a second approval for a removed lineage remove the copy installed after it", async () => {
+      const { harness, runtimeDir } = await revokedHarness();
+      // Two approved removals of the same first lineage, both waiting for their effect.
+      const first = await approve(harness, removeTemplate(harness, "operation-remove"));
+      const second = await approve(harness, removeTemplate(harness, "operation-remove-again"));
+      expect((await harness.lifecycle.applyApprovedOperation(first)).settlement.disposition).toBe("applied");
+
+      // The same check is installed, switched on and revoked again: a new lineage whose fences line up with the old.
+      const lineage = { targetCandidateId: "candidate-demo-r1", targetVersionId: "version-demo-1-r1" };
+      for (const [kind, operationId, expectations] of [
+        ["install_inactive", "operation-reinstall", { expectedCandidateAbsent: true, expectedRuntimeAbsent: true }],
+        [
+          "activate",
+          "operation-reactivate",
+          { expectedCandidateAbsent: false, expectedCandidateRevision: 1, expectedRuntimeAbsent: true },
+        ],
+        [
+          "revoke",
+          "operation-revoke-again",
+          {
+            expectedCandidateAbsent: false,
+            expectedCandidateRevision: 2,
+            expectedRuntimeAbsent: false,
+            expectedRuntimeRevision: 1,
+          },
+        ],
+      ] as const) {
+        const applied = await approveAndApply(harness, {
+          ...template(harness, kind, operationId, expectations),
+          ...lineage,
+        });
+        expect(applied.settlement.disposition).toBe("applied");
+      }
+      expect(harness.storage.skillAggregateRevisions.get("runtime_skill", "extra:demo")?.revision).toBe(2);
+
+      const stale = await harness.lifecycle.applyApprovedOperation(second);
+
+      expect(stale.settlement.disposition).toBe("blocked");
+      expect(stale.settlement.result).toMatchObject({ code: "lineage_already_removed", boundaryCrossed: false });
+      expect(harness.storage.skillLifecycle.find("extra:demo")?.lifecycleState).toBe("revoked");
+      await expect(fs.stat(path.join(runtimeDir, "SKILL.md"))).resolves.toBeTruthy();
+      expect(harness.storage.skillHubOperations.listAppliedRemovalCandidateIds("workspace-1")).toEqual([
+        "candidate-demo",
+      ]);
+    }, 90_000);
+
     it("refuses a removal while an installed plugin still lists the skill", async () => {
       const { harness, runtimeDir } = await revokedHarness();
       await new CapabilityPluginStore(harness.asyncStorage.systemSettings).update("demo-plugin", () => ({
