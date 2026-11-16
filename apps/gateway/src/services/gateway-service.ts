@@ -4295,7 +4295,7 @@ export class GatewayService {
     });
     const skills = await traceInitStep("skillsService.reload", () => this.skillsService.reload());
     await traceInitStep("ensureSkillStates", async () => {
-      await this.skillStateService.ensureSkillStates(skills.map((skill) => skill.skillId));
+      await this.skillStateService.ensureSkillStates(skills);
     });
     this.criticalInitComplete = true;
   }
@@ -10617,7 +10617,7 @@ export class GatewayService {
   }
 
   public async listSkills(effectiveSkills?: EffectiveCapabilitySet, workspaceId?: string): Promise<SkillListItem[]> {
-    await this.skillStateService.ensureSkillStates(this.skillsService.list().map((skill) => skill.skillId));
+    await this.skillStateService.ensureSkillStates(this.skillsService.list());
     return await this.capabilitySystemService.listSkills(effectiveSkills, workspaceId);
   }
 
@@ -10687,7 +10687,7 @@ export class GatewayService {
 
   public async reloadSkills(): Promise<SkillListItem[]> {
     const loaded = await this.skillsService.reload();
-    await this.skillStateService.ensureSkillStates(loaded.map((skill) => skill.skillId));
+    await this.skillStateService.ensureSkillStates(loaded);
     await this.capabilitySystemService.ensureSkillLifecycleBackfill();
     return await this.listSkills();
   }

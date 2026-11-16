@@ -1,8 +1,10 @@
 /* eslint-disable max-lines -- SkillStateService owns the approval-first request verbs, the sole recovered executor, and the branded fail-safe disable for the skill_state domain (HX-402 P2); splitting would scatter the module-private authority. */
 import { createHash, randomUUID } from "node:crypto";
 import { isRecord } from "./companion-auth-helpers.js";
+import { importedSkillFolderGone } from "./imported-skill-folder.js";
 import type {
   ApprovalRequest,
+  LoadedSkill,
   SkillActivationPolicy,
   SkillImportValidationResult,
   SkillRuntimeState,
@@ -97,7 +99,10 @@ export interface SkillLifecycleApprovalAuthorityHost {
 }
 
 export interface SkillStateServiceCtx {
-  storage: Pick<Storage, "db" | "governanceJourneyEvents" | "governedLifecycleEvents" | "runImmediateTransaction">;
+  storage: Pick<
+    Storage,
+    "db" | "governanceJourneyEvents" | "governedLifecycleEvents" | "runImmediateTransaction" | "skillLifecycle"
+  >;
   systemSettings: Pick<Storage["systemSettings"], "get" | "set">;
   skillAggregateRevisions: Storage["skillAggregateRevisions"];
   approvalAuthority?: SkillLifecycleApprovalAuthorityHost;
@@ -306,22 +311,37 @@ export class SkillStateService {
     return new Map(rows.map((row) => [row.skillId, row]));
   }
 
-  async ensureSkillStates(skillIds: string[]): Promise<void> {
-    const unique = [...new Set(skillIds)];
+  /**
+   * Gives every loaded skill a state row and a runtime fence. A loaded skill passed with its source and folder is
+   * skipped when it is an imported skill with no lifecycle record whose folder is gone (a governed removal moved it
+   * aside after the loader read it): a fence written for it would outlive the skill and refuse its reinstall.
+   */
+  async ensureSkillStates(
+    skills: ReadonlyArray<string | Pick<LoadedSkill, "skillId" | "source" | "dir">>,
+  ): Promise<void> {
+    const { storage, skillAggregateRevisions } = this.ctx;
+    const unique = new Map(skills.map((skill) => [typeof skill === "string" ? skill : skill.skillId, skill] as const));
     const now = new Date().toISOString();
-    const insert = this.ctx.storage.db.prepare(`
+    const insert = storage.db.prepare(`
       INSERT INTO skill_state (skill_id, state, note, updated_at, first_auto_approved_at)
       VALUES (@skillId, @state, @note, @updatedAt, NULL)
       ON CONFLICT (skill_id) DO NOTHING
     `);
-    for (const skillId of unique) {
+    for (const [skillId, skill] of unique) {
+      if (
+        typeof skill !== "string" &&
+        importedSkillFolderGone(skill) &&
+        !(await storage.skillLifecycle.find(skillId))
+      ) {
+        continue;
+      }
       await insert.run({
         skillId,
         state: "enabled",
         note: null,
         updatedAt: now,
       });
-      await this.ctx.skillAggregateRevisions.ensure("runtime_skill", skillId, now);
+      await skillAggregateRevisions.ensure("runtime_skill", skillId, now);
     }
   }
 

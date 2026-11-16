@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { APPROVAL_EXPIRY_ACTOR_ID, ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
@@ -118,6 +121,36 @@ describe("skill state substrate (reads, defaults, usage metadata)", () => {
     expect(states.get("skill-beta")).toMatchObject({ state: "enabled" });
     await harness.service.recordSkillUsage(["skill-alpha", " ", "skill-alpha"]);
     expect((await harness.service.readSkillStates()).get("skill-alpha")).toMatchObject({ usageCount: 1 });
+  });
+
+  it("gives no state or fence to a loaded imported skill whose folder is gone and that has no record", async () => {
+    const harness = createHarness();
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), "goat-skill-state-gone-"));
+    cleanups.push(() => fs.rmSync(parent, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(parent, "present"));
+    const gone = { skillId: "extra:gone", source: "extra" as const, dir: path.join(parent, "gone") };
+    const kept = { skillId: "extra:kept", source: "extra" as const, dir: path.join(parent, "kept") };
+    harness.storage.skillLifecycle.upsert({
+      skillId: "extra:kept",
+      category: "community_imported",
+      lifecycleState: "revoked",
+      trustLabel: "Revoked",
+      createdAt: "2026-11-15T00:00:00.000Z",
+      updatedAt: "2026-11-15T00:00:00.000Z",
+    });
+
+    await harness.service.ensureSkillStates([
+      gone,
+      kept,
+      { skillId: "extra:present", source: "extra", dir: path.join(parent, "present") },
+    ]);
+
+    expect(readSkillRow(harness, "extra:gone")).toBeUndefined();
+    expect(harness.storage.skillAggregateRevisions.get("runtime_skill", "extra:gone")).toBeUndefined();
+    // A record still names it, or its folder is there: it gets its row and fence as before.
+    expect(readSkillRow(harness, "extra:kept")).toMatchObject({ state: "enabled" });
+    expect(readSkillRow(harness, "extra:present")).toMatchObject({ state: "enabled" });
+    expect(harness.storage.skillAggregateRevisions.get("runtime_skill", "extra:present")).toBeDefined();
   });
 
   it("returns the default activation policy with a canonical revision", async () => {

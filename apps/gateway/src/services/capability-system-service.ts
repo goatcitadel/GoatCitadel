@@ -118,6 +118,7 @@ import type {
   FeatureFlagsConfig,
 } from "../config.js";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
+import { importedSkillFolderGone } from "./imported-skill-folder.js";
 import type { ChatSessionWorkbenchPatchApplyInput } from "./chat-workbench-service.js";
 import { trackBackgroundTask } from "./background-scheduler.js";
 import {
@@ -5893,11 +5894,6 @@ function summarizeCodeModeRunForComparison(run: CodeModeRunRecord): CodeModeRunC
     createdAt: run.createdAt,
     finishedAt: run.finishedAt,
   };
-}
-
-/** An imported skill the loader still lists whose folder is no longer on disk. */
-function importedSkillFolderGone(skill: LoadedSkill): boolean {
-  return skill.source === "extra" && !fsSync.existsSync(skill.dir);
 }
 
 function buildSkillLifecycleRecord(skill: LoadedSkill, existingCreatedAt?: string): SkillLifecycleRecord {

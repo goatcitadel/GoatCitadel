@@ -33,6 +33,8 @@ import {
   type SkillHubLifecycleServiceOptions,
 } from "./skill-hub-lifecycle-service.js";
 import { skillHubOperationFingerprint } from "./skill-hub-operation-identity.js";
+import { SkillStateService } from "./skill-state-service.js";
+import { GatewayService } from "./gateway-service.js";
 
 /** Names a test treats as shipped with GoatCitadel, on top of the real list. */
 const bundledNames = vi.hoisted(() => new Set<string>());
@@ -983,6 +985,59 @@ describe("SkillHubLifecycleService", () => {
       expect(recovered.settlement.disposition).toBe("applied");
       expect(harness.storage.skillLifecycle.find("extra:demo")).toBeUndefined();
       expect(await scratchEntries(extraRoot)).toEqual([]);
+    }, 90_000);
+
+    it("leaves no state or fence when a stale reload lists the removed skill after the commit", async () => {
+      const { harness, runtimeDir } = await revokedHarness();
+      // What a reload that read the skills folder before the move still holds after the removal committed.
+      const stale = { skillId: "extra:demo", name: "demo", source: "extra" as const, dir: runtimeDir };
+      const result = await harness.lifecycle.applyApprovedOperation(
+        await approve(harness, removeTemplate(harness, "operation-remove")),
+      );
+      expect(result.settlement.disposition).toBe("applied");
+      const skillStates = new SkillStateService(
+        {
+          storage: harness.asyncStorage,
+          systemSettings: harness.asyncStorage.systemSettings,
+          skillAggregateRevisions: harness.asyncStorage.skillAggregateRevisions,
+        },
+        {
+          listSkills: async () => [],
+          recordAutonomousMutation: vi.fn(),
+          recordDevDiagnostic: vi.fn(),
+          publishRealtime: vi.fn(),
+        },
+      );
+      const gateway = {
+        skillsService: { list: () => [stale] },
+        skillStateService: skillStates,
+        capabilitySystemService: { listSkills: vi.fn(async () => []) },
+      };
+
+      // The Skills panel reads the list through the Gateway every few seconds.
+      await GatewayService.prototype.listSkills.call(gateway as unknown as GatewayService);
+
+      expect((await skillStates.readSkillStates()).has("extra:demo")).toBe(false);
+      expect(harness.storage.skillAggregateRevisions.get("runtime_skill", "extra:demo")).toBeUndefined();
+      // So the same source installs and switches on again; an orphan fence would refuse the switch-on.
+      const lineage = { targetCandidateId: "candidate-demo-r1", targetVersionId: "version-demo-1-r1" };
+      const reinstalled = await approveAndApply(harness, {
+        ...template(harness, "install_inactive", "operation-reinstall", {
+          expectedCandidateAbsent: true,
+          expectedRuntimeAbsent: true,
+        }),
+        ...lineage,
+      });
+      expect(reinstalled.settlement.disposition).toBe("applied");
+      const reactivated = await approveAndApply(harness, {
+        ...template(harness, "activate", "operation-reactivate", {
+          expectedCandidateAbsent: false,
+          expectedCandidateRevision: 1,
+          expectedRuntimeAbsent: true,
+        }),
+        ...lineage,
+      });
+      expect(reactivated.settlement.disposition).toBe("applied");
     }, 90_000);
 
     it("puts the folder back when the commit fails after it was moved", async () => {
