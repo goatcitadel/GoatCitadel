@@ -12,6 +12,7 @@ import {
   useIntegrationConnectionMutation,
 } from "../../../features/native-routes/settings/integration-connection-mutation";
 import {
+  beginChannelOperation,
   readChannelMutationState,
   useChannelMutationState,
 } from "../../../features/native-routes/settings/sections/channel-setup-state";
@@ -71,23 +72,20 @@ export function useChannelLifecycle(connection: IntegrationConnection, reload: (
     await reload();
   }
 
-  /** Why a removal cannot start now, read live so a change that began after the last render still holds it back. */
-  const removalHeldBack = (): string | null => {
-    if (busy) return STILL_SENDING;
-    const state = readChannelMutationState();
-    return state.pending || state.uncertain ? (state.uncertain ?? STILL_SENDING) : null;
-  };
-
   /**
    * Settles before the page reads again. Answers null when the removal went ahead (whatever it answered): the caller
    * closes its confirmation and the page says what happened. Answers why when it held back because another change is
    * in flight: nothing was sent, and the caller keeps its confirmation open with that note.
    */
   async function remove(): Promise<string | null> {
-    const heldBack = removalHeldBack();
-    if (heldBack) return heldBack;
+    if (busy) return STILL_SENDING;
+    const channelOperation = beginChannelOperation();
+    if (!channelOperation) return readChannelMutationState().uncertain ?? STILL_SENDING;
     const operation = beginIntegrationMutation(connection.connectionId);
-    if (!operation) return mutation.message ?? STILL_SENDING;
+    if (!operation) {
+      channelOperation.finish();
+      return mutation.message ?? STILL_SENDING;
+    }
     setBusy("remove");
     setNote(null);
     let dispatched = false;
@@ -110,6 +108,7 @@ export function useChannelLifecycle(connection: IntegrationConnection, reload: (
       if (mounted.current) setNote(rejected ? CHANGED : dispatched ? null : NOT_CHECKED);
     } finally {
       operation.finish();
+      channelOperation.finish();
     }
     if (!mounted.current) return null;
     setBusy(null);

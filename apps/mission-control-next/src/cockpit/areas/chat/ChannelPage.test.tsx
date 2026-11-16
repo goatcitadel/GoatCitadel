@@ -769,6 +769,54 @@ describe("ChannelPage turning off and removing", () => {
     expect(container.textContent).toContain(
       "The connection changed or was deleted. Review its current saved state before retrying.",
     );
+    expect(button("Approve", row(section("Who can message it"), "Eve")).disabled).toBe(false);
+  });
+
+  it("holds off pairing from another view from removal preflight through readback", async () => {
+    load({});
+    await mount();
+    let finishPreflight!: (value: IntegrationConnection) => void;
+    let finishReadback!: (error: Error) => void;
+    const preflight = new Promise<IntegrationConnection>((resolve) => {
+      finishPreflight = resolve;
+    });
+    const readback = new Promise<never>((_resolve, reject) => {
+      finishReadback = reject;
+    });
+    api.fetchIntegrationConnection.mockReturnValueOnce(preflight).mockReturnValueOnce(readback);
+    api.deleteIntegrationConnection.mockResolvedValue({ deleted: true });
+    function tryPairingAdmission() {
+      const pairing = beginChannelOperation();
+      pairing?.finish();
+      return Boolean(pairing);
+    }
+
+    await click(button("Remove"));
+    await click(button("Remove channel"));
+    expect(api.fetchIntegrationConnection).toHaveBeenCalledOnce();
+    let admittedDuringPreflight!: boolean;
+    await act(async () => {
+      admittedDuringPreflight = tryPairingAdmission();
+    });
+    expect(api.deleteIntegrationConnection).not.toHaveBeenCalled();
+
+    await act(async () => finishPreflight(connection()));
+    expect(api.deleteIntegrationConnection).toHaveBeenCalledExactlyOnceWith("conn-1", REVISION);
+    expect(api.fetchIntegrationConnection).toHaveBeenCalledTimes(2);
+    let admittedDuringReadback!: boolean;
+    await act(async () => {
+      admittedDuringReadback = tryPairingAdmission();
+    });
+
+    api.fetchIntegrationConnections.mockResolvedValue({ items: [] });
+    api.fetchChatMessaging.mockResolvedValue(overviewOf(channel({ status: "removed" })));
+    await act(async () => finishReadback(notFound()));
+    await settle();
+
+    expect(admittedDuringPreflight).toBe(false);
+    expect(admittedDuringReadback).toBe(false);
+    await act(async () => expect(tryPairingAdmission()).toBe(true));
+    expect(container.textContent).toContain("This channel was removed.");
   });
 });
 
