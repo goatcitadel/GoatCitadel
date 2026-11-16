@@ -161,6 +161,42 @@ describe("skill state substrate (reads, defaults, usage metadata)", () => {
     expect(compareAndSet).toHaveBeenCalledTimes(2);
   });
 
+  it("stops counting a skill whose record a removal deleted between the count's read and its write", async () => {
+    const harness = createHarness();
+    const now = "2026-11-15T00:00:00.000Z";
+    for (const skillId of ["extra:gone", "extra:kept"])
+      harness.storage.skillLifecycle.upsert({
+        skillId,
+        category: "community_imported",
+        lifecycleState: "approved",
+        trustLabel: "Approved upstream snapshot",
+        createdAt: now,
+        updatedAt: now,
+      });
+    const settings = harness.storage.systemSettings;
+    settings.set("skill_state_metadata_v1", {
+      "extra:gone": { usageCount: 4 },
+      "extra:kept": { usageCount: 1 },
+    });
+    // The removal deletes the record and the entry together, after this count has seen both.
+    const realCompareAndSet = settings.compareAndSet.bind(settings);
+    let raced = false;
+    vi.spyOn(settings, "compareAndSet").mockImplementation(((...args: Parameters<typeof settings.compareAndSet>) => {
+      if (!raced) {
+        raced = true;
+        harness.storage.skillLifecycle.delete("extra:gone");
+        settings.set("skill_state_metadata_v1", { "extra:kept": { usageCount: 1 } });
+      }
+      return realCompareAndSet(...args);
+    }) as typeof settings.compareAndSet);
+
+    await harness.service.recordSkillUsage(["extra:gone", "extra:kept"]);
+
+    const stored = settings.get<Record<string, unknown>>("skill_state_metadata_v1")?.value;
+    expect(stored).not.toHaveProperty("extra:gone");
+    expect(stored).toMatchObject({ "extra:kept": { usageCount: 2 } });
+  });
+
   it("gives no state or fence to a loaded imported skill whose folder is gone and that has no record", async () => {
     const harness = createHarness();
     const parent = fs.mkdtempSync(path.join(os.tmpdir(), "goat-skill-state-gone-"));

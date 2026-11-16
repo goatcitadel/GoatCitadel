@@ -1066,13 +1066,18 @@ export class SkillStateService {
     }
     const { systemSettings, storage } = this.ctx;
     // An imported skill with no lifecycle record was removed (or never installed): its entry is never made again.
-    const counted: string[] = [];
-    for (const skillId of uniqueSkillIds) {
-      if (!skillId.startsWith("extra:") || (await storage.skillLifecycle.find(skillId))) counted.push(skillId);
-    }
-    if (counted.length === 0) return;
+    const countable = async (): Promise<string[]> => {
+      const counted: string[] = [];
+      for (const skillId of uniqueSkillIds) {
+        if (!skillId.startsWith("extra:") || (await storage.skillLifecycle.find(skillId))) counted.push(skillId);
+      }
+      return counted;
+    };
     const now = new Date().toISOString();
-    const bump = (metadata: Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }>) => {
+    const bump = (
+      metadata: Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }>,
+      counted: string[],
+    ) => {
       for (const skillId of counted) {
         const current = metadata[skillId] ?? {};
         metadata[skillId] = { ...current, usageCount: (current.usageCount ?? 0) + 1, lastUsedAt: now };
@@ -1080,17 +1085,23 @@ export class SkillStateService {
       return metadata;
     };
     if (!systemSettings.compareAndSet) {
-      await systemSettings.set(SKILL_STATE_METADATA_SETTING_KEY, bump(await this.readSkillStateMetadata()));
+      const counted = await countable();
+      if (counted.length > 0)
+        await systemSettings.set(SKILL_STATE_METADATA_SETTING_KEY, bump(await this.readSkillStateMetadata(), counted));
       return;
     }
     // Compare and set, so a write never puts back an entry a removal deleted after this read; one retry on a race.
+    // Which skills still have a record is read again on each attempt, after the stored value: a removal deletes the
+    // record and the entry in one step, so a retry after it no longer counts the removed skill.
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const stored = await systemSettings.get<unknown>(SKILL_STATE_METADATA_SETTING_KEY);
-      const next = bump(normalizeSkillStateMetadata(stored?.value));
+      const counted = await countable();
+      if (counted.length === 0) return;
+      const next = bump(normalizeSkillStateMetadata(stored?.value), counted);
       if (await systemSettings.compareAndSet(SKILL_STATE_METADATA_SETTING_KEY, stored, next, now)) return;
     }
     skillStateLog.warn("skill use counts changed twice while being recorded; this use was not counted", {
-      skillIds: counted,
+      skillIds: uniqueSkillIds,
     });
   }
 
