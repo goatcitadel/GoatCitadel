@@ -106,12 +106,11 @@ export async function runCockpitChatBackgroundActiveProof({ context, browser, st
       browserContext = await browser.newContext({ viewport, colorScheme: theme });
       await browserContext.addInitScript(({ theme, token }) => {
         window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit"); window.localStorage.setItem("goatcitadel.ui.theme.v1", theme);
-        // The reviewed versions live in the dialog's Technical details, which the lane reads.
-        window.localStorage.setItem("goatcitadel.ui.technical_details.v1", "true");
         window.localStorage.setItem("goatcitadel.gateway.auth.storageMode", "session");
         window.sessionStorage.setItem("goatcitadel.gateway.auth", JSON.stringify({ mode: "token", token }));
       }, { theme, token: TOKEN });
-      await installMissionControlNextBrowserState(browserContext, scope.workspaceId, citadelId);
+      // The reviewed versions live in the dialog's Technical details, which the lane reads.
+      await installMissionControlNextBrowserState(browserContext, scope.workspaceId, citadelId, { showTechnicalDetails: true });
       page = await browserContext.newPage();
       page.on("request", request => {
         const pathname = new URL(request.url()).pathname;
