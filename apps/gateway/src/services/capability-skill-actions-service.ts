@@ -305,9 +305,8 @@ export class CapabilitySkillActionsService {
   /**
    * Asks to remove one revoked skill a plugin left behind: Skill Hub's approval owner creates the check's `remove`
    * approval with the operator as requester (with the plugin's pass when the check came from a plugin that is now
-   * uninstalled), and the same skip rule as an install step applies: the operator's setting, never on
-   * `remote_hardened`. Removing is not treated as only taking power away here, so a switched-off install still asks.
-   * Only that approval's effect removes anything. Refused before any approval, as a 409: a skill whose record isn't a
+   * uninstalled). No skip applies: whatever the operator's setting or the deployment profile, the removal waits for the
+   * operator's approval and its danger review, because it deletes files. Only that approval's effect removes anything. Refused before any approval, as a 409: a skill whose record isn't a
    * revoked Skill Hub install (`not_removable`), one added in another workspace (`other_workspace`), and one an
    * installed plugin still lists (`PLUGIN_OWNED`).
    */
@@ -347,29 +346,9 @@ export class CapabilitySkillActionsService {
       : await this.sources.createSkillHubApproval(step);
     const { approvalId } = approval;
     const { workspaceId } = input;
-    // The same request hands back the approval it already made; an approved one is never resolved again.
-    if (approval.status === "approved") return { status: "approved", approvalId, workspaceId };
-    if (!(await allowsOperatorApprovalSkip(this.sources.deploymentProfile(), () => this.readSkipSetting()))) {
-      return { status: "waiting", approvalId, workspaceId };
-    }
-    try {
-      await this.sources.resolveApproval(approvalId, {
-        decision: "approve",
-        resolvedBy: input.actorId,
-        resolutionNote: OPERATOR_SKILL_SKIP_NOTES.setting,
-      });
-    } catch (error) {
-      // Nothing was approved, so the removal still waits for the operator's approval.
-      this.reportFailure?.("resolve", error);
-      return { status: "waiting", approvalId, workspaceId };
-    }
-    await this.recordSkip({
-      approvalId,
-      kind: SKILL_HUB_LIFECYCLE_APPROVAL_KIND,
-      reason: "setting",
-      actorId: input.actorId,
-    });
-    return { status: "approved", approvalId, workspaceId };
+    // The same request hands back the approval it already made; an approved one is never resolved again. Otherwise it
+    // waits: a removal deletes files, so no setting skips its approval.
+    return { status: approval.status === "approved" ? "approved" : "waiting", approvalId, workspaceId };
   }
 
   /**

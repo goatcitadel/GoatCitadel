@@ -888,41 +888,26 @@ describe("CapabilitySkillActionsService.requestRemoval", () => {
   });
 
   it.each([
-    ["trusted_local", "on", "approved"],
-    ["local_dev", "on", "approved"],
-    ["trusted_local", "off", "waiting"],
-    ["remote_hardened", "on", "waiting"],
-  ] as const)(
-    "%s with the setting %s is %s, the same rule as the other skill steps",
-    async (profile, setting, status) => {
-      const parts = removalSources({
-        deploymentProfile: vi.fn((): DeploymentProfile => profile),
-        readApprovalSkipSetting: vi.fn(async () => setting === "on"),
-      });
+    ["trusted_local", "on"],
+    ["local_dev", "on"],
+    ["trusted_local", "off"],
+    ["remote_hardened", "on"],
+  ] as const)("%s with the setting %s still waits: a removal never skips its approval", async (profile, setting) => {
+    const parts = removalSources({
+      deploymentProfile: vi.fn((): DeploymentProfile => profile),
+      readApprovalSkipSetting: vi.fn(async () => setting === "on"),
+    });
 
-      const outcome = await new CapabilitySkillActionsService(parts).requestRemoval(removal);
+    const outcome = await new CapabilitySkillActionsService(parts).requestRemoval(removal);
 
-      expect(outcome).toEqual({ status, approvalId: "approval-remove", workspaceId: "default" });
-      if (status === "approved") {
-        expect(parts.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-remove", {
-          decision: "approve",
-          resolvedBy: ACTOR,
-          resolutionNote: OPERATOR_SKILL_SKIP_NOTES.setting,
-        });
-        expect(parts.appendApprovalAudit).toHaveBeenCalledExactlyOnceWith("operator_approval_skipped", {
-          approvalId: "approval-remove",
-          kind: "skill_hub.lifecycle",
-          reason: "setting",
-          actorId: ACTOR,
-        });
-      } else {
-        expect(parts.resolveApproval).not.toHaveBeenCalled();
-      }
-      expect(parts.readApprovalSkipSetting).toHaveBeenCalledTimes(profile === "remote_hardened" ? 0 : 1);
-    },
-  );
+    expect(outcome).toEqual({ status: "waiting", approvalId: "approval-remove", workspaceId: "default" });
+    expect(parts.resolveApproval).not.toHaveBeenCalled();
+    expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
+    // The setting is never even read for a removal.
+    expect(parts.readApprovalSkipSetting).not.toHaveBeenCalled();
+  });
 
-  it("never resolves an approval the owner already approved, and keeps waiting when resolving fails", async () => {
+  it("never resolves an approval the owner already approved", async () => {
     const approved = removalSources({
       readApprovalSkipSetting: vi.fn(async () => true),
       createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("remove", "approved") })),
@@ -933,22 +918,23 @@ describe("CapabilitySkillActionsService.requestRemoval", () => {
       workspaceId: "default",
     });
     expect(approved.resolveApproval).not.toHaveBeenCalled();
+  });
 
-    const failure = new Error("approval store locked");
-    const reportFailure = vi.fn();
-    const failing = removalSources({
+  it("still skips an install step with the setting on, so only the removal changed", async () => {
+    const parts = sources({
       readApprovalSkipSetting: vi.fn(async () => true),
-      resolveApproval: vi.fn(async () => {
-        throw failure;
-      }),
+      createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("install_inactive", "pending") })),
     });
-    await expect(new CapabilitySkillActionsService(failing, reportFailure).requestRemoval(removal)).resolves.toEqual({
-      status: "waiting",
-      approvalId: "approval-remove",
+
+    const outcome = await new CapabilitySkillActionsService(parts).requestStep({
       workspaceId: "default",
+      snapshotId: "skill-hub-review-1",
+      operationKind: "install_inactive",
+      actorId: ACTOR,
     });
-    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("resolve", failure);
-    expect(failing.appendApprovalAudit).not.toHaveBeenCalled();
+
+    expect(outcome.status).toBe("approved");
+    expect(parts.resolveApproval).toHaveBeenCalledOnce();
   });
 
   it("refuses a skill added in another workspace, before any approval", async () => {

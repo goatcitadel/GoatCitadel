@@ -292,9 +292,9 @@ export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
 
   /**
    * Asks to remove one revoked skill a plugin left behind. It always asks Skill Hub's approval owner, which creates the
-   * removal's usual danger approval; when the operator's setting to skip approvals applies (never on `remote_hardened`),
-   * the request approves that approval at once as the operator, and the approval's own effect removes the skill. 202
-   * with `approved` or `waiting`, and the approval's workspace. A skill that isn't a removable left-over, one added in
+   * removal's usual danger approval, and it never skips that approval, whatever the operator's setting: only the
+   * operator's approval lets its effect remove the skill. 202 with `waiting` (or `approved` when the same request hands
+   * back an approval already given), and the approval's workspace. A skill that isn't a removable left-over, one added in
    * another workspace, or one an installed plugin still lists is a 409 with its own `details.reason` or code.
    */
   fastify.post("/api/v1/capabilities/skills/removals", operatorStep, async (request, reply) => {
