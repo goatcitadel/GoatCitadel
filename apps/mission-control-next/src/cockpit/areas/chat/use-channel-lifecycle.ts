@@ -12,6 +12,7 @@ import {
   useIntegrationConnectionMutation,
 } from "../../../features/native-routes/settings/integration-connection-mutation";
 import {
+  beginChannelOperation,
   readChannelMutationState,
   useChannelMutationState,
 } from "../../../features/native-routes/settings/sections/channel-setup-state";
@@ -49,14 +50,10 @@ export function useChannelLifecycle(connection: IntegrationConnection, reload: (
     };
   }, []);
 
-  /** Read live, so a pairing answer that started after the last render still holds this back. */
-  const channelLocked = () => {
-    const state = readChannelMutationState();
-    return state.pending || Boolean(state.uncertain);
-  };
-
   async function toggle() {
-    if (busy || mutation.locked || channelLocked()) return;
+    if (busy || mutation.locked) return;
+    const operation = beginChannelOperation();
+    if (!operation) return;
     setBusy("toggle");
     setNote(null);
     const result = await commitIntegrationConnectionUpdate({
@@ -64,7 +61,7 @@ export function useChannelLifecycle(connection: IntegrationConnection, reload: (
       input: { expectedRevision: connection.revision, enabled: !connection.enabled },
       isCurrent: () => mounted.current,
       verify: verifyIntegrationReadback,
-    });
+    }).finally(operation.finish);
     if (!mounted.current) return;
     setBusy(null);
     if (result.status === "conflict" || result.status === "cancelled") setNote(result.message);

@@ -603,6 +603,65 @@ describe("ChannelPage who can message it", () => {
     expect(button("This is you", row(section("Who can message it"), "Ada")).disabled).toBe(false);
   });
 
+  it.each(["Turn off", "This is you"])("rejects a stale %s click after pairing takes admission", async (label) => {
+    load({});
+    await mount();
+    const action = button(label);
+    expect(action.disabled).toBe(false);
+
+    await act(async () => {
+      const pairing = beginChannelOperation()!;
+      try {
+        // React still has the previous enabled button in the DOM.
+        action.click();
+        expect(api.updateIntegrationConnection).not.toHaveBeenCalled();
+      } finally {
+        pairing.finish();
+      }
+    });
+  });
+
+  it.each(["Turn off", "This is you"])("holds off pairing from another view through %s verification", async (label) => {
+    load({});
+    await mount();
+    const saved = connection({
+      revision: SAVED_REVISION,
+      ...(label === "Turn off" ? { enabled: false } : { config: { ...connection().config, ownerActorIds: ["4242"] } }),
+    });
+    let finishWrite!: (value: IntegrationConnection) => void;
+    let finishReadback!: (value: IntegrationConnection) => void;
+    api.updateIntegrationConnection.mockReturnValueOnce(
+      new Promise<IntegrationConnection>((resolve) => {
+        finishWrite = resolve;
+      }),
+    );
+    api.fetchIntegrationConnection.mockReturnValueOnce(
+      new Promise<IntegrationConnection>((resolve) => {
+        finishReadback = resolve;
+      }),
+    );
+    const admissions: boolean[] = [];
+    const tryPairing = () => {
+      const pairing = beginChannelOperation();
+      admissions.push(Boolean(pairing));
+      pairing?.finish();
+    };
+
+    await click(button(label));
+    expect(api.updateIntegrationConnection).toHaveBeenCalledOnce();
+    await act(async () => tryPairing());
+    await act(async () => finishWrite(saved));
+    expect(api.fetchIntegrationConnection).toHaveBeenCalledWith("conn-1");
+    await act(async () => tryPairing());
+    api.fetchIntegrationConnections.mockResolvedValue({ items: [saved] });
+    await act(async () => finishReadback(saved));
+    await settle();
+    await act(async () => tryPairing());
+
+    expect(admissions).toEqual([false, false, true]);
+    expect(button(label === "Turn off" ? "Turn on" : "Not you")).toBeDefined();
+  });
+
   it("shows a Discord approval in who can message it although the connection did not change", async () => {
     const discord = discordConnection();
     load({
