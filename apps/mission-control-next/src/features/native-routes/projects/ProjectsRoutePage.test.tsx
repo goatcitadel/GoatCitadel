@@ -1,6 +1,6 @@
 import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view-state";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatGeneratedArtifactRecord,
   ChatMode,
@@ -20,6 +20,7 @@ import {
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { fetchChatProjects as fetchProjectsFromGateway } from "@goatcitadel/mission-control-shared/api/chat";
 import { deriveProjectHome, ProjectsRoutePage } from "./ProjectsRoutePage";
 import { __resetSessionDraftsForTests } from "../library/session-drafts";
 
@@ -192,6 +193,10 @@ function pageText(renderer: ReactTestRenderer): string {
 }
 
 describe("ProjectsRoutePage", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     __resetSessionViewStateForTests();
     __resetSessionDraftsForTests();
@@ -543,7 +548,7 @@ describe("ProjectsRoutePage", () => {
     expect(pageText(renderer)).toContain("No archived projects in this workspace.");
   });
 
-  it("preserves a project draft, reloads the current revision, and retries after a 409", async () => {
+  it("preserves a draft and retries with the current revision after a 409 despite an older read", async () => {
     const renderer = await renderPage(
       defaultProps({ route: { area: "projects", projectId: "project-alpha", theme: "ops" } }),
     );
@@ -571,12 +576,25 @@ describe("ProjectsRoutePage", () => {
         description: "Local draft preserved across the revision conflict.",
       }),
     );
-    mockedFetchChatProjects.mockResolvedValueOnce({
-      items: [
-        project({ projectId: "project-alpha", revision: 8, description: "Concurrent fixture edit." }),
-        project({ projectId: "project-beta", revision: 2, name: "Beta" }),
-      ],
-    } as any);
+    let resolveStale!: (response: Response) => void;
+    const stale = new Promise<Response>((resolve) => {
+      resolveStale = resolve;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(stale)
+      .mockImplementationOnce(async () =>
+        Response.json({
+          items: [
+            project({ projectId: "project-alpha", revision: 8, description: "Concurrent fixture edit." }),
+            project({ projectId: "project-beta", revision: 2, name: "Beta" }),
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    mockedFetchChatProjects.mockImplementationOnce(fetchProjectsFromGateway);
+    const background = fetchProjectsFromGateway("all", 300, "default", "company");
+    expect(fetchMock).toHaveBeenCalledOnce();
 
     await act(async () => {
       findButton(renderer.root, "Save project").props.onClick();
@@ -584,6 +602,11 @@ describe("ProjectsRoutePage", () => {
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
+    });
+    const readsBeforeStaleResponse = fetchMock.mock.calls.length;
+    await act(async () => {
+      resolveStale(Response.json({ items: [project({ revision: 7 })] }));
+      await background;
     });
 
     expect(mockedUpdateChatProject).toHaveBeenNthCalledWith(
@@ -614,6 +637,7 @@ describe("ProjectsRoutePage", () => {
         description: "Local draft preserved across the revision conflict.",
       }),
     );
+    expect(readsBeforeStaleResponse).toBe(2);
   });
 
   it("uses an active project for overview actions without rewriting the projects root", async () => {
