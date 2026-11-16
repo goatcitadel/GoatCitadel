@@ -12,25 +12,25 @@ const forgetPreview = {
   alreadyForgottenCount: 0,
 };
 
-describe("memory review evidence (U-LB-011)", () => {
-  it("hides the subject id and kind and counts the memory items", () => {
-    const model = buildApprovalEvidenceModel(forgetPreview);
-    const lines = [...(model?.targets ?? []), ...(model?.supporting ?? [])].join("\n");
-    expect(lines).not.toContain("Subject Id");
-    expect(lines).not.toContain("Subject Kind");
-    expect(model?.targets).toContain("Memory items: 1");
-  });
+const technical = { label: "Memory review record", content: "Subject Kind: memory_item\nSubject Id: memory-item-1" };
 
-  it("keeps the subject id and kind in the exact review lines only", () => {
-    const model = buildApprovalReviewEvidenceModel(forgetPreview);
-    expect(model?.targets).toEqual(["Memory items: 1"]);
-    expect(model?.supporting).toEqual(
-      expect.arrayContaining(["Subject Id: memory-item-1", "Subject Kind: memory_item"]),
-    );
+describe("memory review evidence (U-LB-011)", () => {
+  it.each([
+    ["compact", buildApprovalEvidenceModel],
+    ["exact", buildApprovalReviewEvidenceModel],
+  ])("%s review: subject id and kind are in technical details only, and the items are counted", (_mode, build) => {
+    const model = build(forgetPreview);
+    const visible = [...(model?.targets ?? []), ...(model?.supporting ?? [])].join("\n");
+    expect(visible).not.toContain("Subject Id");
+    expect(visible).not.toContain("Subject Kind");
+    expect(visible).not.toContain("memory-item-1");
+    expect(model?.targets).toContain("Memory items: 1");
+    expect(model?.technicalDetails).toEqual([technical]);
   });
 
   it("leaves other subjects alone", () => {
     const model = buildApprovalEvidenceModel({ subjectId: "candidate-1", subjectKind: "capability_candidate" });
     expect(model?.targets).toEqual(expect.arrayContaining(["Subject Id: candidate-1"]));
+    expect(model?.technicalDetails).toBeUndefined();
   });
 });

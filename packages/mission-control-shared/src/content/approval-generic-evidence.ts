@@ -139,6 +139,7 @@ function collectApprovalEvidence(
     commands: Set<string>;
     shellCommands: Set<string>;
     supporting: Set<string>;
+    technicalLines: Set<string>;
     changes: ApprovalEvidenceBlock[];
     seenBlocks: Set<string>;
     exact: boolean;
@@ -203,8 +204,8 @@ function collectApprovalEvidence(
     const memorySubject = isMemorySubjectKind(record.subjectKind);
     for (const [key, value] of Object.entries(record)) {
       if (memorySubject && (key === "subjectId" || key === "subjectKind") && typeof value === "string") {
-        // A memory review names its subject by the count below; the id and kind are for the exact review only.
-        if (collector.exact) collector.supporting.add(`${humanizeKey(key)}: ${value}`);
+        // A memory review names its subject by the count below; the id and kind go to Technical details only.
+        collector.technicalLines.add(`${humanizeKey(key)}: ${value}`);
         continue;
       }
       if (memorySubject && key === "itemCount" && typeof value === "number") {
@@ -309,6 +310,7 @@ function buildEvidence(sources: Array<unknown>, exact: boolean): ApprovalEvidenc
   const commands = new Set<string>();
   const shellCommands = new Set<string>();
   const supporting = new Set<string>();
+  const technicalLines = new Set<string>();
   const changes: ApprovalEvidenceBlock[] = [];
   const seenBlocks = new Set<string>();
 
@@ -319,6 +321,7 @@ function buildEvidence(sources: Array<unknown>, exact: boolean): ApprovalEvidenc
       commands,
       shellCommands,
       supporting,
+      technicalLines,
       changes,
       seenBlocks,
       exact,
@@ -341,6 +344,9 @@ function buildEvidence(sources: Array<unknown>, exact: boolean): ApprovalEvidenc
             return { text, truncated: text !== command };
           }),
         }
+      : {}),
+    ...(technicalLines.size
+      ? { technicalDetails: [{ label: "Memory review record", content: [...technicalLines].join("\n") }] }
       : {}),
     supporting: exact ? [...supporting] : [...supporting].slice(0, 4),
     changes: exact ? changes : changes.slice(0, 4),
