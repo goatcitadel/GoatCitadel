@@ -3,6 +3,7 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CitadelStructureSnapshot, CitadelTemplateSnapshot } from "@goatcitadel/contracts";
+import { getCitadelStructureSnapshot } from "@goatcitadel/mission-control-shared/api/citadels";
 import { useCitadelOverview } from "./use-citadel-overview";
 import { __resetCitadelStructureAttemptsForTests, citadelStructureAttempt, setCitadelStructureAttempt } from "./citadel-structure-state";
 import { __resetSessionDraftsForTests } from "./session-drafts";
@@ -11,7 +12,10 @@ import { __resetFormDirtyRegistryForTests } from "./use-form-dirty";
 
 const api = vi.hoisted(() => ({ base: "http://gateway-one", createCitadelFromTemplate: vi.fn(), getCitadelGatehouse: vi.fn(), getCitadelStructureSnapshot: vi.fn(), listCitadelTemplates: vi.fn(), upsertCitadelCharter: vi.fn(), listCitadels: vi.fn(), fetchWorkspaces: vi.fn(), archiveCitadel: vi.fn(), restoreCitadel: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
-vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({ getGatewayApiBaseUrl: () => api.base }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
+  getGatewayApiBaseUrl: () => api.base,
+}));
 vi.mock("@goatcitadel/mission-control-shared/components/ui/GCModal", () => ({ GCModal: ({ children }: { children: ReactNode }) => <>{children}</> }));
 const initial = (): CitadelStructureSnapshot => ({ citadelId: "one", revision: "a".repeat(64), charter: { citadelId: "one", purpose: "Original purpose", kind: "team", goals: ["Goal"], boundaries: ["Boundary"], successDefinition: ["Success"], riskPosture: "balanced", modelPolicyDefault: "hybrid_guarded", defaultChamberId: "old", createdAt: "2026-09-30T00:00:00.000Z", updatedAt: "2026-09-30T00:00:00.000Z" },
   chambers: [{ chamberId: "old", citadelId: "one", name: "Retained", sensitivity: "private", sealed: true, createdAt: "2026-09-30T00:00:00.000Z", updatedAt: "2026-09-30T00:00:00.000Z" }] });
@@ -31,8 +35,49 @@ beforeEach(async () => {
     chambers: [...saved.chambers, { chamberId: "new", citadelId: "one", name: "New Chamber", sensitivity: "private", sealed: false, createdAt: "2026-09-30T01:00:00.000Z", updatedAt: "2026-09-30T01:00:00.000Z" }] }; return structuredClone(saved); });
   container = document.createElement("div"); document.body.append(container); root = createRoot(container); await render();
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
+afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
 describe("shared Citadel Overview lifecycle", () => {
+  it.each(["Charter", "template"])("settles a %s write despite an older structure read", async (action) => {
+    if (action === "Charter") {
+      await prepare();
+    } else {
+      saved = { ...initial(), charter: null };
+      await act(async () => control.reload());
+      await act(async () => control.requestTemplate(template));
+    }
+    const before = saved;
+    const stale = deferred<Response>();
+    const release = deferred<void>();
+    const mutation = action === "Charter" ? api.upsertCitadelCharter : api.createCitadelFromTemplate;
+    const commit = mutation.getMockImplementation()!;
+    mutation.mockImplementationOnce(async (...args) => {
+      await release.promise;
+      return commit(...args);
+    });
+    const fetchMock = vi.fn().mockReturnValueOnce(stale.promise).mockImplementation(async () => Response.json(saved));
+    vi.stubGlobal("fetch", fetchMock);
+    api.getCitadelStructureSnapshot.mockResolvedValueOnce(before).mockImplementation(getCitadelStructureSnapshot);
+
+    let pending!: Promise<boolean>;
+    await act(async () => { pending = control.confirm(); });
+    expect(mutation).toHaveBeenCalledOnce();
+    const background = getCitadelStructureSnapshot("one");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    await act(async () => release.resolve());
+    const readsBeforeStaleResponse = fetchMock.mock.calls.length;
+    let confirmed!: boolean;
+    await act(async () => {
+      stale.resolve(Response.json(before));
+      expect(await background).toEqual(before);
+      confirmed = await pending;
+    });
+
+    expect(confirmed).toBe(true);
+    expect(control.state.snapshot).toEqual(saved);
+    expect(readsBeforeStaleResponse).toBe(3);
+    expect(control.locked).toBe(false);
+  });
+
   it("reviews immutable purpose with unchanged Charter fields and confirms independent owner", async () => {
     expect(await confirm()).toBe(false); await prepare(); expect(api.upsertCitadelCharter).not.toHaveBeenCalled(); expect(control.review?.kind).toBe("charter");
     expect(await confirm()).toBe(true); expect(api.upsertCitadelCharter).toHaveBeenCalledExactlyOnceWith("one", { purpose: "Reviewed purpose", kind: "team", goals: ["Goal"], boundaries: ["Boundary"], successDefinition: ["Success"], defaultChamberId: "old", riskPosture: "balanced", modelPolicyDefault: "hybrid_guarded", expectedRevision: "a".repeat(64) });
