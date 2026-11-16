@@ -2,7 +2,7 @@ import { GatewayAuthEditor } from "../GatewayAuthEditor";
 import { deviceGrantCanBeRevoked, useDeviceAccessRevocation } from "../use-device-access-revocation";
 // Extracted verbatim from `../../SettingsNativePage.tsx` as part of the
 // per-section settings decomposition.
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import {
   fetchDaemonStatus,
   fetchDeviceAccessGrants,
@@ -23,7 +23,7 @@ import {
 } from "../SettingsShared";
 import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid } from "../../primitives";
-import { deriveDesktopMobileContinuityItems } from "../helpers/provider-format";
+import { deriveDesktopMobileContinuityItems, deviceAccessGrantStatus } from "../helpers/provider-format";
 import { formatDateTime } from "../helpers/input-format";
 
 export function AccessSection({ activeWorkspaceName, route, navigate }: SettingsSectionProps) {
@@ -49,17 +49,10 @@ export function AccessSection({ activeWorkspaceName, route, navigate }: Settings
   }, []);
   const { loading, error, data, reload } = useAsyncLoad(load, [load]);
   const deviceRevocation = useDeviceAccessRevocation();
-  const continuityItems = useMemo(
-    () =>
-      data
-        ? deriveDesktopMobileContinuityItems({
-            settings: data.settings,
-            grants: data.grants,
-            daemon: data.daemon,
-          })
-        : [],
-    [data],
-  );
+  const now = Date.now();
+  const continuityItems = data
+    ? deriveDesktopMobileContinuityItems({ settings: data.settings, grants: data.grants, daemon: data.daemon, now })
+    : [];
 
   return (
     <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
@@ -110,7 +103,9 @@ export function AccessSection({ activeWorkspaceName, route, navigate }: Settings
                 { label: "Desktop", value: data.daemon?.state ?? "unknown" },
                 {
                   label: "Active devices",
-                  value: data.grants ? String(data.grants.filter((grant) => !grant.revokedAt).length) : "Unavailable",
+                  value: data.grants
+                    ? String(data.grants.filter((grant) => deviceAccessGrantStatus(grant, now) === "active").length)
+                    : "Unavailable",
                 },
               ]}
             >
@@ -139,12 +134,12 @@ export function AccessSection({ activeWorkspaceName, route, navigate }: Settings
               items={(data.grants ?? []).map((grant) => ({
                 id: grant.grantId,
                 label: grant.deviceLabel || grant.grantId,
-                description: `${grant.deviceType || "device"} · ${grant.revokedAt ? "revoked" : "active"} · ${formatDateTime(grant.createdAt)}`,
+                description: `${grant.deviceType || "device"} · ${deviceAccessGrantStatus(grant, now)} · ${formatDateTime(grant.createdAt)}`,
                 meta:
                   (typeof grant.metadata.origin === "string" ? grant.metadata.origin : undefined) ||
                   grant.platform ||
                   "Unknown origin",
-                onClick: !deviceGrantCanBeRevoked(grant) || deviceRevocation.attemptFor(grant.grantId) ? undefined : () => deviceRevocation.review(grant),
+                onClick: !deviceGrantCanBeRevoked(grant, now) || deviceRevocation.attemptFor(grant.grantId) ? undefined : () => deviceRevocation.review(grant),
                 actionLabel: deviceRevocation.attemptFor(grant.grantId)?.message ?? (grant.revokedAt ? "Revoked" : "Revoke"),
               }))}
               emptyLabel={data.grants ? "No device grants found." : "Device grants could not be loaded."}

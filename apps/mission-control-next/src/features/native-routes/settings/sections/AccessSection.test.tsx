@@ -100,3 +100,60 @@ it("shows confirmed zero counts for a successful empty read even if daemon statu
   expect(stat("Grants")).toBe("0");
   expect(container.textContent).toContain("No device grants found.");
 });
+
+it("keeps expired and revoked device grants in history without counting them as active", async () => {
+  const grant = {
+    requestId: "request-fixture",
+    actorId: "actor-fixture",
+    createdAt: "2026-11-01T00:00:00Z",
+    metadata: {},
+  };
+  api.fetchDeviceAccessGrants.mockResolvedValue({
+    items: [
+      {
+        ...grant,
+        grantId: "active",
+        deviceLabel: "Current phone",
+        deviceType: "mobile",
+        expiresAt: "2100-01-01T00:00:00Z",
+      },
+      {
+        ...grant,
+        grantId: "expired",
+        deviceLabel: "Old phone",
+        deviceType: "mobile",
+        expiresAt: "2026-11-02T00:00:00Z",
+      },
+      {
+        ...grant,
+        grantId: "revoked",
+        deviceLabel: "Revoked desktop",
+        deviceType: "desktop",
+        expiresAt: "2026-11-02T00:00:00Z",
+        revokedAt: "2026-11-01T12:00:00Z",
+      },
+      {
+        ...grant,
+        grantId: "invalid",
+        deviceLabel: "Unverified desktop",
+        deviceType: "desktop",
+        expiresAt: "invalid-date",
+      },
+    ],
+  });
+  await renderAccess();
+  expect(stat("Active devices")).toBe("1");
+  expect(stat("Grants")).toBe("4");
+  expect(container.textContent).toContain("1 active mobile/tablet device grant");
+  expect(container.textContent).not.toContain("active desktop device grant");
+  const row = (label: string) =>
+    [...container.querySelectorAll('[aria-label="Approved device grants"] .mc-next-settings-action-row')].find(
+      (entry) => entry.querySelector("strong")?.textContent === label,
+    );
+  expect(row("Current phone")?.textContent).toContain("mobile · active");
+  expect(row("Old phone")?.textContent).toContain("mobile · expired");
+  expect(row("Revoked desktop")?.textContent).toContain("desktop · revoked");
+  expect(row("Unverified desktop")?.textContent).toContain("desktop · unavailable");
+  expect(row("Current phone")?.querySelector("button")?.textContent).toBe("Revoke");
+  expect(row("Old phone")?.querySelector("button")).toBeNull();
+});
