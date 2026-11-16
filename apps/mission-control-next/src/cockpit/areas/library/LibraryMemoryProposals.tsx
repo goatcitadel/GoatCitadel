@@ -25,7 +25,14 @@ export function LibraryMemoryProposals(props: Parameters<typeof LibraryMemoryPro
   const access = useLibraryOperation(JSON.stringify(["memory-proposals", props.workspaceId]));
   return <LibraryMemoryProposalsContent key={access.identity} {...props} />;
 }
-function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string }) {
+function LibraryMemoryProposalsContent({
+  workspaceId,
+  hideWhenEmpty = false,
+}: {
+  workspaceId: string;
+  /** Hide the section after a successful read finds no proposals; loading and failed reads keep it. */
+  hideWhenEmpty?: boolean;
+}) {
   const operation = useLibraryOperation(JSON.stringify(["memory-proposals", workspaceId]));
   const client = useQueryClient();
   const query = useQuery({
@@ -96,6 +103,8 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
             : "GoatCitadel confirmed rejection.",
       });
       await client.invalidateQueries({ queryKey: ["library", "memory-proposals", workspaceId, operation.identity] });
+      // A promotion adds a memory: read the memory list again so it shows next to the confirmation.
+      if (review.action === "promote") await client.invalidateQueries({ queryKey: ["library", "memory", workspaceId] });
     } catch (cause) {
       if (operation.current())
         setOutcome({
@@ -106,6 +115,8 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
       setBusy(false);
     }
   }
+  // A shown decision or an open review keeps the section, so a confirmation never disappears with the last row.
+  if (hideWhenEmpty && query.data && !query.isError && !proposals.length && !outcome && !review) return null;
   return (
     <Section
       title="Memory proposals"

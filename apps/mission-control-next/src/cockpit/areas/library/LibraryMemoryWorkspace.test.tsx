@@ -16,6 +16,10 @@ vi.mock("./library-resources", async (original) => ({
   ...(await original<typeof import("./library-resources")>()),
   loadLibraryResources: api.load,
 }));
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", async (original) => ({
+  ...(await original<object>()),
+  fetchWorkspaces: async () => ({ items: [] }),
+}));
 vi.mock("./LibraryMemoryProposals", () => ({ LibraryMemoryProposals: () => <p>proposals</p> }));
 vi.mock("./LibraryMemoryBatch", () => ({ LibraryMemoryBatch: () => <p>bulk actions</p> }));
 vi.mock("./LibraryMemoryEditor", () => ({
@@ -252,4 +256,13 @@ it("filters memory as you type, after a short pause, with no apply button", asyn
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("refreshes the proposals too when the directory is refreshed, since their section may be hidden", async () => {
+  api.load.mockResolvedValue({ items: [], coverage: "0 matching records" });
+  await render();
+  await vi.waitFor(() => expect(container.textContent).toContain("No active memories"));
+  const invalidate = vi.spyOn(client, "invalidateQueries");
+  await act(async () => button("Refresh memory directory")!.click());
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["library", "memory-proposals", "one"] });
 });
