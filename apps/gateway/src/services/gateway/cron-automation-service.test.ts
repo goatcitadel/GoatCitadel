@@ -680,12 +680,19 @@ describe("CronAutomationService job behavior", () => {
     );
     cronJobs.upsert(buildTaskJob({ jobId: "paused-job", schedule: "0 3 * * * UTC", enabled: false }));
 
-    const listed = new Map((await service.listCronJobs()).map((job) => [job.jobId, job]));
+    // A fixed clock well before 03:00 UTC: inside the schedule's matching window the next run is a later minute.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-15T02:00:00.000Z"));
+    let listed: Map<string, CronJobRecord>;
+    try {
+      listed = new Map((await service.listCronJobs()).map((job) => [job.jobId, job]));
+    } finally {
+      vi.useRealTimers();
+    }
 
     const projected = listed.get("daily-job")!;
     expect(projected.nextRunProjected).toBe(true);
-    expect(new Date(projected.nextRunAt!).toISOString().slice(11, 19)).toBe("03:00:00");
-    expect(new Date(projected.nextRunAt!).getTime()).toBeGreaterThan(Date.now());
+    expect(new Date(projected.nextRunAt!).toISOString()).toBe("2026-05-15T03:00:00.000Z");
     expect(listed.get("recorded-job")).toMatchObject({ nextRunAt: "2030-01-01T03:00:00.000Z" });
     expect(listed.get("recorded-job")!.nextRunProjected).toBeUndefined();
     expect(listed.get("paused-job")!.nextRunAt).toBeUndefined();

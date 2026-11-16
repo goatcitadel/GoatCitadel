@@ -50,6 +50,8 @@ describe("projectWorkBoard", () => {
     expect(workRunTitle(post("background_review"))).toBe("Background review after a Chat reply");
     expect(workRunTitle(post("memory_maintenance"))).toBe("Memory upkeep after a Chat reply");
     expect(workRunTitle(post("something_else"))).toBe("Background work after a Chat reply");
+    for (const inherited of ["__proto__", "constructor", "toString"])
+      expect(workRunTitle(post(inherited))).toBe("Background work after a Chat reply");
     expect(workRunTitle(run("completed", "chat.post_commit.effect"))).toBe("Background work after a Chat reply");
     expect(workRunTitle(run("waiting", "approval.wait"))).toBe("Waiting for an approval");
     expect(workRunTitle(run("completed", "connector.delivery"))).toBe("Connector delivery");

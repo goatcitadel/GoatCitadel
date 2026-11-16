@@ -53,5 +53,6 @@ const POST_COMMIT_TITLES: Readonly<Record<string, string>> = {
 };
 
 function postCommitTitle(effect: unknown): string {
-  return (typeof effect === "string" ? POST_COMMIT_TITLES[effect] : undefined) ?? "Background work after a Chat reply";
+  const known = typeof effect === "string" && Object.hasOwn(POST_COMMIT_TITLES, effect);
+  return known ? POST_COMMIT_TITLES[effect]! : "Background work after a Chat reply";
 }
