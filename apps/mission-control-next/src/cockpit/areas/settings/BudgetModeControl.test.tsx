@@ -229,9 +229,8 @@ it("offers native budget inspection after an uncertain write without another mut
     expect(target.searchParams.get("runId")).toBe("run/one");
     expect(target.searchParams.get("shell")).toBe("cockpit");
     expect(container.querySelector('a[href*="shell=classic"]')).toBeNull();
-    await act(async () =>
-      [...container.querySelectorAll("button")].find((item) => item.textContent === "Refresh")!.click(),
-    );
+    // The page's Refresh re-reads every query the page shows.
+    await act(async () => client.invalidateQueries());
     expect(save.disabled).toBe(true);
     expect(select.disabled).toBe(true);
     expect(api.patchSettings).toHaveBeenCalledTimes(1);

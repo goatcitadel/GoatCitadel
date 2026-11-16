@@ -244,8 +244,8 @@ function McpServerRow({
         >
           {server.enabled ? "Review disable" : "Review enable"}
         </Button>
-        <Button size="sm" disabled={disabled} aria-label={`Inspect ${server.label}`} onClick={onInspect}>
-          Connections, tools and transport
+        <Button size="sm" disabled={disabled} aria-label={`Connect and inspect ${server.label}`} onClick={onInspect}>
+          Connect and inspect
         </Button>
         <McpDeleteControl workspaceId={workspaceId} server={server} available={!disabled} />
         <Button

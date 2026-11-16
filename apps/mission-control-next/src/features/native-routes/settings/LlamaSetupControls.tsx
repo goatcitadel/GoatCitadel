@@ -2,6 +2,7 @@ import type { ButtonHTMLAttributes, ComponentType, ReactNode } from "react";
 import type { ChangePlanRecord } from "@goatcitadel/contracts";
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { NativeButton } from "../primitives";
+import { LLAMA_PROCESS_LABELS } from "./llama-process-labels";
 import { useLlamaSetup } from "./use-llama-setup";
 import { useLlamaSetupChatTest } from "./use-llama-setup-chat-test";
 import { LlamaSetupReviews } from "./LlamaSetupReviews";
@@ -29,6 +30,15 @@ export function LlamaSetupControls({
     available: control.ready,
     refresh: control.refresh,
   });
+  const processLabel = projection
+    ? (LLAMA_PROCESS_LABELS[projection.ownership] ?? "Process state not reported")
+    : "Process state not reported";
+  const chatProvider = projection?.chatRoute.providerId;
+  const technicalLines = (
+    <p className="break-all font-mono text-xs">
+      {`Workspace ${workspaceId}${chatProvider ? ` · Chat provider ${chatProvider}` : ""}`}
+    </p>
+  );
   const input = cockpit
     ? "mt-1 min-h-10 w-full rounded-md border border-line bg-canvas px-2 text-sm text-fg disabled:opacity-60"
     : "mc-next-settings-input";
@@ -40,13 +50,16 @@ export function LlamaSetupControls({
       className={cockpit ? "space-y-3 text-sm text-fg-secondary" : "mc-next-settings-stack"}
     >
       <p>
-        Choose a runtime and model for this Gateway installation. Setup plans and the diagnostic Chat are recorded in
-        workspace {workspaceId}.
+        Choose a runtime and model for this GoatCitadel installation. Setup plans and the diagnostic Chat are saved in
+        this workspace.
       </p>
       <p>
-        Ownership: {projection ? humanizeToken(projection.ownership) : "Unavailable"}. Current Chat route:{" "}
-        {projection?.chatRoute.providerId || "Unavailable"} · {projection?.chatRoute.model || "Not selected"}.
+        {processLabel}. Chat uses {projection?.chatRoute.model || "no model"} from the model setup in Settings › Models.
       </p>
+      <details className={cockpit ? "text-sm text-fg-secondary" : undefined}>
+        <summary className={cockpit ? "cursor-pointer font-medium text-accent" : undefined}>Technical details</summary>
+        {technicalLines}
+      </details>
       {control.evidence.loading ? <p role="status">Loading setup evidence…</p> : null}
       {control.evidence.error ? <p role="alert">{control.evidence.error}</p> : null}
       <fieldset disabled={control.locked}>
@@ -97,7 +110,8 @@ export function LlamaSetupControls({
             <option value="">Choose a verified model</option>
             {draft.value.model && !visibleChoices.includes(draft.value.model) ? (
               <option value={draft.value.model} disabled={modelUnverified}>
-                {draft.value.model}{modelUnverified ? " (not currently verified)" : ""}
+                {draft.value.model}
+                {modelUnverified ? " (not currently verified)" : ""}
               </option>
             ) : null}
             {visibleChoices.map((id) => (
@@ -174,15 +188,19 @@ export function LlamaSetupControls({
             </Action>
           ) : null}
           {plan.requiredAction?.kind === "approval" && plan.requiredAction.approvalId ? (
-            renderApprovalAction ? renderApprovalAction(plan, control.busy) : onApproval ? <Action
-              className={actionClass}
-              onClick={() => {
-                if (plan.requiredAction?.kind === "approval" && plan.requiredAction.approvalId)
-                  onApproval(plan.requiredAction.approvalId);
-              }}
-            >
-              Open approval details
-            </Action> : null
+            renderApprovalAction ? (
+              renderApprovalAction(plan, control.busy)
+            ) : onApproval ? (
+              <Action
+                className={actionClass}
+                onClick={() => {
+                  if (plan.requiredAction?.kind === "approval" && plan.requiredAction.approvalId)
+                    onApproval(plan.requiredAction.approvalId);
+                }}
+              >
+                Open approval details
+              </Action>
+            ) : null
           ) : null}
           {control.approved.visible ? (
             <>

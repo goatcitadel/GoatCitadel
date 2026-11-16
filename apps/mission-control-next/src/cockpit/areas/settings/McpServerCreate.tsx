@@ -10,6 +10,7 @@ import type { McpCreateInput } from "../../../features/native-routes/settings/mc
 import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { McpDraftLeave } from "./McpDraftLeave";
 import { McpCreateFields } from "./McpCreateFields";
 import { McpCreateReview } from "./McpCreateReview";
@@ -81,9 +82,10 @@ export function McpServerCreate({
           <McpOutcomeCheck target={{ kind: "create" }} buttonComponent={Button} />
           {created ? (
             <div className="space-y-2">
-              <p role="status">
-                Saved server ID: <code className="break-all font-mono">{created.serverId}</code>
-              </p>
+              <p role="status">Saved {created.label || "the server"}.</p>
+              <TechnicalDetails>
+                <p className="break-all font-mono text-xs">Server {created.serverId}</p>
+              </TechnicalDetails>
               {onInspect ? (
                 <Button size="sm" onClick={() => leave.request(() => onInspect(created.serverId), [control.draft.key])}>
                   Continue to connection review

@@ -116,7 +116,10 @@ export function McpServerEditor({
               aria-label="Current MCP server review"
               className="space-y-2 rounded-md border border-line bg-raised p-3"
             >
-              <p>Saved configuration changed. Inspect it before applying your retained draft.</p>
+              <p>
+                The saved configuration changed. Your draft started from an older version; review the saved one before
+                applying your draft.
+              </p>
               {control.review.loading ? <p role="status">Reading current server…</p> : null}
               {control.review.error ? <p role="alert">{control.review.error}</p> : null}
               {server && !control.review.loading && !control.review.error ? (

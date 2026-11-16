@@ -4,6 +4,7 @@ import { refreshLlamaCppRuntime, stopLlamaCppRuntime } from "@goatcitadel/missio
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { LLAMA_PROCESS_LABELS } from "../../../features/native-routes/settings/llama-process-labels";
 import { Button } from "../../ui/Button";
 import { TimeText } from "../../ui/TimeText";
 
@@ -38,11 +39,6 @@ const RESTART_OUTCOMES: Record<NonNullable<LeaseEvidenceRecord["lastRestart"]>["
 };
 
 const STOPPABLE = new Set<LlamaCppRuntimeStatus["processState"]>(["starting", "running", "error"]);
-const OWNERSHIP: Record<LlamaCppRuntimeLeaseDiagnostics["ownership"], string> = {
-  owned: "Owned by GoatCitadel",
-  external: "External, observed only",
-  none: "No process owned",
-};
 
 function requests(count: number) {
   return `${plural(count, "active request")} ${count === 1 ? "is" : "are"}`;
@@ -60,7 +56,7 @@ function LeaseEvidence({ diagnostics }: { diagnostics: LlamaCppRuntimeLeaseDiagn
   return (
     <ul aria-label="llama.cpp lease lifecycle" className="space-y-1 text-sm text-fg-secondary">
       <li>Lifecycle: {LEASE_STATES[diagnostics.state] ?? "Unknown"}</li>
-      <li>Ownership: {OWNERSHIP[diagnostics.ownership]}</li>
+      <li>Process: {LLAMA_PROCESS_LABELS[diagnostics.ownership]}</li>
       <li>
         Active requests: {diagnostics.activeLeaseCount}
         {purposes ? ` (${purposes})` : ""}
