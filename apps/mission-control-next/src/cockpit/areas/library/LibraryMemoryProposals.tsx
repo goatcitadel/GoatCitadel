@@ -103,6 +103,8 @@ function LibraryMemoryProposalsContent({
             : "GoatCitadel confirmed rejection.",
       });
       await client.invalidateQueries({ queryKey: ["library", "memory-proposals", workspaceId, operation.identity] });
+      // A promotion adds a memory: read the memory list again so it shows next to the confirmation.
+      if (review.action === "promote") await client.invalidateQueries({ queryKey: ["library", "memory", workspaceId] });
     } catch (cause) {
       if (operation.current())
         setOutcome({
@@ -113,7 +115,8 @@ function LibraryMemoryProposalsContent({
       setBusy(false);
     }
   }
-  if (hideWhenEmpty && query.data && !query.isError && !proposals.length) return null;
+  // A shown decision or an open review keeps the section, so a confirmation never disappears with the last row.
+  if (hideWhenEmpty && query.data && !query.isError && !proposals.length && !outcome && !review) return null;
   return (
     <Section
       title="Memory proposals"

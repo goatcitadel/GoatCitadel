@@ -15,6 +15,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/workspaces", async (original) =
   ...(await original<object>()),
   fetchWorkspaces: api.workspaces,
 }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", async (original) => {
+  const actual = await original<typeof import("@goatcitadel/mission-control-shared/state/ui-preferences")>();
+  return { ...actual, useUiPreferences: () => ({ ...actual.useUiPreferences(), showTechnicalDetails: true }) };
+});
 vi.mock("./LibraryMemoryProposals", () => ({
   LibraryMemoryProposals: (props: { hideWhenEmpty?: boolean }) => (
     <p>{props.hideWhenEmpty ? "proposals hidden when empty" : "proposals always"}</p>
@@ -66,18 +70,30 @@ const memory = (itemId: string, workspaceId?: string) => ({
 });
 
 it("names the workspace a memory belongs to in plain words", async () => {
-  api.load.mockResolvedValue({ items: [memory("a", "one"), memory("b")], coverage: "2 records" });
+  api.load.mockResolvedValue({
+    items: [memory("a", "one"), memory("b"), memory("c", "global")],
+    coverage: "3 records",
+  });
   await render();
   await vi.waitFor(() => expect(container.textContent).toContain("Belongs to Studio"));
-  expect(container.textContent).toContain("Shared across workspaces");
-  expect(container.textContent).not.toContain("Owner: one");
+  const lines = [...container.querySelectorAll("li p.text-sm")].map((item) => item.textContent);
+  expect(lines[1]).toContain("Shared across workspaces");
+  expect(lines[2]).toContain("Shared across workspaces");
+  const details = [...container.querySelectorAll("details")];
+  expect(details[0]!.textContent).toContain("Owner: one");
+  expect(container.querySelector("li p.text-sm")!.textContent).not.toContain("one");
 });
 
-it("hides diagnostics and asks the proposals to hide when nothing is remembered", async () => {
+it("keeps one quiet way to diagnostics inside the empty state and asks the proposals to hide", async () => {
   api.load.mockResolvedValue({ items: [], coverage: "0 matching records" });
   await render();
   await vi.waitFor(() => expect(container.textContent).toContain("No active memories"));
-  expect(container.textContent).not.toContain("Open memory diagnostics and maintenance");
+  const openers = [...container.querySelectorAll("button")].filter(
+    (item) => item.textContent === "Open memory diagnostics and maintenance",
+  );
+  expect(openers).toHaveLength(1);
+  expect(openers[0]!.closest("section")?.querySelector("h2")?.textContent).toBe("No active memories");
+  expect(container.textContent).not.toContain("promote a proposal below");
   expect(container.textContent).toContain("proposals hidden when empty");
 });
 
@@ -101,5 +117,21 @@ it("keeps diagnostics when there is a memory", async () => {
   await render();
   await vi.waitFor(() => expect(container.textContent).toContain("Memory a"));
   expect(container.textContent).toContain("Open memory diagnostics and maintenance");
+  expect(container.textContent).toContain("proposals always");
+});
+
+it("keeps diagnostics when a filtered list has no results", async () => {
+  api.load.mockResolvedValue({ items: [], coverage: "0 matching records" });
+  await render();
+  await vi.waitFor(() => expect(container.textContent).toContain("No active memories"));
+  await act(async () =>
+    [...container.querySelectorAll("button")].find((item) => item.textContent === "Show all statuses")!.click(),
+  );
+  await vi.waitFor(() => expect(container.querySelector("form")).not.toBeNull());
+  expect(container.textContent).not.toContain("No active memories");
+  const openers = [...container.querySelectorAll("button")].filter(
+    (item) => item.textContent === "Open memory diagnostics and maintenance",
+  );
+  expect(openers).toHaveLength(1);
   expect(container.textContent).toContain("proposals always");
 });

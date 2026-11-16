@@ -64,9 +64,15 @@ export const memoryNamespaceLabel = (namespace: string) =>
   MEMORY_NAMESPACES[namespace] ?? (humanizeToken(namespace) || "No namespace");
 
 /** Where a memory item lives, as words: the id itself stays in Technical details. */
-export function memoryScopeLabel(item: Pick<MemoryItemRecord, "workspaceId" | "metadata">, workspaceId: string) {
+/** The workspace that owns a memory; a missing id and the literal global id both mean shared by all workspaces. */
+function memoryOwnerId(item: Pick<MemoryItemRecord, "workspaceId" | "metadata">) {
   const owner =
     item.workspaceId ?? (typeof item.metadata.workspaceId === "string" ? item.metadata.workspaceId : undefined);
+  return owner && owner !== "global" ? owner : undefined;
+}
+
+export function memoryScopeLabel(item: Pick<MemoryItemRecord, "workspaceId" | "metadata">, workspaceId: string) {
+  const owner = memoryOwnerId(item);
   if (!owner) return "Shared across workspaces";
   return owner === workspaceId ? "This workspace" : "Another workspace";
 }
@@ -77,9 +83,7 @@ export function memoryOwnerLabel(
   workspaceId: string,
   nameOf: (workspaceId?: string) => string | undefined,
 ) {
-  const owner =
-    item.workspaceId ?? (typeof item.metadata.workspaceId === "string" ? item.metadata.workspaceId : undefined);
-  const name = nameOf(owner);
+  const name = nameOf(memoryOwnerId(item));
   return name ? `Belongs to ${name}` : memoryScopeLabel(item, workspaceId);
 }
 

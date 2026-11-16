@@ -125,17 +125,22 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
       {nothingRemembered ? (
         <EmptyState
           title="No active memories"
-          description="Memories appear here after you approve a memory write from Chat or promote a proposal below. Forgotten memories are listed under all statuses."
+          description="Memories appear here after you approve a memory write from Chat or promote a suggested proposal, which then shows here. Forgotten memories are listed under all statuses."
           action={
-            <Button
-              size="sm"
-              onClick={() => {
-                setStatus("all");
-                setCursors([undefined]);
-              }}
-            >
-              Show all statuses
-            </Button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => {
+                  setStatus("all");
+                  setCursors([undefined]);
+                }}
+              >
+                Show all statuses
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setDiagnostics(true)}>
+                Open memory diagnostics and maintenance
+              </Button>
+            </div>
           }
         />
       ) : (
@@ -152,7 +157,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
               {(props) => (
                 <input
                   {...props}
-                  className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
+                  className="min-w-0 w-full max-w-full rounded-md border border-line-control bg-raised p-2"
                   value={filter}
                   onChange={(event) => setFilter(event.target.value)}
                 />
@@ -162,7 +167,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
               {(props) => (
                 <select
                   {...props}
-                  className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
+                  className="min-w-0 w-full max-w-full rounded-md border border-line-control bg-raised p-2"
                   value={status}
                   onChange={(event) => {
                     setStatus(event.target.value);
@@ -179,7 +184,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
               {(props) => (
                 <select
                   {...props}
-                  className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
+                  className="min-w-0 w-full max-w-full rounded-md border border-line-control bg-raised p-2"
                   value={namespace}
                   onChange={(event) => {
                     setNamespace(event.target.value);
@@ -287,7 +292,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
           </Button>
         </div>
       ) : null}
-      {nothingRemembered && !diagnostics ? null : (
+      {nothingRemembered ? null : (
         <div>
           <Button onClick={() => setDiagnostics(true)}>Open memory diagnostics and maintenance</Button>
         </div>

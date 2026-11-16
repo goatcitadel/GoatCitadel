@@ -16,6 +16,10 @@ vi.mock("./library-resources", async (original) => ({
   ...(await original<typeof import("./library-resources")>()),
   loadLibraryResources: api.load,
 }));
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", async (original) => ({
+  ...(await original<object>()),
+  fetchWorkspaces: async () => ({ items: [] }),
+}));
 vi.mock("./LibraryMemoryProposals", () => ({ LibraryMemoryProposals: () => <p>proposals</p> }));
 vi.mock("./LibraryMemoryBatch", () => ({ LibraryMemoryBatch: () => <p>bulk actions</p> }));
 vi.mock("./LibraryMemoryEditor", () => ({

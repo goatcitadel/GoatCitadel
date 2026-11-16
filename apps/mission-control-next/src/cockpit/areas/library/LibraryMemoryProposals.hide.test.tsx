@@ -4,8 +4,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { TraceMemoryCandidateRecord } from "@goatcitadel/contracts";
-import { fetchTraceMemoryCandidates } from "@goatcitadel/mission-control-shared/api/memory";
+import {
+  fetchTraceMemoryCandidates,
+  fetchTraceMemoryCandidate,
+  promoteTraceMemoryCandidate,
+} from "@goatcitadel/mission-control-shared/api/memory";
 import { LibraryMemoryProposals } from "./LibraryMemoryProposals";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 vi.mock("@goatcitadel/mission-control-shared/api/memory", () => ({
   fetchTraceMemoryCandidates: vi.fn(),
@@ -76,4 +83,31 @@ it("shows the section when it has rows", async () => {
   vi.mocked(fetchTraceMemoryCandidates).mockResolvedValue(result([proposal]));
   await render();
   await vi.waitFor(() => expect(container.textContent).toContain("Prefers short status updates"));
+});
+
+it("keeps the confirmation and refreshes the memory list after the last proposal is promoted", async () => {
+  vi.mocked(fetchTraceMemoryCandidates)
+    .mockResolvedValueOnce(result([proposal]))
+    .mockResolvedValue(result([]));
+  vi.mocked(fetchTraceMemoryCandidate).mockResolvedValue(proposal);
+  vi.mocked(promoteTraceMemoryCandidate).mockResolvedValue({
+    ...proposal,
+    status: "trusted",
+    insight: proposal.proposedInsight,
+  } as unknown as Awaited<ReturnType<typeof promoteTraceMemoryCandidate>>);
+  const invalidate = vi.spyOn(client, "invalidateQueries");
+  await render();
+  const press = async (label: string) => {
+    await vi.waitFor(() => {
+      const found = [...document.querySelectorAll("button")].find((item) => item.textContent === label);
+      expect(found?.disabled).toBe(false);
+    });
+    await act(async () => [...document.querySelectorAll("button")].find((item) => item.textContent === label)!.click());
+  };
+  await press("Review promotion");
+  await press("Confirm memory promotion");
+  await vi.waitFor(() =>
+    expect(document.body.textContent).toContain("GoatCitadel confirmed promotion into a trusted workspace learning."),
+  );
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["library", "memory", "one"] });
 });
