@@ -87,10 +87,42 @@ export function isStepComplete(
     !step.checklist?.length || step.checklist.every((item) => checkedItems[`${draft.draftId}:${step.id}:${item.id}`]);
   if (!checklistComplete) return false;
   if (step.fields?.length || step.requiredAnyOf?.length) {
-    return findMissingFieldLabels(definition, draft, step, values).length === 0;
+    if (findMissingFieldLabels(definition, draft, step, values).length > 0) return false;
+    if (hasEmptySenderList(definition, step, values)) return false;
+    // A step with nothing the operator has to fill in is done once they have been through it.
+    const effectiveValues = wizardValuesWithDefaults(definition, values);
+    const hasRequired =
+      Boolean(step.requiredAnyOf?.length) ||
+      (step.fields ?? []).some(
+        (field) => isFieldVisible(field, effectiveValues) && isFieldRequired(field, draft, effectiveValues),
+      );
+    return hasRequired || Boolean(visitedStepIds[step.id]);
   }
   if (step.checklist?.length) return true;
   return Boolean(visitedStepIds[step.id]);
+}
+
+function senderEntries(value: unknown): string[] {
+  const parts = Array.isArray(value) ? value : typeof value === "string" ? value.split(/[\n,]/u) : [];
+  return parts.map((part) => String(part ?? "").trim()).filter((part) => part.length > 0);
+}
+
+/**
+ * A visible sender list with nobody on it: the bot would turn every message away, so the step is not done yet. Only
+ * a list the current access mode shows counts; a hidden one blocks nothing.
+ */
+export function hasEmptySenderList(
+  definition: ChannelSetupDefinition,
+  step: ChannelSetupStepDefinition,
+  values: Record<string, unknown>,
+): boolean {
+  const effectiveValues = wizardValuesWithDefaults(definition, values);
+  return (step.fields ?? []).some(
+    (field) =>
+      field.type === "sender-list" &&
+      isFieldVisible(field, effectiveValues) &&
+      senderEntries(effectiveValues[field.key]).length === 0,
+  );
 }
 
 export function findMissingFieldLabels(

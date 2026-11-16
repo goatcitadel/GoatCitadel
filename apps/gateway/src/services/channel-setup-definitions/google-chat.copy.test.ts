@@ -113,7 +113,7 @@ describe("Google Chat setup guide: what it says up front (item 9)", () => {
       "Chat app: the Google user ids (users/…) allowed to message it.",
     ]);
     expect(paragraphs("first-message")).toEqual([
-      "Incoming webhook: check the test message appeared in the space. Chat app: paste this connection's webhook address into the Chat app's HTTP endpoint URL, allow your users/… id, then message the app and check the reply. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a Google Chat message from …\", and add that id under Who may message this bot with Edit setup.",
+      "Incoming webhook: check the test message appeared in the space. Chat app: paste this connection's webhook address into the Chat app's HTTP endpoint URL, allow your users/… id, then message the app and check the reply. If the bot doesn't answer your message, open Edit setup and go to Who may message this bot: the sender it turned away is listed there with a button to allow them.",
     ]);
   });
 });
@@ -226,7 +226,7 @@ describe("Google Chat setup guide: one mode field (item 4)", () => {
     const allowed = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
     expect(allowed?.explanation).toBe(
-      'Chat app mode only: add Google Chat user resource names such as users/123456789. Webhook mode never receives messages. Empty means every inbound sender is denied. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
+      "Chat app mode only: add Google Chat user resource names such as users/123456789. Webhook mode never receives messages. Empty means every inbound sender is denied. Don't know the id? Finish setup and message the bot once. Then open Edit setup and come back to this step: the sender it turned away is listed here with a button to allow them.",
     );
   });
 });

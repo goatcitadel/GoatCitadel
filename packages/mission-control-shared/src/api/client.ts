@@ -578,6 +578,7 @@ export {
   fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts,
   fetchChannelSetupDraft,
+  fetchChannelDroppedSenders,
   reviewChannelSetupConnection,
   fetchChannelTargetDirectory,
   discoverTelegramTargets,
