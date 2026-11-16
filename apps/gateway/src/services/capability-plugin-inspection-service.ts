@@ -72,9 +72,9 @@ const SKILL_BLOCKED_MESSAGE = "This skill didn't pass GoatCitadel's checks.";
 const SKILL_UNREADABLE_MESSAGE = "GoatCitadel can't check this skill.";
 const SKILL_REMOVED_EARLIER_MESSAGE =
   "This skill was left behind by an earlier install. Remove it in Capabilities › Skills, then check the plugin again.";
-/** A left-over that was never switched on has no row in Skills to remove it from. */
+/** A left-over that was never switched on has no row in Skills, so its removal is offered here, beside this line. */
 const SKILL_LEFT_INSTALLED_MESSAGE =
-  "This skill was left behind by an earlier install, and GoatCitadel can't remove it from here.";
+  "This skill was left behind by an earlier install and was never switched on. Remove it here, then this plugin can be installed.";
 const SKILL_NAME_TAKEN_MESSAGE = "A skill with this name is already installed.";
 /** A Claude Code skill's own refusals, in plain words. */
 const DIALECT_BLOCKED_MESSAGES: Readonly<Record<string, string>> = {
@@ -435,10 +435,9 @@ export class CapabilityPluginInspectionService {
     // live one is installed now.
     if (runtimeLive) return blocked(NAME_TAKEN_BLOCKER, SKILL_NAME_TAKEN_MESSAGE);
     if (leftOver) {
-      return blocked(
-        leftOver,
-        check.revoked || check.runtimeRevoked ? SKILL_REMOVED_EARLIER_MESSAGE : SKILL_LEFT_INSTALLED_MESSAGE,
-      );
+      if (check.revoked || check.runtimeRevoked) return blocked(leftOver, SKILL_REMOVED_EARLIER_MESSAGE);
+      const skillId = check.skillId ?? `extra:${check.title}`;
+      return { status: "blocked", code: leftOver, message: SKILL_LEFT_INSTALLED_MESSAGE, removableSkillId: skillId };
     }
     if (blockers.includes(NAME_TAKEN_BLOCKER)) return blocked(NAME_TAKEN_BLOCKER, SKILL_REMOVED_EARLIER_MESSAGE);
     return blocked(blockers[0] ?? "SKILL_CHECK_BLOCKED", SKILL_BLOCKED_MESSAGE);

@@ -74,7 +74,7 @@ function SkillDetails({
       </div>
       <p className="text-sm text-fg-secondary">{item.description}</p>
       <SkillPanelSwitch item={item} sw={sw} state={state} announce={announce} />
-      <SkillRemoval item={item} workspaceId={activeWorkspaceId} />
+      {item.removable ? <SkillRemoval skillId={item.skillId} name={item.name} workspaceId={activeWorkspaceId} /> : null}
       <Section title="Uses" headingLevel={3}>
         <UsesLine skillId={item.skillId} />
       </Section>

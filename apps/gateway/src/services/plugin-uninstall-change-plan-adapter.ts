@@ -64,7 +64,7 @@ const LEFT_SKILL_IMPACT =
   "A skill it added stays until you remove it in Capabilities › Skills. Until then the plugin can't be installed again.";
 /** A skill installed and never switched on has no runtime record, so there is nothing in Capabilities › Skills to remove. */
 const NEVER_ON_SKILL_IMPACT =
-  "A skill it added was never switched on, so it stays and GoatCitadel can't remove it. The plugin can't be installed again.";
+  "A skill it added was never switched on, so it stays until you remove it from a new check of this plugin. Until then the plugin can't be installed again.";
 
 // A plugin uninstall: one Change Plan that removes exactly the pieces the plugin's install added, each through its own
 // owner with the plugin's pass, in reverse install order. What was already there stays, and so do the hosts it allowed.

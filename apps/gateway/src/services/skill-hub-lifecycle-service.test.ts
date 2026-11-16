@@ -1108,6 +1108,89 @@ describe("SkillHubLifecycleService", () => {
       expect(await skillStates.restoreCuratorIdleSnapshot("extra:demo")).toBe(false);
     }, 90_000);
 
+    it("removes a lineage never switched on by marking it removed, deleting nothing, and refuses one with a folder", async () => {
+      const harness = await createHarness();
+      await approveAndApply(
+        harness,
+        template(harness, "install_inactive", "operation-install", {
+          expectedCandidateAbsent: true,
+          expectedRuntimeAbsent: true,
+        }),
+      );
+      const neverOn = (operationId: string) =>
+        template(harness, "remove", operationId, {
+          expectedCandidateAbsent: false,
+          expectedCandidateRevision: 1,
+          expectedRuntimeAbsent: true,
+        });
+      const extraRoot = path.join(harness.rootDir, "skills", "extra");
+      const candidate = harness.storage.candidateSkillVersions.get("version-demo-1");
+      const bundle = path.join(harness.rootDir, candidate.bundleRoot);
+
+      // Something sits at the skill's folder: the normal removal owns it, so nothing changes here.
+      await fs.mkdir(path.join(extraRoot, "demo"), { recursive: true });
+      const refused = await harness.lifecycle.applyApprovedOperation(
+        await approve(harness, neverOn("operation-refused")),
+      );
+      expect(refused.settlement.disposition).toBe("blocked");
+      expect(refused.settlement.result).toMatchObject({ code: "runtime_folder_present", boundaryCrossed: false });
+      expect(harness.storage.skillHubOperations.listAppliedRemovalCandidateIds("workspace-1")).toEqual([]);
+      await fs.rm(path.join(extraRoot, "demo"), { recursive: true, force: true });
+
+      const result = await harness.lifecycle.applyApprovedOperation(
+        await approve(harness, neverOn("operation-remove")),
+      );
+
+      expect(result.settlement.disposition).toBe("applied");
+      expect(harness.storage.skillHubOperations.listAppliedRemovalCandidateIds("workspace-1")).toEqual([
+        "candidate-demo",
+      ]);
+      // Kept: the candidate row and its fence, its bundle, the check's artifact; no record or fence was ever made.
+      expect(harness.storage.candidateSkillVersions.get("version-demo-1").lifecycleState).toBe("candidate");
+      expect(harness.storage.skillAggregateRevisions.get("candidate_skill", "candidate-demo")?.revision).toBe(1);
+      await expect(fs.stat(bundle)).resolves.toBeTruthy();
+      expect(harness.storage.skillHubArtifacts.findBySnapshot("workspace-1", "snapshot-1")).toBeDefined();
+      expect(harness.storage.skillLifecycle.find("extra:demo")).toBeUndefined();
+      expect(harness.storage.skillAggregateRevisions.get("runtime_skill", "extra:demo")).toBeUndefined();
+      // So the same source installs again as a new generation.
+      const reinstalled = await approveAndApply(harness, {
+        ...template(harness, "install_inactive", "operation-reinstall", {
+          expectedCandidateAbsent: true,
+          expectedRuntimeAbsent: true,
+        }),
+        targetCandidateId: "candidate-demo-r1",
+        targetVersionId: "version-demo-1-r1",
+      });
+      expect(reinstalled.settlement.disposition).toBe("applied");
+    }, 90_000);
+
+    it("refuses to remove as never switched on a lineage with a version that was switched on", async () => {
+      const { harness } = await revokedHarness();
+      // The runtime record and fence are gone by hand, so only the lineage tells it was once switched on.
+      harness.storage.skillLifecycle.delete("extra:demo");
+      harness.storage.skillAggregateRevisions.deleteFence("runtime_skill", "extra:demo", 2);
+      harness.storage.candidateSkillVersions.updateLifecycleState(
+        "version-demo-1",
+        "approved",
+        new Date().toISOString(),
+      );
+
+      const result = await harness.lifecycle.applyApprovedOperation(
+        await approve(
+          harness,
+          template(harness, "remove", "operation-remove", {
+            expectedCandidateAbsent: false,
+            expectedCandidateRevision: 3,
+            expectedRuntimeAbsent: true,
+          }),
+        ),
+      );
+
+      expect(result.settlement.disposition).toBe("blocked");
+      expect(result.settlement.result).toMatchObject({ code: "candidate_not_revoked" });
+      expect(harness.storage.skillHubOperations.listAppliedRemovalCandidateIds("workspace-1")).toEqual([]);
+    }, 90_000);
+
     it("puts the folder back when the commit fails after it was moved", async () => {
       const loaded: { loader?: SkillsService } = {};
       const { harness, extraRoot, runtimeDir } = await revokedHarness({

@@ -254,11 +254,56 @@ export const LINEAGE_VERSION_LIMIT = 100;
 function lineageBlock(
   intent: SkillHubOperationIntentRecord,
   lineage: RuntimeRemovalContext["lineage"],
+  allowed: ReadonlySet<CandidateSkillVersionRecord["lifecycleState"]> = REVOKED_ONLY,
 ): "lineage_already_removed" | "lineage_too_large" | "candidate_not_revoked" | undefined {
   if (lineage.removedCandidateIds.includes(intent.targetCandidateId!)) return "lineage_already_removed";
   const { versions } = lineage;
   if (versions.length > LINEAGE_VERSION_LIMIT) return "lineage_too_large";
-  return versions.some((version) => version.lifecycleState !== "revoked") ? "candidate_not_revoked" : undefined;
+  return versions.some((version) => !allowed.has(version.lifecycleState)) ? "candidate_not_revoked" : undefined;
+}
+
+const REVOKED_ONLY: ReadonlySet<CandidateSkillVersionRecord["lifecycleState"]> = new Set(["revoked"]);
+/** A lineage never switched on: each version is still a candidate, or revoked; none ever made the skill callable. */
+const NEVER_ACTIVE: ReadonlySet<CandidateSkillVersionRecord["lifecycleState"]> = new Set(["candidate", "revoked"]);
+
+/**
+ * The approved removal of a lineage that was never switched on (its intent expects no runtime record). Nothing on disk
+ * is touched and nothing is deleted: the commit only settles `applied`, which marks the lineage removed, so a later
+ * install of the same source starts a new generation. Before that it re-checks, and settles `blocked` with nothing
+ * changed, when the check's bytes no longer verify, the lineage was already removed, has more versions than can be read,
+ * or has a version that was ever switched on (anything but a candidate or a revoked one), when a runtime record exists
+ * after all (the normal removal path owns that case), or when anything is at the skill's folder in the runtime skills
+ * root (a folder, a file, or a link that can't be read plainly).
+ */
+export async function runNeverActivatedRemoval(context: RuntimeRemovalContext): Promise<SkillHubLifecycleApplyResult> {
+  const { intent, signal } = context;
+  if (!context.artifactVerifies) {
+    return await context.settle("blocked", UNKNOWN_TREE_SHA256, { code: "artifact_tamper", boundaryCrossed: false });
+  }
+  const lineage = lineageBlock(intent, context.lineage, NEVER_ACTIVE);
+  if (lineage)
+    return await context.settle("blocked", intent.contentTreeSha256, { code: lineage, boundaryCrossed: false });
+  if (context.record) {
+    return await context.settle("blocked", intent.contentTreeSha256, {
+      code: "runtime_record_present",
+      boundaryCrossed: false,
+    });
+  }
+  let folder: string;
+  try {
+    folder = await context.filesystem.pathKind(context.root, path.join(context.root, context.skillName), signal);
+  } catch (error) {
+    if (signal.aborted) throw error;
+    folder = "other";
+  }
+  if (folder !== "missing") {
+    return await context.settle("blocked", intent.contentTreeSha256, {
+      code: "runtime_folder_present",
+      boundaryCrossed: false,
+    });
+  }
+  signal.throwIfAborted();
+  return await context.commit(false, {});
 }
 
 export interface RuntimeRemovalContext {

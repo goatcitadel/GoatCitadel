@@ -25,6 +25,8 @@ import {
   type PluginSkillListing,
   type PluginUninstallRevokeInput,
   type PluginUninstallRevokeOutcome,
+  newestLeftoverCheck,
+  type LeftoverCandidateVersion,
   type SkillHubSettlementRead,
 } from "./capability-skill-actions-service.js";
 import { CapabilitySkillDiscoverService } from "./capability-skill-discover-service.js";
@@ -123,6 +125,14 @@ export interface CapabilitySkillsOwners {
     findSettlementByOperationId(operationId: string): Promise<SkillHubSettlementRead | undefined>;
   };
   /**
+   * Skill Hub's candidate versions and the lineages already removed in a workspace: where the check of a left-over skill
+   * that was never switched on is found (it has no runtime record to name it).
+   */
+  skillHubLineages: {
+    listVersions(): Promise<readonly LeftoverCandidateVersion[]>;
+    listRemovedCandidateIds(workspaceId: string): Promise<readonly string[]>;
+  };
+  /**
    * The plugin records, read through the Plugins tab's one store (never a second one): which plugin lists a check as
    * its skill, for a step on that skill and for the Skills tab's marks, and the plugins uninstalled since, whose skills
    * read as removed with them.
@@ -191,6 +201,7 @@ export function composeCapabilitySkills({
   skillHub,
   skillHubSnapshots,
   skillHubSettlements,
+  skillHubLineages,
   pluginRecords,
   skillSources,
 }: CapabilitySkillsOwners): CapabilitySkills {
@@ -234,6 +245,13 @@ export function composeCapabilitySkills({
         (await skills.listSkills("ALL", workspaceId)).find((skill) => skill.skillId === skillId)?.lifecycle,
       listSkillsRemovedWithPlugins: async () => new Set(removedPluginSkills(await pluginRecords.listRemoved()).keys()),
       findSkillHubSettlement: (operationId) => skillHubSettlements.findSettlementByOperationId(operationId),
+      findLeftoverCheck: async (workspaceId, skillId) =>
+        newestLeftoverCheck(
+          await skillHubLineages.listVersions(),
+          new Set(await skillHubLineages.listRemovedCandidateIds(workspaceId)),
+          workspaceId,
+          skillId,
+        ),
     },
     reportFailedStep,
   );

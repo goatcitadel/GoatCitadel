@@ -544,9 +544,40 @@ describe("SkillHubOperatorService", () => {
     const elsewhereItem = (await elsewhere.service.list({ workspaceId: "workspace-1" })).items[0]!;
     expect(elsewhereItem.actions.remove.blockers).toContain("RUNTIME_NOT_FROM_THIS_CHECK");
 
-    const never = createHarness({ snapshots: [checked], candidates: [version("revoked")] });
+    // No runtime record: a lineage never switched on, removed whole, bound to its newest version, runtime expected absent.
+    const never = createHarness({ snapshots: [checked], candidates: [version("candidate")] });
     const neverItem = (await never.service.list({ workspaceId: "workspace-1" })).items[0]!;
-    expect(neverItem.actions.remove.blockers).toContain("RUNTIME_NOT_REVOKED");
+    expect(neverItem.actions.remove).toEqual({ allowed: true, blockers: [] });
+    await expect(createIntent(never, "snapshot-v1", "remove")).resolves.toMatchObject({
+      operationKind: "remove",
+      targetCandidateId: "candidate-demo",
+      targetVersionId: "version-v1",
+      expectedCandidateAbsent: false,
+      expectedRuntimeAbsent: true,
+    });
+    const onceOn = createHarness({ snapshots: [checked], candidates: [version("approved")] });
+    const onceOnItem = (await onceOn.service.list({ workspaceId: "workspace-1" })).items[0]!;
+    expect(onceOnItem.actions.remove.blockers).toContain("CANDIDATE_NOT_REVOKED");
+    const newerCheck = snapshot({
+      snapshotId: "snapshot-v9",
+      contentTreeSha256: "9".repeat(64),
+      declaredVersion: "9.0.0",
+    });
+    const older = createHarness({
+      snapshots: [checked, newerCheck],
+      candidates: [
+        version("candidate"),
+        candidateVersion({
+          versionId: "version-v9",
+          upstreamSnapshotId: "snapshot-v9",
+          sourceFingerprint: newerCheck.contentTreeSha256,
+          lifecycleState: "candidate",
+          updatedAt: "2099-01-01T00:00:00.000Z",
+        }),
+      ],
+    });
+    const olderItem = (await older.service.list({ workspaceId: "workspace-1" })).items[0]!;
+    expect(olderItem.actions.remove.blockers).toContain("NOT_NEWEST_VERSION");
   });
 
   it("asks again for a removal that settled instead of handing the old approval back", async () => {

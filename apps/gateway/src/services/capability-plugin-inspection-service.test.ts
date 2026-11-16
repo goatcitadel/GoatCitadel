@@ -366,12 +366,6 @@ describe("CapabilityPluginInspectionService", () => {
       "This skill was left behind by an earlier install. Remove it in Capabilities › Skills, then check the plugin again.",
     ],
     [
-      "left by an earlier install, with nothing of it running",
-      { installInactive: { allowed: false, blockers: ["SOURCE_ALREADY_INSTALLED"] } },
-      "SOURCE_ALREADY_INSTALLED",
-      "This skill was left behind by an earlier install, and GoatCitadel can't remove it from here.",
-    ],
-    [
       "revoked, seen through a check of a changed copy (no version of its own)",
       { runtimeRevoked: true, installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS"] } },
       "RUNTIME_ALREADY_EXISTS",
@@ -435,6 +429,31 @@ describe("CapabilityPluginInspectionService", () => {
       "default",
       piece(inspection, "meeting-notes").skillSnapshotId,
     );
+  });
+
+  it("offers the removal of a left-over an earlier install never switched on, by its skill id", async () => {
+    const readSkillCheck = vi.fn(async (_workspaceId: string, snapshotId: string) =>
+      skillCheck(snapshotId, {
+        skillId: "extra:meeting-notes",
+        version: "installed_off",
+        installInactive: { allowed: false, blockers: ["SOURCE_ALREADY_INSTALLED"] },
+      }),
+    );
+    const { inspect } = await harness({
+      pieces: [{ kind: "skill", id: "meeting-notes", path: "skills/meeting-notes" }],
+      overrides: { readSkillCheck },
+    });
+
+    const inspection = await inspect();
+
+    expect(inspection.installable).toBe(false);
+    expect(piece(inspection, "meeting-notes").check).toEqual({
+      status: "blocked",
+      code: "SOURCE_ALREADY_INSTALLED",
+      message:
+        "This skill was left behind by an earlier install and was never switched on. Remove it here, then this plugin can be installed.",
+      removableSkillId: "extra:meeting-notes",
+    });
   });
 
   it("blocks a plugin skill named like a bundled skill with the built-in line", async () => {

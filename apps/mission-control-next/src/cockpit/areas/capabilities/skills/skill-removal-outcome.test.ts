@@ -60,6 +60,8 @@ describe("removalOutcomeNote", () => {
       "lineage_too_large",
       "runtime_not_from_check",
       "lineage_already_removed",
+      "runtime_record_present",
+      "runtime_folder_present",
       undefined,
     ]) {
       const note = removalOutcomeNote({ disposition: "blocked", reason });

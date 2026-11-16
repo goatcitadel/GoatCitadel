@@ -34,7 +34,7 @@ export const UNINSTALL_SKILL_STAYS =
  * not installed and off, so it never takes this line.
  */
 export const UNINSTALL_SKILL_NEVER_ON =
-  "This can't be undone here. A skill it added was never switched on, so it stays and GoatCitadel can't remove it. You won't be able to install this plugin again.";
+  "This can't be undone here. A skill it added was never switched on, so it stays. Check this plugin again to remove it, and then it can be installed again.";
 
 /** The confirmation's opening when nothing the plugin added is a skill. */
 export const UNINSTALL_REINSTALLABLE = "This can't be undone here. Installing it again adds its pieces back.";

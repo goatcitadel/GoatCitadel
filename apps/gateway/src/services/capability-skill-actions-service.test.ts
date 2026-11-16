@@ -13,6 +13,7 @@ import {
   CapabilitySkillActionsService,
   CapabilitySkillSourceRefusedError,
   OPERATOR_SKILL_SKIP_NOTES,
+  newestLeftoverCheck,
   type CapabilitySkillActionSources,
   type CapabilitySkillLifecycleRead,
   type OperatorSkillSkipReason,
@@ -27,6 +28,7 @@ import type { SkillLifecyclePendingApproval, SkillStateMutationOutcome } from ".
 
 const ACTOR = "operator-1";
 const SKILL = "bundled:research";
+const SKILL_X = "extra:meeting-notes";
 
 function pending(status: SkillLifecyclePendingApproval["status"] = "pending"): SkillStateMutationOutcome {
   return {
@@ -77,6 +79,7 @@ function sources(overrides: Partial<CapabilitySkillActionSources> = {}) {
     readSkillLifecycle: vi.fn(async (): Promise<CapabilitySkillLifecycleRead | undefined> => undefined),
     listSkillsRemovedWithPlugins: vi.fn(async (): Promise<ReadonlySet<string>> => new Set()),
     findSkillHubSettlement: vi.fn(async (): Promise<SkillHubSettlementRead | undefined> => undefined),
+    findLeftoverCheck: vi.fn(async (): Promise<string | undefined> => undefined),
     ...overrides,
   } satisfies CapabilitySkillActionSources;
 }
@@ -1058,6 +1061,62 @@ describe("CapabilitySkillActionsService.requestRemoval", () => {
       details: { reason: "not_removable" },
     });
     expect(parts.createSkillHubApproval).not.toHaveBeenCalled();
+  });
+
+  it("asks to remove a left-over never switched on through its lineage's newest check, and still waits", async () => {
+    const findLeftoverCheck = vi.fn(async () => "skill-hub-review-newest");
+    const parts = removalSources({
+      readSkillLifecycle: vi.fn(async () => undefined),
+      readApprovalSkipSetting: vi.fn(async () => true),
+      findLeftoverCheck,
+    });
+
+    const outcome = await new CapabilitySkillActionsService(parts).requestRemoval(removal);
+
+    expect(outcome).toEqual({ status: "waiting", approvalId: "approval-remove", workspaceId: "default" });
+    expect(findLeftoverCheck).toHaveBeenCalledExactlyOnceWith("default", "extra:meeting-notes");
+    expect(parts.createSkillHubApproval).toHaveBeenCalledExactlyOnceWith(
+      { workspaceId: "default", snapshotId: "skill-hub-review-newest", operationKind: "remove", actorId: ACTOR },
+      { pluginPass: { pluginId: "meeting-tools" } },
+    );
+    expect(parts.resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it("never looks for a left-over check for a skill no plugin uninstall left behind", async () => {
+    const findLeftoverCheck = vi.fn(async () => "skill-hub-review-newest");
+    const parts = removalSources({
+      readSkillLifecycle: vi.fn(async () => undefined),
+      listSkillsRemovedWithPlugins: vi.fn(async () => new Set<string>()),
+      findLeftoverCheck,
+    });
+
+    await expect(new CapabilitySkillActionsService(parts).requestRemoval(removal)).rejects.toMatchObject({
+      details: { reason: "not_removable" },
+    });
+    expect(findLeftoverCheck).not.toHaveBeenCalled();
+  });
+
+  it("finds the newest check of the one lineage that was never removed", () => {
+    const version = (versionId: string, candidateId: string, updatedAt: string) => ({
+      candidateId,
+      versionId,
+      sourceKind: "upstream_hub" as const,
+      lineageStatus: "governed" as const,
+      workspaceId: "default",
+      title: "meeting-notes",
+      upstreamSnapshotId: `check-${versionId}`,
+      updatedAt,
+    });
+    const older = version("v1", "lineage-a", "2026-11-01T00:00:00.000Z");
+    const newer = version("v2", "lineage-a", "2026-11-02T00:00:00.000Z");
+    const removedLineage = version("v0", "lineage-old", "2026-11-03T00:00:00.000Z");
+    expect(newestLeftoverCheck([older, newer, removedLineage], new Set(["lineage-old"]), "default", SKILL_X)).toBe(
+      "check-v2",
+    );
+    // Two lineages left, or none, or another name: nothing to bind to.
+    expect(newestLeftoverCheck([older, removedLineage], new Set(), "default", SKILL_X)).toBeUndefined();
+    expect(newestLeftoverCheck([older], new Set(["lineage-a"]), "default", SKILL_X)).toBeUndefined();
+    expect(newestLeftoverCheck([older], new Set(), "default", "bundled:meeting-notes")).toBeUndefined();
   });
 
   it("refuses a revoked Skill Hub skill no plugin uninstall left behind", async () => {

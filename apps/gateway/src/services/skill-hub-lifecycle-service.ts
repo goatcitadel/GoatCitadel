@@ -39,12 +39,15 @@ import {
   LINEAGE_VERSION_LIMIT,
   projectionCleanupFailureEvent,
   projectionScratch,
+  runNeverActivatedRemoval,
   runRuntimeRemoval,
   UNKNOWN_TREE_SHA256,
 } from "./skill-hub-runtime-removal.js";
 import { readSkillHubOperationFingerprint } from "./skill-hub-operation-identity.js";
 import {
   asOptionalNumber,
+  assertRevisionExpectation,
+  assertSkillIdentity,
   asOptionalString,
   hasCurrentPromptwareAudit,
   isRecord,
@@ -623,15 +626,21 @@ export class SkillHubLifecycleService {
           }
         } else if (intent.operationKind === "remove") {
           // The candidate lineage is history: fenced above, never advanced. The record, its fence and saved state go.
+          // A lineage never switched on has no record or fence: the settlement alone marks it removed.
           candidateRevision = intent.expectedCandidateRevision;
-          if (!(await storage.skillLifecycle.delete(intent.skillId))) {
+          if (intent.expectedRuntimeAbsent) {
+            if (await storage.skillLifecycle.find(intent.skillId)) {
+              throw new ConflictError({ message: "Skill Hub runtime record appeared before the removal committed." });
+            }
+          } else if (!(await storage.skillLifecycle.delete(intent.skillId))) {
             throw new ConflictError({ message: "Skill Hub runtime record is already gone." });
+          } else {
+            await storage.skillAggregateRevisions.deleteFence(
+              "runtime_skill",
+              intent.skillId,
+              intent.expectedRuntimeRevision!,
+            );
           }
-          await storage.skillAggregateRevisions.deleteFence(
-            "runtime_skill",
-            intent.skillId,
-            intent.expectedRuntimeRevision!,
-          );
           // Its saved state goes too (`withoutSkillMetadata`); a metadata write meanwhile rolls the removal back to retry.
           await storage.skillLifecycle.deleteSavedState(intent.skillId);
           await storage.systemSettings.delete(curatorIdleSnapshotKey(intent.skillId));
@@ -914,7 +923,9 @@ export class SkillHubLifecycleService {
     signal: AbortSignal,
   ): Promise<SkillHubLifecycleApplyResult> {
     const { storage, reloadSkills, afterRuntimeProjection } = this.options;
-    return await runRuntimeRemoval({
+    // A lineage never switched on has no runtime record: its removal only marks the lineage removed.
+    const run = intent.expectedRuntimeAbsent ? runNeverActivatedRemoval : runRuntimeRemoval;
+    return await run({
       intent,
       candidate,
       record: await storage.skillLifecycle.find(intent.skillId),
@@ -1008,27 +1019,6 @@ export class SkillHubLifecycleService {
 }
 
 class AmbiguousSkillRuntimeProjectionError extends Error {}
-
-function assertSkillIdentity(skillId: string, name: string): void {
-  if (!/^[a-z0-9][a-z0-9_-]{0,127}$/iu.test(name) || skillId !== `extra:${name}`) {
-    throw new ConflictError({ message: "Skill Hub SKILL.md identity does not match the approved runtime skill ID." });
-  }
-}
-
-function assertRevisionExpectation(
-  label: string,
-  actual: number | undefined,
-  expected: number | undefined,
-  expectedAbsent: boolean,
-): void {
-  if ((expectedAbsent && actual !== undefined) || (!expectedAbsent && actual !== expected)) {
-    throw new ConflictError({
-      code: "WRITE_CONFLICT",
-      message: `Skill Hub ${label} revision is stale.`,
-      details: { expectedState: expectedAbsent ? "absent" : expected, currentRevision: actual },
-    });
-  }
-}
 
 function isConflict(error: unknown): boolean {
   return error instanceof ConflictError || error instanceof AmbiguousSkillRuntimeProjectionError;

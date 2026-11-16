@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { ConflictError } from "@goatcitadel/contracts";
 import type { SkillHubSnapshotRecord } from "@goatcitadel/storage";
 import {
   PROMPTWARE_SCANNER_ID,
@@ -59,4 +60,26 @@ export function hasCurrentPromptwareAudit(snapshot: SkillHubSnapshotRecord): boo
       )
     );
   });
+}
+
+/** The check's SKILL.md name must make exactly the approved skill id. */
+export function assertSkillIdentity(skillId: string, name: string): void {
+  if (!/^[a-z0-9][a-z0-9_-]{0,127}$/iu.test(name) || skillId !== `extra:${name}`) {
+    throw new ConflictError({ message: "Skill Hub SKILL.md identity does not match the approved runtime skill ID." });
+  }
+}
+
+export function assertRevisionExpectation(
+  label: string,
+  actual: number | undefined,
+  expected: number | undefined,
+  expectedAbsent: boolean,
+): void {
+  if ((expectedAbsent && actual !== undefined) || (!expectedAbsent && actual !== expected)) {
+    throw new ConflictError({
+      code: "WRITE_CONFLICT",
+      message: `Skill Hub ${label} revision is stale.`,
+      details: { expectedState: expectedAbsent ? "absent" : expected, currentRevision: actual },
+    });
+  }
 }

@@ -24,6 +24,10 @@ const BLOCKED_BY_REASON: Readonly<Record<string, string>> = {
     "Not removed. This skill has more versions than GoatCitadel can check, so it can't be removed here.",
   runtime_not_from_check:
     "Not removed. The skill in use was installed from a different check than the one this removal names, so nothing was deleted.",
+  runtime_record_present:
+    "Not removed. This skill now has a record in Capabilities › Skills, so nothing was deleted. Remove it there.",
+  runtime_folder_present:
+    "Not removed. Something is in GoatCitadel's skills folder under this skill's name, so nothing was deleted. Move it out of the skills folder, then remove the skill again.",
   lineage_already_removed:
     "Not removed. This request was for a copy of the skill that was already removed, and the copy here was installed after that, so nothing was deleted. Remove it again to remove this copy.",
 };

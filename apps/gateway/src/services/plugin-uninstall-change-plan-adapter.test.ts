@@ -760,7 +760,7 @@ describe("uninstalling a plugin through one Change Plan", () => {
     const LEFT =
       "A skill it added stays until you remove it in Capabilities › Skills. Until then the plugin can't be installed again.";
     const NEVER_ON =
-      "A skill it added was never switched on, so it stays and GoatCitadel can't remove it. The plugin can't be installed again.";
+      "A skill it added was never switched on, so it stays until you remove it from a new check of this plugin. Until then the plugin can't be installed again.";
     const h = harness();
     await installed(h);
     h.removal.skillChecks.set(SKILL_CHECK_ID, skillCheck({ version: "installed_off", step: "installed_off" }));

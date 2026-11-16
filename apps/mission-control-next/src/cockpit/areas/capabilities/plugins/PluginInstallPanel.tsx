@@ -105,15 +105,21 @@ function WhatItAdds({
   blocked,
   secrets,
   onSecret,
+  leftover,
 }: {
   plugin: ShownPlugin;
   blocked: boolean;
   secrets?: Readonly<Record<string, string>>;
   onSecret?: (pieceId: string, value: string) => void;
+  leftover?: { workspaceId: string; onRemoved?: () => void };
 }) {
   return (
     <Section title="What it adds" headingLevel={3}>
-      <PluginPieceList pieces={plugin.pieces} {...(secrets && onSecret ? { secrets, onSecret } : {})} />
+      <PluginPieceList
+        pieces={plugin.pieces}
+        {...(secrets && onSecret ? { secrets, onSecret } : {})}
+        {...(leftover ? { leftover } : {})}
+      />
       {blocked ? <p className="mt-2">{CANT_BE_INSTALLED}</p> : null}
     </Section>
   );
@@ -154,7 +160,11 @@ function useHookSecrets(flow: PluginInstall) {
  */
 export function PluginInstallPanel({ installKey, form, pluginWorkspaceId, onMove }: PluginInstallPanelProps) {
   const [custody] = useState(pluginInstallCustody);
-  const { flow, refused, inspectionKey, inspectionRead, detailRead } = usePanelFlow(installKey, pluginWorkspaceId, custody);
+  const { flow, refused, inspectionKey, inspectionRead, detailRead } = usePanelFlow(
+    installKey,
+    pluginWorkspaceId,
+    custody,
+  );
 
   useEffect(() => {
     if (custody !== pluginInstallCustody() || !flow.movedTo) return;
@@ -249,6 +259,14 @@ function PluginInstallBody({
           plugin={plugin}
           blocked={state.phase === "ready" && !state.inspection.installable}
           {...(secrets.ids.length > 0 ? { secrets: secrets.values, onSecret: secrets.set } : {})}
+          {...(state.phase === "ready"
+            ? {
+                leftover: {
+                  workspaceId: state.inspection.workspaceId,
+                  ...(source ? { onRemoved: () => void flow.inspect(source) } : {}),
+                },
+              }
+            : {})}
         />
       ) : null}
       {/* Before what happens next, and above a refusal's lines: what GoatCitadel leaves out of a Claude Code plugin. */}

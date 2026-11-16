@@ -24,7 +24,7 @@ export interface CapabilitySkillsAndPluginsOwners
   extends
     Omit<
       CapabilitySkillsOwners,
-      "deploymentProfile" | "rootDir" | "pluginRecords" | "skillHub" | "skillHubSettlements"
+      "deploymentProfile" | "rootDir" | "pluginRecords" | "skillHub" | "skillHubSettlements" | "skillHubLineages"
     >,
     Omit<CapabilityPluginsOwners, "skillHub" | "revokeSkill" | "readOperatorApprovalSkip" | "records"> {
   skillHub: CapabilitySkillsOwners["skillHub"] & CapabilityPluginsOwners["skillHub"];
@@ -33,7 +33,12 @@ export interface CapabilitySkillsAndPluginsOwners
    * and the workspaces and Journey a removal's failed cleanups are read from.
    */
   records: CapabilityPluginsOwners["records"] & {
-    readonly skillHubOperations: CapabilitySkillsOwners["skillHubSettlements"];
+    readonly skillHubOperations: CapabilitySkillsOwners["skillHubSettlements"] & {
+      listAppliedRemovalCandidateIds(workspaceId: string): Promise<readonly string[]>;
+    };
+    readonly candidateSkillVersions: {
+      list(limit: number): ReturnType<CapabilitySkillsOwners["skillHubLineages"]["listVersions"]>;
+    };
     readonly workspaces: { list(view: "all", limit: number): Promise<ReadonlyArray<{ workspaceId: string }>> };
     readonly governanceJourneyEvents: {
       listPage(
@@ -75,6 +80,12 @@ export function composeCapabilitySkillsAndPlugins(
     deploymentProfile: () => owners.config.assistant.deploymentProfile,
     rootDir: owners.config.rootDir,
     skillHubSettlements: owners.records.skillHubOperations,
+    skillHubLineages: {
+      // The same window Skill Hub's own operator list reads its candidates from.
+      listVersions: () => owners.records.candidateSkillVersions.list(500),
+      listRemovedCandidateIds: (workspaceId) =>
+        owners.records.skillHubOperations.listAppliedRemovalCandidateIds(workspaceId),
+    },
     pluginRecords: { list: () => plugins.readPlugins(), listRemoved: () => plugins.readRemovedPlugins() },
   });
   wired.skills = capabilitySkills;

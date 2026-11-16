@@ -57,7 +57,7 @@ describe("uninstallConfirmDescription", () => {
   it("does not promise a removal for a skill that was never switched on", () => {
     expect(uninstallConfirmDescription([{ ...NOTES, state: "installed_off" }])).toBe(UNINSTALL_SKILL_NEVER_ON);
     expect(UNINSTALL_SKILL_NEVER_ON).toBe(
-      "This can't be undone here. A skill it added was never switched on, so it stays and GoatCitadel can't remove it. You won't be able to install this plugin again.",
+      "This can't be undone here. A skill it added was never switched on, so it stays. Check this plugin again to remove it, and then it can be installed again.",
     );
     expect(
       uninstallConfirmDescription([

@@ -8,6 +8,7 @@ import {
   isTrustedGitForgeUrl,
   type ApprovalRequest,
   type ApprovalResolveInput,
+  type CandidateSkillVersionRecord,
   type CapabilitySkillActionOutcome,
   type CapabilitySkillInstall,
   type CapabilitySkillOperationRequest,
@@ -139,6 +140,53 @@ export interface CapabilitySkillActionSources {
   listSkillsRemovedWithPlugins(): Promise<ReadonlySet<string>>;
   /** Skill Hub's settlement of one operation, by its id, once its effect has settled. */
   findSkillHubSettlement(operationId: string): Promise<SkillHubSettlementRead | undefined>;
+  /**
+   * For a skill with no runtime record: the check of the newest version of its one lineage that was never removed
+   * (`newestLeftoverCheck`), or undefined when there is none, or more than one lineage.
+   */
+  findLeftoverCheck(workspaceId: string, skillId: string): Promise<string | undefined>;
+}
+
+/** What `newestLeftoverCheck` reads of a candidate version. */
+export type LeftoverCandidateVersion = Pick<
+  CandidateSkillVersionRecord,
+  | "candidateId"
+  | "versionId"
+  | "sourceKind"
+  | "lineageStatus"
+  | "workspaceId"
+  | "title"
+  | "upstreamSnapshotId"
+  | "updatedAt"
+>;
+
+/**
+ * The check of the newest version (by last update, then version id, as Skill Hub orders them) of the one governed Skill
+ * Hub lineage in the workspace whose skill is `skillId` and that was never removed. Undefined for any other skill id, no
+ * such lineage, or more than one.
+ */
+export function newestLeftoverCheck(
+  versions: readonly LeftoverCandidateVersion[],
+  removedCandidateIds: ReadonlySet<string>,
+  workspaceId: string,
+  skillId: string,
+): string | undefined {
+  if (!skillId.startsWith("extra:")) return undefined;
+  const name = skillId.slice("extra:".length);
+  const lineage = versions.filter(
+    (version) =>
+      version.sourceKind === "upstream_hub" &&
+      version.lineageStatus === "governed" &&
+      version.workspaceId === workspaceId &&
+      version.title === name &&
+      version.upstreamSnapshotId !== undefined &&
+      !removedCandidateIds.has(version.candidateId),
+  );
+  if (new Set(lineage.map((version) => version.candidateId)).size !== 1) return undefined;
+  const newest = [...lineage].sort(
+    (left, right) => right.updatedAt.localeCompare(left.updatedAt) || right.versionId.localeCompare(left.versionId),
+  )[0];
+  return newest?.upstreamSnapshotId;
 }
 
 /** What a removal's read takes from Skill Hub's settlement of its operation. */
@@ -317,20 +365,27 @@ export class CapabilitySkillActionsService {
    * Asks to remove one revoked skill a plugin left behind: Skill Hub's approval owner creates the check's `remove`
    * approval with the operator as requester (with the plugin's pass when the check came from a plugin that is now
    * uninstalled). No skip applies: whatever the operator's setting or the deployment profile, the removal waits for the
-   * operator's approval and its danger review, because it deletes files. Only that approval's effect removes anything. Refused before any approval, as a 409: a skill whose record isn't a
-   * revoked Skill Hub install (`not_removable`), one added in another workspace (`other_workspace`), and one an
-   * installed plugin still lists (`PLUGIN_OWNED`).
+   * operator's approval and its danger review, because it deletes files. Only that approval's effect removes anything.
+   * A left-over never switched on has no record: its removal is asked for on the newest check of its one lineage that
+   * was never removed (`findLeftoverCheck`). Refused before any approval, as a 409: a skill that is neither a revoked
+   * Skill Hub install nor such a left-over (`not_removable`), one added in another workspace (`other_workspace`), and
+   * one an installed plugin still lists (`PLUGIN_OWNED`).
    */
   public async requestRemoval(
     input: CapabilitySkillRemovalRequest & { actorId: string },
   ): Promise<CapabilitySkillRemovalOutcome> {
     const record = await this.sources.readSkillLifecycle(input.workspaceId, input.skillId);
+    const removedWithPlugin = (await this.sources.listSkillsRemovedWithPlugins()).has(input.skillId);
     // The same rule the Skills tab's `removable` uses: a revoked Skill Hub skill that a plugin uninstall left behind.
-    const leftBehind =
-      record?.lifecycleState === "revoked" &&
-      record.provenance?.source === "extra" &&
-      (await this.sources.listSkillsRemovedWithPlugins()).has(input.skillId);
-    const snapshotId = leftBehind ? record.provenance?.sourceRef : undefined;
+    // One that was never switched on has no record: its lineage's newest check names it, and Skill Hub's guard and the
+    // effect prove it never was.
+    const snapshotId = record
+      ? record.lifecycleState === "revoked" && record.provenance?.source === "extra" && removedWithPlugin
+        ? record.provenance.sourceRef
+        : undefined
+      : removedWithPlugin
+        ? await this.sources.findLeftoverCheck(input.workspaceId, input.skillId)
+        : undefined;
     const snapshot = snapshotId ? await this.sources.findSkillHubSnapshot(snapshotId) : undefined;
     if (!snapshotId || !snapshot) throw notRemovable();
     if (snapshot.workspaceId !== input.workspaceId) {

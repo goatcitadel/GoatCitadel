@@ -66,6 +66,7 @@ function realActions(overrides: Partial<CapabilitySkillActionSources> = {}): Cap
     readSkillLifecycle: vi.fn(async () => undefined),
     listSkillsRemovedWithPlugins: vi.fn(async () => new Set(["extra:meeting-notes"])),
     findSkillHubSettlement: vi.fn(async () => undefined),
+    findLeftoverCheck: vi.fn(async (): Promise<string | undefined> => undefined),
     ...overrides,
   });
 }

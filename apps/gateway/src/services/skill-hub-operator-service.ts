@@ -30,6 +30,15 @@ import {
 } from "./plugin-owned-refusal.js";
 import { BUNDLED_SKILL_NAME_TAKEN, isBundledSkillName } from "./plugin-skill-name-rules.js";
 import { TAKES_POWER_AWAY, takesPowerAway } from "./skill-hub-operation-power.js";
+import {
+  compareCandidateNewest,
+  compareSnapshotPosition,
+  normalizeLimit,
+  normalizeOptional,
+  normalizeRequired,
+  readMetadataString,
+  uniqueCandidates,
+} from "./skill-hub-operator-values.js";
 
 export const SKILL_HUB_OPERATOR_SCHEMA_VERSION = "goatcitadel.skill-hub-operator.v1" as const;
 export const SKILL_HUB_OPERATOR_MAX_ITEMS = 100 as const;
@@ -255,6 +264,12 @@ const OPERATOR_ACTIONS: readonly SkillHubOperatorAction[] = [
 
 export { TAKES_POWER_AWAY };
 
+/** A version that never made a skill callable: still a candidate, or revoked. */
+const NEVER_ACTIVE_STATES: ReadonlySet<CandidateSkillVersionRecord["lifecycleState"]> = new Set([
+  "candidate",
+  "revoked",
+]);
+
 export class SkillHubOperatorService {
   private readonly now: () => string;
   private readonly inFlightApprovalsByFingerprint = new Map<string, { approval: Promise<ApprovalRequest> }>();
@@ -272,7 +287,7 @@ export class SkillHubOperatorService {
     const workspaceId = normalizeRequired(input.workspaceId, "workspace ID", 256);
     const { snapshots, limit, truncated } = input.snapshotIds
       ? await this.snapshotsByIds(workspaceId, input.snapshotIds)
-      : await this.newestSnapshots(workspaceId, normalizeLimit(input.limit));
+      : await this.newestSnapshots(workspaceId, normalizeLimit(input.limit, SKILL_HUB_OPERATOR_MAX_ITEMS));
     const inventory = await this.loadInventory(workspaceId);
     const items = await Promise.all(
       snapshots.map(async (snapshot) => this.project(await this.contextFor(snapshot, inventory))),
@@ -761,6 +776,23 @@ export class SkillHubOperatorService {
       targetVersionId = context.exactCandidate?.versionId ?? targetVersionId;
       supersedesVersionId = context.exactCandidate?.supersedesVersionId;
       expectedCandidateRevision = context.candidateRevision?.revision;
+    } else if (action === "remove" && !runtimeExists) {
+      // A lineage never switched on: no runtime record. The removal is of the whole lineage, bound to its newest
+      // version's check; every version must be revoked or never activated.
+      if (!context.exactCandidate) blockers.push("CANDIDATE_VERSION_MISSING");
+      if (context.exactCandidate && context.latestCandidate?.versionId !== context.exactCandidate.versionId) {
+        blockers.push("NOT_NEWEST_VERSION");
+      }
+      if (context.sourceCandidates.some((candidate) => !NEVER_ACTIVE_STATES.has(candidate.lifecycleState))) {
+        blockers.push("CANDIDATE_NOT_REVOKED");
+      }
+      if (!context.lineageCandidateId || !context.candidateRevision) blockers.push("CANDIDATE_REVISION_MISSING");
+      targetCandidateId = context.exactCandidate?.candidateId ?? targetCandidateId;
+      targetVersionId = context.exactCandidate?.versionId ?? targetVersionId;
+      supersedesVersionId = context.exactCandidate?.supersedesVersionId;
+      expectedCandidateRevision = context.candidateRevision?.revision;
+      expectedRuntimeAbsent = true;
+      expectedRuntimeRevision = undefined;
     } else if (action === "remove") {
       if (!context.exactCandidate) blockers.push("CANDIDATE_VERSION_MISSING");
       if (context.runtimeLifecycle?.lifecycleState !== "revoked") blockers.push("RUNTIME_NOT_REVOKED");
@@ -1049,39 +1081,4 @@ function nextLineageGeneration(
 
 function hashParts(...parts: Array<string | number | boolean | undefined>): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
-}
-
-function compareSnapshotPosition(left: SkillHubSnapshotRecord, right: SkillHubSnapshotRecord): number {
-  return left.createdAt.localeCompare(right.createdAt) || left.snapshotId.localeCompare(right.snapshotId);
-}
-
-function compareCandidateNewest(left: CandidateSkillVersionRecord, right: CandidateSkillVersionRecord): number {
-  return right.updatedAt.localeCompare(left.updatedAt) || right.versionId.localeCompare(left.versionId);
-}
-
-function uniqueCandidates(candidates: CandidateSkillVersionRecord[]): CandidateSkillVersionRecord[] {
-  return [...new Map(candidates.map((candidate) => [candidate.versionId, candidate])).values()];
-}
-
-function readMetadataString(value: Record<string, unknown>, key: string): string | undefined {
-  const candidate = value[key];
-  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : undefined;
-}
-
-function normalizeRequired(value: string, label: string, maxLength: number): string {
-  const normalized = value.normalize("NFKC").trim();
-  if (!normalized || normalized.length > maxLength || normalized !== value) {
-    throw new TypeError(`Skill Hub ${label} is missing, oversized, or noncanonical.`);
-  }
-  return normalized;
-}
-
-function normalizeOptional(value: string | undefined, label: string, maxLength: number): string | undefined {
-  return value === undefined ? undefined : normalizeRequired(value, label, maxLength);
-}
-
-function normalizeLimit(value: number | undefined): number {
-  if (value === undefined) return 50;
-  if (!Number.isSafeInteger(value)) throw new TypeError("Skill Hub list limit must be an integer.");
-  return Math.max(1, Math.min(value, SKILL_HUB_OPERATOR_MAX_ITEMS));
 }

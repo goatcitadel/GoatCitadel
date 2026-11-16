@@ -3,6 +3,7 @@ import { Field } from "../../../ui/Field";
 import { cockpitInputClass } from "../../../ui/input-class";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { joinLabels } from "../skills/discover-view";
+import { SkillRemoval } from "../skills/SkillRemoval";
 import {
   PLUGIN_PIECE_KIND_LABELS,
   SIGNING_SECRET_HINT,
@@ -23,10 +24,16 @@ export function PluginPieceList({
   pieces,
   secrets,
   onSecret,
+  leftover,
 }: {
   pieces: readonly ShownPiece[];
   secrets?: Readonly<Record<string, string>>;
   onSecret?: (pieceId: string, value: string) => void;
+  /**
+   * Where a skill an earlier install left behind and never switched on is removed from (its check names it): the
+   * workspace, and what to do once it applied (check the plugin again).
+   */
+  leftover?: { workspaceId: string; onRemoved?: () => void };
 }) {
   return (
     <ul className="divide-y divide-line-subtle">
@@ -42,6 +49,15 @@ export function PluginPieceList({
           <p className={piece.check.status === "blocked" ? "text-status-failed" : undefined}>
             {checkLine(piece.check, piece.kind)}
           </p>
+          {leftover && piece.check.status === "blocked" && piece.check.removableSkillId ? (
+            <SkillRemoval
+              skillId={piece.check.removableSkillId}
+              name={piece.label}
+              workspaceId={leftover.workspaceId}
+              neverOn
+              {...(leftover.onRemoved ? { onRemoved: leftover.onRemoved } : {})}
+            />
+          ) : null}
           {piece.warnings?.map((warning) => (
             <p key={warning} className="text-fg-muted">
               {warning}
