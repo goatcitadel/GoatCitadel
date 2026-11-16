@@ -1,5 +1,6 @@
 import { canonicalJsonString, SECRET_REDACTION_MARKER, type IntegrationConnection } from "@goatcitadel/contracts";
 import { fetchIntegrationConnection, isApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { hasIntegrationConnectionBinding } from "../integration-connection-mutation";
 
 /**
@@ -45,14 +46,14 @@ export function integrationPublicConfigMatches(submitted: unknown, saved: unknow
 }
 export async function verifyIntegrationReadback(receipt: IntegrationConnection) {
   if (!hasIntegrationConnectionBinding(receipt)) throw new Error("The Gateway did not acknowledge a bound connection.");
-  const saved = await fetchIntegrationConnection(receipt.connectionId);
+  const saved = await withFreshReads(() => fetchIntegrationConnection(receipt.connectionId));
   if (canonicalJsonString(saved) !== canonicalJsonString(receipt))
     throw new Error("The saved connection does not match its Gateway acknowledgement.");
 }
 export async function verifyIntegrationDeleted(connectionId: string, receipt: { deleted: boolean }) {
   if (receipt.deleted !== true) throw new Error("The Gateway did not confirm deletion.");
   try {
-    await fetchIntegrationConnection(connectionId);
+    await withFreshReads(() => fetchIntegrationConnection(connectionId));
   } catch (error) {
     if (
       isApiRequestError(error) &&
