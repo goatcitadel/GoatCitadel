@@ -26,6 +26,11 @@ export interface BackupManifestRecord {
   contractCoverage?: BackupManifestContractCoverageRecord;
 }
 
+/** A backup as the list returns it: its manifest and the folder it was saved in. */
+export interface BackupListedRecord extends BackupManifestRecord {
+  outputPath: string;
+}
+
 export interface BackupCreateResponse {
   backupId: string;
   outputPath: string;

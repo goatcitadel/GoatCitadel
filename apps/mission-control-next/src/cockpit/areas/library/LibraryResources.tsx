@@ -26,12 +26,11 @@ import {
 } from "./library-resources";
 import { TimeText } from "../../ui/TimeText";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { LIBRARY_SECTION_LABELS } from "./library-sections";
+import { LIBRARY_SEARCH_DEBOUNCE_MS, LIBRARY_SECTION_LABELS } from "./library-sections";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 
 const TITLES = LIBRARY_SECTION_LABELS;
-const SEARCH_DEBOUNCE_MS = 300;
 export function LibraryResources({
   kind,
   workspaceId,
@@ -79,7 +78,7 @@ function LibraryResourceDirectory({
       setSelected(undefined);
       setLimit(RESOURCE_LIMIT);
       setQuery(next);
-    }, SEARCH_DEBOUNCE_MS);
+    }, LIBRARY_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [draftQuery, query]);
   // "Load more" only grows the window (the last key segment), so the loaded records stay while it reads.

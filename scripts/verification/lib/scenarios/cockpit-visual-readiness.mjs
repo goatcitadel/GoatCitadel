@@ -33,7 +33,7 @@ export function cockpitVisualTranscriptAtLatest(regionSelector) {
   const region = document.querySelector(regionSelector);
   const scroller = region?.querySelector("[data-transcript-scroller]");
   if (!region || !scroller) return false;
-  if (Array.from(region.querySelectorAll("button")).some(button => /^Jump to latest\b/u.test(button.textContent?.trim() ?? ""))) return false;
+  if (Array.from(region.querySelectorAll("button")).some(button => /^Jump to (latest\b|the (approval|question) waiting for you)/u.test(button.textContent?.trim() ?? ""))) return false;
   return scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 80;
 }
 

@@ -174,6 +174,13 @@ describe("Chat turn actions", () => {
     return actions;
   }
 
+  it("retries at once when the turn only read files and recorded no potential", async () => {
+    const actions = await renderWithTools([{ toolName: "fs.read", status: "executed" }]);
+    await act(async () => button("Retry")!.click());
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    expect(actions.onRetryTurn).toHaveBeenCalledExactlyOnceWith("turn-1");
+  });
+
   it("retries at once when no tool in the turn could change things", async () => {
     const actions = await renderWithTools([{ toolName: "read", effectPotential: "none", effectOutcomeKind: "none" }]);
     await act(async () => button("Retry")!.click());

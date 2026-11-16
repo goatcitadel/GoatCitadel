@@ -8,11 +8,13 @@ export function ThreadList({
   projectOptions,
   onOpenProjects,
   messaging,
+  unsentSessionId,
 }: {
   rail: MissionThreadedSessionRailData;
   projectOptions?: readonly ChatProjectFilterOption[];
   onOpenProjects?: () => void;
   messaging?: ConversationListMessaging;
+  unsentSessionId?: string | null;
 }) {
   return (
     <aside
@@ -24,6 +26,7 @@ export function ThreadList({
         projectOptions={projectOptions}
         onOpenProjects={onOpenProjects}
         messaging={messaging}
+        unsentSessionId={unsentSessionId}
       />
     </aside>
   );

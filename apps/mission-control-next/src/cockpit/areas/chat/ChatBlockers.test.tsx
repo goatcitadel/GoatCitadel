@@ -548,6 +548,8 @@ it("does not say the action did not run or offer Ask again while the late read i
     expect(container.textContent).toContain("The time for this approval has passed.");
     expect(container.textContent).not.toContain("did not run");
     expect(findButton("Ask again")).toBeUndefined();
+    // Nothing can be decided on it, so Jump to latest must not name it as waiting.
+    expect(container.querySelector("[data-chat-waiting-decision]")).toBeNull();
   } finally {
     composer.remove();
   }

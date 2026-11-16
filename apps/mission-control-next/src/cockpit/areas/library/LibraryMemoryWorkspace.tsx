@@ -1,6 +1,6 @@
 import { useLibraryOperation } from "./use-library-operation";
 import { LibraryMemoryBatch } from "./LibraryMemoryBatch";
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
@@ -20,7 +20,7 @@ import {
   presentMemoryLifecycle,
 } from "./library-vocabulary";
 import { Sheet } from "../../ui/Sheet";
-import { LIBRARY_SECTION_LABELS } from "./library-sections";
+import { LIBRARY_SEARCH_DEBOUNCE_MS, LIBRARY_SECTION_LABELS } from "./library-sections";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { EmptyState } from "../../ui/EmptyState";
@@ -44,6 +44,16 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
     [filter, setFilter] = useState(""),
     [status, setStatus] = useState("active");
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  // One live search pattern: typing searches after a short pause; Enter searches at once.
+  useEffect(() => {
+    const next = filter.trim();
+    if (next === query) return;
+    const timer = window.setTimeout(() => {
+      setCursors([undefined]);
+      setQuery(next);
+    }, LIBRARY_SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [filter, query]);
   const list = useQuery({
     queryKey: ["library", "memory", workspaceId, citadelId, query, status, namespace, cursors.at(-1), access.identity],
     queryFn: () =>
@@ -133,7 +143,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
             onSubmit={(event) => {
               event.preventDefault();
               setCursors([undefined]);
-              setQuery(filter);
+              setQuery(filter.trim());
             }}
           >
             <Field label="Search memory">
@@ -183,7 +193,6 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
                 </select>
               )}
             </Field>
-            <Button type="submit">Apply memory filter</Button>
           </form>
           {rows.length || selected.length ? (
             <LibraryMemoryBatch
