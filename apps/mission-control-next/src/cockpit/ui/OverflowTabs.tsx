@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { isModifiedClick } from "../lib/modified-click";
+import { TAB_CLASS, TAB_CURRENT_PAGE_CLASS } from "./tab-style";
 import { useScrollEdges } from "./use-scroll-edges";
 
 export interface OverflowTab {
@@ -87,7 +88,7 @@ export function OverflowTabs({
             event.preventDefault();
             navigate(tab.href);
           }}
-          className="shrink-0 border-b-2 border-transparent px-3 py-2 text-sm text-fg-secondary hover:text-fg aria-[current=page]:border-accent aria-[current=page]:text-fg"
+          className={`shrink-0 ${TAB_CLASS} ${TAB_CURRENT_PAGE_CLASS}`}
         >
           {tab.label}
         </a>
