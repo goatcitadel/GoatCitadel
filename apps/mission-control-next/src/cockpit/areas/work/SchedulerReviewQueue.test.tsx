@@ -138,7 +138,7 @@ it("shows an unknown trigger, profile or child state as Other with the raw value
   } as never);
   await renderQueue();
   await vi.waitFor(() => expect(container.textContent).toContain("Other trigger"));
-  expect(container.textContent).toContain("Profile: Other profile.");
+  expect(container.textContent).toContain("Profile: Not described here.");
   expect(container.textContent).toContain("Child run: Another state.");
   const details = container.querySelector("details");
   expect(details?.textContent).toContain("brand_new_trigger");

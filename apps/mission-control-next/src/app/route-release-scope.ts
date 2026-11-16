@@ -106,7 +106,7 @@ export const ROUTE_RELEASE_SCOPE: readonly RouteReleaseScope[] = [
     status: "ship",
     releaseAction: "Capture notes and reminders with workspace scoping and operator-visible state.",
     verification: "verify:surface:regression, focused personal-ops route tests",
-    note: "Notes are release-bearing as personal business context, separate from durable learned memory.",
+    note: "Notes are release-bearing as personal business context, separate from learned memory.",
   },
   {
     area: "library",
@@ -238,7 +238,7 @@ export const ROUTE_RELEASE_SCOPE: readonly RouteReleaseScope[] = [
     releaseAction:
       "Inspect the read-only remote-worker registry, assignments, events, and reconciliation once live HX-501/HX-502/HX-504 authority is composed.",
     verification: "remote-workers route + service proof; verify:surface:regression (fixture-seeded)",
-    note: "HX-507 remote-worker visibility is architecture-ship but implementation-hold pending live worker authority, so it is not counted in the visible release surface until the live data gate opens.",
+    note: "HX-507 remote-worker visibility is architecture-ship but implementation-hold pending live worker records, so it is not counted in the visible release surface until the live data gate opens.",
   },
   {
     area: "ops",

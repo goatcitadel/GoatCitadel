@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ROUTE_RELEASE_SCOPE } from "./route-release-scope";
 
-const INTERNAL_WORDS = /\b(projection|canonical|runtime authority|durable run|replay)\b/i;
+const INTERNAL_WORDS = /\b(projection|canonical|authority|durable|replay)\b/i;
 
 describe("release scope notes (U-GL-034)", () => {
   it("use the glossary's words, not internal architecture words", () => {

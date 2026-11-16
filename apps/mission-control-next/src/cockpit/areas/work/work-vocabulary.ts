@@ -251,7 +251,7 @@ const REVIEW_PROFILE_LABELS: Readonly<Record<string, string>> = {
 };
 
 export const REVIEW_TRIGGER_FALLBACK = "Other trigger";
-export const REVIEW_PROFILE_FALLBACK = "Other profile";
+export const REVIEW_PROFILE_FALLBACK = "Not described here";
 export const REVIEW_CHILD_STATE_FALLBACK = "Another state";
 
 export const reviewTriggerLabel = (value: string): string => REVIEW_TRIGGER_LABELS[value] ?? REVIEW_TRIGGER_FALLBACK;
