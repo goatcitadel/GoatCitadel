@@ -129,7 +129,7 @@ export async function runCockpitSettingsTabsProof({ context, browser, stack, cit
         assert.equal(await select.inputValue(), choice.id);
         const search = page.getByRole("searchbox", { name: "Search settings", exact: true });
         await search.fill("notifications");
-        await page.getByRole("link", { name: /^General/u }).waitFor();
+        await page.getByLabel("General search results", { exact: true }).getByRole("link", { name: /^General/u }).first().waitFor();
         await search.fill("");
         assert.equal(await select.inputValue(), choice.id, "Settings search remounted the selected controller.");
         assert.equal(await page.evaluate(() => performance.timeOrigin), timeOrigin, "Section changes replaced the browser document.");

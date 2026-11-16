@@ -331,7 +331,7 @@ it("names the workspace in the Projects intro and keeps its id only as a technic
   expect(intro()?.textContent).toBe("Organize Chat context for Alpha workspace.");
   workspaceNames.byId = {};
   await render();
-  expect(intro()?.textContent).toBe("Organize Chat context for workspace workspace-a.");
+  expect(intro()?.textContent).toBe("Organize Chat context for this workspace.");
 });
 
 it("renders the recents and import siblings without a duplicate React key", async () => {
