@@ -11,6 +11,7 @@ import {
   updateMasonSessionAnswers,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { sameBlueprintValue } from "./citadel-blueprint-binding";
 import { masonCanDraft, masonReceiptMatches, masonSummaryMatches, validMasonSession } from "./mason-session-binding";
@@ -188,7 +189,7 @@ export function useCitadelMason(citadelId: string) {
         !masonReceiptMatches(before, receipt, kind === "answers" ? (value as Partial<MasonAnswers>) : undefined)
       )
         throw new Error("Mason returned a conflicting session receipt.");
-      const after = await getMasonSession(before.sessionId);
+      const after = await withFreshReads(() => getMasonSession(before.sessionId));
       if (!installationCurrent() || !sameBlueprintValue(after, receipt))
         throw new Error("The Mason write could not be independently confirmed.");
       setMasonAttempt(key, { phase: "idle" });
@@ -226,7 +227,7 @@ export function useCitadelMason(citadelId: string) {
       const blueprint = await draftBlueprintFromMasonSession(before.sessionId);
       if (!installationCurrent() || !sameBlueprintValue(blueprint, expected))
         throw new Error("The drafted Blueprint differs from the reviewed answers.");
-      const after = await getMasonSession(before.sessionId);
+      const after = await withFreshReads(() => getMasonSession(before.sessionId));
       if (
         !installationCurrent() ||
         !masonReceiptMatches({ ...before, status: "drafted" }, after) ||
