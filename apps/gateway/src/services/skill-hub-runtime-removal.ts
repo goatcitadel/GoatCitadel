@@ -41,6 +41,11 @@ export interface RuntimeRemovalStaging {
   diverged: boolean;
   /** Staging or recovery folders of other operations left where they are (none could be proven to be this skill's). */
   otherScratchFolders: number;
+  /**
+   * Where this attempt moved the folder from: the skill's own folder, or an earlier operation's scratch folder it took
+   * over. A failed commit puts it back exactly there. Absent when an earlier attempt of this operation moved it.
+   */
+  movedFrom?: string;
 }
 
 /** The staging and recovery folders of one operation, beside the skills they belong to. */
@@ -126,7 +131,7 @@ export async function stageRuntimeRemoval(
     return { staged: false, diverged: true, otherScratchFolders };
   }
   await moveAside(filesystem, root, target, scratch.backup, signal);
-  return { staged: true, diverged: false, otherScratchFolders };
+  return { staged: true, diverged: false, otherScratchFolders, movedFrom: target };
 }
 
 async function otherScratchNames(
@@ -147,18 +152,18 @@ async function takeOverEarlierRecovery(
   manifest: SkillContentIntegrityManifest,
   signal: AbortSignal,
 ): Promise<RuntimeRemovalStaging> {
-  let staged = false;
+  let movedFrom: string | undefined;
   let otherScratchFolders = 0;
   for (const name of await otherScratchNames(filesystem, root, scratch, signal)) {
     const candidate = path.join(root, name);
-    if (!staged && (await provenCheckFolder(filesystem, root, candidate, manifest, signal))) {
+    if (!movedFrom && (await provenCheckFolder(filesystem, root, candidate, manifest, signal))) {
       await moveAside(filesystem, root, candidate, scratch.backup, signal);
-      staged = true;
+      movedFrom = candidate;
       continue;
     }
     otherScratchFolders += 1;
   }
-  return { staged, diverged: false, otherScratchFolders };
+  return { staged: movedFrom !== undefined, diverged: false, otherScratchFolders, ...(movedFrom ? { movedFrom } : {}) };
 }
 
 /** Whether a folder is a plain directory holding exactly the check's files. Anything unprovable, a link included, is not. */
@@ -194,17 +199,19 @@ async function moveAside(
   }
 }
 
-/** Puts a moved folder back after a failed commit. If it cannot, it stays at its recovery path for the retry. */
+/**
+ * Puts a moved folder back after a failed commit, to where it was moved from (the skill's own folder unless a takeover
+ * says otherwise). If it cannot, it stays at its recovery path for the retry.
+ */
 export async function restoreStagedRemoval(
   filesystem: RemovalFilesystem,
   root: string,
   operationId: string,
-  skillName: string,
+  target: string,
   signal: AbortSignal,
   cause: unknown,
 ): Promise<void> {
   const scratch = projectionScratch(root, operationId);
-  const target = path.join(root, skillName);
   try {
     if (
       (await filesystem.pathKind(root, target, signal)) === "missing" &&
@@ -348,7 +355,7 @@ export async function runRuntimeRemoval(context: RuntimeRemovalContext): Promise
         context.filesystem,
         context.root,
         intent.operationId,
-        context.skillName,
+        staging.movedFrom ?? path.join(context.root, context.skillName),
         signal,
         error,
       );

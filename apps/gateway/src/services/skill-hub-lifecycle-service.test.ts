@@ -1094,6 +1094,25 @@ describe("SkillHubLifecycleService", () => {
       expect(await fs.readFile(path.join(outside, "keep.txt"), "utf8")).toBe("outside data\n");
     }, 90_000);
 
+    it("puts a taken-over folder back where it was found when the commit fails", async () => {
+      const { harness, extraRoot, runtimeDir } = await revokedHarness({
+        afterRuntimeProjection: async () => {
+          harness.storage.skillAggregateRevisions.advanceExpectedRevision("runtime_skill", "extra:demo", 2);
+        },
+      });
+      const abandoned = path.join(extraRoot, scratchName("operation-abandoned", "backup"));
+      await fs.rename(runtimeDir, abandoned);
+
+      await expect(
+        harness.lifecycle.applyApprovedOperation(await approve(harness, removeTemplate(harness, "operation-remove"))),
+      ).rejects.toThrow(/changed since revision/);
+
+      // Back at the abandoned operation's recovery path, never at the skill's own folder where it wasn't.
+      await expect(fs.stat(path.join(abandoned, "SKILL.md"))).resolves.toBeTruthy();
+      expect(await fs.stat(runtimeDir).catch(() => null)).toBeNull();
+      expect(await scratchEntries(extraRoot)).toEqual([scratchName("operation-abandoned", "backup")]);
+    }, 90_000);
+
     it("records a cleanup that fails for the operator and finishes it on the retry", async () => {
       const { harness, extraRoot } = await revokedHarness();
       let failCleanup = true;
