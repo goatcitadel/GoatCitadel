@@ -16,7 +16,7 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import {
   KNOWN_MEMORY_NAMESPACES,
   memoryNamespaceLabel,
-  memoryScopeLabel,
+  memoryOwnerLabel,
   presentMemoryLifecycle,
 } from "./library-vocabulary";
 import { Sheet } from "../../ui/Sheet";
@@ -24,6 +24,7 @@ import { LIBRARY_SEARCH_DEBOUNCE_MS, LIBRARY_SECTION_LABELS } from "./library-se
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { EmptyState } from "../../ui/EmptyState";
+import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 
 const Diagnostics = lazy(() =>
   import("./LibraryMemoryDiagnostics").then((module) => ({ default: module.LibraryMemoryDiagnostics })),
@@ -35,6 +36,7 @@ export function LibraryMemoryWorkspace(props: { workspaceId: string; citadelId: 
 function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; citadelId: string }) {
   const access = useLibraryOperation(JSON.stringify(["memory-directory", workspaceId, citadelId]));
   const route = useCockpitRoute();
+  const workspaceName = useWorkspaceNameLookup(citadelId);
   const [namespace, setNamespace] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [diagnostics, setDiagnostics] = useState(false);
@@ -255,7 +257,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
                 {" · "}
                 {memoryNamespaceLabel(resource.item.namespace)}
                 {" · "}
-                {memoryScopeLabel(resource.item, workspaceId)}
+                {memoryOwnerLabel(resource.item, workspaceId, workspaceName)}
               </p>
               <TechnicalDetails label="Memory identifiers">
                 <p>Item ID: {resource.item.itemId}</p>
@@ -285,15 +287,17 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
           </Button>
         </div>
       ) : null}
-      <div>
-        <Button onClick={() => setDiagnostics(true)}>Open memory diagnostics and maintenance</Button>
-      </div>
+      {nothingRemembered && !diagnostics ? null : (
+        <div>
+          <Button onClick={() => setDiagnostics(true)}>Open memory diagnostics and maintenance</Button>
+        </div>
+      )}
       {diagnostics ? (
         <Suspense fallback={<p role="status">Loading memory diagnostics…</p>}>
           <Diagnostics workspaceId={workspaceId} />
         </Suspense>
       ) : null}
-      <LibraryMemoryProposals workspaceId={workspaceId} />
+      <LibraryMemoryProposals workspaceId={workspaceId} hideWhenEmpty={nothingRemembered} />
     </section>
   );
 }

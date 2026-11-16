@@ -25,7 +25,14 @@ export function LibraryMemoryProposals(props: Parameters<typeof LibraryMemoryPro
   const access = useLibraryOperation(JSON.stringify(["memory-proposals", props.workspaceId]));
   return <LibraryMemoryProposalsContent key={access.identity} {...props} />;
 }
-function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string }) {
+function LibraryMemoryProposalsContent({
+  workspaceId,
+  hideWhenEmpty = false,
+}: {
+  workspaceId: string;
+  /** Hide the section after a successful read finds no proposals; loading and failed reads keep it. */
+  hideWhenEmpty?: boolean;
+}) {
   const operation = useLibraryOperation(JSON.stringify(["memory-proposals", workspaceId]));
   const client = useQueryClient();
   const query = useQuery({
@@ -106,6 +113,7 @@ function LibraryMemoryProposalsContent({ workspaceId }: { workspaceId: string })
       setBusy(false);
     }
   }
+  if (hideWhenEmpty && query.data && !query.isError && !proposals.length) return null;
   return (
     <Section
       title="Memory proposals"

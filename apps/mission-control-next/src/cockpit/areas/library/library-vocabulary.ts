@@ -71,6 +71,18 @@ export function memoryScopeLabel(item: Pick<MemoryItemRecord, "workspaceId" | "m
   return owner === workspaceId ? "This workspace" : "Another workspace";
 }
 
+/** The memory list line: a named workspace reads "Belongs to <name>"; the id stays in Technical details. */
+export function memoryOwnerLabel(
+  item: Pick<MemoryItemRecord, "workspaceId" | "metadata">,
+  workspaceId: string,
+  nameOf: (workspaceId?: string) => string | undefined,
+) {
+  const owner =
+    item.workspaceId ?? (typeof item.metadata.workspaceId === "string" ? item.metadata.workspaceId : undefined);
+  const name = nameOf(owner);
+  return name ? `Belongs to ${name}` : memoryScopeLabel(item, workspaceId);
+}
+
 export const MEMORY_CHANGE: Record<
   "created" | "updated" | "forgotten" | "ttl_changed" | "pin_changed" | "retrospective_added",
   string
