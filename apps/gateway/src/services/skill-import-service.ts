@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import AdmZip from "adm-zip";
-import { isSkillHubScratchFolderName, parseSkillMarkdown } from "@goatcitadel/skills";
+import { parseSkillMarkdown } from "@goatcitadel/skills";
+import { skipsSkillHubScratchFolder } from "./skill-hub-scratch-folders.js";
 import { assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-engine";
 import { readBoundedResponseBytes, readBoundedResponseText } from "./bounded-response-reader.js";
 import {
@@ -1300,7 +1301,7 @@ export class SkillImportService {
     }
     for (const entry of fsSync.readdirSync(extraRoot, { withFileTypes: true })) {
       // Skill Hub's own staging and recovery folders are never installed skills.
-      if (!entry.isDirectory() || isSkillHubScratchFolderName(entry.name)) {
+      if (!entry.isDirectory() || skipsSkillHubScratchFolder(entry.name, "installed_sources")) {
         continue;
       }
       const sourceManifestPath = path.join(extraRoot, entry.name, "source.json");
@@ -1328,7 +1329,7 @@ export class SkillImportService {
     const extraRoot = path.resolve(this.rootDir, "skills", "extra");
     if (fsSync.existsSync(extraRoot)) {
       for (const entry of fsSync.readdirSync(extraRoot, { withFileTypes: true })) {
-        if (!entry.isDirectory() || isSkillHubScratchFolderName(entry.name)) {
+        if (!entry.isDirectory() || skipsSkillHubScratchFolder(entry.name, "duplicate_installs")) {
           continue;
         }
         if (input.inferredSkillId && entry.name === input.inferredSkillId) {

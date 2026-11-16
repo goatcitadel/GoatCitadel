@@ -213,6 +213,32 @@ Demo body`;
     expect(isSkillHubScratchFolderName("skill-hub-notes")).toBe(false);
   });
 
+  it("logs one debug line per skipped Skill Hub scratch folder, naming only the folder", async () => {
+    const root = await makeTempDir();
+    await writeSkill(path.join(root, ".skill-hub-0123456789abcdef01234567.backup"), "---\nname: demo\n---\nBody");
+    await writeSkill(path.join(root, ".skill-hub-0123456789abcdef01234567.staging"), "---\nname: demo\n---\nBody");
+    const logger = { ...makeLoggerSpy(), debug: vi.fn() };
+
+    await new SkillsService([{ source: "extra", dir: root }], logger).reload();
+
+    expect(logger.debug).toHaveBeenCalledTimes(2);
+    const lines = logger.debug.mock.calls.map(([message, context]) => ({ message, context }));
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        {
+          message: "Skipping a Skill Hub scratch folder: .skill-hub-0123456789abcdef01234567.backup",
+          context: { source: "extra", folder: ".skill-hub-0123456789abcdef01234567.backup" },
+        },
+        {
+          message: "Skipping a Skill Hub scratch folder: .skill-hub-0123456789abcdef01234567.staging",
+          context: { source: "extra", folder: ".skill-hub-0123456789abcdef01234567.staging" },
+        },
+      ]),
+    );
+    expect(JSON.stringify(lines)).not.toContain(root);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("reports a malformed SKILL.md instead of silently dropping it", async () => {
     const root = await makeTempDir();
     await writeSkill(

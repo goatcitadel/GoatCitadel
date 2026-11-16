@@ -18,9 +18,16 @@ export interface SkillSource {
 export interface SkillsLogger {
   warn: (message: string, context?: Record<string, unknown>) => void;
   error: (message: string, context?: Record<string, unknown>) => void;
+  /** Routine detail, such as a Skill Hub scratch folder skipped on purpose. Optional; nothing is lost without it. */
+  debug?: (message: string, context?: Record<string, unknown>) => void;
 }
 
 const defaultLogger: SkillsLogger = {
+  // Written only at debug level, as the Gateway's own logger does.
+  debug: (message, context) => {
+    // eslint-disable-next-line no-console -- debug detail goes to the local runtime log only when debug logging is on.
+    if (process.env.GOATCITADEL_LOG_LEVEL === "debug") console.debug(`[goatcitadel] ${message}`, context ?? {});
+  },
   // eslint-disable-next-line no-console -- skill discovery/parse problems must surface in local runtime logs; callers can inject a structured logger.
   warn: (message, context) => console.warn(`[goatcitadel] ${message}`, context ?? {}),
   // eslint-disable-next-line no-console -- unexpected skill source-read failures must surface in local runtime logs; callers can inject a structured logger.
@@ -119,6 +126,8 @@ async function resolveSkillChildDir(
   logger: SkillsLogger,
 ): Promise<string | undefined> {
   if (isSkillHubScratchFolderName(entry.name)) {
+    // Only the folder's own name: it sits inside the source folder, and no path is logged.
+    logger.debug?.(`Skipping a Skill Hub scratch folder: ${entry.name}`, { source: source.source, folder: entry.name });
     return undefined;
   }
   const entryPath = path.join(source.dir, entry.name);
