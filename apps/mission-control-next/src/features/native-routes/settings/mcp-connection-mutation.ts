@@ -5,6 +5,7 @@ import {
   fetchMcpServer,
   isApiRequestError,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { hasMcpServerBinding, isGatewayMcpServer } from "./mcp-server-mutation";
 import { IDLE_MCP_ATTEMPT, readMcpServerAttempt, trackMcpWrite, writeMcpServerAttempt } from "./mcp-server-attempts";
 import { isRuntimeInvokableMcpServer } from "./helpers/mcp-helpers";
@@ -142,7 +143,7 @@ export async function commitMcpConnection({
     acknowledged = true;
     if (!verifiedReceipt(snapshot, action, receipt))
       throw new Error("Connection receipt did not bind the reviewed operation.");
-    const owner = await fetchMcpServer(id);
+    const owner = await withFreshReads(() => fetchMcpServer(id));
     // GET decorates authState; canonical mutation fields must all match the acknowledgement.
     const saved = { ...receipt.server, authState: owner.authState };
     if (canonicalJsonString(saved) !== canonicalJsonString(owner))

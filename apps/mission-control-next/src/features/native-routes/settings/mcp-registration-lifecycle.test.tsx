@@ -4,6 +4,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerRecord, McpServerTemplateRecord } from "@goatcitadel/contracts";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { fetchMcpServer } from "@goatcitadel/mission-control-shared/api/mcp-operations";
 import { createEmptyMcpCreateForm, createMcpFormFromTemplate } from "./sections/mcp-editor-drafts";
 import { prepareMcpCreateInput } from "./mcp-create-binding";
 import { __resetMcpCreationForTests, commitMcpCreation } from "./mcp-create-mutation";
@@ -34,6 +35,7 @@ const committedFailureBody = {
   mutationCommitted: true,
 }; // Exact public projection proved by Gateway mcp.server-revisions.test.ts.
 let deletion: ReturnType<typeof useMcpDeletion>, editDraft: ReturnType<typeof useSessionDraft<{ label: string }>>;
+const unexpectedFetch = vi.fn(() => { throw new Error("Unexpected network"); });
 const onDeleted = vi.fn();
 function DeletionHarness() {
   editDraft = useSessionDraft("mcp:workspace-a:mcp-fixture:edit", { label: "Fixture" }, "a".repeat(64), { label: "MCP edit" });
@@ -51,9 +53,9 @@ beforeEach(() => {
   vi.resetAllMocks(); __resetMcpCreationForTests(); __resetMcpServerMutationsForTests(); __resetSessionDraftsForTests();
   api.fetchMcpServers.mockResolvedValue({ items: [] }); api.createMcpServer.mockResolvedValue(server()); api.fetchMcpServer.mockResolvedValue(server());
   api.deleteMcpServer.mockResolvedValue({ deleted: true });
-  vi.stubGlobal("fetch", vi.fn(() => { throw new Error("Unexpected network"); }));
+  vi.stubGlobal("fetch", unexpectedFetch);
 });
-afterEach(async () => { await act(async () => renderer?.unmount()); renderer = undefined; expect(globalThis.fetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); });
+afterEach(async () => { await act(async () => renderer?.unmount()); renderer = undefined; expect(unexpectedFetch).not.toHaveBeenCalled(); vi.unstubAllGlobals(); });
 
 describe("shared MCP registration", () => {
   it("preserves the advertised template arguments and policy instead of silently dropping them", () => {
@@ -141,6 +143,29 @@ describe("shared MCP registration", () => {
 });
 
 describe("shared MCP deletion", () => {
+  it("confirms deletion with an older pending owner GET", async () => {
+    const before = server();
+    const write = deferred<{ deleted: boolean }>();
+    const older = deferred<Response>();
+    const fetchMock = vi.fn().mockReturnValueOnce(older.promise)
+      .mockResolvedValueOnce(Response.json({ code: "ENTITY_NOT_FOUND" }, { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+    api.fetchMcpServer.mockResolvedValueOnce(before).mockImplementationOnce(fetchMcpServer);
+    api.deleteMcpServer.mockReturnValueOnce(write.promise);
+
+    const pending = remove();
+    await vi.waitFor(() => expect(api.deleteMcpServer).toHaveBeenCalledOnce());
+    const background = fetchMcpServer(before.serverId);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    write.resolve({ deleted: true });
+    await vi.waitFor(() => expect(api.fetchMcpServer).toHaveBeenCalledTimes(2));
+    const readsBeforeOlderResponse = fetchMock.mock.calls.length;
+    older.resolve(Response.json(before));
+
+    expect(await background).toEqual(before);
+    expect(await pending).toEqual({ status: "deleted", serverId: before.serverId });
+    expect(readsBeforeOlderResponse).toBe(2);
+  });
   it("clears only the deleted origin draft after a confirmed response arrives after unmount", async () => {
     await act(async () => { renderer = create(<StrictMode><DeletionHarness /></StrictMode>); });
     await act(async () => editDraft.setValue({ label: "Unsaved edit" }));
