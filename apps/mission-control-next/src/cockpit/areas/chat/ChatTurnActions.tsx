@@ -8,6 +8,7 @@ import { useRef, useState } from "react";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../../ui/Menu";
+import { mayChangeThingsOnRetry } from "./chat-tool-run-summary";
 
 export type TurnActionHandlers = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -59,12 +60,9 @@ export function ChatTurnActions({
   // Choosing Save as skill hands focus to the block it opens, so the menu must not give it back to its trigger.
   const handedFocusOn = useRef(false);
   const canRetry = canRetryTurn(turn) && !streaming && !readOnly && !resendBlocked;
-  // Only a tool recorded as a read ("none") retries without asking. One that may write ("unknown"), has no recorded
-  // potential, or did or might have changed something can change things again on retry, so that retry is confirmed.
-  const effectfulTools = (turn.toolRuns ?? []).filter(
-    (run) =>
-      run.effectPotential !== "none" || run.effectOutcomeKind === "concrete" || run.effectOutcomeKind === "uncertain",
-  ).length;
+  // Only a tool recorded as a read, or known to explore with nothing recorded, retries without asking; any other can
+  // change things again on retry, so that retry is confirmed.
+  const effectfulTools = (turn.toolRuns ?? []).filter(mayChangeThingsOnRetry).length;
   const retry = () => actions.onRetryTurn(turn.turnId);
   const canBranch = !streaming && !readOnly;
   const canSave = Boolean(turn.assistantMessage) && turn.trace.status !== "failed" && !readOnly;

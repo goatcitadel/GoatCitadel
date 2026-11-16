@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
+import type { RealtimeEvent } from "@goatcitadel/contracts";
 import { SystemOwnerLink } from "./SystemOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
@@ -7,6 +8,11 @@ import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { fetchRealtimeEvents } from "@goatcitadel/mission-control-shared/api/system";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import {
+  getGatewayAccessRevision,
+  subscribeGatewayAccessChange,
+} from "@goatcitadel/mission-control-shared/api/client-core";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useEventStreamStatus } from "@goatcitadel/mission-control-shared/hooks/useEventStreamStatus";
 import { presentEventClass } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { ACTIVITY_FALLBACK_MS } from "../../data/activity-feed";
@@ -14,6 +20,8 @@ import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { RecentSessions } from "./RecentSessions";
+import { ActivityOlderFooter } from "./ActivityOlderFooter";
+import { MAX_OLDER_SIGNALS, useOlderActivity } from "./use-older-activity";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import {
@@ -24,6 +32,8 @@ import {
   describeActivity,
   type ActivityRow,
 } from "./activity-sentences";
+
+const EMPTY_EVENTS: readonly RealtimeEvent[] = [];
 
 export const SHOW_BACKGROUND_KEY = "goatcitadel.cockpit.activity.background";
 
@@ -41,6 +51,13 @@ function writeShowBackground(value: boolean): void {
   } catch {
     // Best-effort: storage is unavailable, so the choice applies to this view only.
   }
+}
+
+function countLine(entries: number, signals: number): string {
+  const shown = `Showing ${plural(entries, "entry", "entries")}`;
+  return entries < signals
+    ? `${shown} from ${plural(signals, "signal")}; repeated background signals are merged.`
+    : `${shown}.`;
 }
 
 function ActivityItem({ row }: { row: ActivityRow }) {
@@ -104,7 +121,18 @@ export function SystemActivity() {
     queryFn: () => fetchRealtimeEvents(100),
     refetchInterval: streamOpen ? false : ACTIVITY_FALLBACK_MS,
   });
-  const items = events.data?.items ?? [];
+  const { activeWorkspaceId } = useUiPreferences();
+  const accessRevision = useSyncExternalStore(
+    subscribeGatewayAccessChange,
+    getGatewayAccessRevision,
+    getGatewayAccessRevision,
+  );
+  const older = useOlderActivity(
+    events.data?.items ?? EMPTY_EVENTS,
+    events.data?.nextCursor,
+    `${activeWorkspaceId ?? "default"}:${accessRevision}`,
+  );
+  const items = older.items;
   // SY-01: background status refreshes are hidden by default so what happened stays readable.
   const shown = showBackground ? items : items.filter((event) => !describeActivity(event).operational);
   const rows = collapseActivity(shown);
@@ -115,14 +143,21 @@ export function SystemActivity() {
         title="Activity log"
         description="Recent signals across this installation."
         actions={
-          <Button size="sm" disabled={events.isFetching} onClick={() => void events.refetch()}>
+          <Button
+            size="sm"
+            disabled={events.isFetching}
+            onClick={() => {
+              older.reset();
+              void events.refetch();
+            }}
+          >
             <RefreshCw aria-hidden="true" className="size-4" /> Refresh
           </Button>
         }
       >
         <p className="mt-1 text-xs text-fg-muted">
-          This list keeps recent signals only, not the full history. Open the source record for full details. Signals
-          are saved records: a reported host or device does not show its current health.
+          This list starts with the most recent signals. Load older ones below. Open the source record for full details.
+          Signals are saved records: a reported host or device does not show its current health.
         </p>
         {events.dataUpdatedAt ? (
           <p className="mt-1 text-xs text-fg-muted">
@@ -159,8 +194,7 @@ export function SystemActivity() {
         rows.length ? (
           <>
             <p className="text-xs text-fg-muted">
-              Showing {plural(shown.length, "recent signal")}
-              {events.data.nextCursor ? "; older signals are not shown" : ""}.
+              {countLine(rows.length, shown.length)}
               {hidden ? ` ${plural(hidden, "background signal")} ${hidden === 1 ? "is" : "are"} hidden.` : ""}
             </p>
             <ol className="divide-y divide-line-subtle">
@@ -179,6 +213,16 @@ export function SystemActivity() {
             }
           />
         )
+      ) : null}
+      {events.data ? (
+        <ActivityOlderFooter
+          hasMore={older.hasMore}
+          capped={older.capped}
+          cap={MAX_OLDER_SIGNALS}
+          busy={older.busy}
+          error={older.error}
+          onLoad={() => void older.loadOlder()}
+        />
       ) : null}
       <RecentSessions />
     </section>

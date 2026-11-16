@@ -37,7 +37,7 @@ export function SelectedSessionSection({
       title={item ? sessionTitle(item) : "Selected session"}
       actions={
         <Button size="sm" onClick={onClose}>
-          Close session
+          Close details
         </Button>
       }
       className="space-y-3 text-sm"

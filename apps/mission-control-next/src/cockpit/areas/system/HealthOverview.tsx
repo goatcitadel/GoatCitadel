@@ -74,11 +74,13 @@ function HealthCard({
   workspaceId,
   onRefresh,
   backupReadAvailable,
+  latestBackup,
 }: {
   check: HealthCheck;
   workspaceId: string;
   onRefresh: () => Promise<unknown>;
   backupReadAvailable: boolean;
+  latestBackup?: { createdAt: string; outputPath?: string } | null;
 }) {
   const Icon = ICONS[check.id];
   return (
@@ -104,7 +106,9 @@ function HealthCard({
           keep their existing runtime controls.
         </p>
       ) : null}
-      {check.id === "backups" ? <HealthBackupAction readAvailable={backupReadAvailable} onRefresh={onRefresh} /> : null}
+      {check.id === "backups" ? (
+        <HealthBackupAction readAvailable={backupReadAvailable} onRefresh={onRefresh} latestBackup={latestBackup} />
+      ) : null}
       {check.id === "models" ? <HealthLocalRuntimeActions workspaceId={workspaceId} onRefresh={onRefresh} /> : null}
     </article>
   );
@@ -211,6 +215,9 @@ export function HealthOverview() {
                     check={check}
                     workspaceId={workspaceId}
                     backupReadAvailable={sources.summary.state === "current" && !health.isFetching}
+                    latestBackup={
+                      sources.summary.state === "current" ? sources.summary.value.backups.latest : undefined
+                    }
                     onRefresh={() =>
                       Promise.all([
                         client.invalidateQueries({ queryKey: queryKeys.healthAll() }),

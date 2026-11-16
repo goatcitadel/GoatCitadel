@@ -338,6 +338,8 @@ export interface HealthSummaryResponse {
     latest: {
       backupId: string;
       createdAt: string;
+      /** The folder the Gateway saved this backup in. */
+      outputPath?: string;
       files: Array<{ path?: string; [key: string]: unknown }>;
       [key: string]: unknown;
     } | null;
