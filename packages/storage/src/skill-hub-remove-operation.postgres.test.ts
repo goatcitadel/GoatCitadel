@@ -95,6 +95,32 @@ async function assertConverged(pool: Pool): Promise<void> {
   await assert.rejects(insertIntent(pool, "operation-remove-absent", "remove", true), /check constraint/iu);
 }
 
+/**
+ * The two CHECKs migration 107 creates with the table (`CREATE TABLE IF NOT EXISTS`), as an install whose schema predates
+ * the table carries them: the column CHECK and the combined one, under the names PostgreSQL generates for them.
+ */
+async function addMigration107Checks(pool: Pool): Promise<void> {
+  await pool.query(`
+    ALTER TABLE skill_hub_operation_intents ADD CHECK(operation_kind IN (
+      'install_inactive', 'stage_update_candidate', 'stage_rollback_candidate', 'activate', 'revoke'
+    ));
+    ALTER TABLE skill_hub_operation_intents ADD CHECK(
+      (operation_kind = 'install_inactive'
+        AND expected_candidate_absent = 1
+        AND expected_runtime_absent = 1
+        AND supersedes_version_id IS NULL)
+      OR (operation_kind IN ('stage_update_candidate', 'stage_rollback_candidate')
+        AND expected_candidate_absent = 0
+        AND expected_runtime_absent = 0
+        AND supersedes_version_id IS NOT NULL)
+      OR (operation_kind = 'activate' AND expected_candidate_absent = 0)
+      OR (operation_kind = 'revoke'
+        AND expected_candidate_absent = 0
+        AND expected_runtime_absent = 0)
+    );
+  `);
+}
+
 describe("Skill Hub remove operation kind on live PostgreSQL", () => {
   postgresIt(
     "a fresh install takes the remove kind and passes the schema-shape gate",
@@ -122,9 +148,42 @@ describe("Skill Hub remove operation kind on live PostgreSQL", () => {
           POSTGRES_MIGRATIONS.filter((migration) => migration.version < MIGRATION_VERSION),
         );
         await insertIntent(scope.pool, "operation-revoke", "revoke");
-        // PostgreSQL never carried these CHECKs (the canonical runtime schema creates the table without them), so
-        // the previous version has none to widen; migration 233 adds the same two named CHECKs to both lineages.
+        // An install whose table came from the canonical runtime schema has no CHECK on the kind; migration 233 adds the
+        // same two named CHECKs as on every other install.
         assert.deepEqual(await kindChecks(scope.pool), []);
+
+        // The full registry runs the canonical schema-shape gate after the upgrade.
+        const migrated = await runPostgresMigrations(scope.migrations, POSTGRES_MIGRATIONS);
+        assert.deepEqual(migrated.appliedVersions, [MIGRATION_VERSION]);
+        assert.equal(migrated.latestVersion, MIGRATION_VERSION);
+        const kept = await scope.pool.query<{ operation_kind: string }>(
+          "SELECT operation_kind FROM skill_hub_operation_intents WHERE operation_id = 'operation-revoke'",
+        );
+        assert.equal(kept.rows[0]?.operation_kind, "revoke");
+        await assertConverged(scope.pool);
+      } finally {
+        await scope.teardown();
+      }
+    },
+  );
+
+  postgresIt(
+    "an install upgraded from v232 whose table carries migration 107's CHECKs drops them and converges",
+    { timeout: 300_000 },
+    async () => {
+      const scope = await createScope("v107");
+      try {
+        await runPostgresMigrations(
+          scope.migrations,
+          POSTGRES_MIGRATIONS.filter((migration) => migration.version < MIGRATION_VERSION),
+        );
+        await addMigration107Checks(scope.pool);
+        await insertIntent(scope.pool, "operation-revoke", "revoke");
+        const before = await kindChecks(scope.pool);
+        assert.equal(before.length, 2);
+        // The column CHECK took the very name migration 233 adds, so only the drop-by-definition loop lets it through.
+        assert.ok(before.some((check) => check.name === "skill_hub_operation_intents_operation_kind_check"));
+        await assert.rejects(insertIntent(scope.pool, "operation-remove-early", "remove"), /check constraint/iu);
 
         // The full registry runs the canonical schema-shape gate after the upgrade.
         const migrated = await runPostgresMigrations(scope.migrations, POSTGRES_MIGRATIONS);

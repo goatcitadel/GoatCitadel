@@ -5,9 +5,10 @@ import type { DatabaseSync } from "node:sqlite";
  * operation kind `remove`, so the intent table's two CHECKs on `operation_kind` are widened: the column CHECK that
  * lists the kinds and the combined CHECK whose last arm describes the aggregates a revoke expects present.
  * SQLite 281 rebuilds `skill_hub_operation_intents`. PostgreSQL 233 drops any CHECK naming `operation_kind` by
- * definition text and adds the two named replacements: an install created from the canonical runtime schema has
- * none to drop (that schema never carried them), so a fresh install and an upgraded one converge on the same two
- * named CHECKs. Existing rows keep their kinds.
+ * definition text and adds the two named replacements. An install whose table came from the canonical runtime schema
+ * has none to drop; one whose schema predates the table got both from migration 107, under generated names (the column
+ * CHECK's generated name is the very name 233 adds). Either way every install converges on the same two named CHECKs.
+ * Existing rows keep their kinds.
  */
 export const SKILL_HUB_REMOVE_OPERATION_MIGRATION_NAME = "skill_hub_remove_operation_kind";
 
