@@ -456,10 +456,11 @@ test("a silent install still skips both runtimes", () => {
   assert.match(iss, /\(not WizardSilent\(\)\) and IsComponentSelected\('voice'\)/u);
 });
 
-test("the default type installs Chromium and leaves the voice runtime for later (U-FR-011)", () => {
+test("the default type installs Chromium and the voice runtime; either can be unticked under Custom", () => {
   const iss = renderSample();
-  assert.match(iss, /\[Types\]\r?\nName: "full"; Description: "Full installation"\r?\nName: "everything"; Description: "Full installation with local voice"\r?\n/u);
-  assert.match(iss, /Name: "core"; Description: "Core runtime"; Types: full everything custom; Flags: fixed/u);
-  assert.match(iss, /Name: "chromium"; [^\n]*; Types: full everything custom/u);
-  assert.match(iss, /Name: "voice"; [^\n]*; Types: everything\r?\n/u);
+  assert.match(iss, /\[Types\]\r?\nName: "full"; Description: "Full installation"\r?\n/u);
+  assert.doesNotMatch(iss, /Name: "everything"/u);
+  assert.match(iss, /Name: "core"; Description: "Core runtime"; Types: full custom; Flags: fixed/u);
+  assert.match(iss, /Name: "chromium"; [^\n]*; Types: full custom\r?\n/u);
+  assert.match(iss, /Name: "voice"; [^\n]*; Types: full custom\r?\n/u);
 });
