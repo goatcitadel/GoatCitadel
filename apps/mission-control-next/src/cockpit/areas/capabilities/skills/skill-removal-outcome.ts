@@ -28,6 +28,25 @@ const BLOCKED_BY_REASON: Readonly<Record<string, string>> = {
 };
 const BLOCKED_CHANGED = "Not removed. The skill changed after you asked. Remove it again if you still want it gone.";
 
+/** Where an applied removal's left-over line waits for the panel once the skill has left the list. */
+export function removalLeftoversKey(workspaceId: string, skillId: string) {
+  return ["capability-skill-removal-leftovers", workspaceId, skillId] as const;
+}
+
+/**
+ * The plain line for an applied removal that left temporary folders it couldn't confirm were its own, or nothing when it
+ * left none (or did not apply).
+ */
+export function removalLeftoversNote(
+  settlement: Pick<Settlement, "disposition" | "otherScratchFolders">,
+): string | undefined {
+  const count = settlement.otherScratchFolders ?? 0;
+  if (settlement.disposition !== "applied" || count < 1) return undefined;
+  return count === 1
+    ? "Removed. GoatCitadel left 1 temporary folder in the skills folder that it couldn't confirm was its own."
+    : `Removed. GoatCitadel left ${count} temporary folders in the skills folder that it couldn't confirm were its own.`;
+}
+
 /**
  * The plain line for a removal that settled without removing the skill, from the effect's own settlement. Nothing for
  * an applied removal: the skill leaves the list. Every line says what happened and what the operator can do.

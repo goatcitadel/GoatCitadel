@@ -10,7 +10,7 @@ import { skillListQuery } from "../../../data/capability-skills-query";
 import { Button } from "../../../ui/Button";
 import { Dialog } from "../../../ui/Dialog";
 import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
-import { removalOutcomeNote } from "./skill-removal-outcome";
+import { removalLeftoversKey, removalLeftoversNote, removalOutcomeNote } from "./skill-removal-outcome";
 
 /** How often the list is read again while an approved removal is applied, and how many reads before it gives up. */
 const REMOVING_READ_MS = 3_000;
@@ -26,20 +26,22 @@ type Phase =
   | { kind: "removing"; approvalId: string };
 
 /**
- * Reads the skill list again while an approved removal is applied, so the panel follows the list: once the skill is
- * gone the panel says so. Each read also reads the removal by the approval it tracks: a removal that settled without
- * removing the skill stops the reads with the settlement's plain line. If neither comes, the removal is offered again
- * with a plain line.
+ * Reads the removal by the approval it tracks while an approved removal is applied. Once it settled, the skill list is
+ * read again, so the panel follows the list: an applied removal's skill leaves it, and the panel says so, with any
+ * temporary folders it left (kept where the panel finds it after this part is gone); a removal that settled without
+ * removing the skill stops the reads with the settlement's plain line. A failed read also reads the list again. If
+ * neither comes, the removal is offered again with a plain line.
  */
 function useRemovalReads(
   removal: { approvalId: string } | undefined,
-  workspaceId: string,
+  target: { workspaceId: string; skillId: string },
   onSettled: (note: string | undefined) => void,
 ) {
   const queryClient = useQueryClient();
   const settled = useRef(onSettled);
   settled.current = onSettled;
   const approvalId = removal?.approvalId;
+  const { workspaceId, skillId } = target;
   useEffect(() => {
     if (!approvalId) return undefined;
     const key = skillListQuery(workspaceId).queryKey;
@@ -52,15 +54,22 @@ function useRemovalReads(
       settled.current(note);
     };
     const read = async () => {
-      void queryClient.invalidateQueries({ queryKey: key });
+      let settlement: Awaited<ReturnType<typeof fetchCapabilitySkillRemoval>>["settlement"];
       try {
-        const { settlement } = await fetchCapabilitySkillRemoval({ workspaceId, approvalId });
-        const note = settlement ? removalOutcomeNote(settlement) : undefined;
-        if (note) stop(note);
+        ({ settlement } = await fetchCapabilitySkillRemoval({ workspaceId, approvalId }));
       } catch {
-        // A failed read tells nothing about the removal; the next read tries again, and the reads give up with UNFINISHED.
+        // A failed read tells nothing about the removal: the list is read again, so a removal that went through still
+        // shows, and the next read tries again; the reads give up with UNFINISHED.
+        void queryClient.invalidateQueries({ queryKey: key });
         return;
       }
+      if (!settlement) return;
+      const leftovers = removalLeftoversNote(settlement);
+      // Written before the list is read again, so the line is there when the skill leaves the list.
+      if (leftovers) queryClient.setQueryData(removalLeftoversKey(workspaceId, skillId), leftovers);
+      const note = removalOutcomeNote(settlement);
+      if (note) stop(note);
+      void queryClient.invalidateQueries({ queryKey: key });
     };
     const timer = setInterval(() => {
       reads += 1;
@@ -75,7 +84,7 @@ function useRemovalReads(
       stopped = true;
       clearInterval(timer);
     };
-  }, [approvalId, queryClient, workspaceId]);
+  }, [approvalId, queryClient, skillId, workspaceId]);
 }
 
 /**
@@ -87,7 +96,7 @@ export function SkillRemoval({ item, workspaceId }: { item: CapabilitySkillItem;
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [confirming, setConfirming] = useState(false);
   const removing = phase.kind === "removing";
-  useRemovalReads(phase.kind === "removing" ? phase : undefined, workspaceId, (note) =>
+  useRemovalReads(phase.kind === "removing" ? phase : undefined, { workspaceId, skillId: item.skillId }, (note) =>
     setPhase({ kind: "idle", note: note ?? UNFINISHED, failed: true }),
   );
   const queryClient = useQueryClient();

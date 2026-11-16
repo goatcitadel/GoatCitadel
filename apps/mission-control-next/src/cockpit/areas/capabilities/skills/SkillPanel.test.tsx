@@ -953,6 +953,29 @@ describe("Skill panel removal", () => {
     expect(panelText()).toContain("This skill isn't in the list anymore.");
   });
 
+  it("says once the skill is gone how many temporary folders the removal left", async () => {
+    api.requestCapabilitySkillRemoval.mockResolvedValue({
+      status: "approved",
+      approvalId: APPROVAL_ID,
+      workspaceId: "ws-1",
+    });
+    api.fetchCapabilitySkillRemoval.mockResolvedValue({
+      approvalId: APPROVAL_ID,
+      approvalStatus: "approved",
+      settlement: { disposition: "applied", reason: "applied", otherScratchFolders: 2 },
+    });
+    await openLeftBehind();
+    // Once the removal settled, the next read of the list no longer holds the skill.
+    api.fetchCapabilitySkills.mockResolvedValue(listOf(ITEMS));
+    await press(buttonIn(body(), "Remove skill"));
+    await press(buttonIn(dialog(), "Remove skill"));
+
+    await vi.waitFor(() => expect(panelText()).toContain("This skill isn't in the list anymore."));
+    expect(panelText()).toContain(
+      "Removed. GoatCitadel left 2 temporary folders in the skills folder that it couldn't confirm were its own.",
+    );
+  });
+
   it("explains a removal that left the folder alone, and lets you ask again", async () => {
     api.requestCapabilitySkillRemoval.mockResolvedValue({
       status: "approved",

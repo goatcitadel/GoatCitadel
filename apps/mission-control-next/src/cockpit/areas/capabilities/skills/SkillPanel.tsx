@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SKILL_ORIGIN_LABELS, type CapabilitySkillItem } from "@goatcitadel/contracts";
 import { formatRelativeTime } from "@goatcitadel/mission-control-shared/content/format";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -14,6 +14,7 @@ import { FromPluginLink } from "../plugins/FromPluginLink";
 import { SkillPanelDetail } from "./SkillPanelDetail";
 import { SkillPanelSwitch } from "./SkillPanelSwitch";
 import { SkillRemoval } from "./SkillRemoval";
+import { removalLeftoversKey } from "./skill-removal-outcome";
 import { presentSkillState, presentSkillUses, skillCategoryLabel, SKILL_TONE_TEXT } from "./skill-view";
 import { useSkillSwitch } from "./use-skill-switch";
 
@@ -109,8 +110,20 @@ function SkillPanelBody({
   // entry, so its switch moves with every change to the list. It carries the same options as the tab, because
   // observers write their options onto the one shared query.
   const list = useQuery({ ...skillListQuery(activeWorkspaceId), enabled: false });
+  const queryClient = useQueryClient();
   const item = list.data?.items.find((entry) => entry.skillId === skillId);
-  if (!item) return NOT_LISTED;
+  if (!item) {
+    // A removal that just went through may have left temporary folders; its line was kept for this moment.
+    const leftovers = queryClient.getQueryData<string>(removalLeftoversKey(activeWorkspaceId, skillId));
+    return leftovers ? (
+      <div className="space-y-2">
+        {NOT_LISTED}
+        <p className="text-sm text-fg-secondary">{leftovers}</p>
+      </div>
+    ) : (
+      NOT_LISTED
+    );
+  }
   return <SkillDetails item={item} announce={announce} onTag={onTag} />;
 }
 

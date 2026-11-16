@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { removalOutcomeNote } from "./skill-removal-outcome";
+import { removalLeftoversNote, removalOutcomeNote } from "./skill-removal-outcome";
+
+describe("removalLeftoversNote", () => {
+  it("counts the temporary folders an applied removal left, in the singular for one", () => {
+    expect(removalLeftoversNote({ disposition: "applied", otherScratchFolders: 2 })).toBe(
+      "Removed. GoatCitadel left 2 temporary folders in the skills folder that it couldn't confirm were its own.",
+    );
+    expect(removalLeftoversNote({ disposition: "applied", otherScratchFolders: 1 })).toBe(
+      "Removed. GoatCitadel left 1 temporary folder in the skills folder that it couldn't confirm was its own.",
+    );
+  });
+
+  it("says nothing when none were left, or the removal did not apply", () => {
+    expect(removalLeftoversNote({ disposition: "applied" })).toBeUndefined();
+    expect(removalLeftoversNote({ disposition: "applied", otherScratchFolders: 0 })).toBeUndefined();
+    expect(removalLeftoversNote({ disposition: "blocked", otherScratchFolders: 2 })).toBeUndefined();
+  });
+});
 
 describe("removalOutcomeNote", () => {
   it("says nothing for an applied removal", () => {
