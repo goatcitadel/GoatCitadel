@@ -111,3 +111,15 @@ export interface ThreadKnowledgeCitationRecord {
   excerpt?: string;
   retrievalMode: ThreadKnowledgeRetrievalMode;
 }
+
+export interface KnowledgeDocumentSummary {
+  docId: string;
+  namespace: string;
+  sourceType: "file" | "url" | "text" | "memory" | "external_source_snapshot";
+  title: string;
+  createdAt: string;
+}
+export interface KnowledgeDocumentListResponse {
+  items: KnowledgeDocumentSummary[];
+  truncated: boolean;
+}
