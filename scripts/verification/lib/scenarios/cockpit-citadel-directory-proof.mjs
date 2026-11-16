@@ -240,11 +240,11 @@ export async function runCockpitCitadelDirectoryProof({ context, browser, stack,
         stage = "retain unknown write and dirty draft through the actual Command palette Classic request";
         await page.keyboard.press("Control+k");
         const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
-        await palette.getByRole("combobox", { name: "Search or run a command", exact: true }).fill("Switch to classic Mission Control");
+        await palette.getByRole("combobox", { name: "Search or run a command", exact: true }).fill("Switch to the classic view");
         const presenceBeforeClassic=await page.evaluate(key=>window[key]?.snapshot(),presenceObserverKey);
         assert.ok(presenceBeforeClassic?.complete,"Presence observer incomplete before actual Classic request");
         const presenceTransition={afterSend:presenceBeforeClassic.sends.length,afterGeneration:presenceBeforeClassic.generations.at(-1)?.sequence};
-        await palette.getByRole("option", { name: "Switch to classic Mission Control", exact: true }).click();
+        await palette.getByRole("option", { name: "Switch to the classic view", exact: true }).click();
         const classicReviewKept = await retainCitadelGuardedNavigation(page, url =>
           url.origin === new URL(governanceUrl).origin && url.searchParams.get("shell") === "classic");
         await page.waitForFunction(() => document.documentElement.dataset.shell === "classic");

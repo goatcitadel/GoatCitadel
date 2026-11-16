@@ -428,7 +428,7 @@ describe("CommandPalette", () => {
       "Go to Capabilities",
       "Go to Library",
       "Go to System",
-      "Switch to classic Mission Control",
+      "Switch to the classic view",
     ]) {
       expect(body).toContain(label);
     }
@@ -482,7 +482,7 @@ describe("CommandPalette", () => {
     expect(controls.setTheme).toHaveBeenCalledWith("system");
     click("Use light theme");
     expect(controls.setTheme).toHaveBeenCalledWith("light");
-    click("Switch to classic");
+    click("Switch to the classic view");
     expect(controls.switchShell).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledWith(false);
   });

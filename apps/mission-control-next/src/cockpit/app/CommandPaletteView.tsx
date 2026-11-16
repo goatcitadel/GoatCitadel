@@ -11,7 +11,7 @@ import type { useCommandPaletteSearch } from "./use-command-palette-search";
 import { Button } from "../ui/Button";
 import { TechnicalDetails } from "../ui/TechnicalDetails";
 import type { UiTheme } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { otherThemeOptions, THEME_SEARCH_TERMS } from "./theme-options";
+import { CLASSIC_VIEW_SEARCH_TERMS, otherThemeOptions, THEME_SEARCH_TERMS } from "./theme-options";
 export { PaletteResourcePreview } from "./CommandPaletteResults";
 export interface CommandPaletteViewProps {
   query: string;
@@ -144,9 +144,9 @@ export function CommandPaletteView({
                   Switch to {density === "compact" ? "comfortable" : "compact"} density
                 </Command.Item>
               ) : null}
-              {matches("Switch to classic Mission Control") ? (
+              {matches(CLASSIC_VIEW_SEARCH_TERMS) ? (
                 <Command.Item value="classic" onSelect={onClassic} className={PALETTE_ITEM_CLASS}>
-                  Switch to classic Mission Control
+                  Switch to the classic view
                 </Command.Item>
               ) : null}
             </Command.Group>

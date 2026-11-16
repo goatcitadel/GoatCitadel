@@ -277,10 +277,10 @@ export async function runCockpitChatContextProof({ context, browser, stack, cita
             // The composer no longer carries a classic link; switch layouts where the shell offers it.
             if (variant === "mobile") {
               await page.getByRole("button", { name: "More areas and settings", exact: true }).click();
-              await page.getByRole("button", { name: "Switch to classic Mission Control", exact: true }).click();
+              await page.getByRole("button", { name: "Switch to the classic view", exact: true }).click();
             } else {
               await page.getByRole("button", { name: "Settings and theme", exact: true }).click();
-              await page.getByRole("menuitem", { name: "Switch to classic Mission Control", exact: true }).click();
+              await page.getByRole("menuitem", { name: "Switch to the classic view", exact: true }).click();
             }
             const returnToCockpit = page.getByRole("button", { name: "Return to Cockpit layout", exact: true });
             await returnToCockpit.waitFor({ timeout: 30000 });

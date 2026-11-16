@@ -304,7 +304,7 @@ export function Sidebar({
                 {option.action}
               </MenuItem>
             ))}
-            <MenuItem onSelect={shellSwitch.request}>Switch to classic Mission Control</MenuItem>
+            <MenuItem onSelect={shellSwitch.request}>Switch to the classic view</MenuItem>
           </MenuContent>
         </Menu>
       </div>

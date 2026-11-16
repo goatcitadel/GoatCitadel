@@ -272,7 +272,7 @@ describe("MobileTabBar", () => {
       ),
     );
     await act(async () => button("More").click());
-    await act(async () => button("Switch to classic Mission Control").click());
+    await act(async () => button("Switch to the classic view").click());
     await vi.waitFor(() => expect(shell.switchShell).toHaveBeenCalledOnce());
     const [name, options] = shell.switchShell.mock.calls[0]!;
     expect(name).toBe("classic");

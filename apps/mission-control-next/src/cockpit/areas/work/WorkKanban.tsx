@@ -51,7 +51,7 @@ export function WorkKanban() {
           }
           description={
             route.runId || route.view === "run-detail"
-              ? "A run opened from the classic Kanban, with its saved steps and outcome."
+              ? "A run opened from the classic view's Kanban, with its saved steps and outcome."
               : "The older task Kanban, kept for its advanced task actions. Board is the main Work view."
           }
         />

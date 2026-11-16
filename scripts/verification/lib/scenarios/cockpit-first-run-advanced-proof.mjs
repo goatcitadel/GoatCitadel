@@ -329,7 +329,7 @@ export async function runCockpitFirstRunAdvancedProof({ context, browser, stack,
             window.__advancedFirstRunRoot = document.getElementById("root");
           });
           await page.keyboard.press("Control+k");
-          await page.getByRole("option", { name: "Switch to classic Mission Control", exact: true }).click();
+          await page.getByRole("option", { name: "Switch to the classic view", exact: true }).click();
           await page.waitForSelector('html[data-shell="classic"] .mc-next-shell .mc-next-topbar', { timeout: 30_000 });
           await page.getByRole("button", { name: "First-run defaults", exact: true }).click();
           await page

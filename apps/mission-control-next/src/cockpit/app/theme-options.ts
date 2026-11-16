@@ -22,3 +22,6 @@ export function otherThemeOptions(current: UiTheme): readonly ThemeOption[] {
 
 /** Command palette search text for the theme choices. */
 export const THEME_SEARCH_TERMS = "Switch theme light dark match system";
+
+/** What the palette's classic view command answers to: its name, plus the older words an operator may still type. */
+export const CLASSIC_VIEW_SEARCH_TERMS = "Switch to the classic view Switch to classic Mission Control";

@@ -242,7 +242,7 @@ export function MobileTabBar({
             }}
             className="flex min-h-11 items-center rounded-md px-3 text-left text-fg hover:bg-sunken"
           >
-            Switch to classic Mission Control
+            Switch to the classic view
           </button>
         </div>
       </Sheet>
