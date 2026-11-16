@@ -34,16 +34,27 @@ import { takesPowerAway } from "./skill-hub-operation-power.js";
 import {
   ownedSkillBlock,
   finishAppliedProjection,
+  LINEAGE_VERSION_LIMIT,
+  projectionCleanupFailureEvent,
   projectionScratch,
   runRuntimeRemoval,
   UNKNOWN_TREE_SHA256,
 } from "./skill-hub-runtime-removal.js";
 import { readSkillHubOperationFingerprint } from "./skill-hub-operation-identity.js";
+import {
+  asOptionalNumber,
+  asOptionalString,
+  hasCurrentPromptwareAudit,
+  isRecord,
+  removeUndefined,
+  resolveManagedRoot,
+  sha256,
+  toRootRelative,
+} from "./skill-hub-lifecycle-values.js";
 import { SkillHubArtifactStore, type SkillHubArtifactFilesystem } from "./skill-hub-artifact-store.js";
 import {
   PROMPTWARE_SCANNER_ID,
   PROMPTWARE_MAX_FINDINGS,
-  PROMPTWARE_SCANNER_REVISION,
   PROMPTWARE_SCANNER_VERSION,
   scanPromptwareContent,
 } from "./assembled-prompt-injection-guard.js";
@@ -893,7 +904,14 @@ export class SkillHubLifecycleService {
     return await runRuntimeRemoval({
       intent,
       candidate,
-      storage,
+      record: await storage.skillLifecycle.find(intent.skillId),
+      lineage: {
+        removedCandidateIds: await storage.skillHubOperations.listAppliedRemovalCandidateIds(intent.workspaceId),
+        versions: await storage.candidateSkillVersions.listByCandidateId(
+          candidate.candidateId,
+          LINEAGE_VERSION_LIMIT + 1,
+        ),
+      },
       manifest: artifact.manifest,
       skillName,
       signal,
@@ -915,12 +933,15 @@ export class SkillHubLifecycleService {
   ): Promise<void> {
     if (settlement.disposition !== "applied" || !["activate", "remove"].includes(intent.operationKind)) return;
     const { storage, reloadSkills } = this.options;
+    const journey = storage.governanceJourneyEvents;
     await finishAppliedProjection(this.filesystem, this.skillsExtraRoot, {
       intent,
       signal,
-      journey: storage.governanceJourneyEvents,
-      now: this.now(),
       reloadSkills,
+      recordFailure: async (error) => {
+        const event = projectionCleanupFailureEvent(intent, error, this.now());
+        if (!(await journey.find(event.eventId))) await journey.create(event);
+      },
     });
   }
 
@@ -994,57 +1015,6 @@ function assertRevisionExpectation(
       details: { expectedState: expectedAbsent ? "absent" : expected, currentRevision: actual },
     });
   }
-}
-
-function resolveManagedRoot(rootDir: string, configured: string, label: string): string {
-  const resolved = path.isAbsolute(configured) ? path.resolve(configured) : path.resolve(rootDir, configured);
-  const relative = path.relative(rootDir, resolved);
-  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new TypeError(`Skill Hub ${label} must stay inside the Gateway root.`);
-  }
-  return resolved;
-}
-
-function toRootRelative(rootDir: string, target: string): string {
-  return path.relative(rootDir, target).split(path.sep).join("/");
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
-function removeUndefined(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
-}
-
-function asOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function asOptionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasCurrentPromptwareAudit(snapshot: SkillHubSnapshotRecord): boolean {
-  const scanners = snapshot.audit.scanners;
-  if (!Array.isArray(scanners)) return false;
-  return scanners.some((scanner) => {
-    if (!isRecord(scanner) || !Array.isArray(scanner.coverageIds)) return false;
-    const coverageIds = scanner.coverageIds;
-    return (
-      scanner.scannerId === PROMPTWARE_SCANNER_ID &&
-      scanner.scannerVersion === PROMPTWARE_SCANNER_VERSION &&
-      typeof scanner.revision === "number" &&
-      scanner.revision >= PROMPTWARE_SCANNER_REVISION &&
-      ["exact_bytes", "model_facing_md_txt", "multiline", "protective_negation"].every((coverageId) =>
-        coverageIds.includes(coverageId),
-      )
-    );
-  });
 }
 
 function isConflict(error: unknown): boolean {

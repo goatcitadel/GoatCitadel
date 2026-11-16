@@ -10,7 +10,7 @@ import {
   type SkillHubOperationSettlementDisposition,
   type SkillLifecycleRecord,
 } from "@goatcitadel/contracts";
-import type { AsyncStorage } from "@goatcitadel/storage";
+import type { GovernanceJourneyEventRecord } from "@goatcitadel/storage";
 import { isBundledSkillName } from "./plugin-skill-name-rules.js";
 import type { StoredPlugin } from "./capability-plugin-store.js";
 import type { SkillHubLifecycleFilesystem } from "./skill-hub-lifecycle-filesystem.js";
@@ -221,42 +221,41 @@ export async function restoreStagedRemoval(
   }
 }
 
-/** What the records say about the candidate lineage a removal names, read just before it applies. */
-export interface RemovalLineage {
-  /**
-   * The lineage already has an applied removal in the intent's workspace. A removed lineage's runtime fence is gone, so a
-   * copy installed later from the same check starts again at the same revisions: only this tells an approval for the
-   * removed lineage apart from one for the copy.
-   */
-  alreadyRemoved: boolean;
-  /** Every version of the lineage is revoked, as the guard required when the removal was asked for. */
-  allVersionsRevoked: boolean;
-}
+/**
+ * At most this many versions of one lineage are proven revoked; the owner reads one more, so a lineage with more cannot
+ * be proven all revoked.
+ */
+export const LINEAGE_VERSION_LIMIT = 100;
 
-/** At most this many versions of one lineage are read; a lineage with more cannot be proven all revoked. */
-const LINEAGE_VERSION_LIMIT = 100;
-
-async function readRemovalLineage(
-  storage: Pick<AsyncStorage, "skillHubOperations" | "candidateSkillVersions">,
+/**
+ * Why the intent's candidate lineage must not be removed now, or nothing when it may. A lineage that already has an
+ * applied removal is refused: a removed lineage's runtime fence is gone, so a copy installed later from the same check
+ * starts again at the same revisions, and only this tells an approval for the removed lineage apart from one for the
+ * copy. A lineage with a version that is not revoked (or more versions than can be read) is refused too, as the guard
+ * required when the removal was asked for.
+ */
+function lineageBlock(
   intent: SkillHubOperationIntentRecord,
-): Promise<RemovalLineage> {
-  const removed = await storage.skillHubOperations.listAppliedRemovalCandidateIds(intent.workspaceId);
-  const versions = await storage.candidateSkillVersions.listByCandidateId(
-    intent.targetCandidateId!,
-    LINEAGE_VERSION_LIMIT + 1,
-  );
-  return {
-    alreadyRemoved: removed.includes(intent.targetCandidateId!),
-    allVersionsRevoked:
-      versions.length <= LINEAGE_VERSION_LIMIT && versions.every((version) => version.lifecycleState === "revoked"),
-  };
+  lineage: RuntimeRemovalContext["lineage"],
+): "lineage_already_removed" | "candidate_not_revoked" | undefined {
+  if (lineage.removedCandidateIds.includes(intent.targetCandidateId!)) return "lineage_already_removed";
+  const { versions } = lineage;
+  if (versions.length > LINEAGE_VERSION_LIMIT || versions.some((version) => version.lifecycleState !== "revoked")) {
+    return "candidate_not_revoked";
+  }
+  return undefined;
 }
 
 export interface RuntimeRemovalContext {
   intent: SkillHubOperationIntentRecord;
   candidate: CandidateSkillVersionRecord;
-  /** Where the skill's lifecycle record and its lineage's removals are read, just before anything is decided. */
-  storage: Pick<AsyncStorage, "skillLifecycle" | "skillHubOperations" | "candidateSkillVersions">;
+  /** The skill's lifecycle record as it is now. */
+  record: SkillLifecycleRecord | undefined;
+  /**
+   * The intent's candidate lineage as the records say now: the candidate ids with an applied removal in the intent's
+   * workspace, and the lineage's versions (up to `LINEAGE_VERSION_LIMIT` + 1).
+   */
+  lineage: { removedCandidateIds: readonly string[]; versions: readonly CandidateSkillVersionRecord[] };
   manifest: SkillContentIntegrityManifest;
   skillName: string;
   signal: AbortSignal;
@@ -298,23 +297,16 @@ export async function runRuntimeRemoval(context: RuntimeRemovalContext): Promise
   if (!context.artifactVerifies) {
     return await context.settle("blocked", UNKNOWN_TREE_SHA256, { code: "artifact_tamper", boundaryCrossed: false });
   }
-  const lineage = await readRemovalLineage(context.storage, intent);
-  if (lineage.alreadyRemoved) {
-    return await context.settle("blocked", intent.contentTreeSha256, {
-      code: "lineage_already_removed",
-      boundaryCrossed: false,
-    });
+  const lineage = lineageBlock(intent, context.lineage);
+  if (lineage === "lineage_already_removed") {
+    return await context.settle("blocked", intent.contentTreeSha256, { code: lineage, boundaryCrossed: false });
   }
-  const record = await context.storage.skillLifecycle.find(intent.skillId);
-  const recordBlock = removalRecordBlock(intent, record, context.candidate);
+  const recordBlock = removalRecordBlock(intent, context.record, context.candidate);
   if (recordBlock) {
     return await context.settle("blocked", intent.contentTreeSha256, { code: recordBlock, boundaryCrossed: false });
   }
-  if (!lineage.allVersionsRevoked) {
-    return await context.settle("blocked", intent.contentTreeSha256, {
-      code: "candidate_not_revoked",
-      boundaryCrossed: false,
-    });
+  if (lineage) {
+    return await context.settle("blocked", intent.contentTreeSha256, { code: lineage, boundaryCrossed: false });
   }
   let staging: RuntimeRemovalStaging;
   try {
@@ -368,8 +360,8 @@ export async function runRuntimeRemoval(context: RuntimeRemovalContext): Promise
 
 /**
  * After an applied activation or removal: deletes this operation's own staging and recovery folders through the confined
- * lifecycle filesystem, then reads the skills folder again. A cleanup that fails is recorded for the operator and
- * rethrown, so the effect is retried.
+ * lifecycle filesystem, then reads the skills folder again. A cleanup that fails is recorded for the operator through
+ * `recordFailure` and rethrown, so the effect is retried.
  */
 export async function finishAppliedProjection(
   filesystem: RemovalFilesystem,
@@ -377,19 +369,19 @@ export async function finishAppliedProjection(
   input: {
     intent: SkillHubOperationIntentRecord;
     signal: AbortSignal;
-    journey: Pick<AsyncStorage["governanceJourneyEvents"], "find" | "create">;
-    now: string;
+    recordFailure: (error: unknown) => Promise<void>;
     reloadSkills?: () => Promise<unknown>;
   },
 ): Promise<void> {
-  const scratch = projectionScratch(root, input.intent.operationId);
+  const { intent, signal } = input;
+  const scratch = projectionScratch(root, intent.operationId);
   try {
-    await filesystem.removeTreeIfPresent(root, scratch.staging, input.signal);
-    await filesystem.removeTreeIfPresent(root, scratch.backup, input.signal);
+    await filesystem.removeTreeIfPresent(root, scratch.staging, signal);
+    await filesystem.removeTreeIfPresent(root, scratch.backup, signal);
   } catch (error) {
-    if (input.signal.aborted) throw error;
+    if (signal.aborted) throw error;
     try {
-      await recordProjectionCleanupFailure(input.journey, input.intent, error, input.now);
+      await input.recordFailure(error);
     } catch (recordError) {
       throw new AggregateError([error, recordError], "Skill Hub cleanup failed and could not be recorded.", {
         cause: recordError,
@@ -401,22 +393,19 @@ export async function finishAppliedProjection(
 }
 
 /**
- * Records, once per operation, that deleting an applied operation's staging or recovery folder failed, as a Journey
- * event beside the operation's own: the settlement stays as it is (it is immutable), the effect is retried, and the
- * operator can see a folder was left behind. Only the error's code or name is kept, never a path.
+ * The Journey event that says, once per operation, that deleting an applied operation's staging or recovery folder
+ * failed. It sits beside the operation's own event: the settlement stays as it is (it is immutable), the effect is
+ * retried, and the operator can see a folder was left behind. Only the error's code or name is kept, never a path.
  */
-export async function recordProjectionCleanupFailure(
-  journey: Pick<AsyncStorage["governanceJourneyEvents"], "find" | "create">,
+export function projectionCleanupFailureEvent(
   intent: SkillHubOperationIntentRecord,
   error: unknown,
   now: string,
-): Promise<void> {
-  const eventId = `skill-hub:journey:${intent.operationId}:cleanup`;
-  if (await journey.find(eventId)) return;
+): GovernanceJourneyEventRecord {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  await journey.create({
+  return {
     schemaVersion: "goatcitadel.journey-event.v1",
-    eventId,
+    eventId: `skill-hub:journey:${intent.operationId}:cleanup`,
     idempotencyKey: `skill-hub:lifecycle:${intent.operationId}:cleanup`,
     scopeKind: "workspace",
     workspaceId: intent.workspaceId,
@@ -443,5 +432,5 @@ export async function recordProjectionCleanupFailure(
     },
     occurredAt: now,
     recordedAt: now,
-  });
+  };
 }
