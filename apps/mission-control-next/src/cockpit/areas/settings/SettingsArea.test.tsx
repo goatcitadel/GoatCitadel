@@ -326,7 +326,9 @@ describe("Settings section tabs", () => {
     await activate("Personalities · Experimental");
     expect(draft.value).toBe("Unsaved voice");
     await fill(container.querySelector('input[type="search"]')!, "notifications");
-    expect(container.querySelector('a[href="/settings/general#appearance"]')).not.toBeNull();
+    const hit = container.querySelector('a[href="/settings/general#appearance"]')!;
+    expect(hit).not.toBeNull();
+    expect(hit.textContent).not.toContain("Opens cockpit controls");
     await fill(container.querySelector('input[type="search"]')!, "");
     expect(active()).toBe("Personalities · Experimental");
     expect(draft.value).toBe("Unsaved voice");

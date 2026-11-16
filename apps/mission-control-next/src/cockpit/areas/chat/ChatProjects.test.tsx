@@ -331,7 +331,7 @@ it("names the workspace in the Projects intro and keeps its id only as a technic
   expect(intro()?.textContent).toBe("Organize Chat context for Alpha workspace.");
   workspaceNames.byId = {};
   await render();
-  expect(intro()?.textContent).toBe("Organize Chat context for workspace workspace-a.");
+  expect(intro()?.textContent).toBe("Organize Chat context for this workspace.");
 });
 
 it("renders the recents and import siblings without a duplicate React key", async () => {
@@ -444,4 +444,36 @@ it("shows a kept project draft on the project page and clears it when saved", as
   await click("Save project");
   expect(api.update).toHaveBeenCalledTimes(1);
   expect(host.textContent).not.toContain("Unsaved draft");
+});
+
+it("names the workspace in the archive review and shows its confirm as the main action", async () => {
+  window.history.replaceState(null, "", "/chat/projects/project-a");
+  workspaceNames.byId = { "workspace-a": "Alpha workspace" };
+  await render();
+  await click("Archive project");
+  expect(document.body.textContent).toContain("Review Project Alpha in Alpha workspace.");
+  expect(document.body.textContent).not.toContain("workspace-a");
+  const confirm = [...document.querySelectorAll("button")].find((node) => node.textContent === "Confirm archive");
+  expect(confirm?.className).toContain("bg-accent");
+  expect(confirm?.className).not.toContain("status-failed");
+});
+
+it("never shows a raw workspace id in the project review or editor when the name is unknown", async () => {
+  window.history.replaceState(null, "", "/chat/projects/project-a");
+  workspaceNames.byId = {};
+  await render();
+  await click("Edit project");
+  expect(document.body.textContent).toContain("In this workspace. Project context");
+  expect(document.body.textContent).not.toContain("Workspace workspace-a. Project context");
+  await click("Archive project");
+  expect(document.body.textContent).toContain("Review Project Alpha in this workspace.");
+  expect(document.querySelector("[role=dialog]")?.textContent).not.toContain("workspace-a");
+});
+
+it("names the workspace in the project editor", async () => {
+  window.history.replaceState(null, "", "/chat/projects/project-a");
+  workspaceNames.byId = { "workspace-a": "Alpha workspace" };
+  await render();
+  await click("Edit project");
+  expect(document.body.textContent).toContain("In Alpha workspace. Project context");
 });

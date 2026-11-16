@@ -383,9 +383,6 @@ function SettingsDestinationContent({ entry }: { entry: SettingsIndexEntry }) {
         <span className="block text-sm font-medium text-fg">{entry.label}</span>
         {entry.releaseStatus === "experimental" ? <span className="text-xs text-fg-muted">Experimental</span> : null}
         <span className="mt-1 block text-xs text-fg-muted">{entry.description}</span>
-        <span className="mt-1 block text-xs text-fg-secondary">
-          {entry.completeNative ? "Opens cockpit controls" : "Opens cockpit controls and management links"}
-        </span>
       </span>
       <ArrowRight aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-accent" />
     </>

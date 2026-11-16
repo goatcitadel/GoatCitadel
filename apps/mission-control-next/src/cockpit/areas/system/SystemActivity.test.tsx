@@ -144,8 +144,8 @@ describe("System activity reads as sentences (SY-01)", () => {
     // Identifiers live only in technical details, and the retention caveat is stated once for the list.
     expect(rows()[0]).not.toContain("session-a");
     expect(rows()[0]).not.toContain("Workspace");
-    expect(rows()[0]).not.toContain("does not show its current health");
-    expect(container.textContent?.split("does not show its current health")).toHaveLength(2);
+    expect(rows()[0]).not.toContain("does not show a host's current health");
+    expect(container.textContent?.split("does not show a host's current health")).toHaveLength(2);
     for (const text of rows()) expect(text).not.toContain("_");
 
     const toggle = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
@@ -365,5 +365,27 @@ describe("System activity older signals and counts (22.4)", () => {
     expect(
       [...container.querySelectorAll("button")].some((node) => node.textContent?.includes("Load older signals")),
     ).toBe(true);
+  });
+});
+
+describe("System activity header (U-GL-020)", () => {
+  const CAVEAT =
+    "This list keeps recent signals only. Open a signal's record for its details; a signal does not show a host's current health.";
+
+  it("keeps the header to one description and the updated line, with the caveat under the list", async () => {
+    await render();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const header = container.querySelector("header[data-area-header]")!;
+    const paragraphs = [...header.querySelectorAll("p")].map((node) => node.textContent ?? "");
+    expect(paragraphs.filter((text) => !text.startsWith("Updated"))).toEqual([
+      "Recent signals across this installation.",
+    ]);
+    expect(paragraphs.some((text) => text.startsWith("Updated"))).toBe(true);
+    expect(header.textContent).not.toContain("saved records");
+    const caveats = [...container.querySelectorAll("p")].filter((node) => node.textContent === CAVEAT);
+    expect(caveats).toHaveLength(1);
+    expect(header.contains(caveats[0]!)).toBe(false);
   });
 });
