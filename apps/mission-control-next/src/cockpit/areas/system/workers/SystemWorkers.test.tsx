@@ -83,6 +83,13 @@ it("lists workers by name and status without raw IDs or Classic words", async ()
   expect(host.querySelector(".cockpit-embedded-classic")).toBeNull();
 });
 
+it("says live worker status is not part of this release (U-SY-001)", async () => {
+  await render();
+  expect(host.querySelector("[data-area-header]")?.textContent).toContain(
+    "This page shows saved worker records. Live worker status is not part of this release.",
+  );
+});
+
 it("selects a worker by writing it to the URL, keeping other parameters and the hash", async () => {
   await render();
   const row = [...host.querySelectorAll("button")].find((node) => node.textContent?.startsWith("Build box"))!;
@@ -133,4 +140,16 @@ it("says assignments are unavailable when they could not be read, not that they 
   await render();
   await vi.waitFor(() => expect(text()).toContain("Assignments are unavailable"));
   expect(text()).not.toContain("loading or unavailable");
+});
+
+it("keeps focus on Refresh while the workers reload (U-GL-047)", async () => {
+  await render();
+  registry.value = { ...(registry.value as object), loading: true };
+  await render();
+  const refresh = [...host.querySelectorAll("button")].find((node) => node.textContent?.includes("Refresh"))!;
+  refresh.focus();
+  await act(async () => refresh.click());
+  expect(refresh.disabled).toBe(false);
+  expect(refresh.getAttribute("aria-busy")).toBe("true");
+  expect(document.activeElement).toBe(refresh);
 });

@@ -17,6 +17,7 @@ import { TaskDetailsEditor } from "./TaskDetailsEditor";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TimeText } from "../../ui/TimeText";
+import { useCockpitTitleDetail } from "../../app/cockpit-title-detail";
 import { TASK_ACTIVITY_LABELS, TASK_DELIVERABLE_LABELS, TASK_PRIORITY_LABELS } from "./work-vocabulary";
 import { ListLimitFooter, useListLimit } from "./WorkListLimit";
 
@@ -34,6 +35,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
     !taskQuery.isError && taskQuery.data && taskMatchesWorkspace(taskQuery.data, workspaceId)
       ? taskQuery.data
       : undefined;
+  useCockpitTitleDetail(task?.title);
   const taskSessionId =
     task?.proactiveContext?.sessionId ?? task?.agenticContext?.childSessionId ?? task?.agenticContext?.parentSessionId;
   const activities = useQuery({

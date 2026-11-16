@@ -47,7 +47,7 @@ export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string
             {(props) => (
               <input
                 {...props}
-                className="rounded-md border border-line bg-canvas p-2"
+                className="rounded-md border border-line-control bg-canvas p-2"
                 value={filter}
                 onChange={(event) => setFilter(event.target.value)}
               />

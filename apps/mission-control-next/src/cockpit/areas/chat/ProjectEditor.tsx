@@ -1,6 +1,10 @@
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { useRef, useState } from "react";
-import type { ChatProjectRecord } from "@goatcitadel/contracts";
+import {
+  PROJECT_WORKSPACE_PATH_RULE,
+  projectWorkspacePathProblem,
+  type ChatProjectRecord,
+} from "@goatcitadel/contracts";
 import { createChatProject, updateChatProject } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
@@ -18,6 +22,20 @@ const fields = (project?: ChatProjectRecord) => ({
   description: project?.description ?? "",
   color: project?.color ?? "",
 });
+export function projectDraftKey(input: { citadelId?: string; workspaceId: string; projectId?: string }): string {
+  return JSON.stringify([
+    "cockpit-project",
+    getGatewayApiBaseUrl(),
+    input.citadelId,
+    input.workspaceId,
+    input.projectId ?? "create",
+  ]);
+}
+
+function withFullStop(text: string): string {
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
 export function ProjectEditor({
   project,
   workspaceId,
@@ -37,7 +55,7 @@ export function ProjectEditor({
 }) {
   const access = useProjectAccess(JSON.stringify([citadelId, workspaceId, project?.projectId ?? "create"]));
   const draft = useSessionDraft(
-    JSON.stringify(["cockpit-project", getGatewayApiBaseUrl(), citadelId, workspaceId, project?.projectId ?? "create"]),
+    projectDraftKey({ citadelId, workspaceId, projectId: project?.projectId }),
     fields(project),
     project?.revision,
     { label: project?.name ?? "New project", available },
@@ -58,6 +76,13 @@ export function ProjectEditor({
     const submitted = draft.value;
     if (!submitted.name.trim() || !submitted.workspacePath.trim()) {
       setError("Project name and workspace path are required.");
+      return;
+    }
+    if (
+      submitted.workspacePath.trim() !== project?.workspacePath &&
+      projectWorkspacePathProblem(submitted.workspacePath)
+    ) {
+      setError(PROJECT_WORKSPACE_PATH_RULE);
       return;
     }
     pending.current = true;
@@ -87,7 +112,9 @@ export function ProjectEditor({
       if (access.current() && clean) onSaved(result);
     } catch (cause) {
       if (!access.current()) return;
-      setError(`${describeApiError(cause).summary} Your draft is preserved. Check the saved project before retrying.`);
+      setError(
+        `${withFullStop(describeApiError(cause).summary)} Your draft is preserved. Check the saved project before retrying.`,
+      );
       await refresh();
     } finally {
       if (access.current()) {
@@ -132,17 +159,23 @@ export function ProjectEditor({
       {(
         [
           { key: "name", label: "Project name" },
-          { key: "workspacePath", label: "Workspace path" },
+          {
+            key: "workspacePath",
+            label: "Workspace path",
+            help: "A folder inside the workspace folder, written relative to it.",
+            placeholder: "projects/website",
+          },
           { key: "description", label: "Project description" },
           { key: "color", label: "Project color" },
         ] as const
       ).map((field) => (
-        <Field key={field.key} label={field.label}>
+        <Field key={field.key} label={field.label} help={"help" in field ? field.help : undefined}>
           {(props) => (
             <input
               {...props}
               className="w-full min-w-0 rounded-md border border-line bg-raised p-2 text-fg"
               value={draft.value[field.key]}
+              placeholder={"placeholder" in field ? field.placeholder : undefined}
               disabled={busy}
               onChange={(event) => draft.setValue((current) => ({ ...current, [field.key]: event.target.value }))}
             />

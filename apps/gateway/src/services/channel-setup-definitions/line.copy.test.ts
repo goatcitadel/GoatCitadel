@@ -81,7 +81,7 @@ describe("LINE setup guide: what it says up front (items 4 and 6)", () => {
       "To receive: a public HTTPS address and the channel secret.",
     ]);
     expect(paragraphs("first-message")).toEqual([
-      "Check the test message arrived. To receive: in LINE Developers Console › Messaging API set Webhook URL to this connection's webhook address, click Verify, turn on Use webhook, and turn off auto-reply and greeting messages in Official Account Manager. Allow your LINE user ID under Who may message this bot. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a LINE message from …\", and add that id under Who may message this bot with Edit setup.",
+      "Check the test message arrived. To receive: in LINE Developers Console › Messaging API set Webhook URL to this connection's webhook address, click Verify, turn on Use webhook, and turn off auto-reply and greeting messages in Official Account Manager. Allow your LINE user ID under Who may message this bot. If the bot doesn't answer your message, open Edit setup and go to Who may message this bot: the sender it turned away is listed there with a button to allow them.",
     ]);
   });
 
@@ -240,7 +240,7 @@ describe("LINE setup guide: receiving is its own optional step (items 3 and 5, A
     const open = guide().hydrate(connectionOf({ ...SEND_ONLY_VALUES, inboundAccessMode: "open_legacy" })).draft;
 
     expect(allowed?.explanation).toBe(
-      'Your LINE user ID (starts with U). For a one-to-one chat it is the same ID as Default target. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
+      "Your LINE user ID (starts with U). For a one-to-one chat it is the same ID as Default target. Don't know the id? Finish setup and message the bot once. Then open Edit setup and come back to this step: the sender it turned away is listed here with a button to allow them.",
     );
     expect(mode?.visibleWhenFieldEquals).toEqual({ fieldKey: "inboundAccessWasOpen", value: true });
     expect(open.inboundAccessWasOpen).toBe(true);

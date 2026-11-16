@@ -211,9 +211,10 @@ export function SettingsArea() {
         <FirstRunArea />
       </Suspense>
     );
+  const selectedEntry = page.entries.find((entry) => entry.section === selectedSection);
   const unavailable =
-    page.entries.find((entry) => entry.section === selectedSection)?.releaseStatus === "hide"
-      ? "This capability is hidden from the current release. Technical display preferences do not enable it."
+    selectedEntry?.releaseStatus === "hide"
+      ? `${selectedEntry.label} is not part of this release, so it can't be opened here.`
       : rest[0] && !PAGES.some((item) => item.id === rest[0] || item.entries.some((entry) => entry.section === rest[0]))
         ? "This link does not match a settings page. Choose a page from Settings."
         : hash &&
@@ -227,6 +228,7 @@ export function SettingsArea() {
               "filesystem-write-roots",
               "notification-routing",
               "settings-approval-skip",
+              "voice-runtime",
             ].includes(hash) &&
             !isFeatureSwitchHash(hash) &&
             !page.entries.some((entry) => entry.anchor === hash || entry.section === hash)

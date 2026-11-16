@@ -135,3 +135,15 @@ it("cancelling review writes nothing and history renders owner provenance", asyn
   expect(listNoteRevisions).toHaveBeenCalledExactlyOnceWith("a", "one");
   expect(container.textContent).not.toContain("hash-a");
 });
+it.each([
+  ["Review note save", "Confirm note save"],
+  ["Review archive", "Confirm archive"],
+])("the %s dialog confirm is the primary button (U-GL-008)", async (review, confirm) => {
+  await render();
+  if (review === "Review note save") await title("Edited");
+  await click(review);
+  const button = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(
+    (item) => item.textContent === confirm,
+  )!;
+  expect(button.className).toContain("bg-accent");
+});

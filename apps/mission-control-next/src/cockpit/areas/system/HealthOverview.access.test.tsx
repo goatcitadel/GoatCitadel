@@ -87,6 +87,15 @@ it("shows current backup existence despite an older Inbox absence observation", 
   expect(container.textContent).not.toContain("No backup yet");
 });
 
+it("says this release has no live remote-worker status, in one statement", async () => {
+  await render();
+  await tick(10);
+  expect(container.textContent).toContain(
+    "This release does not include live remote-worker status. The workers page lists saved worker records.",
+  );
+  expect(container.textContent).not.toContain("Held back from this release.");
+});
+
 it("passes the latest backup folder to the card only when the health summary was read", async () => {
   api.fetchHealthSummary.mockResolvedValue({
     database: { reachable: true, issues: [] },
@@ -159,4 +168,20 @@ it("shows stale prior observations after actual API transport rejection and clea
   await tick(60_010);
   expect(container.textContent).not.toContain("Last known");
   expect(container.textContent).toContain("All reachable checks report no problems");
+});
+
+it("keeps focus on Refresh while the health summary reloads (U-GL-047)", async () => {
+  await render();
+  await tick(10);
+  const refresh = [...container.querySelectorAll("button")].find((entry) =>
+    entry.textContent?.includes("Refresh system health"),
+  );
+  if (!refresh) throw new Error("Missing Refresh system health button");
+  api.fetchHealthSummary.mockReturnValue(new Promise(() => undefined));
+  refresh.focus();
+  await act(async () => refresh.click());
+  await tick(10);
+  expect(refresh.disabled).toBe(false);
+  expect(refresh.getAttribute("aria-busy")).toBe("true");
+  expect(document.activeElement).toBe(refresh);
 });

@@ -15,7 +15,7 @@ describe("cockpit document title", () => {
   it("names settings and library sections from the route model instead of the URL slug", () => {
     expect(cockpitDocumentTitle("Settings", "onboarding", "settings")).toBe("GoatCitadel Settings · Get started");
     expect(cockpitDocumentTitle("Settings", "providers", "settings")).toBe("GoatCitadel Settings · Providers & models");
-    expect(cockpitDocumentTitle("Settings", "first-run", "settings")).toBe("GoatCitadel Settings · First run");
+    expect(cockpitDocumentTitle("Settings", "first-run", "settings")).toBe("GoatCitadel Settings · Get started");
     expect(cockpitDocumentTitle("Settings", "models", "settings")).toBe("GoatCitadel Settings · Models");
     expect(cockpitDocumentTitle("Settings", "citadel", "settings")).toBe("GoatCitadel Settings · Citadel");
     expect(cockpitDocumentTitle("Library", "prompt-packs", "library")).toBe("GoatCitadel Library · Prompt packs");
@@ -34,5 +34,18 @@ describe("cockpit document title", () => {
     expect(cockpitDocumentTitle("System", "constructor", "system")).toBe("GoatCitadel System · Constructor");
     expect(cockpitDocumentTitle("Work", "mystery-slug", "work")).toBe("GoatCitadel Work · Mystery slug");
     expect(cockpitDocumentTitle("Inbox", "approval%3A1", "inbox")).toBe("GoatCitadel Inbox · Approval:1");
+  });
+
+  it("adds the open conversation or run name (U-GL-024)", () => {
+    expect(cockpitDocumentTitle("Chat", undefined, "chat", "Weekly plan")).toBe("GoatCitadel Chat · Weekly plan");
+    expect(cockpitDocumentTitle("Work", "runs", "work", "Nightly backup")).toBe("GoatCitadel Work · Nightly backup");
+  });
+
+  it("names Capabilities tabs, Advanced setup and Get started by their labels (U-GL-051)", () => {
+    expect(cockpitDocumentTitle("Capabilities", "skills", "capabilities")).toBe("GoatCitadel Capabilities · Skills");
+    expect(cockpitDocumentTitle("Capabilities", "advanced", "capabilities")).toBe(
+      "GoatCitadel Capabilities · Advanced setup",
+    );
+    expect(cockpitDocumentTitle("Settings", "first-run", "settings")).toBe("GoatCitadel Settings · Get started");
   });
 });

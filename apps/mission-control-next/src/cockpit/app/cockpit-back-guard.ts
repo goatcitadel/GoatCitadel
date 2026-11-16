@@ -50,22 +50,42 @@ export function registerCockpitSheetBack(close: () => void): () => void {
   if (sheetRestore) {
     // React StrictMode and opening another sheet can remount before the
     // browser finishes an earlier cleanup traversal. Push only after it lands.
-    let disposed = false, cleanup: (() => void) | undefined;
-    pendingSheets.push(() => { if (!disposed) cleanup = registerCockpitSheetBack(close); });
-    return () => { disposed = true; cleanup?.(); };
+    let disposed = false,
+      cleanup: (() => void) | undefined;
+    pendingSheets.push(() => {
+      if (!disposed) cleanup = registerCockpitSheetBack(close);
+    });
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
   }
   const base = stampShownEntry();
   for (const [id, previous] of sheetEntries) {
     if (!previous.active && previous.position > base.position!) sheetEntries.delete(id);
   }
-  const entry: SheetEntry = { id: `${Date.now()}:${++sheetSerial}`, close, base, position: base.position! + 1, active: true };
-  sheets.push(entry); sheetEntries.set(entry.id, entry);
-  window.history.pushState({ ...window.history.state, [SHELL_HISTORY_POSITION]: entry.position, [SHEET_ENTRY]: entry.id }, "", base.href);
+  const entry: SheetEntry = {
+    id: `${Date.now()}:${++sheetSerial}`,
+    close,
+    base,
+    position: base.position! + 1,
+    active: true,
+  };
+  sheets.push(entry);
+  sheetEntries.set(entry.id, entry);
+  window.history.pushState(
+    { ...window.history.state, [SHELL_HISTORY_POSITION]: entry.position, [SHEET_ENTRY]: entry.id },
+    "",
+    base.href,
+  );
   knownLastPosition = entry.position;
   follow(liveEntry());
   return () => {
-    const index = sheets.indexOf(entry); if (index >= 0) sheets.splice(index, 1);
-    const wasActive = entry.active; entry.active = false; entry.close = undefined;
+    const index = sheets.indexOf(entry);
+    if (index >= 0) sheets.splice(index, 1);
+    const wasActive = entry.active;
+    entry.active = false;
+    entry.close = undefined;
     if (wasActive && sheetId() === entry.id && !sheetRestore) {
       sheetRestore = { target: entry.base };
       window.history.go(-1);
@@ -75,7 +95,10 @@ export function registerCockpitSheetBack(close: () => void): () => void {
 
 /** Complete an already-reviewed navigation from the real page entry, not a sheet duplicate. */
 export function afterCockpitSheetsClose(after: () => void): boolean {
-  if (sheetRestore) { sheetRestore.after = after; return true; }
+  if (sheetRestore) {
+    sheetRestore.after = after;
+    return true;
+  }
   const current = sheetEntries.get(sheetId() ?? "");
   if (!current) return false;
   let target = current.base;
@@ -84,7 +107,9 @@ export function afterCockpitSheetsClose(after: () => void): boolean {
   for (const entry of [...sheets].reverse()) {
     if (!entry.active) continue;
     entry.active = false;
-    const close = entry.close; entry.close = undefined; close?.();
+    const close = entry.close;
+    entry.close = undefined;
+    close?.();
   }
   // Closing a route-backed sheet can request its own cleanup URL. The
   // already-reviewed destination remains the final navigation for this action.
@@ -119,7 +144,7 @@ function liveEntry(): Entry {
 }
 
 /** Same path and query. The fragment and where or whether `shell=cockpit` appears don't matter. */
-function samePage(from: string, to: string): boolean {
+export function samePage(from: string, to: string): boolean {
   const key = (href: string) => {
     const url = new URL(href, "http://cockpit.invalid");
     const query = new URLSearchParams(url.search);
@@ -135,7 +160,10 @@ function isEntry(entry: Entry, expectedEntry: Entry): boolean {
 
 function follow(entry: Entry) {
   shown = entry;
-  if (entry.position !== null) { lastPosition = entry.position; knownLastPosition = Math.max(knownLastPosition, entry.position); }
+  if (entry.position !== null) {
+    lastPosition = entry.position;
+    knownLastPosition = Math.max(knownLastPosition, entry.position);
+  }
   restoring = null;
   frozen = null;
   allowed = null;
@@ -147,8 +175,11 @@ function expectHashChange(from: string, to: string) {
 }
 
 function openReview(target: Entry, traverse: boolean) {
-  const sheet = sheets.filter(entry => entry.active).at(-1);
-  if (sheet) { sheet.close?.(); return; }
+  const sheet = sheets.filter((entry) => entry.active).at(-1);
+  if (sheet) {
+    sheet.close?.();
+    return;
+  }
   const from = shown!;
   owner!.review(() => {
     if (!owner || !shown || !isEntry(shown, from)) return;
@@ -203,7 +234,8 @@ function land(landing: Entry) {
  * while returning to the intended base; the next route Back uses the leave owner. */
 function restoreSheetBase(event: Event, target: Entry): boolean {
   const restore = sheetRestore!;
-  const delta = target.position === null || restore.target.position === null ? 0 : restore.target.position - target.position;
+  const delta =
+    target.position === null || restore.target.position === null ? 0 : restore.target.position - target.position;
   if (!delta || Math.abs(delta) >= window.history.length) return false;
   event.stopImmediatePropagation();
   restore.after = undefined;
@@ -238,7 +270,7 @@ function onPopState(event: Event) {
     follow(target);
     expected = pendingHashes;
     const waiting = pendingSheets.splice(0);
-    waiting.forEach(register => register());
+    waiting.forEach((register) => register());
     restore.after?.();
     return;
   }
@@ -247,10 +279,11 @@ function onPopState(event: Event) {
     land(target);
     return;
   }
-  const top = sheets.filter(entry => entry.active).at(-1);
+  const top = sheets.filter((entry) => entry.active).at(-1);
   if (top && shown?.position === top.position && target.position !== top.position) {
     top.active = false;
-    const close = top.close; top.close = undefined;
+    const close = top.close;
+    top.close = undefined;
     if (target.position !== top.base.position || target.href !== top.base.href) {
       sheetRestore = { target: top.base };
       frozen = locationOf(top.base.href);
@@ -287,8 +320,8 @@ function onPopState(event: Event) {
   allowed = null;
   if (
     (confirmed && isEntry(target, confirmed)) ||
-    (!(sheets.some(entry => entry.active) && shown.href !== target.href) && (samePage(shown.href, target.href) ||
-    !owner.holds(shown.href, target.href)))
+    (!(sheets.some((entry) => entry.active) && shown.href !== target.href) &&
+      (samePage(shown.href, target.href) || !owner.holds(shown.href, target.href)))
   ) {
     follow(target);
     return;

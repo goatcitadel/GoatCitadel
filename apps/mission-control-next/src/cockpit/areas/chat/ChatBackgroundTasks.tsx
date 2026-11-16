@@ -12,6 +12,7 @@ import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 
 const ATTENTION_STATES: Record<DurableBackgroundTaskItem["attention"]["state"], string> = {
   foreground: "Watching here",
@@ -219,10 +220,13 @@ export function ChatBackgroundTasks({ input, turnId }: { input: MissionThreadedR
         title="Cancel this background task?"
         description="Completed work stays in its record. The running task must still honor the cancellation."
       >
-        <p className="mb-3 break-words text-sm text-fg-secondary">
-          {cancelTask?.label} · Task version {cancelReview?.review.childVersion ?? "unavailable"} · Watcher version{" "}
-          {cancelReview?.review.watcherRevision}
-        </p>
+        <p className="mb-3 break-words text-sm text-fg-secondary">{cancelTask?.label}</p>
+        <TechnicalDetails>
+          <p className="mb-3 font-mono text-xs">
+            Task version {cancelReview?.review.childVersion ?? "unavailable"} · Watcher version{" "}
+            {cancelReview?.review.watcherRevision}
+          </p>
+        </TechnicalDetails>
         {reviewError ? (
           <p role="alert" className="mb-3 rounded-md border border-status-failed p-2 text-sm text-fg-secondary">
             {reviewError}

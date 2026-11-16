@@ -4,7 +4,7 @@ import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { FeatureOffLink } from "../../settings/FeatureOffLink";
 import { FromPluginLink } from "../plugins/FromPluginLink";
-import { CHAT_CONNECTORS_SETTINGS_HREF, WORKSPACE_CAPABILITIES_HREF } from "./connector-links";
+import { CHAT_CONNECTORS_SETTINGS_HREF } from "./connector-links";
 import {
   CONNECTOR_NO_REASON_LINE,
   chatBlockLine,
@@ -96,10 +96,7 @@ export function HiddenNote({ item }: { item: CapabilityConnectorItem }) {
   if (!item.hiddenInWorkspace) return null;
   return (
     <p className="text-sm text-fg-secondary">
-      This workspace hides it from the AI.{" "}
-      <NativeOwnerLink scope={item.id} href={WORKSPACE_CAPABILITIES_HREF}>
-        Change workspace capabilities
-      </NativeOwnerLink>
+      This workspace hides it from the AI. Changing what a workspace hides is not available in this release.
     </p>
   );
 }

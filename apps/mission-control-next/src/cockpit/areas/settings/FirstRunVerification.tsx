@@ -35,12 +35,12 @@ async function optional<T>(read: Promise<T>): Promise<{ value: T; error?: never 
     return { error: true };
   }
 }
-const destinations: Record<string, string> = {
+export const FIRST_RUN_LANE_DESTINATIONS: Record<string, string> = {
   voice: "/settings/advanced#voice-runtime",
   "browser-control": "/capabilities/connectors/advanced#mcp-servers",
   "extension-sdk": "/capabilities/connectors/advanced#integration-connections",
   "packaging-remote": "/system/health",
-  "mobile-companion": "/settings/safety#device-access",
+  "mobile-companion": "/settings/access#device-access",
   "canvas-a2ui": "/capabilities/skills",
 };
 export function FirstRunVerification() {
@@ -190,10 +190,10 @@ export function FirstRunVerification() {
                   <p>{item.description}</p>
                   <a
                     className="text-accent underline"
-                    href={destinations[item.id]}
+                    href={FIRST_RUN_LANE_DESTINATIONS[item.id]}
                     onClick={(event) => {
                       event.preventDefault();
-                      leave.request(() => navigate(destinations[item.id] ?? "/system/health"));
+                      leave.request(() => navigate(FIRST_RUN_LANE_DESTINATIONS[item.id] ?? "/system/health"));
                     }}
                   >
                     {item.actionLabel}

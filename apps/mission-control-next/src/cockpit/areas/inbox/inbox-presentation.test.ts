@@ -4,6 +4,7 @@ import {
   inboxCountIsExact,
   inboxCountLabel,
   inboxCountTitle,
+  inboxItemKindLabel,
   inboxItemTitle,
   inboxKnownCount,
   inboxMatchesWorkspace,
@@ -142,5 +143,12 @@ describe("inboxItemTitle (#562)", () => {
     expect(inboxItemTitle({ ...approval({ toolName: "fs.read" }, "Answer a question"), kind: "user_input" })).toBe(
       "Answer a question",
     );
+  });
+});
+
+describe("inboxItemKindLabel (U-WK-006)", () => {
+  it("names a stopped run as the thing that needs recovery", () => {
+    expect(inboxItemKindLabel("dead_letter")).toBe("Run that needs recovery");
+    expect(inboxItemKindLabel("failed_run")).toBe("Failed run");
   });
 });

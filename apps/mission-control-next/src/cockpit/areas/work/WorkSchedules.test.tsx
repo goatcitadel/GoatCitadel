@@ -703,7 +703,7 @@ describe("scheduler review and run evidence", () => {
           runId: "run-12345678",
           severity: "high",
           status: "open",
-          summary: { trigger: "scheduled", warning: "Child run failed" },
+          summary: { trigger: "scheduled_run", warning: "Child run failed" },
           createdAt: "2026-10-07T09:00:00.000Z",
           updatedAt: "2026-10-07T09:05:00.000Z",
         },
@@ -716,7 +716,7 @@ describe("scheduler review and run evidence", () => {
       return region!;
     });
     // The schedule list names the job; ids stay in technical details.
-    expect(queue.textContent).toContain("Daily review · Scheduled");
+    expect(queue.textContent).toContain("Daily review · On its schedule");
     expect(queue.textContent).toContain("High severity");
     expect(queue.textContent).not.toContain("job-a");
     expect(queue.textContent).not.toContain("run-12345678");

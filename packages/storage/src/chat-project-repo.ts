@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import type { ChatProjectRecord } from "@goatcitadel/contracts";
-import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, projectWorkspacePathProblem, ValidationError } from "@goatcitadel/contracts";
 
 interface ChatProjectRow {
   project_id: string;
@@ -180,7 +180,9 @@ export class ChatProjectRepository {
         description:
           input.description !== undefined ? sanitizeOptional(input.description) : (current.description ?? null),
         workspacePath:
-          input.workspacePath !== undefined ? sanitizeWorkspacePath(input.workspacePath) : current.workspacePath,
+          input.workspacePath !== undefined
+            ? sanitizeWorkspacePath(input.workspacePath, current.workspacePath)
+            : current.workspacePath,
         color: input.color !== undefined ? sanitizeOptional(input.color) : (current.color ?? null),
       };
       if (next.workspaceId !== (current.workspaceId ?? "default")) {
@@ -349,13 +351,14 @@ function sanitizeOptional(value?: string): string | null {
   return trimmed || null;
 }
 
-function sanitizeWorkspacePath(value: string): string {
+function sanitizeWorkspacePath(value: string, unchangedFrom?: string): string {
   const trimmed = value.trim().replaceAll("\\", "/");
   if (!trimmed) {
     throw new ValidationError({ code: "FIELD_REQUIRED", field: "workspacePath" });
   }
-  if (trimmed.startsWith("/") || trimmed.startsWith("../") || trimmed === ".." || trimmed.includes("/../")) {
-    throw new ValidationError({ message: "workspacePath must be relative and jailed" });
+  const problem = trimmed === unchangedFrom ? undefined : projectWorkspacePathProblem(trimmed);
+  if (problem) {
+    throw new ValidationError({ message: problem, field: "workspacePath" });
   }
   return trimmed;
 }

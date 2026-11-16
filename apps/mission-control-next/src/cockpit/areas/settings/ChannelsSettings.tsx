@@ -7,12 +7,14 @@ import {
 } from "@goatcitadel/mission-control-shared/api/channel-plan-handoff";
 import { ChannelEntryControls } from "../../../features/native-routes/settings/channel-setup/ChannelEntryControls";
 import { ChannelConnectionWebhook } from "../../../features/native-routes/settings/channel-setup/ChannelWebhookAddress";
+import { unfinishedCreateDraft } from "../../../features/native-routes/settings/sections/channel-draft-reuse";
 import { useChannelReturnNavigation } from "../../../features/native-routes/settings/sections/use-channel-return-navigation";
 import { useChannelSettings } from "../../../features/native-routes/settings/sections/use-channel-settings";
 import { channelPickerHref } from "../../app/routes";
 import { chatSetupHref, chatSetupHrefForDraft } from "../chat/channel-setup/channel-picker-model";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
+import { TimeText } from "../../ui/TimeText";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { ChannelOutcomeCheck } from "../../../features/native-routes/settings/sections/ChannelOutcomeCheck";
@@ -133,7 +135,9 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                 disabled={disabled || !owner.createDefinition}
                 onClick={() => void owner.handleCreate()}
               >
-                Start guided setup
+                {unfinishedCreateDraft(data?.drafts, owner.createDefinition?.catalog.catalogId ?? "")
+                  ? "Continue guided setup"
+                  : "Start guided setup"}
               </Button>
             </div>
           )}
@@ -325,7 +329,8 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
                   return (
                     <li key={item.draftId} className="flex flex-wrap items-center justify-between gap-2 py-3">
                       <span className="text-sm">
-                        {name} · version {item.revision} · {item.lifecycleMode}
+                        {name} · {item.lifecycleMode === "create" ? "New setup" : "Change to a saved channel"} ·{" "}
+                        <TimeText prefix="Updated" value={item.updatedAt} />
                       </span>
                       {continueInChat ? (
                         <NativeOwnerLink href={continueInChat} scope={workspaceId}>

@@ -10,7 +10,7 @@ describe("Library Journey route HX-402", () => {
     expect(RAIL_ITEMS.library.find((item) => item.id === "library-journey")?.section).toBe("journey");
     expect(getRouteReleaseScope(route)).toMatchObject({
       status: "experimental",
-      note: expect.stringContaining("Skill Hub lifecycle events"),
+      note: expect.stringContaining("Skill Hub changes including rollback and revoke"),
     });
   });
 });

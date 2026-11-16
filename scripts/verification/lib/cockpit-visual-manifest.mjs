@@ -34,7 +34,7 @@ export const COCKPIT_VISUAL_MANIFEST = [
   })),
   { slug: "cockpit-inbox", href: "/inbox", shell: "cockpit", readyText: "Inbox" },
   ...[
-    ["board", "/work", "Work"],
+    ["board", "/work", "Board"],
     ["history", "/work/history", "History"],
     ["schedules", "/work/schedules", "Schedules"],
   ].map(([slug, href, readyText]) => ({
@@ -58,7 +58,7 @@ export const COCKPIT_VISUAL_MANIFEST = [
     readySelector: currentAreaViewSelector("Library sections", `${href}?shell=cockpit`),
   })),
   ...[
-    ["health", "/system", "System"],
+    ["health", "/system", "Health"],
     ["spend", "/system/spend", "Spend"],
     ["quality", "/system/quality", "Quality"],
     ["diagnostics", "/system/diagnostics", "Diagnostics"],

@@ -66,7 +66,7 @@ afterEach(() => {
 describe("Capabilities page", () => {
   it("opens Connectors on the first visit and the last tab after that", async () => {
     await render();
-    expect(container.querySelector("h1")?.textContent).toBe("Capabilities");
+    expect(container.querySelector("h1")?.textContent).toBe("Connectors");
     expect(container.textContent).toContain("Everything GoatCitadel's AI can use, in one place.");
     expect(container.querySelector("nav")?.getAttribute("aria-label")).toBe("Capabilities sections");
     expect(tabLink("Connectors")?.getAttribute("aria-current")).toBe("page");
@@ -87,6 +87,18 @@ describe("Capabilities page", () => {
     expect(tabLink("Connectors")?.getAttribute("aria-current")).toBeNull();
     expect(shown("tools-tab")).toBe(true);
     expect(route.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/tools", { replace: true });
+  });
+
+  it.each([
+    [["skills"], "Skills"],
+    [["plugins"], "Plugins"],
+    [["connectors"], "Connectors"],
+    [["connectors", "advanced"], "Advanced setup"],
+    [["tools"], "Tools"],
+  ])("titles /capabilities/%s with %s (U-GL-051)", async (rest, heading) => {
+    route.rest = rest;
+    await render();
+    expect(container.querySelector("h1")?.textContent).toBe(heading);
   });
 
   it("never mounts Connectors first when the last tab was Tools", async () => {

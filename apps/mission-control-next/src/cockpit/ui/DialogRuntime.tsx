@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { cn } from "../lib/cn";
 import { IconButton } from "./IconButton";
 import type { DialogProps } from "./Dialog";
+import { NoFocusTooltips } from "./tooltip-focus";
 
 export function DialogRuntime({
   open,
@@ -45,23 +46,25 @@ export function DialogRuntime({
               contentClassName,
             )}
           >
-            <div className="mb-3 flex items-start justify-between gap-4">
-              <div>
-                <DialogPrimitive.Title className="font-display text-md font-semibold text-fg">
-                  {title}
-                </DialogPrimitive.Title>
-                {description ? (
-                  <DialogPrimitive.Description className="mt-1 text-sm text-fg-secondary">
-                    {description}
-                  </DialogPrimitive.Description>
-                ) : null}
+            <NoFocusTooltips>
+              <div className="mb-3 flex items-start justify-between gap-4">
+                <div>
+                  <DialogPrimitive.Title className="font-display text-md font-semibold text-fg">
+                    {title}
+                  </DialogPrimitive.Title>
+                  {description ? (
+                    <DialogPrimitive.Description className="mt-1 text-sm text-fg-secondary">
+                      {description}
+                    </DialogPrimitive.Description>
+                  ) : null}
+                </div>
+                {actions}
+                <DialogPrimitive.Close asChild>
+                  <IconButton label={closeLabel} icon={<X aria-hidden="true" className="size-4" />} />
+                </DialogPrimitive.Close>
               </div>
-              {actions}
-              <DialogPrimitive.Close asChild>
-                <IconButton label={closeLabel} icon={<X aria-hidden="true" className="size-4" />} />
-              </DialogPrimitive.Close>
-            </div>
-            {children}
+              {children}
+            </NoFocusTooltips>
           </DialogPrimitive.Content>
         </div>
       </DialogPrimitive.Portal>

@@ -168,7 +168,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
             {plural(candidate.sourceRefs.length, "source reference")}
           </p>
           {candidate.sourceText ? (
-            <details className="rounded-md border border-line bg-sunken p-3 text-fg-secondary">
+            <details className="rounded-md bg-sunken p-3 text-fg-secondary">
               <summary className="cursor-pointer font-medium">Source excerpt</summary>
               <p className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words">{candidate.sourceText}</p>
             </details>

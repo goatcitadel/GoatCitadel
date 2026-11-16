@@ -1,5 +1,5 @@
 import { isApiRequestError } from "../api/http-internal";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   clearGatewayAuthState,
   createGatewayDeviceAccessRequest,
@@ -12,7 +12,7 @@ import {
 } from "../api/shell-client";
 import { deriveShellGatewayAccessState } from "../state/gateway-shell-state";
 import { StatusChip } from "./StatusChip";
-import { GCSelect, GCSwitch } from "./ui";
+import { GCSelect } from "./ui";
 
 type GatewayAccessView =
   | GatewayAccessPreflightResult
@@ -21,14 +21,20 @@ type GatewayAccessView =
       message: string;
       healthDetail?: string;
       authMode?: GatewayAuthState["mode"];
+      rejectedStoredAuth?: undefined;
     };
+
+/** What the sign-in page just sent, so a refusal can be worded for it. Carries no credential. */
+export interface GatewayAccessSubmission {
+  submittedMode: "token" | "basic";
+}
 
 interface GatewayAccessGateProps {
   gatewayBaseUrl: string;
   access: GatewayAccessView;
   busy: boolean;
   autoRetryPending?: boolean;
-  onRetry: () => void | Promise<void>;
+  onRetry: (submission?: GatewayAccessSubmission) => void | Promise<void>;
   /** Heading once connected; the classic view keeps its own wording when omitted. */
   title?: string;
   subtitle?: string;
@@ -94,18 +100,22 @@ export function GatewayAccessGate({
   const [deviceApprovalError, setDeviceApprovalError] = useState<string | null>(null);
   const [deviceApprovalBusy, setDeviceApprovalBusy] = useState(false);
   const [pendingDeviceApproval, setPendingDeviceApproval] = useState<PendingDeviceApprovalRequest | null>(null);
+  // One connect attempt at a time: Enter and the button both submit the same form.
+  const connectInFlightRef = useRef(false);
 
   useEffect(() => {
     const stored = readStoredGatewayAuthState();
     setAuthMode(access.authMode === "basic" ? "basic" : stored?.mode === "basic" ? "basic" : "token");
-    setToken(stored?.token ?? "");
-    setUsername(stored?.username ?? "");
-    setPassword(stored?.password ?? "");
+    // After a refusal the client has already cleared storage; keep what was typed (in this box only) so it can be fixed.
+    const keepTyped = access.rejectedStoredAuth === true;
+    setToken((current) => stored?.token ?? (keepTyped ? current : ""));
+    setUsername((current) => stored?.username ?? (keepTyped ? current : ""));
+    setPassword((current) => stored?.password ?? (keepTyped ? current : ""));
     setRemember(getGatewayAuthStorageMode() === "persistent");
     setFormError(null);
     setDeviceApprovalError(null);
     setDeviceLabel(inferPendingDeviceLabel());
-  }, [access.authMode, access.status]);
+  }, [access.authMode, access.status, access.rejectedStoredAuth]);
 
   useEffect(() => {
     if (access.status !== "needs-auth" || pendingDeviceApproval?.status !== "pending") {
@@ -198,6 +208,18 @@ export function GatewayAccessGate({
       "Mission Control is waiting for a verified gateway session before it starts live data and control surfaces.");
 
   const handleConnect = async () => {
+    if (busy || deviceApprovalBusy || connectInFlightRef.current) {
+      return;
+    }
+    connectInFlightRef.current = true;
+    try {
+      await submitCredentials();
+    } finally {
+      connectInFlightRef.current = false;
+    }
+  };
+
+  const submitCredentials = async () => {
     setFormError(null);
     if (authMode === "token") {
       if (!token.trim()) {
@@ -212,7 +234,7 @@ export function GatewayAccessGate({
         },
         remember ? "persistent" : "session",
       );
-      await onRetry();
+      await onRetry({ submittedMode: "token" });
       return;
     }
 
@@ -229,7 +251,7 @@ export function GatewayAccessGate({
       },
       remember ? "persistent" : "session",
     );
-    await onRetry();
+    await onRetry({ submittedMode: "basic" });
   };
 
   const handleRequestApproval = async () => {
@@ -338,7 +360,14 @@ export function GatewayAccessGate({
         {deviceApprovalError ? <p className="error gateway-access-error">{deviceApprovalError}</p> : null}
 
         {needsAuth ? (
-          <div className="gateway-access-form">
+          <form
+            id="gateway-access-form"
+            className="gateway-access-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleConnect();
+            }}
+          >
             <div className="controls-row gateway-access-row">
               <label htmlFor="gateway-access-mode">Credential type</label>
               <GCSelect
@@ -392,24 +421,39 @@ export function GatewayAccessGate({
             )}
 
             <div className="controls-row gateway-access-row">
-              <GCSwitch
-                id="gateway-access-remember"
-                checked={remember}
-                onCheckedChange={setRemember}
-                label="Remember credentials on this browser"
-              />
+              <label className="gateway-access-check" htmlFor="gateway-access-remember">
+                <input
+                  type="checkbox"
+                  id="gateway-access-remember"
+                  checked={remember}
+                  onChange={(event) => setRemember(event.target.checked)}
+                />{" "}
+                Remember credentials on this browser
+              </label>
             </div>
+          </form>
+        ) : null}
 
-            <div className="controls-row gateway-access-row">
-              <label htmlFor="gateway-access-device-label">Request label</label>
-              <input
-                className="gc-input"
-                id="gateway-access-device-label"
-                value={deviceLabel}
-                onChange={(event) => setDeviceLabel(event.target.value)}
-                autoComplete="off"
-              />
-            </div>
+        {needsAuth ? (
+          // Outside the sign-in form: Enter here asks for approval, and never sends the token.
+          <div className="controls-row gateway-access-row">
+            <label htmlFor="gateway-access-device-label">Request label</label>
+            <input
+              className="gc-input"
+              id="gateway-access-device-label"
+              value={deviceLabel}
+              onChange={(event) => setDeviceLabel(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") {
+                  return;
+                }
+                event.preventDefault();
+                if (!busy && !deviceApprovalBusy && pendingDeviceApproval?.status !== "pending") {
+                  void handleRequestApproval();
+                }
+              }}
+              autoComplete="off"
+            />
           </div>
         ) : null}
 
@@ -426,9 +470,9 @@ export function GatewayAccessGate({
           {needsAuth ? (
             <>
               <button
-                type="button"
+                type="submit"
+                form="gateway-access-form"
                 className="gc-button active"
-                onClick={() => void handleConnect()}
                 disabled={busy || deviceApprovalBusy}
               >
                 {busy ? "Connecting..." : "Connect to gateway"}

@@ -129,7 +129,7 @@ describe("cockpit Features switches", () => {
     try {
       await vi.waitFor(() =>
         expect(container.textContent).toContain(
-          "GoatCitadel did not report this setting. Refresh, or update GoatCitadel, before changing it.",
+          "GoatCitadel did not report this setting. Try again, or update GoatCitadel, before changing it.",
         ),
       );
       expect(container.textContent).not.toContain("Current: Off");

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { MoreHorizontal, Pencil } from "lucide-react";
 import type { MissionThreadedContextDockProps } from "@goatcitadel/threaded-surface-core";
 import { Button } from "../../ui/Button";
@@ -7,14 +7,24 @@ import { Menu, MenuContent, MenuItem, MenuTrigger } from "../../ui/Menu";
 export function ChatSessionTitle({ title, dock }: { title: string; dock: MissionThreadedContextDockProps | null }) {
   const [renaming, setRenaming] = useState(false);
   const busy = dock?.sessionControlPending === "rename";
+  // The rename box unmounts when it closes, so focus goes back to the button that opened it (U-GL-048).
+  const renameButton = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
+  useEffect(() => {
+    if (renaming || !returnFocus.current) return;
+    returnFocus.current = false;
+    renameButton.current?.focus();
+  }, [renaming]);
   const cancel = () => {
     dock?.onRenameTitleChange(title);
+    returnFocus.current = true;
     setRenaming(false);
   };
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!dock?.renameTitle.trim() || busy) return;
     await dock.onRenameSession();
+    returnFocus.current = true;
     setRenaming(false);
   };
 
@@ -50,6 +60,7 @@ export function ChatSessionTitle({ title, dock }: { title: string; dock: Mission
     <div className="flex min-w-0 items-center gap-1">
       <h1 className="truncate font-display text-base font-semibold text-fg">{title}</h1>
       <button
+        ref={renameButton}
         type="button"
         aria-label="Rename conversation"
         onClick={() => {

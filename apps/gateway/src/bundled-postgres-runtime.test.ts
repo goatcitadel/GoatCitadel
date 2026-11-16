@@ -309,4 +309,25 @@ invalid
       details: ["missing effective 5432/tcp port binding"],
     });
   });
+
+  it("decides the port is held only when nothing of this install owns it (U-FR-015)", () => {
+    const held = __bundledPostgresRuntimeInternals.portHeldByAnotherProgram;
+    expect(held({ acceptsConnections: true, ownPostmasterAlive: false, ownContainerRunning: false })).toBe(true);
+    expect(held({ acceptsConnections: true, ownPostmasterAlive: true, ownContainerRunning: false })).toBe(false);
+    expect(held({ acceptsConnections: true, ownPostmasterAlive: false, ownContainerRunning: true })).toBe(false);
+    expect(held({ acceptsConnections: false, ownPostmasterAlive: false, ownContainerRunning: false })).toBe(false);
+  });
+
+  it("words each start failure for the operator without setting names", () => {
+    const summary = __bundledPostgresRuntimeInternals.bundledPostgresOperatorSummary;
+    expect(summary("timeout", 45432, 180000)).toBe(
+      "The local database did not start within 180 seconds. Open Logs shows its last messages.",
+    );
+    expect(summary("port_held", 45432)).toContain("(45432)");
+    for (const kind of ["port_held", "other_database", "reserved_port", "timeout", "no_backend"] as const) {
+      const text = summary(kind, 45432, 180000);
+      expect(text).not.toMatch(/GOATCITADEL_|bundledPostgres|assistant./);
+      expect(text).not.toContain("—");
+    }
+  });
 });

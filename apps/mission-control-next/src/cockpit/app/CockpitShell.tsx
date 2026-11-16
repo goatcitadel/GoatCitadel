@@ -37,6 +37,8 @@ import { applyCockpitAppearance } from "./cockpit-appearance";
 import { useAreaShortcuts } from "./use-area-shortcuts";
 import { ShortcutHelp } from "./ShortcutHelp";
 import { cockpitDocumentTitle } from "./cockpit-document-title";
+import { useFocusPageOnAreaChange } from "./use-focus-page-on-area-change";
+import { useCockpitTitleDetailValue } from "./cockpit-title-detail";
 import { useCockpitScroll } from "./use-cockpit-scroll";
 import { getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 
@@ -104,10 +106,15 @@ function CockpitShellContent({
   const [collapseOverride, setCollapseOverride] = useState<boolean | null>(null);
   const sidebarCollapsed = collapseOverride ?? tablet;
 
+  const titleDetail = useCockpitTitleDetailValue();
+  // Capabilities' Advanced setup lives under Connectors in the address but is its own page.
+  const titleSection =
+    area === "capabilities" && rest[0] === "connectors" && rest[1] === "advanced" ? "advanced" : rest[0];
   const documentTitle = cockpitDocumentTitle(
     areaLabel,
-    area === "chat" || area === "gallery" ? undefined : rest[0],
+    area === "chat" || area === "gallery" ? undefined : titleSection,
     area,
+    area === "chat" || area === "work" ? titleDetail : undefined,
   );
   useEffect(() => {
     const previous = document.title;
@@ -116,6 +123,8 @@ function CockpitShellContent({
       if (document.title === documentTitle) document.title = previous;
     };
   }, [documentTitle]);
+
+  useFocusPageOnAreaChange(area);
 
   useLayoutEffect(() => {
     applyCockpitAppearance(theme, density);

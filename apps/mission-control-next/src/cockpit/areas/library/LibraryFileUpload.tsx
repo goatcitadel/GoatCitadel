@@ -13,7 +13,7 @@ import { formatAbsoluteTime, formatBytes } from "@goatcitadel/mission-control-sh
 import { readTextFileForUpload } from "./library-file-read";
 
 const EMPTY = { path: "", content: "" };
-const INPUT = "w-full rounded-md border border-line bg-raised p-2 text-fg";
+const INPUT = "w-full rounded-md border border-line-control bg-raised p-2 text-fg";
 const LOOKUP_LIMIT = 1000;
 
 /** The file list is relative to the listed directory, so the reviewed path splits into that directory and a name. */

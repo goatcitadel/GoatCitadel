@@ -130,14 +130,14 @@ export function RuntimeAuthorityMap({ workspaceId }: { workspaceId: string }) {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 id="runtime-authority-title" className="text-base font-semibold text-fg">
-            Runtime authority map
+            Where GoatCitadel's records come from
           </h2>
           <p className="mt-1 text-sm text-fg-secondary">
             How GoatCitadel classifies each runtime record, and how current it is.
           </p>
         </div>
         <Button size="sm" disabled={busy} onClick={reload}>
-          {busy ? "Reloading authority" : "Reload authority"}
+          {busy ? "Reloading" : "Reload"}
         </Button>
       </div>
       {projection.error ? (

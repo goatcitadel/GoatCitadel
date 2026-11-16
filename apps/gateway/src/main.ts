@@ -21,7 +21,13 @@ import {
   type RemoteWorkerNativeRuntimeService,
 } from "./services/remote-worker-native-runtime-service.js";
 import { SharedHostAdmissionClosedError } from "./services/shared-host-lifecycle-service.js";
+import { withBundledDatabaseTimeoutSummary } from "./startup-build-failure.js";
 import { resolveGatewayStartupExitCode } from "./startup-errors.js";
+import {
+  STARTUP_FAILURE_FILE_ENV,
+  clearStartupFailureRecord,
+  writeStartupFailureRecord,
+} from "./startup-failure-record.js";
 
 setBootCheckpoint("main.ts:body-start");
 const startupPhases = getStartupPhaseRecorder();
@@ -51,6 +57,10 @@ async function runGateway(): Promise<void> {
     buildAppPhase.fail(formatStartupPhaseError(error));
     console.error(error);
     process.exitCode = resolveGatewayStartupExitCode(error);
+    await writeStartupFailureRecord(
+      process.env[STARTUP_FAILURE_FILE_ENV],
+      error instanceof Error ? withBundledDatabaseTimeoutSummary(error, startupPhases.snapshot()) : error,
+    );
     endBootTracking();
     return;
   }
@@ -179,10 +189,12 @@ async function runGateway(): Promise<void> {
       throw error;
     }
     startupPhases.markReady();
+    await clearStartupFailureRecord(process.env[STARTUP_FAILURE_FILE_ENV]);
     endBootTracking();
   } catch (error) {
     app.log.error(error);
     process.exitCode = resolveGatewayStartupExitCode(error);
+    await writeStartupFailureRecord(process.env[STARTUP_FAILURE_FILE_ENV], error);
     try {
       if (!shuttingDown) {
         shuttingDown = true;

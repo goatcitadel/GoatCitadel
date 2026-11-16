@@ -36,6 +36,7 @@ import { WorkRunningIndicator } from "./WorkRunningIndicator";
 import { ScopeSwitcher } from "./ScopeSwitcher";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
+import { Tooltip } from "../ui/Tooltip";
 import { Kbd } from "../ui/Kbd";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../ui/Menu";
 import { COCKPIT_AREAS } from "./routes";
@@ -47,10 +48,11 @@ import { importCollapsedStreamIndicator } from "./load-collapsed-stream-indicato
 
 type StreamRuntime = typeof import("./CollapsedStreamIndicator");
 let streamRuntimeLoad: Promise<StreamRuntime> | undefined;
-const loadStreamIndicator = () => (streamRuntimeLoad ??= importCollapsedStreamIndicator().catch((cause) => {
-  streamRuntimeLoad = undefined;
-  throw cause;
-}));
+const loadStreamIndicator = () =>
+  (streamRuntimeLoad ??= importCollapsedStreamIndicator().catch((cause) => {
+    streamRuntimeLoad = undefined;
+    throw cause;
+  }));
 
 // A keyed owner keeps navigation and authority changes from inheriting pending focus.
 function DeferredStreamIndicator({ label, children }: { label: string; children: ReactNode }) {
@@ -60,10 +62,17 @@ function DeferredStreamIndicator({ label, children }: { label: string; children:
   const restore = useRef(false);
   useLayoutEffect(() => {
     let current = true;
-    void loadStreamIndicator().then((loaded) => {
-      if (current) setRuntime(loaded);
-    }, () => { /* The labelled fallback remains usable after a code-load failure. */ });
-    return () => { current = false; };
+    void loadStreamIndicator().then(
+      (loaded) => {
+        if (current) setRuntime(loaded);
+      },
+      () => {
+        /* The labelled fallback remains usable after a code-load failure. */
+      },
+    );
+    return () => {
+      current = false;
+    };
   }, []);
   useLayoutEffect(() => {
     if (runtime && restore.current) {
@@ -74,7 +83,9 @@ function DeferredStreamIndicator({ label, children }: { label: string; children:
   const Indicator = runtime?.CollapsedStreamIndicator;
   return (
     <span ref={host} className="inline-flex rounded-sm">
-      {Indicator ? <Indicator label={label}>{children}</Indicator> : (
+      {Indicator ? (
+        <Indicator label={label}>{children}</Indicator>
+      ) : (
         <span
           ref={(node) => {
             if (!node) restore.current = document.activeElement === fallback.current;
@@ -114,7 +125,11 @@ export function Sidebar({
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
 }) {
-  const caller = useSyncExternalStore(subscribeGatewayCallerScope, getGatewayCallerScopeRevision, getGatewayCallerScopeRevision);
+  const caller = useSyncExternalStore(
+    subscribeGatewayCallerScope,
+    getGatewayCallerScopeRevision,
+    getGatewayCallerScopeRevision,
+  );
   const access = useSyncExternalStore(subscribeGatewayAccessChange, getGatewayAccessRevision, getGatewayAccessRevision);
   const shellSwitch = useCockpitShellSwitch();
   const { area: current, pathname, search, hash, navigate } = useCockpitRoute();
@@ -224,21 +239,22 @@ export function Sidebar({
           )}
         </div>
       ) : (
-        <a
-          href={cockpitHref("/system/health") ?? "/system/health"}
-          title={healthStatus.title}
-          onPointerEnter={() => preload("system")}
-          onFocus={() => preload("system")}
-          onClick={(event) => {
-            if (isModifiedClick(event)) return;
-            event.preventDefault();
-            navigate("/system/health");
-          }}
-          className="flex min-h-8 items-center gap-2 px-2 py-1 text-xs text-fg-muted hover:text-fg"
-        >
-          <HealthIcon aria-hidden="true" className={`size-4 shrink-0 ${healthText}`} />
-          <span className={collapsed ? "sr-only" : ""}>{healthStatus.label}</span>
-        </a>
+        <HealthLinkTip title={healthStatus.title}>
+          <a
+            href={cockpitHref("/system/health") ?? "/system/health"}
+            onPointerEnter={() => preload("system")}
+            onFocus={() => preload("system")}
+            onClick={(event) => {
+              if (isModifiedClick(event)) return;
+              event.preventDefault();
+              navigate("/system/health");
+            }}
+            className="flex min-h-8 items-center gap-2 px-2 py-1 text-xs text-fg-muted hover:text-fg"
+          >
+            <HealthIcon aria-hidden="true" className={`size-4 shrink-0 ${healthText}`} />
+            <span className={collapsed ? "sr-only" : ""}>{healthStatus.label}</span>
+          </a>
+        </HealthLinkTip>
       )}
       <div
         data-stream-state={streamState}
@@ -247,7 +263,16 @@ export function Sidebar({
         {collapsed ? (
           // The collapsed rail hides the label, so the icon is focusable and names itself in a tooltip.
           <DeferredStreamIndicator
-            key={JSON.stringify([getGatewayApiBaseUrl(), caller, access, activeCitadelId, activeWorkspaceId, pathname, search, hash])}
+            key={JSON.stringify([
+              getGatewayApiBaseUrl(),
+              caller,
+              access,
+              activeCitadelId,
+              activeWorkspaceId,
+              pathname,
+              search,
+              hash,
+            ])}
             label={stream.label}
           >
             <StreamIcon aria-hidden="true" className={`size-4 ${streamText}`} />
@@ -284,4 +309,9 @@ export function Sidebar({
       {shellSwitch.feedback}
     </aside>
   );
+}
+
+/** The health sentence (when there is one beyond the label) shows in the shared tooltip, not a native title. */
+function HealthLinkTip({ title, children }: { title: string | undefined; children: ReactNode }) {
+  return title ? <Tooltip label={title}>{children}</Tooltip> : <>{children}</>;
 }

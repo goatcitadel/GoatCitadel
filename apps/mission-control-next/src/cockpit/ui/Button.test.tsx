@@ -68,7 +68,7 @@ describe("cockpit buttons", () => {
     });
     const button = renderer.root.findByType("button");
     expect(button.props["aria-label"]).toBe("Open inbox");
-    act(() => button.props.onClick());
+    act(() => button.props.onClick({ defaultPrevented: false }));
     expect(onClick).toHaveBeenCalledOnce();
   });
 });

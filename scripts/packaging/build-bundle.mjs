@@ -139,6 +139,10 @@ async function main() {
     path.join(appRoot, "scripts", "lib", "ui-target.mjs"),
   );
   copyFile(
+    path.join(repoRoot, "scripts", "lib", "gateway-startup-failure.mjs"),
+    path.join(appRoot, "scripts", "lib", "gateway-startup-failure.mjs"),
+  );
+  copyFile(
     path.join(repoRoot, "scripts", "lib", "managed-runtime-ownership.mjs"),
     path.join(appRoot, "scripts", "lib", "managed-runtime-ownership.mjs"),
   );

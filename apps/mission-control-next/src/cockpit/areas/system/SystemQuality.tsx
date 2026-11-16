@@ -6,6 +6,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/Tabs";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
@@ -58,8 +59,14 @@ export function SystemQuality() {
         <>
           <div className="space-y-1 text-sm text-fg-secondary">
             <p>Results checked {qualityTimestamp(snapshot.generatedAt)}.</p>
-            <p>{snapshot.metricScope.note}</p>
+            <p>
+              This page shows saved test results. It does not run tests or call models. Counts cover only the most
+              recent results it reads, not everything ever saved.
+            </p>
             <QualityWarnings items={snapshot.warnings.filter((item) => item !== snapshot.metricScope.note)} />
+            <TechnicalDetails label="Notes from GoatCitadel">
+              <QualityWarnings items={[snapshot.metricScope.note]} />
+            </TechnicalDetails>
           </div>
           <Tabs value={view} onValueChange={(value) => setView(value as QualityView)}>
             <TabsList aria-label="Quality results">
