@@ -1122,6 +1122,27 @@ describe("SkillHubLifecycleService", () => {
       ]);
     }, 90_000);
 
+    it("refuses a removal when a version of the lineage is no longer revoked", async () => {
+      const { harness, runtimeDir } = await revokedHarness();
+      const revoked = harness.storage.candidateSkillVersions.get("version-demo-1");
+      // A later version of the same lineage that was never revoked.
+      harness.storage.candidateSkillVersions.upsert({
+        ...revoked,
+        versionId: "version-demo-2",
+        supersedesVersionId: "version-demo-1",
+        lifecycleState: "candidate",
+      });
+
+      const result = await harness.lifecycle.applyApprovedOperation(
+        await approve(harness, removeTemplate(harness, "operation-remove")),
+      );
+
+      expect(result.settlement.disposition).toBe("blocked");
+      expect(result.settlement.result).toMatchObject({ code: "candidate_not_revoked", boundaryCrossed: false });
+      await expect(fs.stat(path.join(runtimeDir, "SKILL.md"))).resolves.toBeTruthy();
+      expect(harness.storage.skillLifecycle.find("extra:demo")?.lifecycleState).toBe("revoked");
+    }, 90_000);
+
     it("refuses a removal while an installed plugin still lists the skill", async () => {
       const { harness, runtimeDir } = await revokedHarness();
       await new CapabilityPluginStore(harness.asyncStorage.systemSettings).update("demo-plugin", () => ({

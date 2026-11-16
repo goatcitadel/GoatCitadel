@@ -229,21 +229,34 @@ export interface RemovalLineage {
    * removed lineage apart from one for the copy.
    */
   alreadyRemoved: boolean;
+  /** Every version of the lineage is revoked, as the guard required when the removal was asked for. */
+  allVersionsRevoked: boolean;
 }
 
+/** At most this many versions of one lineage are read; a lineage with more cannot be proven all revoked. */
+const LINEAGE_VERSION_LIMIT = 100;
+
 async function readRemovalLineage(
-  storage: Pick<AsyncStorage, "skillHubOperations">,
+  storage: Pick<AsyncStorage, "skillHubOperations" | "candidateSkillVersions">,
   intent: SkillHubOperationIntentRecord,
 ): Promise<RemovalLineage> {
   const removed = await storage.skillHubOperations.listAppliedRemovalCandidateIds(intent.workspaceId);
-  return { alreadyRemoved: removed.includes(intent.targetCandidateId!) };
+  const versions = await storage.candidateSkillVersions.listByCandidateId(
+    intent.targetCandidateId!,
+    LINEAGE_VERSION_LIMIT + 1,
+  );
+  return {
+    alreadyRemoved: removed.includes(intent.targetCandidateId!),
+    allVersionsRevoked:
+      versions.length <= LINEAGE_VERSION_LIMIT && versions.every((version) => version.lifecycleState === "revoked"),
+  };
 }
 
 export interface RuntimeRemovalContext {
   intent: SkillHubOperationIntentRecord;
   candidate: CandidateSkillVersionRecord;
   /** Where the skill's lifecycle record and its lineage's removals are read, just before anything is decided. */
-  storage: Pick<AsyncStorage, "skillLifecycle" | "skillHubOperations">;
+  storage: Pick<AsyncStorage, "skillLifecycle" | "skillHubOperations" | "candidateSkillVersions">;
   manifest: SkillContentIntegrityManifest;
   skillName: string;
   signal: AbortSignal;
@@ -296,6 +309,12 @@ export async function runRuntimeRemoval(context: RuntimeRemovalContext): Promise
   const recordBlock = removalRecordBlock(intent, record, context.candidate);
   if (recordBlock) {
     return await context.settle("blocked", intent.contentTreeSha256, { code: recordBlock, boundaryCrossed: false });
+  }
+  if (!lineage.allVersionsRevoked) {
+    return await context.settle("blocked", intent.contentTreeSha256, {
+      code: "candidate_not_revoked",
+      boundaryCrossed: false,
+    });
   }
   let staging: RuntimeRemovalStaging;
   try {
