@@ -220,6 +220,16 @@ describe("Work run controls", () => {
     expect(api.recoverDurableDeadLetter).toHaveBeenCalledWith("dead-a");
   });
 
+  it("describes recovery in plain words when asking to confirm", async () => {
+    api.fetchDurableRun.mockResolvedValue({ ...run, status: "dead_lettered" });
+    await renderControls();
+    await act(async () => button("Recover").click());
+    expect(document.body.textContent).toContain(
+      "Requeues this run, which needs recovery. Steps and external effects may run again.",
+    );
+    expect(document.body.textContent).not.toContain("dead-lettered");
+  });
+
   it("hides recovery when the recent recovery list lacks a single unresolved failed delivery", async () => {
     api.fetchDurableRun.mockResolvedValue({ ...run, status: "dead_lettered" });
     api.fetchDurableDeadLetters.mockResolvedValue({ items: [] });
