@@ -18,6 +18,8 @@ export interface VoiceRuntimeCliDeps {
   selectManagedVoiceModel: typeof selectManagedVoiceModel;
   getManagedVoiceRuntimeStatus: typeof getManagedVoiceRuntimeStatus;
   models: readonly ManagedVoiceRuntimeModel[];
+  /** Points this process at a GoatCitadel home, where the voice runtime is kept under tools. */
+  setHome: (directory: string) => void;
   log: (message: string) => void;
   error: (message: string) => void;
 }
@@ -29,6 +31,9 @@ const defaultVoiceRuntimeCliDeps: VoiceRuntimeCliDeps = {
   selectManagedVoiceModel,
   getManagedVoiceRuntimeStatus,
   models: MANAGED_VOICE_MODELS,
+  setHome: (directory) => {
+    process.env.GOATCITADEL_HOME = directory;
+  },
   log: console.log.bind(console),
   error: console.error.bind(console),
 };
@@ -44,9 +49,21 @@ export async function runVoiceRuntimeCli(
     return;
   }
 
+  // A packaged install keeps its voice runtime in the install folder; setup names it, since setup itself has no
+  // GOATCITADEL_HOME and would otherwise install into the user profile, where the packaged app does not look.
+  const home = readVoiceRuntimeFlag(args, "--home")?.trim();
+  if (home) deps.setHome(home);
+
   if (action === "install") {
-    const modelId = readVoiceRuntimeFlag(args, "--model") ?? undefined;
-    const activate = !args.includes("--no-activate");
+    let modelId = readVoiceRuntimeFlag(args, "--model") ?? undefined;
+    let activate = !args.includes("--no-activate");
+    if (args.includes("--keep-selection")) {
+      // A setup that refreshes the runtime must not change the model the operator chose. A known choice is the
+      // one installed; a choice this build does not know is left selected and the given model is only added.
+      const selected = (await deps.getManagedVoiceRuntimeStatus()).selectedModelId;
+      if (selected && deps.models.some((item) => item.id === selected)) modelId = selected;
+      else if (selected) activate = false;
+    }
     const status = await deps.installManagedVoiceRuntime(undefined, {
       modelId,
       activate,
@@ -112,7 +129,7 @@ export function printVoiceRuntimeUsage(
   deps: Pick<VoiceRuntimeCliDeps, "log" | "models"> = defaultVoiceRuntimeCliDeps,
 ): void {
   deps.log(`Usage:
-  goat voice install [--model <modelId>] [--no-activate]
+  goat voice install [--model <modelId>] [--no-activate] [--keep-selection] [--home <directory>]
   goat voice status
   goat voice models
   goat voice select <modelId>

@@ -30,6 +30,7 @@ describe("voice runtime CLI", () => {
           fileName: "ggml-base.en.bin",
         },
       ],
+      setHome: vi.fn(),
       log: vi.fn(),
       error: vi.fn(),
     };
@@ -63,6 +64,56 @@ describe("voice runtime CLI", () => {
     expect(readVoiceRuntimeFlag(["--model", "base.en"], "--model")).toBe("base.en");
     expect(readVoiceRuntimeFlag(["--model"], "--model")).toBeNull();
     expect(readVoiceRuntimeFlag([], "--model")).toBeNull();
+  });
+
+  it("keeps the model already chosen when asked to, and uses the given one when nothing is chosen", async () => {
+    const base = createDeps();
+    const chosen: VoiceRuntimeCliDeps = {
+      ...base,
+      models: [...base.models, { ...base.models[0]!, id: "small", label: "Small multilingual" }],
+      getManagedVoiceRuntimeStatus: vi.fn(async () => ({ selectedModelId: "small" }) as never),
+    };
+    await runCli(["install", "--model", "base.en", "--keep-selection"], chosen);
+    expect(chosen.installManagedVoiceRuntime).toHaveBeenCalledWith(undefined, { modelId: "small", activate: true });
+
+    const none = await runCli(["install", "--model", "base.en", "--keep-selection"]);
+    expect(none.installManagedVoiceRuntime).toHaveBeenCalledWith(undefined, { modelId: "base.en", activate: true });
+
+    const unknown: VoiceRuntimeCliDeps = {
+      ...createDeps(),
+      getManagedVoiceRuntimeStatus: vi.fn(async () => ({ selectedModelId: "custom.bin" }) as never),
+    };
+    await runCli(["install", "--model", "base.en", "--keep-selection"], unknown);
+    // A choice this build does not know stays selected: the given model is added without being made active.
+    expect(unknown.installManagedVoiceRuntime).toHaveBeenCalledWith(undefined, { modelId: "base.en", activate: false });
+
+    const plain: VoiceRuntimeCliDeps = {
+      ...createDeps(),
+      getManagedVoiceRuntimeStatus: vi.fn(async () => ({ selectedModelId: "small" }) as never),
+    };
+    await runCli(["install", "--model", "base.en"], plain);
+    expect(plain.installManagedVoiceRuntime).toHaveBeenCalledWith(undefined, { modelId: "base.en", activate: true });
+  });
+
+  it("points at the named home before it reads or installs anything", async () => {
+    const order: string[] = [];
+    const deps: VoiceRuntimeCliDeps = {
+      ...createDeps(),
+      setHome: vi.fn((directory: string) => void order.push(`home:${directory}`)),
+      getManagedVoiceRuntimeStatus: vi.fn(async () => {
+        order.push("status");
+        return {} as never;
+      }),
+      installManagedVoiceRuntime: vi.fn(async () => {
+        order.push("install");
+        return { installed: true } as never;
+      }),
+    };
+    await runCli(["install", "--model", "base.en", "--keep-selection", "--home", "C:/Apps/GoatCitadel"], deps);
+    expect(order).toEqual(["home:C:/Apps/GoatCitadel", "status", "install"]);
+
+    const none = await runCli(["install", "--model", "base.en"]);
+    expect(none.setHome).not.toHaveBeenCalled();
   });
 
   it("prints status and sanitized model catalog output", async () => {
