@@ -2,8 +2,15 @@ import { Children, isValidElement, type ReactNode } from "react";
 import { expect, it } from "vitest";
 import { renderChatControllerFrame } from "./renderChatControllerFrame";
 
-function frame(error: string | null) {
+type FrameOptions = {
+  ownsFrameStatus?: boolean;
+  refreshing?: boolean;
+  renderSurface?: (input: { hostStatus?: unknown }) => ReactNode;
+};
+
+function frame(error: string | null, options: FrameOptions = {}) {
   return renderChatControllerFrame({
+    ownsFrameStatus: options.ownsFrameStatus ?? false,
     lockSurface: true,
     renderWhileLoading: true,
     error,
@@ -12,7 +19,7 @@ function frame(error: string | null) {
     workspaceName: "default",
     selectedSessionId: "session-1",
     visibleRunStateLabel: undefined,
-    renderSurface: () => null,
+    renderSurface: options.renderSurface ?? (() => null),
     threadedSurfaceInput: {} as never,
     forkConfirm: null,
     forkPending: false,
@@ -20,7 +27,13 @@ function frame(error: string | null) {
     blockHistoricalMutation: () => false,
     handleStartNewThreadFromTurn: () => undefined,
     surfaceState: { messageMode: "chat", surfaceHeaderTitle: "", surfaceHeaderSubtitle: "", isCodeSurface: false },
-    sessionData: { thread: null, loading: false, projects: null, sessions: null, isRefreshing: false },
+    sessionData: {
+      thread: null,
+      loading: false,
+      projects: null,
+      sessions: null,
+      isRefreshing: options.refreshing ?? false,
+    },
     threadController: {} as never,
     contextActions: { capabilitySuggestionConfirm: null } as never,
     composerInteractions: {} as never,
@@ -32,6 +45,10 @@ function frame(error: string | null) {
 
 /** The frame is a plain function, so its banner is a direct element in the returned tree; no DOM is needed. */
 function bannerText(error: string | null): string | null {
+  return bannerTextOf(frame(error));
+}
+
+function bannerTextOf(tree: ReactNode): string | null {
   const find = (node: ReactNode): string | null => {
     let found: string | null = null;
     Children.forEach(node, (child) => {
@@ -41,7 +58,7 @@ function bannerText(error: string | null): string | null {
     });
     return found;
   };
-  return find(frame(error));
+  return find(tree);
 }
 
 it("shows a refused API request as its plain sentence, never the raw status and JSON", () => {
@@ -58,4 +75,22 @@ it("keeps plain controller messages as they are, and shows nothing without an er
     "This chat changed elsewhere. Your rename draft is preserved; review it and retry.",
   );
   expect(bannerText(null)).toBeNull();
+});
+
+it("hands the plain error and refresh state to a shell that owns them, and prints neither (U-CH-010)", () => {
+  const seen: unknown[] = [];
+  const tree = frame('API error 422: {"error":"Choose off effort instead."}', {
+    ownsFrameStatus: true,
+    refreshing: true,
+    renderSurface: (input) => (seen.push(input.hostStatus), null),
+  });
+  expect(seen[0]).toEqual({ error: "Choose off effort instead.", refreshing: true });
+  expect(bannerTextOf(tree)).toBeNull();
+  expect(JSON.stringify(tree)).not.toContain("Refreshing chat context");
+});
+
+it("still prints the frame's own status line when the shell does not own it", () => {
+  const tree = frame("Something failed.", { refreshing: true });
+  expect(bannerTextOf(tree)).toBe("Something failed.");
+  expect(JSON.stringify(tree)).toContain("Refreshing chat context");
 });

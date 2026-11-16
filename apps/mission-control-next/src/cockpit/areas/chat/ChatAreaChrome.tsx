@@ -13,6 +13,7 @@ import { useModelLabel } from "../../data/use-model-label";
 import { presentDelegationRunStatus } from "./chat-vocabulary";
 import { projectFirstRunState } from "../settings/first-run-state";
 import type { ChannelConversationContext } from "./channel-conversation";
+import { ChatHostStatus } from "./ChatHostStatus";
 import { startConversation } from "./conversation-reuse";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 
@@ -23,7 +24,16 @@ type ActiveSession = MissionThreadedRenderSurfaceInput["activeSessionSurfaceProp
  * in a sheet; Projects opens from the list's project filter. On a phone the row is only the title, Conversations and the actions menu, which also holds Projects and
  * New conversation, so the transcript keeps the screen; an open build editor keeps its visible way back.
  */
-export function ChatSessionHeader({
+export function ChatSessionHeader(props: Parameters<typeof ChatSessionHeaderRow>[0]) {
+  return (
+    <>
+      <ChatSessionHeaderRow {...props} />
+      <ChatHostStatus status={props.input.hostStatus} />
+    </>
+  );
+}
+
+function ChatSessionHeaderRow({
   input,
   active,
   session,

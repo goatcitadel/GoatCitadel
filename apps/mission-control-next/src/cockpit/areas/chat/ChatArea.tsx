@@ -8,6 +8,7 @@ import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-su
 import { ChatConversationsSheet } from "./ChatConversationsSheet";
 import { unsentConversationId } from "./conversation-reuse";
 import { ChatEmptyState, ChatSessionHeader, ChatSetupGate } from "./ChatAreaChrome";
+import { CHAT_SHELL_FRAME } from "./ChatHostStatus";
 import { ChatTranscript } from "./ChatTranscript";
 import { ChatNoticeText } from "./ChatNoticeText";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
@@ -63,9 +64,7 @@ export function ChatArea({
         workspaceId={activeWorkspaceId ?? "default"}
         getChatApprovalModeIntent={getChatApprovalModeIntent}
         surface="chat"
-        lockSurface
-        hidePageHeader
-        renderWhileLoading
+        {...CHAT_SHELL_FRAME}
         secondaryEvidenceEnabled={inspectorSource === "chat"}
         restorePinnedGoal={false}
         routeSearch={search}
