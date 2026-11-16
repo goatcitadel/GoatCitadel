@@ -72,7 +72,7 @@ it.each([false, true])("marks only the current area link as the current row (col
 it("marks the Settings gear as a current row while Settings is open", async () => {
   route.area = "settings";
   await renderSidebar(false);
-  const gear = host.querySelector<HTMLElement>('[aria-label="Settings and account"]')!;
+  const gear = host.querySelector<HTMLElement>('[aria-label="Settings and theme"]')!;
   expect(gear.getAttribute("aria-current")).toBe("page");
   expect(gear.hasAttribute("data-current-row")).toBe(true);
 });

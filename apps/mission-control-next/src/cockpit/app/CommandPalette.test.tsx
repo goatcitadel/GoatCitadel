@@ -428,7 +428,7 @@ describe("CommandPalette", () => {
       "Go to Capabilities",
       "Go to Library",
       "Go to System",
-      "Switch to classic Mission Control",
+      "Switch to the classic view",
     ]) {
       expect(body).toContain(label);
     }
@@ -451,6 +451,21 @@ describe("CommandPalette", () => {
       });
       expect(document.body.textContent, word).toContain("Go to Capabilities");
       expect(document.body.textContent, word).not.toContain("Go to Work");
+    }
+  });
+
+  it("still finds the classic view by its older words", async () => {
+    act(() => {
+      root.render(<CommandPalette open onOpenChange={() => undefined} />);
+    });
+    await ready();
+    const input = document.querySelector<HTMLInputElement>("[cmdk-input]")!;
+    for (const words of ["classic Mission Control", "switch to classic", "classic view"]) {
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, words);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(document.body.textContent, words).toContain("Switch to the classic view");
     }
   });
 
@@ -482,7 +497,7 @@ describe("CommandPalette", () => {
     expect(controls.setTheme).toHaveBeenCalledWith("system");
     click("Use light theme");
     expect(controls.setTheme).toHaveBeenCalledWith("light");
-    click("Switch to classic");
+    click("Switch to the classic view");
     expect(controls.switchShell).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledWith(false);
   });

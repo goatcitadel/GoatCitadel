@@ -228,7 +228,7 @@ describe("MobileTabBar", () => {
     await act(async () => more.click());
     const sheet = document.querySelector('[role="dialog"][aria-label="More"]')!;
     expect(sheet.querySelector('[aria-label="System status"]')?.textContent).toContain("1 check failing");
-    expect(sheet.querySelector('[aria-label="System status"]')?.textContent).toContain("Updates connected");
+    expect(sheet.querySelector('[aria-label="System status"]')?.textContent).toContain("Live updates on");
     const scope = sheet.querySelector("[data-cockpit-scope-line]")?.textContent ?? "";
     expect(scope).not.toContain("Workspace name unavailable");
     expect(scope).not.toContain("Reading Citadel");
@@ -272,7 +272,7 @@ describe("MobileTabBar", () => {
       ),
     );
     await act(async () => button("More").click());
-    await act(async () => button("Switch to classic Mission Control").click());
+    await act(async () => button("Switch to the classic view").click());
     await vi.waitFor(() => expect(shell.switchShell).toHaveBeenCalledOnce());
     const [name, options] = shell.switchShell.mock.calls[0]!;
     expect(name).toBe("classic");

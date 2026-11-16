@@ -88,10 +88,10 @@ it("shows a Citadel or workspace really named like a marker as its name", async 
   names.citadel = { phase: "ready", name: "Citadel unavailable" };
   names.workspace = { phase: "ready", name: "Loading workspace…" };
   expect(await scopeText()).toBe("In Citadel unavailable / Loading workspace…");
-  names.citadel = { phase: "ready", name: "Reading Citadel..." };
+  names.citadel = { phase: "ready", name: "Reading Citadel…" };
   act(() => root.unmount());
   root = createRoot(container);
-  expect(await scopeText()).toBe("In Reading Citadel... / Loading workspace…");
+  expect(await scopeText()).toBe("In Reading Citadel… / Loading workspace…");
 });
 
 it("carries no live region", async () => {
@@ -102,6 +102,6 @@ it("carries no live region", async () => {
 });
 
 it("keeps the More sheet wording", () => {
-  expect(cockpitScopeLine("Reading Citadel...", undefined)).toBe("Loading workspace…");
+  expect(cockpitScopeLine("Reading Citadel…", undefined)).toBe("Loading workspace…");
   expect(cockpitScopeLine("Personal", undefined)).toBe("Personal / Workspace");
 });

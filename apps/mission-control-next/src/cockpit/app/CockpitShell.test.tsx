@@ -299,7 +299,7 @@ describe("CockpitShell", () => {
       "System",
     ]);
     expect(nav!.querySelector('[aria-current="page"]')?.textContent).toContain("Inbox");
-    expect(container.textContent).toContain("Reconnecting to updates");
+    expect(container.textContent).toContain("Reconnecting live updates");
     expect(container.textContent).not.toContain("All systems ok");
 
     await act(async () => {
@@ -365,7 +365,7 @@ describe("CockpitShell", () => {
     expect(search.getAttribute("aria-keyshortcuts")).toMatch(/^(Control|Meta)\+K$/);
     // The live-updates row shows its state as text; no hidden aria-label renames it.
     expect(sidebar.querySelector('[data-stream-state="open"]')?.hasAttribute("aria-label")).toBe(false);
-    expect(sidebar.querySelector('[data-stream-state="open"]')?.textContent).toContain("Updates connected");
+    expect(sidebar.querySelector('[data-stream-state="open"]')?.textContent).toContain("Live updates on");
   });
   it("shows a prominent Gateway outage without claiming an SSE retry is an outage", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -582,7 +582,7 @@ describe("CockpitShell", () => {
     // SH-01: the rail's live-update icon is focusable and named, so its tooltip is reachable without hover.
     const live = sidebar.querySelector<HTMLElement>('[data-stream-state] [role="img"]')!;
     expect(live.tabIndex).toBe(0);
-    expect(live.getAttribute("aria-label")).toBe("Updates disconnected");
+    expect(live.getAttribute("aria-label")).toBe("Live updates off");
     expect(window.location.href).toBe(href);
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Expand sidebar"]')!.click());
     expect(sidebar.getAttribute("data-collapsed")).toBe("false");
@@ -730,7 +730,7 @@ describe("CockpitShell", () => {
       expect(found).not.toBeNull();
       return found!;
     });
-    expect(strip.textContent).toContain("Updates connected");
+    expect(strip.textContent).toContain("Live updates on");
     expect(health.sources).not.toHaveBeenCalled();
     client.clear();
   });

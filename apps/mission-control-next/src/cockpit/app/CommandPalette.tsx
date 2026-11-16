@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchLlmConfig } from "@goatcitadel/mission-control-shared/api/platform";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
 import { useUiPreferences, type UiTheme } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { THEME_SEARCH_TERMS } from "./theme-options";
+import { CLASSIC_VIEW_SEARCH_TERMS, THEME_SEARCH_TERMS } from "./theme-options";
 import { buildSettingsIndex } from "../areas/settings/settings-index";
 import { resourceTitle } from "../areas/library/resource-title";
 import { LIBRARY_SECTION_LABELS } from "../areas/library/library-sections";
@@ -151,9 +151,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const settingsMatches = SETTINGS.filter((entry) => matches(`settings ${entry.label} ${entry.searchTerms}`));
   const commandMatches = matches("New chat conversation") || matches("Choose default model provider models switch");
   const preferenceMatches =
-    matches(THEME_SEARCH_TERMS) ||
-    matches("Switch density comfortable compact") ||
-    matches("Switch to classic Mission Control");
+    matches(THEME_SEARCH_TERMS) || matches("Switch density comfortable compact") || matches(CLASSIC_VIEW_SEARCH_TERMS);
   const noMatches =
     Boolean(query.trim()) &&
     !commandMatches &&

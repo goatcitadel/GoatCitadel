@@ -6,7 +6,7 @@ export const INBOX_GROUPS = [
   { id: "needs_decision", label: "Needs decision", description: "Requests waiting for your answer" },
   { id: "proposals", label: "Proposals", description: "Changes to inspect before accepting" },
   { id: "needs_attention", label: "Needs attention", description: "Work that needs investigation or recovery" },
-  { id: "updates", label: "Updates", description: "Completed work and other background changes" },
+  { id: "updates", label: "Notices", description: "Completed work and other background changes" },
 ] as const;
 
 /** Refuse counts and actions if the owner projection crosses the selected workspace. */

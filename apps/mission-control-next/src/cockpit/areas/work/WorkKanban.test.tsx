@@ -66,6 +66,9 @@ it.each(["?runId=r%2F1&taskId=t&workspaceId=workspace-a", "?view=run-detail&work
     act(() => root.render(<WorkKanban />));
     expect(host.textContent).toContain("Existing run evidence owner");
     expect(host.textContent).toContain("Experimental");
+    expect(host.textContent).toContain(
+      "A run opened from the classic view's Kanban, with its saved steps and outcome.",
+    );
     expect(fixture.task).not.toHaveBeenCalled();
     expect(fixture.run).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -233,33 +233,33 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
               ? `At least ${ownerCount.known}`
               : "Not fully checked";
           assert.equal(await updates.locator('[data-inbox-count="updates"]').innerText(), countLabel);
-          assert.ok((await updates.innerText()).includes("0 read from shown updates"));
+          assert.ok((await updates.innerText()).includes("0 read from shown notices"));
           const navigationBaseline = navigations;
           stage = "selection leaves the row unviewed";
           await row.getByRole("button", { name: "Details", exact: true }).focus();
           await page.keyboard.press("j");
           await row.waitFor();
-          assert.ok((await updates.innerText()).includes("0 read from shown updates"));
+          assert.ok((await updates.innerText()).includes("0 read from shown notices"));
           stage = "explicit Details marks the exact version";
           await row.getByRole("button", { name: "Details", exact: true }).click();
           await inspector.waitFor();
           await closeDetails();
           await row.waitFor({ state: "hidden" });
-          await updates.getByRole("button", { name: "Show read updates (1)", exact: true }).waitFor();
+          await updates.getByRole("button", { name: "Show read notices (1)", exact: true }).waitFor();
           assert.equal(await nav.getByRole("link", { name: /^Inbox/u }).innerText(), navCount);
           assert.equal(await updates.locator('[data-inbox-count="updates"]').innerText(), countLabel);
           assertInboxOwnerUnchanged(before, await readInbox());
           await capture("hidden");
           stage = "show and hide are reversible";
-          await updates.getByRole("button", { name: "Show read updates (1)", exact: true }).click();
+          await updates.getByRole("button", { name: "Show read notices (1)", exact: true }).click();
           await row.waitFor();
-          await updates.getByRole("button", { name: "Hide read updates", exact: true }).click();
+          await updates.getByRole("button", { name: "Hide read notices", exact: true }).click();
           await row.waitFor({ state: "hidden" });
           stage = "same-document remount retains viewed state";
           await nav.getByRole("link", { name: "Work", exact: true }).click();
           await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
           await nav.getByRole("link", { name: /^Inbox/u }).click();
-          await updates.getByRole("button", { name: "Show read updates (1)", exact: true }).waitFor();
+          await updates.getByRole("button", { name: "Show read notices (1)", exact: true }).waitFor();
           await row.waitFor({ state: "hidden" });
           assert.equal(navigations, navigationBaseline);
           assertInboxOwnerUnchanged(before, await readInbox());
@@ -294,7 +294,7 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
           await page.getByRole("button", { name: "Refresh", exact: true }).click();
           await row.waitFor();
           await row.getByText(changedItem.summary, { exact: true }).waitFor();
-          assert.ok((await updates.innerText()).includes("0 read from shown updates"));
+          assert.ok((await updates.innerText()).includes("0 read from shown notices"));
           assert.equal(await nav.getByRole("link", { name: /^Inbox/u }).innerText(), navCount);
           await capture("new-version");
           await row.getByRole("button", { name: "Details", exact: true }).click();
@@ -304,7 +304,7 @@ export async function runCockpitInboxViewedProof({ context, browser, stack, cita
           assertInboxOwnerUnchanged(changed, await readInbox());
           stage = "full reload preserves acknowledged update version";
           await page.reload({ waitUntil: "domcontentloaded" });
-          await updates.getByRole("button", { name: "Show read updates (1)", exact: true }).waitFor();
+          await updates.getByRole("button", { name: "Show read notices (1)", exact: true }).waitFor();
           await row.waitFor({ state: "hidden" });
           assertInboxOwnerUnchanged(changed, await readInbox());
           assert.ok(

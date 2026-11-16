@@ -325,7 +325,7 @@ export function InboxArea() {
                   filtered
                     ? "Nothing here matches the filters."
                     : group.id === "updates" && viewedCount > 0
-                      ? "No unread updates."
+                      ? "No unread notices."
                       : exact
                         ? "Nothing waiting here."
                         : "Nothing found here, but not every source could be checked."

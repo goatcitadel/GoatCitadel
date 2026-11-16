@@ -140,7 +140,7 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
         };
         const settings = async () => {
           if (variant === "mobile") { await page.getByRole("button", { name: "More areas and settings", exact: true }).click(); await page.getByRole("dialog", { name: "More", exact: true }).getByRole("button", { name: "Settings", exact: true }).click(); }
-          else { await page.getByRole("button", { name: "Settings and account", exact: true }).click(); await page.getByRole("menuitem", { name: "Settings", exact: true }).click(); }
+          else { await page.getByRole("button", { name: "Settings and theme", exact: true }).click(); await page.getByRole("menuitem", { name: "Settings", exact: true }).click(); }
           await page.getByRole("tab", { name: "Appearance", exact: true }).waitFor();
         };
         stage = "rail keyboard and current inspector";

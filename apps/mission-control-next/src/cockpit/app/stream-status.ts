@@ -21,11 +21,11 @@ type StatusPresentation = { Icon: LucideIcon; text: string };
  * label, so status never rests on colour alone.
  */
 export const STREAM_STATUS: Readonly<Record<EventStreamConnectionState, StatusPresentation & { label: string }>> = {
-  connecting: { label: "Connecting to updates", Icon: Clock, text: "text-status-waiting" },
-  open: { label: "Updates connected", Icon: Wifi, text: "text-status-done" },
-  retrying: { label: "Reconnecting to updates", Icon: RefreshCw, text: "text-status-waiting" },
-  error: { label: "Updates unavailable", Icon: WifiOff, text: "text-status-failed" },
-  closed: { label: "Updates disconnected", Icon: Unplug, text: "text-fg-muted" },
+  connecting: { label: "Connecting live updates", Icon: Clock, text: "text-status-waiting" },
+  open: { label: "Live updates on", Icon: Wifi, text: "text-status-done" },
+  retrying: { label: "Reconnecting live updates", Icon: RefreshCw, text: "text-status-waiting" },
+  error: { label: "Live updates unavailable", Icon: WifiOff, text: "text-status-failed" },
+  closed: { label: "Live updates off", Icon: Unplug, text: "text-fg-muted" },
 };
 
 export const HEALTH_TONE_ICON: Readonly<Record<StatusTone, StatusPresentation>> = {
