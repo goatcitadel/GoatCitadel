@@ -257,3 +257,12 @@ it("filters memory as you type, after a short pause, with no apply button", asyn
     vi.useRealTimers();
   }
 });
+
+it("refreshes the proposals too when the directory is refreshed, since their section may be hidden", async () => {
+  api.load.mockResolvedValue({ items: [], coverage: "0 matching records" });
+  await render();
+  await vi.waitFor(() => expect(container.textContent).toContain("No active memories"));
+  const invalidate = vi.spyOn(client, "invalidateQueries");
+  await act(async () => button("Refresh memory directory")!.click());
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["library", "memory-proposals", "one"] });
+});

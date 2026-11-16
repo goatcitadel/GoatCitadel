@@ -1,7 +1,7 @@
 import { useLibraryOperation } from "./use-library-operation";
 import { LibraryMemoryBatch } from "./LibraryMemoryBatch";
 import { lazy, Suspense, useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
@@ -80,7 +80,10 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
     ]),
   ];
   const stalePage = Boolean(list.error && describeApiError(list.error).category === "conflict");
+  const client = useQueryClient();
   function reloadDirectory() {
+    // The proposals section may be hidden while it has no rows, so this button is also its refresh.
+    void client.invalidateQueries({ queryKey: ["library", "memory-proposals", workspaceId] });
     if (cursors.length > 1) setCursors([undefined]);
     else void list.refetch();
   }
