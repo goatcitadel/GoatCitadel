@@ -9,6 +9,7 @@ import {
   fetchChatSessions,
   fetchChatProjects,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { projectWorkspacePathProblem } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
@@ -16,7 +17,8 @@ import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
 import { Dialog } from "../../ui/Dialog";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { ProjectEditor } from "./ProjectEditor";
+import { hasSessionDraft, useSessionDraftVersion } from "../../../features/native-routes/library/session-drafts";
+import { ProjectEditor, projectDraftKey } from "./ProjectEditor";
 import { ProjectFanout } from "./ProjectFanout";
 
 export function ProjectDetail({
@@ -41,6 +43,9 @@ export function ProjectDetail({
   const [editing, setEditing] = useState(false),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
+  useSessionDraftVersion();
+  const hasDraft =
+    !editing && hasSessionDraft(projectDraftKey({ citadelId, workspaceId, projectId: project.projectId }));
   const [review, setReview] = useState<{ token: object; action: "archive" | "restore" } | null>(null);
   const pending = useRef(false);
   useEffect(() => {
@@ -122,6 +127,12 @@ export function ProjectDetail({
         <p className="break-words text-sm text-fg-secondary">{project.description || "No description provided."}</p>
         <p className="text-sm">{project.lifecycleStatus === "archived" ? "Archived project" : "Active project"}</p>
         <p className="break-all text-sm">Workspace path: {project.workspacePath}</p>
+        {projectWorkspacePathProblem(project.workspacePath) ? (
+          <Callout tone="warning" announce={false}>
+            This project's folder is outside the workspace folder. Edit the project and choose a folder inside it, for
+            example projects/website.
+          </Callout>
+        ) : null}
         {error ? <Callout tone="error">{error}</Callout> : null}
         <div className="flex flex-wrap gap-2">
           <Button onClick={togglePin}>{pinned ? "Unpin project" : "Pin project"}</Button>
@@ -129,7 +140,7 @@ export function ProjectDetail({
             disabled={!available || busy || project.lifecycleStatus !== "active"}
             onClick={() => setEditing(true)}
           >
-            Edit project
+            {hasDraft ? "Edit project · Unsaved draft" : "Edit project"}
           </Button>
           <Button
             disabled={!available || busy}
@@ -146,6 +157,11 @@ export function ProjectDetail({
             New conversation in project
           </Button>
         </div>
+        {hasDraft ? (
+          <p className="text-sm text-fg-secondary">
+            You have an unsaved draft of this project. Open Edit project to finish it.
+          </p>
+        ) : null}
         <TechnicalDetails label="Project identity and provenance">
           <p className="break-all">
             Project {project.projectId} · Revision {project.revision} · Workspace {workspaceId} · Citadel{" "}
