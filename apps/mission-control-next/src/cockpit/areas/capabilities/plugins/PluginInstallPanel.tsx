@@ -111,7 +111,7 @@ function WhatItAdds({
   blocked: boolean;
   secrets?: Readonly<Record<string, string>>;
   onSecret?: (pieceId: string, value: string) => void;
-  leftover?: { workspaceId: string; onRemoved?: () => void };
+  leftover?: { workspaceId: string; onRemoved?: (skill: string) => void };
 }) {
   return (
     <Section title="What it adds" headingLevel={3}>
@@ -160,6 +160,8 @@ function useHookSecrets(flow: PluginInstall) {
  */
 export function PluginInstallPanel({ installKey, form, pluginWorkspaceId, onMove }: PluginInstallPanelProps) {
   const [custody] = useState(pluginInstallCustody);
+  // Kept by the panel, not by the removal's own part or the body, so it stays through the check made again after it.
+  const [removedLine, setRemovedLine] = useState<string>();
   const { flow, refused, inspectionKey, inspectionRead, detailRead } = usePanelFlow(
     installKey,
     pluginWorkspaceId,
@@ -192,7 +194,16 @@ export function PluginInstallPanel({ installKey, form, pluginWorkspaceId, onMove
     );
   }
   const plugin = shown ?? (refused ? inspectionRead.data : undefined);
-  return <PluginInstallBody flow={flow} installKey={installKey} offerCheckAgain={!form} plugin={plugin} />;
+  return (
+    <PluginInstallBody
+      flow={flow}
+      installKey={installKey}
+      offerCheckAgain={!form}
+      plugin={plugin}
+      removedLine={removedLine}
+      onLeftoverRemoved={setRemovedLine}
+    />
+  );
 }
 
 /** The panel's flow, with the Gateway reads that seed it: the check an address names, or the plugin's detail. */
@@ -234,8 +245,13 @@ function PluginInstallBody({
   installKey,
   offerCheckAgain,
   plugin,
+  removedLine,
+  onLeftoverRemoved,
 }: {
   flow: PluginInstall;
+  /** "Removed <skill>." after a left-over's removal applied, kept by the panel. */
+  removedLine: string | undefined;
+  onLeftoverRemoved: (line: string) => void;
   installKey: string;
   /** Without a source form of its own, the panel checks its source again from a button. */
   offerCheckAgain: boolean;
@@ -263,12 +279,16 @@ function PluginInstallBody({
             ? {
                 leftover: {
                   workspaceId: state.inspection.workspaceId,
-                  ...(source ? { onRemoved: () => void flow.inspect(source) } : {}),
+                  onRemoved: (skill: string) => {
+                    onLeftoverRemoved(`Removed ${skill}.`);
+                    if (source) void flow.inspect(source);
+                  },
                 },
               }
             : {})}
         />
       ) : null}
+      {removedLine ? <p>{removedLine}</p> : null}
       {/* Before what happens next, and above a refusal's lines: what GoatCitadel leaves out of a Claude Code plugin. */}
       {plugin ? <PluginLeftOut ignored={plugin.ignored} /> : null}
       {state.phase === "ready" ? <WhatHappensNext inspection={state.inspection} skip={skip} /> : null}

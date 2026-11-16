@@ -10,7 +10,12 @@ import { skillListQuery } from "../../../data/capability-skills-query";
 import { Button } from "../../../ui/Button";
 import { Dialog } from "../../../ui/Dialog";
 import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
-import { removalLeftoversKey, removalLeftoversNote, removalOutcomeNote } from "./skill-removal-outcome";
+import {
+  removalLeftoversKey,
+  removalLeftoversNote,
+  removalOutcomeNote,
+  removalRefusalLine,
+} from "./skill-removal-outcome";
 
 /** How often the removal is read again while an approved one is applied, and how many reads before it gives up. */
 const REMOVING_READ_MS = 3_000;
@@ -93,7 +98,7 @@ function useRemovalReads(
 /** The dialog's words: what the removal deletes, which is no folder for a skill that was never switched on. */
 function removalDescription(name: string, neverOn: boolean): string {
   return neverOn
-    ? `Removes ${name}, which an earlier install of this plugin left behind and never switched on. It has no folder in GoatCitadel's skills folder, so nothing is deleted: GoatCitadel marks it removed, so this plugin can be installed again. GoatCitadel keeps its check and its records. This can't be undone here.`
+    ? `Removes ${name}, which an earlier install of this plugin left behind and never switched on. GoatCitadel deletes nothing: it marks the skill removed so this plugin can be installed again. It keeps the skill's check and its records. This can't be undone here.`
     : `Removes ${name} from this install and deletes its folder from GoatCitadel's skills folder. Its plugin was uninstalled, so the AI can't use it. GoatCitadel keeps its check and its records, so you can install it again later. This can't be undone here.`;
 }
 
@@ -142,7 +147,7 @@ export function SkillRemoval({ skillId, name, workspaceId, neverOn = false, onRe
           : { kind: "waiting", approvalId: outcome.approvalId, workspaceId: outcome.workspaceId },
       );
     } catch (error) {
-      setPhase({ kind: "idle", note: describeApiError(error).summary, failed: true });
+      setPhase({ kind: "idle", note: removalRefusalLine(error) ?? describeApiError(error).summary, failed: true });
     }
   };
   const resolved = (approvalId: string, status: ApprovalRequest["status"] | undefined) => {

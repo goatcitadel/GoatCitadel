@@ -12,6 +12,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { GovernanceJourneyEventRecord } from "@goatcitadel/storage";
 import { isBundledSkillName } from "./plugin-skill-name-rules.js";
+import { leftoverPluginBlock, type LeftoverPluginRecords } from "./skill-leftover-binding.js";
 import type { StoredPlugin } from "./capability-plugin-store.js";
 import type { SkillHubLifecycleFilesystem } from "./skill-hub-lifecycle-filesystem.js";
 import type { SkillHubLifecycleApplyResult } from "./skill-hub-lifecycle-service.js";
@@ -32,7 +33,7 @@ export class RuntimeRemovalBoundaryError extends Error {}
 
 type RemovalFilesystem = Pick<
   SkillHubLifecycleFilesystem,
-  "pathKind" | "directoryMatches" | "renameDirectory" | "listScratchDirectories" | "removeTreeIfPresent"
+  "pathKind" | "peekKind" | "directoryMatches" | "renameDirectory" | "listScratchDirectories" | "removeTreeIfPresent"
 >;
 
 /** What staging found: whether the folder sits at the recovery path, and how many scratch folders it left alone. */
@@ -267,45 +268,65 @@ const REVOKED_ONLY: ReadonlySet<CandidateSkillVersionRecord["lifecycleState"]> =
 const NEVER_ACTIVE: ReadonlySet<CandidateSkillVersionRecord["lifecycleState"]> = new Set(["candidate", "revoked"]);
 
 /**
- * The approved removal of a lineage that was never switched on (its intent expects no runtime record). Nothing on disk
- * is touched and nothing is deleted: the commit only settles `applied`, which marks the lineage removed, so a later
- * install of the same source starts a new generation. Before that it re-checks, and settles `blocked` with nothing
- * changed, when the check's bytes no longer verify, the lineage was already removed, has more versions than can be read,
- * or has a version that was ever switched on (anything but a candidate or a revoked one), when a runtime record exists
- * after all (the normal removal path owns that case), or when anything is at the skill's folder in the runtime skills
- * root (a folder, a file, or a link that can't be read plainly).
+ * The approved removal of a lineage that was never switched on (its intent expects no runtime record). It writes no
+ * file and creates no folder: it only reads what is at the skill's folder (`peekKind`, which never creates the runtime
+ * skills root), and the commit advances the candidate's revision fence (so any older step on that lineage is stale) and
+ * settles `applied`, which marks the lineage removed, so a later install of the same source starts a new generation.
+ * Before that it re-checks, and settles `blocked` with nothing changed, when the check's bytes no longer verify, the
+ * lineage was already removed or has more versions than can be read (`lineage_too_large`), a version of it was ever
+ * switched on (`version_switched_on`), a runtime record exists after all (`runtime_record_present`: the normal removal
+ * path owns that case), anything is at the skill's folder (`runtime_folder_present`), or the skills folder can't be read
+ * (`skills_folder_unreadable`).
  */
 export async function runNeverActivatedRemoval(context: RuntimeRemovalContext): Promise<SkillHubLifecycleApplyResult> {
   const { intent, signal } = context;
-  if (!context.artifactVerifies) {
-    return await context.settle("blocked", UNKNOWN_TREE_SHA256, { code: "artifact_tamper", boundaryCrossed: false });
-  }
+  const blocked = (code: string, tree = intent.contentTreeSha256) =>
+    context.settle("blocked", tree, { code, boundaryCrossed: false });
+  if (!context.artifactVerifies) return await blocked("artifact_tamper", UNKNOWN_TREE_SHA256);
   const lineage = lineageBlock(intent, context.lineage, NEVER_ACTIVE);
-  if (lineage)
-    return await context.settle("blocked", intent.contentTreeSha256, { code: lineage, boundaryCrossed: false });
-  if (context.record) {
-    return await context.settle("blocked", intent.contentTreeSha256, {
-      code: "runtime_record_present",
-      boundaryCrossed: false,
-    });
-  }
+  if (lineage) return await blocked(lineage === "candidate_not_revoked" ? "version_switched_on" : lineage);
+  if (context.record) return await blocked("runtime_record_present");
   let folder: string;
   try {
-    folder = await context.filesystem.pathKind(context.root, path.join(context.root, context.skillName), signal);
+    folder = await context.filesystem.peekKind(context.root, path.join(context.root, context.skillName), signal);
   } catch (error) {
     if (signal.aborted) throw error;
-    folder = "other";
+    return await blocked("skills_folder_unreadable");
   }
-  if (folder !== "missing") {
-    return await context.settle("blocked", intent.contentTreeSha256, {
-      code: "runtime_folder_present",
-      boundaryCrossed: false,
-    });
-  }
+  if (folder !== "missing") return await blocked("runtime_folder_present");
   signal.throwIfAborted();
   return await context.commit(false, {});
 }
 
+/**
+ * Whether a never-switched-on left-over still belongs to the uninstalled plugin whose check it came with (the shared
+ * `leftoverPluginBlock`), as a removal's reason, or undefined when it does. Read under the plugin store's lock.
+ */
+export function neverOnBindingBlock(
+  snapshot: { sourceProvider: string; sourceRef: string },
+  skillId: string,
+  records: LeftoverPluginRecords,
+): "not_left_by_plugin" | "plugin_still_installed" | undefined {
+  const block = leftoverPluginBlock(snapshot, skillId, records);
+  return block === "plugin_installed" ? "plugin_still_installed" : block;
+}
+
+/**
+ * Why an approved step must not apply to a lineage now, before anything else is read, or undefined: any step but a
+ * removal on a lineage marked removed (`lineage_removed`: nothing of a removed lineage is ever installed or switched on
+ * again), a removal of a lineage already removed (`lineage_already_removed`), and a removal of a never-switched-on
+ * lineage whose skill has a runtime record now (`runtime_record_present`).
+ */
+export async function removedLineageStepBlock(
+  intent: SkillHubOperationIntentRecord,
+  listRemovedCandidateIds: () => Promise<readonly string[]>,
+  recordExists: () => Promise<boolean>,
+): Promise<"lineage_removed" | "lineage_already_removed" | "runtime_record_present" | undefined> {
+  const removed = (await listRemovedCandidateIds()).includes(intent.targetCandidateId!);
+  if (intent.operationKind !== "remove") return removed ? "lineage_removed" : undefined;
+  if (removed) return "lineage_already_removed";
+  return intent.expectedRuntimeAbsent && (await recordExists()) ? "runtime_record_present" : undefined;
+}
 export interface RuntimeRemovalContext {
   intent: SkillHubOperationIntentRecord;
   candidate: CandidateSkillVersionRecord;
@@ -443,6 +464,11 @@ export async function finishAppliedProjection(
   },
 ): Promise<void> {
   const { intent, signal } = input;
+  // A lineage never switched on moved nothing aside: there is nothing to clean up, and the skills folder is left as it is.
+  if (intent.operationKind === "remove" && intent.expectedRuntimeAbsent) {
+    await input.reloadSkills?.();
+    return;
+  }
   const scratch = projectionScratch(root, intent.operationId);
   try {
     await filesystem.removeTreeIfPresent(root, scratch.staging, signal);

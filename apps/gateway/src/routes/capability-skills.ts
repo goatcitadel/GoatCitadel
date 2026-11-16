@@ -77,7 +77,16 @@ const removalParamsSchema = z.object({ approvalId: z.string().min(1).max(256) })
 const REMOVAL_NOT_FOUND_MESSAGE = "This removal wasn't found.";
 
 /** The `details.reason` of the removal's own 409s, which keep their plain message. */
-const PLAIN_REMOVAL_REASONS: ReadonlySet<string> = new Set(["not_removable", "other_workspace"]);
+const PLAIN_REMOVAL_REASONS: ReadonlySet<string> = new Set([
+  "not_removable",
+  "other_workspace",
+  "bundled_skill",
+  "has_record",
+  "not_left_by_plugin",
+  "plugin_installed",
+  "lineage_unclear",
+  "version_switched_on",
+]);
 
 const UNREADABLE_MESSAGE = "Skill use counts can't be read right now.";
 const UNAVAILABLE_LIST_MESSAGE = "Skills can't be read right now.";

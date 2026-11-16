@@ -67,6 +67,7 @@ function realActions(overrides: Partial<CapabilitySkillActionSources> = {}): Cap
     listSkillsRemovedWithPlugins: vi.fn(async () => new Set(["extra:meeting-notes"])),
     findSkillHubSettlement: vi.fn(async () => undefined),
     findLeftoverCheck: vi.fn(async (): Promise<string | undefined> => undefined),
+    listRemovedPlugins: vi.fn(async () => []),
     ...overrides,
   });
 }
@@ -516,10 +517,11 @@ describe("capability skill check and install routes", () => {
       const first = await build({ actions: notRemovable as unknown as Record<string, unknown> });
       const refused = await first.server.inject({ method: "POST", url: REMOVAL_URL, payload: REMOVAL_BODY });
       expect(refused.statusCode).toBe(409);
+      // No record and no uninstall that left it: the left-over rule's own plain refusal, no code in the words.
       expect(refused.json()).toEqual({
-        error: "This skill can't be removed.",
+        error: "GoatCitadel can't remove it from here, because no uninstalled plugin left it behind.",
         code: "STATE_CONFLICT",
-        details: { reason: "not_removable" },
+        details: { reason: "not_left_by_plugin" },
       });
       await first.server.close();
 

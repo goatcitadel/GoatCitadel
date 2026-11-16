@@ -11,7 +11,6 @@ import {
   ConflictError,
   canonicalJsonString,
   type ApprovalCreateInput,
-  type ApprovalRequest,
   type CandidateSkillVersionRecord,
   type CapabilityArtifactRecord,
   type SkillHubOperationIntentPreview,
@@ -39,6 +38,8 @@ import {
   LINEAGE_VERSION_LIMIT,
   projectionCleanupFailureEvent,
   projectionScratch,
+  neverOnBindingBlock,
+  removedLineageStepBlock,
   runNeverActivatedRemoval,
   runRuntimeRemoval,
   UNKNOWN_TREE_SHA256,
@@ -50,7 +51,6 @@ import {
   assertSkillIdentity,
   asOptionalString,
   hasCurrentPromptwareAudit,
-  isRecord,
   removeUndefined,
   resolveManagedRoot,
   sha256,
@@ -133,31 +133,7 @@ export function buildSkillHubLifecycleApprovalInput(
   };
 }
 
-/** Reconstruct the exact immutable intent only after the canonical approval is approved. */
-export function materializeApprovedSkillHubIntent(approval: ApprovalRequest): SkillHubOperationIntentRecord {
-  if (approval.kind !== SKILL_HUB_LIFECYCLE_APPROVAL_KIND || approval.status !== "approved") {
-    throw new ConflictError({ message: "Skill Hub lifecycle intent requires an approved dedicated approval." });
-  }
-  const preview = approval.preview as Partial<SkillHubOperationIntentPreview>;
-  if (preview.schemaVersion !== SKILL_HUB_OPERATION_INTENT_PREVIEW_SCHEMA || !isRecord(preview.intent)) {
-    throw new TypeError("Skill Hub lifecycle approval preview is missing its immutable intent.");
-  }
-  const intent = preview.intent as unknown as SkillHubOperationIntentTemplate;
-  const requestSha256 = computeSkillHubOperationRequestSha256({ ...intent, approvalId: approval.approvalId });
-  const expectedPayload = {
-    operationId: intent.operationId,
-    requestSha256,
-    workspaceId: intent.workspaceId,
-    operationKind: intent.operationKind,
-    skillId: intent.skillId,
-    snapshotId: intent.snapshotId,
-    contentTreeSha256: intent.contentTreeSha256,
-  };
-  if (canonicalJsonString(approval.payload) !== canonicalJsonString(expectedPayload)) {
-    throw new TypeError("Skill Hub lifecycle approval payload does not match its hash-bound preview.");
-  }
-  return { ...intent, approvalId: approval.approvalId, requestSha256 };
-}
+export { materializeApprovedSkillHubIntent } from "./skill-hub-lifecycle-values.js";
 
 export class SkillHubLifecycleService {
   private readonly rootDir: string;
@@ -219,6 +195,16 @@ export class SkillHubLifecycleService {
         boundaryCrossed: false,
       });
     }
+    const removed = await removedLineageStepBlock(
+      intent,
+      () => storage.skillHubOperations.listAppliedRemovalCandidateIds(intent.workspaceId),
+      async () => Boolean(await storage.skillLifecycle.find(intent.skillId)),
+    );
+    if (removed)
+      return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
+        code: removed,
+        boundaryCrossed: false,
+      });
     if (!(await this.artifactStillVerifies(artifact.bundleRelPath, artifact.manifest))) {
       return await this.settle(intent, artifact.artifactId, "blocked", UNKNOWN_TREE_SHA256, {
         code: "artifact_tamper",
@@ -304,7 +290,15 @@ export class SkillHubLifecycleService {
             (work) => this.runTransaction(work),
             async () => {
               // Under the plugin store's lock, so a plugin install or uninstall cannot change who owns the skill.
-              const code = ownedSkillBlock(await this.plugins.list(), intent, parsed.frontmatter.name);
+              const plugins = await this.plugins.list();
+              const code =
+                ownedSkillBlock(plugins, intent, parsed.frontmatter.name) ??
+                (intent.expectedRuntimeAbsent
+                  ? neverOnBindingBlock(snapshot, intent.skillId, {
+                      plugins,
+                      removed: await this.plugins.listRemoved(),
+                    })
+                  : undefined);
               return code
                 ? await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
                     code,
@@ -632,6 +626,15 @@ export class SkillHubLifecycleService {
             if (await storage.skillLifecycle.find(intent.skillId)) {
               throw new ConflictError({ message: "Skill Hub runtime record appeared before the removal committed." });
             }
+            // Every older step on this lineage (an activation asked for before) is stale from here on.
+            candidateRevision = (
+              await storage.skillAggregateRevisions.advanceExpectedRevision(
+                "candidate_skill",
+                intent.targetCandidateId!,
+                intent.expectedCandidateRevision!,
+                now,
+              )
+            ).revision;
           } else if (!(await storage.skillLifecycle.delete(intent.skillId))) {
             throw new ConflictError({ message: "Skill Hub runtime record is already gone." });
           } else {

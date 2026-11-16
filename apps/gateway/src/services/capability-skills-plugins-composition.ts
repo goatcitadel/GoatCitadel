@@ -23,7 +23,10 @@ export interface CapabilitySkillsAndPluginsOwners
       CapabilitySkillsOwners,
       "deploymentProfile" | "rootDir" | "pluginRecords" | "skillHub" | "skillHubSettlements" | "skillHubLineages"
     >,
-    Omit<CapabilityPluginsOwners, "skillHub" | "revokeSkill" | "readOperatorApprovalSkip" | "records"> {
+    Omit<
+      CapabilityPluginsOwners,
+      "skillHub" | "revokeSkill" | "readOperatorApprovalSkip" | "readLeftoverRemoval" | "records"
+    > {
   skillHub: CapabilitySkillsOwners["skillHub"] & CapabilityPluginsOwners["skillHub"];
   /**
    * The plugin records' storage, which also holds Skill Hub's settlements the Skills tab reads a removal's outcome from,
@@ -63,6 +66,11 @@ export function composeCapabilitySkillsAndPlugins(
     },
     // The same skip the Skills tab and the plugin plans follow, read live: never on remote_hardened, whose setting
     // is never read.
+    // The Skills tab's one rule for a never-switched-on left-over, so the plugin check offers exactly what it accepts.
+    readLeftoverRemoval: (workspaceId, skillId) => {
+      if (!wired.skills) throw new Error("The Skills tab isn't wired yet, so a left-over skill can't be read.");
+      return wired.skills.actions.leftoverRemoval(workspaceId, skillId);
+    },
     readOperatorApprovalSkip: () =>
       allowsOperatorApprovalSkip(owners.config.assistant.deploymentProfile, () =>
         owners.features.isFeatureEnabled("settingsApprovalSkipEnabled"),

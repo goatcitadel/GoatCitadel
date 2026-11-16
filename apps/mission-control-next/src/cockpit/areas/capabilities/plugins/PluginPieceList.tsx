@@ -33,7 +33,7 @@ export function PluginPieceList({
    * Where a skill an earlier install left behind and never switched on is removed from (its check names it): the
    * workspace, and what to do once it applied (check the plugin again).
    */
-  leftover?: { workspaceId: string; onRemoved?: () => void };
+  leftover?: { workspaceId: string; onRemoved?: (skill: string) => void };
 }) {
   return (
     <ul className="divide-y divide-line-subtle">
@@ -55,7 +55,7 @@ export function PluginPieceList({
               name={piece.label}
               workspaceId={leftover.workspaceId}
               neverOn
-              {...(leftover.onRemoved ? { onRemoved: leftover.onRemoved } : {})}
+              {...(leftover.onRemoved ? { onRemoved: () => leftover.onRemoved?.(piece.label) } : {})}
             />
           ) : null}
           {piece.warnings?.map((warning) => (

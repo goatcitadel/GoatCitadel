@@ -245,6 +245,7 @@ export function composeCapabilitySkills({
         (await skills.listSkills("ALL", workspaceId)).find((skill) => skill.skillId === skillId)?.lifecycle,
       listSkillsRemovedWithPlugins: async () => new Set(removedPluginSkills(await pluginRecords.listRemoved()).keys()),
       findSkillHubSettlement: (operationId) => skillHubSettlements.findSettlementByOperationId(operationId),
+      listRemovedPlugins: () => pluginRecords.listRemoved(),
       findLeftoverCheck: async (workspaceId, skillId) =>
         newestLeftoverCheck(
           await skillHubLineages.listVersions(),

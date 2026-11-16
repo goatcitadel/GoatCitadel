@@ -781,6 +781,215 @@ describe("SkillHubLifecycleService", () => {
     expect(manual.settlement.result).toMatchObject({ code: "ambiguous_runtime_projection", boundaryCrossed: true });
     expect(harness.storage.skillLifecycle.find("extra:demo")).toBeUndefined();
   });
+  describe("governed removal of a lineage never switched on", () => {
+    const PLAN = "plan-demo";
+    const pluginSnapshot = {
+      sourceProvider: "goatcitadel_plugin",
+      sourceType: "local_path",
+      sourceRef: `plugin:demo-plugin/demo@content:${"a".repeat(64)}`,
+      canonicalSourceKey: "plugin:demo-plugin/demo",
+    } as const;
+
+    function pluginStore(harness: Harness) {
+      return new CapabilityPluginStore(harness.asyncStorage.systemSettings);
+    }
+
+    async function writePluginRecord(harness: Harness, state: "installing" | "installed" = "installed") {
+      await pluginStore(harness).update("demo-plugin", () => ({
+        pluginId: "demo-plugin",
+        name: "Demo plugin",
+        description: "Test plugin",
+        version: "1.0.0",
+        trust: "built_in",
+        sourceKind: "built_in",
+        sourceDisplay: "Built in",
+        pin: { kind: "content", treeSha256: harness.treeSha256 },
+        manifestSha256: "b".repeat(64),
+        snapshotTreeSha256: harness.treeSha256,
+        workspaceId: "workspace-1",
+        installPlanId: PLAN,
+        state,
+        installedAt: "2026-07-14T00:00:00.000Z",
+        pieces: [{ pieceId: "demo", kind: "skill", owned: true, skillSnapshotId: "snapshot-1" }],
+      }));
+    }
+
+    async function uninstallPlugin(harness: Harness) {
+      await pluginStore(harness).remove("demo-plugin", () => ({
+        pluginId: "demo-plugin",
+        name: "Demo plugin",
+        skillIds: ["extra:demo"],
+        removedAt: "2026-07-14T00:05:00.000Z",
+      }));
+    }
+
+    /** A plugin's own step, approved with the plugin's install generation, as its install asks for it. */
+    async function approvePluginStep(harness: Harness, request: SkillHubOperationIntentTemplate) {
+      const fingerprint = skillHubOperationFingerprint(request, PLAN);
+      const keyed = {
+        ...request,
+        operationId: `skill-hub-op-${fingerprint.slice(0, 32)}-1`,
+        idempotencyKey: `skill-hub:lifecycle:${fingerprint}:1`,
+      };
+      const pending = harness.storage.approvals.create(buildSkillHubLifecycleApprovalInput(keyed, PLAN));
+      const approved = harness.storage.approvals.resolve(pending.approvalId, {
+        decision: "approve",
+        resolvedBy: "operator-1",
+      });
+      const intent = materializeApprovedSkillHubIntent(approved);
+      harness.storage.skillHubOperations.createIntent(intent);
+      return { operationId: intent.operationId, approvalId: intent.approvalId, requestSha256: intent.requestSha256 };
+    }
+
+    const install = (harness: Harness) =>
+      template(harness, "install_inactive", "operation-install", {
+        expectedCandidateAbsent: true,
+        expectedRuntimeAbsent: true,
+      });
+    const activate = (harness: Harness) =>
+      template(harness, "activate", "operation-activate", {
+        expectedCandidateAbsent: false,
+        expectedCandidateRevision: 1,
+        expectedRuntimeAbsent: true,
+      });
+    const neverOn = (harness: Harness, operationId: string, expectedCandidateRevision = 1) =>
+      template(harness, "remove", operationId, {
+        expectedCandidateAbsent: false,
+        expectedCandidateRevision,
+        expectedRuntimeAbsent: true,
+      });
+
+    /** The plugin installed its skill and never switched it on, then was uninstalled. */
+    async function leftOver(options: { uninstall?: boolean } = {}) {
+      const harness = await createHarness(pluginSnapshot);
+      await writePluginRecord(harness, "installing");
+      const installed = await harness.lifecycle.applyApprovedOperation(
+        await approvePluginStep(harness, install(harness)),
+      );
+      expect(installed.settlement.disposition).toBe("applied");
+      if (options.uninstall !== false) await uninstallPlugin(harness);
+      return { harness, extraRoot: path.join(harness.rootDir, "skills", "extra") };
+    }
+
+    it("marks the lineage removed, deletes nothing, fences older steps, and the source installs again", async () => {
+      const { harness, extraRoot } = await leftOver();
+      const candidate = harness.storage.candidateSkillVersions.get("version-demo-1");
+      const bundle = path.join(harness.rootDir, candidate.bundleRoot);
+      await fs.rm(extraRoot, { recursive: true, force: true });
+
+      const request = await approve(harness, neverOn(harness, "operation-remove"));
+      const result = await harness.lifecycle.applyApprovedOperation(request);
+
+      expect(result.settlement.disposition).toBe("applied");
+      expect(harness.storage.skillHubOperations.listAppliedRemovalCandidateIds("workspace-1")).toEqual([
+        "candidate-demo",
+      ]);
+      // Its folder check created nothing: no skills folder appeared.
+      await expect(fs.stat(extraRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      // Kept: the candidate row, its bundle, the check's artifact; the candidate fence moved on, so older steps are stale.
+      expect(harness.storage.candidateSkillVersions.get("version-demo-1").lifecycleState).toBe("candidate");
+      expect(harness.storage.skillAggregateRevisions.get("candidate_skill", "candidate-demo")?.revision).toBe(2);
+      await expect(fs.stat(bundle)).resolves.toBeTruthy();
+      expect(harness.storage.skillHubArtifacts.findBySnapshot("workspace-1", "snapshot-1")).toBeDefined();
+      expect(harness.storage.skillLifecycle.find("extra:demo")).toBeUndefined();
+      // The same approval replays; a second approval for the removed lineage is refused for what it is.
+      const replay = await harness.lifecycle.applyApprovedOperation(request);
+      expect(replay.replayed).toBe(true);
+      const again = await harness.lifecycle.applyApprovedOperation(
+        await approve(harness, neverOn(harness, "operation-remove-2")),
+      );
+      expect(again.settlement.result).toMatchObject({ code: "lineage_already_removed" });
+      // So the same source installs again as a new generation.
+      await writePluginRecord(harness, "installing");
+      const reinstalled = await harness.lifecycle.applyApprovedOperation(
+        await approvePluginStep(harness, {
+          ...install(harness),
+          operationId: "operation-reinstall",
+          targetCandidateId: "candidate-demo-r1",
+          targetVersionId: "version-demo-1-r1",
+        }),
+      );
+      expect(reinstalled.settlement.disposition).toBe("applied");
+    }, 90_000);
+
+    it("never lets an activation asked for before the removal make the removed lineage callable", async () => {
+      const { harness } = await leftOver({ uninstall: false });
+      const activation = await approvePluginStep(harness, activate(harness));
+      await uninstallPlugin(harness);
+      const removed = await harness.lifecycle.applyApprovedOperation(
+        await approve(harness, neverOn(harness, "operation-remove")),
+      );
+      expect(removed.settlement.disposition).toBe("applied");
+
+      const late = await harness.lifecycle.applyApprovedOperation(activation);
+
+      expect(late.settlement.disposition).toBe("blocked");
+      expect(late.settlement.result).toMatchObject({ code: "lineage_removed", boundaryCrossed: false });
+      expect(harness.storage.skillLifecycle.find("extra:demo")).toBeUndefined();
+      await expect(fs.stat(path.join(harness.rootDir, "skills", "extra", "demo"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }, 90_000);
+
+    it("refuses a removal approved after the skill was switched on, before reading any revision", async () => {
+      const { harness } = await leftOver({ uninstall: false });
+      const removal = await approve(harness, neverOn(harness, "operation-remove"));
+      const activated = await harness.lifecycle.applyApprovedOperation(
+        await approvePluginStep(harness, activate(harness)),
+      );
+      expect(activated.settlement.disposition).toBe("applied");
+
+      const refused = await harness.lifecycle.applyApprovedOperation(removal);
+
+      expect(refused.settlement.result).toMatchObject({ code: "runtime_record_present", boundaryCrossed: false });
+      expect(harness.storage.skillLifecycle.find("extra:demo")?.lifecycleState).toBe("approved");
+      expect(harness.storage.skillHubOperations.listAppliedRemovalCandidateIds("workspace-1")).toEqual([]);
+    }, 90_000);
+
+    it.each([
+      ["the plugin is installed again", "plugin_still_installed"],
+      ["the check didn't come with an uninstalled plugin", "not_left_by_plugin"],
+      ["something is at the skill's folder", "runtime_folder_present"],
+      ["the name ships with GoatCitadel", "bundled_skill"],
+      ["the lineage has more versions than can be read", "lineage_too_large"],
+    ] as const)(
+      "refuses, changing nothing, when %s",
+      async (_case, code) => {
+        const { harness, extraRoot } = await leftOver({ uninstall: code !== "not_left_by_plugin" });
+        if (code === "plugin_still_installed") await writePluginRecord(harness);
+        if (code === "not_left_by_plugin") {
+          // Uninstalled, but its tombstone names another skill: nothing says this plugin left this one.
+          await pluginStore(harness).remove("demo-plugin", () => ({
+            pluginId: "demo-plugin",
+            name: "Demo plugin",
+            skillIds: ["extra:other"],
+            removedAt: "2026-07-14T00:06:00.000Z",
+          }));
+        }
+        if (code === "runtime_folder_present") await fs.mkdir(path.join(extraRoot, "demo"), { recursive: true });
+        if (code === "bundled_skill") bundledNames.add("demo");
+        if (code === "lineage_too_large") {
+          const base = harness.storage.candidateSkillVersions.get("version-demo-1");
+          for (let index = 0; index < 101; index += 1) {
+            harness.storage.candidateSkillVersions.upsert({ ...base, versionId: `version-demo-extra-${index}` });
+          }
+        }
+        try {
+          const result = await harness.lifecycle.applyApprovedOperation(
+            await approve(harness, neverOn(harness, "operation-remove")),
+          );
+          expect(result.settlement.disposition).toBe("blocked");
+          expect(result.settlement.result).toMatchObject({ code, boundaryCrossed: false });
+          expect(harness.storage.skillHubOperations.listAppliedRemovalCandidateIds("workspace-1")).toEqual([]);
+          expect(harness.storage.skillAggregateRevisions.get("candidate_skill", "candidate-demo")?.revision).toBe(1);
+        } finally {
+          bundledNames.delete("demo");
+        }
+      },
+      90_000,
+    );
+  });
+
   describe("governed removal of a revoked skill", () => {
     async function revokedHarness(
       options: {
@@ -1106,89 +1315,6 @@ describe("SkillHubLifecycleService", () => {
       expect(state?.pinned).toBeUndefined();
       expect(state?.usageCount).toBeUndefined();
       expect(await skillStates.restoreCuratorIdleSnapshot("extra:demo")).toBe(false);
-    }, 90_000);
-
-    it("removes a lineage never switched on by marking it removed, deleting nothing, and refuses one with a folder", async () => {
-      const harness = await createHarness();
-      await approveAndApply(
-        harness,
-        template(harness, "install_inactive", "operation-install", {
-          expectedCandidateAbsent: true,
-          expectedRuntimeAbsent: true,
-        }),
-      );
-      const neverOn = (operationId: string) =>
-        template(harness, "remove", operationId, {
-          expectedCandidateAbsent: false,
-          expectedCandidateRevision: 1,
-          expectedRuntimeAbsent: true,
-        });
-      const extraRoot = path.join(harness.rootDir, "skills", "extra");
-      const candidate = harness.storage.candidateSkillVersions.get("version-demo-1");
-      const bundle = path.join(harness.rootDir, candidate.bundleRoot);
-
-      // Something sits at the skill's folder: the normal removal owns it, so nothing changes here.
-      await fs.mkdir(path.join(extraRoot, "demo"), { recursive: true });
-      const refused = await harness.lifecycle.applyApprovedOperation(
-        await approve(harness, neverOn("operation-refused")),
-      );
-      expect(refused.settlement.disposition).toBe("blocked");
-      expect(refused.settlement.result).toMatchObject({ code: "runtime_folder_present", boundaryCrossed: false });
-      expect(harness.storage.skillHubOperations.listAppliedRemovalCandidateIds("workspace-1")).toEqual([]);
-      await fs.rm(path.join(extraRoot, "demo"), { recursive: true, force: true });
-
-      const result = await harness.lifecycle.applyApprovedOperation(
-        await approve(harness, neverOn("operation-remove")),
-      );
-
-      expect(result.settlement.disposition).toBe("applied");
-      expect(harness.storage.skillHubOperations.listAppliedRemovalCandidateIds("workspace-1")).toEqual([
-        "candidate-demo",
-      ]);
-      // Kept: the candidate row and its fence, its bundle, the check's artifact; no record or fence was ever made.
-      expect(harness.storage.candidateSkillVersions.get("version-demo-1").lifecycleState).toBe("candidate");
-      expect(harness.storage.skillAggregateRevisions.get("candidate_skill", "candidate-demo")?.revision).toBe(1);
-      await expect(fs.stat(bundle)).resolves.toBeTruthy();
-      expect(harness.storage.skillHubArtifacts.findBySnapshot("workspace-1", "snapshot-1")).toBeDefined();
-      expect(harness.storage.skillLifecycle.find("extra:demo")).toBeUndefined();
-      expect(harness.storage.skillAggregateRevisions.get("runtime_skill", "extra:demo")).toBeUndefined();
-      // So the same source installs again as a new generation.
-      const reinstalled = await approveAndApply(harness, {
-        ...template(harness, "install_inactive", "operation-reinstall", {
-          expectedCandidateAbsent: true,
-          expectedRuntimeAbsent: true,
-        }),
-        targetCandidateId: "candidate-demo-r1",
-        targetVersionId: "version-demo-1-r1",
-      });
-      expect(reinstalled.settlement.disposition).toBe("applied");
-    }, 90_000);
-
-    it("refuses to remove as never switched on a lineage with a version that was switched on", async () => {
-      const { harness } = await revokedHarness();
-      // The runtime record and fence are gone by hand, so only the lineage tells it was once switched on.
-      harness.storage.skillLifecycle.delete("extra:demo");
-      harness.storage.skillAggregateRevisions.deleteFence("runtime_skill", "extra:demo", 2);
-      harness.storage.candidateSkillVersions.updateLifecycleState(
-        "version-demo-1",
-        "approved",
-        new Date().toISOString(),
-      );
-
-      const result = await harness.lifecycle.applyApprovedOperation(
-        await approve(
-          harness,
-          template(harness, "remove", "operation-remove", {
-            expectedCandidateAbsent: false,
-            expectedCandidateRevision: 3,
-            expectedRuntimeAbsent: true,
-          }),
-        ),
-      );
-
-      expect(result.settlement.disposition).toBe("blocked");
-      expect(result.settlement.result).toMatchObject({ code: "candidate_not_revoked" });
-      expect(harness.storage.skillHubOperations.listAppliedRemovalCandidateIds("workspace-1")).toEqual([]);
     }, 90_000);
 
     it("rolls a removal back cleanly when the saved-state compare and set loses a race, and the retry finishes", async () => {

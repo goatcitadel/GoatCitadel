@@ -13,6 +13,7 @@ import {
   CapabilitySkillActionsService,
   CapabilitySkillSourceRefusedError,
   OPERATOR_SKILL_SKIP_NOTES,
+  LEFTOVER_REFUSAL_MESSAGES,
   newestLeftoverCheck,
   type CapabilitySkillActionSources,
   type CapabilitySkillLifecycleRead,
@@ -80,6 +81,7 @@ function sources(overrides: Partial<CapabilitySkillActionSources> = {}) {
     listSkillsRemovedWithPlugins: vi.fn(async (): Promise<ReadonlySet<string>> => new Set()),
     findSkillHubSettlement: vi.fn(async (): Promise<SkillHubSettlementRead | undefined> => undefined),
     findLeftoverCheck: vi.fn(async (): Promise<string | undefined> => undefined),
+    listRemovedPlugins: vi.fn(async () => []),
     ...overrides,
   } satisfies CapabilitySkillActionSources;
 }
@@ -1050,7 +1052,6 @@ describe("CapabilitySkillActionsService.requestRemoval", () => {
   });
 
   it.each<[string, Awaited<ReturnType<CapabilitySkillActionSources["readSkillLifecycle"]>>]>([
-    ["has no runtime record", undefined],
     ["is switched on", { ...leftBehind, lifecycleState: "approved" }],
     ["came from a bundled folder", { ...leftBehind, provenance: { source: "bundled", sourceRef: "research" } }],
     ["names no check", { ...leftBehind, provenance: { source: "extra" } }],
@@ -1066,37 +1067,132 @@ describe("CapabilitySkillActionsService.requestRemoval", () => {
     expect(parts.createSkillHubApproval).not.toHaveBeenCalled();
   });
 
-  it("asks to remove a left-over never switched on through its lineage's newest check, and still waits", async () => {
-    const findLeftoverCheck = vi.fn(async () => "skill-hub-review-newest");
-    const parts = removalSources({
-      readSkillLifecycle: vi.fn(async () => undefined),
-      readApprovalSkipSetting: vi.fn(async () => true),
-      findLeftoverCheck,
+  describe("a left-over never switched on", () => {
+    const neverOn = (overrides: Partial<CapabilitySkillActionSources> = {}) =>
+      removalSources({
+        readSkillLifecycle: vi.fn(async () => undefined),
+        readApprovalSkipSetting: vi.fn(async () => true),
+        listRemovedPlugins: vi.fn(async () => [{ pluginId: "meeting-tools", skillIds: ["extra:meeting-notes"] }]),
+        findLeftoverCheck: vi.fn(async (): Promise<string | undefined> => "skill-hub-review-newest"),
+        listSkillHub: vi.fn(async () => ({
+          items: [
+            { snapshotId: "skill-hub-review-newest", actions: { remove: { allowed: true, blockers: [] } } },
+          ] as never,
+        })),
+        ...overrides,
+      });
+    const refusedWith = async (parts: ReturnType<typeof neverOn>, reason: string, skillId = "extra:meeting-notes") => {
+      await expect(
+        new CapabilitySkillActionsService(parts).requestRemoval({ ...removal, skillId }),
+      ).rejects.toMatchObject({
+        httpStatus: 409,
+        code: "STATE_CONFLICT",
+        message: LEFTOVER_REFUSAL_MESSAGES[reason as keyof typeof LEFTOVER_REFUSAL_MESSAGES],
+        details: { reason },
+      });
+      expect(parts.createSkillHubApproval).not.toHaveBeenCalled();
+    };
+
+    it("asks for its removal through its lineage's newest check, with its plugin's pass, and still waits", async () => {
+      const parts = neverOn();
+
+      const outcome = await new CapabilitySkillActionsService(parts).requestRemoval(removal);
+
+      expect(outcome).toEqual({ status: "waiting", approvalId: "approval-remove", workspaceId: "default" });
+      expect(parts.createSkillHubApproval).toHaveBeenCalledExactlyOnceWith(
+        { workspaceId: "default", snapshotId: "skill-hub-review-newest", operationKind: "remove", actorId: ACTOR },
+        { pluginPass: { pluginId: "meeting-tools" } },
+      );
+      expect(parts.resolveApproval).not.toHaveBeenCalled();
     });
 
-    const outcome = await new CapabilitySkillActionsService(parts).requestRemoval(removal);
-
-    expect(outcome).toEqual({ status: "waiting", approvalId: "approval-remove", workspaceId: "default" });
-    expect(findLeftoverCheck).toHaveBeenCalledExactlyOnceWith("default", "extra:meeting-notes");
-    expect(parts.createSkillHubApproval).toHaveBeenCalledExactlyOnceWith(
-      { workspaceId: "default", snapshotId: "skill-hub-review-newest", operationKind: "remove", actorId: ACTOR },
-      { pluginPass: { pluginId: "meeting-tools" } },
-    );
-    expect(parts.resolveApproval).not.toHaveBeenCalled();
-  });
-
-  it("never looks for a left-over check for a skill no plugin uninstall left behind", async () => {
-    const findLeftoverCheck = vi.fn(async () => "skill-hub-review-newest");
-    const parts = removalSources({
-      readSkillLifecycle: vi.fn(async () => undefined),
-      listSkillsRemovedWithPlugins: vi.fn(async () => new Set<string>()),
-      findLeftoverCheck,
+    it("refuses the operator's own import of the same name: its check didn't come with the plugin", async () => {
+      await refusedWith(
+        neverOn({
+          findSkillHubSnapshot: vi.fn(async () => ({
+            sourceProvider: "local",
+            sourceRef: "https://github.com/someone/notes",
+            workspaceId: "default",
+          })),
+        }),
+        "not_left_by_plugin",
+      );
     });
 
-    await expect(new CapabilitySkillActionsService(parts).requestRemoval(removal)).rejects.toMatchObject({
-      details: { reason: "not_removable" },
+    it("refuses a check that came with another plugin than the one whose uninstall left the skill", async () => {
+      await refusedWith(
+        neverOn({
+          findSkillHubSnapshot: vi.fn(async () => ({
+            ...pluginCheck,
+            sourceRef: `plugin:other-tools/notes@commit:${"c".repeat(40)}`,
+          })),
+        }),
+        "not_left_by_plugin",
+      );
     });
-    expect(findLeftoverCheck).not.toHaveBeenCalled();
+
+    it("refuses while a record of its plugin exists again", async () => {
+      const listed: PluginSkillListing = {
+        pluginId: "meeting-tools",
+        name: "Meeting tools",
+        installPlanId: "plan-2",
+        workspaceId: "default",
+        state: "installed",
+        pieces: [],
+      };
+      await refusedWith(neverOn({ listPluginRecords: vi.fn(async () => [listed]) }), "plugin_installed");
+    });
+
+    it("refuses with no uninstall tombstone naming it, before looking for a check", async () => {
+      const parts = neverOn({ listRemovedPlugins: vi.fn(async () => []) });
+      await refusedWith(parts, "not_left_by_plugin");
+      expect(parts.findLeftoverCheck).not.toHaveBeenCalled();
+    });
+
+    it("refuses when no single lineage matches it (none, or two never removed)", async () => {
+      await refusedWith(neverOn({ findLeftoverCheck: vi.fn(async () => undefined) }), "lineage_unclear");
+    });
+
+    it("refuses a lineage with a version that was switched on, in plain words", async () => {
+      await refusedWith(
+        neverOn({
+          listSkillHub: vi.fn(async () => ({
+            items: [
+              {
+                snapshotId: "skill-hub-review-newest",
+                actions: { remove: { allowed: false, blockers: ["CANDIDATE_NOT_REVOKED"] } },
+              },
+            ] as never,
+          })),
+        }),
+        "version_switched_on",
+      );
+    });
+
+    it("refuses a name that ships with GoatCitadel, also for a revoked left-over with a record", async () => {
+      await refusedWith(
+        neverOn({
+          listRemovedPlugins: vi.fn(async () => [{ pluginId: "meeting-tools", skillIds: ["extra:debugging"] }]),
+        }),
+        "bundled_skill",
+        "extra:debugging",
+      );
+      await refusedWith(
+        neverOn({
+          readSkillLifecycle: vi.fn(async () => leftBehind),
+          listSkillsRemovedWithPlugins: vi.fn(async () => new Set(["extra:debugging"])),
+        }),
+        "bundled_skill",
+        "extra:debugging",
+      );
+    });
+
+    it("refuses a check from another workspace (a lineage is only ever looked for in this one)", async () => {
+      await refusedWith(
+        neverOn({ findSkillHubSnapshot: vi.fn(async () => ({ ...pluginCheck, workspaceId: "other" })) }),
+        "not_left_by_plugin",
+      );
+    });
   });
 
   it("finds the newest check of the one lineage that was never removed", () => {

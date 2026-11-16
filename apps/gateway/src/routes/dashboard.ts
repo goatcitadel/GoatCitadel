@@ -1,4 +1,5 @@
-import type { FastifyBaseLogger, FastifyInstance, FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync } from "fastify";
+import { readSkillRemovalCleanup } from "./skill-removal-cleanup-health.js";
 import { z } from "zod";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { projectSettingsPublicValue } from "../services/provider-settings-public-projection.js";
@@ -11,7 +12,6 @@ import {
   LlmProviderCapabilitiesSchema,
   LlmProviderGoogleCloudConfigSchema,
   LlmProviderRequestConfigSchema,
-  redactStructuredSecrets,
   SemanticValidationError,
   ServiceUnavailableError,
   WEB_SEARCH_NATIVE_ENGINES,
@@ -1040,35 +1040,4 @@ function containsPublicProjectionMarker(value: unknown, seen = new WeakSet<objec
   return (Array.isArray(value) ? value : Object.values(value)).some((item) =>
     containsPublicProjectionMarker(item, seen),
   );
-}
-
-/** How long the health summary waits for the skill removal cleanup count before it answers without it. */
-const SKILL_REMOVAL_CLEANUP_WAIT_MS = 2_000;
-
-/**
- * System › Health's count of applied skill removals whose moved-aside folder is still in the skills folder. A host that
- * doesn't compose it, a read that fails, or one slower than `SKILL_REMOVAL_CLEANUP_WAIT_MS` answers nothing (logged at
- * debug), so the health summary never waits long on it, never fails for it, and the page never reads it as none left.
- */
-async function readSkillRemovalCleanup(
-  fastify: FastifyInstance,
-  log: FastifyBaseLogger,
-): Promise<{ leftFolders: number } | undefined> {
-  const owner = fastify.services.capabilitySkills?.removalCleanup;
-  if (!owner) return undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<undefined>((resolve) => {
-    timer = setTimeout(() => resolve(undefined), SKILL_REMOVAL_CLEANUP_WAIT_MS);
-  });
-  try {
-    const leftFolders = await Promise.race([owner.countLeftovers(), late]);
-    if (leftFolders === undefined) log.debug("skill removal cleanups took too long to read");
-    return leftFolders === undefined ? undefined : { leftFolders };
-  } catch (error) {
-    const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: String(error) };
-    log.debug({ err: redactStructuredSecrets(diagnostic).value }, "skill removal cleanups could not be read");
-    return undefined;
-  } finally {
-    clearTimeout(timer);
-  }
 }

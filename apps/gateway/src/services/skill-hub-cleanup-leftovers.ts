@@ -20,12 +20,20 @@ export function createRemovalCleanupCounter(
   now: () => number = Date.now,
 ): () => Promise<number> {
   let kept: { value: number; at: number; generation: number } | undefined;
+  // One scan at a time: a caller that comes while one runs shares it.
+  let running: Promise<number> | undefined;
   return async () => {
     const generation = removalCleanupGeneration();
     if (kept && kept.generation === generation && now() - kept.at < REMOVAL_CLEANUP_COUNT_TTL_MS) return kept.value;
-    const value = await countLeftovers(listCleanupFailures, rootExists, readFolderKind, root);
-    kept = { value, at: now(), generation };
-    return value;
+    running ??= countLeftovers(listCleanupFailures, rootExists, readFolderKind, root)
+      .then((value) => {
+        kept = { value, at: now(), generation };
+        return value;
+      })
+      .finally(() => {
+        running = undefined;
+      });
+    return await running;
   };
 }
 

@@ -1,6 +1,16 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { ConflictError } from "@goatcitadel/contracts";
+import {
+  ConflictError,
+  SKILL_HUB_LIFECYCLE_APPROVAL_KIND,
+  SKILL_HUB_OPERATION_INTENT_PREVIEW_SCHEMA,
+  canonicalJsonString,
+  type ApprovalRequest,
+  type SkillHubOperationIntentPreview,
+  type SkillHubOperationIntentRecord,
+  type SkillHubOperationIntentTemplate,
+} from "@goatcitadel/contracts";
+import { computeSkillHubOperationRequestSha256 } from "@goatcitadel/storage";
 import type { SkillHubSnapshotRecord } from "@goatcitadel/storage";
 import {
   PROMPTWARE_SCANNER_ID,
@@ -82,4 +92,30 @@ export function assertRevisionExpectation(
       details: { expectedState: expectedAbsent ? "absent" : expected, currentRevision: actual },
     });
   }
+}
+
+/** Reconstruct the exact immutable intent only after the canonical approval is approved. */
+export function materializeApprovedSkillHubIntent(approval: ApprovalRequest): SkillHubOperationIntentRecord {
+  if (approval.kind !== SKILL_HUB_LIFECYCLE_APPROVAL_KIND || approval.status !== "approved") {
+    throw new ConflictError({ message: "Skill Hub lifecycle intent requires an approved dedicated approval." });
+  }
+  const preview = approval.preview as Partial<SkillHubOperationIntentPreview>;
+  if (preview.schemaVersion !== SKILL_HUB_OPERATION_INTENT_PREVIEW_SCHEMA || !isRecord(preview.intent)) {
+    throw new TypeError("Skill Hub lifecycle approval preview is missing its immutable intent.");
+  }
+  const intent = preview.intent as unknown as SkillHubOperationIntentTemplate;
+  const requestSha256 = computeSkillHubOperationRequestSha256({ ...intent, approvalId: approval.approvalId });
+  const expectedPayload = {
+    operationId: intent.operationId,
+    requestSha256,
+    workspaceId: intent.workspaceId,
+    operationKind: intent.operationKind,
+    skillId: intent.skillId,
+    snapshotId: intent.snapshotId,
+    contentTreeSha256: intent.contentTreeSha256,
+  };
+  if (canonicalJsonString(approval.payload) !== canonicalJsonString(expectedPayload)) {
+    throw new TypeError("Skill Hub lifecycle approval payload does not match its hash-bound preview.");
+  }
+  return { ...intent, approvalId: approval.approvalId, requestSha256 };
 }

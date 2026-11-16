@@ -33,8 +33,10 @@ export const UNINSTALL_SKILL_STAYS =
  * and they have no row in Capabilities › Skills to remove them from. A skill switched on and revoked since reads removed,
  * not installed and off, so it never takes this line.
  */
-export const UNINSTALL_SKILL_NEVER_ON =
-  "This can't be undone here. A skill it added was never switched on, so it stays. Check this plugin again to remove it, and then it can be installed again.";
+export function uninstallSkillNeverOn(skills: readonly string[], plugin: string): string {
+  const named = joinLabels(skills);
+  return `This can't be undone here. ${named} was never switched on, so it stays after the uninstall. To install ${plugin} again, check ${plugin} again and remove ${named} there.`;
+}
 
 /** The confirmation's opening when nothing the plugin added is a skill. */
 export const UNINSTALL_REINSTALLABLE = "This can't be undone here. Installing it again adds its pieces back.";
@@ -57,7 +59,7 @@ function ownSkills(pieces: readonly CapabilityPluginDetailPiece[]): CapabilityPl
 }
 
 /** The confirmation's description: it says up front whether the plugin can be installed again. */
-export function uninstallConfirmDescription(pieces: readonly CapabilityPluginDetailPiece[]): string {
+export function uninstallConfirmDescription(pieces: readonly CapabilityPluginDetailPiece[], plugin: string): string {
   const skills = ownSkills(pieces);
   // The confirmation shows only before an uninstall, where a skill reads removed once it was revoked: it stays revoked
   // until it is removed in Capabilities › Skills.
@@ -67,7 +69,12 @@ export function uninstallConfirmDescription(pieces: readonly CapabilityPluginDet
     )
   )
     return UNINSTALL_SKILL_STAYS;
-  if (skills.some((piece) => piece.state === "installed_off")) return UNINSTALL_SKILL_NEVER_ON;
+  const neverOn = skills.filter((piece) => piece.state === "installed_off");
+  if (neverOn.length > 0)
+    return uninstallSkillNeverOn(
+      neverOn.map((piece) => piece.label),
+      plugin,
+    );
   return skills.some((piece) => piece.state === "unknown") ? UNINSTALL_SKILL_UNKNOWN : UNINSTALL_REINSTALLABLE;
 }
 

@@ -441,7 +441,10 @@ describe("CapabilityPluginInspectionService", () => {
     );
     const { inspect } = await harness({
       pieces: [{ kind: "skill", id: "meeting-notes", path: "skills/meeting-notes" }],
-      overrides: { readSkillCheck },
+      overrides: {
+        readSkillCheck,
+        readLeftoverRemoval: vi.fn(async () => ({ removable: true as const, snapshotId: "check-1" })),
+      },
     });
 
     const inspection = await inspect();
@@ -454,6 +457,37 @@ describe("CapabilityPluginInspectionService", () => {
         "This skill was left behind by an earlier install and was never switched on. Remove it here, then this plugin can be installed.",
       removableSkillId: "extra:meeting-notes",
     });
+  });
+
+  it.each([
+    ["two lineages match it", "lineage_unclear", "more than one installed copy of this skill matches it."],
+    ["a version of it was switched on", "version_switched_on", "a version of it was switched on before."],
+    ["no uninstall left it", "not_left_by_plugin", "no uninstalled plugin left it behind."],
+  ] as const)("offers no removal when %s, and says so plainly", async (_case, reason, tail) => {
+    const readSkillCheck = vi.fn(async (_workspaceId: string, snapshotId: string) =>
+      skillCheck(snapshotId, {
+        skillId: "extra:meeting-notes",
+        version: "installed_off",
+        installInactive: { allowed: false, blockers: ["SOURCE_ALREADY_INSTALLED"] },
+      }),
+    );
+    const readLeftoverRemoval = vi.fn(async () => ({ removable: false as const, reason }));
+    const { inspect } = await harness({
+      pieces: [{ kind: "skill", id: "meeting-notes", path: "skills/meeting-notes" }],
+      overrides: { readSkillCheck, readLeftoverRemoval },
+    });
+
+    const check = piece(await inspect(), "meeting-notes").check;
+
+    expect(check).not.toHaveProperty("removableSkillId");
+    expect(check).toMatchObject({ status: "blocked", code: "SOURCE_ALREADY_INSTALLED" });
+    const message = (check as { message: string }).message;
+    expect(message.startsWith("This skill was left behind by an earlier install and was never switched on. ")).toBe(
+      true,
+    );
+    expect(message.endsWith(tail)).toBe(true);
+    expect(message).not.toMatch(/[A-Z]{2,}_[A-Z]/u);
+    expect(readLeftoverRemoval).toHaveBeenCalledExactlyOnceWith("default", "extra:meeting-notes");
   });
 
   it("blocks a plugin skill named like a bundled skill with the built-in line", async () => {

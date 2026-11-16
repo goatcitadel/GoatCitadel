@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { removalLeftoversNote, removalOutcomeNote } from "./skill-removal-outcome";
+import { removalLeftoversNote, removalOutcomeNote, removalRefusalLine } from "./skill-removal-outcome";
 
 describe("removalLeftoversNote", () => {
   it("counts the temporary folders an applied removal left, in the singular for one", () => {
@@ -68,5 +68,47 @@ describe("removalOutcomeNote", () => {
       expect(note).toMatch(/^Not removed\. /u);
       expect(note).not.toMatch(/_/u);
     }
+  });
+});
+
+describe("removalRefusalLine", () => {
+  const refusal = (
+    reason: string,
+    error = "GoatCitadel can't remove it from here, because no uninstalled plugin left it behind.",
+  ) =>
+    Object.assign(new Error("API error 409"), {
+      status: 409,
+      body: { error, code: "STATE_CONFLICT", details: { reason } },
+    });
+
+  it("shows the Gateway's own plain words for the removal's own refusals", () => {
+    expect(removalRefusalLine(refusal("not_left_by_plugin"))).toBe(
+      "GoatCitadel can't remove it from here, because no uninstalled plugin left it behind.",
+    );
+    expect(removalRefusalLine(refusal("version_switched_on", "plain words"))).toBe("plain words");
+  });
+
+  it("reads nothing else, so no code reaches the screen", () => {
+    expect(removalRefusalLine(refusal("blocked", "CANDIDATE_NOT_REVOKED"))).toBeUndefined();
+    expect(removalRefusalLine(Object.assign(new Error("x"), { status: 503, body: { error: "down" } }))).toBeUndefined();
+    expect(removalRefusalLine(new Error("plain"))).toBeUndefined();
+  });
+
+  it("words each never-on refusal of the effect plainly", () => {
+    for (const reason of [
+      "runtime_record_present",
+      "runtime_folder_present",
+      "skills_folder_unreadable",
+      "version_switched_on",
+      "not_left_by_plugin",
+      "lineage_removed",
+    ]) {
+      const note = removalOutcomeNote({ disposition: "blocked", reason });
+      expect(note).toMatch(/^Not removed\. /u);
+      expect(note).not.toMatch(/_/u);
+    }
+    expect(removalOutcomeNote({ disposition: "blocked", reason: "skills_folder_unreadable" })).toBe(
+      "Not removed. GoatCitadel couldn't read its skills folder, so nothing was changed. Try again.",
+    );
   });
 });

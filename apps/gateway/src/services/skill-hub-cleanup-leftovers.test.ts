@@ -52,6 +52,20 @@ describe("createRemovalCleanupCounter", () => {
     expect(noRoot.readFolderKind).not.toHaveBeenCalled();
   });
 
+  it("runs one scan at a time: callers that come while it runs share it", async () => {
+    const parts = reads(new Set(), [failure("operation-left")]);
+    let release!: () => void;
+    parts.listCleanupFailures.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve([failure("operation-left")]))),
+    );
+    const first = parts.count();
+    const second = parts.count();
+    await Promise.resolve();
+    release();
+    await expect(Promise.all([first, second])).resolves.toEqual([0, 0]);
+    expect(parts.listCleanupFailures).toHaveBeenCalledOnce();
+  });
+
   it("counts a folder it can't read plainly", async () => {
     const unreadable = reads(new Set(), [failure("operation-link")]);
     unreadable.readFolderKind.mockRejectedValue(new Error("reparse point"));

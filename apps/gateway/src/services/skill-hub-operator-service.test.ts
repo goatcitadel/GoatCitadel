@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { LeftoverPluginRecords } from "./skill-leftover-binding.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   SKILL_HUB_LIFECYCLE_APPROVAL_KIND,
@@ -544,18 +545,36 @@ describe("SkillHubOperatorService", () => {
     const elsewhereItem = (await elsewhere.service.list({ workspaceId: "workspace-1" })).items[0]!;
     expect(elsewhereItem.actions.remove.blockers).toContain("RUNTIME_NOT_FROM_THIS_CHECK");
 
-    // No runtime record: a lineage never switched on, removed whole, bound to its newest version, runtime expected absent.
-    const never = createHarness({ snapshots: [checked], candidates: [version("candidate")] });
+    // No runtime record: a lineage never switched on, removed whole, bound to its newest version, runtime expected absent,
+    // and only when it came with a plugin that is uninstalled now and whose tombstone names the skill.
+    const fromPlugin = snapshot({
+      snapshotId: "snapshot-v1",
+      sourceProvider: "goatcitadel_plugin",
+      sourceRef: `plugin:meeting-tools/demo@commit:${"c".repeat(40)}`,
+    });
+    const tombstoned: LeftoverPluginRecords = {
+      plugins: [],
+      removed: [{ pluginId: "meeting-tools", skillIds: ["extra:demo"] }],
+    };
+    const never = createHarness({
+      snapshots: [fromPlugin],
+      candidates: [version("candidate")],
+      pluginRecords: tombstoned,
+    });
     const neverItem = (await never.service.list({ workspaceId: "workspace-1" })).items[0]!;
     expect(neverItem.actions.remove).toEqual({ allowed: true, blockers: [] });
-    await expect(createIntent(never, "snapshot-v1", "remove")).resolves.toMatchObject({
+    await expect(createIntent(never, "snapshot-v1", "remove", { pluginId: "meeting-tools" })).resolves.toMatchObject({
       operationKind: "remove",
       targetCandidateId: "candidate-demo",
       targetVersionId: "version-v1",
       expectedCandidateAbsent: false,
       expectedRuntimeAbsent: true,
     });
-    const onceOn = createHarness({ snapshots: [checked], candidates: [version("approved")] });
+    const onceOn = createHarness({
+      snapshots: [fromPlugin],
+      candidates: [version("approved")],
+      pluginRecords: tombstoned,
+    });
     const onceOnItem = (await onceOn.service.list({ workspaceId: "workspace-1" })).items[0]!;
     expect(onceOnItem.actions.remove.blockers).toContain("CANDIDATE_NOT_REVOKED");
     const newerCheck = snapshot({
@@ -564,7 +583,8 @@ describe("SkillHubOperatorService", () => {
       declaredVersion: "9.0.0",
     });
     const older = createHarness({
-      snapshots: [checked, newerCheck],
+      pluginRecords: tombstoned,
+      snapshots: [fromPlugin, newerCheck],
       candidates: [
         version("candidate"),
         candidateVersion({
@@ -578,6 +598,23 @@ describe("SkillHubOperatorService", () => {
     });
     const olderItem = (await older.service.list({ workspaceId: "workspace-1" })).items[0]!;
     expect(olderItem.actions.remove.blockers).toContain("NOT_NEWEST_VERSION");
+
+    // The same rule as the removal request: an own import, no tombstone, or a plugin installed again is not removable.
+    for (const [snapshots, pluginRecords, blocker] of [
+      [[checked], tombstoned, "LEFTOVER_NOT_FROM_UNINSTALLED_PLUGIN"],
+      [[fromPlugin], { plugins: [], removed: [] }, "LEFTOVER_NOT_FROM_UNINSTALLED_PLUGIN"],
+      [[fromPlugin], undefined, "LEFTOVER_NOT_FROM_UNINSTALLED_PLUGIN"],
+      [[fromPlugin], { ...tombstoned, plugins: [{ pluginId: "meeting-tools" }] }, "LEFTOVER_PLUGIN_INSTALLED"],
+    ] as const) {
+      const refused = createHarness({
+        snapshots: [...snapshots],
+        candidates: [version("candidate")],
+        ...(pluginRecords ? { pluginRecords } : {}),
+      });
+      const refusedItem = (await refused.service.list({ workspaceId: "workspace-1" })).items[0]!;
+      expect(refusedItem.actions.remove.allowed).toBe(false);
+      expect(refusedItem.actions.remove.blockers).toContain(blocker);
+    }
   });
 
   it("asks again for a removal that settled instead of handing the old approval back", async () => {
@@ -891,13 +928,12 @@ async function createIntent(
   harness: ReturnType<typeof createHarness>,
   snapshotId: string,
   operationKind: SkillHubOperationIntentTemplate["operationKind"],
+  pluginPass?: { pluginId: string },
 ): Promise<SkillHubOperationIntentTemplate> {
-  await harness.service.createApproval({
-    workspaceId: "workspace-1",
-    snapshotId,
-    operationKind,
-    actorId: "operator-1",
-  });
+  await harness.service.createApproval(
+    { workspaceId: "workspace-1", snapshotId, operationKind, actorId: "operator-1" },
+    pluginPass ? { pluginPass } : {},
+  );
   const input = harness.createApproval.mock.calls[0]?.[0] as ApprovalCreateInput;
   return (input.preview as { intent: SkillHubOperationIntentTemplate }).intent;
 }
@@ -910,6 +946,7 @@ function createHarness(input: {
   removedCandidateIds?: string[];
   settledOperationIds?: Set<string>;
   catalogEntry?: CapabilityCatalogEntry;
+  pluginRecords?: LeftoverPluginRecords;
   beforeCreateApproval?: () => Promise<void>;
   transformCreatedApproval?: (approval: ApprovalRequest) => ApprovalRequest;
 }) {
@@ -1004,6 +1041,7 @@ function createHarness(input: {
     storage,
     createApproval,
     listInspectableCatalog: async () => (input.catalogEntry ? [input.catalogEntry] : []),
+    ...(input.pluginRecords ? { readPluginRecords: async () => input.pluginRecords! } : {}),
     now: () => "2026-07-14T01:00:00.000Z",
   });
   return { service, storage, approvals, createApproval };

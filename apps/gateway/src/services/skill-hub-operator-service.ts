@@ -30,7 +30,14 @@ import {
 } from "./plugin-owned-refusal.js";
 import { BUNDLED_SKILL_NAME_TAKEN, isBundledSkillName } from "./plugin-skill-name-rules.js";
 import { TAKES_POWER_AWAY, takesPowerAway } from "./skill-hub-operation-power.js";
+import { leftoverPluginBlock, type LeftoverPluginBlock, type LeftoverPluginRecords } from "./skill-leftover-binding.js";
 import {
+  isCanonicalIntentString,
+  isOptionalCanonicalIntentString,
+  isOptionalPositiveRevision,
+  isSha256,
+  isCanonicalIsoDateTime,
+  isRecord,
   compareCandidateNewest,
   compareSnapshotPosition,
   normalizeLimit,
@@ -203,6 +210,11 @@ export interface SkillHubOperatorServiceOptions {
   storage: SkillHubOperatorStorage;
   createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest>;
   listInspectableCatalog(): Promise<CapabilityCatalogEntry[]>;
+  /**
+   * The plugin records and the uninstalled plugins remembered, through the Plugins tab's one store: a never-switched-on
+   * left-over is removable only when an uninstalled plugin left it (`leftoverPluginBlock`). Without it, none is.
+   */
+  readPluginRecords?: () => Promise<LeftoverPluginRecords>;
   now?: () => string;
 }
 
@@ -215,6 +227,8 @@ interface OperatorInventory {
   approvalsBySnapshot: Map<string, Partial<Record<SkillHubOperatorAction, SkillHubOperatorApprovalSummary>>>;
   /** Candidate lineages whose skill was removed in this workspace; they stay as history and are never reused. */
   removedCandidateIds: ReadonlySet<string>;
+  /** The plugin records and tombstones, or undefined when they aren't wired (then no left-over is removable). */
+  pluginRecords?: LeftoverPluginRecords;
 }
 
 interface SnapshotContext {
@@ -238,6 +252,8 @@ interface SnapshotContext {
   runtimeRevision?: SkillAggregateRevisionRecord;
   catalogEntry?: CapabilityCatalogEntry;
   activeVersion: boolean;
+  /** Why this check's skill isn't a left-over an uninstalled plugin left, or undefined when it is. */
+  leftoverBlock?: LeftoverPluginBlock;
   candidateInventoryTruncated: boolean;
   approvals: Partial<Record<SkillHubOperatorAction, SkillHubOperatorApprovalSummary>>;
 }
@@ -494,6 +510,7 @@ export class SkillHubOperatorService {
       catalogBySkillId,
       approvalsBySnapshot: await this.latestApprovalsBySnapshot(workspaceId),
       removedCandidateIds: new Set(await storage.skillHubOperations.listAppliedRemovalCandidateIds(workspaceId)),
+      ...(this.options.readPluginRecords ? { pluginRecords: await this.options.readPluginRecords() } : {}),
     };
   }
 
@@ -615,6 +632,10 @@ export class SkillHubOperatorService {
       runtimeRevision: skillId ? await storage.skillAggregateRevisions.get("runtime_skill", skillId) : undefined,
       catalogEntry: skillId ? inventory.catalogBySkillId.get(skillId) : undefined,
       activeVersion,
+      leftoverBlock:
+        skillId && inventory.pluginRecords
+          ? leftoverPluginBlock(snapshot, skillId, inventory.pluginRecords)
+          : "not_left_by_plugin",
       candidateInventoryTruncated: inventory.candidateInventoryTruncated,
       approvals: inventory.approvalsBySnapshot.get(snapshot.snapshotId) ?? {},
     };
@@ -787,6 +808,9 @@ export class SkillHubOperatorService {
         blockers.push("CANDIDATE_NOT_REVOKED");
       }
       if (!context.lineageCandidateId || !context.candidateRevision) blockers.push("CANDIDATE_REVISION_MISSING");
+      if (context.leftoverBlock === "plugin_installed") blockers.push("LEFTOVER_PLUGIN_INSTALLED");
+      else if (context.leftoverBlock) blockers.push("LEFTOVER_NOT_FROM_UNINSTALLED_PLUGIN");
+      if (pluginSkillNamedLikeBundled(context.snapshot)) blockers.push(BUNDLED_SKILL_NAME_TAKEN);
       targetCandidateId = context.exactCandidate?.candidateId ?? targetCandidateId;
       targetVersionId = context.exactCandidate?.versionId ?? targetVersionId;
       supersedesVersionId = context.exactCandidate?.supersedesVersionId;
@@ -961,37 +985,6 @@ function isOperatorIntentTemplate(
     readSkillHubOperationFingerprint(value as unknown as SkillHubOperationIntentTemplate, pluginInstallPlanId) !==
     undefined
   );
-}
-
-function isCanonicalIntentString(value: unknown, maxLength: number): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= maxLength &&
-    value.normalize("NFKC").trim() === value
-  );
-}
-
-function isOptionalCanonicalIntentString(value: unknown, maxLength: number): value is string | undefined {
-  return value === undefined || isCanonicalIntentString(value, maxLength);
-}
-
-function isOptionalPositiveRevision(value: unknown): value is number | undefined {
-  return value === undefined || (Number.isSafeInteger(value) && (value as number) > 0);
-}
-
-function isSha256(value: unknown): value is string {
-  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
-}
-
-function isCanonicalIsoDateTime(value: unknown): value is string {
-  if (!isCanonicalIntentString(value, 64)) return false;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function operationAttempt(intent: SkillHubOperationIntentTemplate): number {

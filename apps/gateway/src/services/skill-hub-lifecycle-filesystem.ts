@@ -248,6 +248,25 @@ export class SkillHubLifecycleFilesystem {
     return names;
   }
 
+  /**
+   * What is at `target`, read only: unlike `pathKind` it never creates the managed root (a missing root, or a missing
+   * parent, means nothing is there) and it answers `link` for a symlink, junction or reparse point instead of throwing.
+   * Containment is checked the same way; any other failure (permissions, an unreadable entry) throws.
+   */
+  public async peekKind(
+    managedRoot: string,
+    target: string,
+    signal: AbortSignal,
+  ): Promise<"directory" | "missing" | "link" | "other"> {
+    const resolvedRoot = this.assertManagedRoot(managedRoot);
+    const targetPath = this.assertContained(resolvedRoot, target, false);
+    if (!(await this.tryLstat(resolvedRoot, signal))) return "missing";
+    const stat = await this.tryLstat(targetPath, signal);
+    if (!stat) return "missing";
+    if (stat.symbolicLink || stat.reparsePoint) return "link";
+    return stat.kind === "directory" ? "directory" : "other";
+  }
+
   public async pathKind(
     managedRoot: string,
     target: string,

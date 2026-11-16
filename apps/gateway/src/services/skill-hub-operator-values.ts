@@ -37,3 +37,34 @@ export function normalizeLimit(value: number | undefined, max: number): number {
   if (!Number.isSafeInteger(value)) throw new TypeError("Skill Hub list limit must be an integer.");
   return Math.max(1, Math.min(value, max));
 }
+
+export function isCanonicalIntentString(value: unknown, maxLength: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maxLength &&
+    value.normalize("NFKC").trim() === value
+  );
+}
+
+export function isOptionalCanonicalIntentString(value: unknown, maxLength: number): value is string | undefined {
+  return value === undefined || isCanonicalIntentString(value, maxLength);
+}
+
+export function isOptionalPositiveRevision(value: unknown): value is number | undefined {
+  return value === undefined || (Number.isSafeInteger(value) && (value as number) > 0);
+}
+
+export function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+export function isCanonicalIsoDateTime(value: unknown): value is string {
+  if (!isCanonicalIntentString(value, 64)) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}

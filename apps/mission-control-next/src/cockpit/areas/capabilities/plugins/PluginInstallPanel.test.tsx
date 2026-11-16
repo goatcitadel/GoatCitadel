@@ -54,6 +54,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/capability-plugins", () => api)
 const skills = vi.hoisted(() => ({
   requestCapabilitySkillOperation: vi.fn(),
   fetchCapabilitySkillInstalls: vi.fn(),
+  requestCapabilitySkillRemoval: vi.fn(),
+  fetchCapabilitySkillRemoval: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/capability-skills", () => skills);
 const plans = vi.hoisted(() => ({ fetchChangePlan: vi.fn() }));
@@ -770,5 +772,52 @@ describe("Plugin install panel: a Claude Code plugin", () => {
     expect(text()).not.toContain("Experimental");
     expect(text()).not.toContain("GoatCitadel can use");
     expect(section("What it leaves out")).toBeUndefined();
+  });
+});
+
+describe("Plugin install panel: a left-over skill never switched on", () => {
+  it("removes it from the check, checks again, and keeps saying it was removed after the check", async () => {
+    const leftover = {
+      ...NOTES,
+      check: {
+        status: "blocked" as const,
+        code: "SOURCE_ALREADY_INSTALLED",
+        message:
+          "This skill was left behind by an earlier install and was never switched on. Remove it here, then this plugin can be installed.",
+        removableSkillId: "extra:meeting-notes",
+      },
+    };
+    gateway = fakeGateway(inspectionOf([leftover], { installable: false }));
+    skills.requestCapabilitySkillRemoval.mockResolvedValue({
+      status: "approved",
+      approvalId: "approval-remove",
+      workspaceId: "ws-1",
+    });
+    skills.fetchCapabilitySkillRemoval.mockResolvedValue({
+      approvalId: "approval-remove",
+      approvalStatus: "approved",
+      settlement: { disposition: "applied", reason: "applied" },
+    });
+    const draft = draftPluginInstallKey("git");
+    await render(draft, { form: "git" });
+    await type(container.querySelector("input"), "https://github.com/example/meeting-tools");
+    await press(button("Check"));
+    await render(readPluginInstall(draft)?.movedTo ?? INSPECTION_ID, { form: "git" });
+    await press(button("Remove skill"));
+    // What the Gateway answers once the left-over is removed: the plugin can be installed.
+    const checks = api.inspectCapabilityPlugin.mock.calls.length;
+    gateway.inspection = inspectionOf([NOTES]);
+    await press(button("Remove skill", dialog()!));
+    expect(skills.requestCapabilitySkillRemoval).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      skillId: "extra:meeting-notes",
+    });
+
+    // Applied: the check is made again, and now the plugin can be installed; the line stays after that check.
+    await settle();
+    expect(api.inspectCapabilityPlugin.mock.calls.length).toBe(checks + 1);
+    await settle();
+    expect(text()).toContain(`Removed ${NOTES.label}.`);
+    expect(button("Remove skill")).toBeUndefined();
   });
 });

@@ -26,6 +26,8 @@ import { ApprovalExpiredAfterCommitError } from "./approval-lifecycle-service.js
 import type { StoredPlugin } from "./capability-plugin-store.js";
 import { buildCapabilitySkillInstall } from "./capability-skill-install-projection.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
+import { isBundledSkillName } from "./plugin-skill-name-rules.js";
+import { leftoverPluginBlock } from "./skill-leftover-binding.js";
 import {
   PLUGIN_SKILL_STEP_DECLINED_NOTE,
   PluginOwnedError,
@@ -145,7 +147,34 @@ export interface CapabilitySkillActionSources {
    * (`newestLeftoverCheck`), or undefined when there is none, or more than one lineage.
    */
   findLeftoverCheck(workspaceId: string, skillId: string): Promise<string | undefined>;
+  /** The uninstalled plugins remembered, with the skill ids each uninstall removed. */
+  listRemovedPlugins(): Promise<ReadonlyArray<{ pluginId: string; skillIds: readonly string[] }>>;
 }
+
+/** Why a skill with no runtime record isn't a left-over GoatCitadel removes from a plugin's check. */
+export type LeftoverRemovalRefusal =
+  | "bundled_skill"
+  | "has_record"
+  | "not_left_by_plugin"
+  | "plugin_installed"
+  | "lineage_unclear"
+  | "version_switched_on";
+
+export type LeftoverRemovalVerdict =
+  | { removable: true; snapshotId: string }
+  | { removable: false; reason: LeftoverRemovalRefusal };
+
+/** Each refusal in plain words, true wherever it is shown (the request's 409 and the plugin check's line). */
+export const LEFTOVER_REFUSAL_MESSAGES: Readonly<Record<LeftoverRemovalRefusal, string>> = {
+  bundled_skill:
+    "GoatCitadel can't remove it from here, because it has the same name as a skill that ships with GoatCitadel.",
+  has_record: "It now has a record in Capabilities › Skills, so GoatCitadel doesn't remove it from here.",
+  not_left_by_plugin: "GoatCitadel can't remove it from here, because no uninstalled plugin left it behind.",
+  plugin_installed: "GoatCitadel can't remove it from here while the plugin that added it is still installed.",
+  lineage_unclear:
+    "GoatCitadel can't remove it from here, because more than one installed copy of this skill matches it.",
+  version_switched_on: "GoatCitadel can't remove it from here, because a version of it was switched on before.",
+};
 
 /** What `newestLeftoverCheck` reads of a candidate version. */
 export type LeftoverCandidateVersion = Pick<
@@ -375,17 +404,33 @@ export class CapabilitySkillActionsService {
     input: CapabilitySkillRemovalRequest & { actorId: string },
   ): Promise<CapabilitySkillRemovalOutcome> {
     const record = await this.sources.readSkillLifecycle(input.workspaceId, input.skillId);
-    const removedWithPlugin = (await this.sources.listSkillsRemovedWithPlugins()).has(input.skillId);
     // The same rule the Skills tab's `removable` uses: a revoked Skill Hub skill that a plugin uninstall left behind.
-    // One that was never switched on has no record: its lineage's newest check names it, and Skill Hub's guard and the
-    // effect prove it never was.
-    const snapshotId = record
-      ? record.lifecycleState === "revoked" && record.provenance?.source === "extra" && removedWithPlugin
-        ? record.provenance.sourceRef
-        : undefined
-      : removedWithPlugin
-        ? await this.sources.findLeftoverCheck(input.workspaceId, input.skillId)
-        : undefined;
+    // One that was never switched on has no record: the one rule `leftoverRemoval` decides it, as the plugin check does.
+    let snapshotId: string | undefined;
+    if (record) {
+      const removedWithPlugin = (await this.sources.listSkillsRemovedWithPlugins()).has(input.skillId);
+      snapshotId =
+        record.lifecycleState === "revoked" && record.provenance?.source === "extra" && removedWithPlugin
+          ? record.provenance.sourceRef
+          : undefined;
+      if (snapshotId && isBundledSkillName(input.skillId.slice("extra:".length))) {
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: LEFTOVER_REFUSAL_MESSAGES.bundled_skill,
+          details: { reason: "bundled_skill" },
+        });
+      }
+    } else {
+      const verdict = await this.leftoverRemoval(input.workspaceId, input.skillId);
+      if (!verdict.removable) {
+        throw new ConflictError({
+          code: "STATE_CONFLICT",
+          message: LEFTOVER_REFUSAL_MESSAGES[verdict.reason],
+          details: { reason: verdict.reason },
+        });
+      }
+      snapshotId = verdict.snapshotId;
+    }
     const snapshot = snapshotId ? await this.sources.findSkillHubSnapshot(snapshotId) : undefined;
     if (!snapshotId || !snapshot) throw notRemovable();
     if (snapshot.workspaceId !== input.workspaceId) {
@@ -415,6 +460,40 @@ export class CapabilitySkillActionsService {
     // The same request hands back the approval it already made; an approved one is never resolved again. Otherwise it
     // waits: a removal deletes files, so no setting skips its approval.
     return { status: approval.status === "approved" ? "approved" : "waiting", approvalId, workspaceId };
+  }
+
+  /**
+   * Whether a skill with no runtime record is a left-over GoatCitadel removes from a plugin's check: the one rule the
+   * removal request and the plugin check share. It must not be named like a bundled skill, have no record, be named by
+   * an uninstalled plugin's tombstone, have exactly one lineage that was never removed (bound to its newest version's
+   * check), that check must have come with that very uninstalled plugin and no record of the plugin may exist now, and
+   * Skill Hub's own guard must allow its `remove` (every version a candidate or revoked). It only reads.
+   */
+  public async leftoverRemoval(workspaceId: string, skillId: string): Promise<LeftoverRemovalVerdict> {
+    const name = skillId.startsWith("extra:") ? skillId.slice("extra:".length) : undefined;
+    if (!name) return { removable: false, reason: "not_left_by_plugin" };
+    if (isBundledSkillName(name)) return { removable: false, reason: "bundled_skill" };
+    if (await this.sources.readSkillLifecycle(workspaceId, skillId)) return { removable: false, reason: "has_record" };
+    const removed = await this.sources.listRemovedPlugins();
+    if (!removed.some((tombstone) => tombstone.skillIds.includes(skillId))) {
+      return { removable: false, reason: "not_left_by_plugin" };
+    }
+    const snapshotId = await this.sources.findLeftoverCheck(workspaceId, skillId);
+    if (!snapshotId) return { removable: false, reason: "lineage_unclear" };
+    const snapshot = await this.sources.findSkillHubSnapshot(snapshotId);
+    if (!snapshot || snapshot.workspaceId !== workspaceId) return { removable: false, reason: "not_left_by_plugin" };
+    const block = leftoverPluginBlock(snapshot, skillId, { plugins: await this.sources.listPluginRecords(), removed });
+    if (block) return { removable: false, reason: block };
+    const { items } = await this.sources.listSkillHub({ workspaceId, snapshotIds: [snapshotId] });
+    const guard = items.find((item) => item.snapshotId === snapshotId)?.actions.remove;
+    if (!guard?.allowed) {
+      const blockers = guard?.blockers ?? [];
+      return {
+        removable: false,
+        reason: blockers.includes("CANDIDATE_NOT_REVOKED") ? "version_switched_on" : "lineage_unclear",
+      };
+    }
+    return { removable: true, snapshotId };
   }
 
   /**

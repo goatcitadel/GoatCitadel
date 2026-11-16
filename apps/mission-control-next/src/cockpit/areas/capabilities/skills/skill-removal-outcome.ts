@@ -25,9 +25,14 @@ const BLOCKED_BY_REASON: Readonly<Record<string, string>> = {
   runtime_not_from_check:
     "Not removed. The skill in use was installed from a different check than the one this removal names, so nothing was deleted.",
   runtime_record_present:
-    "Not removed. This skill now has a record in Capabilities › Skills, so nothing was deleted. Remove it there.",
+    "Not removed. This skill now has a record in Capabilities › Skills, so nothing was changed. Find it there: if it reads as removed with its plugin, remove it there.",
   runtime_folder_present:
-    "Not removed. Something is in GoatCitadel's skills folder under this skill's name, so nothing was deleted. Move it out of the skills folder, then remove the skill again.",
+    "Not removed. Something is in GoatCitadel's skills folder under this skill's name, so nothing was changed. Move it out of the skills folder, then remove the skill again.",
+  skills_folder_unreadable:
+    "Not removed. GoatCitadel couldn't read its skills folder, so nothing was changed. Try again.",
+  version_switched_on:
+    "Not removed. A version of this skill was switched on before, so it isn't one that was never switched on, and nothing was changed.",
+  not_left_by_plugin: "Not removed. No uninstalled plugin left this skill behind, so nothing was changed.",
   lineage_already_removed:
     "Not removed. This request was for a copy of the skill that was already removed, and the copy here was installed after that, so nothing was deleted. Remove it again to remove this copy.",
 };
@@ -49,6 +54,33 @@ export function removalLeftoversNote(
   if (settlement.disposition !== "applied" || count < 1) return undefined;
   const verb = count === 1 ? "was" : "were";
   return `Removed. GoatCitadel left ${plural(count, "temporary folder")} in the skills folder that it couldn't confirm ${verb} its own.`;
+}
+
+/** The removal request's own refusals (its 409 `details.reason`), whose plain message the Gateway wrote. */
+const PLAIN_REFUSAL_REASONS: ReadonlySet<string> = new Set([
+  "not_removable",
+  "other_workspace",
+  "bundled_skill",
+  "has_record",
+  "not_left_by_plugin",
+  "plugin_installed",
+  "lineage_unclear",
+  "version_switched_on",
+]);
+
+/**
+ * The Gateway's own plain line for a refused removal request, or undefined for any other error (then the shared
+ * wording applies). Only a 409 with one of the removal's own reasons is read, so no code reaches the screen.
+ */
+export function removalRefusalLine(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const { status, body } = error as { status?: unknown; body?: unknown };
+  if (status !== 409 || !body || typeof body !== "object") return undefined;
+  const { error: message, details } = body as { error?: unknown; details?: { reason?: unknown } };
+  const reason = details?.reason;
+  return typeof reason === "string" && PLAIN_REFUSAL_REASONS.has(reason) && typeof message === "string"
+    ? message
+    : undefined;
 }
 
 /**
