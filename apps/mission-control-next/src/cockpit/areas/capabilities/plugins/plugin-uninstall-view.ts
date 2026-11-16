@@ -29,12 +29,12 @@ export const UNINSTALL_SKILL_STAYS =
   "This can't be undone here. A skill it added stays until you remove it in Capabilities › Skills. Until then it can't be installed again.";
 
 /**
- * The confirmation's opening when the only skills it added read installed and switched off. Most were never switched on:
- * those stay installed with no row in Capabilities › Skills to remove them from. One switched on before can read the same
- * here (its switch-on approval may be older than the approvals its check reads), so the line names both.
+ * The confirmation's opening when the only skills it added were never switched on: the uninstall leaves them installed,
+ * and they have no row in Capabilities › Skills to remove them from. A skill switched on and revoked since reads removed,
+ * not installed and off, so it never takes this line.
  */
 export const UNINSTALL_SKILL_NEVER_ON =
-  "This can't be undone here. A skill it added stays. If it was switched on before, remove it in Capabilities › Skills, and then this plugin can be installed again. If it never was, GoatCitadel can't remove it, and this plugin can't be installed again.";
+  "This can't be undone here. A skill it added was never switched on, so it stays and GoatCitadel can't remove it. You won't be able to install this plugin again.";
 
 /** The confirmation's opening when nothing the plugin added is a skill. */
 export const UNINSTALL_REINSTALLABLE = "This can't be undone here. Installing it again adds its pieces back.";
