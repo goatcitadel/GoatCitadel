@@ -63,6 +63,26 @@ async function render() {
   );
 }
 
+describe("System activity Refresh (U-GL-047)", () => {
+  it("keeps focus on Refresh while the feed reloads", async () => {
+    await render();
+    // The first read settles, so the press starts a reload instead of landing on a busy button.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    api.fetchRealtimeEvents.mockReturnValue(new Promise(() => undefined));
+    const refresh = [...container.querySelectorAll("button")].find((node) => node.textContent?.includes("Refresh"))!;
+    refresh.focus();
+    await act(async () => refresh.click());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(refresh.disabled).toBe(false);
+    expect(refresh.getAttribute("aria-busy")).toBe("true");
+    expect(document.activeElement).toBe(refresh);
+  });
+});
+
 describe("System activity polling (WK-13)", () => {
   it("shows recent sessions beside the activity feed", async () => {
     await render();

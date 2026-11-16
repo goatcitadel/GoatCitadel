@@ -32,7 +32,14 @@ export function Section({
     >
       <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <Heading id={headingId} className="text-base font-semibold text-fg">
+          <Heading
+            id={headingId}
+            className={
+              headingLevel === 2
+                ? "font-display text-lg font-semibold text-fg"
+                : "font-display text-md font-semibold text-fg"
+            }
+          >
             {title}
           </Heading>
           {description ? <p className="mt-0.5 text-sm text-fg-secondary">{description}</p> : null}

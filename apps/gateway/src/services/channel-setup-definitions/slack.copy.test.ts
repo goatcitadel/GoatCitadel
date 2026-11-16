@@ -134,7 +134,7 @@ describe("Slack setup guide: what it says up front (items 4 and 5)", () => {
       "To receive messages: Socket Mode with an app-level token (no public web address needed), or an OAuth install from here with message history scopes and a public HTTPS address for this Gateway.",
     ]);
     expect(paragraphs("first-message")).toEqual([
-      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. With Socket Mode, send your bot a direct message and check the reply. To receive on a web address instead (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a Slack message from …\", and add that id under Who may message this bot with Edit setup.",
+      "With a bot token, check that the test passed. With only an incoming webhook, check that the test post arrived in the channel. With Socket Mode, send your bot a direct message and check the reply. To receive on a web address instead (OAuth installs only): in your Slack app open Event Subscriptions, paste this connection's webhook address, subscribe to message events, and allow your Slack member ID under Who may message this bot. If the bot doesn't answer your message, open Edit setup and go to Who may message this bot: the sender it turned away is listed there with a button to allow them.",
     ]);
   });
 
@@ -309,7 +309,7 @@ describe("Slack setup guide: who may message the bot (item 6, A7, A8)", () => {
     const allowed = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
     expect(allowed?.explanation).toBe(
-      'Your Slack member ID (starts with U). Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
+      "Your Slack member ID (starts with U). Don't know the id? Finish setup and message the bot once. Then open Edit setup and come back to this step: the sender it turned away is listed here with a button to allow them.",
     );
   });
 

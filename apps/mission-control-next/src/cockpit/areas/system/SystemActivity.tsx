@@ -145,7 +145,7 @@ export function SystemActivity() {
         actions={
           <Button
             size="sm"
-            disabled={events.isFetching}
+            loading={events.isFetching}
             onClick={() => {
               older.reset();
               void events.refetch();

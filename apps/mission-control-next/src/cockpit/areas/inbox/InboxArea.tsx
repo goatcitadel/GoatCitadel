@@ -186,6 +186,8 @@ export function InboxArea() {
     (item: OperatorInboxItem, focusAction?: "approve" | "deny", explicitDetails = false) =>
       inspector.open({
         source: `inbox:${item.id}`,
+        // Details (click, Enter or the O shortcut) is the operator opening it; a J or K follow keeps focus on the row.
+        focusOnOpen: explicitDetails,
         title: inboxItemTitle(item),
         body: (
           <InboxInspectorBody
@@ -236,7 +238,7 @@ export function InboxArea() {
         actions={
           <>
             <InboxShortcutsToggle open={shortcutHelpOpen} onOpenChange={setShortcutHelpOpen} />
-            <Button size="sm" onClick={() => void inbox.refetch()} disabled={inbox.isFetching}>
+            <Button size="sm" onClick={() => void inbox.refetch()} loading={inbox.isFetching}>
               <RefreshCw aria-hidden="true" className="size-4" /> Refresh
             </Button>
           </>

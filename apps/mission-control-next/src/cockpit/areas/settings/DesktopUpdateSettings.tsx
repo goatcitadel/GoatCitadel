@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
 import { Dialog } from "../../ui/Dialog";
 import type { DesktopUpdateChannel } from "@goatcitadel/contracts";
 import { useDesktopUpdates } from "../../../features/desktop-updates/desktop-update-bridge";
 import { useDesktopUpdateActions } from "../../../features/desktop-updates/use-desktop-update-actions";
 import { Button } from "../../ui/Button";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 
 export function DesktopUpdateSettings() {
@@ -15,6 +17,15 @@ export function DesktopUpdateSettings() {
   const { act, busy, error, uncertain } = useDesktopUpdateActions(status);
   const actionBusy = busy || uncertain;
   const offered = status?.availableRelease;
+  const buildDetails =
+    status && (status.installedCommit || offered) ? (
+      <TechnicalDetails>
+        {status.installedCommit ? (
+          <p className="break-all font-mono text-xs">Installed build {status.installedCommit}</p>
+        ) : null}
+        {offered ? <p className="break-all font-mono text-xs">Offered build {offered.sourceCommit}</p> : null}
+      </TechnicalDetails>
+    ) : null;
   return (
     <section id="application-updates" aria-label="Application updates" className="space-y-3">
       <header>
@@ -30,8 +41,8 @@ export function DesktopUpdateSettings() {
         <>
           <p className="text-sm text-fg-secondary">
             Installed: <strong className="text-fg">{status.installedVersion}</strong>
-            {status.installedCommit ? <span> · {status.installedCommit.slice(0, 8)}</span> : null}
           </p>
+          {offered ? null : buildDetails}
           <label className="block text-sm text-fg-secondary">
             Update channel
             <select
@@ -59,8 +70,9 @@ export function DesktopUpdateSettings() {
           {offered ? (
             <>
               <p className="text-sm text-fg-secondary">
-                Available: <strong className="text-fg">{offered.version}</strong> · {offered.sourceCommit.slice(0, 8)}
+                Available: <strong className="text-fg">{offered.version}</strong>
               </p>
+              {buildDetails}
               <p className="text-xs text-fg-muted">
                 {offered.publisherSigned
                   ? "Signed release verified."
@@ -68,8 +80,7 @@ export function DesktopUpdateSettings() {
               </p>
               {status.phase === "downloading" ? (
                 <label className="block text-sm text-fg-secondary">
-                  Downloading {Math.round(status.downloadedBytes / 1048576)} of{" "}
-                  {Math.round(offered.installer.sizeBytes / 1048576)} MB
+                  Downloading {formatBytes(status.downloadedBytes)} of {formatBytes(offered.installer.sizeBytes)}
                   <progress
                     aria-label="Update download"
                     value={status.downloadedBytes}

@@ -22,7 +22,8 @@ import {
   isBundledPostgresMode,
   resolveGatewayPostgresConnectionOptions,
 } from "./postgres-runtime-config.js";
-import { NonRetryableStartupError } from "./startup-errors.js";
+import { tcpPortAcceptsConnections } from "./bundled-postgres-port-probe.js";
+import { NonRetryableStartupError, attachOperatorSummary } from "./startup-errors.js";
 
 export const POSTGRES_IMAGE = "postgres:16-alpine";
 const READY_POLL_MS = 500;
@@ -135,11 +136,14 @@ export async function ensureBundledPostgresRuntime(
     return undefined;
   }
   if (probe.reachable) {
-    throw new Error(
-      `Bundled Postgres port ${config.assistant.database.bundledPostgres.port} is reachable but does not belong to this runtime root. Expected dataDir ${path.resolve(
-        config.rootDir,
-        config.assistant.database.bundledPostgres.dataDir,
-      )}; observed ${probe.dataDirectory ?? "unknown"}. Stop the other Postgres runtime or configure a different bundledPostgres.port.`,
+    throw attachOperatorSummary(
+      new Error(
+        `Bundled Postgres port ${config.assistant.database.bundledPostgres.port} is reachable but does not belong to this runtime root. Expected dataDir ${path.resolve(
+          config.rootDir,
+          config.assistant.database.bundledPostgres.dataDir,
+        )}; observed ${probe.dataDirectory ?? "unknown"}. Stop the other Postgres runtime or configure a different bundledPostgres.port.`,
+      ),
+      bundledPostgresOperatorSummary("other_database", config.assistant.database.bundledPostgres.port),
     );
   }
 
@@ -148,6 +152,7 @@ export async function ensureBundledPostgresRuntime(
   }
 
   assertBundledPostgresPortIsUsable(config);
+  await assertBundledPostgresPortIsNotHeld(config);
 
   // SECURITY (codex finding #3): If an operator explicitly configured a
   // native bundled Postgres (via `assistant.database.bundledPostgres.binDir`)
@@ -201,21 +206,24 @@ export async function ensureBundledPostgresRuntime(
   // that changes by restarting the gateway, so surface it as non-retryable and
   // let the dev supervisor stop with operator advice instead of burning its
   // restart budget on a loop that can never succeed.
-  throw new NonRetryableStartupError(
-    [
-      "Bundled Postgres is enabled but no managed runtime backend is available.",
-      "Docker is NOT required — a local PostgreSQL install is the preferred backend, but none",
-      "was found on this host and the Docker fallback is unavailable too. Choose one:",
-      "  1. Install PostgreSQL (the server package, which provides initdb and pg_ctl).",
-      "     It is discovered automatically on PATH and in the standard install locations.",
-      "  2. Point at an install in a non-standard location: set",
-      "     assistant.database.bundledPostgres.binDir to the directory holding initdb and pg_ctl.",
-      '  3. Use a Postgres you already run: set assistant.database.postgres.mode to "managed" and',
-      "     supply connectionString (or host/port/user/password). GoatCitadel then manages no",
-      "     database process at all.",
-      '  4. Fall back to SQLite: set assistant.database.driver to "sqlite".',
-      "  5. Or start Docker Desktop to use the containerised fallback backend.",
-    ].join("\n"),
+  throw attachOperatorSummary(
+    new NonRetryableStartupError(
+      [
+        "Bundled Postgres is enabled but no managed runtime backend is available.",
+        "Docker is NOT required — a local PostgreSQL install is the preferred backend, but none",
+        "was found on this host and the Docker fallback is unavailable too. Choose one:",
+        "  1. Install PostgreSQL (the server package, which provides initdb and pg_ctl).",
+        "     It is discovered automatically on PATH and in the standard install locations.",
+        "  2. Point at an install in a non-standard location: set",
+        "     assistant.database.bundledPostgres.binDir to the directory holding initdb and pg_ctl.",
+        '  3. Use a Postgres you already run: set assistant.database.postgres.mode to "managed" and',
+        "     supply connectionString (or host/port/user/password). GoatCitadel then manages no",
+        "     database process at all.",
+        '  4. Fall back to SQLite: set assistant.database.driver to "sqlite".',
+        "  5. Or start Docker Desktop to use the containerised fallback backend.",
+      ].join("\n"),
+    ),
+    bundledPostgresOperatorSummary("no_backend", config.assistant.database.bundledPostgres.port),
   );
 }
 
@@ -271,6 +279,10 @@ function readLivePostmasterPid(dataDir: string): number | undefined {
     }
     return undefined;
   }
+}
+
+function postmasterPidFileExists(dataDir: string): boolean {
+  return fsSync.existsSync(path.join(dataDir, "postmaster.pid"));
 }
 
 async function tryStartNativeBundledPostgres(
@@ -573,10 +585,13 @@ async function waitForBundledPostgres(config: GatewayRuntimeConfig): Promise<voi
   }
 
   const diagnostics = await collectBundledPostgresStartupDiagnostics(config);
-  throw new Error(
-    `Bundled Postgres did not become reachable within ${timeoutMs}ms.${
-      lastProbeDetail ? ` Last probe: ${lastProbeDetail}.` : ""
-    }${diagnostics ? `\n\n${diagnostics}` : ""}`,
+  throw attachOperatorSummary(
+    new Error(
+      `Bundled Postgres did not become reachable within ${timeoutMs}ms.${
+        lastProbeDetail ? ` Last probe: ${lastProbeDetail}.` : ""
+      }${diagnostics ? `\n\n${diagnostics}` : ""}`,
+    ),
+    bundledPostgresOperatorSummary("timeout", config.assistant.database.bundledPostgres.port, timeoutMs),
   );
 }
 
@@ -1136,15 +1151,86 @@ function assertBundledPostgresPortIsUsable(config: GatewayRuntimeConfig): void {
     exclusion.startPort === exclusion.endPort
       ? `${exclusion.startPort}`
       : `${exclusion.startPort}-${exclusion.endPort}`;
-  throw new Error(
-    [
-      `Bundled Postgres cannot start on 127.0.0.1:${port} because Windows has reserved TCP port range ${range}.`,
-      "A reserved port can fail with Permission denied even when no process is listening on it.",
-      "Set GOATCITADEL_BUNDLED_POSTGRES_PORT to a free port, or update " +
-        "assistant.database.bundledPostgres.port in your local config, then restart.",
-      "To inspect Windows reservations, run: netsh interface ipv4 show excludedportrange protocol=tcp",
-    ].join("\n"),
+  throw attachOperatorSummary(
+    new Error(
+      [
+        `Bundled Postgres cannot start on 127.0.0.1:${port} because Windows has reserved TCP port range ${range}.`,
+        "A reserved port can fail with Permission denied even when no process is listening on it.",
+        "Set GOATCITADEL_BUNDLED_POSTGRES_PORT to a free port, or update " +
+          "assistant.database.bundledPostgres.port in your local config, then restart.",
+        "To inspect Windows reservations, run: netsh interface ipv4 show excludedportrange protocol=tcp",
+      ].join("\n"),
+    ),
+    bundledPostgresOperatorSummary("reserved_port", port),
   );
+}
+
+/**
+ * Fails fast, with a plain reason, when something else already answers on the
+ * configured port. It only detects and reports: it never frees the port, never
+ * stops the program holding it and never picks another port.
+ */
+async function assertBundledPostgresPortIsNotHeld(config: GatewayRuntimeConfig): Promise<void> {
+  const port = config.assistant.database.bundledPostgres.port;
+  const acceptsConnections = await tcpPortAcceptsConnections(port);
+  if (!acceptsConnections) {
+    return;
+  }
+  const dataDir = path.resolve(config.rootDir, config.assistant.database.bundledPostgres.dataDir);
+  // Doubtful cases count as this install's own so the start keeps its old behaviour (wait and
+  // retry) instead of a new refusal: a live postmaster, a postmaster.pid left behind (its pid may
+  // belong to a container or a database that is still shutting down), or a container with this
+  // root's name in any state (the start path reuses it by that name), or one mounting the data dir.
+  const ownPostmasterAlive = readLivePostmasterPid(dataDir) !== undefined || postmasterPidFileExists(dataDir);
+  const ownContainerRunning =
+    !ownPostmasterAlive && canUseDocker()
+      ? inspectDockerContainerState(buildBundledDockerContainerName(config.rootDir)) !== "missing" ||
+        hasRunningBundledDockerContainerForDataDir(config)
+      : false;
+  if (!portHeldByAnotherProgram({ acceptsConnections, ownPostmasterAlive, ownContainerRunning })) {
+    return;
+  }
+  throw attachOperatorSummary(
+    new NonRetryableStartupError(
+      [
+        `Bundled Postgres cannot start on 127.0.0.1:${port}: the port already accepts connections, but the probe could not use it and no postmaster or container of this install owns it.`,
+        "Another program may be using the port, or an older GoatCitadel database with a different password is still running.",
+        "Stop that program and restart. GoatCitadel does not stop it or free the port for you.",
+        "To use a different port, set GOATCITADEL_BUNDLED_POSTGRES_PORT to a free port, or update " +
+          "assistant.database.bundledPostgres.port in your local config, then restart.",
+      ].join("\n"),
+    ),
+    bundledPostgresOperatorSummary("port_held", port),
+  );
+}
+
+function portHeldByAnotherProgram(input: {
+  acceptsConnections: boolean;
+  ownPostmasterAlive: boolean;
+  ownContainerRunning: boolean;
+}): boolean {
+  return input.acceptsConnections && !input.ownPostmasterAlive && !input.ownContainerRunning;
+}
+
+type BundledPostgresSummaryKind = "port_held" | "other_database" | "reserved_port" | "timeout" | "no_backend";
+
+export function bundledPostgresOperatorSummary(
+  kind: BundledPostgresSummaryKind,
+  port: number,
+  timeoutMs?: number,
+): string {
+  switch (kind) {
+    case "port_held":
+      return `The local database could not start because another program is using its port (${port}), or an older GoatCitadel database with a different password is still running. Stop that program and press Retry. Open Logs shows how to choose a different port.`;
+    case "other_database":
+      return `The local database port (${port}) belongs to a different database. Stop it and press Retry, or open Logs to see how to choose a different port.`;
+    case "reserved_port":
+      return `The local database could not start because Windows has reserved its port (${port}). Open Logs shows how to choose a different port.`;
+    case "timeout":
+      return `The local database did not start within ${Math.round((timeoutMs ?? 0) / 1000)} seconds. Open Logs shows its last messages.`;
+    case "no_backend":
+      return "The local database could not start because no PostgreSQL install was found and Docker is not running. Open Logs shows the ways to fix this.";
+  }
 }
 
 function findWindowsTcpPortExclusion(port: number): WindowsTcpPortExclusion | undefined {
@@ -1296,4 +1382,6 @@ export const __bundledPostgresRuntimeInternals = {
   sameFilesystemPath,
   dockerContainerMountsDataDir,
   formatBundledPostgresProbeFailure,
+  portHeldByAnotherProgram,
+  bundledPostgresOperatorSummary,
 };

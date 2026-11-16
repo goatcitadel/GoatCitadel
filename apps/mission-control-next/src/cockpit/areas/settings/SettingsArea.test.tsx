@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsArea } from "./SettingsArea";
+import { FIRST_RUN_LANE_DESTINATIONS } from "./FirstRunVerification";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { resolveCockpitCompatibility } from "../../app/cockpit-compatibility";
 import { buildSettingsIndex } from "./settings-index";
@@ -269,7 +270,11 @@ describe("Settings section tabs", () => {
       window.location.hash = "citadel-capabilities";
       window.dispatchEvent(new Event("hashchange"));
     });
-    await vi.waitFor(() => expect(container.textContent).toContain("This capability is hidden from the current release. Technical display preferences do not enable it."));
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain(
+        "Citadel capabilities is not part of this release, so it can't be opened here.",
+      ),
+    );
     expect(window.location.pathname + window.location.search).toBe(current);
     expect(document.documentElement).toBe(documentOwner);
     expect(tab("Citadel capabilities")).toBeUndefined();
@@ -293,7 +298,7 @@ describe("Settings section tabs", () => {
     expect(container.textContent).toContain("Settings destination unavailable");
     await render("/settings/citadel?shell=cockpit#workspace-capabilities");
     expect(container.querySelector('[aria-label="workspace capabilities workspace-a retained draft"]')).toBeNull();
-    expect(container.textContent).toContain("Technical display preferences do not enable it");
+    expect(container.textContent).toContain("is not part of this release, so it can't be opened here.");
     const entries = buildSettingsIndex().flatMap((page) => page.entries);
     expect(entries.find((entry) => entry.section === "citadel-capabilities")?.href).toBe(
       "/settings/citadel#citadel-capabilities",
@@ -444,4 +449,32 @@ describe("the Settings targets of the Tools panel", () => {
     expect(container.textContent).not.toContain("Settings destination unavailable");
     expect(container.textContent).not.toContain("does not match");
   });
+});
+
+const LANE_TARGET_OWNERS: Record<string, string> = {
+  "/settings/access#device-access": "Access owner",
+  "/settings/advanced#voice-runtime": "Voice owner",
+};
+
+describe("the Settings targets of the Diagnostics lanes", () => {
+  const targets = Object.values(FIRST_RUN_LANE_DESTINATIONS).filter((href) => href.startsWith("/settings/"));
+
+  it("keeps a known owner for each Settings target", () => {
+    expect([...targets].sort()).toEqual(Object.keys(LANE_TARGET_OWNERS).sort());
+  });
+
+  it.each(Object.entries(LANE_TARGET_OWNERS))(
+    "opens the Diagnostics lane target %s on %s (U-FR-002)",
+    async (href, owner) => {
+      await render(href.replace("#", "?shell=cockpit#"));
+      await vi.waitFor(() => expect(container.textContent).toContain(owner));
+      expect(container.textContent).not.toContain("Settings destination unavailable");
+    },
+  );
+});
+
+it("names a held-back page as not part of this release (U-ST-018)", async () => {
+  await render("/settings/citadel?shell=cockpit#workspace-capabilities");
+  expect(container.textContent).toContain("is not part of this release, so it can't be opened here.");
+  expect(container.textContent).not.toContain("Technical display preferences");
 });

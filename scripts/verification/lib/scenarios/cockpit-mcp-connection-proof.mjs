@@ -51,7 +51,7 @@ export async function runCockpitMcpConnectionProof({ context, browser, stack, ci
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         const panel = page.getByRole("region", { name: "MCP server configuration", exact: true });
         await panel.getByRole("searchbox", { name: "Search MCP servers", exact: true }).fill(label);
-        await panel.getByRole("button", { name: `Inspect ${label}`, exact: true }).click();
+        await panel.getByRole("button", { name: `Connect and inspect ${label}`, exact: true }).click();
         const inspection = page.getByRole("dialog", { name: "MCP server inspection", exact: true });
         const controls = inspection.getByRole("region", { name: "Reviewed MCP connection controls", exact: true });
         const review = controls.getByRole("region", { name: "MCP connection action review", exact: true });
@@ -102,7 +102,7 @@ export async function runCockpitMcpConnectionProof({ context, browser, stack, ci
         await page.getByRole("tab", { name: "MCP servers", exact: true }).click();
         await panel.getByRole("searchbox", { name: "Search MCP servers", exact: true }).fill(label);
         assert.equal(await panel.getByRole("button", { name: `Edit ${label}`, exact: true }).isDisabled(), true);
-        await panel.getByRole("button", { name: `Inspect ${label}`, exact: true }).click();
+        await panel.getByRole("button", { name: `Connect and inspect ${label}`, exact: true }).click();
         await controls.getByText(/^MCP connection outcome is unconfirmed/).waitFor();
         assert.equal(await controls.getByRole("button", { name: "Review connection", exact: true }).isDisabled(), true);
         assert.equal(await controls.getByRole("button", { name: "Review disconnect", exact: true }).isDisabled(), true);

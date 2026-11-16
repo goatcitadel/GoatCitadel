@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { useDeliberateOpen } from "../deliberate-open";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CapabilitySkillDiscoverItem, CapabilitySkillSource } from "@goatcitadel/contracts";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -97,17 +98,19 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
     [client, workspaceId, navigate, view, openSkill, scope],
   );
 
+  const deliberate = useDeliberateOpen();
   const show = useCallback(
     (key: string, panelTitle: string, gitImport = false) => {
       if (!isSkillInstallScopeCurrent(scope)) return;
       asked.current = { key, inspectorOpen: openInspector };
       openInspector({
         source: skillInstallSource(key),
+        focusOnOpen: deliberate.take(key),
         title: panelTitle,
         body: <SkillInstallPanel installKey={key} gitImport={gitImport} onMove={move} onDone={done} />,
       });
     },
-    [openInspector, move, done, scope],
+    [openInspector, move, done, scope, deliberate],
   );
 
   useEffect(() => {
@@ -136,6 +139,7 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
   const install = (item: CapabilitySkillDiscoverItem) => {
     if (!isSkillInstallScopeCurrent(scope) || !item.install) return;
     const key = sourceDraftKey(item.install);
+    deliberate.press(key);
     // A second press while the first check runs shows that check rather than making another.
     if (readSkillInstall(key)?.state.phase !== "checking") {
       resetSkillInstall(key);
@@ -154,10 +158,11 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
       // A waiting step this page already follows opens its approval at once, as a skill row's Review button does.
       const followed = installOf(readSkillInstall(checkId)?.state);
       if (followed?.approvalId) reopenSettingsApproval(followed.approvalId);
-      navigate(installItemHref(checkId, view));
+      deliberate.go(checkId, () => navigate(installItemHref(checkId, view)));
     },
     importFromGit: () => {
       if (!isSkillInstallScopeCurrent(scope)) return;
+      deliberate.press(GIT_IMPORT_KEY);
       resetSkillInstall(GIT_IMPORT_KEY);
       show(GIT_IMPORT_KEY, GIT_IMPORT_TITLE, true);
     },

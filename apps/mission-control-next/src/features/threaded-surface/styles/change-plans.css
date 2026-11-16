@@ -315,3 +315,20 @@
     flex-basis: 100%;
   }
 }
+
+/* In the Cockpit the confirm is the accent button (a danger plan's confirm is red), as the shared button's own layer
+   gives it; the unlayered rule above would otherwise paint every dialog button as a neutral one. */
+html[data-shell="cockpit"]
+  .chat-change-plan-modal
+  .gc-modal-actions
+  button:last-child:not([data-variant="destructive"]) {
+  border-color: var(--cockpit-accent);
+  background: var(--cockpit-accent);
+  color: var(--cockpit-accent-ink);
+}
+
+html[data-shell="cockpit"] .chat-change-plan-modal .gc-modal-actions button[data-variant="destructive"] {
+  border-color: var(--cockpit-failed);
+  background: var(--cockpit-failed);
+  color: var(--cockpit-accent-ink);
+}

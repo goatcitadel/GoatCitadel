@@ -13,6 +13,17 @@ export interface OverflowTab {
 /** A strip this long cannot fit a phone, so on a phone it becomes a section picker. */
 export const PICKER_MIN_TABS = 6;
 
+/** The row's scroll position that shows the tab with the least movement. */
+export function nearestScrollLeft(
+  row: { scrollLeft: number; clientWidth: number },
+  tab: { offsetLeft: number; offsetWidth: number },
+): number {
+  if (tab.offsetLeft < row.scrollLeft) return tab.offsetLeft;
+  const tabEnd = tab.offsetLeft + tab.offsetWidth;
+  if (tabEnd > row.scrollLeft + row.clientWidth) return tabEnd - row.clientWidth;
+  return row.scrollLeft;
+}
+
 /**
  * One row of view tabs that never wraps or clips silently (DESIGN.md › Page anatomy): it scrolls sideways, the hidden
  * side fades out so the operator can tell more tabs exist, and the current tab is kept in view. The tabs stay links at
@@ -33,7 +44,10 @@ export function OverflowTabs({
   const picker = phone && tabs.length >= PICKER_MIN_TABS;
   const { ref: row, ...edges } = useScrollEdges<HTMLElement>([tabs.length, picker]);
   useEffect(() => {
-    row.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    // Set the row's own scroll position: scrollIntoView would also move the keyboard start point (U-GL-046).
+    const element = row.current;
+    const currentTab = element?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (element && currentTab) element.scrollLeft = nearestScrollLeft(element, currentTab);
   }, [row, current, picker]);
   if (picker) {
     const selected = tabs.find((tab) => tab.id === current);
@@ -61,7 +75,7 @@ export function OverflowTabs({
       aria-label={label}
       data-overflow-start={edges.start || undefined}
       data-overflow-end={edges.end || undefined}
-      className="cockpit-area-tabs cockpit-overflow-fade flex gap-1 overflow-x-auto border-b border-line-subtle"
+      className="cockpit-area-tabs cockpit-overflow-fade relative flex gap-1 overflow-x-auto border-b border-line-subtle"
     >
       {tabs.map((tab) => (
         <a

@@ -128,6 +128,7 @@ export function WorkRunningIndicator({
       ) : summary.state !== "none" ? (
         <span
           aria-hidden="true"
+          data-status-dot={summary.state}
           className={`size-2 shrink-0 rounded-full ${summary.state === "running" ? DOT_CLASS.running : DOT_CLASS.unknown}`}
         />
       ) : null}

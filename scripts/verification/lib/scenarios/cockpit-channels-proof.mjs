@@ -99,6 +99,7 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
         let page,
           browserContext,
           receiver,
+          draftRoute,
           stage = "start isolated notification receiver";
         const screenshotDir = path.join(context.artifactRoot, "screenshots");
         const suffix = randomUUID().replaceAll("-", "").slice(0, 12),
@@ -162,6 +163,7 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
           const created = await createdResponse.json();
           assert.equal(created.catalogId, "channel.ntfy");
           const route = `/api/v1/channels/drafts/${encodeURIComponent(created.draftId)}`;
+          draftRoute = route;
           await panel.getByLabel("Connection label", { exact: true }).fill(label);
           await panel
             .getByRole("checkbox", { name: "Enable this connection after governed finalization", exact: true })
@@ -431,6 +433,18 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
         } finally {
           await browserContext?.close();
           if (receiver) await new Promise((resolve) => receiver.close(resolve));
+          // Remove the draft this pass created. Coming back to a channel continues its unfinished draft, so a
+          // leftover one would turn the next viewport's "Start guided setup" into "Continue guided setup".
+          if (draftRoute) {
+            try {
+              const current = await requestJson(stack.gatewayUrl, draftRoute);
+              if (current.ok)
+                await api(draftRoute, { method: "DELETE", body: { expectedRevision: current.body.revision } });
+            } catch {
+              // Intentionally ignored: a finally block must not replace this pass's result. A draft that could not
+              // be removed makes the next viewport fail at "Start guided setup", which reports the problem.
+            }
+          }
         }
         async function capture(name) {
           await mkdir(screenshotDir, { recursive: true });

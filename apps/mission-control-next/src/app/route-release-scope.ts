@@ -90,7 +90,7 @@ export const ROUTE_RELEASE_SCOPE: readonly RouteReleaseScope[] = [
     releaseAction:
       "Inspect currently captured learning, memory, approval, effect, and Skill Hub lifecycle evidence without mutation.",
     verification: "verify:surface:regression, focused Journey route and service tests",
-    note: "Canonical producers cover skill learning, candidate governance, memory, approvals and effects, plus Skill Hub lifecycle events including rollback and revoke; import and cross-surface coverage remain experimental.",
+    note: "Journey shows skill learning, candidate reviews, memory, approvals and their effects, and Skill Hub changes including rollback and revoke. Imports and changes made on other screens are experimental here.",
   },
   {
     area: "library",
@@ -106,7 +106,7 @@ export const ROUTE_RELEASE_SCOPE: readonly RouteReleaseScope[] = [
     status: "ship",
     releaseAction: "Capture notes and reminders with workspace scoping and operator-visible state.",
     verification: "verify:surface:regression, focused personal-ops route tests",
-    note: "Notes are release-bearing as personal business context, separate from durable learned memory.",
+    note: "Notes are release-bearing as personal business context, separate from learned memory.",
   },
   {
     area: "library",
@@ -205,7 +205,7 @@ export const ROUTE_RELEASE_SCOPE: readonly RouteReleaseScope[] = [
     status: "ship",
     releaseAction: "Create, select, edit, archive, and restore trusted layouts built from compiled Ops summaries.",
     verification: "focused HX-410 Mission Control tests, verify:surface:regression",
-    note: "Saved boards are layout-only projections; every widget reloads its canonical source and never becomes runtime authority.",
+    note: "Saved boards keep only their layout. Every widget reads its saved record again and never changes how GoatCitadel runs.",
   },
   {
     area: "ops",
@@ -238,7 +238,7 @@ export const ROUTE_RELEASE_SCOPE: readonly RouteReleaseScope[] = [
     releaseAction:
       "Inspect the read-only remote-worker registry, assignments, events, and reconciliation once live HX-501/HX-502/HX-504 authority is composed.",
     verification: "remote-workers route + service proof; verify:surface:regression (fixture-seeded)",
-    note: "HX-507 remote-worker visibility is architecture-ship but implementation-hold pending live worker authority, so it is not counted in the visible release surface until the live data gate opens.",
+    note: "HX-507 remote-worker visibility is architecture-ship but implementation-hold pending live worker records, so it is not counted in the visible release surface until the live data gate opens.",
   },
   {
     area: "ops",

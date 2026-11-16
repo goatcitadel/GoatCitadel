@@ -193,6 +193,10 @@ describe("native Citadel directory", () => {
     await click("Save Citadel metadata");
     expect(api.updateCitadel).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(button("Apply draft to current Citadel")).toBeTruthy());
+    expect(text(view!.root)).toContain(
+      "Your draft started from an older version; review the saved profile before applying it.",
+    );
+    expect(text(view!.root)).not.toContain("retained draft");
     expect(field("Citadel name").props.value).toBe("Retained draft");
     await click("Apply draft to current Citadel");
     await click("Save Citadel metadata");

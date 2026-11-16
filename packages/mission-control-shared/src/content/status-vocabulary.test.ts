@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   humanizeToken,
+  isFinishedRunStatus,
   presentApprovalOutcome,
   presentApprovalStatus,
   presentChangePlanStatus,
@@ -24,6 +25,13 @@ describe("status vocabulary", () => {
     expect(presentChatTurnStatus("waiting_for_approval")).toEqual({ label: "Waiting on you", tone: "waiting" });
   });
 
+  it("names the run statuses that can no longer change", () => {
+    for (const status of ["completed", "failed", "cancelled", "dead_lettered"] as const)
+      expect(isFinishedRunStatus(status)).toBe(true);
+    for (const status of ["queued", "running", "waiting", "paused"] as const)
+      expect(isFinishedRunStatus(status)).toBe(false);
+  });
+
   it("maps decision, change, and risk states", () => {
     expect(presentChangePlanStatus("awaiting_confirmation")).toEqual({ label: "Needs confirmation", tone: "waiting" });
     expect(presentChangePlanStatus("rollback_failed")).toEqual({ label: "Rollback failed", tone: "failed" });
@@ -43,6 +51,18 @@ describe("status vocabulary", () => {
     expect(presentEventType("change_plan.awaiting_approval")).toBe("Change plan awaiting approval");
     expect(humanizeToken("remote_worker.assignment-changed")).toBe("Remote worker assignment changed");
     expect(presentToolEffectOutcome("uncertain")).toBe("Outcome uncertain. Check before retrying.");
+  });
+});
+
+describe("humanizeToken acronyms", () => {
+  it.each([
+    ["mesh_mcp_server", "Mesh MCP server"],
+    ["url", "URL"],
+    ["oauth_token", "OAuth token"],
+    ["api_key", "API key"],
+    ["repo_search", "Repo search"],
+  ])("humanizeToken(%s) is %s (U-GL-007)", (value, label) => {
+    expect(humanizeToken(value)).toBe(label);
   });
 });
 

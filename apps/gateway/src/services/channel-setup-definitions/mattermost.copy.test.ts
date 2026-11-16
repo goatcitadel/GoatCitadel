@@ -135,7 +135,7 @@ describe("Mattermost setup guide: what it says up front (items 1 and 6)", () => 
     // Ruling R46: the audit's "(or message the bot directly)" is a Mattermost claim its docs do not make, so it is not shipped.
     // Ruling R49: the probe deletes its test post right away, so the audit's "Check the test post arrived" is not asked.
     expect(paragraphs("first-message")).toEqual([
-      'Check the test passed. To receive: turn on Receive posts, allow your user ID, post in a channel the bot is in, and check the reply. If the bot doesn\'t answer your message, open System › Diagnostics, find "Dropped a Mattermost message from …", and add that id under Who may message this bot with Edit setup.',
+      "Check the test passed. To receive: turn on Receive posts, allow your user ID, post in a channel the bot is in, and check the reply. If the bot doesn't answer your message, open Edit setup and go to Who may message this bot: the sender it turned away is listed there with a button to allow them.",
     ]);
   });
 
@@ -366,7 +366,7 @@ describe("Mattermost setup guide: receiving (items 4 and 6, A7, A8)", () => {
 
   it("says a sender is a user ID, not a username, and where an admin finds it", () => {
     expect(field("allowedSenders").explanation).toBe(
-      'Mattermost user IDs (26 letters and digits), not usernames. An admin sees them in System Console › User Management › Users. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
+      "Mattermost user IDs (26 letters and digits), not usernames. An admin sees them in System Console › User Management › Users. Don't know the id? Finish setup and message the bot once. Then open Edit setup and come back to this step: the sender it turned away is listed here with a button to allow them.",
     );
   });
 

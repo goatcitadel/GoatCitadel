@@ -1,11 +1,42 @@
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
+import { useTooltipOpensOnFocus } from "./tooltip-focus";
 
+const LONG_PRESS_MS = 500;
+
+/**
+ * Names a control on hover and keyboard focus (Radix), and on a touch long-press, which Radix does not handle.
+ * The label is also shown to assistive technology through the tooltip's description.
+ */
 export function Tooltip({ label, children }: { label: string; children: ReactNode }) {
+  const openOnFocus = useTooltipOpensOnFocus();
+  const [open, setOpen] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const cancelPress = useCallback(() => {
+    clearTimeout(timer.current);
+    timer.current = undefined;
+  }, []);
+  useEffect(() => cancelPress, [cancelPress]);
+  const startPress = (event: PointerEvent<HTMLElement>) => {
+    if (event.pointerType !== "touch") return;
+    cancelPress();
+    timer.current = setTimeout(() => setOpen(true), LONG_PRESS_MS);
+  };
   return (
     <TooltipPrimitive.Provider delayDuration={400}>
-      <TooltipPrimitive.Root>
-        <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>
+      <TooltipPrimitive.Root open={open} onOpenChange={setOpen}>
+        <TooltipPrimitive.Trigger
+          asChild
+          onFocus={(event) => {
+            if (!openOnFocus) event.preventDefault();
+          }}
+          onPointerDown={startPress}
+          onPointerUp={cancelPress}
+          onPointerCancel={cancelPress}
+          onPointerLeave={cancelPress}
+        >
+          {children}
+        </TooltipPrimitive.Trigger>
         <TooltipPrimitive.Portal>
           <TooltipPrimitive.Content
             sideOffset={6}

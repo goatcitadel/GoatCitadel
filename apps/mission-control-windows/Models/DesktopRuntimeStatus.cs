@@ -43,11 +43,26 @@ public sealed class DesktopRuntimeStatus
     [JsonPropertyName("desktopEventStream")]
     public DesktopEventStreamCredential? DesktopEventStream { get; set; }
 
+    [JsonPropertyName("startupFailure")]
+    public RuntimeStartupFailure? StartupFailure { get; set; }
+
     [JsonPropertyName("checkedAt")]
     public string CheckedAt { get; set; } = "";
 
     [JsonIgnore]
     public bool IsReady => Status == "ready" && Readiness.Gateway && Readiness.Ui;
+}
+
+public sealed class RuntimeStartupFailure
+{
+    [JsonPropertyName("summary")]
+    public string Summary { get; set; } = "";
+
+    [JsonPropertyName("retryable")]
+    public bool Retryable { get; set; }
+
+    [JsonPropertyName("at")]
+    public string At { get; set; } = "";
 }
 
 public sealed class ManagedPidInfo

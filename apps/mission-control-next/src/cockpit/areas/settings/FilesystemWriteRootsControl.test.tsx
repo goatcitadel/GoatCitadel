@@ -400,7 +400,8 @@ describe("global filesystem tool access", () => {
     expect(toolSelect("fs.copy").disabled).toBe(true);
     expect(pathInput().disabled).toBe(true);
     expect(button("Add OS temp folder").disabled).toBe(true);
-    await click(button("Refresh"));
+    // The page's Refresh re-reads every query the page shows.
+    await act(async () => client.invalidateQueries());
     expect(toolSelect("fs.copy").disabled).toBe(true);
     api.fetchSettings.mockResolvedValue(settingsAt(5, { deny: ["fs.delete"], allow: ["fs.copy"] }));
     await click(button("Re-read settings and unlock"));

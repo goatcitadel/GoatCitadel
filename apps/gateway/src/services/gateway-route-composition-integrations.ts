@@ -10,6 +10,7 @@ import type {
 import { createChannelSetupRoutePort } from "./channel-setup-route-service.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import { createCommsRoutePort } from "./comms-route-service.js";
+import { ChannelDroppedSenderLog } from "./channel-dropped-sender-log.js";
 import { createIntegrationRoutePort } from "./integration-route-service.js";
 import { createIntegrationWebhookRoutePort } from "./integration-webhook-route-service.js";
 import { createObsidianRoutePort } from "./obsidian-route-service.js";
@@ -182,6 +183,8 @@ export function composeIntegrationChannelRouteDependencies(
   };
   const requireNotificationRouting = () => gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
   const googleSignIn = gateway.googleWorkspaceOAuth;
+  // One log, written by the webhook gate and read by channel setup.
+  const droppedSenders = new ChannelDroppedSenderLog();
   const integrations = createIntegrationRoutePort({
     approveDiscordPairing: (connectionId, pairingId) =>
       integrationChannel.approveDiscordPairing(connectionId, pairingId),
@@ -211,6 +214,7 @@ export function composeIntegrationChannelRouteDependencies(
         actionId,
         input,
       ),
+    listChannelDroppedSenders: (connectionId) => droppedSenders.list(connectionId),
     listDiscordPairings: (connectionId) => integrationChannel.listDiscordPairings(connectionId),
     listExternalSideEffectRuns: (query: ExternalSideEffectRunListQuery = {}) =>
       query.connectionId
@@ -326,6 +330,7 @@ export function composeIntegrationChannelRouteDependencies(
     transcribeChannelVoice: (input, owner) => channelVoiceInbound.transcribe(input, owner),
     parseChatCommand: (sessionId, commandText, options) => gateway.parseChatCommand(sessionId, commandText, options),
     recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
+    recordDroppedSender: (input) => droppedSenders.record(input),
     emitChannelActivity: (input) => gateway.commsActivity(input),
     respondToExistingChatMessage: (sessionId, messageId, input) =>
       gateway.respondToExistingChatMessage(sessionId, messageId, input),

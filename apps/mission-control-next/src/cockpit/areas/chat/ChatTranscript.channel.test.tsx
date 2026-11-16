@@ -186,17 +186,18 @@ describe("ChatTranscript in a channel conversation", () => {
 
     await render(<ChatTranscript props={props([channelMessage])} channel={channel} />);
     expect(buttons()).not.toContain("Retry");
-    expect(container.textContent).not.toContain("Capture this as a workflow");
     const arrived = await openMoreMenu(container.querySelector("article")!);
     expect(arrived).toContain("Run details");
+    expect(arrived).not.toContain("Save as skill…");
     expect(arrived).toContain("New conversation from here");
     expect(arrived).not.toContain("Edit your message and resend");
 
     // A desk message is not retried or edited either: either would send the words through the channel again.
     await remount(<ChatTranscript props={props([deskMessage])} channel={channel} />);
     expect(buttons()).not.toContain("Retry");
-    expect(container.textContent).toContain("Capture this as a workflow");
+    expect(container.textContent).not.toContain("Capture this as a workflow");
     const desk = await openMoreMenu(container.querySelector("article")!);
+    expect(desk).toContain("Save as skill…");
     expect(desk).toContain("New conversation from here");
     expect(desk).not.toContain("Edit your message and resend");
 

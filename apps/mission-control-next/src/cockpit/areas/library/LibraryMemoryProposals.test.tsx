@@ -8,6 +8,9 @@ import { fetchTraceMemoryCandidates } from "@goatcitadel/mission-control-shared/
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { LibraryMemoryProposals } from "./LibraryMemoryProposals";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 vi.mock("@goatcitadel/mission-control-shared/api/memory", () => ({
   fetchTraceMemoryCandidates: vi.fn(),
@@ -126,4 +129,22 @@ it("reads proposals again, without a reload, once memory administration is turne
   });
   await vi.waitFor(() => expect(container.textContent).toContain("No proposals waiting for review."));
   expect(container.textContent).not.toContain("turned off on this installation");
+});
+
+it.each([
+  ["Review promotion", "Confirm memory promotion"],
+  ["Review rejection", "Confirm memory rejection"],
+])("the %s dialog confirm is the primary button (U-GL-008)", async (review, confirm) => {
+  vi.mocked(fetchTraceMemoryCandidates).mockResolvedValue({ items: [proposal] } as unknown as Awaited<
+    ReturnType<typeof fetchTraceMemoryCandidates>
+  >);
+  await render();
+  const opener = () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === review);
+  await vi.waitFor(() => expect(opener()?.disabled).toBe(false));
+  await act(async () => opener()!.click());
+  const button = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(
+    (item) => item.textContent === confirm,
+  )!;
+  expect(button.className).toContain("bg-accent");
 });
