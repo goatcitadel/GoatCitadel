@@ -361,3 +361,28 @@ it("marks a pinned conversation with a Pinned glyph and in its row name", async 
   expect(plain.querySelector('[aria-label="Pinned"]')).toBeNull();
   expect(plain.getAttribute("aria-label")).not.toContain("Pinned,");
 });
+
+it("shows the conversation rail from 1280 px, or from 1600 px while the inspector is open (U-CH-002, U-CH-001)", async () => {
+  const rail = {
+    missionSessions: [],
+    externalSessions: [],
+    selectedSessionId: null,
+    availableFolders: [],
+    selectedFolderId: "all",
+    selectedProjectId: "all",
+    search: "",
+    loading: false,
+    onSearchChange: vi.fn(),
+    onHistoryViewChange: vi.fn(),
+    onSelectProjectId: vi.fn(),
+    onCreateSession: vi.fn(),
+    historyView: "active",
+  } as unknown as MissionThreadedSessionRailData;
+  const aside = () => container.querySelector("aside")!;
+  await act(async () => root.render(<ThreadList rail={rail} />));
+  expect(aside().className).toContain("lg:flex");
+  expect(aside().className).not.toContain("md:flex");
+  await act(async () => root.render(<ThreadList rail={rail} yieldToInspector />));
+  expect(aside().className).toContain("xl:flex");
+  expect(aside().className).not.toContain("lg:flex");
+});

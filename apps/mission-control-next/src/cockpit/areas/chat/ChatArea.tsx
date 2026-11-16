@@ -5,7 +5,7 @@ import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/cl
 import { fetchOnboardingState } from "@goatcitadel/mission-control-shared/api/client";
 import { MissionThreadedControllerHost } from "@goatcitadel/threaded-surface-core";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
-import { ChatConversationsSheet } from "./ChatConversationsSheet";
+import { ChatConversationRail } from "./ChatConversationRail";
 import { unsentConversationId } from "./conversation-reuse";
 import { ChatEmptyState, ChatSessionHeader, ChatSetupGate } from "./ChatAreaChrome";
 import { CHAT_SHELL_FRAME } from "./ChatHostStatus";
@@ -18,7 +18,6 @@ import { artifactInspectorHistoryMatches, buildEditorTurnId, inspectorTabFor } f
 import { chatSelectionHref } from "./chat-selection-evidence";
 import type { ChatInspectorTab } from "./chat-inspector-evidence";
 import { readCockpitHistory } from "../../app/cockpit-history";
-import { ThreadList } from "./ThreadList";
 import { useInspector } from "../../app/inspector";
 import { InspectorSourceContext } from "../../app/inspector-context";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
@@ -292,20 +291,14 @@ export function ChatAreaView({
   useEffect(() => () => closeIfOpen("chat"), [closeIfOpen]);
   return (
     <section aria-label="Chat" className="flex min-h-0 min-w-0 flex-1">
-      <ThreadList
+      <ChatConversationRail
         rail={input.sessionRail}
         projectOptions={input.contextDockProps?.projectOptions}
         onOpenProjects={openProjects}
         messaging={messaging}
-        unsentSessionId={unsentConversationId(active)}
-      />
-      <ChatConversationsSheet
-        open={conversationsOpen}
-        onOpenChange={setConversationsOpen}
-        rail={input.sessionRail}
-        projectOptions={input.contextDockProps?.projectOptions}
-        onOpenProjects={openProjects}
-        messaging={messaging}
+        yieldToInspector={Boolean(inspectorContent)}
+        sheetOpen={conversationsOpen}
+        onSheetOpenChange={setConversationsOpen}
         unsentSessionId={unsentConversationId(active)}
       />
       <ChatMainColumn messaging={messagingView(rest, search)} channelConversation={isChannelConversation(session)}>
@@ -335,6 +328,7 @@ export function ChatAreaView({
           inspecting={inspectorContent?.source === "chat"}
           onInspect={() => (inspectorContent?.source === "chat" ? close() : openInspector())}
           onFork={active && latestTurnId ? () => active.onStartNewThreadFromTurn(latestTurnId) : undefined}
+          railYields={Boolean(inspectorContent)}
         />
         {active ? (
           <DeferredProjectAssignmentReview active={active} search={search} identity={inspectorIdentity} />
@@ -378,7 +372,11 @@ export function ChatAreaView({
             />
           </div>
         ) : (
-          <ChatEmptyState rail={input.sessionRail} onOpenConversations={() => setConversationsOpen(true)} />
+          <ChatEmptyState
+            rail={input.sessionRail}
+            onOpenConversations={() => setConversationsOpen(true)}
+            railYields={Boolean(inspectorContent)}
+          />
         )}
         {active?.sessionStatusPanel ? (
           <DeferredSessionStatusPanel key={selectedSessionId} hidden={buildOpen} panel={active.sessionStatusPanel} />

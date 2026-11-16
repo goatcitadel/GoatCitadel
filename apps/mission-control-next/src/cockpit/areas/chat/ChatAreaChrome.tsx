@@ -47,6 +47,7 @@ function ChatSessionHeaderRow({
   inspecting = false,
   onInspect,
   onFork,
+  railYields = false,
 }: {
   input: MissionThreadedRenderSurfaceInput;
   active: ActiveSession;
@@ -63,6 +64,8 @@ function ChatSessionHeaderRow({
   inspecting?: boolean;
   onInspect: () => void;
   onFork?: () => void;
+  /** The conversation rail waits for the extra-wide layout while the inspector is open. */
+  railYields?: boolean;
 }) {
   // The "can't reach GoatCitadel" notice clears itself once the Gateway answers again.
   useChatOutageRecovery({
@@ -80,7 +83,7 @@ function ChatSessionHeaderRow({
   const conversations = (
     <Button
       size="sm"
-      className={phone ? "h-11 shrink-0 px-3" : "md:hidden"}
+      className={phone ? "h-11 shrink-0 px-3" : railYields ? "xl:hidden" : "lg:hidden"}
       aria-haspopup="dialog"
       aria-expanded={conversationsOpen}
       disabled={rail.loading}
@@ -92,7 +95,7 @@ function ChatSessionHeaderRow({
   const newConversation = (
     <Button
       size="sm"
-      className="md:hidden"
+      className={railYields ? "xl:hidden" : "lg:hidden"}
       aria-label="New conversation"
       disabled={rail.creatingSession || rail.loading}
       onClick={createConversation}
@@ -278,10 +281,12 @@ export function ChatSetupGate({
 export function ChatEmptyState({
   rail,
   onOpenConversations,
+  railYields = false,
 }: {
   rail: MissionThreadedRenderSurfaceInput["sessionRail"];
   /** Below the desktop rail the list is behind the header's Conversations button; the empty state offers it too. */
   onOpenConversations?: () => void;
+  railYields?: boolean;
 }) {
   const { activeWorkspaceId } = useUiPreferences();
   // Only a plain Recent list with nothing in it is a first conversation; a search or the archive that found nothing is not.
@@ -308,7 +313,10 @@ export function ChatEmptyState({
           </p>
           <div className="flex flex-wrap justify-center gap-2">
             {onOpenConversations ? (
-              <Button className="max-sm:h-11 md:hidden" onClick={onOpenConversations}>
+              <Button
+                className={railYields ? "max-sm:h-11 xl:hidden" : "max-sm:h-11 lg:hidden"}
+                onClick={onOpenConversations}
+              >
                 Show conversations
               </Button>
             ) : null}

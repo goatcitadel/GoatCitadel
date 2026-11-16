@@ -8,18 +8,25 @@ export function ThreadList({
   projectOptions,
   onOpenProjects,
   messaging,
+  yieldToInspector = false,
   unsentSessionId,
 }: {
   rail: MissionThreadedSessionRailData;
   projectOptions?: readonly ChatProjectFilterOption[];
   onOpenProjects?: () => void;
   messaging?: ConversationListMessaging;
+  /** While the inspector is open the rail waits for the extra-wide layout, so the transcript keeps its room. */
+  yieldToInspector?: boolean;
   unsentSessionId?: string | null;
 }) {
   return (
     <aside
       aria-label="Conversations"
-      className="hidden w-60 shrink-0 flex-col border-r border-line-subtle bg-raised md:flex"
+      className={
+        yieldToInspector
+          ? "hidden w-60 shrink-0 flex-col border-r border-line-subtle bg-raised xl:flex"
+          : "hidden w-60 shrink-0 flex-col border-r border-line-subtle bg-raised lg:flex"
+      }
     >
       <ConversationListPanel
         rail={rail}

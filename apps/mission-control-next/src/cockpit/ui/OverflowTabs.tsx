@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { isModifiedClick } from "../lib/modified-click";
+import { useScrollEdges } from "./use-scroll-edges";
 
 export interface OverflowTab {
   id: string;
@@ -41,31 +42,13 @@ export function OverflowTabs({
 }) {
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const picker = phone && tabs.length >= PICKER_MIN_TABS;
-  const row = useRef<HTMLElement>(null);
-  const [edges, setEdges] = useState({ start: false, end: false });
-  useEffect(() => {
-    const element = row.current;
-    if (!element) return undefined;
-    const measure = () =>
-      setEdges({
-        start: element.scrollLeft > 1,
-        end: element.scrollLeft + element.clientWidth < element.scrollWidth - 1,
-      });
-    measure();
-    element.addEventListener("scroll", measure, { passive: true });
-    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
-    observer?.observe(element);
-    return () => {
-      element.removeEventListener("scroll", measure);
-      observer?.disconnect();
-    };
-  }, [tabs.length, picker]);
+  const { ref: row, ...edges } = useScrollEdges<HTMLElement>([tabs.length, picker]);
   useEffect(() => {
     // Set the row's own scroll position: scrollIntoView would also move the keyboard start point (U-GL-046).
     const element = row.current;
     const currentTab = element?.querySelector<HTMLElement>('[aria-current="page"]');
     if (element && currentTab) element.scrollLeft = nearestScrollLeft(element, currentTab);
-  }, [current, picker]);
+  }, [row, current, picker]);
   if (picker) {
     const selected = tabs.find((tab) => tab.id === current);
     return (

@@ -231,6 +231,10 @@ html[data-shell="cockpit"] .mc-dialog-content {
     white-space: nowrap;
   }
   /* OverflowTabs: fade whichever side has more tabs hidden, so a clipped row reads as scrollable. */
+  /* A tab focused by keyboard scrolls clear of the fade, which is 2rem wide on each side. */
+  .cockpit-overflow-fade {
+    scroll-padding-inline: 2rem;
+  }
   .cockpit-overflow-fade[data-overflow-end] {
     mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
   }

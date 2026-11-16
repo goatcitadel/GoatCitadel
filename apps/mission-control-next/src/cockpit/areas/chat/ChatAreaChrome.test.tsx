@@ -84,7 +84,7 @@ function input(): MissionThreadedRenderSurfaceInput {
   } as unknown as MissionThreadedRenderSurfaceInput;
 }
 
-function renderHeader(build = false) {
+function renderHeader(build = false, railYields = false) {
   const view = input();
   const onOpenProjects = vi.fn();
   const onToggle = vi.fn();
@@ -100,6 +100,7 @@ function renderHeader(build = false) {
         onOpenProjects={onOpenProjects}
         onOpenConversations={onOpenConversations}
         onInspect={vi.fn()}
+        railYields={railYields}
       />,
     ),
   );
@@ -190,7 +191,7 @@ describe("ChatSessionHeader", () => {
       (button) => button.textContent === "Conversations",
     )!;
     expect(conversations.parentElement).toBe(header);
-    expect(conversations.className).toContain("md:hidden");
+    expect(conversations.className).toContain("lg:hidden");
     expect(conversations.getAttribute("aria-haspopup")).toBe("dialog");
     expect(header.querySelector("select")).toBeNull();
     expect(header.querySelector('button[aria-label="New conversation"]')?.parentElement).toBe(header);
@@ -199,6 +200,22 @@ describe("ChatSessionHeader", () => {
     expect(header.querySelector('button[aria-label="Conversation actions"]')).not.toBeNull();
     await act(async () => conversations.click());
     expect(onOpenConversations).toHaveBeenCalledOnce();
+  });
+
+  it("shows Conversations and New until the rail appears at 1280 px, or 1600 px with the inspector open (U-CH-002)", () => {
+    const find = (header: HTMLElement) => ({
+      conversations: [...header.querySelectorAll("button")].find((button) => button.textContent === "Conversations")!,
+      create: header.querySelector('button[aria-label="New conversation"]')!,
+    });
+    const normal = find(renderHeader().header);
+    expect(normal.conversations.className).toContain("lg:hidden");
+    expect(normal.conversations.className).not.toContain("md:hidden");
+    expect(normal.create.className).toContain("lg:hidden");
+    const yielding = find(renderHeader(false, true).header);
+    expect(yielding.conversations.className).toContain("xl:hidden");
+    expect(yielding.conversations.className).not.toContain("lg:hidden");
+    expect(yielding.create.className).toContain("xl:hidden");
+    expect(yielding.create.className).not.toContain("lg:hidden");
   });
 
   it("accessible name starts with the visible text", () => {
