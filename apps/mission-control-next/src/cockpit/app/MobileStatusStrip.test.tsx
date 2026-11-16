@@ -48,7 +48,7 @@ describe("MobileStatusStrip", () => {
     );
     const strip = container.querySelector<HTMLElement>('[aria-label="System status"]')!;
     expect(strip.textContent).toContain("Checking…");
-    expect(strip.textContent).toContain("Reconnecting to updates");
+    expect(strip.textContent).toContain("Reconnecting live updates");
     await vi.waitFor(() => expect(strip.textContent).toContain("unverified"));
     const healthDot = strip.querySelector<HTMLElement>("[data-health-tone]")!;
     expect(healthDot.hasAttribute("title")).toBe(false);
@@ -58,8 +58,8 @@ describe("MobileStatusStrip", () => {
     expect(healthDot.textContent).toMatch(/^\d+ checks? unverified/);
     expect(healthDot.querySelector("svg")).not.toBeNull();
     const stream = strip.querySelector<HTMLElement>("[data-stream-state]")!;
-    expect(stream.title).toBe("Reconnecting to updates");
-    expect(stream.textContent).toBe("Reconnecting to updates");
+    expect(stream.title).toBe("Reconnecting live updates");
+    expect(stream.textContent).toBe("Reconnecting live updates");
     expect(stream.querySelector("svg")?.classList.contains("lucide-refresh-cw")).toBe(true);
     const open = [...strip.querySelectorAll("button")].find((b) => b.textContent === "Open System health")!;
     await act(async () => open.click());
@@ -77,9 +77,9 @@ it("exposes replay recovery and transport degradation with the visible label as 
     ),
   );
   expect(container.querySelector('[data-stream-state="open"]')?.getAttribute("aria-label")).toBe(
-    "Updates connected · Catching up",
+    "Live updates on · Catching up",
   );
-  expect(container.textContent).toContain("Updates connected · Catching up");
+  expect(container.textContent).toContain("Live updates on · Catching up");
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -88,7 +88,7 @@ it("exposes replay recovery and transport degradation with the visible label as 
     ),
   );
   expect(container.querySelector('[data-stream-state="retrying"]')?.getAttribute("aria-label")).toBe(
-    "Reconnecting to updates",
+    "Reconnecting live updates",
   );
-  expect(container.textContent).toContain("Reconnecting to updates");
+  expect(container.textContent).toContain("Reconnecting live updates");
 });

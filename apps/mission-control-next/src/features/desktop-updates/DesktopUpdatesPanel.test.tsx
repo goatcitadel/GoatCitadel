@@ -33,11 +33,26 @@ const available: DesktopUpdateStatus = {
     installer: { name: "setup.exe", url: "https://example.test/setup.exe", sizeBytes: 100, sha256: "c".repeat(64) },
   },
 };
-describe.each([["classic", DesktopUpdatesPanel], ["cockpit", DesktopUpdateSettings]] as const)("%s desktop update controls", (_name, Panel) => {
+describe.each([
+  ["classic", DesktopUpdatesPanel],
+  ["cockpit", DesktopUpdateSettings],
+] as const)("%s desktop update controls", (_name, Panel) => {
   beforeEach(() => {
     __resetDesktopUpdateActionsForTests();
     bridge.status = structuredClone(available);
     bridge.requestDesktopUpdate.mockReset().mockResolvedValue(undefined);
+  });
+  it("names the card App updates in both shells", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Panel />);
+    });
+    const text = JSON.stringify(renderer.toJSON());
+    expect(text).toContain("App updates");
+    expect(text).not.toContain("Application updates");
+    await act(async () => {
+      renderer.unmount();
+    });
   });
   it("shows versions and unsigned truth and waits for an explicit download click", async () => {
     let renderer!: ReactTestRenderer;
@@ -100,27 +115,56 @@ describe.each([["classic", DesktopUpdatesPanel], ["cockpit", DesktopUpdateSettin
   });
   it("keeps one dispatch pending across a settings remount and rereads the host after an uncertain reply", async () => {
     let reject!: (reason: Error) => void;
-    bridge.requestDesktopUpdate.mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
+    bridge.requestDesktopUpdate.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, fail) => {
+          reject = fail;
+        }),
+    );
     let renderer!: ReactTestRenderer;
-    await act(async () => { renderer = create(<Panel />); });
-    const button = (name: string) => renderer.root.findAllByType("button").find((item) => item.children.includes(name))!;
+    await act(async () => {
+      renderer = create(<Panel />);
+    });
+    const button = (name: string) =>
+      renderer.root.findAllByType("button").find((item) => item.children.includes(name))!;
     const send = button("Download").props.onClick;
-    await act(async () => { send(); send(); });
+    await act(async () => {
+      send();
+      send();
+    });
     expect(bridge.requestDesktopUpdate).toHaveBeenCalledTimes(1);
-    await act(async () => { renderer.unmount(); });
-    await act(async () => { renderer = create(<Panel />); });
+    await act(async () => {
+      renderer.unmount();
+    });
+    await act(async () => {
+      renderer = create(<Panel />);
+    });
     expect(button("Download").props.disabled).toBe(true);
-    await act(async () => { reject(new Error("The host did not respond.")); });
+    await act(async () => {
+      reject(new Error("The host did not respond."));
+    });
     expect(JSON.stringify(renderer.toJSON())).toContain("refresh host status");
     expect(button("Download").props.disabled).toBe(true);
-    await act(async () => { button("Download").props.onClick(); });
+    await act(async () => {
+      button("Download").props.onClick();
+    });
     expect(bridge.requestDesktopUpdate).toHaveBeenCalledTimes(1);
     expect(button("Check for updates").props.disabled).toBe(false);
-    await act(async () => { await button("Check for updates").props.onClick(); });
-    expect(bridge.requestDesktopUpdate).toHaveBeenNthCalledWith(2, "check", expect.objectContaining({ releaseTag: available.availableRelease!.tag }));
+    await act(async () => {
+      await button("Check for updates").props.onClick();
+    });
+    expect(bridge.requestDesktopUpdate).toHaveBeenNthCalledWith(
+      2,
+      "check",
+      expect.objectContaining({ releaseTag: available.availableRelease!.tag }),
+    );
     expect(button("Download").props.disabled).toBe(false);
-    await act(async () => { await button("Download").props.onClick(); });
+    await act(async () => {
+      await button("Download").props.onClick();
+    });
     expect(bridge.requestDesktopUpdate).toHaveBeenCalledTimes(3);
-    await act(async () => { renderer.unmount(); });
+    await act(async () => {
+      renderer.unmount();
+    });
   });
 });

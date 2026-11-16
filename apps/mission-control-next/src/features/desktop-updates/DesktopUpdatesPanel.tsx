@@ -11,8 +11,8 @@ export function DesktopUpdatesPanel() {
   const actionBusy = busy || uncertain;
   const offered = status?.availableRelease;
   return (
-    <section id="updates" aria-label="Application updates">
-      <NativeCard title="Updates" subtitle="Choose when to download and install a new version.">
+    <section id="updates" aria-label="App updates">
+      <NativeCard title="App updates" subtitle="Choose when to download and install a new version.">
         {!status ? (
           <p>
             Open the installed Windows app to check for updates. Its tray menu also works while the local runtime is
