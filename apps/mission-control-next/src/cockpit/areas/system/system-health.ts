@@ -281,7 +281,7 @@ function deriveCurrentSystemHealthChecks(
   const updateCheck: HealthCheck = !updates
     ? notSetUp(
         "updates",
-        "Desktop updates",
+        "App updates",
         "Update status is available in the installed Windows app.",
         "/settings/general#updates",
         "Desktop app only",
@@ -289,7 +289,7 @@ function deriveCurrentSystemHealthChecks(
     : updates.phase === "error"
       ? {
           id: "updates",
-          title: "Desktop updates",
+          title: "App updates",
           inspectPath: "/settings/general#updates",
           detail: "The last update check or operation reported an error.",
           status: { label: "Needs review", tone: "waiting" },
@@ -297,7 +297,7 @@ function deriveCurrentSystemHealthChecks(
       : updates.availableRelease
         ? {
             id: "updates",
-            title: "Desktop updates",
+            title: "App updates",
             inspectPath: "/settings/general#updates",
             detail: "An update is available for operator review and installation.",
             status: { label: "Update available", tone: "waiting" },
@@ -305,14 +305,14 @@ function deriveCurrentSystemHealthChecks(
         : updates.lastSuccessfulCheck
           ? {
               id: "updates",
-              title: "Desktop updates",
+              title: "App updates",
               inspectPath: "/settings/general#updates",
               detail: "No eligible update was reported at the last successful check.",
               status: { label: "Checked", tone: "done" },
             }
           : unknown(
               "updates",
-              "Desktop updates",
+              "App updates",
               "The installed app has not reported a successful update check.",
               "/settings/general#updates",
             );

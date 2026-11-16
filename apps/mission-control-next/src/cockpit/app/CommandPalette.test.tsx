@@ -454,6 +454,21 @@ describe("CommandPalette", () => {
     }
   });
 
+  it("still finds the classic view by its older words", async () => {
+    act(() => {
+      root.render(<CommandPalette open onOpenChange={() => undefined} />);
+    });
+    await ready();
+    const input = document.querySelector<HTMLInputElement>("[cmdk-input]")!;
+    for (const words of ["classic Mission Control", "switch to classic", "classic view"]) {
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, words);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(document.body.textContent, words).toContain("Switch to the classic view");
+    }
+  });
+
   it("dispatches explicit owner actions and preserves the guarded classic handoff", async () => {
     const close = vi.fn();
     act(() => {
