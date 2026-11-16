@@ -17,14 +17,14 @@ const BLOCKED_BY_REASON: Readonly<Record<string, string>> = {
   bundled_skill:
     "Not removed. This skill has the same name as one that ships with GoatCitadel, so it can't be removed here.",
   // Its record is missing, switched on, or a version of it isn't revoked: none reads as a revoked skill.
-  skill_not_revoked: "Not removed. The skill no longer reads as revoked, so nothing was deleted.",
+  skill_not_revoked: "Not removed. The skill was switched on again or changed after you asked, so nothing was deleted.",
   candidate_not_revoked: "Not removed. Another version of this skill isn't revoked, so nothing was deleted.",
   lineage_too_large:
     "Not removed. This skill has more versions than GoatCitadel can check, so it can't be removed here.",
   runtime_not_from_check:
     "Not removed. The skill in use was installed from a different check than the one this removal names, so nothing was deleted.",
   lineage_already_removed:
-    "Not removed. This copy of the skill was installed after an earlier removal. Remove it again.",
+    "Not removed. This request was for a copy of the skill that was already removed, and the copy here was installed after that, so nothing was deleted. Remove it again to remove this copy.",
 };
 const BLOCKED_CHANGED = "Not removed. The skill changed after you asked. Remove it again if you still want it gone.";
 

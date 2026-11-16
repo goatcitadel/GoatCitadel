@@ -41,7 +41,10 @@ describe("removalOutcomeNote", () => {
       "Not removed. The skill changed after you asked. Remove it again if you still want it gone.",
     );
     expect(removalOutcomeNote({ disposition: "blocked", reason: "skill_not_revoked" })).toBe(
-      "Not removed. The skill no longer reads as revoked, so nothing was deleted.",
+      "Not removed. The skill was switched on again or changed after you asked, so nothing was deleted.",
+    );
+    expect(removalOutcomeNote({ disposition: "blocked", reason: "lineage_already_removed" })).toBe(
+      "Not removed. This request was for a copy of the skill that was already removed, and the copy here was installed after that, so nothing was deleted. Remove it again to remove this copy.",
     );
     // A refusal no retry can change never tells the operator to try again.
     for (const reason of ["lineage_too_large", "artifact_tamper", "bundled_skill"]) {
