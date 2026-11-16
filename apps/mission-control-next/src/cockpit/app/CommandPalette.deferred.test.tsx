@@ -23,7 +23,7 @@ const controls = vi.hoisted(() => ({
   owner: vi.fn(),
   attempt: undefined as
     | undefined
-    | { state: "unknown" | "confirmed"; message: string; mode: "chat"; sessionId?: string },
+    | { state: "unknown" | "confirmed"; message: string; mode: "chat"; sessionId?: string; openFailed?: boolean },
   groups: [] as PaletteSearchGroup[],
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
@@ -269,7 +269,8 @@ it("keeps one current created-conversation click through load between down and u
     close = vi.fn();
   controls.attempt = {
     state: "confirmed",
-    message: "Conversation created. Opening it failed; use Open created conversation.",
+    message: "Conversation created, but it didn't open. Use Open created conversation.",
+    openFailed: true,
     mode: "chat",
     sessionId: "created-session",
   };
