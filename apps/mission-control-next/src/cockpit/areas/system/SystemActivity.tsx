@@ -155,10 +155,6 @@ export function SystemActivity() {
           </Button>
         }
       >
-        <p className="mt-1 text-xs text-fg-muted">
-          This list starts with the most recent signals. Load older ones below. Open the source record for full details.
-          Signals are saved records: a reported host or device does not show its current health.
-        </p>
         {events.dataUpdatedAt ? (
           <p className="mt-1 text-xs text-fg-muted">
             <TimeText value={events.dataUpdatedAt} prefix="Updated" />
@@ -224,6 +220,10 @@ export function SystemActivity() {
           onLoad={() => void older.loadOlder()}
         />
       ) : null}
+      <p className="text-xs text-fg-muted">
+        This list keeps recent signals only. Open a signal's record for its details; a signal does not show a host's
+        current health.
+      </p>
       <RecentSessions />
     </section>
   );
