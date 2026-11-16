@@ -55,6 +55,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
   const data = trace.isError ? undefined : trace.data;
   const recordedWorkspaceId = data?.run ? durableRunWorkspaceId(data.run) : null;
   const run = recordedWorkspaceId === workspaceId ? data?.run : undefined;
+  const lastErrorCancellation = presentRecordedCancellation(run?.lastError);
   const sessionId =
     typeof run?.payload.sessionId === "string" && run.payload.sessionId.trim() ? run.payload.sessionId : null;
   const pendingApproval = run && data ? data.approvals.items.some((item) => item.status === "pending") : false;
@@ -181,12 +182,10 @@ export function WorkRunDetail({ runId }: { runId: string }) {
           {run.lastError || run.recoverySummary ? (
             <div className="grid gap-2">
               <p role="alert" className="rounded-md border border-line p-3 text-sm text-status-failed">
-                {run.lastError
-                  ? (presentRecordedCancellation(run.lastError) ?? presentErrorText(run.lastError).summary)
-                  : null}
+                {run.lastError ? (lastErrorCancellation ?? presentErrorText(run.lastError).summary) : null}
                 {run.recoverySummary ? ` ${run.recoverySummary}` : ""}
               </p>
-              {run.lastError && presentRecordedCancellation(run.lastError) ? (
+              {run.lastError && lastErrorCancellation ? (
                 <RecordedCancellationDetails recorded={run.lastError} />
               ) : (
                 <RecordedErrorDetails error={run.lastError} />
@@ -202,15 +201,15 @@ export function WorkRunDetail({ runId }: { runId: string }) {
               {plural(data.errors.items.length, "recorded error")} {data.errors.items.length === 1 ? "needs" : "need"}{" "}
               review.
               <ul className="mt-3 space-y-2">
-                {data.errors.items.map((error) => (
-                  <li key={`${error.source}:${error.id}`} className="break-words">
-                    <strong>{RUN_ERROR_SOURCES[error.source] ?? "Run"}:</strong>{" "}
-                    {presentRecordedCancellation(error.message) ?? error.message}
-                    {presentRecordedCancellation(error.message) ? (
-                      <RecordedCancellationDetails recorded={error.message} />
-                    ) : null}
-                  </li>
-                ))}
+                {data.errors.items.map((error) => {
+                  const cancellation = presentRecordedCancellation(error.message);
+                  return (
+                    <li key={`${error.source}:${error.id}`} className="break-words">
+                      <strong>{RUN_ERROR_SOURCES[error.source] ?? "Run"}:</strong> {cancellation ?? error.message}
+                      {cancellation ? <RecordedCancellationDetails recorded={error.message} /> : null}
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           ) : null}

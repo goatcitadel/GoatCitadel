@@ -176,7 +176,7 @@ export function WorkScheduleListItem({
   onReview: () => void;
 }) {
   return (
-    <li aria-current={selected ? "true" : undefined} className="py-4 aria-[current=true]:bg-sunken">
+    <li aria-current={selected ? "true" : undefined} className="px-3 py-4 aria-[current=true]:bg-sunken">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <h2 className="text-sm font-semibold text-fg">{job.name}</h2>

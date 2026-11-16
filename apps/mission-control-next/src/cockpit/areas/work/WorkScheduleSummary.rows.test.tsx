@@ -56,6 +56,7 @@ describe("schedule list rows", () => {
     expect(item.className).not.toMatch(/\bborder\b/u);
     expect(item.className).not.toContain("rounded");
     expect(item.className).not.toContain("bg-raised");
+    expect(item.className).toContain("px-3");
   });
 
   it("shows Enabled and Paused as status badges that announce nothing", () => {

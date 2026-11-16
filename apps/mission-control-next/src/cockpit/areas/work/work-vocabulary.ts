@@ -213,8 +213,10 @@ const IMPORT_COMPATIBILITY_LABELS: Readonly<Record<"not_verified", string>> = {
 
 const OTHER_LABEL = "Other";
 
+const NOT_RECOGNISED_LABEL = "Not recognised";
+
 const ownLabel = (labels: Readonly<Record<string, string>>, value: string): string =>
-  Object.hasOwn(labels, value) ? labels[value]! : OTHER_LABEL;
+  Object.hasOwn(labels, value) ? labels[value]! : NOT_RECOGNISED_LABEL;
 
 export const presentExportValidation = (value: string): string => ownLabel(EXPORT_VALIDATION_LABELS, value);
 export const presentImportCompatibility = (value: string): string => ownLabel(IMPORT_COMPATIBILITY_LABELS, value);
@@ -227,7 +229,8 @@ export const presentApprovalKind = (kind: string): string => knownApprovalAction
  * operator (the default operator, or a signed-in, paired or companion caller), or one of a few system causes. Text that
  * is none of these is left as recorded.
  */
-const OPERATOR_ACTOR = /^(?:operator|(?:auth|companion|device|ip|background-task-rail):.+)$/iu;
+const OPERATOR_ACTOR =
+  /^(?:operator|anonymous|fanout:operator_stop|(?:auth|companion|device|ip|token|basic|loopback|background-task-rail):.+)$/iu;
 const SYSTEM_CANCELLATIONS: Readonly<Record<string, string>> = {
   "fanout:parent_cancelled": "Cancelled because the run that started it was cancelled.",
   abort_signal: "Cancelled because the request that started it was stopped.",
