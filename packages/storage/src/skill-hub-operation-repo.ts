@@ -455,8 +455,11 @@ function validateIntent(input: SkillHubOperationIntentRecord): void {
     }
   } else if (input.operationKind === "activate") {
     if (input.expectedCandidateAbsent) throw new TypeError("Skill Hub activation requires an existing candidate.");
+  } else if (input.operationKind === "remove") {
+    // A never-switched-on skill has no runtime record, so a removal may expect it absent; never its candidate.
+    if (input.expectedCandidateAbsent) throw new TypeError("Skill Hub removal requires an existing candidate.");
   } else if (input.expectedCandidateAbsent || input.expectedRuntimeAbsent) {
-    throw new TypeError("Skill Hub revoke or remove requires existing candidate and runtime aggregates.");
+    throw new TypeError("Skill Hub revoke requires existing candidate and runtime aggregates.");
   }
   assertCanonicalIdentity(input.actorId, "actor ID", 256);
   assertOptionalCanonicalIdentity(input.sessionId, "session ID", 256);

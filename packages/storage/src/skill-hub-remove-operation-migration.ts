@@ -3,7 +3,8 @@ import type { DatabaseSync } from "node:sqlite";
 /**
  * A skill a plugin left behind can be removed through a governed Skill Hub step. The step is recorded as the new
  * operation kind `remove`, so the intent table's two CHECKs on `operation_kind` are widened: the column CHECK that
- * lists the kinds and the combined CHECK whose last arm describes the aggregates a revoke expects present.
+ * lists the kinds, and the combined CHECK, which gains a `remove` arm (candidate expected present, runtime record present
+ * or absent: a never-switched-on skill has none) beside the unchanged revoke arm.
  * SQLite 281 rebuilds `skill_hub_operation_intents`. PostgreSQL 233 drops any CHECK naming `operation_kind` by
  * definition text and adds the two named replacements. An install whose table came from the canonical runtime schema
  * has none to drop; one whose schema predates the table got both from migration 107, under generated names (the column
@@ -14,8 +15,13 @@ export const SKILL_HUB_REMOVE_OPERATION_MIGRATION_NAME = "skill_hub_remove_opera
 
 const OPERATION_KIND_LIST_BEFORE = "'activate', 'revoke'";
 const OPERATION_KIND_LIST_AFTER = "'activate', 'revoke', 'remove'";
-const TAKES_POWER_AWAY_ARM_BEFORE = "operation_kind = 'revoke'";
-const TAKES_POWER_AWAY_ARM_AFTER = "operation_kind IN ('revoke', 'remove')";
+const TAKES_POWER_AWAY_ARM_BEFORE = "(operation_kind = 'revoke'";
+/**
+ * A remove expects its candidate lineage present; its runtime record may be present (a revoked skill) or absent (a
+ * skill that was never switched on). The revoke arm stays exactly as it was.
+ */
+const TAKES_POWER_AWAY_ARM_AFTER =
+  "(operation_kind = 'remove' AND expected_candidate_absent = 0)\n      OR (operation_kind = 'revoke'";
 
 /**
  * PostgreSQL 233. Every CHECK that names `operation_kind` is dropped (there may be none), then the two named
@@ -50,7 +56,8 @@ export const SKILL_HUB_REMOVE_OPERATION_POSTGRES_SQL = `
       AND expected_runtime_absent = 0
       AND supersedes_version_id IS NOT NULL)
     OR (operation_kind = 'activate' AND expected_candidate_absent = 0)
-    OR (operation_kind IN ('revoke', 'remove')
+    OR (operation_kind = 'remove' AND expected_candidate_absent = 0)
+    OR (operation_kind = 'revoke'
       AND expected_candidate_absent = 0
       AND expected_runtime_absent = 0)
   );

@@ -369,20 +369,30 @@ describe("SkillHubOperationRepository", () => {
     );
   });
 
-  it("accepts a remove intent only with both aggregates present, like a revoke", () => {
+  it("accepts a remove intent with or without a runtime record, but never without its candidate", () => {
     const { db, operations, manifest } = createStore();
     const removal = removeIntent(manifest, "1");
     insertApproval(db, removal);
     assertCanonicalEqual(operations.createIntent(removal), removal);
 
-    const absentBase = {
+    // A skill never switched on has no runtime record: its removal expects the runtime absent.
+    const neverOnBase = {
       ...withoutRequestHash(removeIntent(manifest, "2")),
       expectedRuntimeAbsent: true,
       expectedRuntimeRevision: undefined,
     };
-    const absent = { ...absentBase, requestSha256: computeSkillHubOperationRequestSha256(absentBase) };
-    insertApproval(db, absent);
-    assert.throws(() => operations.createIntent(absent), TypeError);
+    const neverOn = { ...neverOnBase, requestSha256: computeSkillHubOperationRequestSha256(neverOnBase) };
+    insertApproval(db, neverOn);
+    assertCanonicalEqual(operations.createIntent(neverOn), neverOn);
+
+    const noCandidateBase = {
+      ...withoutRequestHash(removeIntent(manifest, "3")),
+      expectedCandidateAbsent: true,
+      expectedCandidateRevision: undefined,
+    };
+    const noCandidate = { ...noCandidateBase, requestSha256: computeSkillHubOperationRequestSha256(noCandidateBase) };
+    insertApproval(db, noCandidate);
+    assert.throws(() => operations.createIntent(noCandidate), TypeError);
   });
 
   it("lists only the candidates of applied removals in the workspace", () => {
@@ -427,7 +437,8 @@ describe("SkillHubOperationRepository", () => {
     legacy
       .prepare(
         `UPDATE sqlite_master SET sql = replace(replace(sql, '''activate'', ''revoke'', ''remove''', '''activate'', ''revoke'''),
-           'operation_kind IN (''revoke'', ''remove'')', 'operation_kind = ''revoke''')
+           '(operation_kind = ''remove'' AND expected_candidate_absent = 0)' || char(10) || '      OR (operation_kind = ''revoke''',
+           '(operation_kind = ''revoke''')
          WHERE type = 'table' AND name = 'skill_hub_operation_intents'`,
       )
       .run();

@@ -39,7 +39,7 @@ describe("Skill Hub remove operation kind", () => {
       .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'skill_hub_operation_intents'")
       .get() as { sql: string };
     assert.match(table.sql, /'activate', 'revoke', 'remove'/u);
-    assert.match(table.sql, /operation_kind IN \('revoke', 'remove'\)/u);
+    assert.match(table.sql, /operation_kind = 'remove' AND expected_candidate_absent = 0\)/u);
   });
 
   it("widens an old-shape table once, keeps its indexes and triggers, and is idempotent", () => {
@@ -52,16 +52,22 @@ describe("Skill Hub remove operation kind", () => {
 
       insertIntent(legacy, "operation-remove", "remove");
       assert.throws(() => insertIntent(legacy, "operation-bogus", "bogus"), /CHECK constraint/u);
+      // A never-switched-on skill's removal expects no runtime record; a revoke still needs one, and a removal its candidate.
+      insertIntent(legacy, "operation-remove-never-on", "remove", { expected_runtime_absent: 1 });
       assert.throws(
-        () => insertIntent(legacy, "operation-bad-remove", "remove", { expected_runtime_absent: 1 }),
+        () => insertIntent(legacy, "operation-bad-revoke", "revoke", { expected_runtime_absent: 1 }),
+        /CHECK constraint/u,
+      );
+      assert.throws(
+        () => insertIntent(legacy, "operation-bad-remove", "remove", { expected_candidate_absent: 1 }),
         /CHECK constraint/u,
       );
       assert.deepEqual(schemaObjects(legacy), before);
-      assert.equal(count(legacy, "skill_hub_operation_intents"), 2);
+      assert.equal(count(legacy, "skill_hub_operation_intents"), 3);
       assert.equal(legacy.prepare("SELECT name FROM sqlite_master WHERE name LIKE '%_remove_new'").get(), undefined);
 
       upgradeSkillHubOperationKindsSqlite(legacy);
-      assert.equal(count(legacy, "skill_hub_operation_intents"), 2);
+      assert.equal(count(legacy, "skill_hub_operation_intents"), 3);
     } finally {
       legacy.close();
     }
@@ -160,7 +166,10 @@ function legacyIntentsDatabase(): DatabaseSync {
     fresh.exec(
       object.sql
         .replace("'activate', 'revoke', 'remove'", "'activate', 'revoke'")
-        .replace("operation_kind IN ('revoke', 'remove')", "operation_kind = 'revoke'"),
+        .replace(
+          "(operation_kind = 'remove' AND expected_candidate_absent = 0)\n      OR (operation_kind = 'revoke'",
+          "(operation_kind = 'revoke'",
+        ),
     );
   }
   fresh.exec(
@@ -182,13 +191,16 @@ function insertIntent(
        operation_id, idempotency_key, workspace_id, operation_kind, approval_id, snapshot_id, content_tree_sha256,
        skill_id, target_candidate_id, target_version_id, expected_candidate_revision, expected_runtime_revision,
        expected_candidate_absent, expected_runtime_absent, actor_id, request_sha256, created_at
-     ) VALUES (?, ?, 'workspace-1', ?, ?, 'snapshot-1', ?, 'extra:demo', 'candidate-1', 'version-1', 1, 1, 0, ?, 'operator-1', ?, '2026-11-15T00:00:00.000Z')`,
+     ) VALUES (?, ?, 'workspace-1', ?, ?, 'snapshot-1', ?, 'extra:demo', 'candidate-1', 'version-1', ?, ?, ?, ?, 'operator-1', ?, '2026-11-15T00:00:00.000Z')`,
   ).run(
     operationId,
     `key:${operationId}`,
     kind,
     `approval:${operationId}`,
     "a".repeat(64),
+    overrides.expected_candidate_absent ? null : 1,
+    overrides.expected_runtime_absent ? null : 1,
+    overrides.expected_candidate_absent ?? 0,
     overrides.expected_runtime_absent ?? 0,
     "b".repeat(64),
   );

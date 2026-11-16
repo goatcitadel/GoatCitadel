@@ -99,7 +99,9 @@ async function assertConverged(pool: Pool): Promise<void> {
   assert.match(checks[1]?.definition ?? "", /'revoke'::text, 'remove'::text/u);
   await insertIntent(pool, "operation-remove", "remove");
   await assert.rejects(insertIntent(pool, "operation-bogus", "bogus"), /check constraint/iu);
-  await assert.rejects(insertIntent(pool, "operation-remove-absent", "remove", true), /check constraint/iu);
+  // A never-switched-on skill's removal expects no runtime record; a revoke still needs one.
+  await insertIntent(pool, "operation-remove-absent", "remove", true);
+  await assert.rejects(insertIntent(pool, "operation-revoke-absent", "revoke", true), /check constraint/iu);
 }
 
 /**

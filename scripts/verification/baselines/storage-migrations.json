@@ -1974,7 +1974,7 @@
           "name": "skill_hub_remove_operation_kind",
           "groupName": "canonical",
           "definitionSha256": "a71c2f6c8e5bfe290929a3a0b2498c60a6c9bc3db3f4b5262b022a788222a43f",
-          "implementationSha256": "5a44c7dbf0a2aca9ef1144109b5ecf863deecb876b6e186bc0283b06c43b5808"
+          "implementationSha256": "d273e52bd1f13a12264ce95bb5ddb3d6ef2febc5bc827b8816f866d567780250"
         }
       ]
     },
@@ -3390,8 +3390,8 @@
         {
           "version": 233,
           "name": "skill_hub_remove_operation_kind",
-          "definitionSha256": "887d1cfec7b2824ebfdb7c09c6f28306f072d83390a547e92e03e4479c459120",
-          "runtimeIntegritySha256": "58813109111d63def0a5d821f4ac3df74f0bf6c5ff8f9c4e3068838c38ebe03a"
+          "definitionSha256": "bf77735a30ac3ddf5bcab82b37a1a5ab0d9ec917fcad60b459a271ad65bf6ace",
+          "runtimeIntegritySha256": "e96e1d832500daef2d69ae95ef6072d79e9f6540eeccb57e83168afb21dfe30d"
         }
       ]
     }

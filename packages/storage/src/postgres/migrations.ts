@@ -15392,7 +15392,7 @@ $approval_file_schema_convergence$;
     version: 233,
     name: "skill_hub_remove_operation_kind",
     sql: SKILL_HUB_REMOVE_OPERATION_POSTGRES_SQL,
-    integritySha256: "58813109111d63def0a5d821f4ac3df74f0bf6c5ff8f9c4e3068838c38ebe03a",
+    integritySha256: "e96e1d832500daef2d69ae95ef6072d79e9f6540eeccb57e83168afb21dfe30d",
   },
 ];
 
