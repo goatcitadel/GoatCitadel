@@ -29,5 +29,5 @@ export function useCitadelNameRead(
 /** Shared authorized-directory projection for the existing scope picker and phone label. */
 export function useCitadelName(citadelId: string, enabled: boolean) {
   const read = useCitadelNameRead(citadelId, enabled);
-  return read.phase === "loading" ? "Reading Citadel..." : read.phase === "ready" ? read.name! : "Citadel unavailable";
+  return read.phase === "loading" ? "Reading Citadel…" : read.phase === "ready" ? read.name! : "Citadel unavailable";
 }
