@@ -226,6 +226,7 @@ export function composeCapabilitySkills({
       listPluginRecords: () => pluginRecords.list(),
       readSkillLifecycle: async (workspaceId, skillId) =>
         (await skills.listSkills("ALL", workspaceId)).find((skill) => skill.skillId === skillId)?.lifecycle,
+      listSkillsRemovedWithPlugins: async () => new Set(removedPluginSkills(await pluginRecords.listRemoved()).keys()),
     },
     reportFailedStep,
   );

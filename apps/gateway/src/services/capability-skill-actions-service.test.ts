@@ -73,6 +73,7 @@ function sources(overrides: Partial<CapabilitySkillActionSources> = {}) {
     })),
     listPluginRecords: vi.fn(async () => []),
     readSkillLifecycle: vi.fn(async (): Promise<CapabilitySkillLifecycleRead | undefined> => undefined),
+    listSkillsRemovedWithPlugins: vi.fn(async (): Promise<ReadonlySet<string>> => new Set()),
     ...overrides,
   } satisfies CapabilitySkillActionSources;
 }
@@ -847,6 +848,7 @@ describe("CapabilitySkillActionsService.requestRemoval", () => {
   const removalSources = (overrides: Partial<CapabilitySkillActionSources> = {}) =>
     sources({
       readSkillLifecycle: vi.fn(async () => leftBehind),
+      listSkillsRemovedWithPlugins: vi.fn(async () => new Set(["extra:meeting-notes"])),
       createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("remove", "pending") })),
       findSkillHubSnapshot: vi.fn(async () => pluginCheck),
       ...overrides,
@@ -970,6 +972,19 @@ describe("CapabilitySkillActionsService.requestRemoval", () => {
     ["names no check", { ...leftBehind, provenance: { source: "extra" } }],
   ])("refuses a skill that %s", async (_case, record) => {
     const parts = removalSources({ readSkillLifecycle: vi.fn(async () => record) });
+
+    await expect(new CapabilitySkillActionsService(parts).requestRemoval(removal)).rejects.toMatchObject({
+      httpStatus: 409,
+      code: "STATE_CONFLICT",
+      message: "This skill can't be removed.",
+      details: { reason: "not_removable" },
+    });
+    expect(parts.createSkillHubApproval).not.toHaveBeenCalled();
+  });
+
+  it("refuses a revoked Skill Hub skill no plugin uninstall left behind", async () => {
+    // Revoked by hand in Library: the panel offers no removal for it, and neither does the service.
+    const parts = removalSources({ listSkillsRemovedWithPlugins: vi.fn(async () => new Set(["extra:other"])) });
 
     await expect(new CapabilitySkillActionsService(parts).requestRemoval(removal)).rejects.toMatchObject({
       httpStatus: 409,

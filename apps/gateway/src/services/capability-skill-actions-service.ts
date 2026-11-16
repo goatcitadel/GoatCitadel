@@ -132,6 +132,8 @@ export interface CapabilitySkillActionSources {
   listPluginRecords(): Promise<readonly PluginSkillListing[]>;
   /** One loaded skill's runtime record (its state and where it came from), or undefined for a skill the list doesn't hold. */
   readSkillLifecycle(workspaceId: string, skillId: string): Promise<CapabilitySkillLifecycleRead | undefined>;
+  /** The ids of the skills plugin uninstalls removed, as the Skills tab reads them for "Removed with <plugin>". */
+  listSkillsRemovedWithPlugins(): Promise<ReadonlySet<string>>;
 }
 
 /** What a removal reads of a skill's runtime record. */
@@ -313,10 +315,12 @@ export class CapabilitySkillActionsService {
     input: CapabilitySkillRemovalRequest & { actorId: string },
   ): Promise<CapabilitySkillRemovalOutcome> {
     const record = await this.sources.readSkillLifecycle(input.workspaceId, input.skillId);
-    const snapshotId =
-      record?.lifecycleState === "revoked" && record.provenance?.source === "extra"
-        ? record.provenance.sourceRef
-        : undefined;
+    // The same rule the Skills tab's `removable` uses: a revoked Skill Hub skill that a plugin uninstall left behind.
+    const leftBehind =
+      record?.lifecycleState === "revoked" &&
+      record.provenance?.source === "extra" &&
+      (await this.sources.listSkillsRemovedWithPlugins()).has(input.skillId);
+    const snapshotId = leftBehind ? record.provenance?.sourceRef : undefined;
     const snapshot = snapshotId ? await this.sources.findSkillHubSnapshot(snapshotId) : undefined;
     if (!snapshotId || !snapshot) throw notRemovable();
     if (snapshot.workspaceId !== input.workspaceId) {
