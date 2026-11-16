@@ -1000,6 +1000,82 @@ describe("SkillHubLifecycleService", () => {
       expect(loader.list().map((skill) => skill.skillId)).toEqual(["extra:demo"]);
     }, 90_000);
 
+    const scratchName = (operationId: string, kind: "backup" | "staging") =>
+      `.skill-hub-${createHash("sha256").update(operationId).digest("hex").slice(0, 24)}.${kind}`;
+
+    it("takes over an abandoned operation's matching recovery folder and leaves the rest alone", async () => {
+      const { harness, extraRoot, runtimeDir } = await revokedHarness();
+      // An earlier removal moved the folder aside and was never finished.
+      const abandoned = path.join(extraRoot, scratchName("operation-abandoned", "backup"));
+      await fs.rename(runtimeDir, abandoned);
+      // Another leftover that is not this check's files, and a link out of the root dressed as one.
+      const foreign = path.join(extraRoot, scratchName("operation-foreign", "staging"));
+      await fs.mkdir(foreign);
+      await fs.writeFile(path.join(foreign, "SKILL.md"), "someone else's bytes\n", "utf8");
+      const outside = path.join(harness.rootDir, "outside-scratch");
+      await fs.mkdir(outside);
+      await fs.writeFile(path.join(outside, "keep.txt"), "outside data\n", "utf8");
+      await fs.symlink(outside, path.join(extraRoot, scratchName("operation-link", "backup")), "junction");
+
+      const result = await harness.lifecycle.applyApprovedOperation(
+        await approve(harness, removeTemplate(harness, "operation-remove")),
+      );
+
+      expect(result.settlement.disposition).toBe("applied");
+      expect(result.settlement.result).toMatchObject({ otherScratchFolders: 2 });
+      expect(harness.storage.skillLifecycle.find("extra:demo")).toBeUndefined();
+      await expect(fs.stat(abandoned)).rejects.toThrow();
+      expect((await scratchEntries(extraRoot)).sort()).toEqual(
+        [scratchName("operation-foreign", "staging"), scratchName("operation-link", "backup")].sort(),
+      );
+      expect(await fs.readFile(path.join(foreign, "SKILL.md"), "utf8")).toBe("someone else's bytes\n");
+      expect(await fs.readFile(path.join(outside, "keep.txt"), "utf8")).toBe("outside data\n");
+    }, 90_000);
+
+    it("records a cleanup that fails for the operator and finishes it on the retry", async () => {
+      const { harness, extraRoot } = await revokedHarness();
+      let failCleanup = true;
+      const flaky = new Proxy(sharedFilesystem, {
+        get(target, key, receiver) {
+          if (key !== "removeTree") return Reflect.get(target, key, receiver);
+          return async (absolutePath: string, signal: AbortSignal) => {
+            if (failCleanup) throw Object.assign(new Error(`busy: ${absolutePath}`), { code: "EBUSY" });
+            return await target.removeTree(absolutePath, signal);
+          };
+        },
+      });
+      harness.lifecycle = new SkillHubLifecycleService({
+        rootDir: harness.rootDir,
+        candidateRoot: "data/capability-candidates",
+        skillsExtraRoot: "skills/extra",
+        artifactStore: harness.artifactStore,
+        storage: harness.asyncStorage,
+        filesystem: flaky,
+      });
+      const request = await approve(harness, removeTemplate(harness, "operation-remove"));
+
+      await expect(harness.lifecycle.applyApprovedOperation(request)).rejects.toThrow(/busy/);
+      expect(harness.storage.skillHubOperations.findSettlementByOperationId("operation-remove")?.disposition).toBe(
+        "applied",
+      );
+      expect(await scratchEntries(extraRoot)).toHaveLength(1);
+      const recorded = harness.storage.governanceJourneyEvents.find("skill-hub:journey:operation-remove:cleanup");
+      expect(recorded).toMatchObject({
+        action: "remove_cleanup_failed",
+        subjectId: "extra:demo",
+        trustDisposition: "manual_reconciliation",
+        summary: { operationId: "operation-remove", code: "projection_scratch_cleanup_failed", error: "EBUSY" },
+      });
+      // No path is kept.
+      expect(JSON.stringify(recorded)).not.toContain(extraRoot);
+      await expect(harness.lifecycle.applyApprovedOperation(request)).rejects.toThrow(/busy/);
+
+      failCleanup = false;
+      const retried = await harness.lifecycle.applyApprovedOperation(request);
+      expect(retried.replayed).toBe(true);
+      expect(await scratchEntries(extraRoot)).toEqual([]);
+    }, 90_000);
+
     it("refuses a removal while an installed plugin still lists the skill", async () => {
       const { harness, runtimeDir } = await revokedHarness();
       await new CapabilityPluginStore(harness.asyncStorage.systemSettings).update("demo-plugin", () => ({

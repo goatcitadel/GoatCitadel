@@ -32,6 +32,9 @@ interface BoundNode {
 
 class SkillHubLifecycleContentMismatchError extends Error {}
 
+/** A staging or recovery folder of one Skill Hub operation (see `projectionScratch`). */
+const SKILL_HUB_SCRATCH_NAME = /^\.skill-hub-[0-9a-f]{24}\.(?:staging|backup)$/u;
+
 /**
  * Filesystem boundary for lifecycle projections outside the immutable artifact store.
  *
@@ -227,6 +230,22 @@ export class SkillHubLifecycleFilesystem {
       throw new Error("Skill Hub lifecycle cleanup did not remove its bound directory.");
     }
     await this.assertDirectoryBinding(parentBinding, signal);
+  }
+
+  /**
+   * The names of Skill Hub's own staging and recovery folders (`.skill-hub-<token>.staging` or `.backup`) directly in a
+   * managed root, in name order. It only reads: each name is still checked through `pathKind` and `directoryMatches`
+   * before anything is done with it.
+   */
+  public async listScratchDirectories(managedRoot: string, signal: AbortSignal): Promise<string[]> {
+    const resolvedRoot = this.assertManagedRoot(managedRoot);
+    await this.ensureManagedRoot(resolvedRoot, signal);
+    const binding = await this.captureDirectoryBinding(resolvedRoot, signal);
+    const names = (await this.filesystem.readdir(resolvedRoot, signal))
+      .filter((name) => SKILL_HUB_SCRATCH_NAME.test(name))
+      .sort();
+    await this.assertDirectoryBinding(binding, signal);
+    return names;
   }
 
   public async pathKind(

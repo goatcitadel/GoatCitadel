@@ -1,12 +1,16 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type {
-  CandidateSkillVersionRecord,
-  SkillContentIntegrityManifest,
-  SkillHubOperationIntentRecord,
-  SkillHubOperationSettlementDisposition,
-  SkillLifecycleRecord,
+import {
+  SKILL_HUB_LIFECYCLE_JOURNEY_EVENT_TYPE,
+  SKILL_HUB_LIFECYCLE_JOURNEY_SOURCE_KIND,
+  SKILL_HUB_LIFECYCLE_JOURNEY_SUBJECT_KIND,
+  type CandidateSkillVersionRecord,
+  type SkillContentIntegrityManifest,
+  type SkillHubOperationIntentRecord,
+  type SkillHubOperationSettlementDisposition,
+  type SkillLifecycleRecord,
 } from "@goatcitadel/contracts";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { isBundledSkillName } from "./plugin-skill-name-rules.js";
 import type { StoredPlugin } from "./capability-plugin-store.js";
 import type { SkillHubLifecycleFilesystem } from "./skill-hub-lifecycle-filesystem.js";
@@ -26,7 +30,18 @@ export const UNKNOWN_TREE_SHA256 = "0".repeat(64);
 /** The rename that moves a removed skill's folder aside failed, so where the folder is now is not known. */
 export class RuntimeRemovalBoundaryError extends Error {}
 
-type RemovalFilesystem = Pick<SkillHubLifecycleFilesystem, "pathKind" | "directoryMatches" | "renameDirectory">;
+type RemovalFilesystem = Pick<
+  SkillHubLifecycleFilesystem,
+  "pathKind" | "directoryMatches" | "renameDirectory" | "listScratchDirectories" | "removeTreeIfPresent"
+>;
+
+/** What staging found: whether the folder sits at the recovery path, and how many scratch folders it left alone. */
+export interface RuntimeRemovalStaging {
+  staged: boolean;
+  diverged: boolean;
+  /** Staging or recovery folders of other operations left where they are (none could be proven to be this skill's). */
+  otherScratchFolders: number;
+}
 
 /** The staging and recovery folders of one operation, beside the skills they belong to. */
 export function projectionScratch(root: string, operationId: string): { staging: string; backup: string } {
@@ -78,8 +93,10 @@ export function ownedSkillBlock(
 /**
  * Moves the skill's runtime folder to the operation's recovery path when, and only when, it is a plain directory inside
  * the runtime skills root whose files are exactly the check's. A folder already moved by an earlier attempt of this
- * same operation is accepted when it still matches. Anything else is reported as diverged and left alone; a link, a
- * reparse point or a path outside the root throws before anything moves.
+ * same operation is accepted when it still matches. When the folder is gone, a staging or recovery folder an earlier,
+ * abandoned operation left beside it is taken over (renamed to this operation's recovery path) when it too matches the
+ * check exactly, so its cleanup deletes it; one that cannot be proven is left alone and counted. Anything else is
+ * reported as diverged and left alone; a link, a reparse point or a path outside the root throws before anything moves.
  */
 export async function stageRuntimeRemoval(
   filesystem: RemovalFilesystem,
@@ -88,25 +105,93 @@ export async function stageRuntimeRemoval(
   manifest: SkillContentIntegrityManifest,
   skillName: string,
   signal: AbortSignal,
-): Promise<{ staged: boolean; diverged: boolean }> {
+): Promise<RuntimeRemovalStaging> {
   const scratch = projectionScratch(root, operationId);
   const target = path.join(root, skillName);
   const targetKind = await filesystem.pathKind(root, target, signal);
   const backupKind = await filesystem.pathKind(root, scratch.backup, signal);
+  if (targetKind === "missing" && backupKind === "missing") {
+    return await takeOverEarlierRecovery(filesystem, root, scratch, manifest, signal);
+  }
+  const otherScratchFolders = (await otherScratchNames(filesystem, root, scratch, signal)).length;
   if (targetKind === "missing") {
-    if (backupKind === "missing") return { staged: false, diverged: false };
     const movedStillMatches =
       backupKind === "directory" && (await filesystem.directoryMatches(root, scratch.backup, manifest, signal));
-    return movedStillMatches ? { staged: true, diverged: false } : { staged: false, diverged: true };
+    return { staged: movedStillMatches, diverged: !movedStillMatches, otherScratchFolders };
   }
-  if (targetKind !== "directory" || backupKind !== "missing") return { staged: false, diverged: true };
-  if (!(await filesystem.directoryMatches(root, target, manifest, signal))) return { staged: false, diverged: true };
+  if (targetKind !== "directory" || backupKind !== "missing") {
+    return { staged: false, diverged: true, otherScratchFolders };
+  }
+  if (!(await filesystem.directoryMatches(root, target, manifest, signal))) {
+    return { staged: false, diverged: true, otherScratchFolders };
+  }
+  await moveAside(filesystem, root, target, scratch.backup, signal);
+  return { staged: true, diverged: false, otherScratchFolders };
+}
+
+async function otherScratchNames(
+  filesystem: RemovalFilesystem,
+  root: string,
+  scratch: { staging: string; backup: string },
+  signal: AbortSignal,
+): Promise<string[]> {
+  const own = new Set([path.basename(scratch.staging), path.basename(scratch.backup)]);
+  return (await filesystem.listScratchDirectories(root, signal)).filter((name) => !own.has(name));
+}
+
+/** The first earlier scratch folder that is a plain directory holding exactly the check's files, taken over. */
+async function takeOverEarlierRecovery(
+  filesystem: RemovalFilesystem,
+  root: string,
+  scratch: { staging: string; backup: string },
+  manifest: SkillContentIntegrityManifest,
+  signal: AbortSignal,
+): Promise<RuntimeRemovalStaging> {
+  let staged = false;
+  let otherScratchFolders = 0;
+  for (const name of await otherScratchNames(filesystem, root, scratch, signal)) {
+    const candidate = path.join(root, name);
+    if (!staged && (await provenCheckFolder(filesystem, root, candidate, manifest, signal))) {
+      await moveAside(filesystem, root, candidate, scratch.backup, signal);
+      staged = true;
+      continue;
+    }
+    otherScratchFolders += 1;
+  }
+  return { staged, diverged: false, otherScratchFolders };
+}
+
+/** Whether a folder is a plain directory holding exactly the check's files. Anything unprovable, a link included, is not. */
+async function provenCheckFolder(
+  filesystem: RemovalFilesystem,
+  root: string,
+  folder: string,
+  manifest: SkillContentIntegrityManifest,
+  signal: AbortSignal,
+): Promise<boolean> {
   try {
-    await filesystem.renameDirectory(root, target, scratch.backup, signal);
+    return (
+      (await filesystem.pathKind(root, folder, signal)) === "directory" &&
+      (await filesystem.directoryMatches(root, folder, manifest, signal))
+    );
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return false;
+  }
+}
+
+async function moveAside(
+  filesystem: RemovalFilesystem,
+  root: string,
+  source: string,
+  target: string,
+  signal: AbortSignal,
+): Promise<void> {
+  try {
+    await filesystem.renameDirectory(root, source, target, signal);
   } catch (error) {
     throw new RuntimeRemovalBoundaryError(error instanceof Error ? error.message : String(error), { cause: error });
   }
-  return { staged: true, diverged: false };
 }
 
 /** Puts a moved folder back after a failed commit. If it cannot, it stays at its recovery path for the retry. */
@@ -153,8 +238,11 @@ export interface RuntimeRemovalContext {
     observedTreeSha256: string,
     result: Record<string, unknown>,
   ): Promise<SkillHubLifecycleApplyResult>;
-  /** Deletes the runtime record and its fence and settles `applied`, in one transaction. */
-  commit(staged: boolean): Promise<SkillHubLifecycleApplyResult>;
+  /**
+   * Deletes the runtime record and its fence and settles `applied`, in one transaction; `detail` goes into the
+   * settlement's result.
+   */
+  commit(staged: boolean, detail: Record<string, unknown>): Promise<SkillHubLifecycleApplyResult>;
   /**
    * Reads the skills folder again, so the loaded list matches what is on disk. Called once the folder is moved aside
    * and before the record goes, so no skills list can see a loaded skill without its record, and again after a failed
@@ -183,7 +271,7 @@ export async function runRuntimeRemoval(context: RuntimeRemovalContext): Promise
   if (recordBlock) {
     return await context.settle("blocked", intent.contentTreeSha256, { code: recordBlock, boundaryCrossed: false });
   }
-  let staging: { staged: boolean; diverged: boolean };
+  let staging: RuntimeRemovalStaging;
   try {
     staging = await stageRuntimeRemoval(
       context.filesystem,
@@ -213,7 +301,10 @@ export async function runRuntimeRemoval(context: RuntimeRemovalContext): Promise
     // The loader skips the recovery folder, so after this read the skill is no longer loaded: a skills list in the
     // window between the commit and the caller's final reload cannot write the record or its fence back.
     await context.reloadSkills?.();
-    return await context.commit(staging.staged);
+    return await context.commit(
+      staging.staged,
+      staging.otherScratchFolders > 0 ? { otherScratchFolders: staging.otherScratchFolders } : {},
+    );
   } catch (error) {
     if (staging.staged) {
       await restoreStagedRemoval(
@@ -228,4 +319,84 @@ export async function runRuntimeRemoval(context: RuntimeRemovalContext): Promise
     }
     throw error;
   }
+}
+
+/**
+ * After an applied activation or removal: deletes this operation's own staging and recovery folders through the confined
+ * lifecycle filesystem, then reads the skills folder again. A cleanup that fails is recorded for the operator and
+ * rethrown, so the effect is retried.
+ */
+export async function finishAppliedProjection(
+  filesystem: RemovalFilesystem,
+  root: string,
+  input: {
+    intent: SkillHubOperationIntentRecord;
+    signal: AbortSignal;
+    journey: Pick<AsyncStorage["governanceJourneyEvents"], "find" | "create">;
+    now: string;
+    reloadSkills?: () => Promise<unknown>;
+  },
+): Promise<void> {
+  const scratch = projectionScratch(root, input.intent.operationId);
+  try {
+    await filesystem.removeTreeIfPresent(root, scratch.staging, input.signal);
+    await filesystem.removeTreeIfPresent(root, scratch.backup, input.signal);
+  } catch (error) {
+    if (input.signal.aborted) throw error;
+    try {
+      await recordProjectionCleanupFailure(input.journey, input.intent, error, input.now);
+    } catch (recordError) {
+      throw new AggregateError([error, recordError], "Skill Hub cleanup failed and could not be recorded.", {
+        cause: recordError,
+      });
+    }
+    throw error;
+  }
+  await input.reloadSkills?.();
+}
+
+/**
+ * Records, once per operation, that deleting an applied operation's staging or recovery folder failed, as a Journey
+ * event beside the operation's own: the settlement stays as it is (it is immutable), the effect is retried, and the
+ * operator can see a folder was left behind. Only the error's code or name is kept, never a path.
+ */
+export async function recordProjectionCleanupFailure(
+  journey: Pick<AsyncStorage["governanceJourneyEvents"], "find" | "create">,
+  intent: SkillHubOperationIntentRecord,
+  error: unknown,
+  now: string,
+): Promise<void> {
+  const eventId = `skill-hub:journey:${intent.operationId}:cleanup`;
+  if (await journey.find(eventId)) return;
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  await journey.create({
+    schemaVersion: "goatcitadel.journey-event.v1",
+    eventId,
+    idempotencyKey: `skill-hub:lifecycle:${intent.operationId}:cleanup`,
+    scopeKind: "workspace",
+    workspaceId: intent.workspaceId,
+    eventType: SKILL_HUB_LIFECYCLE_JOURNEY_EVENT_TYPE,
+    subjectKind: SKILL_HUB_LIFECYCLE_JOURNEY_SUBJECT_KIND,
+    subjectId: intent.skillId,
+    action: `${intent.operationKind}_cleanup_failed`,
+    actorId: intent.actorId,
+    actorType: "approval_effect",
+    approvalId: intent.approvalId,
+    fingerprint: intent.requestSha256,
+    sourceKind: SKILL_HUB_LIFECYCLE_JOURNEY_SOURCE_KIND,
+    sourceId: intent.snapshotId,
+    trustDisposition: "manual_reconciliation",
+    evidenceRefs: [
+      { owner: "approval", refId: intent.approvalId },
+      { owner: "upstream_snapshot", refId: intent.snapshotId },
+    ],
+    provenance: { approvalRequired: true, sourceRequired: true },
+    summary: {
+      operationId: intent.operationId,
+      code: "projection_scratch_cleanup_failed",
+      error: typeof code === "string" ? code : error instanceof Error ? error.name : "unknown",
+    },
+    occurredAt: now,
+    recordedAt: now,
+  });
 }

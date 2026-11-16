@@ -33,6 +33,7 @@ import { pluginSkillSource } from "./plugin-owned-refusal.js";
 import { takesPowerAway } from "./skill-hub-operation-power.js";
 import {
   ownedSkillBlock,
+  finishAppliedProjection,
   projectionScratch,
   runRuntimeRemoval,
   UNKNOWN_TREE_SHA256,
@@ -178,13 +179,7 @@ export class SkillHubLifecycleService {
     }
     const replay = await storage.skillHubOperations.findSettlementByOperationId(input.operationId);
     if (replay) {
-      if (
-        (intent.operationKind === "activate" || intent.operationKind === "remove") &&
-        replay.disposition === "applied"
-      ) {
-        await this.cleanupProjectionScratch(input.operationId, signal);
-        await this.options.reloadSkills?.();
-      }
+      await this.finishAppliedProjection(intent, replay, signal);
       return { settlement: replay, replayed: true };
     }
 
@@ -323,13 +318,7 @@ export class SkillHubLifecycleService {
               },
             )
           : await mutate();
-    if (
-      (intent.operationKind === "activate" || intent.operationKind === "remove") &&
-      result.settlement.disposition === "applied"
-    ) {
-      await this.cleanupProjectionScratch(intent.operationId, signal);
-      await this.options.reloadSkills?.();
-    }
+    await this.finishAppliedProjection(intent, result.settlement, signal);
     return result;
   }
 
@@ -526,6 +515,7 @@ export class SkillHubLifecycleService {
     candidate: CandidateSkillVersionRecord,
     artifactId: string,
     runtimeProjected: boolean,
+    detail: Record<string, unknown> = {},
   ): Promise<SkillHubLifecycleApplyResult> {
     const storage = this.options.storage;
     return await this.runTransaction(async () => {
@@ -675,6 +665,7 @@ export class SkillHubLifecycleService {
             : intent.skillId,
         candidateRevision,
         runtimeRevision,
+        ...detail,
       });
     });
   }
@@ -910,16 +901,28 @@ export class SkillHubLifecycleService {
       root: this.skillsExtraRoot,
       settle: (disposition, observedTreeSha256, result) =>
         this.settle(intent, artifact.artifactId, disposition, observedTreeSha256, result),
-      commit: (staged) => this.applyCanonicalMutation(intent, candidate, artifact.artifactId, staged),
+      commit: (staged, detail) => this.applyCanonicalMutation(intent, candidate, artifact.artifactId, staged, detail),
       reloadSkills: this.options.reloadSkills,
       afterStage: this.options.afterRuntimeProjection,
     });
   }
 
-  private async cleanupProjectionScratch(operationId: string, signal: AbortSignal): Promise<void> {
-    const scratch = projectionScratch(this.skillsExtraRoot, operationId);
-    await this.filesystem.removeTreeIfPresent(this.skillsExtraRoot, scratch.staging, signal);
-    await this.filesystem.removeTreeIfPresent(this.skillsExtraRoot, scratch.backup, signal);
+  /** After an applied activation or removal (also on its replay); see `finishAppliedProjection`. */
+  private async finishAppliedProjection(
+    intent: SkillHubOperationIntentRecord,
+    settlement: SkillHubOperationSettlementRecord,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (settlement.disposition !== "applied" || !["activate", "remove"].includes(intent.operationKind)) return;
+    const { storage, reloadSkills } = this.options;
+    const journey = storage.governanceJourneyEvents;
+    await finishAppliedProjection(this.filesystem, this.skillsExtraRoot, {
+      intent,
+      signal,
+      journey,
+      now: this.now(),
+      reloadSkills,
+    });
   }
 
   private async artifactStillVerifies(
