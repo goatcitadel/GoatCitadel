@@ -383,9 +383,15 @@ export interface CronJobRecordResponse {
   endAt?: string;
   lastRunAt?: string;
   nextRunAt?: string;
+  /** Read-only. Set when the list worked out nextRunAt from the schedule because the scheduler has not recorded one yet. Never stored. */
+  nextRunProjected?: boolean;
+  /** Read-only. For a Task schedule, the workspace the next run files its task in, resolved when listed (the citadel's current default workspace, else the installation default). Absent when it could not be read. Never stored. */
+  taskDestinationWorkspaceId?: string;
   updatedAt?: string;
   workdir?: string;
   contextFrom?: string;
+  /** Citadel this schedule belongs to; absent means it applies across workspaces. */
+  citadelId?: string;
   lastRunOutput?: string;
   lastRunId?: string;
   /** `skipped`: the run settled cleanly but its handler reported it did no work. */

@@ -12,6 +12,7 @@ import { Button } from "../../ui/Button";
 import { taskRecordsEqual } from "../../../features/native-routes/ops/task-detail-mutation";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { readCockpitLocation } from "../../app/cockpit-back-guard";
+import { TaskOwnerNotice } from "./TaskOwnerNotice";
 
 const PRIORITIES: readonly TaskRecord["priority"][] = ["low", "normal", "high", "urgent"];
 
@@ -87,7 +88,7 @@ export function TaskDetailsEditor({ task, workspaceId }: { task: TaskRecord; wor
       </p>
       {executionOwned ? (
         <p className="mt-2 text-sm text-fg-muted">
-          A runtime execution owns this task. Review its run before editing board details.
+          <TaskOwnerNotice task={task} workspaceId={workspaceId} before="editing board details" />
         </p>
       ) : null}
       {task.status === "done" ? (

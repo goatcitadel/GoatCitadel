@@ -945,7 +945,8 @@ function collectRunTraceErrors(
     }
   }
   for (const turn of lifecycle?.turns ?? []) {
-    if (turn.failure?.message) {
+    // An approval wait is the run's status and its linked approval, not an error.
+    if (turn.failure?.message && turn.failure.failureClass !== "approval_required") {
       errors.push({ source: "turn", id: turn.turnId, message: turn.failure.message, createdAt: turn.finishedAt });
     }
   }

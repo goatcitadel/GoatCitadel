@@ -207,6 +207,52 @@ describe("WK-06 Work board counts", () => {
   });
 });
 
+describe("23.1 lanes list tasks apart from runs", () => {
+  const waitingRun = {
+    runId: "run-1",
+    workflowKey: "chat.turn.execute",
+    status: "waiting",
+    payload: { workspaceId: "workspace-a" },
+    metadata: { objective: "Plan the launch" },
+    updatedAt: "2026-10-06",
+  };
+  const renderBoard = () =>
+    act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <WorkBoard />
+        </QueryClientProvider>,
+      ),
+    );
+
+  it("shows a Tasks heading before the task card and a Runs heading before the run card", async () => {
+    vi.mocked(fetchDurableRunHistory).mockResolvedValue({ items: [waitingRun] } as never);
+    vi.mocked(fetchTasks).mockResolvedValue({
+      items: [{ ...task("w", "Waiting task"), status: "blocked" }],
+    } as never);
+    await renderBoard();
+    await vi.waitFor(() => expect(container.textContent).toContain("Plan the launch"));
+    const lane = [...container.querySelectorAll("section[aria-label]")].find((section) =>
+      section.textContent?.includes("Plan the launch"),
+    )!;
+    const headings = [...lane.querySelectorAll("h3")].map((heading) => heading.textContent);
+    expect(headings).toEqual(["Tasks", "Runs"]);
+    const text = lane.textContent ?? "";
+    expect(text.indexOf("Tasks")).toBeLessThan(text.indexOf("Waiting task"));
+    expect(text.indexOf("Runs")).toBeLessThan(text.indexOf("Plan the launch"));
+  });
+
+  it("starts a lane count with At least while more tasks remain unloaded", async () => {
+    vi.mocked(fetchTasks).mockResolvedValue({ items: [task("a", "Outline release")], nextCursor: "next" } as never);
+    await renderBoard();
+    await vi.waitFor(() =>
+      expect(container.querySelector('section[aria-label="Active"]')!.querySelector("h2 + span")!.textContent).toBe(
+        "At least 1 task · 0 runs",
+      ),
+    );
+  });
+});
+
 describe("WK-12 New task focus", () => {
   it("returns focus to New task when the form closes", async () => {
     await act(async () =>

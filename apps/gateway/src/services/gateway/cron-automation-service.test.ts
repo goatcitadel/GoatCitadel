@@ -671,6 +671,36 @@ describe("CronAutomationService job behavior", () => {
     await expect(service.runCronJobNow("custom-job")).rejects.toThrow("Cron job has no runnable handler: custom-job");
   });
 
+  it("lists a projected next run for an enabled job the scheduler has not run yet", async () => {
+    const cronJobs = new FakeCronJobs();
+    const service = createService(new FakeDb(), vi.fn(), { cronJobs });
+    cronJobs.upsert(buildTaskJob({ jobId: "daily-job", schedule: "0 3 * * * UTC" }));
+    cronJobs.upsert(
+      buildTaskJob({ jobId: "recorded-job", schedule: "0 3 * * * UTC", nextRunAt: "2030-01-01T03:00:00.000Z" }),
+    );
+    cronJobs.upsert(buildTaskJob({ jobId: "paused-job", schedule: "0 3 * * * UTC", enabled: false }));
+
+    // A fixed clock well before 03:00 UTC: inside the schedule's matching window the next run is a later minute.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-15T02:00:00.000Z"));
+    let listed: Map<string, CronJobRecord>;
+    try {
+      listed = new Map((await service.listCronJobs()).map((job) => [job.jobId, job]));
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const projected = listed.get("daily-job")!;
+    expect(projected.nextRunProjected).toBe(true);
+    expect(new Date(projected.nextRunAt!).toISOString()).toBe("2026-05-15T03:00:00.000Z");
+    expect(listed.get("recorded-job")).toMatchObject({ nextRunAt: "2030-01-01T03:00:00.000Z" });
+    expect(listed.get("recorded-job")!.nextRunProjected).toBeUndefined();
+    expect(listed.get("paused-job")!.nextRunAt).toBeUndefined();
+    expect(listed.get("paused-job")!.nextRunProjected).toBeUndefined();
+    // Read-only: the stored row is untouched.
+    expect(cronJobs.get("daily-job")?.nextRunAt).toBeUndefined();
+  });
+
   it("creates, updates, pauses, and deletes non-system jobs with persisted realtime events", async () => {
     const db = new FakeDb();
     const cronJobs = new FakeCronJobs();
@@ -2503,6 +2533,77 @@ describe("citadel-scoped cron jobs", () => {
 
     expect(agentTurn).toHaveBeenCalledTimes(1);
     expect(agentTurn.mock.calls[0]?.[0]).toMatchObject({ workspaceId: "ws-team" });
+  });
+
+  it("files a citadel-scoped Task schedule's task in the citadel's workspace and leaves the last run output alone", async () => {
+    const task = vi.fn(async (_job: CronJobRecord, _context?: unknown, _scope?: { workspaceId?: string }) => ({
+      taskId: "task-ws",
+    }));
+    const service = createService(new FakeDb(), vi.fn(), {
+      citadels: citadelReader([citadelRecord("team", { defaultWorkspaceId: "ws-c" })]),
+      handlers: { task },
+    });
+    await service.createCronJob({ ...taskJob, citadelId: "team" });
+    await service.createCronJob({ ...taskJob, jobId: "global-task" });
+
+    await service.runCronJobNow("scoped-task");
+    await service.runCronJobNow("global-task");
+
+    expect(task.mock.calls[0]?.[2]).toEqual({ workspaceId: "ws-c" });
+    expect(task.mock.calls[1]?.[2]).toEqual({ workspaceId: "default" });
+    expect((await service.getCronJob("scoped-task")).lastRunOutput).toBeUndefined();
+  });
+
+  describe("Task schedule destination projection", () => {
+    const listed = async (service: CronAutomationService, jobId: string) =>
+      (await service.listCronJobs()).find((job) => job.jobId === jobId);
+
+    it("projects the installation default for an unscoped schedule, and never stores it", async () => {
+      const cronJobs = new FakeCronJobs();
+      const service = createService(new FakeDb(), vi.fn(), { cronJobs });
+      await service.createCronJob({ ...taskJob, jobId: "plain" });
+
+      expect((await listed(service, "plain"))?.taskDestinationWorkspaceId).toBe("default");
+      expect((await service.getCronJobView("plain")).taskDestinationWorkspaceId).toBe("default");
+      expect(cronJobs.get("plain")?.taskDestinationWorkspaceId).toBeUndefined();
+      expect((await service.getCronJob("plain")).taskDestinationWorkspaceId).toBeUndefined();
+    });
+
+    it("projects the citadel's current default workspace and follows a change after a run", async () => {
+      const records = [citadelRecord("team", { defaultWorkspaceId: "ws-a" })];
+      const service = createService(new FakeDb(), vi.fn(), {
+        citadels: {
+          findRecord: (id) => records.find((record) => record.citadelId === id),
+          getCitadel: () => undefined,
+        },
+      });
+      await service.createCronJob({ ...taskJob, citadelId: "team" });
+      expect((await listed(service, "scoped-task"))?.taskDestinationWorkspaceId).toBe("ws-a");
+
+      await service.runCronJobNow("scoped-task");
+      records[0] = { ...records[0]!, defaultWorkspaceId: "ws-b" };
+
+      expect((await listed(service, "scoped-task"))?.taskDestinationWorkspaceId).toBe("ws-b");
+    });
+
+    it("leaves the destination out when it cannot be resolved, and for other actions", async () => {
+      const records = [citadelRecord("team")];
+      const cronJobs = new FakeCronJobs();
+      const service = createService(new FakeDb(), vi.fn(), {
+        cronJobs,
+        citadels: {
+          findRecord: (id) => records.find((record) => record.citadelId === id),
+          getCitadel: () => undefined,
+        },
+      });
+      await service.createCronJob({ ...taskJob, citadelId: "team" });
+      cronJobs.upsert(buildTaskJob({ jobId: "backup-job", action: "backup" }));
+      records.length = 0;
+
+      expect((await listed(service, "scoped-task"))?.taskDestinationWorkspaceId).toBeUndefined();
+      expect((await listed(service, "scoped-task"))?.jobId).toBe("scoped-task");
+      expect((await listed(service, "backup-job"))?.taskDestinationWorkspaceId).toBeUndefined();
+    });
   });
 
   it("fails closed when an admitted agent turn's job changes citadel before launch", async () => {

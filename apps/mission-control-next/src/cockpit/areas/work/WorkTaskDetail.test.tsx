@@ -199,6 +199,41 @@ describe("Work task detail", () => {
     expect(container.querySelector("select")).toBeNull();
     expect(updateTask).not.toHaveBeenCalled();
   });
+
+  it("links a Chat delegation's conversation, not a run page, in the owner notices", async () => {
+    vi.mocked(fetchTask).mockResolvedValue(
+      task({
+        agenticContext: { runId: "delegation-run-1", parentSessionId: "s-1" } as TaskRecord["agenticContext"],
+      }),
+    );
+    await render();
+    await vi.waitFor(() => expect(container.textContent).toContain("A Chat delegation is handling this task."));
+    const hrefs = [...container.querySelectorAll("a")].map((link) => link.getAttribute("href") ?? "");
+    expect(hrefs.some((href) => href.startsWith("/chat?sessionId=s-1"))).toBe(true);
+    expect(hrefs.some((href) => href.includes("/work/runs/"))).toBe(false);
+    for (const before of ["changing execution state", "changing ownership", "editing board details"])
+      expect(container.textContent).toContain(`before ${before}.`);
+  });
+
+  it("points a runtime-owned task with nothing recorded at Work history", async () => {
+    vi.mocked(fetchTask).mockResolvedValue(task({ agenticContext: { runId: "run-a" } }));
+    await render();
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("A run is handling this task, but no link to it was recorded."),
+    );
+    expect([...container.querySelectorAll("a")].some((link) => link.textContent === "Open Work history")).toBe(true);
+  });
+
+  it("links the durable run when one is recorded", async () => {
+    vi.mocked(fetchTask).mockResolvedValue(
+      task({ agenticContext: { durableRunId: "run-1" } as TaskRecord["agenticContext"] }),
+    );
+    await render();
+    await vi.waitFor(() => expect(container.textContent).toContain("A run is handling this task. Review its run"));
+    // The three owner notices each link it once; the page adds no second link of its own.
+    const links = [...container.querySelectorAll("a")].filter((link) => link.textContent === "Open linked run");
+    expect(links).toHaveLength(3);
+  });
 });
 
 describe("WK-10 task activity count", () => {

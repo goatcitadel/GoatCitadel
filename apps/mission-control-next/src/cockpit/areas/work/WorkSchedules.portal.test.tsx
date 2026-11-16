@@ -10,6 +10,9 @@ import { commitCockpitNavigation } from "../../app/cockpit-history";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { resetScheduleOperationsForTests } from "../../../features/native-routes/ops/use-schedule-operations";
 import { fetchCronJob, fetchCronJobs, updateCronJob, pauseCronJob } from "@goatcitadel/mission-control-shared/api/cron";
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [{ workspaceId: "ws-c", name: "Research" }] })),
+}));
 // The scheduler review flag read is not under test here; answer it so no real request stays in flight.
 vi.mock("@goatcitadel/mission-control-shared/api/settings", () => ({
   fetchSettings: vi.fn(async () => ({ features: { cronReviewQueueV1Enabled: false } })),

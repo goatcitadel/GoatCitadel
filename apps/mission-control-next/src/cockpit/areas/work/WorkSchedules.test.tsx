@@ -46,6 +46,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/cron", () => ({
   fetchCronReviewQueue: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/settings", () => ({ fetchSettings: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [{ workspaceId: "ws-c", name: "Research" }] })),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/durable")>()),
   fetchObserveRunTrace: vi.fn(),
@@ -527,6 +530,33 @@ describe("Work schedules", () => {
     expect(window.location.search).toBe(destination.search);
     expect(window.location.hash).toBe("#schedule-evidence");
     expect(window.history.state).toMatchObject({ evidence: "schedule-record-recovery" });
+  });
+
+  it("says the same destination and next run in the review dialog as in the detail", async () => {
+    const task = job({
+      nextRunAt: new Date(Date.now() + 3 * 3_600_000).toISOString(),
+      nextRunProjected: true,
+      taskDestinationWorkspaceId: "ws-c",
+    });
+    vi.mocked(fetchCronJobs).mockResolvedValue({ items: [task] });
+    vi.mocked(fetchCronJob).mockResolvedValue(task);
+    await render();
+    await review();
+    await click("Pause");
+    const dialog = container.querySelector('[role="dialog"]')!;
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Destination: Research's task list."));
+    expect(dialog.textContent).toContain("Next run: in 3 hours (from its schedule)");
+  });
+
+  it("names the same destination in the edit review", async () => {
+    const task = job({ taskDestinationWorkspaceId: "ws-c" });
+    vi.mocked(fetchCronJobs).mockResolvedValue({ items: [task] });
+    vi.mocked(fetchCronJob).mockResolvedValue(task);
+    await render();
+    await review();
+    await click("Review schedule changes");
+    const dialog = container.querySelector('[role="dialog"]')!;
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Destination: Research's task list."));
   });
 
   it("names schedule deletion plainly and offers Pause instead", async () => {

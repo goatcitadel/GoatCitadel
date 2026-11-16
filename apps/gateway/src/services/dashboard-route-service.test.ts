@@ -656,6 +656,61 @@ describe("dashboard route service", () => {
     expect(trace.artifacts.items[0]).not.toHaveProperty("content");
   });
 
+  it("leaves an approval wait out of a run's recorded errors", async () => {
+    const deps = createDeps();
+    deps.durableOperatorService.getRun.mockReturnValue({
+      runId: "run-1",
+      workflowKey: "chat.turn.execute",
+      status: "waiting",
+      attemptCount: 1,
+      maxAttempts: 3,
+      version: 2,
+      payload: { sessionId: "session-1", turnId: "turn-1" },
+      metadata: {},
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:02:00.000Z",
+    });
+    deps.durableOperatorService.listRunCheckpoints.mockReturnValue([]);
+    deps.durableOperatorService.listRunTimeline.mockReturnValue([]);
+    const turn = (turnId: string, failure: { failureClass: string; message: string }) => ({
+      turnId,
+      sessionId: "session-1",
+      userMessageId: `message-${turnId}`,
+      status: "failed",
+      mode: "chat",
+      startedAt: "2026-05-30T00:00:00.000Z",
+      durableRunId: "run-1",
+      failure,
+    });
+    deps.runtimeLifecycleReadService.getRuntimeLifecycle.mockResolvedValue({
+      query: { runId: "run-1" },
+      canonical: { runId: "run-1", sessionId: "session-1", turnId: "turn-1" },
+      linked: {
+        sessionIds: ["session-1"],
+        turnIds: ["turn-1", "turn-2"],
+        runIds: ["run-1"],
+        proactiveRunIds: [],
+        approvalIds: [],
+        taskIds: [],
+        workspaceIds: ["workspace-1"],
+      },
+      session: { sessionId: "session-1", channel: "chat" },
+      sessionSummary: { transcriptEventCount: 2 },
+      turns: [
+        turn("turn-1", { failureClass: "approval_required", message: "Waiting for approval" }),
+        turn("turn-2", { failureClass: "provider_error", message: "provider failed" }),
+      ],
+      toolRuns: [],
+    });
+    deps.storage.memoryContexts.listByRun.mockReturnValue([]);
+    deps.storage.chatGeneratedArtifacts.listByTurnIds.mockReturnValue(new Map());
+    const service = createDashboardRouteService(createDashboardRoutePort(deps as never));
+
+    const trace = await service.getObserveRunTrace("run-1");
+
+    expect(trace.errors.items.map((item: { message: string }) => item.message)).toEqual(["provider failed"]);
+  });
+
   it("projects the fully assembled Observe trace and export while preserving every canonical backing record", async () => {
     const deps = createDeps();
     const rawRun = {

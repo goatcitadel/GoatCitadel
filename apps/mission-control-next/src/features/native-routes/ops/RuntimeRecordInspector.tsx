@@ -1,5 +1,6 @@
 import { runtimeEventKey } from "./runtime-overview-model";
 import { formatHumanSessionTitle, humanizeEventLabel, formatDateTime } from "./runtime-formatters";
+import { formatScheduleNextRun } from "./runtime-schedule-model";
 import { ImprovementReportDetails } from "./ImprovementReportDetails";
 import { RecordEvidence } from "../shared/RecordEvidence";
 import { DetailInspector } from "../../../components/DetailInspector";
@@ -136,7 +137,7 @@ export function RuntimeRecordInspector({
             <dt>State</dt>
             <dd>{inspectedJob.enabled ? "Enabled" : "Disabled"}</dd>
             <dt>Next run</dt>
-            <dd>{inspectedJob.nextRunAt ? formatDateTime(inspectedJob.nextRunAt) : "Not scheduled"}</dd>
+            <dd>{formatScheduleNextRun(inspectedJob, "Not scheduled")}</dd>
             <dt>Last run</dt>
             <dd>{inspectedJob.lastRunStatus ?? "Unavailable"}</dd>
             <dt>Revision</dt>

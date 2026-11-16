@@ -136,14 +136,16 @@ export function WorkRunControls({ runId }: { runId: string }) {
       setCompleted(true);
       const returned = presentRunStatus(result.status);
       setNotice({
-        text: `Run moved to ${returned.label}. Refresh to review its current state and any follow-on effects.`,
+        text: `Run moved to ${returned.label}.`,
         status: returned,
       });
       void queryClient.invalidateQueries({ queryKey: queryKeys.durableRuns() });
       void queryClient.invalidateQueries({ queryKey: queryKeys.runTrace(runId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
       void queryClient.invalidateQueries({ queryKey: ["tasks", "work-run-dead-letter", runId] });
-      rereadRun();
+      // The buttons stay hidden while the run is read again; they come back for the state that read returns.
+      await queryClient.resetQueries({ queryKey: runKey, exact: true });
+      setCompleted(false);
     } catch (cause) {
       setReviewed(null);
       if (mutationAttempted) {

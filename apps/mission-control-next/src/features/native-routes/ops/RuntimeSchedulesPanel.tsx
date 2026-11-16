@@ -1,7 +1,6 @@
 import { RuntimeAutomationPreview } from "./RuntimeAutomationPreview";
 import { OpsNeedsAttentionCard } from "./RuntimeOverviewPanels";
 import { buildNeedsAttentionItems } from "./runtime-overview-model";
-import { formatDateTime } from "./runtime-formatters";
 import { ScheduleTimingFields } from "./ScheduleTimingFields";
 import { FocusedDetail } from "../shared/FocusedDetail";
 import type {
@@ -13,7 +12,12 @@ import { NativeButton, NoticeBanner } from "../primitives";
 import { NativeCard, NativeGrid, NativeList } from "../NativeRoutePageLayout";
 import type { NativeRoutePagesProps } from "../types";
 import type { OpsRuntimeData } from "./runtime-overview-model";
-import { CRON_ACTION_OPTIONS, type CronActionOption, formatSchedulerReviewItem } from "./runtime-schedule-model";
+import {
+  CRON_ACTION_OPTIONS,
+  type CronActionOption,
+  formatScheduleNextRun,
+  formatSchedulerReviewItem,
+} from "./runtime-schedule-model";
 import type {
   RuntimePanelSetter,
   RuntimeScheduleEditor,
@@ -125,7 +129,7 @@ export function RuntimeSchedulesPanel({
                 meta: item.enabled ? "enabled" : "disabled",
                 body: [
                   item.action,
-                  item.nextRunAt ? formatDateTime(item.nextRunAt) : "No next run",
+                  formatScheduleNextRun(item, "No next run"),
                   item.lastRunStatus ? `last run ${item.lastRunStatus}` : undefined,
                   item.lastRunEvidenceEnvelopeId ? `evidence ${item.lastRunEvidenceEnvelopeId.slice(0, 8)}` : undefined,
                 ]

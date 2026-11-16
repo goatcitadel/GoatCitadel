@@ -55,6 +55,13 @@ export async function normalizeCronJobCitadelId(
   return citadelId;
 }
 
+const DEFAULT_TASK_WORKSPACE_ID = "default";
+
+/** The workspace a Task schedule files its task in: its citadel's default workspace, else the installation default. */
+export function cronTaskDestinationWorkspaceId(scope: CronCitadelExecutionScope): string {
+  return scope.workspaceId ?? DEFAULT_TASK_WORKSPACE_ID;
+}
+
 /**
  * Resolves the scope a due or manual run executes in. A citadel-scoped job whose citadel
  * is gone or archived fails closed (even when forced) instead of running as a global job.

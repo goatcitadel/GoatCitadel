@@ -2082,8 +2082,8 @@ export class GatewayService {
         }
       },
       runHandlers: {
-        task: async (job, _context?) => {
-          const task = await this.createCronInboxTask(job);
+        task: async (job, _context, scope) => {
+          const task = await this.createCronInboxTask(job, { workspaceId: scope?.workspaceId });
           return { taskId: task.taskId };
         },
         agentTurn: async (input) => await this.runCronAgentTurn(input),

@@ -1,4 +1,6 @@
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 import type { ScheduleAction } from "../../../features/native-routes/ops/schedule-operation";
 import type { CronJobRecordResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { Button } from "../../ui/Button";
@@ -11,6 +13,27 @@ import { presentScheduleAction, presentScheduleReason } from "./work-vocabulary"
 /** A Gateway-reported schedule time, or a plain gap when the Gateway sent none. */
 export function ScheduleTime({ value }: { value: string | undefined }) {
   return value ? <TimeText value={value} /> : <>Not reported</>;
+}
+
+const OVERDUE_AFTER_MS = 60_000;
+
+/** The next run of a schedule: paused, a time, overdue (the scheduler has not moved it on), or a gap. */
+export function ScheduleNextRun({ job, now = Date.now() }: { job: CronJobRecordResponse; now?: number }) {
+  if (!job.enabled) return <>Paused</>;
+  const due = job.nextRunAt ? Date.parse(job.nextRunAt) : Number.NaN;
+  if (Number.isFinite(due) && due < now - OVERDUE_AFTER_MS) {
+    return (
+      <>
+        Overdue, was due <TimeText value={job.nextRunAt} />
+      </>
+    );
+  }
+  return (
+    <>
+      <ScheduleTime value={job.nextRunAt} />
+      {job.nextRunAt && job.nextRunProjected ? " (from its schedule)" : ""}
+    </>
+  );
 }
 
 /**
@@ -57,6 +80,24 @@ function readNonEmptyString(value: unknown): string | undefined {
 
 function looksLikeJson(value: string): boolean {
   return /^\s*[[{"]/u.test(value);
+}
+
+/**
+ * Where the next run of a Task schedule files its task, as the Gateway resolved it when it listed the schedule. A
+ * schedule whose destination the Gateway could not read says so; the last run's destination is never used instead.
+ */
+export function TaskDestination({ job }: { job: CronJobRecordResponse }) {
+  const { activeCitadelId } = useUiPreferences();
+  const nameOf = useWorkspaceNameLookup(activeCitadelId);
+  const workspaceId = job.taskDestinationWorkspaceId;
+  if (!workspaceId) return <>could not be read.</>;
+  const name = nameOf(workspaceId);
+  if (name) return <>{name}&apos;s task list.</>;
+  return workspaceId === "default" ? (
+    <>the default workspace&apos;s task list.</>
+  ) : (
+    <>the task list of another workspace.</>
+  );
 }
 
 export function lastRunOutcomeLabel(job: CronJobRecordResponse): string {
@@ -146,7 +187,7 @@ export function WorkScheduleListItem({
       <p className="mt-2 text-sm text-fg-secondary">
         <ScheduleWording expression={job.schedule} /> · {scheduleTimezoneSummary(job.schedule)}
         <br />
-        Next run: {job.enabled ? <ScheduleTime value={job.nextRunAt} /> : "Paused"}
+        Next run: <ScheduleNextRun job={job} />
       </p>
       <p className="mt-2 text-sm text-fg-secondary">
         Last outcome: {lastRunOutcomeLabel(job)}
@@ -182,7 +223,9 @@ export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecor
         </div>
         <div>
           <dt className="text-fg-muted">Next run</dt>
-          <dd className="text-fg">{selected.enabled ? <ScheduleTime value={selected.nextRunAt} /> : "Paused"}</dd>
+          <dd className="text-fg">
+            <ScheduleNextRun job={selected} />
+          </dd>
         </div>
         <div>
           <dt className="text-fg-muted">Last run</dt>
@@ -217,9 +260,9 @@ export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecor
         </p>
       ) : null}
       <p className="text-sm text-fg-secondary">
-        Installation-wide · Action: {presentScheduleAction(selected.action)}. Destination:{" "}
-        {selected.workdir || "Not reported"}. {scheduleTimezoneSummary(selected.schedule)} Displayed dates use your
-        browser timezone.
+        {selected.citadelId ? "" : "Installation-wide · "}Action: {presentScheduleAction(selected.action)}. Destination:{" "}
+        {selected.action === "task" ? <TaskDestination job={selected} /> : `${selected.workdir || "Not reported"}.`}{" "}
+        {scheduleTimezoneSummary(selected.schedule)} Displayed dates use your browser timezone.
       </p>
       {selected.lastRunOutput || selected.lastRunEvidenceEnvelopeId ? (
         <TechnicalDetails label="Last run technical details">

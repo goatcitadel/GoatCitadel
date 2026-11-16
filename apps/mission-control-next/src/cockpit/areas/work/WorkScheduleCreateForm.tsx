@@ -16,7 +16,7 @@ const CREATE_ACTIONS = [
 export type CreateScheduleAction = (typeof CREATE_ACTIONS)[number];
 /** One plain line per action; built-in maintenance reuses the matching built-in job. */
 const CREATE_ACTION_DESCRIPTIONS: Readonly<Record<CreateScheduleAction, string>> = {
-  task: "Adds a task to the task list each time it runs. It does not start a run.",
+  task: "Adds a task to the default workspace's task list each time it runs. It does not start a run.",
   improvement: "Runs the built-in improvement review.",
   backup: "Runs the built-in backup.",
   memory_flush: "Runs the built-in memory flush.",

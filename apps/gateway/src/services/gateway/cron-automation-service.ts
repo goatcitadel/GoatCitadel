@@ -31,7 +31,13 @@ import {
   normalizeAgentTurnCronActionConfig,
   runAgentTurnCronJob,
 } from "./cron-agent-turn-support.js";
-import { normalizeCronJobCitadelId, resolveCronJobCitadelScope, type CronCitadelReader } from "./cron-citadel-scope.js";
+import {
+  cronTaskDestinationWorkspaceId,
+  normalizeCronJobCitadelId,
+  resolveCronJobCitadelScope,
+  type CronCitadelReader,
+} from "./cron-citadel-scope.js";
+import { withProjectedNextRun, withTaskDestination } from "./cron-next-run-projection.js";
 import { normalizeNoAgentCronActionConfig, runNoAgentCronJob } from "./cron-no-agent-support.js";
 import {
   COST_REPORT_HOURLY_JOB_ID,
@@ -208,6 +214,7 @@ export interface CronAutomationServiceDeps {
     task: (
       job: CronJobRecord,
       context?: { contextFrom?: string; contextOutput?: string },
+      scope?: { workspaceId?: string },
     ) => Promise<{ taskId?: string } | void>;
     improvement: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
     backup: (context?: CronSystemRunContext) => Promise<CronSystemHandlerOutcome | void>;
@@ -249,7 +256,7 @@ export class CronAutomationService {
   }): Promise<CronJobRecord[]> {
     const { citadels, cronJobs } = this.deps.storage;
     if (!citadel) {
-      return await cronJobs.list();
+      return await this.projectCronJobs(await cronJobs.list());
     }
     const scope: CitadelAccessScope = {
       citadelId: citadel.citadelId,
@@ -264,7 +271,26 @@ export class CronAutomationService {
     if (!(await citadels.getCitadel(citadel.citadelId))) {
       throw new NotFoundError(`Citadel ${citadel.citadelId} not found.`);
     }
-    return await cronJobs.listByCitadel(scope);
+    return await this.projectCronJobs(await cronJobs.listByCitadel(scope));
+  }
+
+  /** Read-only list projections: a next run worked out from the schedule and a Task schedule's current destination. */
+  private async projectCronJobs(jobs: CronJobRecord[]): Promise<CronJobRecord[]> {
+    const now = new Date();
+    const reader = this.citadelReader();
+    return await Promise.all(
+      jobs.map((job) =>
+        withTaskDestination(withProjectedNextRun(job, now, computeNextCronRunAt), async (target) =>
+          cronTaskDestinationWorkspaceId(await resolveCronJobCitadelScope(reader, target)),
+        ),
+      ),
+    );
+  }
+
+  /** One job as an operator reads it: the stored record plus the same read-only projections as the list. */
+  public async getCronJobView(jobId: string): Promise<CronJobRecord> {
+    const [job] = await this.projectCronJobs([await this.getCronJob(jobId)]);
+    return job!;
   }
 
   public async getCronJob(jobId: string): Promise<CronJobRecord> {
@@ -444,7 +470,7 @@ export class CronAutomationService {
     }
     // Citadel scope is enforced for every trigger (due sweep, manual, forced): a job whose
     // citadel is gone or archived is refused rather than run as a global job.
-    await resolveCronJobCitadelScope(this.citadelReader(), job);
+    const citadelScope = await resolveCronJobCitadelScope(this.citadelReader(), job);
     const lifecycleAdmission = this.deps.sharedHostLifecycle?.tryReserve(
       "cron",
       `cron:${normalizedJobId}:${options.admissionKey?.trim() || randomUUID()}`,
@@ -464,7 +490,9 @@ export class CronAutomationService {
       try {
         if (job.action === "task") {
           const context = await this.resolveCronJobContext(job);
-          const taskResult = await this.deps.runHandlers.task(job, context);
+          const taskResult = await this.deps.runHandlers.task(job, context, {
+            workspaceId: cronTaskDestinationWorkspaceId(citadelScope),
+          });
           const finishedAt = new Date().toISOString();
           const saved = await this.recordCronRunSuccess(job, runId, finishedAt);
           runSummary = {

@@ -113,6 +113,22 @@ describe("Work run controls", () => {
     expect(container.textContent).toContain("Run moved to Paused");
   });
 
+  it("shows Resume after a pause without pressing Refresh", async () => {
+    api.fetchDurableRun
+      .mockResolvedValueOnce({ ...run, status: "waiting" })
+      .mockResolvedValueOnce({ ...run, status: "waiting" })
+      .mockResolvedValue({ ...run, status: "paused", version: 3 });
+    await renderControls();
+    await act(async () => button("Pause").click());
+    await act(async () => button("Pause run").click());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(container.textContent).toContain("Run moved to Paused.");
+    expect(container.textContent).not.toContain("Refresh to review");
+    expect(button("Resume")).toBeDefined();
+  });
+
   it("asks a capitalized question and never pairs two Cancel buttons", async () => {
     await renderControls();
     await act(async () => button("Cancel").click());

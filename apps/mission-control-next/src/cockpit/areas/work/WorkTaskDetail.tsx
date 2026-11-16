@@ -14,7 +14,6 @@ import { EmptyState } from "../../ui/EmptyState";
 import { taskMatchesWorkspace } from "./work-tasks";
 import { TaskAssignmentControl } from "./TaskAssignmentControl";
 import { TaskDetailsEditor } from "./TaskDetailsEditor";
-import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TimeText } from "../../ui/TimeText";
 import { useCockpitTitleDetail } from "../../app/cockpit-title-detail";
@@ -36,8 +35,6 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
       ? taskQuery.data
       : undefined;
   useCockpitTitleDetail(task?.title);
-  const taskSessionId =
-    task?.proactiveContext?.sessionId ?? task?.agenticContext?.childSessionId ?? task?.agenticContext?.parentSessionId;
   const activities = useQuery({
     queryKey: ["tasks", "work-task-activities", workspaceId, taskId],
     queryFn: () => fetchTaskActivities(taskId, workspaceId),
@@ -115,22 +112,6 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
             <p className="text-sm text-fg-secondary">
               This task is blocked. No blocker reason was recorded; review its activity.
             </p>
-          ) : null}
-          {task.proactiveContext?.durableRunId || task.agenticContext?.durableRunId ? (
-            <NativeOwnerLink
-              scope={[workspaceId, taskId]}
-              href={`/work/runs/${encodeURIComponent((task.proactiveContext?.durableRunId ?? task.agenticContext?.durableRunId)!)}`}
-            >
-              Open linked run
-            </NativeOwnerLink>
-          ) : null}
-          {taskSessionId ? (
-            <NativeOwnerLink
-              scope={[workspaceId, taskId]}
-              href={`/chat?sessionId=${encodeURIComponent(taskSessionId)}`}
-            >
-              Open linked conversation
-            </NativeOwnerLink>
           ) : null}
           {task.description ? (
             // The heading and the text share one parent: browser proofs read the description beside its heading.

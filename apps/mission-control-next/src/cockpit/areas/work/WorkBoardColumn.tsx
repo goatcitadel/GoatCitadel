@@ -43,10 +43,44 @@ export function WorkBoardColumn({
   onToggle: (taskId: string) => void;
   onOpen: (path: string) => (event: MouseEvent<HTMLAnchorElement>) => void;
 }) {
-  const items: BoardItem[] = [
-    ...tasks.map((task) => ({ kind: "task" as const, key: "task:" + task.taskId, task })),
-    ...runs.map((run) => ({ kind: "run" as const, key: "run:" + run.runId, run })),
-  ];
+  const taskItems: BoardItem[] = tasks.map((task) => ({ kind: "task" as const, key: "task:" + task.taskId, task }));
+  const runItems: BoardItem[] = runs.map((run) => ({ kind: "run" as const, key: "run:" + run.runId, run }));
+  const renderItem = (item: BoardItem) => {
+    if (item.kind === "run") return <RunCard run={item.run} onOpen={onOpen} />;
+    const task = item.task;
+    if (selecting)
+      return (
+        <label className={`${CARD} flex min-h-11 cursor-pointer items-start gap-2`}>
+          <input
+            type="checkbox"
+            className="mt-0.5 size-5 shrink-0"
+            checked={selectedIds.has(task.taskId)}
+            onChange={() => onToggle(task.taskId)}
+          />
+          <span className="min-w-0">
+            <TaskKind task={task} />
+            <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">{task.title}</span>
+          </span>
+        </label>
+      );
+    const path = `/work/tasks/${encodeURIComponent(task.taskId)}`;
+    return (
+      <a href={path} onClick={onOpen(path)} className={CARD}>
+        <TaskKind task={task} />
+        <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">{task.title}</span>
+        <TimeText value={task.updatedAt} prefix="Updated" className="mt-2 block text-xs text-fg-muted" />
+      </a>
+    );
+  };
+  const list = (heading: string, noun: string, items: BoardItem[]) =>
+    items.length ? (
+      <>
+        <h3 className="text-xs font-semibold text-fg-secondary">{heading}</h3>
+        <WindowedRecordList label={`${title} ${noun}`} items={items} itemKey={(item) => item.key}>
+          {renderItem}
+        </WindowedRecordList>
+      </>
+    ) : null;
   return (
     <section aria-label={title} className="flex min-w-0 flex-col gap-2">
       <div className="flex flex-wrap items-baseline justify-between gap-x-2 border-b border-line-subtle pb-2">
@@ -54,37 +88,8 @@ export function WorkBoardColumn({
         <span className="whitespace-nowrap text-xs tabular-nums text-fg-muted">{count}</span>
       </div>
       <p className="text-xs text-fg-muted">{description}</p>
-      {items.length ? (
-        <WindowedRecordList label={title + " records"} items={items} itemKey={(item) => item.key}>
-          {(item) => {
-            if (item.kind === "run") return <RunCard run={item.run} onOpen={onOpen} />;
-            const task = item.task;
-            if (selecting)
-              return (
-                <label className={`${CARD} flex min-h-11 cursor-pointer items-start gap-2`}>
-                  <input
-                    type="checkbox"
-                    className="mt-0.5 size-5 shrink-0"
-                    checked={selectedIds.has(task.taskId)}
-                    onChange={() => onToggle(task.taskId)}
-                  />
-                  <span className="min-w-0">
-                    <TaskKind task={task} />
-                    <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">{task.title}</span>
-                  </span>
-                </label>
-              );
-            const path = `/work/tasks/${encodeURIComponent(task.taskId)}`;
-            return (
-              <a href={path} onClick={onOpen(path)} className={CARD}>
-                <TaskKind task={task} />
-                <span className="mt-1 line-clamp-3 block text-sm font-medium text-fg">{task.title}</span>
-                <TimeText value={task.updatedAt} prefix="Updated" className="mt-2 block text-xs text-fg-muted" />
-              </a>
-            );
-          }}
-        </WindowedRecordList>
-      ) : null}
+      {list("Tasks", "tasks", taskItems)}
+      {list("Runs", "runs", runItems)}
       {empty ? (
         <p className="text-xs text-fg-muted">
           {filtered ? "Nothing here matches the filter." : "No recent work in this state."}
