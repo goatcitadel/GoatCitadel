@@ -123,6 +123,18 @@ it("lists only this workspace's sessions and opens a deep-linked session with it
   expect(container.textContent).toContain("does not show that a browser is open, bound or active");
 });
 
+it("says how a browser session appears when there are none at all (U-SY-014)", async () => {
+  vi.mocked(fetchBrowserSessions).mockResolvedValue([]);
+  await open("/system/browser-sessions");
+  await vi.waitFor(() => expect(container.textContent).toContain("No browser sessions match this filter."));
+  expect(container.textContent).not.toContain("A session appears here");
+  await click("All");
+  await vi.waitFor(() => expect(container.textContent).toContain("No browser sessions"));
+  expect(container.textContent).toContain("A session appears here when you create one with New browser session.");
+  expect(container.textContent).not.toContain("match this filter");
+  expect(button("Refresh sessions")).toBeDefined();
+});
+
 it("creates an inert session with a request ID and replays only that ID after a lost response", async () => {
   vi.mocked(createBrowserSession)
     .mockRejectedValueOnce(new Error("socket closed"))
