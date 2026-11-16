@@ -86,7 +86,7 @@ export function useWorkHistoryHeadPoll(workspaceId: string): void {
       inFlight = true;
       Promise.all([checkTasks, checkRuns].map((check) => check(client, workspaceId, controller.signal)))
         .catch(() => {
-          // A failed read is not an error to show: the next tick or a realtime event reads again.
+          // Intentionally ignored: a failed read is not an error to show; the next tick or a realtime event reads again.
         })
         .finally(() => {
           inFlight = false;
