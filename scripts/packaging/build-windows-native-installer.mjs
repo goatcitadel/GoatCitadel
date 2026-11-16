@@ -709,7 +709,7 @@ procedure InstallVoiceRuntime();
 begin
   RunOrFail(
     ExpandConstant('{app}\\app\\runtime\\node\\node.exe'),
-    ExpandConstant('"{app}\\app\\gateway\\dist\\voice-runtime-cli.js" install --model base.en'),
+    ExpandConstant('"{app}\\app\\gateway\\dist\\voice-runtime-cli.js" install --model base.en --keep-selection'),
     ExpandConstant('{app}\\app\\gateway'),
     'Installing local voice runtime...'
   );

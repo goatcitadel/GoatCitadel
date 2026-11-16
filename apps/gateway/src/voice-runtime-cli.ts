@@ -45,8 +45,14 @@ export async function runVoiceRuntimeCli(
   }
 
   if (action === "install") {
-    const modelId = readVoiceRuntimeFlag(args, "--model") ?? undefined;
+    let modelId = readVoiceRuntimeFlag(args, "--model") ?? undefined;
     const activate = !args.includes("--no-activate");
+    if (args.includes("--keep-selection")) {
+      // A setup that refreshes the runtime must not change the model the operator chose: install that one instead
+      // of the given default. With no earlier choice, or one this build does not know, the given model is used.
+      const selected = (await deps.getManagedVoiceRuntimeStatus()).selectedModelId;
+      if (selected && deps.models.some((item) => item.id === selected)) modelId = selected;
+    }
     const status = await deps.installManagedVoiceRuntime(undefined, {
       modelId,
       activate,
@@ -112,7 +118,7 @@ export function printVoiceRuntimeUsage(
   deps: Pick<VoiceRuntimeCliDeps, "log" | "models"> = defaultVoiceRuntimeCliDeps,
 ): void {
   deps.log(`Usage:
-  goat voice install [--model <modelId>] [--no-activate]
+  goat voice install [--model <modelId>] [--no-activate] [--keep-selection]
   goat voice status
   goat voice models
   goat voice select <modelId>

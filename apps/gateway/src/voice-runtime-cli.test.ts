@@ -65,6 +65,34 @@ describe("voice runtime CLI", () => {
     expect(readVoiceRuntimeFlag([], "--model")).toBeNull();
   });
 
+  it("keeps the model already chosen when asked to, and uses the given one when nothing is chosen", async () => {
+    const base = createDeps();
+    const chosen: VoiceRuntimeCliDeps = {
+      ...base,
+      models: [...base.models, { ...base.models[0]!, id: "small", label: "Small multilingual" }],
+      getManagedVoiceRuntimeStatus: vi.fn(async () => ({ selectedModelId: "small" }) as never),
+    };
+    await runCli(["install", "--model", "base.en", "--keep-selection"], chosen);
+    expect(chosen.installManagedVoiceRuntime).toHaveBeenCalledWith(undefined, { modelId: "small", activate: true });
+
+    const none = await runCli(["install", "--model", "base.en", "--keep-selection"]);
+    expect(none.installManagedVoiceRuntime).toHaveBeenCalledWith(undefined, { modelId: "base.en", activate: true });
+
+    const unknown: VoiceRuntimeCliDeps = {
+      ...createDeps(),
+      getManagedVoiceRuntimeStatus: vi.fn(async () => ({ selectedModelId: "custom.bin" }) as never),
+    };
+    await runCli(["install", "--model", "base.en", "--keep-selection"], unknown);
+    expect(unknown.installManagedVoiceRuntime).toHaveBeenCalledWith(undefined, { modelId: "base.en", activate: true });
+
+    const plain: VoiceRuntimeCliDeps = {
+      ...createDeps(),
+      getManagedVoiceRuntimeStatus: vi.fn(async () => ({ selectedModelId: "small" }) as never),
+    };
+    await runCli(["install", "--model", "base.en"], plain);
+    expect(plain.installManagedVoiceRuntime).toHaveBeenCalledWith(undefined, { modelId: "base.en", activate: true });
+  });
+
   it("prints status and sanitized model catalog output", async () => {
     const status = await runCli(["status"]);
     expect(status.getManagedVoiceRuntimeStatus).toHaveBeenCalledTimes(1);
