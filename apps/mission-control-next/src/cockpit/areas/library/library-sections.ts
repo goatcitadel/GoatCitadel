@@ -14,3 +14,6 @@ export const LIBRARY_SECTION_LABELS = {
 } as const;
 
 export type LibrarySectionKey = keyof typeof LIBRARY_SECTION_LABELS;
+
+/** How long typing in a Library search waits before it searches; Enter searches at once. */
+export const LIBRARY_SEARCH_DEBOUNCE_MS = 300;

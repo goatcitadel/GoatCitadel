@@ -71,10 +71,13 @@ export function FeatureSwitchesSettings() {
             unless you&apos;ve chosen to apply Settings changes without asking.
           </p>
         </div>
-        <Button size="sm" disabled={settings.isFetching} onClick={() => void settings.refetch()}>
-          Refresh
-        </Button>
       </div>
+      {settings.isError ||
+      (settings.data && FEATURE_SWITCHES.some((item) => typeof settings.data.features?.[item.flag] !== "boolean")) ? (
+        <Button size="sm" className="mt-3" disabled={settings.isFetching} onClick={() => void settings.refetch()}>
+          Try again
+        </Button>
+      ) : null}
       {FEATURE_SWITCHES.map((definition) => (
         <FeatureSwitchControl key={definition.flag} definition={definition} settings={settings} />
       ))}
@@ -129,7 +132,8 @@ export function FeatureSwitchControl({
       <GovernedSettingLoadState
         governed={governed}
         loading="Loading features…"
-        incomplete="GoatCitadel did not report this setting. Refresh, or update GoatCitadel, before changing it."
+        incomplete="GoatCitadel did not report this setting. Try again, or update GoatCitadel, before changing it."
+        tryAgain={false}
       />
       {ready ? (
         <>

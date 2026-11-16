@@ -2,6 +2,7 @@ import type {
   CalendarCreateEventInput,
   CalendarListQuery,
   ChannelCapabilities,
+  ChannelDroppedSendersResponse,
   ChannelTargetDirectory,
   ChannelTargetResolution,
   ChannelReactInput,
@@ -107,6 +108,14 @@ export async function createChannelSetupDraft(input: ChannelSetupDraftCreateInpu
 
 export async function fetchChannelSetupDraft(draftId: string): Promise<ChannelSetupDraft> {
   return request<ChannelSetupDraft>(`/api/v1/channels/drafts/${encodeURIComponent(draftId)}`, { cache: "no-store" });
+}
+
+/** The senders a channel connection turned away lately: a short in-memory list the Gateway keeps, never cached. */
+export async function fetchChannelDroppedSenders(connectionId: string): Promise<ChannelDroppedSendersResponse> {
+  return request<ChannelDroppedSendersResponse>(
+    `/api/v1/channels/connections/${encodeURIComponent(connectionId)}/dropped-senders`,
+    { cache: "no-store" },
+  );
 }
 
 export async function reviewChannelSetupConnection(

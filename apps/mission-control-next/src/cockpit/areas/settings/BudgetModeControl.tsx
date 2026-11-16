@@ -1,10 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
-import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { Button } from "../../ui/Button";
 import { Field } from "../../ui/Field";
 import { cockpitInputClass } from "../../ui/input-class";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { useGovernedSettingsQuery } from "./governed-settings-query";
 import { useGovernedRuntimeSetting } from "./use-governed-runtime-setting";
 import {
   GovernedSettingChangeStatus,
@@ -32,11 +32,7 @@ function isBudgetMode(value: unknown): value is BudgetMode {
 }
 
 export function BudgetModeControl() {
-  const query = useQuery({
-    queryKey: ["system", "settings-budget-mode"],
-    queryFn: fetchSettings,
-    refetchInterval: 60_000,
-  });
+  const query = useGovernedSettingsQuery();
   const governed = useGovernedRuntimeSetting<BudgetMode>({
     settings: query,
     draftKey: "budget:system:mode",
@@ -70,14 +66,11 @@ export function BudgetModeControl() {
             A saved preference for how much to spend on models. This is not a dollar limit.
           </p>
         </div>
-        <Button size="sm" disabled={settings.isFetching || governed.busy} onClick={governed.refresh}>
-          Refresh
-        </Button>
       </div>
       <GovernedSettingLoadState
         governed={governed}
         loading="Loading budget preference…"
-        incomplete="GoatCitadel returned an incomplete budget setting. Refresh the current setting before changing this preference."
+        incomplete="GoatCitadel returned an incomplete budget setting. Try again to read the current setting before changing this preference."
       />
       {ready ? (
         <>
@@ -115,6 +108,13 @@ export function BudgetModeControl() {
               </div>
             ))}
           </dl>
+          <NativeOwnerLink
+            href="/system/spend"
+            scope="budget-mode"
+            className="mt-2 inline-block text-sm font-medium text-accent hover:underline"
+          >
+            See what you spent in System › Spend
+          </NativeOwnerLink>
           <GovernedSettingDraftState
             governed={governed}
             unsaved="Unsaved preference draft"

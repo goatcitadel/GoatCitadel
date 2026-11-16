@@ -1,7 +1,7 @@
 import { useLibraryOperation } from "./use-library-operation";
 import { LibraryMemoryBatch } from "./LibraryMemoryBatch";
-import { lazy, Suspense, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
@@ -16,14 +16,15 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import {
   KNOWN_MEMORY_NAMESPACES,
   memoryNamespaceLabel,
-  memoryScopeLabel,
+  memoryOwnerLabel,
   presentMemoryLifecycle,
 } from "./library-vocabulary";
 import { Sheet } from "../../ui/Sheet";
-import { LIBRARY_SECTION_LABELS } from "./library-sections";
+import { LIBRARY_SEARCH_DEBOUNCE_MS, LIBRARY_SECTION_LABELS } from "./library-sections";
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { EmptyState } from "../../ui/EmptyState";
+import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 
 const Diagnostics = lazy(() =>
   import("./LibraryMemoryDiagnostics").then((module) => ({ default: module.LibraryMemoryDiagnostics })),
@@ -35,6 +36,7 @@ export function LibraryMemoryWorkspace(props: { workspaceId: string; citadelId: 
 function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; citadelId: string }) {
   const access = useLibraryOperation(JSON.stringify(["memory-directory", workspaceId, citadelId]));
   const route = useCockpitRoute();
+  const workspaceName = useWorkspaceNameLookup(citadelId);
   const [namespace, setNamespace] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [diagnostics, setDiagnostics] = useState(false);
@@ -44,6 +46,16 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
     [filter, setFilter] = useState(""),
     [status, setStatus] = useState("active");
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  // One live search pattern: typing searches after a short pause; Enter searches at once.
+  useEffect(() => {
+    const next = filter.trim();
+    if (next === query) return;
+    const timer = window.setTimeout(() => {
+      setCursors([undefined]);
+      setQuery(next);
+    }, LIBRARY_SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [filter, query]);
   const list = useQuery({
     queryKey: ["library", "memory", workspaceId, citadelId, query, status, namespace, cursors.at(-1), access.identity],
     queryFn: () =>
@@ -68,7 +80,10 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
     ]),
   ];
   const stalePage = Boolean(list.error && describeApiError(list.error).category === "conflict");
+  const client = useQueryClient();
   function reloadDirectory() {
+    // The proposals section may be hidden while it has no rows, so this button is also its refresh.
+    void client.invalidateQueries({ queryKey: ["library", "memory-proposals", workspaceId] });
     if (cursors.length > 1) setCursors([undefined]);
     else void list.refetch();
   }
@@ -113,17 +128,22 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
       {nothingRemembered ? (
         <EmptyState
           title="No active memories"
-          description="Memories appear here after you approve a memory write from Chat or promote a proposal below. Forgotten memories are listed under all statuses."
+          description="Memories appear here after you approve a memory write from Chat or promote a suggested proposal, which then shows here. Forgotten memories are listed under all statuses."
           action={
-            <Button
-              size="sm"
-              onClick={() => {
-                setStatus("all");
-                setCursors([undefined]);
-              }}
-            >
-              Show all statuses
-            </Button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => {
+                  setStatus("all");
+                  setCursors([undefined]);
+                }}
+              >
+                Show all statuses
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setDiagnostics(true)}>
+                Open memory diagnostics and maintenance
+              </Button>
+            </div>
           }
         />
       ) : (
@@ -133,14 +153,14 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
             onSubmit={(event) => {
               event.preventDefault();
               setCursors([undefined]);
-              setQuery(filter);
+              setQuery(filter.trim());
             }}
           >
             <Field label="Search memory">
               {(props) => (
                 <input
                   {...props}
-                  className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
+                  className="min-w-0 w-full max-w-full rounded-md border border-line-control bg-raised p-2"
                   value={filter}
                   onChange={(event) => setFilter(event.target.value)}
                 />
@@ -150,7 +170,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
               {(props) => (
                 <select
                   {...props}
-                  className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
+                  className="min-w-0 w-full max-w-full rounded-md border border-line-control bg-raised p-2"
                   value={status}
                   onChange={(event) => {
                     setStatus(event.target.value);
@@ -167,7 +187,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
               {(props) => (
                 <select
                   {...props}
-                  className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
+                  className="min-w-0 w-full max-w-full rounded-md border border-line-control bg-raised p-2"
                   value={namespace}
                   onChange={(event) => {
                     setNamespace(event.target.value);
@@ -183,7 +203,6 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
                 </select>
               )}
             </Field>
-            <Button type="submit">Apply memory filter</Button>
           </form>
           {rows.length || selected.length ? (
             <LibraryMemoryBatch
@@ -246,7 +265,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
                 {" · "}
                 {memoryNamespaceLabel(resource.item.namespace)}
                 {" · "}
-                {memoryScopeLabel(resource.item, workspaceId)}
+                {memoryOwnerLabel(resource.item, workspaceId, workspaceName)}
               </p>
               <TechnicalDetails label="Memory identifiers">
                 <p>Item ID: {resource.item.itemId}</p>
@@ -276,15 +295,17 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
           </Button>
         </div>
       ) : null}
-      <div>
-        <Button onClick={() => setDiagnostics(true)}>Open memory diagnostics and maintenance</Button>
-      </div>
+      {nothingRemembered ? null : (
+        <div>
+          <Button onClick={() => setDiagnostics(true)}>Open memory diagnostics and maintenance</Button>
+        </div>
+      )}
       {diagnostics ? (
         <Suspense fallback={<p role="status">Loading memory diagnostics…</p>}>
           <Diagnostics workspaceId={workspaceId} />
         </Suspense>
       ) : null}
-      <LibraryMemoryProposals workspaceId={workspaceId} />
+      <LibraryMemoryProposals workspaceId={workspaceId} hideWhenEmpty={nothingRemembered} />
     </section>
   );
 }

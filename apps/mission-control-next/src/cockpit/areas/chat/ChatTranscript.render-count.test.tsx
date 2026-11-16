@@ -28,6 +28,9 @@ vi.mock("./ChatTurnDetails", () => ({
   },
 }));
 
+// Save as skill shows its block only on request; this test pins what a shown block costs when the draft changes.
+vi.mock("./chat-skill-capture", () => ({ skillCaptureVisibility: () => "shown" }));
+
 vi.mock("../../../features/native-routes/library/WorkflowSkillCaptureControl", () => ({
   WorkflowSkillCaptureControl: ({ draftEmpty }: { draftEmpty: boolean }) => (
     <span data-skill-capture>{draftEmpty ? "empty" : "drafting"}</span>

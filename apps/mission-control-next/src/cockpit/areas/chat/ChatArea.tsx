@@ -3,12 +3,12 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { useQuery } from "@tanstack/react-query";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { fetchOnboardingState } from "@goatcitadel/mission-control-shared/api/client";
-import {
-  MissionThreadedControllerHost,
-  type MissionThreadedRenderSurfaceInput,
-} from "@goatcitadel/threaded-surface-core";
+import { MissionThreadedControllerHost } from "@goatcitadel/threaded-surface-core";
+import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
 import { ChatConversationsSheet } from "./ChatConversationsSheet";
+import { unsentConversationId } from "./conversation-reuse";
 import { ChatEmptyState, ChatSessionHeader, ChatSetupGate } from "./ChatAreaChrome";
+import { CHAT_SHELL_FRAME } from "./ChatHostStatus";
 import { ChatTranscript } from "./ChatTranscript";
 import { ChatNoticeText } from "./ChatNoticeText";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
@@ -64,9 +64,7 @@ export function ChatArea({
         workspaceId={activeWorkspaceId ?? "default"}
         getChatApprovalModeIntent={getChatApprovalModeIntent}
         surface="chat"
-        lockSurface
-        hidePageHeader
-        renderWhileLoading
+        {...CHAT_SHELL_FRAME}
         secondaryEvidenceEnabled={inspectorSource === "chat"}
         restorePinnedGoal={false}
         routeSearch={search}
@@ -209,6 +207,7 @@ export function ChatAreaView({
     if (turnId) active?.onSelectTurn(turnId);
     open({
       source: "chat",
+      focusOnOpen: true,
       title: "Conversation",
       body: (
         <DeferredChatInspector
@@ -298,6 +297,7 @@ export function ChatAreaView({
         projectOptions={input.contextDockProps?.projectOptions}
         onOpenProjects={openProjects}
         messaging={messaging}
+        unsentSessionId={unsentConversationId(active)}
       />
       <ChatConversationsSheet
         open={conversationsOpen}
@@ -306,6 +306,7 @@ export function ChatAreaView({
         projectOptions={input.contextDockProps?.projectOptions}
         onOpenProjects={openProjects}
         messaging={messaging}
+        unsentSessionId={unsentConversationId(active)}
       />
       <ChatMainColumn messaging={messagingView(rest, search)} channelConversation={isChannelConversation(session)}>
         <ChatSessionHeader

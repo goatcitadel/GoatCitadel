@@ -26,9 +26,14 @@ export function MobileStatusStrip({
   const { Icon: StreamIcon, text: streamText } = stream;
   return (
     <div aria-label="System status" role="group" className="grid gap-1 border-b border-line-subtle pb-2">
-      <div title={health.title} data-health-tone={health.tone} className={`${ROW} text-sm text-fg`}>
+      <div data-health-tone={health.tone} className={`${ROW} text-sm text-fg`}>
         <HealthIcon aria-hidden="true" className={`size-4 shrink-0 ${healthText}`} />
-        <span className="min-w-0 flex-1">{health.label}</span>
+        <span className="min-w-0 flex-1">
+          {health.label}
+          {health.title && health.title !== health.label ? (
+            <span className="block text-xs text-fg-muted">{health.title}</span>
+          ) : null}
+        </span>
         {health.phase === "unavailable" ? (
           <button
             type="button"

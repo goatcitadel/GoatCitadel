@@ -4,6 +4,9 @@ import { LibraryResourceDetail } from "../areas/library/LibraryResourceDetail";
 import type { LibraryResource } from "../areas/library/library-resources";
 import type { PaletteObject, PaletteScope, PaletteSearchGroup } from "./command-palette-search";
 
+/** Every palette group's heading is padded like its items, so headings and items share a left edge. */
+export const PALETTE_GROUP_CLASS = "text-xs text-fg-muted [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1";
+
 export const PALETTE_ITEM_CLASS = "cursor-pointer rounded-sm px-3 py-2 text-sm text-fg data-[disabled=true]:opacity-60";
 
 export function CommandPaletteResults({
@@ -16,11 +19,7 @@ export function CommandPaletteResults({
   return groups
     .filter((group) => group.items.length > 0)
     .map((group) => (
-      <Command.Group
-        key={group.id}
-        heading={group.label}
-        className="py-2 text-xs text-fg-muted [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-1"
-      >
+      <Command.Group key={group.id} heading={group.label} className={`py-2 ${PALETTE_GROUP_CLASS}`}>
         {group.items.map((item) => (
           <Command.Item
             key={item.id}

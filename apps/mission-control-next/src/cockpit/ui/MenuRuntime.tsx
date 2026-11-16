@@ -1,12 +1,13 @@
 import { DropdownMenu } from "radix-ui";
 import { forwardRef, type ComponentPropsWithoutRef, type ComponentRef } from "react";
 import { cn } from "../lib/cn";
+import { NoFocusTooltips } from "./tooltip-focus";
 export const Root = DropdownMenu.Root;
 export const Trigger = DropdownMenu.Trigger;
 export const Content = forwardRef<
   ComponentRef<typeof DropdownMenu.Content>,
   ComponentPropsWithoutRef<typeof DropdownMenu.Content>
->(function Content({ className, ...props }, ref) {
+>(function Content({ className, children, ...props }, ref) {
   return (
     <DropdownMenu.Portal>
       <DropdownMenu.Content
@@ -14,7 +15,9 @@ export const Content = forwardRef<
         sideOffset={6}
         className={cn("z-60 min-w-48 rounded-md border border-line bg-overlay p-1 shadow-overlay", className)}
         {...props}
-      />
+      >
+        <NoFocusTooltips>{children}</NoFocusTooltips>
+      </DropdownMenu.Content>
     </DropdownMenu.Portal>
   );
 });

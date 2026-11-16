@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => {
     execFile: vi.fn(),
     execFileSync: vi.fn(),
     isBundledPostgresMode: vi.fn(),
+    tcpPortAcceptsConnections: vi.fn(),
     resolveGatewayPostgresConnectionOptions: vi.fn(),
     FakePostgresDatabaseClient,
   };
@@ -63,6 +64,10 @@ vi.mock("@goatcitadel/storage", () => ({
   PostgresDatabaseClient: mocks.FakePostgresDatabaseClient,
 }));
 
+vi.mock("./bundled-postgres-port-probe.js", () => ({
+  tcpPortAcceptsConnections: mocks.tcpPortAcceptsConnections,
+}));
+
 vi.mock("./postgres-runtime-config.js", () => ({
   AUTO_NATIVE_BIN_DIR: "auto",
   isBundledPostgresMode: mocks.isBundledPostgresMode,
@@ -74,7 +79,7 @@ import {
   buildBundledDockerContainerName,
   ensureBundledPostgresRuntime,
 } from "./bundled-postgres-runtime.js";
-import { NonRetryableStartupError } from "./startup-errors.js";
+import { NonRetryableStartupError, readOperatorSummary } from "./startup-errors.js";
 
 const tempDirs: string[] = [];
 let savedPathEnv: string | undefined;
@@ -89,6 +94,9 @@ beforeEach(() => {
   mocks.dockerStates.length = 0;
   mocks.execFile.mockReset();
   mocks.execFileSync.mockReset();
+  // Never touch a real local port: a real bundled database may be listening on 45432.
+  mocks.tcpPortAcceptsConnections.mockReset();
+  mocks.tcpPortAcceptsConnections.mockResolvedValue(false);
   mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
     if (command === "docker" && args[0] === "info") {
       return "";
@@ -354,6 +362,76 @@ describe("bundled postgres runtime lifecycle", () => {
     await expect(action).rejects.toThrow("bundledPostgres.binDir");
     await expect(action).rejects.toThrow('postgres.mode to "managed"');
     await expect(action).rejects.toThrow('driver to "sqlite"');
+  });
+
+  it("fails fast with a plain reason when another program holds the port (U-FR-015)", async () => {
+    const rootDir = await makeTempDir();
+    mocks.dbScripts.push({ queryOne: new Error("ECONNREFUSED") });
+    mocks.tcpPortAcceptsConnections.mockResolvedValue(true);
+
+    const action = ensureBundledPostgresRuntime(buildConfig(rootDir));
+
+    await expect(action).rejects.toBeInstanceOf(NonRetryableStartupError);
+    await expect(action).rejects.toThrow("GOATCITADEL_BUNDLED_POSTGRES_PORT");
+    await expect(action).rejects.toSatisfy(
+      (error) =>
+        readOperatorSummary(error) ===
+        __bundledPostgresRuntimeInternals.bundledPostgresOperatorSummary("port_held", 45432),
+    );
+    // Detect and report only: nothing was started, stopped or freed.
+    expect(mocks.execFile).not.toHaveBeenCalled();
+  });
+
+  it("does not call the port held when this root's named container is running but its mount path differs", async () => {
+    const rootDir = await makeTempDir();
+    // The name lookup says running; the mount lookup finds nothing (another path form).
+    mocks.dockerStates.push("running", "running");
+    mocks.dbScripts.push({ queryOne: new Error("ECONNREFUSED") });
+    mocks.tcpPortAcceptsConnections.mockResolvedValue(true);
+
+    const action = ensureBundledPostgresRuntime(buildConfig(rootDir, { startTimeoutMs: 50 }));
+
+    // Whatever the start then does, it is not refused as another program holding the port.
+    await action.catch(() => undefined);
+    await expect(action).rejects.not.toSatisfy((error) => readOperatorSummary(error)?.includes("another program"));
+  });
+
+  it("does not call the port held while this root's named container is still starting or just stopped", async () => {
+    const rootDir = await makeTempDir();
+    mocks.dockerStates.push("exited", "exited");
+    mocks.dbScripts.push({ queryOne: new Error("ECONNREFUSED") });
+    mocks.tcpPortAcceptsConnections.mockResolvedValue(true);
+
+    const action = ensureBundledPostgresRuntime(buildConfig(rootDir, { startTimeoutMs: 50 }));
+
+    await action.catch(() => undefined);
+    await expect(action).rejects.not.toSatisfy((error) => readOperatorSummary(error)?.includes("another program"));
+  });
+
+  it("does not call the port held when a postmaster.pid is left in this install's data directory", async () => {
+    const rootDir = await makeTempDir();
+    const dataDir = path.resolve(rootDir, "data", "postgres");
+    await fs.mkdir(dataDir, { recursive: true });
+    // A pid that is not alive (for example one that lived inside a container).
+    await fs.writeFile(path.join(dataDir, "postmaster.pid"), "2147483646\n", "utf8");
+    mocks.dbScripts.push({ queryOne: new Error("ECONNREFUSED") });
+    mocks.tcpPortAcceptsConnections.mockResolvedValue(true);
+
+    const action = ensureBundledPostgresRuntime(buildConfig(rootDir, { startTimeoutMs: 50 }));
+
+    await action.catch(() => undefined);
+    await expect(action).rejects.not.toSatisfy((error) => readOperatorSummary(error)?.includes("another program"));
+  });
+
+  it("still calls the port held for a foreign holder when no container of this root's name exists", async () => {
+    const rootDir = await makeTempDir();
+    mocks.dockerRunningNames.push("goatcitadel-postgres-someone-else");
+    mocks.dbScripts.push({ queryOne: new Error("ECONNREFUSED") });
+    mocks.tcpPortAcceptsConnections.mockResolvedValue(true);
+
+    const action = ensureBundledPostgresRuntime(buildConfig(rootDir));
+
+    await expect(action).rejects.toSatisfy((error) => readOperatorSummary(error)?.includes("another program"));
   });
 
   it("auto-discovers a local PostgreSQL install for a fresh data directory instead of using Docker", async () => {

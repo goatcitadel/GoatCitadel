@@ -54,6 +54,7 @@ const appMocks = vi.hoisted(() => ({
 vi.mock("@goatcitadel/mission-control-shared/api/shell-client", () => ({
   connectEventStream: appMocks.connectEventStream,
   consumeGatewayAccessBootstrapFromLocation: appMocks.consumeGatewayAccessBootstrapFromLocation,
+  readStoredGatewayAuthState: vi.fn(),
   fetchWorkspaces: appMocks.fetchWorkspaces,
   getGatewayApiBaseUrl: appMocks.getGatewayApiBaseUrl,
   preflightGatewayAccess: appMocks.preflightGatewayAccess,

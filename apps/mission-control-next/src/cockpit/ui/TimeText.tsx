@@ -17,13 +17,7 @@ export function TimeText({
   className?: string;
 }) {
   const time = presentTime(value);
-  if (!time)
-    return (
-      <span className={className}>
-        {prefix ? `${prefix} · ` : ""}
-        {TIME_UNAVAILABLE}
-      </span>
-    );
+  if (!time) return <span className={className}>{prefix ? `${prefix} at an unknown time` : TIME_UNAVAILABLE}</span>;
   return (
     <time dateTime={time.dateTime} title={time.title} className={className}>
       {prefix ? `${prefix} ` : ""}

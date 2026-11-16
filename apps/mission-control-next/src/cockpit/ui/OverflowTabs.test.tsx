@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { OverflowTabs } from "./OverflowTabs";
+import { OverflowTabs, nearestScrollLeft } from "./OverflowTabs";
 
 const media = vi.hoisted(() => ({ phone: false }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({ useMediaQuery: () => media.phone }));
@@ -39,6 +39,21 @@ it("keeps the tabs as named links and marks the side that hides more tabs", asyn
   expect(nav.hasAttribute("data-overflow-start")).toBe(false);
   await act(async () => (nav.querySelector('a[href="/work"]') as HTMLAnchorElement).click());
   expect(navigate).toHaveBeenCalledWith("/work");
+});
+
+it("never calls scrollIntoView, so the first Tab still starts at the top of the page (U-GL-046)", async () => {
+  const scrollIntoView = vi.fn();
+  Element.prototype.scrollIntoView = scrollIntoView;
+  await act(async () =>
+    root.render(<OverflowTabs label="Work views" tabs={tabs} current="history" navigate={vi.fn()} />),
+  );
+  expect(scrollIntoView).not.toHaveBeenCalled();
+});
+
+it("brings the current tab into view by setting the row's scroll position", () => {
+  expect(nearestScrollLeft({ scrollLeft: 0, clientWidth: 300 }, { offsetLeft: 420, offsetWidth: 80 })).toBe(200);
+  expect(nearestScrollLeft({ scrollLeft: 200, clientWidth: 300 }, { offsetLeft: 40, offsetWidth: 80 })).toBe(40);
+  expect(nearestScrollLeft({ scrollLeft: 100, clientWidth: 300 }, { offsetLeft: 150, offsetWidth: 80 })).toBe(100);
 });
 
 const many = Array.from({ length: 8 }, (_, index) => ({

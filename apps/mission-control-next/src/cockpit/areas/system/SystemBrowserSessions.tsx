@@ -9,6 +9,7 @@ import { useSessionDraft } from "../../../features/native-routes/library/session
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
+import { EmptyState } from "../../ui/EmptyState";
 import { Field } from "../../ui/Field";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { useLibraryOperation } from "../library/use-library-operation";
@@ -170,7 +171,15 @@ function BrowserSessionsWorkspace({ workspaceId }: { workspaceId: string }) {
             {list.isPending ? <p role="status">Reading browser sessions…</p> : null}
             {list.error ? <Callout tone="error">{describeApiError(list.error).summary}</Callout> : null}
             {list.data && !sessions.length ? (
-              <p className="text-sm text-fg-muted">No browser sessions match this filter.</p>
+              filter === "all" ? (
+                <EmptyState
+                  headingLevel={3}
+                  title="No browser sessions"
+                  description="A session appears here when you create one with New browser session."
+                />
+              ) : (
+                <p className="text-sm text-fg-muted">No browser sessions match this filter.</p>
+              )
             ) : null}
             {(list.data?.length ?? 0) >= LIST_LIMIT ? (
               <p className="text-sm text-fg-secondary">

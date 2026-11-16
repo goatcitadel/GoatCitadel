@@ -16,6 +16,7 @@ import { TaskAssignmentControl } from "./TaskAssignmentControl";
 import { TaskDetailsEditor } from "./TaskDetailsEditor";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TimeText } from "../../ui/TimeText";
+import { useCockpitTitleDetail } from "../../app/cockpit-title-detail";
 import { TASK_ACTIVITY_LABELS, TASK_DELIVERABLE_LABELS, TASK_PRIORITY_LABELS } from "./work-vocabulary";
 import { ListLimitFooter, useListLimit } from "./WorkListLimit";
 
@@ -33,6 +34,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
     !taskQuery.isError && taskQuery.data && taskMatchesWorkspace(taskQuery.data, workspaceId)
       ? taskQuery.data
       : undefined;
+  useCockpitTitleDetail(task?.title);
   const activities = useQuery({
     queryKey: ["tasks", "work-task-activities", workspaceId, taskId],
     queryFn: () => fetchTaskActivities(taskId, workspaceId),

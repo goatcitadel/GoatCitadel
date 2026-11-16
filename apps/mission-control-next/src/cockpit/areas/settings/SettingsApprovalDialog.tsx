@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
@@ -12,6 +12,7 @@ import { ApprovalReviewSummary } from "../inbox/ApprovalReviewSummary";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { restoreFocusAfterClose } from "../../ui/focus-return";
 import { StatusBadge } from "../../ui/StatusBadge";
 
 // Approvals already offered in this app session, so a re-render or remount never reopens one the operator closed.
@@ -104,6 +105,25 @@ export function SettingsApprovalDialog({
   const pending = approval?.status === "pending";
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState<string>();
+  // Where focus was when the dialog opened, so a decision (which removes the Review button) hands it back to the setting.
+  const origin = useRef<{ opener: HTMLElement | null; region: HTMLElement | null }>({ opener: null, region: null });
+  // A decision was made and focus has not been handed back yet. The owner often drops this dialog from its own
+  // `onResolved`, so the unmount hands focus back too; whichever comes first does it, once.
+  const owed = useRef(false);
+  const returnFocus = () => {
+    if (!owed.current) return;
+    owed.current = false;
+    restoreFocusAfterClose(origin.current.opener, origin.current.region);
+  };
+  const returnFocusRef = useRef(returnFocus);
+  returnFocusRef.current = returnFocus;
+  useEffect(() => () => returnFocusRef.current(), []);
+  const rememberOrigin = () => {
+    owed.current = false;
+    const active = document.activeElement;
+    const opener = active instanceof HTMLElement && active !== document.body ? active : null;
+    origin.current = { opener, region: opener?.closest("section") ?? null };
+  };
   const reopenAsk = useSyncExternalStore(
     subscribeReopenAsks,
     () => reopenAsks.get(approvalId) ?? 0,
@@ -122,6 +142,7 @@ export function SettingsApprovalDialog({
   useEffect(() => {
     if (!pending || offered.has(approvalId)) return;
     offered.add(approvalId);
+    rememberOrigin();
     setOpen(true);
   }, [approvalId, pending, reopenAsk]);
 
@@ -142,7 +163,14 @@ export function SettingsApprovalDialog({
   const line = (value: unknown) => (typeof value === "string" && value.trim() ? value : undefined);
   return (
     <>
-      <Button size="sm" variant="primary" onClick={() => setOpen(true)}>
+      <Button
+        size="sm"
+        variant="primary"
+        onClick={() => {
+          rememberOrigin();
+          setOpen(true);
+        }}
+      >
         {reviewLabel}
       </Button>
       <Dialog
@@ -169,12 +197,14 @@ export function SettingsApprovalDialog({
             approval={approval}
             workspaceId={workspaceId}
             onResolved={() => {
+              owed.current = true;
               setOpen(false);
               settle();
               void fetchApproval(approvalId, readScope)
                 .then((record) => record.status)
                 .catch(() => undefined)
-                .then((status) => onResolved(status));
+                .then((status) => onResolved(status))
+                .finally(() => returnFocus());
             }}
             onInvalidated={(text) =>
               settle(text ?? "The approval changed. Review the refreshed record before deciding.")

@@ -25,6 +25,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { nameWithKind, WorkspaceSwitchOffer } from "../../app/WorkspaceSwitchOffer";
 import { workRunTitle } from "./work-board";
 import { RunEvidenceSections } from "./RunEvidenceSections";
+import { useCockpitTitleDetail } from "../../app/cockpit-title-detail";
 import { RunSignedReceipt } from "./RunSignedReceipt";
 import { WorkRunControls } from "./WorkRunControls";
 import { RunArtifacts } from "./RunArtifacts";
@@ -57,6 +58,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
     typeof recordedCost === "number" && Number.isFinite(recordedCost) && recordedCost >= 0
       ? formatMoney(recordedCost, { atLeast: true })
       : "Unknown";
+  useCockpitTitleDetail(run ? workRunTitle(run) : undefined);
   const ownerScope = JSON.stringify([workspaceId, runId]);
   const history = useListLimit(data?.durable?.timeline?.items ?? [], 12, "end");
   const runContextParams = new URLSearchParams(search);

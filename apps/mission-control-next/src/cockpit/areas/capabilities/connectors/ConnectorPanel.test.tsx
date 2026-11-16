@@ -372,12 +372,14 @@ describe("Connector panel", () => {
     expect(text()).not.toContain("Uses your web search settings");
   });
 
-  it("says a hidden connector is hidden here, with a link to the workspace's capabilities", async () => {
+  it("says a hidden connector is hidden here, and that changing it is not available", async () => {
     await renderPanel(LINEAR.id, [{ ...LINEAR, hiddenInWorkspace: true }]);
     expect(text()).toContain("The AI can't use it in this workspace");
     expect(text()).not.toContain("Ready to use");
-    const target = new URL(link("Change workspace capabilities")!.getAttribute("href")!, "http://cockpit.invalid");
-    expect(target.pathname + target.hash).toBe("/settings/citadel#workspace-capabilities");
+    expect(text()).toContain(
+      "This workspace hides it from the AI. Changing what a workspace hides is not available in this release.",
+    );
+    expect(link("Change workspace capabilities")).toBeUndefined();
   });
 
   it("wraps a long reason and keeps ids and hosts inside Technical details", async () => {

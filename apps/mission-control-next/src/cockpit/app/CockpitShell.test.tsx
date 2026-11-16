@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, StrictMode, useEffect } from "react";
+import { act, StrictMode, useEffect, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,8 @@ import { __resetFormDirtyRegistryForTests } from "../../features/native-routes/l
 import { CockpitNavigationProvider } from "./CockpitNavigationProvider";
 import { useCockpitNavigation } from "./cockpit-navigation-context";
 import { CockpitShell } from "./CockpitShell";
+import { commitCockpitNavigation } from "./cockpit-history";
+import { SHELL_HISTORY_POSITION } from "../../app/shell-transition";
 import { resolveCockpitCompatibility } from "./cockpit-compatibility";
 
 vi.mock("@goatcitadel/mission-control-shared/api/citadels", () => ({
@@ -44,9 +46,13 @@ vi.mock("./CommandPalette", async () => {
       ) : null,
   };
 });
-const libraryArea = vi.hoisted(() => ({ failure: null as Error | null }));
+const libraryArea = vi.hoisted(() => ({ failure: null as Error | null, redirectOnMount: false }));
 vi.mock("../areas/library/LibraryArea", () => ({
   LibraryArea: () => {
+    useEffect(() => {
+      // An area that tidies its own address as it mounts, as Capabilities does from its bare route.
+      if (libraryArea.redirectOnMount) commitCockpitNavigation("/library/memory", { replace: true });
+    }, []);
     if (libraryArea.failure) throw libraryArea.failure;
     return <p>Library content</p>;
   },
@@ -56,7 +62,7 @@ vi.mock("../areas/capabilities/CapabilitiesArea", () => ({
 }));
 import { useGatewayUnavailable } from "./gateway-unavailable-context";
 // No other test here visits Chat, so a stub keeps the failure test off the network.
-const chatArea = vi.hoisted(() => ({ failure: null as Error | null, effects: 0 }));
+const chatArea = vi.hoisted(() => ({ failure: null as Error | null, effects: 0, composer: false }));
 vi.mock("../areas/chat/ChatArea", () => ({
   ChatArea: () => {
     useEffect(() => {
@@ -65,9 +71,17 @@ vi.mock("../areas/chat/ChatArea", () => ({
         chatArea.effects--;
       };
     }, []);
+    const composer = useRef<HTMLTextAreaElement>(null);
+    useEffect(() => {
+      // The real composer focuses itself once it has loaded; a zero timer stands in for that.
+      if (!chatArea.composer) return;
+      const timer = setTimeout(() => composer.current?.focus(), 0);
+      return () => clearTimeout(timer);
+    }, []);
     if (chatArea.failure) throw chatArea.failure;
     return (
       <>
+        {chatArea.composer ? <textarea ref={composer} id="cockpit-chat-draft" aria-label="Message" /> : null}
         <p>Chat content</p>
         <p data-chat-gateway-unavailable>{String(useGatewayUnavailable())}</p>
         <input aria-label="Retained conversation draft" defaultValue="Draft" />
@@ -420,6 +434,131 @@ describe("CockpitShell", () => {
     expect(document.title).not.toBe("GoatCitadel Mission Control Next");
     await act(async () => root.render(<></>));
     expect(document.title).toBe("Before");
+    client.clear();
+  });
+  it("moves focus to the main region when the area changes and focus is outside it (U-GL-025)", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <CockpitShell />
+        </QueryClientProvider>,
+      ),
+    );
+    container.querySelector<HTMLElement>('nav[aria-label="Areas"] a[href]')!.focus();
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "g" }));
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "l" }));
+    });
+    expect(window.location.pathname).toBe("/library");
+    expect(document.activeElement?.id).toBe("main-content");
+    client.clear();
+  });
+  async function renderShell() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <CockpitShell />
+        </QueryClientProvider>,
+      ),
+    );
+    return client;
+  }
+  const goToLibrary = () =>
+    act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "g" }));
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "l" }));
+    });
+  it("leaves focus alone when it is already inside the page (U-GL-025)", async () => {
+    const client = await renderShell();
+    const inside = document.createElement("button");
+    inside.type = "button";
+    document.getElementById("main-content")!.appendChild(inside);
+    inside.focus();
+    await goToLibrary();
+    expect(window.location.pathname).toBe("/library");
+    expect(document.activeElement).toBe(inside);
+    inside.remove();
+    client.clear();
+  });
+  it("ends on the composer when the new page focuses it itself", async () => {
+    chatArea.composer = true;
+    const client = await renderShell();
+    container.querySelector<HTMLElement>('nav[aria-label="Areas"] a[href]')!.focus();
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "g" }));
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "c" }));
+    });
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(window.location.pathname).toBe("/chat");
+    expect(document.activeElement?.id).toBe("cockpit-chat-draft");
+    chatArea.composer = false;
+    client.clear();
+  });
+  it("waits for a closing dialog, then moves focus to the page and not to the dialog's trigger", async () => {
+    const client = await renderShell();
+    const trigger = container.querySelector<HTMLElement>('nav[aria-label="Areas"] a[href]')!;
+    trigger.focus();
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.tabIndex = -1;
+    document.body.appendChild(dialog);
+    dialog.focus();
+    await goToLibrary();
+    expect(window.location.pathname).toBe("/library");
+    expect(document.activeElement).toBe(dialog);
+    // The layer closes and hands focus back to what opened it, as a closing dialog does.
+    dialog.remove();
+    trigger.focus();
+    await vi.waitFor(() => expect(document.activeElement?.id).toBe("main-content"));
+    client.clear();
+  });
+  it("still moves focus when the new area replaces its own address as it mounts", async () => {
+    libraryArea.redirectOnMount = true;
+    const client = await renderShell();
+    container.querySelector<HTMLElement>('nav[aria-label="Areas"] a[href]')!.focus();
+    await goToLibrary();
+    expect(window.location.pathname).toBe("/library/memory");
+    expect(document.activeElement?.id).toBe("main-content");
+    libraryArea.redirectOnMount = false;
+    client.clear();
+  });
+  it("moves focus to the page when Back crosses areas", async () => {
+    const client = await renderShell();
+    await goToLibrary();
+    container.querySelector<HTMLElement>('nav[aria-label="Areas"] a[href]')!.focus();
+    await act(async () => {
+      // The browser restores the earlier entry (its own number) before it fires popstate.
+      window.history.replaceState({ [SHELL_HISTORY_POSITION]: 0 }, "", "/inbox?shell=cockpit");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(window.location.pathname).toBe("/inbox");
+    expect(document.activeElement?.id).toBe("main-content");
+    client.clear();
+  });
+  it("does not move focus for a redirect that replaces the address (U-GL-025)", async () => {
+    const client = await renderShell();
+    const trigger = container.querySelector<HTMLElement>('nav[aria-label="Areas"] a[href]')!;
+    trigger.focus();
+    await act(async () => {
+      commitCockpitNavigation("/library", { replace: true });
+    });
+    expect(window.location.pathname).toBe("/library");
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 100)));
+    expect(document.activeElement).toBe(trigger);
+    client.clear();
+  });
+  it("does not move focus on the first page of a visit", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <CockpitShell />
+        </QueryClientProvider>,
+      ),
+    );
+    expect(document.activeElement).toBe(document.body);
     client.clear();
   });
   it("collapses to an accessible rail with Ctrl+B and preserves the route", async () => {

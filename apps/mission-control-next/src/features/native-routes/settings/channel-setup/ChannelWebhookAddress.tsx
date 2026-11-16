@@ -120,7 +120,7 @@ function SetPublicWebAddressLink() {
  * The public web address is read through a query client. The Cockpit has one. The Classic guide has none, so there the
  * read gets its own, started afresh when the gateway access changes so an address read under other access is never shown.
  */
-function WithQueryClient({ children }: { children: ReactNode }) {
+export function WithQueryClient({ children }: { children: ReactNode }) {
   const inherited = useContext(QueryClientContext);
   const accessRevision = useSyncExternalStore(subscribeGatewayAccessChange, getGatewayAccessRevision, () => 0);
   return inherited ? <>{children}</> : <OwnQueryClient key={accessRevision}>{children}</OwnQueryClient>;

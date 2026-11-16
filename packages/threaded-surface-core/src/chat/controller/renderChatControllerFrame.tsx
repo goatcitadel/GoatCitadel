@@ -21,6 +21,8 @@ import type { useMissionControlSurfaceState } from "../useMissionControlSurfaceS
 type Input = {
   lockSurface: NonNullable<MissionThreadedControllerHostProps["lockSurface"]>;
   renderWhileLoading: boolean;
+  /** True when the shell draws the host error and refresh state itself from `hostStatus`. */
+  ownsFrameStatus?: boolean;
   error: string | null;
   hidePageHeader: NonNullable<MissionThreadedControllerHostProps["hidePageHeader"]>;
   approvalsCount: NonNullable<MissionThreadedControllerHostProps["approvalsCount"]>;
@@ -98,6 +100,7 @@ type Input = {
 export function renderChatControllerFrame({
   lockSurface,
   renderWhileLoading,
+  ownsFrameStatus = false,
   error,
   hidePageHeader,
   approvalsCount,
@@ -128,6 +131,11 @@ export function renderChatControllerFrame({
     turnStatus: latestSelectedTurn?.trace?.status,
     assistantContent: latestSelectedTurn?.assistantMessage?.content,
   });
+  // The same plain sentence the frame prints itself, handed over so a shell can draw it with its own parts.
+  const hostStatus = {
+    error: error && !hostErrorAlreadyInThread ? describeApiErrorText(error).summary : null,
+    refreshing: sessionData.isRefreshing,
+  };
   const loadingFrame = sessionData.loading && !renderWhileLoading;
   // Keep the same confirmation owner mounted while the frame briefly displays its loading shell.
   const confirmations = (
@@ -232,9 +240,13 @@ export function renderChatControllerFrame({
         />
       ) : null}
       {/* Controllers keep only error.message, so an API failure arrives as "API error <status>: <json>"; say it plainly. */}
-      {error && !hostErrorAlreadyInThread ? <p className="error">{describeApiErrorText(error).summary}</p> : null}
-      {sessionData.isRefreshing ? <p className="status-banner">Refreshing chat context...</p> : null}
-      {renderSurface(threadedSurfaceInput)}
+      {error && !hostErrorAlreadyInThread && !ownsFrameStatus ? (
+        <p className="error">{describeApiErrorText(error).summary}</p>
+      ) : null}
+      {sessionData.isRefreshing && !ownsFrameStatus ? (
+        <p className="status-banner">Refreshing chat context...</p>
+      ) : null}
+      {renderSurface({ ...threadedSurfaceInput, hostStatus })}
       {confirmations}
     </section>
   );

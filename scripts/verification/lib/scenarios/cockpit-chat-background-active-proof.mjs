@@ -109,7 +109,8 @@ export async function runCockpitChatBackgroundActiveProof({ context, browser, st
         window.localStorage.setItem("goatcitadel.gateway.auth.storageMode", "session");
         window.sessionStorage.setItem("goatcitadel.gateway.auth", JSON.stringify({ mode: "token", token }));
       }, { theme, token: TOKEN });
-      await installMissionControlNextBrowserState(browserContext, scope.workspaceId, citadelId);
+      // The reviewed versions live in the dialog's Technical details, which the lane reads.
+      await installMissionControlNextBrowserState(browserContext, scope.workspaceId, citadelId, { showTechnicalDetails: true });
       page = await browserContext.newPage();
       page.on("request", request => {
         const pathname = new URL(request.url()).pathname;
@@ -186,7 +187,7 @@ export async function runCockpitChatBackgroundActiveProof({ context, browser, st
       const readReviewed = async () => {
         // The response may belong to a concurrently finishing poll. Bind the
         // actual frozen dialog versions, not that transport, to the live owner.
-        const shown = /Task version (\d+) · Watcher version (\d+)/.exec(await dialog.innerText());
+        const shown = /Task version (\d+) · Watcher version (\d+)/.exec(await dialog.textContent());
         assert.ok(shown, "The review must show its exact child and watcher versions.");
         current = await readBound();
         const reviewed = { ...current, watcherRevision: Number(shown[2]), childVersion: Number(shown[1]) };

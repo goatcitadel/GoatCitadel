@@ -74,11 +74,13 @@ function HealthCard({
   workspaceId,
   onRefresh,
   backupReadAvailable,
+  latestBackup,
 }: {
   check: HealthCheck;
   workspaceId: string;
   onRefresh: () => Promise<unknown>;
   backupReadAvailable: boolean;
+  latestBackup?: { createdAt: string; outputPath?: string } | null;
 }) {
   const Icon = ICONS[check.id];
   return (
@@ -100,11 +102,12 @@ function HealthCard({
       </SystemOwnerLink>
       {check.id === "remote_workers" ? (
         <p className="mt-2 text-xs text-fg-muted">
-          The workers page shows worker records, assignments and spending budgets. Enrollment and containment recovery
-          keep their existing runtime controls.
+          This release does not include live remote-worker status. The workers page lists saved worker records.
         </p>
       ) : null}
-      {check.id === "backups" ? <HealthBackupAction readAvailable={backupReadAvailable} onRefresh={onRefresh} /> : null}
+      {check.id === "backups" ? (
+        <HealthBackupAction readAvailable={backupReadAvailable} onRefresh={onRefresh} latestBackup={latestBackup} />
+      ) : null}
       {check.id === "models" ? <HealthLocalRuntimeActions workspaceId={workspaceId} onRefresh={onRefresh} /> : null}
     </article>
   );
@@ -141,13 +144,14 @@ export function HealthOverview() {
   return (
     <section className={AREA_PAGE}>
       <AreaHeader
-        title="System"
+        title="Health"
         description="Service status as each part of the system reports it, and what each check can confirm."
         actions={
           <Button
             size="sm"
             onClick={() => void health.refetch()}
-            disabled={health.isFetching || (health.isError && error.retryable === false)}
+            loading={health.isFetching}
+            disabled={health.isError && error.retryable === false}
           >
             <RefreshCw aria-hidden="true" className="size-4" /> Refresh<span className="sr-only"> system health</span>
           </Button>
@@ -211,6 +215,9 @@ export function HealthOverview() {
                     check={check}
                     workspaceId={workspaceId}
                     backupReadAvailable={sources.summary.state === "current" && !health.isFetching}
+                    latestBackup={
+                      sources.summary.state === "current" ? sources.summary.value.backups.latest : undefined
+                    }
                     onRefresh={() =>
                       Promise.all([
                         client.invalidateQueries({ queryKey: queryKeys.healthAll() }),

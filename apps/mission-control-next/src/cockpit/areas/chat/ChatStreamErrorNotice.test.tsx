@@ -57,4 +57,13 @@ describe("Chat stream error notice", () => {
       false,
     );
   });
+
+  it("says when another message is still being sent (U-CH-022)", async () => {
+    const raw =
+      "A chat turn write is already in progress for session session-1. Wait for the current agent-send to finish and retry.";
+    await act(async () => root.render(<ChatStreamErrorNotice error={raw} source="send" />));
+    expect(container.textContent).toContain("Another message is still being sent in this conversation.");
+    expect(container.textContent).not.toContain("The response was interrupted");
+    expect(container.querySelector("details")).toBeNull();
+  });
 });

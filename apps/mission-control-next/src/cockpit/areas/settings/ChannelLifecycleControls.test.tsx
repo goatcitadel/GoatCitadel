@@ -20,6 +20,14 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
   ...(await original<object>()),
   ...api,
 }));
+vi.mock("../../ui/TechnicalDetails", () => ({
+  TechnicalDetails: ({ children }: { children: React.ReactNode }) => (
+    <details>
+      <summary>Technical details</summary>
+      {children}
+    </details>
+  ),
+}));
 vi.mock("../../ui/Dialog", () => ({
   Dialog: ({ open, title, description, children }: ComponentProps<typeof Dialog>) =>
     open ? (
@@ -45,7 +53,13 @@ const missing = () =>
     status: 404,
     body: { code: "ENTITY_NOT_FOUND" },
   });
-const button = (name: string) => [...container.querySelectorAll("button")].find((item) => item.textContent === name)!;
+const dialog = () => container.querySelector("section[aria-label]");
+const buttonIn = (scope: ParentNode, name: string) =>
+  [...scope.querySelectorAll("button")].find((item) => item.textContent === name)!;
+/** A button that opens a review; it stays on the page while the dialog is open. */
+const opener = (name: string) => buttonIn(container, name);
+/** The dialog's own button while one is open (an opener may share its name), otherwise a button of the page. */
+const button = (name: string) => buttonIn(dialog() ?? container, name);
 async function click(name: string) {
   await act(async () => button(name).click());
 }
@@ -71,11 +85,11 @@ afterEach(async () => {
 });
 it("reviews, cancels, then verifies canonical deletion before success", async () => {
   await click("Delete saved draft");
-  await click("Keep current channel state");
+  await click("Keep draft");
   expect(api.discardChannelSetupDraft).not.toHaveBeenCalled();
   api.fetchChannelSetupDraft.mockResolvedValueOnce(draft).mockRejectedValueOnce(missing());
   await click("Delete saved draft");
-  await click("Apply reviewed channel change");
+  await click("Delete draft");
   expect(api.discardChannelSetupDraft).toHaveBeenCalledExactlyOnceWith("draft-1", 3);
   expect(reload).toHaveBeenCalledOnce();
   expect(container.textContent).toContain("Deleted. GoatCitadel confirmed it.");
@@ -83,17 +97,17 @@ it("reviews, cancels, then verifies canonical deletion before success", async ()
 it("rejects a changed revision before dispatch", async () => {
   api.fetchChannelSetupDraft.mockResolvedValue({ ...draft, revision: 4 });
   await click("Delete saved draft");
-  await click("Apply reviewed channel change");
+  await click("Delete draft");
   expect(api.discardChannelSetupDraft).not.toHaveBeenCalled();
   expect(container.textContent).toContain("could not be confirmed");
 });
 it("locks ambiguous canonical readback instead of allowing duplicate deletion", async () => {
   await click("Delete saved draft");
-  await click("Apply reviewed channel change");
+  await click("Delete draft");
   expect(api.discardChannelSetupDraft).toHaveBeenCalledOnce();
   expect(reload).not.toHaveBeenCalled();
   expect(container.textContent).toContain("Outcome uncertain");
-  expect(button("Delete saved draft").disabled).toBe(true);
+  expect(opener("Delete saved draft").disabled).toBe(true);
 });
 it("does not dispatch after caller handoff during preflight", async () => {
   let finish!: (value: ChannelSetupDraft) => void;
@@ -104,7 +118,7 @@ it("does not dispatch after caller handoff during preflight", async () => {
       }),
   );
   await click("Delete saved draft");
-  await click("Apply reviewed channel change");
+  await click("Delete draft");
   await act(async () => {
     setGatewayCallerScope("caller-b");
     finish(draft);
@@ -146,7 +160,7 @@ it.each(["disable", "delete"])("reviews and canonically confirms channel connect
     root.render(<ChannelLifecycleControls workspaceId="a" selection={{ connection }} reload={reload} />),
   );
   await click(action === "disable" ? "Review disable channel" : "Remove channel connection");
-  await click("Apply reviewed channel change");
+  await click(action === "disable" ? "Turn off channel" : "Remove channel connection");
   if (action === "disable")
     expect(api.updateIntegrationConnection).toHaveBeenCalledExactlyOnceWith(connection.connectionId, {
       expectedRevision: connection.revision,
@@ -200,4 +214,68 @@ it("does not claim the keys are deleted when only disabling", async () => {
 
   expect(container.textContent).not.toContain("deletes its keys");
   expect(container.querySelector('section[aria-label="Remove Fixture?"]')).toBeNull();
+});
+
+it.each([
+  [true, "Turn off Fixture?", "Turn off channel", "Keep it on"],
+  [false, "Turn on Fixture?", "Turn on channel", "Keep it off"],
+])(
+  "a toggle review for an enabled=%s channel says what happens and is not red (U-ST-006, U-MS-004)",
+  async (enabled, title, confirm, keep) => {
+    await act(async () =>
+      root.render(
+        <ChannelLifecycleControls
+          workspaceId="a"
+          selection={{ connection: { ...fixtureConnection, enabled } }}
+          reload={reload}
+        />,
+      ),
+    );
+    await click(enabled ? "Review disable channel" : "Review enable channel");
+
+    const dialog = container.querySelector(`section[aria-label="${title}"]`)!;
+    expect(dialog).not.toBeNull();
+    expect(button(confirm).className).not.toContain("border-status-failed");
+    expect(button(keep)).toBeTruthy();
+    // The revision sits inside Technical details and nowhere in the visible body of the dialog.
+    const details = dialog.querySelector("details")!;
+    expect(details.textContent).toMatch(/Reviewed version a{64}/);
+    const visible = dialog.cloneNode(true) as Element;
+    visible.querySelector("details")!.remove();
+    expect(visible.textContent).not.toMatch(/version/i);
+    expect(visible.textContent).not.toContain("a".repeat(64));
+  },
+);
+
+it("deleting a saved draft asks Delete this draft? with Delete draft and Keep draft (U-MS-004)", async () => {
+  await click("Delete saved draft");
+
+  expect(container.querySelector('section[aria-label="Delete this draft?"]')).not.toBeNull();
+  expect(button("Delete draft").className).toContain("border-status-failed");
+  expect(button("Keep draft")).toBeTruthy();
+});
+
+it("names the draft in the delete review (U-MS-004)", async () => {
+  await click("Delete saved draft");
+
+  expect(dialog()!.textContent).toContain("Reviewed channel");
+});
+
+it("keeps the review's words when the channel changes under an open dialog", async () => {
+  await renderConnection();
+  await click("Review disable channel");
+
+  await act(async () =>
+    root.render(
+      <ChannelLifecycleControls
+        workspaceId="a"
+        selection={{ connection: { ...fixtureConnection, enabled: false, revision: "b".repeat(64) } }}
+        reload={reload}
+      />,
+    ),
+  );
+
+  expect(container.querySelector('section[aria-label="Turn off Fixture?"]')).not.toBeNull();
+  expect(button("Turn off channel").disabled).toBe(true);
+  expect(dialog()!.textContent).toContain("The reviewed scope or record changed.");
 });

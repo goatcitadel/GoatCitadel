@@ -11,7 +11,7 @@ export type KnowledgeDraft = {
   query: string;
 };
 
-const INPUT = "min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2";
+const INPUT = "min-w-0 w-full max-w-full rounded-md border border-line-control bg-raised p-2";
 
 /** Namespace, source type, title and source body for a Knowledge ingest draft. */
 export function KnowledgeSourceFields({

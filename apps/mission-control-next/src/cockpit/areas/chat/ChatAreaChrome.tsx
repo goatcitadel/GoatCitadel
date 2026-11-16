@@ -5,6 +5,7 @@ import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-su
 import { PanelRight } from "lucide-react";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
+import { useCockpitTitleDetail } from "../../app/cockpit-title-detail";
 import { ChatSessionOverflow, ChatSessionTitle } from "./ChatSessionControls";
 import { SelectedThreadActivity } from "./SelectedThreadActivity";
 import { useChatOutageRecovery } from "./use-chat-outage-recovery";
@@ -12,6 +13,9 @@ import { useModelLabel } from "../../data/use-model-label";
 import { presentDelegationRunStatus } from "./chat-vocabulary";
 import { projectFirstRunState } from "../settings/first-run-state";
 import type { ChannelConversationContext } from "./channel-conversation";
+import { ChatHostStatus } from "./ChatHostStatus";
+import { startConversation } from "./conversation-reuse";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 
 type ActiveSession = MissionThreadedRenderSurfaceInput["activeSessionSurfaceProps"];
 
@@ -20,7 +24,16 @@ type ActiveSession = MissionThreadedRenderSurfaceInput["activeSessionSurfaceProp
  * in a sheet; Projects opens from the list's project filter. On a phone the row is only the title, Conversations and the actions menu, which also holds Projects and
  * New conversation, so the transcript keeps the screen; an open build editor keeps its visible way back.
  */
-export function ChatSessionHeader({
+export function ChatSessionHeader(props: Parameters<typeof ChatSessionHeaderRow>[0]) {
+  return (
+    <>
+      <ChatSessionHeaderRow {...props} />
+      <ChatHostStatus status={props.input.hostStatus} />
+    </>
+  );
+}
+
+function ChatSessionHeaderRow({
   input,
   active,
   session,
@@ -56,6 +69,7 @@ export function ChatSessionHeader({
     onDismissError: active?.onDismissError,
     onRefreshThread: active?.onRefreshThread,
   });
+  useCockpitTitleDetail(active?.sessionTitle);
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const rail = input.sessionRail;
   const createConversation = () => void rail.onCreateSession();
@@ -266,6 +280,13 @@ export function ChatEmptyState({
   /** Below the desktop rail the list is behind the header's Conversations button; the empty state offers it too. */
   onOpenConversations?: () => void;
 }) {
+  const { activeWorkspaceId } = useUiPreferences();
+  // Only a plain Recent list with nothing in it is a first conversation; a search or the archive that found nothing is not.
+  const first =
+    rail.historyView === "active" &&
+    !rail.search?.trim() &&
+    !rail.missionSessions.length &&
+    !rail.externalSessions?.length;
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-5 text-center">
       {rail.loading ? (
@@ -274,15 +295,24 @@ export function ChatEmptyState({
         </p>
       ) : (
         <>
-          <p className="text-lg font-semibold text-fg">Choose a conversation</p>
-          <p className="max-w-sm text-sm text-fg-secondary">Pick one from the list, or start a new conversation.</p>
+          <p className="text-lg font-semibold text-fg">
+            {first ? "Start your first conversation" : "Choose a conversation"}
+          </p>
+          <p className="max-w-sm text-sm text-fg-secondary">
+            {first
+              ? "Ask GoatCitadel anything. Your conversations will be listed here."
+              : "Pick one from the list, or start a new conversation."}
+          </p>
           <div className="flex flex-wrap justify-center gap-2">
             {onOpenConversations ? (
               <Button className="max-sm:h-11 md:hidden" onClick={onOpenConversations}>
                 Show conversations
               </Button>
             ) : null}
-            <Button onClick={() => void rail.onCreateSession()} disabled={rail.creatingSession}>
+            <Button
+              onClick={() => startConversation(rail, activeWorkspaceId ?? undefined)}
+              disabled={rail.creatingSession}
+            >
               {rail.creatingSession ? "Creating…" : "New conversation"}
             </Button>
           </div>

@@ -163,7 +163,7 @@ export function WorkBoard() {
   return (
     <section className={`${AREA_PAGE} min-h-full`}>
       <AreaHeader
-        title="Work"
+        title="Board"
         description="Workspace tasks and recent Chat or supervised plan runs."
         actions={
           <>

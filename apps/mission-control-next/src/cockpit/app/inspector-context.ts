@@ -4,6 +4,12 @@ export interface InspectorContent {
   title: string;
   body: ReactNode;
   source?: string;
+  /**
+   * Set only by an open the operator asked for by hand (a click or Enter on a row or an Inspect control): the docked
+   * or floating panel then takes focus once. An open from an address, a reload, a refetch or a list walk leaves focus
+   * where it is. The panel acts on it once per content, so an update of the same panel never moves focus again.
+   */
+  focusOnOpen?: boolean;
 }
 export interface InspectorApi {
   content: InspectorContent | null;

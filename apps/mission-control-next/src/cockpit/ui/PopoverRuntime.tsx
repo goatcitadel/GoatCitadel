@@ -1,12 +1,13 @@
 import { forwardRef, type ComponentPropsWithoutRef, type ComponentRef } from "react";
 import { Popover as PopoverPrimitive } from "radix-ui";
 import { cn } from "../lib/cn";
+import { NoFocusTooltips } from "./tooltip-focus";
 export const Root = PopoverPrimitive.Root;
 export const Trigger = PopoverPrimitive.Trigger;
 export const Content = forwardRef<
   ComponentRef<typeof PopoverPrimitive.Content>,
   ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(function Content({ className, ...props }, ref) {
+>(function Content({ className, children, ...props }, ref) {
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Content
@@ -19,7 +20,9 @@ export const Content = forwardRef<
           className,
         )}
         {...props}
-      />
+      >
+        <NoFocusTooltips>{children}</NoFocusTooltips>
+      </PopoverPrimitive.Content>
     </PopoverPrimitive.Portal>
   );
 });

@@ -33,8 +33,10 @@ export function useChannelSetupState(activeWorkspaceId: string) {
       definitions: definitions.data.items,
       drafts: drafts.data.items,
       connections: connections.data.items,
-      connectorDiagnosticsEnabled: typeof runtimeSettings.data?.features?.connectorDiagnosticsV1Enabled === "boolean"
-        ? runtimeSettings.data.features.connectorDiagnosticsV1Enabled : undefined,
+      connectorDiagnosticsEnabled:
+        typeof runtimeSettings.data?.features?.connectorDiagnosticsV1Enabled === "boolean"
+          ? runtimeSettings.data.features.connectorDiagnosticsV1Enabled
+          : undefined,
     };
   }, []);
   const { loading, error, data, reload, updateData } = useAsyncLoad(load, [load]);
@@ -167,11 +169,12 @@ export function useChannelSetupState(activeWorkspaceId: string) {
       (channelDraft.isDirty || JSON.stringify(valuesOverride ?? draftValues) !== JSON.stringify(selectedDraft.draft)),
     );
   const draftSelectionGuard = {
-    requestTransition: (id: string) =>
+    requestTransition: (id: string, onOpened?: () => void) =>
       leave.request(() => {
         setSelectedDraftId(id);
         setPanel("editor");
         setValidationResult(null);
+        onOpened?.();
       }),
   };
   const closePanel = () => leave.request(() => setPanel(null));

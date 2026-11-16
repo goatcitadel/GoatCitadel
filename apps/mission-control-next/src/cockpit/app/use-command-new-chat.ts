@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { createChatSession, fetchChatSessionStatus } from "@goatcitadel/mission-control-shared/api/chat";
+import { createChatSession } from "@goatcitadel/mission-control-shared/api/chat";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { assertPaletteWorkspace, type PaletteScope } from "./command-palette-search";
@@ -49,7 +49,7 @@ export function useCommandNewChat(scope: PaletteScope, open: boolean, onCreated:
     const pending: ChatSessionCreation = {
       state: "checking",
       mode: "chat",
-      message: "Verifying the selected workspace…",
+      message: "Checking the workspace…",
     };
     if (!beginChatSessionCreation(key, pending)) return;
     let dispatched = false;
@@ -60,7 +60,7 @@ export function useCommandNewChat(scope: PaletteScope, open: boolean, onCreated:
         return;
       }
       pending.state = "pending";
-      pending.message = "Creating one conversation…";
+      pending.message = "Creating the conversation…";
       publishChatSessionCreation(key, pending);
       dispatched = true;
       const created = await createChatSession(
@@ -69,20 +69,12 @@ export function useCommandNewChat(scope: PaletteScope, open: boolean, onCreated:
       );
       assertChatSessionCreated(created, scope.workspaceId);
       pending.sessionId = created.sessionId;
-      const saved = await fetchChatSessionStatus(created.sessionId, new AbortController().signal);
-      if (
-        getGatewayApiBaseUrl() !== installation ||
-        saved.sessionId !== created.sessionId ||
-        saved.workspaceId !== scope.workspaceId
-      )
-        throw new Error("The independent conversation read does not match the creation receipt.");
-      await assertPaletteWorkspace(scope);
       if (getGatewayApiBaseUrl() !== installation)
         throw new Error(
           "You switched to a different GoatCitadel installation, so the new conversation could not be confirmed.",
         );
       pending.state = "confirmed";
-      pending.message = "Conversation created and independently verified.";
+      pending.message = "Conversation created.";
       publishChatSessionCreation(key, pending);
     } catch (cause) {
       pending.state = dispatched ? "unknown" : "error";
@@ -95,9 +87,9 @@ export function useCommandNewChat(scope: PaletteScope, open: boolean, onCreated:
       try {
         (review?.onCreated ?? onCreated)(pending.sessionId);
       } catch {
-        // Presentation failure does not undo an independently verified creation.
-        pending.message =
-          "Conversation created and independently verified. Opening it failed; use Open created conversation.";
+        // Presentation failure does not undo a creation the Gateway confirmed.
+        pending.openFailed = true;
+        pending.message = "Conversation created, but it didn't open. Use Open created conversation.";
         publishChatSessionCreation(key, pending);
       }
     }

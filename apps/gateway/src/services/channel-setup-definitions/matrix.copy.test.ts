@@ -105,7 +105,7 @@ describe("Matrix setup guide: what it says up front (item 6, R48)", () => {
     // Ruling R49: the test posts a notice only when a Default room ID is set, so the audit's unconditional
     // "Check the test notice arrived" is made conditional.
     expect(paragraphs("first-message")).toEqual([
-      'If you set a Default room ID, check the test notice arrived in that room. To receive: turn on Receive messages, allow your Matrix ID (for example @alice:example.com), post in the room, and check the reply. If the bot doesn\'t answer your message, open System › Diagnostics, find "Dropped a Matrix message from …", and add that id under Who may message this bot with Edit setup.',
+      "If you set a Default room ID, check the test notice arrived in that room. To receive: turn on Receive messages, allow your Matrix ID (for example @alice:example.com), post in the room, and check the reply. If the bot doesn't answer your message, open Edit setup and go to Who may message this bot: the sender it turned away is listed there with a button to allow them.",
     ]);
   });
 
@@ -332,7 +332,7 @@ describe("Matrix setup guide: receiving (items 5 and 6, A7, A8)", () => {
 
   it("says the Matrix ID format a sender must be written in, and where to find it", () => {
     expect(field("allowedSenders").explanation).toBe(
-      'Your Matrix ID with the @ and the server, for example @alice:example.com. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
+      "Your Matrix ID with the @ and the server, for example @alice:example.com. Don't know the id? Finish setup and message the bot once. Then open Edit setup and come back to this step: the sender it turned away is listed here with a button to allow them.",
     );
   });
 

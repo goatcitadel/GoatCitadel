@@ -1,5 +1,6 @@
 import { KnowledgeFacadeService } from "./memory-facade-service.js";
 import { readKnowledgeApprovalResult } from "./knowledge-approval-result.js";
+import { listKnowledgeDocuments } from "./knowledge-document-list.js";
 import { SkillEvaluationService } from "./skill-evaluation-service.js";
 import { SkillHubOperatorService } from "./skill-hub-operator-service.js";
 import { KeychainEvidenceReceiptSigningKeyProvider } from "./evidence-receipt-signing-key.js";
@@ -89,6 +90,7 @@ export function composeMemoryKnowledgeRouteDependencies(
       knowledgeApprovalResult: (approvalId, input) => readKnowledgeApprovalResult(gateway, approvalId, input),
       knowledgeDocsIngest: (input) => knowledgeFacade.knowledgeDocsIngest(input),
       knowledgeEmbeddingsIndex: (input) => knowledgeFacade.knowledgeEmbeddingsIndex(input),
+      knowledgeListDocuments: (input) => listKnowledgeDocuments(gateway.storage.knowledge, input),
       knowledgeEmbeddingsQuery: (input) => knowledgeFacade.knowledgeEmbeddingsQuery(input),
       knowledgeMemorySearch: (input) => knowledgeFacade.knowledgeMemorySearch(input),
       knowledgeMemoryWrite: (input) => knowledgeFacade.knowledgeMemoryWrite(input),

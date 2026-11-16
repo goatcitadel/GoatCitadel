@@ -49,6 +49,11 @@ describe("shared API wrappers", () => {
       cache: "no-store",
     });
     await expectCall(
+      integrations.fetchChannelDroppedSenders("conn/1"),
+      "/api/v1/channels/connections/conn%2F1/dropped-senders",
+      { cache: "no-store" },
+    );
+    await expectCall(
       integrations.reviewChannelSetupConnection("draft/1", {
         expectedRevision: 3,
         expectedConnectionRevision: "a".repeat(64),

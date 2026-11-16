@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
-import { Button } from "../../ui/Button";
 import { FirecrawlSettings } from "./FirecrawlSettings";
 import { SearchEngineOrderControl } from "./SearchEngineOrderControl";
 import { WebSearchKeys } from "./WebSearchKeys";
@@ -28,9 +27,6 @@ export function WebSearchSettings() {
             your search engines. Every request still needs its host in the outbound allowlist.
           </p>
         </div>
-        <Button size="sm" disabled={settings.isFetching} onClick={() => void settings.refetch()}>
-          Refresh
-        </Button>
       </div>
       <FirecrawlSettings settings={settings} />
       <SearchEngineOrderControl settings={settings} />

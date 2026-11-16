@@ -112,7 +112,7 @@ export async function runCockpitTaskLifecycleProof({ context, browser, stack, ci
         const back = () => page.getByRole("link", { name: "Back to Work", exact: true }).click();
         if (keepDraft) await keepWorkDraftOnLeave({ page, action: back, label: "Task details" });
         else await back();
-        await page.getByRole("heading", { name: "Work", exact: true }).waitFor();
+        await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
         await page.locator(`a[href="${taskHref(id)}"]`).click();
         await details.waitFor();
       };
@@ -164,7 +164,7 @@ export async function runCockpitTaskLifecycleProof({ context, browser, stack, ci
         clearedFields: { Title: current.title, Description: current.description ?? "", Priority: current.priority },
         destinationLink: page.getByRole("link", { name: "Back to Work", exact: true }),
         destinationPath: "/work?shell=cockpit",
-        destinationReady: () => page.getByRole("heading", { name: "Work", exact: true }).waitFor(),
+        destinationReady: () => page.getByRole("heading", { name: "Board", exact: true }).waitFor(),
         reopen: () => details.waitFor(), selection, writes, documentCount: () => navigations,
         capture: (name, target) => capture("task-detail-" + name, target),
       });
@@ -231,7 +231,7 @@ export async function runCockpitTaskLifecycleProof({ context, browser, stack, ci
       await page.route(`**${taskPath}?*`, holdGet, { times: 1 });
       const beforeLeave = writes.length;
       await statusDialog.getByRole("button", { name: "Confirm status change", exact: true }).click(); await observed;
-      await page.goBack(); await page.getByRole("heading", { name: "Work", exact: true }).waitFor();
+      await page.goBack(); await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
       releaseRead(); releaseRead = undefined; await finished;
       await page.locator(`a[href="${taskHref(taskId)}"]`).click(); await details.waitFor();
       assert.equal(writes.length, beforeLeave); assert.deepEqual(await read(taskId), current);

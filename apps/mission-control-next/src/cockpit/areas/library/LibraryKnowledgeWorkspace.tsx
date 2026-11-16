@@ -10,6 +10,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { LibraryEngineeringLearnings } from "./LibraryEngineeringLearnings";
 import { LibraryExternalSources } from "./LibraryExternalSources";
 import { LibraryKnowledgeActions } from "./LibraryKnowledgeActions";
+import { LibraryKnowledgeSources } from "./LibraryKnowledgeSources";
 import { LibraryFileDownload } from "./LibraryFileDownload";
 import { Callout } from "../../ui/Callout";
 import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
@@ -36,6 +37,7 @@ export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string
         description="Source material, governed imports, retrieval history and Engineering learnings."
       />
       <LibraryKnowledgeActions workspaceId={workspaceId} />
+      <LibraryKnowledgeSources workspaceId={workspaceId} />
       <Section title="Memory files" description="Installation memory files, not a workspace-only directory.">
         {files.error ? <Callout tone="error">{describeApiError(files.error).summary}</Callout> : null}
         {files.isPending ? <p role="status">Reading memory files…</p> : null}
@@ -45,7 +47,7 @@ export function LibraryKnowledgeWorkspace({ workspaceId }: { workspaceId: string
             {(props) => (
               <input
                 {...props}
-                className="rounded-md border border-line bg-canvas p-2"
+                className="rounded-md border border-line-control bg-canvas p-2"
                 value={filter}
                 onChange={(event) => setFilter(event.target.value)}
               />

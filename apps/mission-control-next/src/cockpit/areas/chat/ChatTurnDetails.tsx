@@ -29,7 +29,7 @@ type TurnActions = Pick<
   | "onOpenRunDetails"
   | "onCreateGeneratedArtifact"
   | "onOpenGeneratedArtifact"
->;
+> & { onSaveAsSkill?: () => void };
 
 const isCodeModeRequest = (tool: ChatToolRunRecord): boolean => tool.toolName === "code_mode.request";
 

@@ -229,9 +229,8 @@ it("offers native budget inspection after an uncertain write without another mut
     expect(target.searchParams.get("runId")).toBe("run/one");
     expect(target.searchParams.get("shell")).toBe("cockpit");
     expect(container.querySelector('a[href*="shell=classic"]')).toBeNull();
-    await act(async () =>
-      [...container.querySelectorAll("button")].find((item) => item.textContent === "Refresh")!.click(),
-    );
+    // The page's Refresh re-reads every query the page shows.
+    await act(async () => client.invalidateQueries());
     expect(save.disabled).toBe(true);
     expect(select.disabled).toBe(true);
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
@@ -242,4 +241,35 @@ it("offers native budget inspection after an uncertain write without another mut
     client.clear();
     container.remove();
   }
+});
+
+describe("cockpit budget preference links", () => {
+  it("links to System › Spend (U-ST-017)", async () => {
+    api.fetchSettings.mockResolvedValue({ revision: 2, budgetMode: "balanced" });
+    window.history.replaceState(null, "", "/settings/safety?shell=cockpit#budget-mode");
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    try {
+      await act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <CockpitNavigationProvider>
+              <BudgetModeControl />
+            </CockpitNavigationProvider>
+          </QueryClientProvider>,
+        ),
+      );
+      await vi.waitFor(() => expect(container.textContent).toContain("Current: Balanced"));
+      const link = [...container.querySelectorAll("a")].find(
+        (anchor) => anchor.textContent === "See what you spent in System › Spend",
+      );
+      expect(link?.getAttribute("href")).toContain("/system/spend");
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+      client.clear();
+    }
+  });
 });

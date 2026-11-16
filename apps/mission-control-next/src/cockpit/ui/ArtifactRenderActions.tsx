@@ -6,6 +6,7 @@ import {
   renderChatGeneratedArtifact,
 } from "@goatcitadel/mission-control-shared/api/chat";
 import { Button } from "./Button";
+import { Callout } from "./Callout";
 import { AttachmentImage, describeFailure } from "./AttachmentImage";
 
 type Activity = "idle" | "rendering" | "critiquing";
@@ -103,11 +104,7 @@ export function ArtifactRenderActions({
               : (state.message ?? "Offline PNG images at desktop and phone widths; no scripts, no network.")}
         </span>
       </div>
-      {state.error ? (
-        <p role="alert" className="text-sm text-status-failed">
-          {state.error}
-        </p>
-      ) : null}
+      {state.error ? <Callout tone="error">{state.error}</Callout> : null}
       {state.renders.length > 0 ? (
         <ul className="grid gap-3 sm:grid-cols-2">
           {state.renders.map((item) => (

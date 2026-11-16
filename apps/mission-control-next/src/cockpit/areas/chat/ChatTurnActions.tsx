@@ -4,10 +4,11 @@ import { canRetryTurn } from "@goatcitadel/mission-control-shared/components/cha
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { Check, MoreHorizontal } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "../../ui/Menu";
+import { mayChangeThingsOnRetry } from "./chat-tool-run-summary";
 
 export type TurnActionHandlers = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -17,7 +18,10 @@ export type TurnActionHandlers = Pick<
   | "onEditTurn"
   | "onOpenRunDetails"
   | "onCreateGeneratedArtifact"
->;
+> & {
+  /** Opens Save as skill for this answer. Set only when the answer can become a skill. */
+  onSaveAsSkill?: () => void;
+};
 
 const INLINE = "inline-flex min-h-8 items-center px-1 text-accent hover:underline";
 const PHONE =
@@ -53,18 +57,21 @@ export function ChatTurnActions({
 }) {
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const [confirmRetry, setConfirmRetry] = useState(false);
+  // Choosing Save as skill hands focus to the block it opens, so the menu must not give it back to its trigger.
+  const handedFocusOn = useRef(false);
   const canRetry = canRetryTurn(turn) && !streaming && !readOnly && !resendBlocked;
-  // Only a tool recorded as a read ("none") retries without asking. One that may write ("unknown"), has no recorded
-  // potential, or did or might have changed something can change things again on retry, so that retry is confirmed.
-  const effectfulTools = (turn.toolRuns ?? []).filter(
-    (run) =>
-      run.effectPotential !== "none" || run.effectOutcomeKind === "concrete" || run.effectOutcomeKind === "uncertain",
-  ).length;
+  // Only a tool recorded as a read, or known to explore with nothing recorded, retries without asking; any other can
+  // change things again on retry, so that retry is confirmed.
+  const effectfulTools = (turn.toolRuns ?? []).filter(mayChangeThingsOnRetry).length;
   const retry = () => actions.onRetryTurn(turn.turnId);
   const canBranch = !streaming && !readOnly;
   const canSave = Boolean(turn.assistantMessage) && turn.trace.status !== "failed" && !readOnly;
   const siblings = turn.branch.siblingTurnIds ?? [];
   const copyLabel = streaming ? "Copy answer so far" : "Copy answer";
+  const saveAsSkill = () => {
+    handedFocusOn.current = true;
+    actions.onSaveAsSkill?.();
+  };
   const secondary = [
     canBranch
       ? { label: "New conversation from here", run: () => actions.onStartNewThreadFromTurn(turn.turnId) }
@@ -74,6 +81,7 @@ export function ChatTurnActions({
       : null,
     { label: "Run details", run: () => actions.onOpenRunDetails(turn.turnId) },
     canSave ? { label: "Save answer", run: () => actions.onCreateGeneratedArtifact(turn.turnId) } : null,
+    actions.onSaveAsSkill ? { label: "Save as skill…", run: saveAsSkill } : null,
   ].filter((item): item is { label: string; run: () => void } => Boolean(item));
 
   return (
@@ -128,7 +136,14 @@ export function ChatTurnActions({
             <MoreHorizontal aria-hidden="true" className="size-4" />
             <span className="ml-1">More</span>
           </MenuTrigger>
-          <MenuContent align="start">
+          <MenuContent
+            align="start"
+            onCloseAutoFocus={(event) => {
+              if (!handedFocusOn.current) return;
+              handedFocusOn.current = false;
+              event.preventDefault();
+            }}
+          >
             {secondary.map((item) => (
               <MenuItem key={item.label} className="min-h-11" onSelect={item.run}>
                 {item.label}

@@ -18,7 +18,7 @@ function createStore(): { db: DatabaseClient; repo: ChatSessionProjectRepository
     {
       workspaceId: "workspace-a",
       name: "Workspace project",
-      workspacePath: "F:/work/project-a",
+      workspacePath: "work/project-a",
     },
     "2026-03-26T00:00:00.000Z",
   );

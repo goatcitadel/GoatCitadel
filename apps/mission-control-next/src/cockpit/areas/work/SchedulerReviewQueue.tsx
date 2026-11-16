@@ -3,7 +3,7 @@ import { fetchCronReviewQueue } from "@goatcitadel/mission-control-shared/api/cr
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings";
 import type { CronReviewItem, DurableRunStatus } from "@goatcitadel/contracts";
-import { humanizeToken, presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
@@ -11,7 +11,14 @@ import { FeatureOffNotice, listedFeatureFlag } from "../settings/FeatureOffNotic
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
-import { REVIEW_SEVERITY_LABELS, SCHEDULER_REVIEW_STATUSES, presentFrom } from "./work-vocabulary";
+import {
+  REVIEW_CHILD_STATE_FALLBACK,
+  REVIEW_SEVERITY_LABELS,
+  SCHEDULER_REVIEW_STATUSES,
+  presentFrom,
+  reviewProfileLabel,
+  reviewTriggerLabel,
+} from "./work-vocabulary";
 
 // The Gateway answers 409 when the review queue is switched off (or cannot be listed); that is not an empty queue.
 const statusOf = (error: unknown) =>
@@ -26,8 +33,9 @@ function summaryString(summary: Record<string, unknown>, ...keys: string[]): str
 }
 
 /**
- * One flagged run in plain words. Trigger and profile posture are open strings from the scheduler, so they are
- * humanized; job, run and turn ids stay in technical details.
+ * One flagged run in plain words. Trigger and profile posture are open strings from the scheduler: each known value
+ * has a label, an unknown one reads as Other and its raw value goes to technical details with the job, run and
+ * turn ids.
  */
 function ReviewItem({ item, scheduleName }: { item: CronReviewItem; scheduleName?: string }) {
   const summary = item.summary ?? {};
@@ -39,13 +47,13 @@ function ReviewItem({ item, scheduleName }: { item: CronReviewItem; scheduleName
   const warning = summaryString(summary, "warning", "profileWarning");
   const childLabel = childStatus
     ? ((presentRunStatus(childStatus as DurableRunStatus) as ReturnType<typeof presentRunStatus> | undefined)?.label ??
-      humanizeToken(childStatus))
+      REVIEW_CHILD_STATE_FALLBACK)
     : "Accepted";
   return (
     <li className="grid min-w-0 gap-1 py-3 text-sm wrap-anywhere">
       <strong className="text-fg">
         {scheduleName ?? "A scheduled job"}
-        {trigger ? ` · ${humanizeToken(trigger)}` : ""}
+        {trigger ? ` · ${reviewTriggerLabel(trigger)}` : ""}
       </strong>
       <span className="flex flex-wrap items-center gap-2 text-fg-secondary">
         {REVIEW_SEVERITY_LABELS[item.severity] ?? "Unknown"} severity ·{" "}
@@ -53,7 +61,7 @@ function ReviewItem({ item, scheduleName }: { item: CronReviewItem; scheduleName
         <StatusBadge status={presentFrom(SCHEDULER_REVIEW_STATUSES, item.status)} />
       </span>
       {childRunId ? <p className="text-fg-secondary">Child run: {childLabel}.</p> : null}
-      {posture ? <p className="text-fg-secondary">Profile {humanizeToken(posture).toLowerCase()}.</p> : null}
+      {posture ? <p className="text-fg-secondary">Profile: {reviewProfileLabel(posture)}.</p> : null}
       {warning ? <p className="whitespace-pre-line text-fg-secondary">{warning}</p> : null}
       <TechnicalDetails>
         <ul className="grid gap-1 font-mono text-xs">
@@ -61,6 +69,9 @@ function ReviewItem({ item, scheduleName }: { item: CronReviewItem; scheduleName
           <li>Scheduler run: {item.runId}</li>
           {childRunId ? <li>Child run: {childRunId}</li> : null}
           {childTurnId ? <li>Child turn: {childTurnId}</li> : null}
+          {trigger ? <li>Trigger: {trigger}</li> : null}
+          {posture ? <li>Profile: {posture}</li> : null}
+          {childStatus ? <li>Child state: {childStatus}</li> : null}
         </ul>
       </TechnicalDetails>
     </li>

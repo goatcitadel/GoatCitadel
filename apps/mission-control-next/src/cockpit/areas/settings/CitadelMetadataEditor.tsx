@@ -40,7 +40,8 @@ export function CitadelMetadataEditor({
         <div role="status" className="space-y-2 text-sm text-status-waiting">
           <p>
             The Citadel changed. Current name: {selected?.name ?? "Unavailable"}. Description:{" "}
-            {selected?.description || "None"}. Review the saved profile before applying your retained draft.
+            {selected?.description || "None"}. Your draft started from an older version; review the saved profile before
+            applying it.
           </p>
           <Button size="sm" disabled={!available || !editor.canRebase} onClick={editor.rebase}>
             Apply draft to current Citadel

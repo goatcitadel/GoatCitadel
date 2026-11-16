@@ -170,7 +170,7 @@ describe("WeCom setup guide: what it says up front (items 2, 4, 8, R46, R48)", (
 
   it("asks for the test message only when one was sent: the probe sends nothing without a default target (R49)", () => {
     expect(paragraphs("first-message")).toEqual([
-      "If you set a default target, check the test message arrived. To receive: in the app's receive messages settings enter this connection's webhook address with the same Token and EncodingAESKey, and save. Allow your WeCom userid, message the app, and check the reply. If the bot doesn't answer your message, open System › Diagnostics, find \"Dropped a WeCom message from …\", and add that id under Who may message this bot with Edit setup.",
+      "If you set a default target, check the test message arrived. To receive: in the app's receive messages settings enter this connection's webhook address with the same Token and EncodingAESKey, and save. Allow your WeCom userid, message the app, and check the reply. If the bot doesn't answer your message, open Edit setup and go to Who may message this bot: the sender it turned away is listed there with a button to allow them.",
     ]);
   });
 
@@ -422,7 +422,7 @@ describe("WeCom setup guide: the sender step (A7, A8)", () => {
     const senders = step("sender-access").fields?.find((candidate) => candidate.key === "allowedSenders");
 
     expect(senders?.explanation).toBe(
-      'Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied. Don\'t know the id? Message the bot once, then open System › Diagnostics and find "Dropped a … message from …".',
+      "Add the WeCom userids that may start conversations. Inbound is default-deny; empty means every inbound sender is denied. Don't know the id? Finish setup and message the bot once. Then open Edit setup and come back to this step: the sender it turned away is listed here with a button to allow them.",
     );
   });
 });
@@ -762,10 +762,10 @@ describe("WeCom receiving path: can it finish?", () => {
 
   it("tells the person where their userid is, so allowing themselves needs no later fix", () => {
     // WeCom shows a member's userid (the Account) to an administrator under Contacts. Someone who can't see
-    // Contacts can read it from the dropped message's diagnostic (A6, C9), as for QQ.
+    // Contacts finds it on the sender step, which lists the sender the bot turned away.
     expect(textOf(field("defaultTarget").whereToFind)).toContain("Contacts");
     expect(paragraphs("first-message")[0]).toContain("Allow your WeCom userid");
-    expect(wizardText()).toContain('find "Dropped a … message from …"');
+    expect(wizardText()).toContain("the sender it turned away is listed there with a button to allow them");
     expect(describeDroppedSender("wecom", "zhangsan")).toMatch(/^Dropped a WeCom message from zhangsan: /u);
   });
 

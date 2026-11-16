@@ -12,7 +12,7 @@ describe("chatToolDisplayName", () => {
 
   it("reads any other tool as words, never as a raw registry id", () => {
     expect(chatToolDisplayName(run("calendar.create_event"))).toBe("Calendar create event");
-    expect(chatToolDisplayName(run("mcp.invoke"))).toBe("Mcp invoke");
+    expect(chatToolDisplayName(run("mcp.invoke"))).toBe("MCP invoke");
   });
 
   it("names a malformed record without breaking", () => {

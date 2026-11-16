@@ -155,6 +155,8 @@ it("opens the Inspect panel on Message for an ordinary turn", async () => {
     // The header's Inspect opens the Chat inspector on the Message tab for an ordinary latest turn.
     expect(inspector?.content?.source).toBe("chat");
     expect(document.body.textContent).toContain("a:latest:turn");
+    // A press on Inspect hands focus to the panel (U-GL-039).
+    expect(document.activeElement?.closest("aside")).not.toBeNull();
     await act(async () => {
       inspectButton().click();
     });

@@ -23,6 +23,12 @@ import {
   resolveLauncherEndpoint,
   safeEndpointOrigin,
 } from "../scripts/lib/managed-runtime-ownership.mjs";
+import {
+  GATEWAY_STARTUP_FAILURE_ENV,
+  clearGatewayStartupFailure,
+  gatewayStartupFailurePath,
+  readGatewayStartupFailure,
+} from "../scripts/lib/gateway-startup-failure.mjs";
 import { resolveUiTarget } from "../scripts/lib/ui-target.mjs";
 import {
   initializeInstalledRuntimeSettings,
@@ -911,6 +917,12 @@ async function readRuntimeStatus(options = {}) {
   const anyStale = pidStates.includes("stale");
   const anyReady = gatewayReady || uiReady;
   const status = gatewayReady && uiReady ? "ready" : anyAlive || anyReady ? "degraded" : anyStale ? "stale" : "stopped";
+  // A recorded reason only explains a Gateway that is not answering and no longer running;
+  // a Gateway that is still starting has not failed, and an old record must not be shown for it.
+  const startupFailure =
+    !gatewayReady && gatewayPid.state !== "running"
+      ? readGatewayStartupFailure(gatewayStartupFailurePath(runtimeLogDir))
+      : undefined;
 
   return buildRuntimeCommandResult({
     status,
@@ -928,6 +940,7 @@ async function readRuntimeStatus(options = {}) {
       ui: endpointOwnershipDiagnostic(ownership.ui),
     },
     desktopEventStream,
+    startupFailure,
   });
 }
 
@@ -1080,6 +1093,7 @@ function buildRuntimeCommandResult({
   uiPid,
   endpointOwnership,
   desktopEventStream,
+  startupFailure,
 }) {
   return {
     status,
@@ -1110,6 +1124,7 @@ function buildRuntimeCommandResult({
     },
     onboardingCompleted,
     ...(desktopEventStream ? { desktopEventStream } : {}),
+    ...(startupFailure ? { startupFailure } : {}),
     checkedAt: new Date().toISOString(),
   };
 }
@@ -1703,6 +1718,8 @@ function resolvePackagedNodeExecutable() {
 }
 
 async function ensureGatewayReady({ packaged, endpoint, nodeExecutable }) {
+  // A reason recorded by an earlier start must not explain this one, even if this launch never reaches the spawn.
+  prepareGatewayStartupFailureRecord();
   const outcome = await establishLauncherEndpointReadiness({
     endpoint,
     timeoutMs: 180000,
@@ -1862,6 +1879,7 @@ function describeEndpointReadinessFailure(endpoint, outcome) {
 
 function startPackagedGateway(nodeExecutable, gatewayUrl, expectedFingerprint) {
   const port = String(new URL(gatewayUrl).port || "8787");
+  const startupFailurePath = prepareGatewayStartupFailureRecord();
   startManagedDetachedProcess({
     pidPath: gatewayPidPath,
     service: "gateway",
@@ -1875,10 +1893,19 @@ function startPackagedGateway(nodeExecutable, gatewayUrl, expectedFingerprint) {
       GOATCITADEL_ROOT_DIR: packagedRuntimeRoot,
       GATEWAY_HOST: "127.0.0.1",
       GATEWAY_PORT: port,
+      [GATEWAY_STARTUP_FAILURE_ENV]: startupFailurePath,
     },
     stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),
     stderrPath: path.join(runtimeLogDir, "gateway.stderr.log"),
   });
+}
+
+// The Gateway writes why it could not start into this file; the launcher only reads it.
+// Clear it before every start so an earlier run's reason is never shown for this one.
+function prepareGatewayStartupFailureRecord() {
+  const startupFailurePath = gatewayStartupFailurePath(runtimeLogDir);
+  clearGatewayStartupFailure(startupFailurePath);
+  return startupFailurePath;
 }
 
 function startPackagedUi(nodeExecutable, uiUrl, expectedFingerprint) {
@@ -1905,6 +1932,7 @@ function startPackagedUi(nodeExecutable, uiUrl, expectedFingerprint) {
 function startSourceGateway(gatewayUrl, expectedFingerprint) {
   const runner = resolvePnpmRunner();
   const port = String(new URL(gatewayUrl).port || "8787");
+  const startupFailurePath = prepareGatewayStartupFailureRecord();
   startManagedDetachedProcess({
     pidPath: gatewayPidPath,
     service: "gateway",
@@ -1917,6 +1945,7 @@ function startSourceGateway(gatewayUrl, expectedFingerprint) {
       ...resolveSourceEvolutionRuntimeEnv(gatewayUrl),
       GATEWAY_HOST: "127.0.0.1",
       GATEWAY_PORT: port,
+      [GATEWAY_STARTUP_FAILURE_ENV]: startupFailurePath,
     },
     stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),
     stderrPath: path.join(runtimeLogDir, "gateway.stderr.log"),

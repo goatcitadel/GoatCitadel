@@ -87,10 +87,16 @@ it.each(["before confirmation", "after rejected preflight"])(
       await client.invalidateQueries({ queryKey: ["cockpit", "schedule", a.jobId] });
     });
     await vi.waitFor(() => expect(client.isFetching()).toBe(0));
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
-    expect(getByRole("dialog").contains(getByRole("alert"))).toBe(true);
+    // The conflict notice follows the refreshed schedule through several renders; wait for it instead of a fixed delay.
+    await vi.waitFor(
+      async () => {
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+        expect(getByRole("dialog").contains(getByRole("alert"))).toBe(true);
+      },
+      { timeout: 3000 },
+    );
     expect(getByRole("alert").textContent).toContain("changed during review");
     expect(getByRole("dialog").textContent).toContain("A schedule");
     expect(getByRole("dialog").textContent).not.toContain("Changed schedule");

@@ -58,7 +58,7 @@ export async function runCockpitMcpOAuthProof({ context, browser, stack, citadel
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30000 });
         const panel = page.getByRole("region", { name: "MCP server configuration", exact: true });
         await panel.getByRole("searchbox", { name: "Search MCP servers", exact: true }).fill(label);
-        await panel.getByRole("button", { name: `Inspect ${label}`, exact: true }).click();
+        await panel.getByRole("button", { name: `Connect and inspect ${label}`, exact: true }).click();
         const inspection = page.getByRole("dialog", { name: "MCP server inspection", exact: true });
         const controls = inspection.getByRole("region", { name: "Reviewed MCP OAuth controls", exact: true });
         const review = controls.getByRole("region", { name: "MCP OAuth action review", exact: true });
@@ -105,7 +105,7 @@ export async function runCockpitMcpOAuthProof({ context, browser, stack, citadel
         await page.getByRole("tab", { name: "MCP servers", exact: true }).click();
         await panel.getByRole("searchbox", { name: "Search MCP servers", exact: true }).fill(label);
         assert.equal(await panel.getByRole("button", { name: `Edit ${label}`, exact: true }).isDisabled(), true);
-        await panel.getByRole("button", { name: `Inspect ${label}`, exact: true }).click();
+        await panel.getByRole("button", { name: `Connect and inspect ${label}`, exact: true }).click();
         await controls.getByText(/^MCP authorization outcome is unconfirmed/).waitFor();
         assert.equal(await controls.getByRole("button", { name: "Review OAuth authorization", exact: true }).isDisabled(), true);
         assert.equal(await controls.getByLabel("Authorization code", { exact: true }).count(), 0);
