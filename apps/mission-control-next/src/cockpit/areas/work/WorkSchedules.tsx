@@ -327,7 +327,7 @@ export function WorkSchedules() {
       {schedules.data && !schedules.isError ? (
         schedules.data.items.length ? (
           <div className="grid gap-4 lg:grid-cols-2">
-            <ul className="grid content-start gap-2">
+            <ul className="grid content-start divide-y divide-line-subtle">
               {schedules.data.items.map((job) => (
                 <WorkScheduleListItem
                   key={job.jobId}

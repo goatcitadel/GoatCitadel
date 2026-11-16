@@ -20,6 +20,7 @@ export const SKILL_HUB_OPERATION_KINDS = [
   "stage_rollback_candidate",
   "activate",
   "revoke",
+  "remove",
 ] as const;
 
 export const SKILL_HUB_OPERATION_SETTLEMENT_DISPOSITIONS = ["applied", "blocked", "manual_reconciliation"] as const;

@@ -5,6 +5,11 @@ import type { IntegrationConnectionRepository } from "./integration-connection-r
 
 export const CHANNEL_STREAM_CURSOR_SETTING_PREFIX = "channel_stream_cursor_v1";
 
+/** The setting the skill curator keeps one skill's idle-archive snapshot under. */
+export function curatorIdleSnapshotKey(skillId: string): string {
+  return `curator_idle_skill_snapshot_v1:${skillId}`;
+}
+
 export interface TelegramPollCursorWriteGuard {
   connectionId: string;
   expectedRevision: string;
@@ -27,6 +32,7 @@ export class SystemSettingsRepository {
   private readonly upsertStmt;
   private readonly insertIfAbsentStmt;
   private readonly getForUpdateStmt;
+  private readonly deleteStmt;
 
   public constructor(
     private readonly db: DatabaseClient,
@@ -48,6 +54,18 @@ export class SystemSettingsRepository {
         value_json = excluded.value_json,
         updated_at = excluded.updated_at
     `);
+    this.deleteStmt = db.prepare("DELETE FROM system_settings WHERE setting_key = ?");
+  }
+
+  /**
+   * Removes one skill's curator idle-archive snapshot, and nothing else: the only setting delete there is, so no caller
+   * can delete an arbitrary setting. True when it was there.
+   */
+  public deleteCuratorIdleSnapshot(skillId: string): boolean {
+    if (typeof skillId !== "string" || skillId.length === 0 || skillId.length > 300) {
+      throw new ValidationError({ message: "A curator snapshot delete needs a skill id." });
+    }
+    return this.deleteStmt.run(curatorIdleSnapshotKey(skillId)).changes > 0;
   }
 
   public get<T = unknown>(key: string): SystemSettingRecord<T> | undefined {

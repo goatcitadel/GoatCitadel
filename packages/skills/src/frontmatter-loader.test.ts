@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseSkillMarkdown, resolveSkillNameViolation, SkillFrontmatterSchema } from "./frontmatter.js";
-import { SkillsService, type SkillsLogger } from "./loader.js";
+import { isSkillHubScratchFolderName, SkillsService, type SkillsLogger } from "./loader.js";
 
 function makeLoggerSpy(): SkillsLogger {
   return { warn: vi.fn(), error: vi.fn() };
@@ -190,6 +190,53 @@ Broken body`,
       keywords: ["direct keyword"],
       instructionBody: "Direct body",
     });
+  });
+
+  it("never loads a Skill Hub staging or recovery folder as a skill", async () => {
+    const root = await makeTempDir();
+    const body = `---
+name: demo
+description: Demo skill
+---
+Demo body`;
+    await writeSkill(path.join(root, "kept"), body.replace("name: demo", "name: kept"));
+    // A removal moves the folder to `.skill-hub-<token>.backup`; an activation stages under `.staging`.
+    await writeSkill(path.join(root, ".skill-hub-0123456789abcdef01234567.backup"), body);
+    await writeSkill(path.join(root, ".skill-hub-0123456789abcdef01234567.staging"), body);
+
+    const logger = makeLoggerSpy();
+    const loaded = await new SkillsService([{ source: "extra", dir: root }], logger).reload();
+
+    expect(loaded.map((skill) => skill.skillId)).toEqual(["extra:kept"]);
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(isSkillHubScratchFolderName(".skill-hub-0123456789abcdef01234567.backup")).toBe(true);
+    expect(isSkillHubScratchFolderName("skill-hub-notes")).toBe(false);
+  });
+
+  it("logs one debug line per skipped Skill Hub scratch folder, naming only the folder", async () => {
+    const root = await makeTempDir();
+    await writeSkill(path.join(root, ".skill-hub-0123456789abcdef01234567.backup"), "---\nname: demo\n---\nBody");
+    await writeSkill(path.join(root, ".skill-hub-0123456789abcdef01234567.staging"), "---\nname: demo\n---\nBody");
+    const logger = { ...makeLoggerSpy(), debug: vi.fn() };
+
+    await new SkillsService([{ source: "extra", dir: root }], logger).reload();
+
+    expect(logger.debug).toHaveBeenCalledTimes(2);
+    const lines = logger.debug.mock.calls.map(([message, context]) => ({ message, context }));
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        {
+          message: "Skipping a Skill Hub scratch folder: .skill-hub-0123456789abcdef01234567.backup",
+          context: { source: "extra", folder: ".skill-hub-0123456789abcdef01234567.backup" },
+        },
+        {
+          message: "Skipping a Skill Hub scratch folder: .skill-hub-0123456789abcdef01234567.staging",
+          context: { source: "extra", folder: ".skill-hub-0123456789abcdef01234567.staging" },
+        },
+      ]),
+    );
+    expect(JSON.stringify(lines)).not.toContain(root);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it("reports a malformed SKILL.md instead of silently dropping it", async () => {

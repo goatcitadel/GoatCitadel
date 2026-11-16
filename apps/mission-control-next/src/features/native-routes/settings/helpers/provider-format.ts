@@ -1,5 +1,9 @@
 import type { DeviceAccessGrantRecord, LlmProviderConfig, LlmProviderRequestConfig } from "@goatcitadel/contracts";
-import { fetchDaemonStatus, fetchSettings, type OpenAICodexOAuthStatus } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  fetchDaemonStatus,
+  fetchSettings,
+  type OpenAICodexOAuthStatus,
+} from "@goatcitadel/mission-control-shared/api/client";
 
 export function isLikelyLocalProviderBaseUrl(baseUrl: string | undefined): boolean {
   const normalized = (baseUrl ?? "").trim().toLowerCase();

@@ -17,6 +17,7 @@ import {
   type StatusPresentation,
   type StatusTone,
 } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
+import { knownApprovalActionName } from "../chat/chat-vocabulary";
 import type { WorkRunAction } from "./work-run-control-guard";
 
 /** Plain words for the Work area's wire enums. Typed records so a new enum value fails typecheck. */
@@ -201,14 +202,48 @@ export function presentArtifactKind(kind: string): string {
   return ARTIFACT_KIND_LABELS[kind] ?? humanizeToken(kind);
 }
 
-export const EXPORT_VALIDATION_LABELS: Readonly<Record<"ready_for_operator_import_review" | "blocked", string>> = {
+const EXPORT_VALIDATION_LABELS: Readonly<Record<"ready_for_operator_import_review" | "blocked", string>> = {
   ready_for_operator_import_review: "Ready for your import review",
   blocked: "Blocked",
 };
 
-export const IMPORT_COMPATIBILITY_LABELS: Readonly<Record<"not_verified", string>> = {
+const IMPORT_COMPATIBILITY_LABELS: Readonly<Record<"not_verified", string>> = {
   not_verified: "Not verified",
 };
+
+const OTHER_LABEL = "Other";
+
+const NOT_RECOGNISED_LABEL = "Not recognised";
+
+const ownLabel = (labels: Readonly<Record<string, string>>, value: string): string =>
+  Object.hasOwn(labels, value) ? labels[value]! : NOT_RECOGNISED_LABEL;
+
+export const presentExportValidation = (value: string): string => ownLabel(EXPORT_VALIDATION_LABELS, value);
+export const presentImportCompatibility = (value: string): string => ownLabel(IMPORT_COMPATIBILITY_LABELS, value);
+
+/** Plain name of the action a run asked approval for. Kinds are open strings; an unknown one reads Other. */
+export const presentApprovalKind = (kind: string): string => knownApprovalActionName(kind) ?? OTHER_LABEL;
+
+/*
+ * The Gateway records "cancelled by <actor>" when it cancels a run. What follows "by" is the caller it recorded: an
+ * operator (the default operator, or a signed-in, paired or companion caller), or one of a few system causes. Text that
+ * is none of these is left as recorded.
+ */
+const OPERATOR_ACTOR =
+  /^(?:operator|anonymous|fanout:operator_stop|(?:auth|companion|device|ip|token|basic|loopback|background-task-rail):.+)$/iu;
+const SYSTEM_CANCELLATIONS: Readonly<Record<string, string>> = {
+  "fanout:parent_cancelled": "Cancelled because the run that started it was cancelled.",
+  abort_signal: "Cancelled because the request that started it was stopped.",
+  "worktree-lease-fence": "Cancelled by the system.",
+};
+
+export function presentRecordedCancellation(recorded: string | null | undefined): string | undefined {
+  const match = /^cancelled by (\S+?)\.?$/iu.exec(recorded?.trim() ?? "");
+  if (!match) return undefined;
+  const actor = match[1]!;
+  if (OPERATOR_ACTOR.test(actor)) return "Cancelled by an operator.";
+  return Object.hasOwn(SYSTEM_CANCELLATIONS, actor) ? SYSTEM_CANCELLATIONS[actor] : undefined;
+}
 
 export const SCHEDULER_REVIEW_STATUSES: Readonly<
   Record<"open" | "resolved" | "retrying" | "ignored", StatusPresentation>

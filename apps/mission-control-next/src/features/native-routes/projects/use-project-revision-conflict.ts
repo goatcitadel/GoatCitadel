@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import type { ChatProjectRecord } from "@goatcitadel/contracts";
 import { fetchChatProjects, isApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 
 export type ProjectRevisionConflict = {
   projectId: string;
@@ -24,7 +25,7 @@ export function useProjectRevisionConflict(input: {
       }
       let refreshedProjects: ChatProjectRecord[] | null = null;
       try {
-        const response = await fetchChatProjects("all", 300, activeWorkspaceId, activeCitadelId);
+        const response = await withFreshReads(() => fetchChatProjects("all", 300, activeWorkspaceId, activeCitadelId));
         if (!isMounted()) {
           return true;
         }

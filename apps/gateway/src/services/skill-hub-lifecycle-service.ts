@@ -11,7 +11,6 @@ import {
   ConflictError,
   canonicalJsonString,
   type ApprovalCreateInput,
-  type ApprovalRequest,
   type CandidateSkillVersionRecord,
   type CapabilityArtifactRecord,
   type SkillHubOperationIntentPreview,
@@ -30,12 +29,37 @@ import {
 import { parseSkillMarkdown } from "@goatcitadel/skills";
 import { CapabilityPluginStore } from "./capability-plugin-store.js";
 import { pluginSkillSource } from "./plugin-owned-refusal.js";
+import { takesPowerAway } from "./skill-hub-operation-power.js";
+import { SKILL_STATE_METADATA_SETTING_KEY } from "./skill-state-keys.js";
+import {
+  withoutSkillMetadata,
+  ownedSkillBlock,
+  finishAppliedProjection,
+  LINEAGE_VERSION_LIMIT,
+  projectionCleanupFailureEvent,
+  projectionScratch,
+  neverOnBindingBlock,
+  removedLineageStepBlock,
+  runNeverActivatedRemoval,
+  runRuntimeRemoval,
+  UNKNOWN_TREE_SHA256,
+} from "./skill-hub-runtime-removal.js";
 import { readSkillHubOperationFingerprint } from "./skill-hub-operation-identity.js";
+import {
+  asOptionalNumber,
+  assertRevisionExpectation,
+  assertSkillIdentity,
+  asOptionalString,
+  hasCurrentPromptwareAudit,
+  removeUndefined,
+  resolveManagedRoot,
+  sha256,
+  toRootRelative,
+} from "./skill-hub-lifecycle-values.js";
 import { SkillHubArtifactStore, type SkillHubArtifactFilesystem } from "./skill-hub-artifact-store.js";
 import {
   PROMPTWARE_SCANNER_ID,
   PROMPTWARE_MAX_FINDINGS,
-  PROMPTWARE_SCANNER_REVISION,
   PROMPTWARE_SCANNER_VERSION,
   scanPromptwareContent,
 } from "./assembled-prompt-injection-guard.js";
@@ -43,8 +67,6 @@ import {
   SkillHubLifecycleFilesystem,
   type SkillHubLifecycleFilesystemMutation,
 } from "./skill-hub-lifecycle-filesystem.js";
-
-const UNKNOWN_TREE_SHA256 = "0".repeat(64);
 
 export interface SkillHubLifecycleApplyResult {
   settlement: SkillHubOperationSettlementRecord;
@@ -111,31 +133,7 @@ export function buildSkillHubLifecycleApprovalInput(
   };
 }
 
-/** Reconstruct the exact immutable intent only after the canonical approval is approved. */
-export function materializeApprovedSkillHubIntent(approval: ApprovalRequest): SkillHubOperationIntentRecord {
-  if (approval.kind !== SKILL_HUB_LIFECYCLE_APPROVAL_KIND || approval.status !== "approved") {
-    throw new ConflictError({ message: "Skill Hub lifecycle intent requires an approved dedicated approval." });
-  }
-  const preview = approval.preview as Partial<SkillHubOperationIntentPreview>;
-  if (preview.schemaVersion !== SKILL_HUB_OPERATION_INTENT_PREVIEW_SCHEMA || !isRecord(preview.intent)) {
-    throw new TypeError("Skill Hub lifecycle approval preview is missing its immutable intent.");
-  }
-  const intent = preview.intent as unknown as SkillHubOperationIntentTemplate;
-  const requestSha256 = computeSkillHubOperationRequestSha256({ ...intent, approvalId: approval.approvalId });
-  const expectedPayload = {
-    operationId: intent.operationId,
-    requestSha256,
-    workspaceId: intent.workspaceId,
-    operationKind: intent.operationKind,
-    skillId: intent.skillId,
-    snapshotId: intent.snapshotId,
-    contentTreeSha256: intent.contentTreeSha256,
-  };
-  if (canonicalJsonString(approval.payload) !== canonicalJsonString(expectedPayload)) {
-    throw new TypeError("Skill Hub lifecycle approval payload does not match its hash-bound preview.");
-  }
-  return { ...intent, approvalId: approval.approvalId, requestSha256 };
-}
+export { materializeApprovedSkillHubIntent } from "./skill-hub-lifecycle-values.js";
 
 export class SkillHubLifecycleService {
   private readonly rootDir: string;
@@ -158,29 +156,27 @@ export class SkillHubLifecycleService {
     requestSha256: string;
     signal?: AbortSignal;
   }): Promise<SkillHubLifecycleApplyResult> {
+    const storage = this.options.storage;
     const signal = input.signal ?? new AbortController().signal;
     signal.throwIfAborted();
-    const intent = await this.options.storage.skillHubOperations.getIntent(input.operationId);
+    const intent = await storage.skillHubOperations.getIntent(input.operationId);
     if (intent.approvalId !== input.approvalId || intent.requestSha256 !== input.requestSha256) {
       throw new ConflictError({ message: "Skill Hub lifecycle effect identity does not match its immutable intent." });
     }
     // Re-run parent validation against the exact current approval before any effect.
-    await this.options.storage.skillHubOperations.createIntent(intent);
-    const approval = await this.options.storage.approvals.get(intent.approvalId);
+    await storage.skillHubOperations.createIntent(intent);
+    const approval = await storage.approvals.get(intent.approvalId);
     if (approval.status !== "approved" || approval.kind !== SKILL_HUB_LIFECYCLE_APPROVAL_KIND) {
       throw new ConflictError({ message: "Skill Hub lifecycle approval is no longer executable." });
     }
-    const replay = await this.options.storage.skillHubOperations.findSettlementByOperationId(input.operationId);
+    const replay = await storage.skillHubOperations.findSettlementByOperationId(input.operationId);
     if (replay) {
-      if (intent.operationKind === "activate" && replay.disposition === "applied") {
-        await this.cleanupProjectionScratch(input.operationId, signal);
-        await this.options.reloadSkills?.();
-      }
+      await this.finishAppliedProjection(intent, replay, signal);
       return { settlement: replay, replayed: true };
     }
 
-    const snapshot = await this.options.storage.skillHubSnapshots.get(intent.snapshotId);
-    const artifact = await this.options.storage.skillHubArtifacts.findBySnapshot(intent.workspaceId, intent.snapshotId);
+    const snapshot = await storage.skillHubSnapshots.get(intent.snapshotId);
+    const artifact = await storage.skillHubArtifacts.findBySnapshot(intent.workspaceId, intent.snapshotId);
     if (
       !artifact ||
       snapshot.workspaceId !== intent.workspaceId ||
@@ -191,24 +187,31 @@ export class SkillHubLifecycleService {
         message: "Skill Hub lifecycle snapshot/artifact scope or byte lineage does not match.",
       });
     }
-    const pluginSource = intent.operationKind === "revoke" ? undefined : pluginSkillSource(snapshot);
+    const pluginSource = takesPowerAway(intent.operationKind) ? undefined : pluginSkillSource(snapshot);
     const pluginInstallPlanId = (approval.preview as Partial<SkillHubOperationIntentPreview>).pluginInstallPlanId;
-    if (
-      pluginSource &&
-      (!pluginInstallPlanId || !readSkillHubOperationFingerprint(intent, pluginInstallPlanId))
-    ) {
+    if (pluginSource && (!pluginInstallPlanId || !readSkillHubOperationFingerprint(intent, pluginInstallPlanId))) {
       return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
         code: "plugin_install_authority_missing",
         boundaryCrossed: false,
       });
     }
+    const removed = await removedLineageStepBlock(
+      intent,
+      () => storage.skillHubOperations.listAppliedRemovalCandidateIds(intent.workspaceId),
+      async () => Boolean(await storage.skillLifecycle.find(intent.skillId)),
+    );
+    if (removed)
+      return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
+        code: removed,
+        boundaryCrossed: false,
+      });
     if (!(await this.artifactStillVerifies(artifact.bundleRelPath, artifact.manifest))) {
       return await this.settle(intent, artifact.artifactId, "blocked", UNKNOWN_TREE_SHA256, {
         code: "artifact_tamper",
         boundaryCrossed: false,
       });
     }
-    if (intent.operationKind !== "revoke" && !hasCurrentPromptwareAudit(snapshot)) {
+    if (!takesPowerAway(intent.operationKind) && !hasCurrentPromptwareAudit(snapshot)) {
       return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
         code: "promptware_policy_stale",
         blockerCodes: ["PROMPTWARE_POLICY_STALE"],
@@ -218,7 +221,7 @@ export class SkillHubLifecycleService {
       });
     }
     if (
-      intent.operationKind !== "revoke" &&
+      !takesPowerAway(intent.operationKind) &&
       (snapshot.trustDisposition !== "candidate" || snapshot.blockerCodes.length > 0)
     ) {
       return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
@@ -230,7 +233,7 @@ export class SkillHubLifecycleService {
     }
 
     const bundlePath = this.options.artifactStore.resolveBundlePath(artifact.bundleRelPath);
-    if (intent.operationKind !== "revoke") {
+    if (!takesPowerAway(intent.operationKind)) {
       const promptwareScan = await this.scanVerifiedArtifactPromptware(bundlePath, artifact, signal);
       if (promptwareScan.unscannedPaths.length > 0) {
         return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
@@ -281,28 +284,51 @@ export class SkillHubLifecycleService {
 
     const mutate = () =>
       this.mutateVerifiedOperation(intent, snapshot, artifact, skillMarkdown, parsed.frontmatter.name, signal);
-    const result = pluginSource
-      ? await this.plugins.withLock((work) => this.runTransaction(work), async () => {
-          const plugin = pluginSource.pluginId ? await this.plugins.get(pluginSource.pluginId) : undefined;
-          if (
-            !plugin ||
-            plugin.installPlanId !== pluginInstallPlanId ||
-            plugin.workspaceId !== intent.workspaceId ||
-            (plugin.state !== "installing" && plugin.state !== "installed") ||
-            !plugin.pieces.some((piece) => piece.kind === "skill" && piece.skillSnapshotId === intent.snapshotId)
-          ) {
-            return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
-              code: "plugin_install_authority_changed",
-              boundaryCrossed: false,
-            });
-          }
-          return await mutate();
-        })
-      : await mutate();
-    if (intent.operationKind === "activate" && result.settlement.disposition === "applied") {
-      await this.cleanupProjectionScratch(intent.operationId, signal);
-      await this.options.reloadSkills?.();
-    }
+    const result =
+      intent.operationKind === "remove"
+        ? await this.plugins.withLock(
+            (work) => this.runTransaction(work),
+            async () => {
+              // Under the plugin store's lock, so a plugin install or uninstall cannot change who owns the skill.
+              const plugins = await this.plugins.list();
+              const code =
+                ownedSkillBlock(plugins, intent, parsed.frontmatter.name) ??
+                (intent.expectedRuntimeAbsent
+                  ? neverOnBindingBlock(snapshot, intent.skillId, {
+                      plugins,
+                      removed: await this.plugins.listRemoved(),
+                    })
+                  : undefined);
+              return code
+                ? await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
+                    code,
+                    boundaryCrossed: false,
+                  })
+                : await mutate();
+            },
+          )
+        : pluginSource
+          ? await this.plugins.withLock(
+              (work) => this.runTransaction(work),
+              async () => {
+                const plugin = pluginSource.pluginId ? await this.plugins.get(pluginSource.pluginId) : undefined;
+                if (
+                  !plugin ||
+                  plugin.installPlanId !== pluginInstallPlanId ||
+                  plugin.workspaceId !== intent.workspaceId ||
+                  (plugin.state !== "installing" && plugin.state !== "installed") ||
+                  !plugin.pieces.some((piece) => piece.kind === "skill" && piece.skillSnapshotId === intent.snapshotId)
+                ) {
+                  return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
+                    code: "plugin_install_authority_changed",
+                    boundaryCrossed: false,
+                  });
+                }
+                return await mutate();
+              },
+            )
+          : await mutate();
+    await this.finishAppliedProjection(intent, result.settlement, signal);
     return result;
   }
 
@@ -330,6 +356,10 @@ export class SkillHubLifecycleService {
       candidate = await this.buildInactiveCandidate(intent, snapshot, artifact, skillMarkdown, signal);
     } else {
       candidate = await this.requireBoundCandidate(intent);
+    }
+
+    if (intent.operationKind === "remove") {
+      return await this.removeRuntimeSkill(intent, candidate, artifact, skillName, signal);
     }
 
     if (intent.operationKind === "activate") {
@@ -495,28 +525,30 @@ export class SkillHubLifecycleService {
     candidate: CandidateSkillVersionRecord,
     artifactId: string,
     runtimeProjected: boolean,
+    detail: Record<string, unknown> = {},
   ): Promise<SkillHubLifecycleApplyResult> {
+    const storage = this.options.storage;
     return await this.runTransaction(async () => {
-      const replay = await this.options.storage.skillHubOperations.findSettlementByOperationId(intent.operationId);
+      const replay = await storage.skillHubOperations.findSettlementByOperationId(intent.operationId);
       if (replay) return { settlement: replay, replayed: true };
       const now = this.now();
       let candidateRevision: number | undefined;
       let runtimeRevision: number | undefined;
 
       if (intent.operationKind === "install_inactive") {
-        const revision = await this.options.storage.skillAggregateRevisions.createInitialRevisionFence(
+        const revision = await storage.skillAggregateRevisions.createInitialRevisionFence(
           "candidate_skill",
           intent.targetCandidateId!,
           now,
         );
-        await this.options.storage.candidateSkillVersions.upsert(candidate);
+        await storage.candidateSkillVersions.upsert(candidate);
         candidateRevision = revision.revision;
       } else {
         await this.fenceExisting(intent, now);
         if (intent.operationKind === "stage_update_candidate" || intent.operationKind === "stage_rollback_candidate") {
-          await this.options.storage.candidateSkillVersions.upsert(candidate);
+          await storage.candidateSkillVersions.upsert(candidate);
           candidateRevision = (
-            await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+            await storage.skillAggregateRevisions.advanceExpectedRevision(
               "candidate_skill",
               intent.targetCandidateId!,
               intent.expectedCandidateRevision!,
@@ -525,19 +557,15 @@ export class SkillHubLifecycleService {
           ).revision;
           runtimeRevision = intent.expectedRuntimeRevision;
         } else if (intent.operationKind === "activate") {
-          const current = await this.options.storage.candidateSkillVersions.get(intent.targetVersionId!);
+          const current = await storage.candidateSkillVersions.get(intent.targetVersionId!);
           if (current.lifecycleState === "revoked") {
             throw new ConflictError({ message: "Revoked Skill Hub candidates cannot be activated." });
           }
           const candidateChanged = current.lifecycleState !== "approved";
-          await this.options.storage.candidateSkillVersions.updateLifecycleState(
-            intent.targetVersionId!,
-            "approved",
-            now,
-          );
+          await storage.candidateSkillVersions.updateLifecycleState(intent.targetVersionId!, "approved", now);
           candidateRevision = candidateChanged
             ? (
-                await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+                await storage.skillAggregateRevisions.advanceExpectedRevision(
                   "candidate_skill",
                   intent.targetCandidateId!,
                   intent.expectedCandidateRevision!,
@@ -545,7 +573,7 @@ export class SkillHubLifecycleService {
                 )
               ).revision
             : intent.expectedCandidateRevision;
-          const snapshotArtifact = await this.options.storage.skillHubArtifacts.findBySnapshot(
+          const snapshotArtifact = await storage.skillHubArtifacts.findBySnapshot(
             intent.workspaceId,
             intent.snapshotId,
           );
@@ -568,21 +596,21 @@ export class SkillHubLifecycleService {
                 verified: true,
               },
             },
-            createdAt: (await this.options.storage.skillLifecycle.find(intent.skillId))?.createdAt ?? now,
+            createdAt: (await storage.skillLifecycle.find(intent.skillId))?.createdAt ?? now,
             updatedAt: now,
           };
           if (intent.expectedRuntimeAbsent) {
-            const runtimeFence = await this.options.storage.skillAggregateRevisions.createInitialRevisionFence(
+            const runtimeFence = await storage.skillAggregateRevisions.createInitialRevisionFence(
               "runtime_skill",
               intent.skillId,
               now,
             );
-            await this.options.storage.skillLifecycle.upsert(lifecycle);
+            await storage.skillLifecycle.upsert(lifecycle);
             runtimeRevision = runtimeFence.revision;
           } else {
-            await this.options.storage.skillLifecycle.upsert(lifecycle);
+            await storage.skillLifecycle.upsert(lifecycle);
             runtimeRevision = (
-              await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+              await storage.skillAggregateRevisions.advanceExpectedRevision(
                 "runtime_skill",
                 intent.skillId,
                 intent.expectedRuntimeRevision!,
@@ -590,17 +618,50 @@ export class SkillHubLifecycleService {
               )
             ).revision;
           }
+        } else if (intent.operationKind === "remove") {
+          // The candidate lineage is history: fenced above, never advanced. The record, its fence and saved state go.
+          // A lineage never switched on has no record or fence: the settlement alone marks it removed.
+          candidateRevision = intent.expectedCandidateRevision;
+          if (intent.expectedRuntimeAbsent) {
+            if (await storage.skillLifecycle.find(intent.skillId)) {
+              throw new ConflictError({ message: "Skill Hub runtime record appeared before the removal committed." });
+            }
+            // Every older step on this lineage (an activation asked for before) is stale from here on.
+            candidateRevision = (
+              await storage.skillAggregateRevisions.advanceExpectedRevision(
+                "candidate_skill",
+                intent.targetCandidateId!,
+                intent.expectedCandidateRevision!,
+                now,
+              )
+            ).revision;
+          } else if (!(await storage.skillLifecycle.delete(intent.skillId))) {
+            throw new ConflictError({ message: "Skill Hub runtime record is already gone." });
+          } else {
+            await storage.skillAggregateRevisions.deleteFence(
+              "runtime_skill",
+              intent.skillId,
+              intent.expectedRuntimeRevision!,
+            );
+          }
+          // Its saved state goes too (`withoutSkillMetadata`); a metadata write meanwhile rolls the removal back to retry.
+          await storage.skillLifecycle.deleteSavedState(intent.skillId);
+          await storage.systemSettings.deleteCuratorIdleSnapshot(intent.skillId);
+          const metadata = await storage.systemSettings.get<unknown>(SKILL_STATE_METADATA_SETTING_KEY);
+          const rest = withoutSkillMetadata(metadata?.value, intent.skillId);
+          if (
+            rest &&
+            !(await storage.systemSettings.compareAndSet(SKILL_STATE_METADATA_SETTING_KEY, metadata, rest, now))
+          ) {
+            throw new ConflictError({ message: "A removed skill's saved state changed while it was being deleted." });
+          }
         } else {
-          const currentCandidate = await this.options.storage.candidateSkillVersions.get(intent.targetVersionId!);
+          const currentCandidate = await storage.candidateSkillVersions.get(intent.targetVersionId!);
           const candidateChanged = currentCandidate.lifecycleState !== "revoked";
-          await this.options.storage.candidateSkillVersions.updateLifecycleState(
-            intent.targetVersionId!,
-            "revoked",
-            now,
-          );
+          await storage.candidateSkillVersions.updateLifecycleState(intent.targetVersionId!, "revoked", now);
           candidateRevision = candidateChanged
             ? (
-                await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+                await storage.skillAggregateRevisions.advanceExpectedRevision(
                   "candidate_skill",
                   intent.targetCandidateId!,
                   intent.expectedCandidateRevision!,
@@ -608,9 +669,9 @@ export class SkillHubLifecycleService {
                 )
               ).revision
             : intent.expectedCandidateRevision;
-          const currentLifecycle = await this.options.storage.skillLifecycle.get(intent.skillId);
+          const currentLifecycle = await storage.skillLifecycle.get(intent.skillId);
           const runtimeChanged = currentLifecycle.lifecycleState !== "revoked";
-          await this.options.storage.skillLifecycle.upsert({
+          await storage.skillLifecycle.upsert({
             ...currentLifecycle,
             lifecycleState: "revoked",
             trustLabel: "Revoked",
@@ -619,7 +680,7 @@ export class SkillHubLifecycleService {
           });
           runtimeRevision = runtimeChanged
             ? (
-                await this.options.storage.skillAggregateRevisions.advanceExpectedRevision(
+                await storage.skillAggregateRevisions.advanceExpectedRevision(
                   "runtime_skill",
                   intent.skillId,
                   intent.expectedRuntimeRevision!,
@@ -635,9 +696,12 @@ export class SkillHubLifecycleService {
         boundaryCrossed: runtimeProjected,
         candidateVersionId: intent.targetVersionId!,
         runtimeSkillId:
-          intent.operationKind === "activate" || intent.operationKind === "revoke" ? intent.skillId : undefined,
+          intent.operationKind === "install_inactive" || intent.operationKind.startsWith("stage_")
+            ? undefined
+            : intent.skillId,
         candidateRevision,
         runtimeRevision,
+        ...detail,
       });
     });
   }
@@ -853,10 +917,59 @@ export class SkillHubLifecycleService {
     return { boundaryCrossed: true };
   }
 
-  private async cleanupProjectionScratch(operationId: string, signal: AbortSignal): Promise<void> {
-    const scratch = projectionScratch(this.skillsExtraRoot, operationId);
-    await this.filesystem.removeTreeIfPresent(this.skillsExtraRoot, scratch.staging, signal);
-    await this.filesystem.removeTreeIfPresent(this.skillsExtraRoot, scratch.backup, signal);
+  /** The approved removal of a revoked skill; see `runRuntimeRemoval` for what is checked and in what order. */
+  private async removeRuntimeSkill(
+    intent: SkillHubOperationIntentRecord,
+    candidate: CandidateSkillVersionRecord,
+    artifact: SkillHubSnapshotArtifactRecord,
+    skillName: string,
+    signal: AbortSignal,
+  ): Promise<SkillHubLifecycleApplyResult> {
+    const { storage, reloadSkills, afterRuntimeProjection } = this.options;
+    // A lineage never switched on has no runtime record: its removal only marks the lineage removed.
+    const run = intent.expectedRuntimeAbsent ? runNeverActivatedRemoval : runRuntimeRemoval;
+    return await run({
+      intent,
+      candidate,
+      record: await storage.skillLifecycle.find(intent.skillId),
+      lineage: {
+        removedCandidateIds: await storage.skillHubOperations.listAppliedRemovalCandidateIds(intent.workspaceId),
+        versions: await storage.candidateSkillVersions.listByCandidateId(
+          candidate.candidateId,
+          LINEAGE_VERSION_LIMIT + 1,
+        ),
+      },
+      manifest: artifact.manifest,
+      skillName,
+      signal,
+      artifactVerifies: await this.artifactStillVerifies(artifact.bundleRelPath, artifact.manifest),
+      filesystem: this.filesystem,
+      root: this.skillsExtraRoot,
+      settle: (disposition, tree, result) => this.settle(intent, artifact.artifactId, disposition, tree, result),
+      commit: (staged, detail) => this.applyCanonicalMutation(intent, candidate, artifact.artifactId, staged, detail),
+      reloadSkills,
+      afterStage: afterRuntimeProjection,
+    });
+  }
+
+  /** After an applied activation or removal (also on its replay); see `finishAppliedProjection`. */
+  private async finishAppliedProjection(
+    intent: SkillHubOperationIntentRecord,
+    settlement: SkillHubOperationSettlementRecord,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (settlement.disposition !== "applied" || !["activate", "remove"].includes(intent.operationKind)) return;
+    const { storage, reloadSkills } = this.options;
+    const journey = storage.governanceJourneyEvents;
+    await finishAppliedProjection(this.filesystem, this.skillsExtraRoot, {
+      intent,
+      signal,
+      reloadSkills,
+      recordFailure: async (error) => {
+        const event = projectionCleanupFailureEvent(intent, error, this.now());
+        if (!(await journey.find(event.eventId))) await journey.create(event);
+      },
+    });
   }
 
   private async artifactStillVerifies(
@@ -909,86 +1022,6 @@ export class SkillHubLifecycleService {
 }
 
 class AmbiguousSkillRuntimeProjectionError extends Error {}
-
-function assertSkillIdentity(skillId: string, name: string): void {
-  if (!/^[a-z0-9][a-z0-9_-]{0,127}$/iu.test(name) || skillId !== `extra:${name}`) {
-    throw new ConflictError({ message: "Skill Hub SKILL.md identity does not match the approved runtime skill ID." });
-  }
-}
-
-function assertRevisionExpectation(
-  label: string,
-  actual: number | undefined,
-  expected: number | undefined,
-  expectedAbsent: boolean,
-): void {
-  if ((expectedAbsent && actual !== undefined) || (!expectedAbsent && actual !== expected)) {
-    throw new ConflictError({
-      code: "WRITE_CONFLICT",
-      message: `Skill Hub ${label} revision is stale.`,
-      details: { expectedState: expectedAbsent ? "absent" : expected, currentRevision: actual },
-    });
-  }
-}
-
-function resolveManagedRoot(rootDir: string, configured: string, label: string): string {
-  const resolved = path.isAbsolute(configured) ? path.resolve(configured) : path.resolve(rootDir, configured);
-  const relative = path.relative(rootDir, resolved);
-  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new TypeError(`Skill Hub ${label} must stay inside the Gateway root.`);
-  }
-  return resolved;
-}
-
-function projectionScratch(root: string, operationId: string): { staging: string; backup: string } {
-  const token = sha256(operationId).slice(0, 24);
-  return {
-    staging: path.join(root, `.skill-hub-${token}.staging`),
-    backup: path.join(root, `.skill-hub-${token}.backup`),
-  };
-}
-
-function toRootRelative(rootDir: string, target: string): string {
-  return path.relative(rootDir, target).split(path.sep).join("/");
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
-function removeUndefined(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
-}
-
-function asOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function asOptionalNumber(value: unknown): number | undefined {
-  return typeof value === "number" ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasCurrentPromptwareAudit(snapshot: SkillHubSnapshotRecord): boolean {
-  const scanners = snapshot.audit.scanners;
-  if (!Array.isArray(scanners)) return false;
-  return scanners.some((scanner) => {
-    if (!isRecord(scanner) || !Array.isArray(scanner.coverageIds)) return false;
-    const coverageIds = scanner.coverageIds;
-    return (
-      scanner.scannerId === PROMPTWARE_SCANNER_ID &&
-      scanner.scannerVersion === PROMPTWARE_SCANNER_VERSION &&
-      typeof scanner.revision === "number" &&
-      scanner.revision >= PROMPTWARE_SCANNER_REVISION &&
-      ["exact_bytes", "model_facing_md_txt", "multiline", "protective_negation"].every((coverageId) =>
-        coverageIds.includes(coverageId),
-      )
-    );
-  });
-}
 
 function isConflict(error: unknown): boolean {
   return error instanceof ConflictError || error instanceof AmbiguousSkillRuntimeProjectionError;

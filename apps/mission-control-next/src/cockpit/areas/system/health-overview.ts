@@ -1,6 +1,7 @@
 import type { HealthSummaryResponse } from "@goatcitadel/mission-control-shared/api/types";
 import type { StatusTone } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { describeRuntimeService } from "@goatcitadel/mission-control-shared/content/runtime-service";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { BackupTrustState } from "./backup-trust";
 
 /** Runtime controls and backup records live on the native System › Runtime page. */
@@ -18,7 +19,8 @@ export interface HealthCheck {
     | "channels"
     | "integrations"
     | "updates"
-    | "remote_workers";
+    | "remote_workers"
+    | "skill_cleanup";
   title: string;
   detail: string;
   status: { label: string; tone: StatusTone };
@@ -119,6 +121,28 @@ export function deriveHealthChecks(health: HealthSummaryResponse, backupTrust?: 
       inspectPath: RUNTIME_INSPECT_PATH,
     },
     backupHealthCheck(backupTrust, Boolean(health.backups.latest)),
+    ...skillCleanupChecks(health.skillRemovalCleanup),
+  ];
+}
+
+/**
+ * One check while applied skill removals still leave their moved-aside folders in the skills folder; none when none
+ * are left or the count couldn't be read. The cleanup failures are in the Journey timeline.
+ */
+function skillCleanupChecks(cleanup: HealthSummaryResponse["skillRemovalCleanup"]): HealthCheck[] {
+  const count = cleanup?.leftFolders ?? 0;
+  if (count < 1) return [];
+  return [
+    {
+      id: "skill_cleanup",
+      title: "Removed skill cleanup",
+      status: { label: "Needs a look", tone: "waiting" },
+      detail:
+        count === 1
+          ? "A removed skill's folder is still in GoatCitadel's skills folder because deleting it failed. The skill itself is already removed, and GoatCitadel keeps trying to delete the folder. The failure is in the Journey timeline of the workspace the skill was removed from, which may not be this one."
+          : `The folders of ${plural(count, "removed skill")} are still in GoatCitadel's skills folder because deleting them failed. The skills themselves are already removed, and GoatCitadel keeps trying to delete the folders. The failures are in the Journey timeline of the workspaces the skills were removed from, which may not be this one.`,
+      inspectPath: "/library/journey",
+    },
   ];
 }
 

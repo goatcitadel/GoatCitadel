@@ -186,6 +186,13 @@ export const journeyBlockerLabel = (code: string) =>
 /** Journey event types, subject kinds and actions are open producer strings. */
 export const journeyWords = (value: string, fallback: string) => humanizeToken(value) || fallback;
 
+/** Journey actions that read better as a sentence than as their words. */
+const JOURNEY_ACTIONS: Record<string, string> = {
+  remove_cleanup_failed: "A removed skill's folder couldn't be deleted",
+  activate_cleanup_failed: "A skill's temporary install folder couldn't be deleted",
+};
+export const journeyActionLabel = (action: string) => JOURNEY_ACTIONS[action] ?? journeyWords(action, "Journey event");
+
 export const LEARNING_ACTION: Record<EngineeringLearningAction, string> = {
   activate: "Activate",
   update: "Update",

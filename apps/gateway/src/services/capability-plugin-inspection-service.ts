@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { LEFTOVER_REFUSAL_MESSAGES, type LeftoverRemovalVerdict } from "./capability-skill-actions-service.js";
 import fs from "node:fs/promises";
 import {
   ConflictError,
@@ -71,7 +72,14 @@ export const ASKS_FIRST = {
 const SKILL_BLOCKED_MESSAGE = "This skill didn't pass GoatCitadel's checks.";
 const SKILL_UNREADABLE_MESSAGE = "GoatCitadel can't check this skill.";
 const SKILL_REMOVED_EARLIER_MESSAGE =
-  "This skill was removed with an earlier install. It can't come back until skills can be removed.";
+  "This skill was left behind by an earlier install. Remove it in Capabilities › Skills, then check the plugin again.";
+/** A left-over that was never switched on has no row in Skills, so its removal is offered here, beside this line. */
+const SKILL_LEFT_INSTALLED_MESSAGE =
+  "This skill was left behind by an earlier install and was never switched on. Remove it here, then this plugin can be installed.";
+/** The first half of the line for a never-switched-on left-over GoatCitadel can't remove from here; the reason follows. */
+const SKILL_LEFT_NEVER_ON_MESSAGE = "This skill was left behind by an earlier install and was never switched on.";
+const SKILL_LEFTOVER_UNREADABLE_MESSAGE =
+  "GoatCitadel can't tell right now whether it can remove it. Check the plugin again.";
 const SKILL_NAME_TAKEN_MESSAGE = "A skill with this name is already installed.";
 /** A Claude Code skill's own refusals, in plain words. */
 const DIALECT_BLOCKED_MESSAGES: Readonly<Record<string, string>> = {
@@ -160,6 +168,11 @@ export interface CapabilityPluginInspectionSources {
    * Undefined when the workspace has no check with that id.
    */
   readSkillCheck(workspaceId: string, snapshotId: string): Promise<PluginSkillCheck | undefined>;
+  /**
+   * The removal request's own rule for a never-switched-on left-over (the Skills tab's `leftoverRemoval`): whether its
+   * removal is offered on this check. Absent where the Skills tab isn't wired; then none is offered.
+   */
+  readLeftoverRemoval?(workspaceId: string, skillId: string): Promise<LeftoverRemovalVerdict>;
   /** The plugin store's record of an installed plugin. */
   findInstalled(pluginId: string): Promise<StoredPlugin | undefined>;
   /** The kept inspection that answered this key in this scope, with its request's fingerprint. */
@@ -402,11 +415,26 @@ export class CapabilityPluginInspectionService {
 
   /**
    * Whether the reviewed skill can be installed now, read from its check by id. Checking the same copy again replays
-   * the same check, so a skill an earlier install of this plugin added, then its uninstall revoked, is refused: it
-   * can't come back until skills can be removed. Another installed skill of that name refuses it too. A plugin
+   * the same check, so a skill an earlier install of this plugin added, then its uninstall revoked, is refused until it
+   * is removed in Capabilities › Skills. Another installed skill of that name refuses it too. A plugin
    * skill named like a skill that ships with GoatCitadel is refused first, with its own line. A check that can't be
    * read is never taken as installable.
    */
+  /** The removal rule's verdict, or undefined (logged) when it can't be read or isn't wired. */
+  private async readLeftoverRemoval(
+    input: CapabilityPluginInspectInput,
+    skillId: string,
+    pieceId: string,
+  ): Promise<LeftoverRemovalVerdict | undefined> {
+    if (!this.sources.readLeftoverRemoval) return { removable: false, reason: "not_left_by_plugin" };
+    try {
+      return await this.sources.readLeftoverRemoval(input.workspaceId, skillId);
+    } catch (error) {
+      warn(input.log, pieceId, error, "a left-over skill's removal couldn't be read");
+      return undefined;
+    }
+  }
+
   private async installableSkill(
     snapshotId: string,
     pieceId: string,
@@ -431,7 +459,17 @@ export class CapabilityPluginInspectionService {
     // Removed earlier only when what's left of it is revoked (through this check or another), or nothing of it runs; a
     // live one is installed now.
     if (runtimeLive) return blocked(NAME_TAKEN_BLOCKER, SKILL_NAME_TAKEN_MESSAGE);
-    if (leftOver) return blocked(leftOver, SKILL_REMOVED_EARLIER_MESSAGE);
+    if (leftOver) {
+      if (check.revoked || check.runtimeRevoked) return blocked(leftOver, SKILL_REMOVED_EARLIER_MESSAGE);
+      // The removal request's own rule decides whether it is offered here; anything else says why, with no button.
+      const skillId = check.skillId ?? `extra:${check.title}`;
+      const verdict = await this.readLeftoverRemoval(input, skillId, pieceId);
+      if (verdict?.removable) {
+        return { status: "blocked", code: leftOver, message: SKILL_LEFT_INSTALLED_MESSAGE, removableSkillId: skillId };
+      }
+      const why = verdict ? LEFTOVER_REFUSAL_MESSAGES[verdict.reason] : SKILL_LEFTOVER_UNREADABLE_MESSAGE;
+      return blocked(leftOver, `${SKILL_LEFT_NEVER_ON_MESSAGE} ${why}`);
+    }
     if (blockers.includes(NAME_TAKEN_BLOCKER)) return blocked(NAME_TAKEN_BLOCKER, SKILL_REMOVED_EARLIER_MESSAGE);
     return blocked(blockers[0] ?? "SKILL_CHECK_BLOCKED", SKILL_BLOCKED_MESSAGE);
   }

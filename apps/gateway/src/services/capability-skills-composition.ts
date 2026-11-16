@@ -25,6 +25,9 @@ import {
   type PluginSkillListing,
   type PluginUninstallRevokeInput,
   type PluginUninstallRevokeOutcome,
+  newestLeftoverCheck,
+  type LeftoverCandidateVersion,
+  type SkillHubSettlementRead,
 } from "./capability-skill-actions-service.js";
 import { CapabilitySkillDiscoverService } from "./capability-skill-discover-service.js";
 import { CapabilitySkillUsageService } from "./capability-skill-usage-service.js";
@@ -117,6 +120,18 @@ export interface CapabilitySkillsOwners {
    * skill from any other.
    */
   skillHubSnapshots: { find(snapshotId: string): Promise<SkillHubCheckSource | undefined> };
+  /** Skill Hub's settlements, read one operation at a time: what a removal's outcome is read from. */
+  skillHubSettlements: {
+    findSettlementByOperationId(operationId: string): Promise<SkillHubSettlementRead | undefined>;
+  };
+  /**
+   * Skill Hub's candidate versions and the lineages already removed in a workspace: where the check of a left-over skill
+   * that was never switched on is found (it has no runtime record to name it).
+   */
+  skillHubLineages: {
+    listVersions(): Promise<readonly LeftoverCandidateVersion[]>;
+    listRemovedCandidateIds(workspaceId: string): Promise<readonly string[]>;
+  };
   /**
    * The plugin records, read through the Plugins tab's one store (never a second one): which plugin lists a check as
    * its skill, for a step on that skill and for the Skills tab's marks, and the plugins uninstalled since, whose skills
@@ -185,6 +200,8 @@ export function composeCapabilitySkills({
   rootDir,
   skillHub,
   skillHubSnapshots,
+  skillHubSettlements,
+  skillHubLineages,
   pluginRecords,
   skillSources,
 }: CapabilitySkillsOwners): CapabilitySkills {
@@ -224,6 +241,18 @@ export function composeCapabilitySkills({
       createSkillHubApproval: (...args) => skillHub.createSkillHubApproval(...args),
       findSkillHubSnapshot: (snapshotId) => skillHubSnapshots.find(snapshotId),
       listPluginRecords: () => pluginRecords.list(),
+      readSkillLifecycle: async (workspaceId, skillId) =>
+        (await skills.listSkills("ALL", workspaceId)).find((skill) => skill.skillId === skillId)?.lifecycle,
+      listSkillsRemovedWithPlugins: async () => new Set(removedPluginSkills(await pluginRecords.listRemoved()).keys()),
+      findSkillHubSettlement: (operationId) => skillHubSettlements.findSettlementByOperationId(operationId),
+      listRemovedPlugins: () => pluginRecords.listRemoved(),
+      findLeftoverCheck: async (workspaceId, skillId) =>
+        newestLeftoverCheck(
+          await skillHubLineages.listVersions(),
+          new Set(await skillHubLineages.listRemovedCandidateIds(workspaceId)),
+          workspaceId,
+          skillId,
+        ),
     },
     reportFailedStep,
   );

@@ -54,6 +54,7 @@ export class SkillAggregateRevisionRepository {
   private readonly ensureStmt;
   private readonly fenceStmt;
   private readonly bumpStmt;
+  private readonly deleteFenceStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare(`
@@ -82,11 +83,34 @@ export class SkillAggregateRevisionRepository {
         AND aggregate_id = @aggregateId
         AND revision = @expectedRevision
     `);
+    this.deleteFenceStmt = db.prepare(`
+      DELETE FROM skill_aggregate_revisions
+      WHERE aggregate_kind = @aggregateKind
+        AND aggregate_id = @aggregateId
+        AND revision = @expectedRevision
+    `);
   }
 
   public get(aggregateKind: SkillAggregateKind, aggregateId: string): SkillAggregateRevisionRecord | undefined {
     const key = normalizeKey({ aggregateKind, aggregateId });
     return this.getNormalized(key);
+  }
+
+  /**
+   * Deletes a fence together with the aggregate it guards, inside the transaction that owns the domain delete.
+   * Throws the usual revision conflict when the stored revision is not the expected one.
+   */
+  public deleteFence(aggregateKind: SkillAggregateKind, aggregateId: string, expectedRevision: number): void {
+    const key = normalizeKey({ aggregateKind, aggregateId });
+    const normalizedExpectedRevision = normalizeExpectedRevision(expectedRevision);
+    const deleted = this.deleteFenceStmt.run({
+      aggregateKind: key.aggregateKind,
+      aggregateId: key.aggregateId,
+      expectedRevision: normalizedExpectedRevision,
+    });
+    if (deleted.changes === 0) {
+      this.throwCasMiss(key, normalizedExpectedRevision);
+    }
   }
 
   /** Lazily establishes revision one for filesystem-only or otherwise unbackfilled aggregates. */

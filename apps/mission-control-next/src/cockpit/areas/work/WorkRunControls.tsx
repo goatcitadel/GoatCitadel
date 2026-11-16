@@ -34,7 +34,7 @@ const ACTIONS: readonly { id: WorkRunAction; label: string; description: string 
   {
     id: "recover",
     label: "Recover",
-    description: "Requeues this dead-lettered run. Steps and external effects may run again.",
+    description: "Requeues this run, which needs recovery. Steps and external effects may run again.",
   },
 ];
 

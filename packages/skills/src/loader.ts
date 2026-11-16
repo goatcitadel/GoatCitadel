@@ -18,9 +18,16 @@ export interface SkillSource {
 export interface SkillsLogger {
   warn: (message: string, context?: Record<string, unknown>) => void;
   error: (message: string, context?: Record<string, unknown>) => void;
+  /** Routine detail, such as a Skill Hub scratch folder skipped on purpose. Optional; nothing is lost without it. */
+  debug?: (message: string, context?: Record<string, unknown>) => void;
 }
 
 const defaultLogger: SkillsLogger = {
+  // Written only at debug level, as the Gateway's own logger does.
+  debug: (message, context) => {
+    // eslint-disable-next-line no-console -- debug detail goes to the local runtime log only when debug logging is on.
+    if (process.env.GOATCITADEL_LOG_LEVEL === "debug") console.debug(`[goatcitadel] ${message}`, context ?? {});
+  },
   // eslint-disable-next-line no-console -- skill discovery/parse problems must surface in local runtime logs; callers can inject a structured logger.
   warn: (message, context) => console.warn(`[goatcitadel] ${message}`, context ?? {}),
   // eslint-disable-next-line no-console -- unexpected skill source-read failures must surface in local runtime logs; callers can inject a structured logger.
@@ -33,16 +40,30 @@ function isErrnoException(error: unknown, code: string): boolean {
 
 export class SkillsService {
   private loaded: LoadedSkill[] = [];
+  /** How many reloads have started, and which of them last set `loaded`. */
+  private startedReloads = 0;
+  private appliedReload = 0;
 
   public constructor(
     private readonly sources: SkillSource[],
     private readonly logger: SkillsLogger = defaultLogger,
   ) {}
 
+  /**
+   * Reads every source again. Reloads can overlap, and the one that started last read the disk last, so its list wins:
+   * one that finishes after a later-started reload already set the list is dropped, and answers that newer list. Without
+   * this a slow reload that read a skill's folder before it was moved aside could put the skill back after a later
+   * reload took it out.
+   */
   public async reload(): Promise<LoadedSkill[]> {
+    this.startedReloads += 1;
+    const reload = this.startedReloads;
     const sourceSkills = await Promise.all(this.sources.map((source) => loadSourceSkills(source, this.logger)));
 
-    this.loaded = resolveSkillPrecedence(sourceSkills.flat());
+    if (reload > this.appliedReload) {
+      this.appliedReload = reload;
+      this.loaded = resolveSkillPrecedence(sourceSkills.flat());
+    }
     return this.loaded;
   }
 
@@ -84,6 +105,16 @@ async function loadSourceSkills(source: SkillSource, logger: SkillsLogger): Prom
   return loaded.filter((skill): skill is LoadedSkill => skill !== undefined);
 }
 
+/**
+ * Skill Hub stages an activation and parks a removed skill's folder beside the skills it governs, under
+ * `.skill-hub-<token>.staging` and `.skill-hub-<token>.backup`. Those folders are its own scratch, never installed
+ * skills: anything that lists the skills in a source folder skips them, or a skill would come back into the list while
+ * its record is being written or after it was deleted.
+ */
+export function isSkillHubScratchFolderName(name: string): boolean {
+  return name.startsWith(".skill-hub-");
+}
+
 // Symlinks and Windows junctions report isDirectory() === false on a Dirent, so
 // they used to vanish silently. A link is accepted only when it resolves to a
 // directory that stays inside the (real) source root: a skill source is a
@@ -94,6 +125,11 @@ async function resolveSkillChildDir(
   entry: Dirent,
   logger: SkillsLogger,
 ): Promise<string | undefined> {
+  if (isSkillHubScratchFolderName(entry.name)) {
+    // Only the folder's own name: it sits inside the source folder, and no path is logged.
+    logger.debug?.(`Skipping a Skill Hub scratch folder: ${entry.name}`, { source: source.source, folder: entry.name });
+    return undefined;
+  }
   const entryPath = path.join(source.dir, entry.name);
   if (entry.isDirectory()) {
     return entryPath;

@@ -111,6 +111,7 @@ export class GovernanceJourneyEventRepository {
   private readonly getStmt;
   private readonly getByIdempotencyKeyStmt;
   private readonly highWaterStmt;
+  private readonly listRemovalCleanupFailuresStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
@@ -139,6 +140,22 @@ export class GovernanceJourneyEventRepository {
       ORDER BY recorded_at DESC, event_id DESC
       LIMIT 1
     `);
+    this.listRemovalCleanupFailuresStmt = db.prepare(`
+      SELECT * FROM governance_journey_events
+      WHERE event_type = 'skill_hub_lifecycle' AND action = 'remove_cleanup_failed'
+      ORDER BY recorded_at DESC, event_id DESC
+      LIMIT ?
+    `);
+  }
+
+  /**
+   * The newest Skill Hub removal cleanup failures in every workspace (the event a removal records once when deleting
+   * its moved-aside folder fails), at most `limit` (1 to 500). One read, for System › Health's count.
+   */
+  public listSkillHubRemovalCleanupFailures(limit = 500): GovernanceJourneyEventRecord[] {
+    const bounded = Math.max(1, Math.min(500, Math.floor(limit)));
+    const rows = this.listRemovalCleanupFailuresStmt.all(bounded) as GovernanceJourneyEventRow[];
+    return rows.map(mapRow);
   }
 
   public create(input: GovernanceJourneyEventRecord): GovernanceJourneyEventRecord {

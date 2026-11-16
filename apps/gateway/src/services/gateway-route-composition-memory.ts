@@ -2,6 +2,7 @@ import { KnowledgeFacadeService } from "./memory-facade-service.js";
 import { readKnowledgeApprovalResult } from "./knowledge-approval-result.js";
 import { listKnowledgeDocuments } from "./knowledge-document-list.js";
 import { SkillEvaluationService } from "./skill-evaluation-service.js";
+import { CapabilityPluginStore } from "./capability-plugin-store.js";
 import { SkillHubOperatorService } from "./skill-hub-operator-service.js";
 import { KeychainEvidenceReceiptSigningKeyProvider } from "./evidence-receipt-signing-key.js";
 import type { EvidenceReceiptDataPort } from "./evidence-receipt-service.js";
@@ -53,6 +54,11 @@ export function composeMemoryKnowledgeRouteDependencies(
     storage: gateway.storage,
     createApproval: (input) => gateway.createApproval(input),
     listInspectableCatalog: async () => await gateway.capabilitySystemService.listCatalog("inspectable"),
+    // Read through the plugin store over the same settings row the Plugins tab writes.
+    readPluginRecords: async () => {
+      const store = new CapabilityPluginStore(gateway.storage.systemSettings);
+      return { plugins: await store.list(), removed: await store.listRemoved() };
+    },
   });
 
   return {

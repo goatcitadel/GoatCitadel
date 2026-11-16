@@ -60,67 +60,83 @@ export function AccessSection({ activeWorkspaceName, route, navigate }: Settings
       {data ? (
         <SettingsStack>
           <SettingsLoadWarnings issues={data.issues} onRetry={reload} />
-          <p className="mc-next-settings-field-note">Workspace: {activeWorkspaceName}. Authentication is installation-wide.</p>
-          <GatewayAuthEditor settings={data.settings} available={!loading && !error} reload={reload}
-            onReviewApproval={approvalId => navigate({ area: "ops", section: "approvals", approvalId, theme: route.theme })} />
-          <SettingsButtonRow><NativeButton variant="outline" onClick={() => void reload()}>Refresh devices</NativeButton></SettingsButtonRow>
+          <p className="mc-next-settings-field-note">
+            Workspace: {activeWorkspaceName}. Authentication is installation-wide.
+          </p>
+          <GatewayAuthEditor
+            settings={data.settings}
+            available={!loading && !error}
+            reload={reload}
+            onReviewApproval={(approvalId) =>
+              navigate({ area: "ops", section: "approvals", approvalId, theme: route.theme })
+            }
+          />
+          <SettingsButtonRow>
+            <NativeButton variant="outline" onClick={() => void reload()}>
+              Refresh devices
+            </NativeButton>
+          </SettingsButtonRow>
           <SettingsStack>
-            <NativeDisclosureCard id="access-transport" title="Transport and credential posture"><NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="Current posture"
-              subtitle="Readable auth state instead of a recycled general page."
-            >
-              <NativeMetricGrid
-                items={[
+            <NativeDisclosureCard id="access-transport" title="Transport and credential posture">
+              <NativeCard
+                density="compact"
+                className="mc-next-settings-panel"
+                title="Current posture"
+                subtitle="Readable auth state instead of a recycled general page."
+              >
+                <NativeMetricGrid
+                  items={[
+                    {
+                      label: "Loopback bypass",
+                      value: data.settings.auth?.allowLoopbackBypass ? "Enabled" : "Disabled",
+                      meta:
+                        data.settings.auth?.tokenConfigured || data.settings.auth?.basicConfigured
+                          ? "Protected mode configured"
+                          : "No persisted credentials",
+                    },
+                    {
+                      label: "Token auth",
+                      value: data.settings.auth?.tokenConfigured ? "Configured" : "Missing",
+                      meta: "Operator token presence",
+                    },
+                    {
+                      label: "Basic auth",
+                      value: data.settings.auth?.basicConfigured ? "Configured" : "Missing",
+                      meta: "Username/password presence",
+                    },
+                  ]}
+                />
+              </NativeCard>
+            </NativeDisclosureCard>
+            <NativeDisclosureCard id="access-continuity" title="Desktop/mobile continuity">
+              <NativeCard
+                density="compact"
+                className="mc-next-settings-panel"
+                title="Desktop/mobile continuity"
+                subtitle="Trusted devices, desktop runtime state, and companion handoff boundaries."
+                stats={[
+                  { label: "Desktop", value: data.daemon?.state ?? "unknown" },
                   {
-                    label: "Loopback bypass",
-                    value: data.settings.auth?.allowLoopbackBypass ? "Enabled" : "Disabled",
-                    meta:
-                      data.settings.auth?.tokenConfigured || data.settings.auth?.basicConfigured
-                        ? "Protected mode configured"
-                        : "No persisted credentials",
-                  },
-                  {
-                    label: "Token auth",
-                    value: data.settings.auth?.tokenConfigured ? "Configured" : "Missing",
-                    meta: "Operator token presence",
-                  },
-                  {
-                    label: "Basic auth",
-                    value: data.settings.auth?.basicConfigured ? "Configured" : "Missing",
-                    meta: "Username/password presence",
+                    label: "Active devices",
+                    value: data.grants
+                      ? String(data.grants.filter((grant) => deviceAccessGrantStatus(grant, now) === "active").length)
+                      : "Unavailable",
                   },
                 ]}
-              />
-            </NativeCard></NativeDisclosureCard>
-            <NativeDisclosureCard id="access-continuity" title="Desktop/mobile continuity"><NativeCard
-              density="compact"
-              className="mc-next-settings-panel"
-              title="Desktop/mobile continuity"
-              subtitle="Trusted devices, desktop runtime state, and companion handoff boundaries."
-              stats={[
-                { label: "Desktop", value: data.daemon?.state ?? "unknown" },
-                {
-                  label: "Active devices",
-                  value: data.grants
-                    ? String(data.grants.filter((grant) => deviceAccessGrantStatus(grant, now) === "active").length)
-                    : "Unavailable",
-                },
-              ]}
-            >
-              <SettingsActionList
-                ariaLabel="Desktop and mobile continuity checks"
-                items={continuityItems.map((item) => ({
-                  id: item.id,
-                  label: item.label,
-                  description: item.description,
-                  meta: item.meta,
-                  actionLabel: item.actionLabel,
-                }))}
-                maxHeight="min(36vh, 22rem)"
-              />
-            </NativeCard></NativeDisclosureCard>
+              >
+                <SettingsActionList
+                  ariaLabel="Desktop and mobile continuity checks"
+                  items={continuityItems.map((item) => ({
+                    id: item.id,
+                    label: item.label,
+                    description: item.description,
+                    meta: item.meta,
+                    actionLabel: item.actionLabel,
+                  }))}
+                  maxHeight="min(36vh, 22rem)"
+                />
+              </NativeCard>
+            </NativeDisclosureCard>
           </SettingsStack>
           <NativeCard
             density="compact"
@@ -139,8 +155,12 @@ export function AccessSection({ activeWorkspaceName, route, navigate }: Settings
                   (typeof grant.metadata.origin === "string" ? grant.metadata.origin : undefined) ||
                   grant.platform ||
                   "Unknown origin",
-                onClick: !deviceGrantCanBeRevoked(grant, now) || deviceRevocation.attemptFor(grant.grantId) ? undefined : () => deviceRevocation.review(grant),
-                actionLabel: deviceRevocation.attemptFor(grant.grantId)?.message ?? (grant.revokedAt ? "Revoked" : "Revoke"),
+                onClick:
+                  !deviceGrantCanBeRevoked(grant, now) || deviceRevocation.attemptFor(grant.grantId)
+                    ? undefined
+                    : () => deviceRevocation.review(grant),
+                actionLabel:
+                  deviceRevocation.attemptFor(grant.grantId)?.message ?? (grant.revokedAt ? "Revoked" : "Revoke"),
               }))}
               emptyLabel={data.grants ? "No device grants found." : "Device grants could not be loaded."}
             />
@@ -156,7 +176,9 @@ export function AccessSection({ activeWorkspaceName, route, navigate }: Settings
         pending={deviceRevocation.pending}
         onCancel={deviceRevocation.cancel}
         onConfirm={() => {
-          void deviceRevocation.confirm().then((revoked) => { if (revoked) void reload(); });
+          void deviceRevocation.confirm().then((revoked) => {
+            if (revoked) void reload();
+          });
         }}
       />
     </SettingsSectionShell>

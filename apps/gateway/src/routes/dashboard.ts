@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import { readSkillRemovalCleanup } from "./skill-removal-cleanup-health.js";
 import { z } from "zod";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { projectSettingsPublicValue } from "../services/provider-settings-public-projection.js";
@@ -426,15 +427,17 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     const now = new Date();
     const to = now.toISOString();
     const from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const [backups, database, costSummary, costUsageAvailability, qmd, daemonStatus, daemonLogs] = await Promise.all([
-      fastify.services.dashboard.listBackups(parsed.data.backupLimit),
-      fastify.services.health.getDatabaseHealthSnapshot(),
-      fastify.services.dashboard.costSummary(parsed.data.costScope, from, to),
-      fastify.services.dashboard.costUsageAvailability(from, to),
-      fastify.services.dashboard.getMemoryQmdStats(from, to),
-      fastify.services.daemon.getDaemonStatus(),
-      fastify.services.daemon.listDaemonLogs(parsed.data.logTail),
-    ]);
+    const [backups, database, costSummary, costUsageAvailability, qmd, daemonStatus, daemonLogs, skillRemovalCleanup] =
+      await Promise.all([
+        fastify.services.dashboard.listBackups(parsed.data.backupLimit),
+        fastify.services.health.getDatabaseHealthSnapshot(),
+        fastify.services.dashboard.costSummary(parsed.data.costScope, from, to),
+        fastify.services.dashboard.costUsageAvailability(from, to),
+        fastify.services.dashboard.getMemoryQmdStats(from, to),
+        fastify.services.daemon.getDaemonStatus(),
+        fastify.services.daemon.listDaemonLogs(parsed.data.logTail),
+        readSkillRemovalCleanup(fastify, request.log),
+      ]);
     return reply.send(
       projectPublicSecretValue({
         generatedAt: to,
@@ -458,6 +461,8 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
           items: backups,
           latest: backups[0] ?? null,
         },
+        // Absent when it can't be read: an unread count is never shown as none left.
+        ...(skillRemovalCleanup ? { skillRemovalCleanup } : {}),
       }),
     );
   });

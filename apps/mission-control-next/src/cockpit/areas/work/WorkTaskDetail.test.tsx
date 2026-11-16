@@ -104,6 +104,23 @@ describe("Work task detail", () => {
     expect(container.querySelector("#task-deliverable-title")).toBeNull();
   });
 
+  it("words an empty task page as nothing recorded and says where to add a deliverable", async () => {
+    vi.mocked(fetchTask).mockResolvedValue(task());
+    await render();
+    await vi.waitFor(() => expect(container.textContent).toContain("No activity recorded for this task."));
+    expect(container.textContent).toContain("No deliverables recorded. Add one with Record a deliverable below.");
+    expect(container.textContent).not.toContain("were returned");
+  });
+
+  it("does not point at a form that a run-handled task does not have", async () => {
+    vi.mocked(fetchTask).mockResolvedValue(
+      task({ agenticContext: { durableRunId: "run-1" } as TaskRecord["agenticContext"] }),
+    );
+    await render();
+    await vi.waitFor(() => expect(container.textContent).toContain("No deliverables recorded."));
+    expect(container.textContent).not.toContain("Add one with");
+  });
+
   it("withholds a foreign record and does not request its detail evidence", async () => {
     vi.mocked(fetchTask).mockResolvedValue(task({ workspaceId: "workspace-b", title: "PRIVATE TASK" }));
     await render();

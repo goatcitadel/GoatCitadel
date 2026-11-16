@@ -43,7 +43,7 @@ export function deriveSystemHealthChecks(
   if (!stale.length) return checks;
   const earlier = deriveCurrentSystemHealthChecks(retainedHealthObservations(sources), updates, backupTrust);
   const affected: Record<keyof SystemHealthSources, readonly HealthCheck["id"][]> = {
-    summary: ["gateway", "database", "service", "backups"],
+    summary: ["gateway", "database", "service", "backups", "skill_cleanup"],
     llama: ["models"],
     npu: ["models"],
     connections: ["integrations", "channels"],

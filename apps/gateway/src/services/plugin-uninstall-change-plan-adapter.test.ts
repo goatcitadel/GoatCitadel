@@ -756,6 +756,32 @@ describe("uninstalling a plugin through one Change Plan", () => {
     await expect(h.store.listRemoved()).resolves.toMatchObject([{ skillIds: [SKILL_ID] }]);
   });
 
+  it("promises no removal in Capabilities for a skill that was never switched on", async () => {
+    const LEFT =
+      "A skill it added stays until you remove it in Capabilities › Skills. Until then the plugin can't be installed again.";
+    const NEVER_ON =
+      "A skill it added was never switched on, so it stays until you remove it from a new check of this plugin. Until then the plugin can't be installed again.";
+    const h = harness();
+    await installed(h);
+    h.removal.skillChecks.set(SKILL_CHECK_ID, skillCheck({ version: "installed_off", step: "installed_off" }));
+
+    const neverOn = await h.plans.get(OPERATOR, (await h.uninstall()).planId);
+
+    expect(neverOn.impact).toContain(NEVER_ON);
+    expect(neverOn.impact).not.toContain(LEFT);
+
+    // Switched on once and revoked since: its runtime record stays revoked, so it can be removed.
+    const again = harness();
+    await installed(again);
+    again.removal.skillChecks.set(
+      SKILL_CHECK_ID,
+      skillCheck({ version: "installed_off", step: "installed_off", runtimeRevoked: true }),
+    );
+    const revokedBefore = await again.plans.get(OPERATOR, (await again.uninstall()).planId);
+    expect(revokedBefore.impact).toContain(LEFT);
+    expect(revokedBefore.impact).not.toContain(NEVER_ON);
+  });
+
   it("keeps its words for a skill whose own step is already under way, as nothing waits on the operator", async () => {
     const h = harness();
     await installed(h);
@@ -926,7 +952,9 @@ describe("uninstalling a plugin through one Change Plan", () => {
 
     const plan = await h.plans.get(OPERATOR, waiting.planId);
     expect(plan.summary).toContain("Remove the skill meeting-notes, so the AI can't use it.");
-    expect(plan.impact).toContain("A skill it added can't be installed again until skills can be removed.");
+    expect(plan.impact).toContain(
+      "A skill it added stays until you remove it in Capabilities › Skills. Until then the plugin can't be installed again.",
+    );
   });
 
   it("cleans up after a failed install, counting only what it added", async () => {
@@ -1337,7 +1365,7 @@ describe("uninstalling a plugin through one Change Plan", () => {
     expect(again).toMatchObject({ outcome: "applied" });
     // A skill an earlier pass removed still blocks a reinstall, and the plan still says so.
     expect((await h.plans.get(OPERATOR, again.planId)).impact).toContain(
-      "A skill it added can't be installed again until skills can be removed.",
+      "A skill it added stays until you remove it in Capabilities › Skills. Until then the plugin can't be installed again.",
     );
     await expect(h.store.get(PLUGIN_ID)).resolves.toBeUndefined();
     await expect(h.store.listRemoved()).resolves.toMatchObject([{ pluginId: PLUGIN_ID, skillIds: [SKILL_ID] }]);

@@ -5,7 +5,6 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { formatMoney, plural } from "@goatcitadel/mission-control-shared/content/format";
 import {
-  humanizeToken,
   presentApprovalStatus,
   presentEventType,
   presentRiskLevel,
@@ -35,7 +34,13 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 import { presentErrorText } from "../../lib/present-error";
-import { EVIDENCE_STATE_WORDS, RUN_ERROR_SOURCES } from "./work-vocabulary";
+import { RecordedCancellationDetails } from "./RecordedCancellationDetails";
+import {
+  EVIDENCE_STATE_WORDS,
+  presentApprovalKind,
+  presentRecordedCancellation,
+  RUN_ERROR_SOURCES,
+} from "./work-vocabulary";
 import { ListLimitFooter, useListLimit } from "./WorkListLimit";
 
 export function WorkRunDetail({ runId }: { runId: string }) {
@@ -50,6 +55,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
   const data = trace.isError ? undefined : trace.data;
   const recordedWorkspaceId = data?.run ? durableRunWorkspaceId(data.run) : null;
   const run = recordedWorkspaceId === workspaceId ? data?.run : undefined;
+  const lastErrorCancellation = presentRecordedCancellation(run?.lastError);
   const sessionId =
     typeof run?.payload.sessionId === "string" && run.payload.sessionId.trim() ? run.payload.sessionId : null;
   const pendingApproval = run && data ? data.approvals.items.some((item) => item.status === "pending") : false;
@@ -176,10 +182,14 @@ export function WorkRunDetail({ runId }: { runId: string }) {
           {run.lastError || run.recoverySummary ? (
             <div className="grid gap-2">
               <p role="alert" className="rounded-md border border-line p-3 text-sm text-status-failed">
-                {run.lastError ? presentErrorText(run.lastError).summary : null}
+                {run.lastError ? (lastErrorCancellation ?? presentErrorText(run.lastError).summary) : null}
                 {run.recoverySummary ? ` ${run.recoverySummary}` : ""}
               </p>
-              <RecordedErrorDetails error={run.lastError} />
+              {run.lastError && lastErrorCancellation ? (
+                <RecordedCancellationDetails recorded={run.lastError} />
+              ) : (
+                <RecordedErrorDetails error={run.lastError} />
+              )}
             </div>
           ) : null}
           {data.errors.items.length ? (
@@ -191,11 +201,15 @@ export function WorkRunDetail({ runId }: { runId: string }) {
               {plural(data.errors.items.length, "recorded error")} {data.errors.items.length === 1 ? "needs" : "need"}{" "}
               review.
               <ul className="mt-3 space-y-2">
-                {data.errors.items.map((error) => (
-                  <li key={`${error.source}:${error.id}`} className="break-words">
-                    <strong>{RUN_ERROR_SOURCES[error.source] ?? "Run"}:</strong> {error.message}
-                  </li>
-                ))}
+                {data.errors.items.map((error) => {
+                  const cancellation = presentRecordedCancellation(error.message);
+                  return (
+                    <li key={`${error.source}:${error.id}`} className="break-words">
+                      <strong>{RUN_ERROR_SOURCES[error.source] ?? "Run"}:</strong> {cancellation ?? error.message}
+                      {cancellation ? <RecordedCancellationDetails recorded={error.message} /> : null}
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           ) : null}
@@ -280,7 +294,7 @@ export function WorkRunDetail({ runId }: { runId: string }) {
                       key={approval.approvalId}
                       className="flex flex-wrap items-center justify-between gap-2 border-b border-line-subtle py-2 text-sm"
                     >
-                      <span className="text-fg">{humanizeToken(approval.kind)}</span>
+                      <span className="text-fg">{presentApprovalKind(approval.kind)}</span>
                       <NativeOwnerLink
                         scope={[workspaceId, runId, approval.approvalId]}
                         href={approvalRecordHref(approval.approvalId)}

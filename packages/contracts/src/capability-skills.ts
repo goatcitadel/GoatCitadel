@@ -1,5 +1,7 @@
+import type { ApprovalStatus } from "./approvals.js";
 import type { CapabilityCatalogEntry, SkillLifecycleState } from "./capabilities.js";
 import type { SkillCategoryId, SkillOrigin } from "./skill-categories.js";
+import type { SkillHubOperationSettlementDisposition } from "./skill-hub-lifecycle.js";
 import type { SkillRuntimeState, SkillSourceProvider } from "./skills.js";
 
 // ---------------------------------------------------------------------------
@@ -78,10 +80,16 @@ export interface CapabilitySkillItem {
    */
   fromPlugin?: { pluginId: string; name: string };
   /**
-   * The plugin whose uninstall removed this skill: it was revoked, or left switched off, so the AI can't use it, and it
-   * stays until skills can be removed. Absent while the AI can still use it, and when the plugin records couldn't be read.
+   * The plugin whose uninstall removed this skill: it was revoked, or left switched off, so the AI can't use it. A
+   * revoked one stays until you remove it (`removable`). Absent while the AI can still use it, and when the plugin
+   * records couldn't be read.
    */
   removedWithPlugin?: { name: string };
+  /**
+   * `true` when GoatCitadel can remove this skill: it was revoked, so the AI can't use it, and no installed plugin lists
+   * it. Removing it lets its source be installed again. Absent otherwise.
+   */
+  removable?: boolean;
 }
 
 export interface CapabilitySkillsResponse {
@@ -296,6 +304,44 @@ export interface CapabilitySkillOperationRequest {
   workspaceId: string;
   snapshotId: string;
   operationKind: "install_inactive" | "activate";
+}
+
+// ---------------------------------------------------------------------------
+// Removing a left-over skill: POST /api/v1/capabilities/skills/removals
+// ---------------------------------------------------------------------------
+
+/** Asks to remove one revoked skill a plugin left behind. No field skips its approval: a removal always asks. */
+export interface CapabilitySkillRemovalRequest {
+  workspaceId: string;
+  skillId: string;
+}
+
+/**
+ * What asking for a removal did. The removal always creates its approval, and no setting skips it.
+ * - `approved`: the same request handed back an approval the operator already gave; its own effect removes the skill (or
+ *   already has).
+ * - `waiting`: it waits for the operator's approval, which is the one in `workspaceId`.
+ */
+export type CapabilitySkillRemovalOutcome = {
+  status: "approved" | "waiting";
+  approvalId: string;
+  workspaceId: string;
+};
+
+/**
+ * One removal, read by its approval: GET /api/v1/capabilities/skills/removals/:approvalId?workspaceId=. `settlement` is
+ * there once the removal's effect has settled; until then only the approval's own status is known.
+ */
+export interface CapabilitySkillRemovalRead {
+  approvalId: string;
+  approvalStatus: ApprovalStatus;
+  settlement?: {
+    disposition: SkillHubOperationSettlementDisposition;
+    /** Why it settled as it did, as the effect recorded it (a code such as `runtime_projection_diverged`). */
+    reason?: string;
+    /** Temporary folders in the skills folder that an applied removal left because it couldn't confirm they were its own. */
+    otherScratchFolders?: number;
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -277,6 +277,7 @@ function projection(options: { blocked?: boolean; activeNonCallable?: boolean } 
           stage_rollback_candidate: { allowed: false, blockers: ["CANDIDATE_LINEAGE_MISSING"] },
           activate: { allowed: false, blockers: ["INACTIVE_CANDIDATE_MISSING"] },
           revoke: { allowed: false, blockers: ["VERSION_NOT_ACTIVE"] },
+          remove: { allowed: false, blockers: ["RUNTIME_NOT_REVOKED"] },
         },
       },
     ],

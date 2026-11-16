@@ -27,7 +27,7 @@ export const RULES = [
   {
     id: "humanize-token",
     pattern: /\bhumanizeToken\(/g,
-    budget: 24,
+    budget: 21,
     help: "use a typed presenter from status-vocabulary (or an area *-vocabulary.ts); humanizeToken is for free-form text only",
   },
   {

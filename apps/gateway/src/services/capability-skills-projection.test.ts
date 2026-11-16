@@ -259,7 +259,7 @@ describe("buildCapabilitySkillItems", () => {
     const items = buildCapabilitySkillItems({
       ...ITEMS_INPUT,
       skills: [
-        // Revoked by the uninstall: the AI can't use it, and it stays until skills can be removed.
+        // Revoked by the uninstall: the AI can't use it, and it can be removed.
         skill({ skillId: "extra:notes", name: "notes", callable: false, lifecycleState: "revoked" }),
         // Its revoke hasn't applied yet: the AI can still use it, so it isn't marked.
         skill({ skillId: "extra:digest", name: "digest", callable: true }),
@@ -277,6 +277,28 @@ describe("buildCapabilitySkillItems", () => {
       ["extra:other", undefined],
     ]);
     expect(items.filter((item) => "removedWithPlugin" in item)).toHaveLength(1);
+  });
+
+  it("marks only a revoked skill removed with its plugin as removable", () => {
+    const items = buildCapabilitySkillItems({
+      ...ITEMS_INPUT,
+      skills: [
+        skill({ skillId: "extra:notes", name: "notes", callable: false, lifecycleState: "revoked" }),
+        // Left switched off, not revoked: the uninstall left it, and GoatCitadel does not remove it.
+        skill({ skillId: "extra:parked", name: "parked", callable: false, lifecycleState: "approved" }),
+        skill({ skillId: "extra:other", name: "other", callable: false, lifecycleState: "revoked" }),
+      ],
+      removedPluginSkills: new Map([
+        ["extra:notes", { name: "Meeting tools" }],
+        ["extra:parked", { name: "Meeting tools" }],
+      ]),
+    });
+
+    expect(items.map((item) => [item.skillId, item.removable])).toEqual([
+      ["extra:notes", true],
+      ["extra:other", undefined],
+      ["extra:parked", undefined],
+    ]);
   });
 
   it("offers no switch for a skill removed with its plugin, even when the switch owner holds it", () => {

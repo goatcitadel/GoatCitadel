@@ -109,6 +109,7 @@ export class SkillHubOperationRepository {
   private readonly getArtifactBindingStmt;
   private readonly getEvidenceBindingStmt;
   private readonly getJourneyBindingStmt;
+  private readonly listAppliedRemovalCandidatesStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertIntentStmt = db.prepare(`
@@ -132,6 +133,15 @@ export class SkillHubOperationRepository {
       "SELECT * FROM skill_hub_operation_intents WHERE idempotency_key = ?",
     );
     this.findIntentByApprovalStmt = db.prepare("SELECT * FROM skill_hub_operation_intents WHERE approval_id = ?");
+    this.listAppliedRemovalCandidatesStmt = db.prepare(`
+      SELECT DISTINCT intent.target_candidate_id AS target_candidate_id
+      FROM skill_hub_operation_intents AS intent
+      JOIN skill_hub_operation_settlements AS settlement ON settlement.operation_id = intent.operation_id
+      WHERE intent.workspace_id = ?
+        AND intent.operation_kind = 'remove'
+        AND settlement.disposition = 'applied'
+      ORDER BY intent.target_candidate_id ASC
+    `);
     this.getApprovalBindingStmt = db.prepare(`
       SELECT approval_id, kind, status, linkage_json, payload_json
       FROM approvals
@@ -241,6 +251,17 @@ export class SkillHubOperationRepository {
     assertCanonicalIdentity(approvalId, "approval ID", 256);
     const row = this.findIntentByApprovalStmt.get(approvalId) as SkillHubOperationIntentRow | undefined;
     return row ? mapAndValidateIntent(row) : undefined;
+  }
+
+  /**
+   * The candidate lineages whose skill was removed in this workspace: the distinct target candidate of every
+   * `remove` intent whose settlement is `applied`. A removed lineage stays as history and is never reused.
+   */
+  public listAppliedRemovalCandidateIds(workspaceId: string): string[] {
+    assertCanonicalIdentity(workspaceId, "workspace ID", 256);
+    return this.listAppliedRemovalCandidatesStmt
+      .all<{ target_candidate_id: string }>(workspaceId)
+      .map((row) => row.target_candidate_id);
   }
 
   public createSettlement(input: SkillHubOperationSettlementRecord): SkillHubOperationSettlementRecord {
@@ -434,6 +455,9 @@ function validateIntent(input: SkillHubOperationIntentRecord): void {
     }
   } else if (input.operationKind === "activate") {
     if (input.expectedCandidateAbsent) throw new TypeError("Skill Hub activation requires an existing candidate.");
+  } else if (input.operationKind === "remove") {
+    // A never-switched-on skill has no runtime record, so a removal may expect it absent; never its candidate.
+    if (input.expectedCandidateAbsent) throw new TypeError("Skill Hub removal requires an existing candidate.");
   } else if (input.expectedCandidateAbsent || input.expectedRuntimeAbsent) {
     throw new TypeError("Skill Hub revoke requires existing candidate and runtime aggregates.");
   }

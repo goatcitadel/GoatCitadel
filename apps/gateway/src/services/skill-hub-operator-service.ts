@@ -29,6 +29,23 @@ import {
   pluginSkillSource,
 } from "./plugin-owned-refusal.js";
 import { BUNDLED_SKILL_NAME_TAKEN, isBundledSkillName } from "./plugin-skill-name-rules.js";
+import { TAKES_POWER_AWAY, takesPowerAway } from "./skill-hub-operation-power.js";
+import { leftoverPluginBlock, type LeftoverPluginBlock, type LeftoverPluginRecords } from "./skill-leftover-binding.js";
+import {
+  isCanonicalIntentString,
+  isOptionalCanonicalIntentString,
+  isOptionalPositiveRevision,
+  isSha256,
+  isCanonicalIsoDateTime,
+  isRecord,
+  compareCandidateNewest,
+  compareSnapshotPosition,
+  normalizeLimit,
+  normalizeOptional,
+  normalizeRequired,
+  readMetadataString,
+  uniqueCandidates,
+} from "./skill-hub-operator-values.js";
 
 export const SKILL_HUB_OPERATOR_SCHEMA_VERSION = "goatcitadel.skill-hub-operator.v1" as const;
 export const SKILL_HUB_OPERATOR_MAX_ITEMS = 100 as const;
@@ -56,7 +73,10 @@ export interface SkillHubOperatorApprovalSummary {
   settlement?: Pick<
     SkillHubOperationSettlementRecord,
     "settlementId" | "disposition" | "resultSha256" | "evidenceEnvelopeId" | "journeyEventId" | "settledAt"
-  >;
+  > & {
+    /** Why it settled as it did, as the effect recorded it (a code such as `runtime_projection_diverged`). */
+    reason?: string;
+  };
 }
 
 export interface SkillHubOperatorCandidateSummary {
@@ -190,6 +210,11 @@ export interface SkillHubOperatorServiceOptions {
   storage: SkillHubOperatorStorage;
   createApproval(input: ApprovalCreateInput): Promise<ApprovalRequest>;
   listInspectableCatalog(): Promise<CapabilityCatalogEntry[]>;
+  /**
+   * The plugin records and the uninstalled plugins remembered, through the Plugins tab's one store: a never-switched-on
+   * left-over is removable only when an uninstalled plugin left it (`leftoverPluginBlock`). Without it, none is.
+   */
+  readPluginRecords?: () => Promise<LeftoverPluginRecords>;
   now?: () => string;
 }
 
@@ -200,6 +225,10 @@ interface OperatorInventory {
   candidateInventoryTruncated: boolean;
   catalogBySkillId: Map<string, CapabilityCatalogEntry>;
   approvalsBySnapshot: Map<string, Partial<Record<SkillHubOperatorAction, SkillHubOperatorApprovalSummary>>>;
+  /** Candidate lineages whose skill was removed in this workspace; they stay as history and are never reused. */
+  removedCandidateIds: ReadonlySet<string>;
+  /** The plugin records and tombstones, or undefined when they aren't wired (then no left-over is removable). */
+  pluginRecords?: LeftoverPluginRecords;
 }
 
 interface SnapshotContext {
@@ -212,6 +241,8 @@ interface SnapshotContext {
   sourceCandidates: CandidateSkillVersionRecord[];
   lineageCandidateId?: string;
   lineageAmbiguous: boolean;
+  /** How many earlier lineages of this source were removed; a new install starts lineage number n. */
+  lineageGeneration: number;
   latestCandidate?: CandidateSkillVersionRecord;
   activeCandidate?: CandidateSkillVersionRecord;
   referenceSnapshot?: SkillHubSnapshotRecord;
@@ -221,6 +252,8 @@ interface SnapshotContext {
   runtimeRevision?: SkillAggregateRevisionRecord;
   catalogEntry?: CapabilityCatalogEntry;
   activeVersion: boolean;
+  /** Why this check's skill isn't a left-over an uninstalled plugin left, or undefined when it is. */
+  leftoverBlock?: LeftoverPluginBlock;
   candidateInventoryTruncated: boolean;
   approvals: Partial<Record<SkillHubOperatorAction, SkillHubOperatorApprovalSummary>>;
 }
@@ -242,7 +275,16 @@ const OPERATOR_ACTIONS: readonly SkillHubOperatorAction[] = [
   "stage_rollback_candidate",
   "activate",
   "revoke",
+  "remove",
 ];
+
+export { TAKES_POWER_AWAY };
+
+/** A version that never made a skill callable: still a candidate, or revoked. */
+const NEVER_ACTIVE_STATES: ReadonlySet<CandidateSkillVersionRecord["lifecycleState"]> = new Set([
+  "candidate",
+  "revoked",
+]);
 
 export class SkillHubOperatorService {
   private readonly now: () => string;
@@ -261,7 +303,7 @@ export class SkillHubOperatorService {
     const workspaceId = normalizeRequired(input.workspaceId, "workspace ID", 256);
     const { snapshots, limit, truncated } = input.snapshotIds
       ? await this.snapshotsByIds(workspaceId, input.snapshotIds)
-      : await this.newestSnapshots(workspaceId, normalizeLimit(input.limit));
+      : await this.newestSnapshots(workspaceId, normalizeLimit(input.limit, SKILL_HUB_OPERATOR_MAX_ITEMS));
     const inventory = await this.loadInventory(workspaceId);
     const items = await Promise.all(
       snapshots.map(async (snapshot) => this.project(await this.contextFor(snapshot, inventory))),
@@ -313,7 +355,7 @@ export class SkillHubOperatorService {
       throw new NotFoundError({ entity: "Skill Hub snapshot", id: snapshotId });
     }
     assertSkillHubSnapshotNotFromPlugin(snapshot, options.pluginPass);
-    const pluginSource = input.operationKind === "revoke" ? undefined : pluginSkillSource(snapshot);
+    const pluginSource = takesPowerAway(input.operationKind) ? undefined : pluginSkillSource(snapshot);
     const pluginInstallPlanId = pluginSource ? options.pluginPass?.installPlanId : undefined;
     if (pluginSource && !pluginInstallPlanId) throw new PluginSkillNeedsInstallError(pluginSource.pluginId);
     const context = await this.contextFor(snapshot, await this.loadInventory(workspaceId));
@@ -441,7 +483,8 @@ export class SkillHubOperatorService {
   }
 
   private async loadInventory(workspaceId: string): Promise<OperatorInventory> {
-    const rawCandidates = await this.options.storage.candidateSkillVersions.list(500);
+    const storage = this.options.storage;
+    const rawCandidates = await storage.candidateSkillVersions.list(500);
     const candidates = rawCandidates.filter(
       (candidate) =>
         candidate.sourceKind === "upstream_hub" &&
@@ -451,7 +494,7 @@ export class SkillHubOperatorService {
     );
     const candidateSnapshots = new Map<string, SkillHubSnapshotRecord>();
     for (const candidate of candidates) {
-      const snapshot = await this.options.storage.skillHubSnapshots.find(candidate.upstreamSnapshotId!);
+      const snapshot = await storage.skillHubSnapshots.find(candidate.upstreamSnapshotId!);
       if (snapshot?.workspaceId === workspaceId) candidateSnapshots.set(candidate.versionId, snapshot);
     }
     const catalogBySkillId = new Map(
@@ -466,11 +509,14 @@ export class SkillHubOperatorService {
       candidateInventoryTruncated: rawCandidates.length >= 500,
       catalogBySkillId,
       approvalsBySnapshot: await this.latestApprovalsBySnapshot(workspaceId),
+      removedCandidateIds: new Set(await storage.skillHubOperations.listAppliedRemovalCandidateIds(workspaceId)),
+      ...(this.options.readPluginRecords ? { pluginRecords: await this.options.readPluginRecords() } : {}),
     };
   }
 
   private async contextFor(snapshot: SkillHubSnapshotRecord, inventory: OperatorInventory): Promise<SnapshotContext> {
-    const deterministicVersion = await this.options.storage.candidateSkillVersions.find(versionIdForSnapshot(snapshot));
+    const storage = this.options.storage;
+    const deterministicVersion = await storage.candidateSkillVersions.find(versionIdForSnapshot(snapshot));
     const candidates = uniqueCandidates([
       ...inventory.candidates,
       ...(deterministicVersion &&
@@ -486,22 +532,36 @@ export class SkillHubOperatorService {
           snapshot:
             inventory.candidateSnapshots.get(candidate.versionId) ??
             (candidate.upstreamSnapshotId
-              ? await this.options.storage.skillHubSnapshots.find(candidate.upstreamSnapshotId)
+              ? await storage.skillHubSnapshots.find(candidate.upstreamSnapshotId)
               : undefined),
         })),
       )
     ).filter((item): item is { candidate: CandidateSkillVersionRecord; snapshot: SkillHubSnapshotRecord } =>
       Boolean(item.snapshot?.workspaceId === inventory.workspaceId),
     );
-    const sourceCandidates = candidatesWithSources
-      .filter((item) => item.snapshot.canonicalSourceKey === snapshot.canonicalSourceKey)
+    const removedCandidateIds = inventory.removedCandidateIds;
+    const sameSource = candidatesWithSources.filter(
+      (item) => item.snapshot.canonicalSourceKey === snapshot.canonicalSourceKey,
+    );
+    const lineageGeneration = nextLineageGeneration(
+      snapshot,
+      new Set(
+        sameSource
+          .filter((item) => removedCandidateIds.has(item.candidate.candidateId))
+          .map((item) => item.candidate.candidateId),
+      ).size,
+      removedCandidateIds,
+    );
+    // A removed lineage is history: it no longer counts as an installed source.
+    const sourceCandidates = sameSource
+      .filter((item) => !removedCandidateIds.has(item.candidate.candidateId))
       .map((item) => item.candidate);
     const sourceCandidateIds = [...new Set(sourceCandidates.map((candidate) => candidate.candidateId))];
     const lineageCandidateId = sourceCandidateIds.length === 1 ? sourceCandidateIds[0] : undefined;
     const lineageCandidates = lineageCandidateId
       ? uniqueCandidates([
           ...sourceCandidates,
-          ...(await this.options.storage.candidateSkillVersions.listByCandidateId(lineageCandidateId, 500)).filter(
+          ...(await storage.candidateSkillVersions.listByCandidateId(lineageCandidateId, 500)).filter(
             (candidate) =>
               candidate.sourceKind === "upstream_hub" &&
               candidate.workspaceId === inventory.workspaceId &&
@@ -522,7 +582,7 @@ export class SkillHubOperatorService {
     const candidateTitles = [...new Set(lineageCandidates.map((candidate) => candidate.title))];
     const skillId =
       candidateTitles.length === 1 ? skillIdForName(candidateTitles[0]!) : resolveSnapshotSkillId(snapshot);
-    const runtimeLifecycle = skillId ? await this.options.storage.skillLifecycle.find(skillId) : undefined;
+    const runtimeLifecycle = skillId ? await storage.skillLifecycle.find(skillId) : undefined;
     const activeCandidate = runtimeLifecycle?.provenance?.sourceRef
       ? lineageCandidates.find(
           (candidate) =>
@@ -532,12 +592,12 @@ export class SkillHubOperatorService {
       : undefined;
     const referenceCandidate = activeCandidate ?? latestCandidate;
     const referenceSnapshot = referenceCandidate?.upstreamSnapshotId
-      ? await this.options.storage.skillHubSnapshots.find(referenceCandidate.upstreamSnapshotId)
+      ? await storage.skillHubSnapshots.find(referenceCandidate.upstreamSnapshotId)
       : undefined;
     const candidateRevision = lineageCandidateId
-      ? await this.options.storage.skillAggregateRevisions.get("candidate_skill", lineageCandidateId)
+      ? await storage.skillAggregateRevisions.get("candidate_skill", lineageCandidateId)
       : undefined;
-    const targetCandidateId = lineageCandidateId ?? candidateIdForSource(snapshot);
+    const targetCandidateId = lineageCandidateId ?? candidateIdForSource(snapshot, lineageGeneration);
     const activeVersion = Boolean(
       exactCandidate &&
       activeCandidate?.versionId === exactCandidate.versionId &&
@@ -547,35 +607,35 @@ export class SkillHubOperatorService {
     return {
       snapshot,
       priorSnapshot: snapshot.priorSnapshotId
-        ? await this.options.storage.skillHubSnapshots.find(snapshot.priorSnapshotId)
+        ? await storage.skillHubSnapshots.find(snapshot.priorSnapshotId)
         : undefined,
-      driftSnapshot: await this.options.storage.skillHubSnapshots.findSameVersionByteDrift({
+      driftSnapshot: await storage.skillHubSnapshots.findSameVersionByteDrift({
         workspaceId: snapshot.workspaceId,
         canonicalSourceKey: snapshot.canonicalSourceKey,
         declaredVersion: snapshot.declaredVersion,
         resolvedVersion: snapshot.resolvedVersion,
         contentTreeSha256: snapshot.contentTreeSha256,
       }),
-      artifact: await this.options.storage.skillHubArtifacts.findBySnapshot(snapshot.workspaceId, snapshot.snapshotId),
+      artifact: await storage.skillHubArtifacts.findBySnapshot(snapshot.workspaceId, snapshot.snapshotId),
       skillId,
       exactCandidate,
       sourceCandidates: lineageCandidates,
       lineageCandidateId,
+      lineageGeneration,
       lineageAmbiguous: sourceCandidateIds.length > 1 || exactCandidateIds.length > 1 || candidateTitles.length > 1,
       latestCandidate,
       activeCandidate,
       referenceSnapshot,
       candidateRevision,
-      targetCandidateRevision: await this.options.storage.skillAggregateRevisions.get(
-        "candidate_skill",
-        targetCandidateId,
-      ),
+      targetCandidateRevision: await storage.skillAggregateRevisions.get("candidate_skill", targetCandidateId),
       runtimeLifecycle,
-      runtimeRevision: skillId
-        ? await this.options.storage.skillAggregateRevisions.get("runtime_skill", skillId)
-        : undefined,
+      runtimeRevision: skillId ? await storage.skillAggregateRevisions.get("runtime_skill", skillId) : undefined,
       catalogEntry: skillId ? inventory.catalogBySkillId.get(skillId) : undefined,
       activeVersion,
+      leftoverBlock:
+        skillId && inventory.pluginRecords
+          ? leftoverPluginBlock(snapshot, skillId, inventory.pluginRecords)
+          : "not_left_by_plugin",
       candidateInventoryTruncated: inventory.candidateInventoryTruncated,
       approvals: inventory.approvalsBySnapshot.get(snapshot.snapshotId) ?? {},
     };
@@ -676,7 +736,7 @@ export class SkillHubOperatorService {
     if (!context.skillId) blockers.push("SKILL_ID_UNRESOLVED");
     if (!context.artifact) blockers.push("ARTIFACT_NOT_RETAINED");
     if (context.lineageAmbiguous) blockers.push("CANDIDATE_LINEAGE_AMBIGUOUS");
-    if (action !== "revoke") {
+    if (!takesPowerAway(action)) {
       if (context.snapshot.trustDisposition !== "candidate") blockers.push("SNAPSHOT_NOT_CANDIDATE");
       blockers.push(...context.snapshot.blockerCodes);
     }
@@ -684,8 +744,10 @@ export class SkillHubOperatorService {
     if (runtimeExists && !context.runtimeRevision) blockers.push("RUNTIME_REVISION_MISSING");
     if (!runtimeExists && context.runtimeRevision) blockers.push("RUNTIME_REVISION_ORPHANED");
 
-    let targetCandidateId = context.lineageCandidateId ?? candidateIdForSource(context.snapshot);
-    let targetVersionId = context.exactCandidate?.versionId ?? versionIdForSnapshot(context.snapshot);
+    let targetCandidateId =
+      context.lineageCandidateId ?? candidateIdForSource(context.snapshot, context.lineageGeneration);
+    let targetVersionId =
+      context.exactCandidate?.versionId ?? versionIdForSnapshot(context.snapshot, context.lineageGeneration);
     let supersedesVersionId: string | undefined;
     let expectedCandidateRevision: number | undefined;
     let expectedRuntimeRevision = runtimeExists ? context.runtimeRevision?.revision : undefined;
@@ -735,6 +797,47 @@ export class SkillHubOperatorService {
       targetVersionId = context.exactCandidate?.versionId ?? targetVersionId;
       supersedesVersionId = context.exactCandidate?.supersedesVersionId;
       expectedCandidateRevision = context.candidateRevision?.revision;
+    } else if (action === "remove" && !runtimeExists) {
+      // A lineage never switched on: no runtime record. The removal is of the whole lineage, bound to its newest
+      // version's check; every version must be revoked or never activated.
+      if (!context.exactCandidate) blockers.push("CANDIDATE_VERSION_MISSING");
+      if (context.exactCandidate && context.latestCandidate?.versionId !== context.exactCandidate.versionId) {
+        blockers.push("NOT_NEWEST_VERSION");
+      }
+      if (context.sourceCandidates.some((candidate) => !NEVER_ACTIVE_STATES.has(candidate.lifecycleState))) {
+        blockers.push("CANDIDATE_NOT_REVOKED");
+      }
+      if (!context.lineageCandidateId || !context.candidateRevision) blockers.push("CANDIDATE_REVISION_MISSING");
+      if (context.leftoverBlock === "plugin_installed") blockers.push("LEFTOVER_PLUGIN_INSTALLED");
+      else if (context.leftoverBlock) blockers.push("LEFTOVER_NOT_FROM_UNINSTALLED_PLUGIN");
+      if (pluginSkillNamedLikeBundled(context.snapshot)) blockers.push(BUNDLED_SKILL_NAME_TAKEN);
+      targetCandidateId = context.exactCandidate?.candidateId ?? targetCandidateId;
+      targetVersionId = context.exactCandidate?.versionId ?? targetVersionId;
+      supersedesVersionId = context.exactCandidate?.supersedesVersionId;
+      expectedCandidateRevision = context.candidateRevision?.revision;
+      expectedRuntimeAbsent = true;
+      expectedRuntimeRevision = undefined;
+    } else if (action === "remove") {
+      if (!context.exactCandidate) blockers.push("CANDIDATE_VERSION_MISSING");
+      if (context.runtimeLifecycle?.lifecycleState !== "revoked") blockers.push("RUNTIME_NOT_REVOKED");
+      // The folder on disk is checked against this check's files, so the runtime record must name this very check.
+      const runtimeSource = context.runtimeLifecycle?.provenance;
+      if (
+        context.runtimeLifecycle &&
+        (runtimeSource?.sourceRef !== context.snapshot.snapshotId ||
+          runtimeSource?.contentIntegrity?.treeSha256 !== context.snapshot.contentTreeSha256)
+      ) {
+        blockers.push("RUNTIME_NOT_FROM_THIS_CHECK");
+      }
+      if (context.sourceCandidates.some((candidate) => candidate.lifecycleState !== "revoked")) {
+        blockers.push("CANDIDATE_NOT_REVOKED");
+      }
+      if (!context.lineageCandidateId || !context.candidateRevision) blockers.push("CANDIDATE_REVISION_MISSING");
+      targetCandidateId = context.exactCandidate?.candidateId ?? targetCandidateId;
+      targetVersionId = context.exactCandidate?.versionId ?? targetVersionId;
+      supersedesVersionId = context.exactCandidate?.supersedesVersionId;
+      expectedCandidateRevision = context.candidateRevision?.revision;
+      expectedRuntimeAbsent = false;
     } else {
       if (!context.exactCandidate || !context.activeVersion) blockers.push("VERSION_NOT_ACTIVE");
       if (!context.runtimeLifecycle || context.runtimeLifecycle.lifecycleState === "revoked") {
@@ -797,20 +900,33 @@ export class SkillHubOperatorService {
             evidenceEnvelopeId: settlement.evidenceEnvelopeId,
             journeyEventId: settlement.journeyEventId,
             settledAt: settlement.settledAt,
+            ...(typeof settlement.result.code === "string" ? { reason: settlement.result.code } : {}),
           }
         : undefined,
     };
   }
 
   private async findReusableApproval(workspaceId: string, fingerprint: string): Promise<ApprovalRequest | undefined> {
-    return (await this.options.storage.approvals.list(undefined, 500, workspaceId)).find((approval) => {
+    for (const approval of await this.options.storage.approvals.list(undefined, 500, workspaceId)) {
       const intent = readOperatorIntent(approval);
-      return Boolean(
-        intent &&
-        intent.idempotencyKey.startsWith(`skill-hub:lifecycle:${fingerprint}:`) &&
-        ["pending", "approved"].includes(approval.status),
-      );
-    });
+      if (
+        !intent ||
+        !intent.idempotencyKey.startsWith(`skill-hub:lifecycle:${fingerprint}:`) ||
+        !["pending", "approved"].includes(approval.status)
+      ) {
+        continue;
+      }
+      // A removal that already settled (even one left for a manual step) is finished: asking again is a new request,
+      // so an operator who fixed the folder by hand is not handed the old, settled approval back.
+      if (
+        intent.operationKind === "remove" &&
+        (await this.options.storage.skillHubOperations.findSettlementByOperationId(intent.operationId))
+      ) {
+        continue;
+      }
+      return approval;
+    }
+    return undefined;
   }
 
   private async nextAttempt(workspaceId: string, fingerprint: string): Promise<number> {
@@ -865,38 +981,10 @@ function isOperatorIntentTemplate(
   ) {
     return false;
   }
-  return readSkillHubOperationFingerprint(value as unknown as SkillHubOperationIntentTemplate, pluginInstallPlanId) !== undefined;
-}
-
-function isCanonicalIntentString(value: unknown, maxLength: number): value is string {
   return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= maxLength &&
-    value.normalize("NFKC").trim() === value
+    readSkillHubOperationFingerprint(value as unknown as SkillHubOperationIntentTemplate, pluginInstallPlanId) !==
+    undefined
   );
-}
-
-function isOptionalCanonicalIntentString(value: unknown, maxLength: number): value is string | undefined {
-  return value === undefined || isCanonicalIntentString(value, maxLength);
-}
-
-function isOptionalPositiveRevision(value: unknown): value is number | undefined {
-  return value === undefined || (Number.isSafeInteger(value) && (value as number) > 0);
-}
-
-function isSha256(value: unknown): value is string {
-  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
-}
-
-function isCanonicalIsoDateTime(value: unknown): value is string {
-  if (!isCanonicalIntentString(value, 64)) return false;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function operationAttempt(intent: SkillHubOperationIntentTemplate): number {
@@ -959,49 +1047,31 @@ function isCanonicalSkillName(value: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,127}$/iu.test(value) && value === value.normalize("NFKC").trim();
 }
 
-function candidateIdForSource(snapshot: SkillHubSnapshotRecord): string {
-  return `skill-hub-candidate-${hashParts(snapshot.workspaceId, snapshot.canonicalSourceKey).slice(0, 32)}`;
+/** Generation 0 keeps the id every earlier install used; each later lineage of the same source appends `-r<n>`. */
+function candidateIdForSource(snapshot: SkillHubSnapshotRecord, generation = 0): string {
+  const base = `skill-hub-candidate-${hashParts(snapshot.workspaceId, snapshot.canonicalSourceKey).slice(0, 32)}`;
+  return generation === 0 ? base : `${base}-r${generation}`;
 }
 
-function versionIdForSnapshot(snapshot: SkillHubSnapshotRecord): string {
-  return `skill-hub-version-${hashParts(snapshot.workspaceId, snapshot.snapshotId, snapshot.contentTreeSha256).slice(0, 32)}`;
+function versionIdForSnapshot(snapshot: SkillHubSnapshotRecord, generation = 0): string {
+  const base = `skill-hub-version-${hashParts(snapshot.workspaceId, snapshot.snapshotId, snapshot.contentTreeSha256).slice(0, 32)}`;
+  return generation === 0 ? base : `${base}-r${generation}`;
+}
+
+/**
+ * The generation a new install of this source starts at: the number of removed lineages found, moved past any
+ * generation whose deterministic candidate id is itself a removed one, so a new lineage never reuses an old id.
+ */
+function nextLineageGeneration(
+  snapshot: SkillHubSnapshotRecord,
+  removedLineages: number,
+  removedCandidateIds: ReadonlySet<string>,
+): number {
+  let generation = removedLineages;
+  while (removedCandidateIds.has(candidateIdForSource(snapshot, generation))) generation += 1;
+  return generation;
 }
 
 function hashParts(...parts: Array<string | number | boolean | undefined>): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
-}
-
-function compareSnapshotPosition(left: SkillHubSnapshotRecord, right: SkillHubSnapshotRecord): number {
-  return left.createdAt.localeCompare(right.createdAt) || left.snapshotId.localeCompare(right.snapshotId);
-}
-
-function compareCandidateNewest(left: CandidateSkillVersionRecord, right: CandidateSkillVersionRecord): number {
-  return right.updatedAt.localeCompare(left.updatedAt) || right.versionId.localeCompare(left.versionId);
-}
-
-function uniqueCandidates(candidates: CandidateSkillVersionRecord[]): CandidateSkillVersionRecord[] {
-  return [...new Map(candidates.map((candidate) => [candidate.versionId, candidate])).values()];
-}
-
-function readMetadataString(value: Record<string, unknown>, key: string): string | undefined {
-  const candidate = value[key];
-  return typeof candidate === "string" && candidate.trim() ? candidate.trim() : undefined;
-}
-
-function normalizeRequired(value: string, label: string, maxLength: number): string {
-  const normalized = value.normalize("NFKC").trim();
-  if (!normalized || normalized.length > maxLength || normalized !== value) {
-    throw new TypeError(`Skill Hub ${label} is missing, oversized, or noncanonical.`);
-  }
-  return normalized;
-}
-
-function normalizeOptional(value: string | undefined, label: string, maxLength: number): string | undefined {
-  return value === undefined ? undefined : normalizeRequired(value, label, maxLength);
-}
-
-function normalizeLimit(value: number | undefined): number {
-  if (value === undefined) return 50;
-  if (!Number.isSafeInteger(value)) throw new TypeError("Skill Hub list limit must be an integer.");
-  return Math.max(1, Math.min(value, SKILL_HUB_OPERATOR_MAX_ITEMS));
 }

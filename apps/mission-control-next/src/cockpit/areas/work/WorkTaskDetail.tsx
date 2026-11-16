@@ -160,7 +160,7 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
                   <ListLimitFooter limit={activityList} noun="activity" nounPlural="activities" latest />
                 </>
               ) : activities.data && !activities.isError ? (
-                <p className="mt-2 text-sm text-fg-muted">No activity was returned.</p>
+                <p className="mt-2 text-sm text-fg-muted">No activity recorded for this task.</p>
               ) : null}
               {!activities.isError && activities.data && activities.data.items.length >= 200 ? (
                 <p className="mt-2 text-xs text-fg-muted">Showing at most 200 recent activities.</p>
@@ -196,7 +196,11 @@ export function WorkTaskDetail({ taskId }: { taskId: string }) {
                   />
                 </>
               ) : deliverables.data && !deliverables.isError ? (
-                <p className="mt-2 text-sm text-fg-muted">No deliverables were returned.</p>
+                <p className="mt-2 text-sm text-fg-muted">
+                  {task.agenticContext || task.proactiveContext
+                    ? "No deliverables recorded."
+                    : "No deliverables recorded. Add one with Record a deliverable below."}
+                </p>
               ) : null}
               {!deliverables.isError && deliverables.data && deliverables.data.items.length >= 200 ? (
                 <p className="mt-2 text-xs text-fg-muted">Showing at most 200 recent deliverables.</p>
