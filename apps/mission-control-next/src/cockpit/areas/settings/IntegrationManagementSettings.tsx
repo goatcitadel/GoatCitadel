@@ -3,6 +3,7 @@ import { describeApiError } from "@goatcitadel/mission-control-shared/api/descri
 import { useIntegrationSettings } from "../../../features/native-routes/settings/sections/use-integration-settings";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
 import { IntegrationConnectionEditor } from "./IntegrationConnectionEditor";
 import { IntegrationConnectionDetails } from "./IntegrationConnectionDetails";
@@ -134,7 +135,9 @@ export function IntegrationManagementSettings({
           if (!open && !s.deletePending) s.setPendingDeleteConnection(null);
         }}
       >
-        <p className="break-all text-xs text-fg-muted">Reviewed version: {s.pendingDeleteConnection?.revision}</p>
+        <TechnicalDetails>
+          <p className="break-all text-xs text-fg-muted">Reviewed version: {s.pendingDeleteConnection?.revision}</p>
+        </TechnicalDetails>
         <div className="mt-4 flex flex-wrap gap-2">
           <Button
             variant="danger"
