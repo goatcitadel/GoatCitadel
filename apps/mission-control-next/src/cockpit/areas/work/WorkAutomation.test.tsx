@@ -33,14 +33,14 @@ const preview = {
   proofChecklist: ["Review capabilities"],
   missingCapabilities: ["tool:unavailable"],
 };
-const template = (status = "ready") => ({
+const template = (status = "ready_for_operator_import_review") => ({
   filename: "template.json",
   content: "export content",
   contentType: "application/json",
   contentSha256: "hash",
   evidence: { planId: "advisory", status: "advisory", actionNeeded: "Operator import" },
   posture: { execution: "Operator only" },
-  validation: { status, nativeImportCompatibility: "unverified", checks: [] },
+  validation: { status, nativeImportCompatibility: "not_verified", checks: [] },
 });
 let renderer: ReactTestRenderer;
 const copy = vi.fn();
@@ -173,7 +173,10 @@ it("keeps the previewed recipe and both export results across navigation, withou
   const text = JSON.stringify(renderer.toJSON());
   expect(text).toContain("Recipe");
   expect(headings()).toEqual(
-    expect.arrayContaining(["Activepieces export validation: Ready", "n8n export validation: Ready"]),
+    expect.arrayContaining([
+      "Activepieces export validation: Ready for your import review",
+      "n8n export validation: Ready for your import review",
+    ]),
   );
   expect(draftAutomationRecipe).toHaveBeenCalledOnce();
 });
@@ -183,7 +186,10 @@ it("shows both platforms' export results side by side", async () => {
   await click("Copy Activepieces template");
   await click("Copy n8n template");
   expect(headings()).toEqual(
-    expect.arrayContaining(["Activepieces export validation: Ready", "n8n export validation: Ready"]),
+    expect.arrayContaining([
+      "Activepieces export validation: Ready for your import review",
+      "n8n export validation: Ready for your import review",
+    ]),
   );
 });
 
