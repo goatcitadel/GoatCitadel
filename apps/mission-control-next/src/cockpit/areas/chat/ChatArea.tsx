@@ -8,6 +8,7 @@ import {
   type MissionThreadedRenderSurfaceInput,
 } from "@goatcitadel/threaded-surface-core";
 import { ChatConversationsSheet } from "./ChatConversationsSheet";
+import { unsentConversationId } from "./conversation-reuse";
 import { ChatEmptyState, ChatSessionHeader, ChatSetupGate } from "./ChatAreaChrome";
 import { ChatTranscript } from "./ChatTranscript";
 import { ChatNoticeText } from "./ChatNoticeText";
@@ -298,6 +299,7 @@ export function ChatAreaView({
         projectOptions={input.contextDockProps?.projectOptions}
         onOpenProjects={openProjects}
         messaging={messaging}
+        unsentSessionId={unsentConversationId(active)}
       />
       <ChatConversationsSheet
         open={conversationsOpen}
@@ -306,6 +308,7 @@ export function ChatAreaView({
         projectOptions={input.contextDockProps?.projectOptions}
         onOpenProjects={openProjects}
         messaging={messaging}
+        unsentSessionId={unsentConversationId(active)}
       />
       <ChatMainColumn messaging={messagingView(rest, search)} channelConversation={isChannelConversation(session)}>
         <ChatSessionHeader

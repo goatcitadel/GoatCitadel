@@ -15,7 +15,7 @@ import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
-import { SystemDashboardWidget } from "./SystemDashboardWidget";
+import { SavedBoardGrid } from "./SavedBoardGrid";
 
 const ADJUSTMENTS: ReadonlyArray<{ value: OpsSavedBoardsPlacementAdjustment; label: string }> = [
   { value: "left", label: "Move left" },
@@ -299,11 +299,11 @@ function BoardEditorView({
             Unsaved layout preview. Widgets show the latest values they loaded.
           </p>
           {accessAvailable ? (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {draft.placements.map((placement) => (
-                <SystemDashboardWidget key={placement.widgetId} kind={placement.kind} workspaceId={workspaceId} />
-              ))}
-            </div>
+            <SavedBoardGrid
+              label={`${draft.name.trim() || "New board"} preview widget grid`}
+              placements={draft.placements}
+              workspaceId={workspaceId}
+            />
           ) : (
             <p role="status">Preview unavailable until current board access is verified.</p>
           )}

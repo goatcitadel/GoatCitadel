@@ -21,6 +21,7 @@ import { approvalTargetLine } from "../inbox/approval-target";
 import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
+import { useReportWaitingDecision } from "./chat-jump-to-latest";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { specialistApprovalCode } from "../inbox/load-specialist-approval-code";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
@@ -146,10 +147,20 @@ export function ChatBlockers({ props }: { props: Blockers }) {
       : undefined;
   const input = props.pendingUserInput;
   const questionScope = input ? JSON.stringify([workspaceId, props.selectedSessionId, input.promptId]) : "";
+  // Skipping hides an optional question on this screen only; the Gateway keeps the prompt and nothing is sent.
+  const [skipped, setSkipped] = useState<ReadonlySet<string>>(new Set());
+  const setQuestionSkipped = (skip: boolean) =>
+    setSkipped((current) => {
+      const next = new Set(current);
+      if (skip) next.add(questionScope);
+      else next.delete(questionScope);
+      return next;
+    });
   // The persisted record outranks the retained prompt: once it is decided, the card reports the decision
   // instead of asking for one while Chat waits for the queue to clear it.
   const targetLine = approvalTargetLine(reviewedApproval?.kind, reviewedApproval?.preview);
   const decided = reviewedApproval && reviewedApproval.status !== "pending" ? reviewedApproval : undefined;
+
   const expiry = decided ? null : approvalExpiryLabel(approval?.expiresAt);
   // An approval that ran out of time leaves the action undone: the way forward is to ask again.
   const expiresAt = reviewedApproval?.expiresAt ?? approval?.expiresAt;
@@ -162,6 +173,10 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   // The deadline passed on this clock but the record still reads pending: the approval may have been decided elsewhere,
   // so nothing says the action did not run until a fresh read of the record does.
   const lapsed = Boolean(approval) && !decided && hasExpired(expiresAt, now);
+  // Jump to latest names a decision only while its card offers one: not decided, not past its deadline, not skipped,
+  // not owned by the Code Mode card.
+  const approvalWaiting = Boolean(approval) && !ownedByCodeModeCard && !decided && !lapsed;
+  useReportWaitingDecision(approvalWaiting ? "approval" : input && !skipped.has(questionScope) ? "question" : null);
   const deadlineCheck = useApprovalDeadlineCheck({ approvalId, lapsed, read: () => recordQuery.refetch() });
   const [askBlocked, setAskBlocked] = useState(false);
   // The text Ask again itself put in the box: it is the request, not something the operator typed.
@@ -206,6 +221,8 @@ export function ChatBlockers({ props }: { props: Blockers }) {
       {approval && !ownedByCodeModeCard ? (
         <section
           aria-label={decided ? "Decided approval" : "Pending approval"}
+          tabIndex={-1}
+          data-chat-waiting-decision={approvalWaiting ? "" : undefined}
           className={`mt-3 rounded-md border bg-raised p-3 text-sm ${decided ? "border-line-subtle" : "border-status-waiting"}`}
         >
           <div className="flex flex-wrap items-start justify-between gap-2">
@@ -354,13 +371,25 @@ export function ChatBlockers({ props }: { props: Blockers }) {
         </section>
       ) : null}
       {/* CH-N06: blockers only render inside the Chat transcript, so no "open in Chat" link. */}
-      {input ? (
+      {input && skipped.has(questionScope) ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-fg-secondary">
+          <p>You skipped “{input.title || "this question"}”. The work goes on without your answer.</p>
+          <Button variant="ghost" size="sm" onClick={() => setQuestionSkipped(false)}>
+            Show the question again
+          </Button>
+        </div>
+      ) : input ? (
         <DeferredChatLeaf
           key={questionScope}
           identity={questionScope}
           label="Answer controls"
           fallback={
-            <section aria-label="Pending question" className="mt-3 border-l-2 border-status-waiting pl-3 text-sm">
+            <section
+              aria-label="Pending question"
+              tabIndex={-1}
+              data-chat-waiting-decision=""
+              className="mt-3 border-l-2 border-status-waiting pl-3 text-sm"
+            >
               <h3 className="font-semibold text-fg">{input.title || "Your input is needed"}</h3>
               {isBackgroundChatUserInputPrompt(input) ? (
                 <p className="mt-1 text-xs text-fg-muted">Optional · Work continues</p>
@@ -372,7 +401,12 @@ export function ChatBlockers({ props }: { props: Blockers }) {
             </section>
           }
         >
-          <ChatPendingQuestion prompt={input} pending={props.userInputPending} onSubmit={props.onSubmitUserInput} />
+          <ChatPendingQuestion
+            prompt={input}
+            pending={props.userInputPending}
+            onSubmit={props.onSubmitUserInput}
+            onSkip={() => setQuestionSkipped(true)}
+          />
         </DeferredChatLeaf>
       ) : null}
     </div>

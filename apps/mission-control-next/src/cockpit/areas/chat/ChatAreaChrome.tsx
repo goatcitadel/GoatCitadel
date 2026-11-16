@@ -12,6 +12,8 @@ import { useModelLabel } from "../../data/use-model-label";
 import { presentDelegationRunStatus } from "./chat-vocabulary";
 import { projectFirstRunState } from "../settings/first-run-state";
 import type { ChannelConversationContext } from "./channel-conversation";
+import { startConversation } from "./conversation-reuse";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 
 type ActiveSession = MissionThreadedRenderSurfaceInput["activeSessionSurfaceProps"];
 
@@ -266,6 +268,13 @@ export function ChatEmptyState({
   /** Below the desktop rail the list is behind the header's Conversations button; the empty state offers it too. */
   onOpenConversations?: () => void;
 }) {
+  const { activeWorkspaceId } = useUiPreferences();
+  // Only a plain Recent list with nothing in it is a first conversation; a search or the archive that found nothing is not.
+  const first =
+    rail.historyView === "active" &&
+    !rail.search?.trim() &&
+    !rail.missionSessions.length &&
+    !rail.externalSessions?.length;
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-5 text-center">
       {rail.loading ? (
@@ -274,15 +283,24 @@ export function ChatEmptyState({
         </p>
       ) : (
         <>
-          <p className="text-lg font-semibold text-fg">Choose a conversation</p>
-          <p className="max-w-sm text-sm text-fg-secondary">Pick one from the list, or start a new conversation.</p>
+          <p className="text-lg font-semibold text-fg">
+            {first ? "Start your first conversation" : "Choose a conversation"}
+          </p>
+          <p className="max-w-sm text-sm text-fg-secondary">
+            {first
+              ? "Ask GoatCitadel anything. Your conversations will be listed here."
+              : "Pick one from the list, or start a new conversation."}
+          </p>
           <div className="flex flex-wrap justify-center gap-2">
             {onOpenConversations ? (
               <Button className="max-sm:h-11 md:hidden" onClick={onOpenConversations}>
                 Show conversations
               </Button>
             ) : null}
-            <Button onClick={() => void rail.onCreateSession()} disabled={rail.creatingSession}>
+            <Button
+              onClick={() => startConversation(rail, activeWorkspaceId ?? undefined)}
+              disabled={rail.creatingSession}
+            >
               {rail.creatingSession ? "Creating…" : "New conversation"}
             </Button>
           </div>

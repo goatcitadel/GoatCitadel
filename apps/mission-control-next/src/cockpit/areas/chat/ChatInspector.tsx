@@ -17,10 +17,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { readCockpitHistory, subscribeCockpitHistory } from "../../app/cockpit-history";
-import {
-  createDeferredDialogRuntime,
-  useDeferredDialogRuntime,
-} from "@goatcitadel/mission-control-shared/components/ui/deferred-dialog";
+import { ChatInspectorLoadFailure } from "./ChatInspectorLoadFailure";
 
 type InspectorCode = typeof import("./ChatInspectorBody");
 type InspectorProps = ComponentProps<InspectorCode["ChatInspector"]>;
@@ -35,9 +32,6 @@ function loadInspectorCode() {
 }
 type Owner = { scope: string };
 type LoadState = { owner: Owner; code: InspectorCode } | { owner: Owner; failed: true };
-const failureLoader = createDeferredDialogRuntime(() =>
-  import("./ChatInspectorLoadFailure").then(({ ChatInspectorLoadFailure }) => ChatInspectorLoadFailure),
-);
 
 /** Registration stores this element; code starts only when the existing inspector actually mounts it. */
 export function ChatInspector(props: InspectorProps) {
@@ -99,7 +93,6 @@ export function ChatInspector(props: InspectorProps) {
   const ownedState = state?.owner === owner ? state : undefined;
   const code = ownedState && "code" in ownedState ? ownedState.code : undefined;
   const failed = Boolean(ownedState && "failed" in ownedState);
-  const { runtime: Failure } = useDeferredDialogRuntime(failed, failureLoader);
   return (
     <div aria-busy={!code && !failed}>
       {code ? (
@@ -109,7 +102,7 @@ export function ChatInspector(props: InspectorProps) {
           <p>
             Conversation details could not load. You can close the inspector and keep using Chat, or reload the app.
           </p>
-          {Failure ? <Failure key={history} current={current} /> : null}
+          <ChatInspectorLoadFailure key={history} current={current} />
         </div>
       ) : (
         <p role="status" className="min-h-24 text-sm text-fg-muted">

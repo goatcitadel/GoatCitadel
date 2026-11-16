@@ -140,7 +140,7 @@ it("binds the session controls to an unlisted session and the active workspace, 
   expect(fixture.control).toHaveBeenCalledWith({ sessionId: "older-session", workspaceId: "workspace-a" });
   expect(host.textContent).toContain("isn't in the recent list");
   const close = host.querySelector<HTMLButtonElement>("#selected-session button")!;
-  expect(close.textContent).toBe("Close session");
+  expect(close.textContent).toBe("Close details");
   act(() => close.click());
   expect(fixture.navigate).toHaveBeenCalledExactlyOnceWith(
     "/system/sessions?workspaceId=workspace-a&extra=keep#control",

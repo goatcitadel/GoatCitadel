@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, type ComponentType, type ReactNode, type Ref } from "react";
+import { act, useState, type ComponentType, type ReactNode, type Ref } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -151,6 +151,143 @@ afterEach(() => {
 });
 
 describe("ChatTranscript", () => {
+  it("names the approval waiting for you on Jump to latest, and moves focus to its card", async () => {
+    vi.mocked(fetchApproval).mockResolvedValueOnce({
+      preview: { targets: ["/workspace/fixture.txt"] },
+      payload: {},
+      createdAt: "2026-10-01T00:00:00Z",
+      approvalId: "jump-approval",
+      kind: "tool_invoke",
+      status: "pending",
+      riskLevel: "caution",
+      expiresAt: "2099-10-02T00:00:00Z",
+    } as never);
+    await act(async () =>
+      renderWithProviders(
+        <InspectorProvider>
+          <ChatTranscript
+            props={{
+              ...sessionProps([turn("jump-approval-turn", true)]),
+              followOutput: false,
+              composerRef: { current: null },
+              pendingApproval: { approvalId: "jump-approval", toolName: "fs.read" },
+            }}
+          />
+        </InspectorProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.querySelector("[data-chat-waiting-decision]")).not.toBeNull());
+    const jump = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Jump to the approval waiting for you",
+    );
+    expect(jump).toBeDefined();
+    await act(async () => {
+      jump!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(document.activeElement?.hasAttribute("data-chat-waiting-decision")).toBe(true);
+  });
+
+  describe("Jump to latest names only a decision whose card is shown and waiting", () => {
+    const jumpButton = () =>
+      [...container.querySelectorAll("button")].find((button) => button.textContent?.startsWith("Jump to"));
+    const renderJump = (extra: Record<string, unknown>) =>
+      act(async () =>
+        renderWithProviders(
+          <InspectorProvider>
+            <ChatTranscript
+              props={{
+                ...sessionProps([turn("jump-turn", true)]),
+                followOutput: false,
+                composerRef: { current: null },
+                ...extra,
+              }}
+            />
+          </InspectorProvider>,
+        ),
+      );
+
+    it("still moves focus when the jump makes the transcript follow output and the button unmounts", async () => {
+      const composer = document.createElement("textarea");
+      document.body.append(composer);
+      let flip = () => {};
+      function Follower() {
+        const [follow, setFollow] = useState(false);
+        flip = () => setFollow(true);
+        return (
+          <InspectorProvider>
+            <ChatTranscript
+              props={{
+                ...sessionProps([turn("follow-turn", true)]),
+                followOutput: follow,
+                composerRef: { current: composer },
+              }}
+            />
+          </InspectorProvider>
+        );
+      }
+      try {
+        await act(async () => renderWithProviders(<Follower />));
+        expect(jumpButton()).toBeDefined();
+        // The jump makes the transcript follow output, so the button unmounts with the same click.
+        const onClick = () => flip();
+        container.addEventListener("click", onClick, true);
+        await act(async () => jumpButton()!.click());
+        container.removeEventListener("click", onClick, true);
+        expect(jumpButton()).toBeUndefined();
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 5)));
+        expect(document.activeElement).toBe(composer);
+      } finally {
+        composer.remove();
+      }
+    });
+
+    it("says plain Jump to latest for an approval that is already decided", async () => {
+      vi.mocked(fetchApproval).mockResolvedValue({
+        approvalId: "decided-approval",
+        kind: "tool_invoke",
+        status: "approved",
+        riskLevel: "caution",
+        preview: {},
+        payload: {},
+        createdAt: "2026-10-01T00:00:00Z",
+      } as never);
+      await renderJump({
+        pendingApproval: { approvalId: "decided-approval", toolName: "fs.read", riskLevel: "caution" },
+      });
+      await vi.waitFor(() => expect(container.textContent).toContain("Approval decided"));
+      expect(jumpButton()?.textContent).toBe("Jump to latest");
+    });
+
+    it("says plain Jump to latest for an approval owned by the Code Mode card", async () => {
+      await renderJump({
+        pendingApproval: { approvalId: "code-mode-approval", toolName: "code_mode.request", riskLevel: "caution" },
+      });
+      expect(container.querySelector("[data-chat-waiting-decision]")).toBeNull();
+      expect(jumpButton()?.textContent).toBe("Jump to latest");
+    });
+
+    it("names an optional question until you skip it, then says plain Jump to latest", async () => {
+      await renderJump({
+        pendingUserInput: {
+          promptId: "optional-q",
+          turnId: "t",
+          kind: "text",
+          title: "Pick a name",
+          question: "What name?",
+          required: false,
+          delivery: "background",
+        },
+      });
+      await vi.waitFor(() => expect(container.querySelector('form[aria-label="Pending question"]')).not.toBeNull());
+      expect(jumpButton()?.textContent).toBe("Jump to the question waiting for you");
+      const skip = [...container.querySelectorAll("button")].find((button) => button.textContent === "Skip question");
+      await act(async () => skip!.click());
+      expect(container.textContent).toContain("You skipped");
+      expect(jumpButton()?.textContent).toBe("Jump to latest");
+    });
+  });
+
   it("hydrates missing approval risk from the matching pending canonical record", async () => {
     const onApprovePending = vi.fn();
     vi.mocked(fetchApproval).mockResolvedValueOnce({

@@ -96,6 +96,26 @@ it("says this release has no live remote-worker status, in one statement", async
   expect(container.textContent).not.toContain("Held back from this release.");
 });
 
+it("passes the latest backup folder to the card only when the health summary was read", async () => {
+  api.fetchHealthSummary.mockResolvedValue({
+    database: { reachable: true, issues: [] },
+    daemonStatus: { supported: true, running: true, diagnostics: [] },
+    backups: { latest: { backupId: "B", createdAt: "2026-10-06T12:00:00Z", outputPath: "/var/backups/B.backup" } },
+  });
+  await render();
+  await tick(10);
+  expect(container.textContent).toContain("in this folder:");
+  expect(container.textContent).toContain("/var/backups/B.backup");
+});
+
+it("says nothing about the backup folder when the health summary could not be read", async () => {
+  api.fetchHealthSummary.mockRejectedValue(new TypeError("Failed to fetch"));
+  await render();
+  await tick(10);
+  expect(container.textContent).not.toContain("Latest backup saved");
+  expect(container.textContent).not.toContain("installation's backup folder");
+});
+
 it.each([401, 403])("uses the full real loader without repeatedly fetching denied NPU %s", async (status) => {
   api.fetchNpuStatus.mockRejectedValue(
     new ApiRequestError("Denied", { kind: "http", method: "GET", path: "/api/v1/npu/status", status }),

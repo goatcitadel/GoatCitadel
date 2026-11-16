@@ -10,6 +10,8 @@ import { TimeText } from "../../ui/TimeText";
 import { ChatConversationFilters, type ChatProjectFilterOption } from "./ChatConversationFilters";
 import { MessagingSection } from "./MessagingSection";
 import { isChannelConversation } from "./channel-conversation-scope";
+import { startConversation } from "./conversation-reuse";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 
 type RailSession = MissionThreadedSessionRailData["missionSessions"][number];
 
@@ -52,6 +54,7 @@ export function ConversationListPanel({
   onDone,
   onOpenProjects,
   messaging,
+  unsentSessionId,
 }: {
   rail: MissionThreadedSessionRailData;
   projectOptions?: readonly ChatProjectFilterOption[];
@@ -60,7 +63,10 @@ export function ConversationListPanel({
   /** Called after a conversation is chosen or created, so the sheet can close. */
   onDone?: () => void;
   messaging?: ConversationListMessaging;
+  /** The open conversation while it holds typed text or attachments: New never reuses it. */
+  unsentSessionId?: string | null;
 }) {
+  const { activeWorkspaceId } = useUiPreferences();
   // Messaging lists the active channel conversations, so the list leaves them out while Messaging is shown and the
   // view is Recent with no search. Messaging reads neither the Archived view nor the search, so there the list stays
   // the only way to reach a channel conversation (to find it, or to restore it).
@@ -85,7 +91,7 @@ export function ConversationListPanel({
           <button
             type="button"
             onClick={() => {
-              void rail.onCreateSession();
+              startConversation(rail, activeWorkspaceId ?? undefined, unsentSessionId);
               onDone?.();
             }}
             disabled={rail.creatingSession || rail.loading}

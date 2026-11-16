@@ -321,3 +321,25 @@ it("retains tail streaming, optimistic text and the canonical pending decision o
   expect(host.textContent?.split("Tail response still streaming")).toHaveLength(2);
   expect(host.querySelector('form[aria-label="Pending question"]')).not.toBeNull();
 });
+
+it("asks before reloading the app from the windowing failure line, and reloads only on confirm", async () => {
+  loader.load.mockRejectedValue(new Error("fixture unavailable chunk"));
+  const reload = vi.spyOn(window.location, "reload").mockImplementation(() => undefined);
+  try {
+    await act(async () => render(props(1000)));
+    expect(host.textContent).toContain("More messages could not be shown");
+    const reloadButton = [...host.querySelectorAll("button")].find((button) => button.textContent === "Reload app");
+    expect(reloadButton).toBeDefined();
+    await act(async () => reloadButton!.click());
+    const dialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find(
+      (node) => document.getElementById(node.getAttribute("aria-labelledby") ?? "")?.textContent === "Reload app?",
+    );
+    expect(dialog).toBeDefined();
+    expect(reload).not.toHaveBeenCalled();
+    const confirm = [...dialog!.querySelectorAll("button")].find((button) => button.textContent === "Reload app");
+    await act(async () => confirm!.click());
+    expect(reload).toHaveBeenCalledOnce();
+  } finally {
+    reload.mockRestore();
+  }
+});

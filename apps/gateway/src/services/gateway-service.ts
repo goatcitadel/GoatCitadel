@@ -145,7 +145,7 @@ import type {
 import type {
   BackupCreateResponse,
   BackupManifestFileRecord,
-  BackupManifestRecord,
+  BackupListedRecord,
   BackupVerifyResponse,
   AuthRuntimeSettings,
   CompanionAuditEventRecord,
@@ -9134,7 +9134,7 @@ export class GatewayService {
     };
   }
 
-  public async listBackups(limit = 50): Promise<BackupManifestRecord[]> {
+  public async listBackups(limit = 50): Promise<BackupListedRecord[]> {
     return this.backupRetentionService.listBackups(limit);
   }
 
