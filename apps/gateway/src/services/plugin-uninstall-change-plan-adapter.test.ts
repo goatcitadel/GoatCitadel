@@ -756,6 +756,32 @@ describe("uninstalling a plugin through one Change Plan", () => {
     await expect(h.store.listRemoved()).resolves.toMatchObject([{ skillIds: [SKILL_ID] }]);
   });
 
+  it("promises no removal in Capabilities for a skill that was never switched on", async () => {
+    const LEFT =
+      "A skill it added stays until you remove it in Capabilities › Skills. Until then the plugin can't be installed again.";
+    const NEVER_ON =
+      "A skill it added was never switched on, so it stays and GoatCitadel can't remove it. The plugin can't be installed again.";
+    const h = harness();
+    await installed(h);
+    h.removal.skillChecks.set(SKILL_CHECK_ID, skillCheck({ version: "installed_off", step: "installed_off" }));
+
+    const neverOn = await h.plans.get(OPERATOR, (await h.uninstall()).planId);
+
+    expect(neverOn.impact).toContain(NEVER_ON);
+    expect(neverOn.impact).not.toContain(LEFT);
+
+    // Switched on once and revoked since: its runtime record stays revoked, so it can be removed.
+    const again = harness();
+    await installed(again);
+    again.removal.skillChecks.set(
+      SKILL_CHECK_ID,
+      skillCheck({ version: "installed_off", step: "installed_off", runtimeRevoked: true }),
+    );
+    const revokedBefore = await again.plans.get(OPERATOR, (await again.uninstall()).planId);
+    expect(revokedBefore.impact).toContain(LEFT);
+    expect(revokedBefore.impact).not.toContain(NEVER_ON);
+  });
+
   it("keeps its words for a skill whose own step is already under way, as nothing waits on the operator", async () => {
     const h = harness();
     await installed(h);

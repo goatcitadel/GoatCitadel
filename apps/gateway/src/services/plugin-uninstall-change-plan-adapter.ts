@@ -38,10 +38,6 @@ import {
   type PendingSkillStep,
   type SkillRemovalDecision,
 } from "./plugin-uninstall-skills.js";
-
-/** A skill an uninstall revokes stays until the operator removes it; until then the plugin can't be installed again. */
-const LEFT_SKILL_IMPACT =
-  "A skill it added stays until you remove it in Capabilities › Skills. Until then the plugin can't be installed again.";
 import {
   completedSummary,
   connectorUnknownStop,
@@ -62,6 +58,13 @@ import {
   type UninstallProgress,
   type UninstallStep,
 } from "./plugin-uninstall-words.js";
+
+/** A skill an uninstall revokes stays until the operator removes it; until then the plugin can't be installed again. */
+const LEFT_SKILL_IMPACT =
+  "A skill it added stays until you remove it in Capabilities › Skills. Until then the plugin can't be installed again.";
+/** A skill installed and never switched on has no runtime record, so there is nothing in Capabilities › Skills to remove. */
+const NEVER_ON_SKILL_IMPACT =
+  "A skill it added was never switched on, so it stays and GoatCitadel can't remove it. The plugin can't be installed again.";
 
 // A plugin uninstall: one Change Plan that removes exactly the pieces the plugin's install added, each through its own
 // owner with the plugin's pass, in reverse install order. What was already there stays, and so do the hosts it allowed.
@@ -171,7 +174,7 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
     const labels = await this.labelsOf(record);
     // What apply will act on beyond the record's own pieces; apply reads it again and refuses one that moved.
     const scope = await readUninstallScope(this.sources, record, context.origin.actorId ?? "operator", labels);
-    const installedSkills = await this.installedSkillPieces(record);
+    const { pieces: installedSkills, onlyNeverSwitchedOn } = await this.installedSkillPieces(record);
     const summary = boundedSentences(plannedSentences(record, labels, installedSkills, scope));
     const title = boundedTitle(`Uninstall ${record.name}`);
     // A skill removed by an earlier pass still blocks a reinstall.
@@ -187,7 +190,7 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
       impact: boundedSentences([
         "Anything that was there before the plugin stays.",
         HOSTS_STAY,
-        ...(leftSkills ? [LEFT_SKILL_IMPACT] : []),
+        ...(leftSkills ? [onlyNeverSwitchedOn ? NEVER_ON_SKILL_IMPACT : LEFT_SKILL_IMPACT] : []),
       ]),
       risk: "caution" as const,
       status: "awaiting_confirmation" as const,
@@ -315,22 +318,41 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
   /**
    * The skill pieces that may have something installed by the time the plan applies, by piece id, for the plan's own
    * words: installed now, or with an own step waiting or under way. A check that can't be read counts too, so the plan
-   * never promises less than it might remove.
+   * never promises less than it might remove. `onlyNeverSwitchedOn` is true when every one of them is known to be
+   * installed and never switched on (its check reads installed and off, nothing of it was ever revoked, and no step
+   * waits), and no earlier pass left
+   * a skill behind: then nothing can be removed in Capabilities › Skills.
    */
-  private async installedSkillPieces(record: StoredPlugin): Promise<ReadonlySet<string>> {
+  private async installedSkillPieces(
+    record: StoredPlugin,
+  ): Promise<{ pieces: ReadonlySet<string>; onlyNeverSwitchedOn: boolean }> {
     const open = ownedPieces(record, "skill").filter((piece) => !piece.removed && piece.skillSnapshotId);
-    if (open.length === 0) return new Set();
+    if (open.length === 0) return { pieces: new Set(), onlyNeverSwitchedOn: false };
     const ids = open.map((piece) => piece.skillSnapshotId!);
     const checks = await this.sources.readSkillChecks(record.workspaceId, ids).catch(() => undefined);
     const steps = await this.sources.listPendingSkillSteps(record.workspaceId, ids).catch(() => undefined);
-    return new Set(
-      open
-        .filter((piece) => {
-          const check = checks?.get(piece.skillSnapshotId!);
-          return !checks || !steps || !check || mayHaveInstalledSkill(check, steps.get(piece.skillSnapshotId!));
-        })
-        .map((piece) => piece.pieceId),
-    );
+    const included = open.filter((piece) => {
+      const check = checks?.get(piece.skillSnapshotId!);
+      return !checks || !steps || !check || mayHaveInstalledSkill(check, steps.get(piece.skillSnapshotId!));
+    });
+    const neverOn = (snapshotId: string) => {
+      const check = checks?.get(snapshotId);
+      return Boolean(
+        check &&
+        steps &&
+        !steps.has(snapshotId) &&
+        check.version === "installed_off" &&
+        check.step === "installed_off" &&
+        !check.revoked &&
+        !check.runtimeRevoked,
+      );
+    };
+    const leftEarlier = ownedPieces(record, "skill").some((piece) => piece.removed?.skillId);
+    return {
+      pieces: new Set(included.map((piece) => piece.pieceId)),
+      onlyNeverSwitchedOn:
+        included.length > 0 && !leftEarlier && included.every((piece) => neverOn(piece.skillSnapshotId!)),
+    };
   }
 
   /**

@@ -29,11 +29,12 @@ export const UNINSTALL_SKILL_STAYS =
   "This can't be undone here. A skill it added stays until you remove it in Capabilities › Skills. Until then it can't be installed again.";
 
 /**
- * The confirmation's opening when the only skills it added were never switched on: the uninstall leaves them installed,
- * and they have no row in Capabilities › Skills to remove them from.
+ * The confirmation's opening when the only skills it added read installed and switched off. Most were never switched on:
+ * those stay installed with no row in Capabilities › Skills to remove them from. One switched on before can read the same
+ * here (its switch-on approval may be older than the approvals its check reads), so the line names both.
  */
 export const UNINSTALL_SKILL_NEVER_ON =
-  "This can't be undone here. A skill it added was never switched on, so it stays and GoatCitadel can't remove it. You won't be able to install this plugin again.";
+  "This can't be undone here. A skill it added stays. If it was switched on before, remove it in Capabilities › Skills, and then this plugin can be installed again. If it never was, GoatCitadel can't remove it, and this plugin can't be installed again.";
 
 /** The confirmation's opening when nothing the plugin added is a skill. */
 export const UNINSTALL_REINSTALLABLE = "This can't be undone here. Installing it again adds its pieces back.";
@@ -58,7 +59,13 @@ function ownSkills(pieces: readonly CapabilityPluginDetailPiece[]): CapabilityPl
 /** The confirmation's description: it says up front whether the plugin can be installed again. */
 export function uninstallConfirmDescription(pieces: readonly CapabilityPluginDetailPiece[]): string {
   const skills = ownSkills(pieces);
-  if (skills.some((piece) => ADDED_STATES.has(piece.state) && piece.state !== "installed_off"))
+  // The confirmation shows only before an uninstall, where a skill reads removed once it was revoked: it stays revoked
+  // until it is removed in Capabilities › Skills.
+  if (
+    skills.some(
+      (piece) => (ADDED_STATES.has(piece.state) && piece.state !== "installed_off") || piece.state === "removed",
+    )
+  )
     return UNINSTALL_SKILL_STAYS;
   if (skills.some((piece) => piece.state === "installed_off")) return UNINSTALL_SKILL_NEVER_ON;
   return skills.some((piece) => piece.state === "unknown") ? UNINSTALL_SKILL_UNKNOWN : UNINSTALL_REINSTALLABLE;

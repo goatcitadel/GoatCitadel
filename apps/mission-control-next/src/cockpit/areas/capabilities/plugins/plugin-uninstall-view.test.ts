@@ -51,8 +51,14 @@ describe("uninstallConfirmDescription", () => {
       "This can't be undone here. A skill it added stays until you remove it in Capabilities › Skills. Until then it can't be installed again.",
     );
   });
-  it("does not promise a removal for a skill that was never switched on", () => {
+  it("says a skill revoked before the uninstall stays until you remove it", () => {
+    expect(uninstallConfirmDescription([{ ...NOTES, state: "removed" }])).toBe(UNINSTALL_SKILL_STAYS);
+  });
+  it("does not promise a removal for a skill that may never have been switched on", () => {
     expect(uninstallConfirmDescription([{ ...NOTES, state: "installed_off" }])).toBe(UNINSTALL_SKILL_NEVER_ON);
+    expect(UNINSTALL_SKILL_NEVER_ON).toBe(
+      "This can't be undone here. A skill it added stays. If it was switched on before, remove it in Capabilities › Skills, and then this plugin can be installed again. If it never was, GoatCitadel can't remove it, and this plugin can't be installed again.",
+    );
     expect(
       uninstallConfirmDescription([
         { ...NOTES, state: "installed_off" },
