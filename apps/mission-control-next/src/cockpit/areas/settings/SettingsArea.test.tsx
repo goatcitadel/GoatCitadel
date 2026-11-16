@@ -138,6 +138,14 @@ describe("Settings page anatomy (ST-N01, ST-N02, ST-N05, ST-N18)", () => {
     await render(path);
     await vi.waitFor(() => expect(container.querySelector("h1")?.textContent).toBe(title));
   });
+  it("titles each search result group as a section (text-lg), below the page h1 (U-GL-035)", async () => {
+    await render();
+    await fill(container.querySelector('input[type="search"]')!, "notifications");
+    const heading = container.querySelector('section[aria-label$="search results"] h2')!;
+    expect(heading).not.toBeNull();
+    expect(heading.className).toContain("text-lg");
+    expect(heading.className).toContain("font-display");
+  });
   it("renders no section tablist on a page with one section", async () => {
     await render("/settings/access");
     await vi.waitFor(() => expect(container.textContent).toContain("Access owner"));

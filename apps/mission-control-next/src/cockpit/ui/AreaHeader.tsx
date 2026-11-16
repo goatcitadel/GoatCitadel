@@ -48,7 +48,7 @@ export function AreaHeader({
         {/* basis-64: on a phone the actions wrap under the title instead of squeezing it into a narrow column. */}
         <div className="min-w-0 flex-1 basis-64">
           <h1 className="font-display text-xl font-semibold text-fg">{title}</h1>
-          {description ? <p className="mt-1 max-w-3xl text-sm text-fg-secondary">{description}</p> : null}
+          {description ? <p className="mt-1 max-w-3xl text-base text-fg-secondary">{description}</p> : null}
           <ScopeLine />
           {children}
         </div>

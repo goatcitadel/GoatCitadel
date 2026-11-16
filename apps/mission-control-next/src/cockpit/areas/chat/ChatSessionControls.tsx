@@ -28,7 +28,7 @@ export function ChatSessionTitle({ title, dock }: { title: string; dock: Mission
     setRenaming(false);
   };
 
-  if (!dock) return <h1 className="truncate font-display text-base font-semibold text-fg">{title}</h1>;
+  if (!dock) return <h1 className="truncate font-display text-xl font-semibold text-fg">{title}</h1>;
   if (renaming)
     return (
       <form onSubmit={(event) => void save(event)} className="flex min-w-0 items-center gap-1">
@@ -58,7 +58,7 @@ export function ChatSessionTitle({ title, dock }: { title: string; dock: Mission
   return (
     // The heading holds only the title; the rename button sits beside it, so the outline reads the title alone.
     <div className="flex min-w-0 items-center gap-1">
-      <h1 className="truncate font-display text-base font-semibold text-fg">{title}</h1>
+      <h1 className="truncate font-display text-xl font-semibold text-fg">{title}</h1>
       <button
         ref={renameButton}
         type="button"
