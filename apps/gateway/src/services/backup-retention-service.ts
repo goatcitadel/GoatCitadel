@@ -9,6 +9,7 @@ import type {
   BackupCreateResponse,
   BackupManifestContractCoverageRecord,
   BackupManifestFileRecord,
+  BackupListedRecord,
   BackupManifestRecord,
   BackupVerifyResponse,
   RetentionPolicy,
@@ -21,6 +22,7 @@ import { isWindowsEquivalentBackupPath, verifyBackupAtPath } from "./gateway/bac
 import type { GatewayRuntimeConfig } from "../config.js";
 import { discoverNativePostgresTool } from "../native-postgres-discovery.js";
 import { AUTO_NATIVE_BIN_DIR, resolveGatewayPostgresConnectionString } from "../postgres-runtime-config.js";
+import { assertStablePublishedBackupDirectory, ensurePathWithinRoot } from "./backup-published-identity.js";
 import { resolveBackupDirectory, resolveBackupPathWithinDirectory } from "./backup-paths.js";
 import {
   postgresBackupAncillaryEnvironment,
@@ -98,17 +100,22 @@ export async function restoreBackupOffline(input: {
     }
 
     // This namespace can hold the only recoverable old database family; reject every archive member before any copy.
-    if (manifest.files.some((file) =>
-      file.path.replaceAll("\\", "/").split("/")[0]?.toLowerCase() === SQLITE_RESTORE_RECOVERY_DIRECTORY,
-    )) {
+    if (
+      manifest.files.some(
+        (file) => file.path.replaceAll("\\", "/").split("/")[0]?.toLowerCase() === SQLITE_RESTORE_RECOVERY_DIRECTORY,
+      )
+    ) {
       throw new Error("Backup manifest conflicts with the reserved SQLite restore recovery namespace.");
     }
-    const sqlitePaths = manifest.files.filter((file) =>
-      isWindowsEquivalentBackupPath(file.path, "data/index.db") ||
-      (manifest.contractCoverage?.minimumSet.databasePaths ?? []).some((databasePath) =>
-        isWindowsEquivalentBackupPath(file.path, databasePath),
-      ),
-    ).map((file) => file.path);
+    const sqlitePaths = manifest.files
+      .filter(
+        (file) =>
+          isWindowsEquivalentBackupPath(file.path, "data/index.db") ||
+          (manifest.contractCoverage?.minimumSet.databasePaths ?? []).some((databasePath) =>
+            isWindowsEquivalentBackupPath(file.path, databasePath),
+          ),
+      )
+      .map((file) => file.path);
     for (const databasePath of sqlitePaths) {
       const stagedDatabasePath = path.resolve(payloadDir, databasePath);
       ensurePathWithinRoot(stagedDatabasePath, payloadDir);
@@ -117,9 +124,14 @@ export async function restoreBackupOffline(input: {
     }
     let filesRestored = 0;
     for (const file of manifest.files) {
-      if (isEphemeralSqliteSidecar(file.path) || sqlitePaths.some((databasePath) =>
-        SQLITE_RESTORE_FAMILY_SUFFIXES.some((suffix) => isWindowsEquivalentBackupPath(file.path, databasePath + suffix)),
-      )) {
+      if (
+        isEphemeralSqliteSidecar(file.path) ||
+        sqlitePaths.some((databasePath) =>
+          SQLITE_RESTORE_FAMILY_SUFFIXES.some((suffix) =>
+            isWindowsEquivalentBackupPath(file.path, databasePath + suffix),
+          ),
+        )
+      ) {
         continue;
       }
       const source = path.resolve(payloadDir, file.path);
@@ -179,7 +191,11 @@ function validateStandaloneSqliteRestore(databasePath: string): void {
  * Operators must still stop the runtime. The private directory excludes competing SQLite publication and retains the complete
  * old database families until publication validates; it is deliberately retained if rollback cannot finish.
  */
-async function publishSqliteRestoreFamilies(payloadDir: string, runtimeRoot: string, sqlitePaths: readonly string[]): Promise<void> {
+async function publishSqliteRestoreFamilies(
+  payloadDir: string,
+  runtimeRoot: string,
+  sqlitePaths: readonly string[],
+): Promise<void> {
   if (sqlitePaths.length === 0) return;
   const recoveryRoot = path.join(runtimeRoot, SQLITE_RESTORE_RECOVERY_DIRECTORY);
   ensurePathWithinRoot(recoveryRoot, runtimeRoot);
@@ -222,7 +238,9 @@ async function publishSqliteRestoreFamilies(payloadDir: string, runtimeRoot: str
   } catch (cause) {
     const rollbackErrors: unknown[] = [];
     for (const target of published.reverse()) {
-      await fs.rm(target, { force: true }).catch((error: unknown) => { rollbackErrors.push(error); });
+      await fs.rm(target, { force: true }).catch((error: unknown) => {
+        rollbackErrors.push(error);
+      });
     }
     // Do not split more of the retained family after rollback fails; leave the remainder together for recovery.
     if (rollbackErrors.length === 0) {
@@ -236,7 +254,11 @@ async function publishSqliteRestoreFamilies(payloadDir: string, runtimeRoot: str
       }
     }
     if (rollbackErrors.length > 0) {
-      throw new AggregateError([cause, ...rollbackErrors], `SQLite restore rollback needs operator recovery: ${recoveryRoot}`, { cause });
+      throw new AggregateError(
+        [cause, ...rollbackErrors],
+        `SQLite restore rollback needs operator recovery: ${recoveryRoot}`,
+        { cause },
+      );
     }
     await fs.rm(recoveryRoot, { recursive: true, force: true });
     throw cause;
@@ -244,9 +266,12 @@ async function publishSqliteRestoreFamilies(payloadDir: string, runtimeRoot: str
   try {
     await fs.rm(recoveryRoot, { recursive: true, force: true });
   } catch (cause) {
-    throw Object.assign(new Error(`SQLite restore completed but retained recovery files need cleanup: ${recoveryRoot}`, { cause }), {
-      mutationCommitted: true,
-    });
+    throw Object.assign(
+      new Error(`SQLite restore completed but retained recovery files need cleanup: ${recoveryRoot}`, { cause }),
+      {
+        mutationCommitted: true,
+      },
+    );
   }
 }
 export async function verifyBackupAtRuntime(
@@ -282,10 +307,10 @@ export class BackupRetentionService {
 
   // ── Backups ──────────────────────────────────────────────────────────
 
-  public async listBackups(limit = 50): Promise<BackupManifestRecord[]> {
+  public async listBackups(limit = 50): Promise<BackupListedRecord[]> {
     const backupDir = this.getBackupDirectory();
     const entries = await listFilesSafe(backupDir);
-    const manifests: BackupManifestRecord[] = [];
+    const manifests: BackupListedRecord[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory() || !entry.name.endsWith(".backup")) {
         continue;
@@ -294,7 +319,7 @@ export class BackupRetentionService {
       try {
         const raw = await fs.readFile(manifestPath, "utf8");
         const parsed = JSON.parse(raw) as BackupManifestRecord;
-        manifests.push(parsed);
+        manifests.push({ ...parsed, outputPath: path.join(backupDir, entry.name) });
       } catch {
         // skip invalid backup folders
       }
@@ -666,59 +691,6 @@ async function listFilesSafe(dir: string): Promise<
   }
 }
 
-interface PublishedBackupIdentity {
-  size: number;
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  birthtimeMs: number;
-}
-
-async function assertStablePublishedBackupDirectory(
-  backupPath: string,
-  backupRoot: string,
-  expected: PublishedBackupIdentity,
-): Promise<PublishedBackupIdentity> {
-  const before = await readPublishedBackupIdentity(backupPath);
-  if (!samePublishedBackupIdentity(before, expected)) {
-    throw new Error("Published backup changed before trust inspection could bind its bytes.");
-  }
-  const [realRoot, realBackup] = await Promise.all([fs.realpath(backupRoot), fs.realpath(backupPath)]);
-  ensurePathWithinRoot(realBackup, realRoot);
-  const after = await readPublishedBackupIdentity(backupPath);
-  if (!samePublishedBackupIdentity(before, after)) {
-    throw new Error("Published backup changed while trust inspection resolved its path.");
-  }
-  return after;
-}
-
-async function readPublishedBackupIdentity(backupPath: string): Promise<PublishedBackupIdentity> {
-  const stats = await fs.lstat(backupPath);
-  if (!stats.isDirectory() || stats.isSymbolicLink()) {
-    throw new Error("Published backup must be a stable directory, not a link.");
-  }
-  return {
-    size: stats.size,
-    dev: stats.dev,
-    ino: stats.ino,
-    mtimeMs: stats.mtimeMs,
-    ctimeMs: stats.ctimeMs,
-    birthtimeMs: stats.birthtimeMs,
-  };
-}
-
-function samePublishedBackupIdentity(left: PublishedBackupIdentity, right: PublishedBackupIdentity): boolean {
-  return (
-    left.size === right.size &&
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.ctimeMs === right.ctimeMs &&
-    left.birthtimeMs === right.birthtimeMs
-  );
-}
-
 async function directorySizeBytes(dir: string): Promise<number> {
   let total = 0;
   const walk = async (current: string): Promise<void> => {
@@ -941,14 +913,6 @@ function readGitRef(rootDir: string, env: NodeJS.ProcessEnv): string | undefined
   } catch {
     return undefined;
   }
-}
-
-function ensurePathWithinRoot(targetPath: string, rootDir: string): void {
-  const relative = path.relative(rootDir, targetPath);
-  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
-    return;
-  }
-  throw new Error("Path escapes allowed root");
 }
 
 /**
