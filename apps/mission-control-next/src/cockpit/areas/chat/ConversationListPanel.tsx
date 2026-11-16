@@ -152,6 +152,8 @@ export function ConversationListPanel({
                   onClick={() => select(session.sessionId)}
                   aria-label={rowName(rail.renderSessionLabel(session.sessionId), session, activity[session.sessionId])}
                   aria-current={session.sessionId === rail.selectedSessionId ? "page" : undefined}
+                  // The title is already medium weight, so the current row adds only the edge (data-current-row).
+                  data-current-row=""
                   className="flex w-full items-start rounded-md p-2 text-left hover:bg-sunken aria-[current=page]:bg-sunken"
                 >
                   {/* The title has its own line so it is not cut short by the time; the second line carries when, a running, waiting or failed status, the project, and the preview. */}

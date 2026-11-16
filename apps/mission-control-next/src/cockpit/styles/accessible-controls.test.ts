@@ -30,6 +30,15 @@ describe("Cockpit accessible controls", () => {
     expect(css).toContain('[role="tab"][aria-selected="true"], [data-cockpit-tabbar] [aria-current="page"]');
   });
 
+  it("marks the current sidebar and list row with an accent edge, and in forced colours with the current outline (U-GL-005)", () => {
+    expect(css).toMatch(
+      /@layer base \{[^@]*html\[data-shell="cockpit"\] \[data-current-row\]\[aria-current="page"\] \{\s*box-shadow: inset 2px 0 var\(--cockpit-accent\);/,
+    );
+    const forced = css.slice(css.indexOf("@media (forced-colors: active)"));
+    expect(forced).not.toContain("data-current-row");
+    expect(forced).toMatch(/\[aria-current="page"\][^{]*\{\s*outline: 2px solid Highlight;/);
+  });
+
   it("keeps focus, coarse-pointer, reduced-motion and forced-colors rules", () => {
     expect(css).toMatch(/:focus-visible \{\s*outline: 2px solid var\(--cockpit-accent\) !important;/);
     expect(css).toMatch(/@media \(pointer: coarse\)[\s\S]*min-height: max\(44px, 2em\)/);
