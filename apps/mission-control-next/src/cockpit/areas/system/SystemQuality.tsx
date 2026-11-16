@@ -59,9 +59,13 @@ export function SystemQuality() {
         <>
           <div className="space-y-1 text-sm text-fg-secondary">
             <p>Results checked {qualityTimestamp(snapshot.generatedAt)}.</p>
-            <p>This page shows saved test results. It does not run tests or call models.</p>
+            <p>
+              This page shows saved test results. It does not run tests or call models. Counts cover only the most
+              recent results it reads, not everything ever saved.
+            </p>
+            <QualityWarnings items={snapshot.warnings.filter((item) => item !== snapshot.metricScope.note)} />
             <TechnicalDetails label="Notes from GoatCitadel">
-              <QualityWarnings items={[snapshot.metricScope.note, ...snapshot.warnings]} />
+              <QualityWarnings items={[snapshot.metricScope.note]} />
             </TechnicalDetails>
           </div>
           <Tabs value={view} onValueChange={(value) => setView(value as QualityView)}>

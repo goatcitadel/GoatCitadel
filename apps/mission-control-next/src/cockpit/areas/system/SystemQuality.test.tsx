@@ -257,14 +257,16 @@ describe("native Quality owner evidence", () => {
     expect(container.textContent?.split("Shared limitation").length).toBe(2);
     expect(container.textContent?.split("Local gate warning").length).toBe(2);
   });
-  it("states the page limits once in operator words and keeps the Gateway notes in technical details (U-SY-006)", async () => {
+  it("states the page limits in operator words, keeps warnings visible and the scope note in technical details (U-SY-006)", async () => {
     const data = snapshot();
-    data.warnings = ["Quality projection endpoint carries P0 gates only"];
+    data.warnings = ["Prompt pack Alpha could not be loaded."];
     api.snapshot.mockResolvedValue(data);
     await mount();
     const visible = container.textContent ?? "";
     expect(visible).toContain("This page shows saved test results. It does not run tests or call models.");
-    for (const word of ["projection", "endpoint", "P0", "At most 200 packs"]) expect(visible).not.toContain(word);
+    expect(visible).toContain("Counts cover only the most recent results it reads, not everything ever saved.");
+    expect(visible).toContain("Prompt pack Alpha could not be loaded.");
+    expect(visible).not.toContain("At most 200 packs");
     preferences.showTechnicalDetails = true;
     await act(async () =>
       root.render(
@@ -277,10 +279,10 @@ describe("native Quality owner evidence", () => {
       (item) => item.querySelector("summary")?.textContent === "Notes from GoatCitadel",
     );
     expect(details?.textContent).toContain("At most 200 packs and 25 evaluations.");
-    expect(details?.textContent).toContain("Quality projection endpoint carries P0 gates only");
+    expect(details?.textContent).not.toContain("could not be loaded");
     await click("Evaluations");
     expect(container.textContent?.split("At most 200 packs").length).toBe(2);
-    expect(container.textContent?.split("Quality projection endpoint").length).toBe(2);
+    expect(container.textContent?.split("could not be loaded").length).toBe(2);
   });
   it("uses the bounded installation-wide owner and keeps partial sources unavailable", async () => {
     const data = snapshot();
