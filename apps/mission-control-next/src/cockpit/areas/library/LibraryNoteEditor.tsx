@@ -21,7 +21,7 @@ import { Field } from "../../ui/Field";
 import { TimeText } from "../../ui/TimeText";
 import { NOTE_REVISION_SOURCE, noteLifecycleLabel } from "./library-vocabulary";
 
-const INPUT = "w-full rounded-md border border-line bg-raised p-2 text-fg";
+const INPUT = "w-full rounded-md border border-line-control bg-raised p-2 text-fg";
 type Review = { action: "save" | "archive"; note?: NoteRecord; title: string; body: string; revision?: number };
 export function LibraryNoteEditor(props: Parameters<typeof LibraryNoteEditorContent>[0]) {
   const access = useLibraryOperation(JSON.stringify(["note", props.workspaceId, props.note?.noteId ?? "create"]));
@@ -271,6 +271,7 @@ function LibraryNoteEditorContent({
             </Callout>
           ) : null}
           <Button
+            variant="primary"
             disabled={busy || operation.locked || Boolean(outcome) || reviewStale || !available}
             onClick={() => void confirm()}
           >

@@ -651,7 +651,6 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
         const run = await runPromptPackTest(selectedPackId, test.testId, input);
         let autoScoreSummary = "";
         let autoScoreError: string | null = null;
-        let savedLogPath = "";
         let exportError: string | null = null;
         if (autoScoreOnRun && run.status === "completed") {
           try {
@@ -664,8 +663,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
           }
         }
         try {
-          const exportRecord = await savePromptPackSnapshot(selectedPackId);
-          savedLogPath = exportRecord.latestSnapshotPath ?? exportRecord.path;
+          await savePromptPackSnapshot(selectedPackId);
         } catch (err) {
           exportError = describeApiError(err).summary;
         }
@@ -674,13 +672,13 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
         if (run.status === "failed") {
           setError(`Ran ${test.code}, but it failed: ${run.error ?? "Unknown error"}`);
         } else if (autoScoreError) {
-          setSuccess(`Ran ${test.code}.${savedLogPath ? ` Saved log to ${savedLogPath}.` : ""}`);
+          setSuccess(`Ran ${test.code}.`);
           setError(`Ran ${test.code}, but auto-score failed: ${autoScoreError}`);
         } else if (exportError) {
           setSuccess(`Ran ${test.code}.${autoScoreSummary}`);
           setError(`Ran ${test.code}, but saving the run log failed: ${exportError}`);
         } else {
-          setSuccess(`Ran ${test.code}.${autoScoreSummary}${savedLogPath ? ` Saved log to ${savedLogPath}.` : ""}`);
+          setSuccess(`Ran ${test.code}.${autoScoreSummary}`);
         }
       } catch (err) {
         setError(describeApiError(err).summary);
@@ -703,10 +701,8 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
         if (!exportedBenchmarkRunIdsRef.current.has(status.run.benchmarkRunId)) {
           exportedBenchmarkRunIdsRef.current.add(status.run.benchmarkRunId);
           try {
-            const exportRecord = await savePromptPackSnapshot(status.run.packId);
-            setSuccess(
-              `Benchmark ${status.run.status}: ${status.run.benchmarkRunId}. Saved log to ${exportRecord.latestSnapshotPath ?? exportRecord.path}.`,
-            );
+            await savePromptPackSnapshot(status.run.packId);
+            setSuccess(`Benchmark ${status.run.status}: ${status.run.benchmarkRunId}.`);
           } catch (err) {
             setError(`Benchmark ${status.run.status}, but saving the run log failed: ${describeApiError(err).summary}`);
           }
@@ -960,10 +956,8 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
         if (selectedPackId && !exportedRegressionRunIdsRef.current.has(status.run.regressionRunId)) {
           exportedRegressionRunIdsRef.current.add(status.run.regressionRunId);
           try {
-            const exportRecord = await savePromptPackSnapshot(selectedPackId);
-            setSuccess(
-              `Replay regression ${status.run.status}: ${status.run.regressionRunId}. Saved log to ${exportRecord.latestSnapshotPath ?? exportRecord.path}.`,
-            );
+            await savePromptPackSnapshot(selectedPackId);
+            setSuccess(`Replay regression ${status.run.status}: ${status.run.regressionRunId}.`);
           } catch (err) {
             setError(
               `Replay regression ${status.run.status}, but saving the run log failed: ${describeApiError(err).summary}`,

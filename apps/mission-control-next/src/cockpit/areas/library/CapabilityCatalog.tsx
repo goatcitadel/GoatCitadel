@@ -226,7 +226,7 @@ export function CapabilityCatalog({ footer }: { footer?: ReactNode | ((search: s
     <section className={`${AREA_COLUMN} flex flex-col gap-3 p-4 sm:p-6`}>
       <AreaHeader
         title={LIBRARY_SECTION_LABELS.capabilities}
-        description="Review skill candidates, capability proposals, and what mesh nodes publish."
+        description="Skill candidates and what mesh nodes publish. Memory, notes, files and the rest are in the tabs above."
         actions={
           <Button
             size="sm"

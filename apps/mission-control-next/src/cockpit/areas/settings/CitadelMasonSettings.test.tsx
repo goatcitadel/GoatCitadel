@@ -3,6 +3,7 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CitadelMasonSettings } from "./CitadelMasonSettings";
+import { CITADEL_PAGE_LABELS } from "../../../app/route-model";
 import {
   masonSession,
   masonBlueprint,
@@ -176,5 +177,12 @@ describe("native Mason", () => {
     expect(api.updateMasonSessionAnswers).not.toHaveBeenCalled();
     expect(container.querySelector('[role="dialog"]')).toBeNull();
     expect(container.textContent).toContain("Unsaved structured answers");
+  });
+  it("keeps its own heading by default and drops it when the page header shows the title (U-LB-004)", async () => {
+    const titles = () => [...container.querySelectorAll("h3")].map((item) => item.textContent);
+    expect(titles()).toContain(CITADEL_PAGE_LABELS.citadel);
+    await act(async () => root.render(<CitadelMasonSettings citadelId="one" embeddedHeading />));
+    expect(titles()).not.toContain(CITADEL_PAGE_LABELS.citadel);
+    expect(container.querySelector('section[aria-label="Citadel Mason"]')).toBeTruthy();
   });
 });
