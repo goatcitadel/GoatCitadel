@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type CapturedProcessHandler = (...args: unknown[]) => void;
@@ -293,6 +296,54 @@ describe("gateway main entrypoint", () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
+  describe("start failure record", () => {
+    const tempRoots: string[] = [];
+    async function recordPath(): Promise<string> {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-main-record-"));
+      tempRoots.push(root);
+      return path.join(root, "runtime", "logs", "gateway-startup-failure.json");
+    }
+    afterEach(async () => {
+      delete process.env.GOATCITADEL_STARTUP_FAILURE_FILE;
+      await Promise.all(tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+    });
+
+    it("writes the record when buildApp fails", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const file = await recordPath();
+      process.env.GOATCITADEL_STARTUP_FAILURE_FILE = file;
+      await importMainWithMocks({ buildAppError: new Error("database could not start") });
+      const record = JSON.parse(await fs.readFile(file, "utf8"));
+      expect(record).toMatchObject({ version: 1, retryable: true });
+      expect(record.summary).not.toContain("database could not start");
+    });
+
+    it("writes the record when listen fails", async () => {
+      const file = await recordPath();
+      process.env.GOATCITADEL_STARTUP_FAILURE_FILE = file;
+      const app = createFailingListenApp();
+      await importMainWithMocks({ app });
+      await vi.waitFor(async () => expect(JSON.parse(await fs.readFile(file, "utf8")).version).toBe(1));
+    });
+
+    it("clears an earlier record once the Gateway is ready", async () => {
+      const file = await recordPath();
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, "{}", "utf8");
+      process.env.GOATCITADEL_STARTUP_FAILURE_FILE = file;
+      await importMainWithMocks();
+      await vi.waitFor(async () => expect(fs.access(file)).rejects.toThrow());
+    });
+
+    it("writes nothing when the variable is unset", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const file = await recordPath();
+      delete process.env.GOATCITADEL_STARTUP_FAILURE_FILE;
+      await importMainWithMocks({ buildAppError: new Error("x") });
+      await expect(fs.access(file)).rejects.toThrow();
+    });
+  });
+
   it("records shutdown close failures without forcing an immediate process exit", async () => {
     const shutdownError = new Error("close failed");
     const app = {
@@ -411,3 +462,18 @@ describe("gateway main entrypoint", () => {
     expect(process.exitCode).toBe(1);
   });
 });
+
+function createFailingListenApp(): MockGatewayApp {
+  return {
+    close: vi.fn(async () => undefined),
+    gatewayConfig: { assistant: { auth: { mode: "none" } } },
+    gatewayRuntime: createGatewayRuntimeMock(),
+    listen: vi.fn(async () => {
+      throw new Error("listen EADDRINUSE");
+    }),
+    log: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    services: { a2a: {} },
+    server: { close: vi.fn(), listening: false },
+    sharedHostLifecycle: createSharedHostLifecycleMock(),
+  };
+}
