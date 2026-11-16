@@ -33,16 +33,30 @@ function isErrnoException(error: unknown, code: string): boolean {
 
 export class SkillsService {
   private loaded: LoadedSkill[] = [];
+  /** How many reloads have started, and which of them last set `loaded`. */
+  private startedReloads = 0;
+  private appliedReload = 0;
 
   public constructor(
     private readonly sources: SkillSource[],
     private readonly logger: SkillsLogger = defaultLogger,
   ) {}
 
+  /**
+   * Reads every source again. Reloads can overlap, and the one that started last read the disk last, so its list wins:
+   * one that finishes after a later-started reload already set the list is dropped, and answers that newer list. Without
+   * this a slow reload that read a skill's folder before it was moved aside could put the skill back after a later
+   * reload took it out.
+   */
   public async reload(): Promise<LoadedSkill[]> {
+    this.startedReloads += 1;
+    const reload = this.startedReloads;
     const sourceSkills = await Promise.all(this.sources.map((source) => loadSourceSkills(source, this.logger)));
 
-    this.loaded = resolveSkillPrecedence(sourceSkills.flat());
+    if (reload > this.appliedReload) {
+      this.appliedReload = reload;
+      this.loaded = resolveSkillPrecedence(sourceSkills.flat());
+    }
     return this.loaded;
   }
 
