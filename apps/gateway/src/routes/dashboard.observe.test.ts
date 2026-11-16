@@ -256,6 +256,41 @@ describe("dashboard observe aggregate routes", () => {
         latest: { backupId: "backup-1" },
       },
     });
+    // No Skills tab composed: the skill removal cleanup is left out, never reported as none.
+    expect(response.json()).not.toHaveProperty("skillRemovalCleanup");
+  });
+
+  it("adds how many skill removals left a folder behind, and leaves it out when it can't be read", async () => {
+    const services = (countLeftovers: () => Promise<number>) => ({
+      dashboard: {
+        getSystemVitals: vi.fn(() => ({ hostname: "goat-box" })),
+        costSummary: vi.fn(() => []),
+        costUsageAvailability: vi.fn(() => ({ trackedEvents: 0, unknownEvents: 0, totalAgentEvents: 0 })),
+        getMemoryQmdStats: vi.fn(() => ({ totalRuns: 0 })),
+        listBackups: vi.fn(async () => []),
+      },
+      daemon: { getDaemonStatus: vi.fn(async () => ({ running: true })), listDaemonLogs: vi.fn(async () => []) },
+      health: { getDatabaseHealthSnapshot: vi.fn(async () => ({ driver: "sqlite", healthy: true })) },
+      capabilitySkills: { removalCleanup: { countLeftovers: vi.fn(countLeftovers) } },
+    });
+    app = Fastify();
+    app.decorate("services", services(async () => 2) as never);
+    await app.register(dashboardRoutes);
+    const counted = await app.inject({ method: "GET", url: "/api/v1/observe/health" });
+    expect(counted.json().skillRemovalCleanup).toEqual({ leftFolders: 2 });
+    await app.close();
+
+    app = Fastify();
+    app.decorate(
+      "services",
+      services(async () => {
+        throw new Error("journey unreadable");
+      }) as never,
+    );
+    await app.register(dashboardRoutes);
+    const unread = await app.inject({ method: "GET", url: "/api/v1/observe/health" });
+    expect(unread.statusCode).toBe(200);
+    expect(unread.json()).not.toHaveProperty("skillRemovalCleanup");
   });
 
   it("returns a universal run trace through the observe route", async () => {

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { composeCapabilityPlugins, type CapabilityPluginsOwners } from "./capability-plugins-composition.js";
 import type { CapabilityPluginsRouteService } from "./capability-plugins-route-service.js";
 import {
@@ -6,6 +7,8 @@ import {
   type CapabilitySkillsOwners,
 } from "./capability-skills-composition.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
+import { countRemovalCleanupLeftovers, type RemovalCleanupLeftoverSources } from "./skill-hub-cleanup-leftovers.js";
+import { createSkillHubLifecycleFilesystem } from "./skill-hub-lifecycle-filesystem-composition.js";
 
 // The Skills tab and the Plugins tab, wired together. A plugin's skills take the Skills tab's own install steps, which
 // read the plugin records, and the Skills tab marks a skill a plugin brought (or an uninstall removed); the plugin's
@@ -21,14 +24,20 @@ export interface CapabilitySkillsAndPluginsOwners
     >,
     Omit<CapabilityPluginsOwners, "skillHub" | "revokeSkill" | "readOperatorApprovalSkip" | "records"> {
   skillHub: CapabilitySkillsOwners["skillHub"] & CapabilityPluginsOwners["skillHub"];
-  /** The plugin records' storage, which also holds Skill Hub's settlements the Skills tab reads a removal's outcome from. */
+  /**
+   * The plugin records' storage, which also holds Skill Hub's settlements the Skills tab reads a removal's outcome from,
+   * and the workspaces and Journey a removal's failed cleanups are read from.
+   */
   records: CapabilityPluginsOwners["records"] & {
     readonly skillHubOperations: CapabilitySkillsOwners["skillHubSettlements"];
-  };
+  } & RemovalCleanupLeftoverSources["storage"];
 }
 
 export interface CapabilitySkillsAndPlugins {
-  capabilitySkills: CapabilitySkills;
+  capabilitySkills: CapabilitySkills & {
+    /** System › Health's read: applied removals whose moved-aside folder is still in the skills folder. */
+    removalCleanup: { countLeftovers(): Promise<number> };
+  };
   capabilityPlugins: CapabilityPluginsRouteService;
 }
 
@@ -59,5 +68,17 @@ export function composeCapabilitySkillsAndPlugins(
     pluginRecords: { list: () => plugins.readPlugins(), listRemoved: () => plugins.readRemovedPlugins() },
   });
   wired.skills = capabilitySkills;
-  return { capabilitySkills, capabilityPlugins: plugins.routes };
+  // The same runtime skills root Skill Hub's removals move folders aside in, read through the confined filesystem.
+  const rootDir = path.resolve(owners.config.rootDir);
+  const filesystem = createSkillHubLifecycleFilesystem(rootDir, {});
+  const removalCleanup = {
+    countLeftovers: () =>
+      countRemovalCleanupLeftovers({
+        storage: owners.records,
+        filesystem,
+        root: path.join(rootDir, "skills", "extra"),
+        signal: new AbortController().signal,
+      }),
+  };
+  return { capabilitySkills: { ...capabilitySkills, removalCleanup }, capabilityPlugins: plugins.routes };
 }

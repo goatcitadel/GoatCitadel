@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyBaseLogger, FastifyInstance, FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { projectSettingsPublicValue } from "../services/provider-settings-public-projection.js";
@@ -11,6 +11,7 @@ import {
   LlmProviderCapabilitiesSchema,
   LlmProviderGoogleCloudConfigSchema,
   LlmProviderRequestConfigSchema,
+  redactStructuredSecrets,
   SemanticValidationError,
   ServiceUnavailableError,
   WEB_SEARCH_NATIVE_ENGINES,
@@ -426,15 +427,17 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     const now = new Date();
     const to = now.toISOString();
     const from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const [backups, database, costSummary, costUsageAvailability, qmd, daemonStatus, daemonLogs] = await Promise.all([
-      fastify.services.dashboard.listBackups(parsed.data.backupLimit),
-      fastify.services.health.getDatabaseHealthSnapshot(),
-      fastify.services.dashboard.costSummary(parsed.data.costScope, from, to),
-      fastify.services.dashboard.costUsageAvailability(from, to),
-      fastify.services.dashboard.getMemoryQmdStats(from, to),
-      fastify.services.daemon.getDaemonStatus(),
-      fastify.services.daemon.listDaemonLogs(parsed.data.logTail),
-    ]);
+    const [backups, database, costSummary, costUsageAvailability, qmd, daemonStatus, daemonLogs, skillRemovalCleanup] =
+      await Promise.all([
+        fastify.services.dashboard.listBackups(parsed.data.backupLimit),
+        fastify.services.health.getDatabaseHealthSnapshot(),
+        fastify.services.dashboard.costSummary(parsed.data.costScope, from, to),
+        fastify.services.dashboard.costUsageAvailability(from, to),
+        fastify.services.dashboard.getMemoryQmdStats(from, to),
+        fastify.services.daemon.getDaemonStatus(),
+        fastify.services.daemon.listDaemonLogs(parsed.data.logTail),
+        readSkillRemovalCleanup(fastify, request.log),
+      ]);
     return reply.send(
       projectPublicSecretValue({
         generatedAt: to,
@@ -458,6 +461,8 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
           items: backups,
           latest: backups[0] ?? null,
         },
+        // Absent when it can't be read: an unread count is never shown as none left.
+        ...(skillRemovalCleanup ? { skillRemovalCleanup } : {}),
       }),
     );
   });
@@ -1035,4 +1040,23 @@ function containsPublicProjectionMarker(value: unknown, seen = new WeakSet<objec
   return (Array.isArray(value) ? value : Object.values(value)).some((item) =>
     containsPublicProjectionMarker(item, seen),
   );
+}
+
+/**
+ * System › Health's count of applied skill removals whose moved-aside folder is still in the skills folder. A host that
+ * doesn't compose it, or a read that fails, answers nothing (logged), so the page never reads it as none left.
+ */
+async function readSkillRemovalCleanup(
+  fastify: FastifyInstance,
+  log: FastifyBaseLogger,
+): Promise<{ leftFolders: number } | undefined> {
+  const owner = fastify.services.capabilitySkills?.removalCleanup;
+  if (!owner) return undefined;
+  try {
+    return { leftFolders: await owner.countLeftovers() };
+  } catch (error) {
+    const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: String(error) };
+    log.warn({ err: redactStructuredSecrets(diagnostic).value }, "skill removal cleanups could not be read");
+    return undefined;
+  }
 }

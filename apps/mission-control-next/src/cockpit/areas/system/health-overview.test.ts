@@ -232,3 +232,31 @@ describe("describeRuntimeService (SY-01)", () => {
     expect(describeRuntimeService(info).label).toBe("Running");
   });
 });
+
+describe("skill removal cleanup", () => {
+  it("adds one check that needs a look while removed skills' folders are still in the skills folder", () => {
+    const one = deriveHealthChecks({ ...healthy, skillRemovalCleanup: { leftFolders: 1 } }).find(
+      (check) => check.id === "skill_cleanup",
+    );
+    expect(one).toEqual({
+      id: "skill_cleanup",
+      title: "Removed skill cleanup",
+      status: { label: "Needs a look", tone: "waiting" },
+      detail:
+        "A removed skill's folder is still in GoatCitadel's skills folder because deleting it failed. The skill itself is already removed, and GoatCitadel keeps trying to delete the folder.",
+      inspectPath: "/library/journey",
+    });
+    const two = deriveHealthChecks({ ...healthy, skillRemovalCleanup: { leftFolders: 2 } }).find(
+      (check) => check.id === "skill_cleanup",
+    );
+    expect(two?.detail).toBe(
+      "The folders of 2 removed skills are still in GoatCitadel's skills folder because deleting them failed. The skills themselves are already removed, and GoatCitadel keeps trying to delete the folders.",
+    );
+  });
+
+  it("adds nothing when none are left, or the count couldn't be read", () => {
+    for (const health of [{ ...healthy, skillRemovalCleanup: { leftFolders: 0 } }, healthy]) {
+      expect(deriveHealthChecks(health).some((check) => check.id === "skill_cleanup")).toBe(false);
+    }
+  });
+});

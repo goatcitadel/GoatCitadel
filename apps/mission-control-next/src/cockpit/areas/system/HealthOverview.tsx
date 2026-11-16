@@ -12,6 +12,7 @@ import {
   Cpu,
   Database,
   Download,
+  FolderX,
   Plug,
   RefreshCw,
   Server,
@@ -52,6 +53,7 @@ const ICONS: Readonly<Record<HealthCheck["id"], LucideIcon>> = {
   integrations: Plug,
   updates: Download,
   remote_workers: Workflow,
+  skill_cleanup: FolderX,
 };
 
 /** Failed, then waiting, then unconfirmed, then not set up, then clear; the derived order breaks ties. */

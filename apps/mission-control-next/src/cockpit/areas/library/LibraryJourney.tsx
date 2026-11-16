@@ -25,6 +25,7 @@ import {
   JOURNEY_ACTOR,
   JOURNEY_CATEGORY,
   JOURNEY_TRUST,
+  journeyActionLabel,
   journeyBlockerLabel,
   journeyWords,
 } from "./library-vocabulary";
@@ -223,7 +224,7 @@ export function LibraryJourney({ workspaceId }: { workspaceId: string }) {
                     onClick={() => setParams({ eventId: event.eventId })}
                     className="grid min-h-11 w-full min-w-0 gap-1 rounded-md px-2 py-2 text-left wrap-anywhere hover:bg-sunken aria-[current=true]:rounded-l-none aria-[current=true]:border-l aria-[current=true]:border-accent aria-[current=true]:bg-sunken aria-[current=true]:text-accent"
                   >
-                    <strong>{humanize(event.action)}</strong>
+                    <strong>{journeyActionLabel(event.action)}</strong>
                     <span className="text-sm text-fg-secondary">
                       <TimeText value={event.recordedAt} /> · {JOURNEY_CATEGORY[event.category] ?? "Other"} ·{" "}
                       {formatJourneyEvidenceHealth(event.evidence.health)}
@@ -290,7 +291,7 @@ function JourneyEventDetail({ item }: { item: JourneyTimelineItem }) {
           : "Not required";
   return (
     <section className={CARD} aria-label="Journey event detail">
-      <h2 className="text-base font-semibold wrap-anywhere">{humanize(item.action)}</h2>
+      <h2 className="text-base font-semibold wrap-anywhere">{journeyActionLabel(item.action)}</h2>
       <p className="text-sm text-fg-secondary wrap-anywhere">
         {journeyWords(item.eventType, "Event")} · {journeyWords(item.subjectKind, "Subject")} ·{" "}
         {item.scopeKind === "global" ? "All workspaces" : "This workspace"}

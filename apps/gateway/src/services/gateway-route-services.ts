@@ -313,6 +313,8 @@ export interface GatewayRouteServices {
       "setState" | "checkSource" | "requestStep" | "requestRemoval" | "readRemoval"
     >;
     discover: Pick<CapabilitySkillDiscoverService, "list">;
+    /** Applied removals whose moved-aside folder is still in the skills folder, for System › Health. */
+    removalCleanup?: { countLeftovers(): Promise<number> };
   };
   /**
    * The Capabilities Plugins tab, its install and its uninstall. Composed by the gateway service over the plugin store

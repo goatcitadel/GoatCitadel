@@ -311,6 +311,11 @@ export interface DaemonStatusResponse {
 export interface HealthSummaryResponse {
   generatedAt: string;
   database?: DatabaseHealthSnapshot;
+  /**
+   * Applied skill removals whose moved-aside folder is still in the skills folder after a failed cleanup. Absent when it
+   * couldn't be read.
+   */
+  skillRemovalCleanup?: { leftFolders: number };
   systemVitals: SystemVitalsResponse;
   daemonStatus: DaemonStatusResponse;
   daemonLogs: {
