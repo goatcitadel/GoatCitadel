@@ -3,6 +3,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CitadelRecord, WorkspaceRecord } from "@goatcitadel/contracts";
+import { fetchWorkspaces } from "@goatcitadel/mission-control-shared/api/workspaces";
+import { listCitadels } from "@goatcitadel/mission-control-shared/api/citadels";
 import { __resetSessionDraftsForTests, hasSessionDraft, useSessionDraft } from "../library/session-drafts";
 import { directoryLifecycleReceiptMatches, type DirectoryLifecycleReview } from "./directory-lifecycle-binding";
 import { __resetWorkspaceAttemptsForTests, workspaceAttemptLocked } from "./workspace-editor-state";
@@ -139,9 +141,74 @@ afterEach(async () => {
   container.remove();
   __resetWorkspaceAttemptsForTests();
   __resetSessionDraftsForTests();
+  vi.unstubAllGlobals();
 });
 
 describe("shared directory lifecycle", () => {
+  it.each(["workspace archive", "Citadel restore"])(
+    "confirms a %s despite an older in-flight directory read",
+    async (operation) => {
+      const archive = operation === "workspace archive";
+      const stamp = "2026-09-30T01:00:00.000Z";
+      const review: DirectoryLifecycleReview = archive
+        ? target("archive")
+        : {
+            kind: "citadel",
+            action: "restore",
+            record: { ...savedCitadel, lifecycleStatus: "archived", archivedAt: stamp },
+          };
+      const updatedAt = "2026-09-30T02:00:00.000Z";
+      const receipt = {
+        ...review.record,
+        lifecycleStatus: archive ? "archived" : "active",
+        revision: archive ? savedWorkspace.revision + 1 : "b".repeat(64),
+        archivedAt: archive ? updatedAt : undefined,
+        updatedAt,
+      };
+      const read = () => (archive ? fetchWorkspaces("all", 500, "personal") : listCitadels("all", 500));
+      const rows = (record: typeof review.record | typeof receipt) => ({ citadelId: "personal", items: [record] });
+      const stale = deferred<Response>();
+      const mutationEntered = deferred<void>();
+      const write = deferred<typeof receipt>();
+      const fetchMock = vi
+        .fn()
+        .mockImplementationOnce(async () => Response.json(rows(review.record)))
+        .mockReturnValueOnce(stale.promise)
+        .mockImplementationOnce(async () => Response.json(rows(receipt)));
+      vi.stubGlobal("fetch", fetchMock);
+      const mutate = archive ? api.archiveWorkspace : api.restoreCitadel;
+      if (archive) api.fetchWorkspaces.mockImplementation(fetchWorkspaces);
+      else api.listCitadels.mockImplementation(listCitadels);
+      mutate.mockImplementationOnce(() => {
+        mutationEntered.resolve();
+        return write.promise;
+      });
+
+      await request(review);
+      let confirmation!: Promise<boolean>;
+      await act(async () => {
+        confirmation = actions.confirm();
+        await mutationEntered.promise;
+      });
+      const background = read();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await act(async () => write.resolve(receipt));
+      const readsBeforeStaleResponse = fetchMock.mock.calls.length;
+      stale.resolve(Response.json(rows(review.record)));
+      expect(await background).toMatchObject(rows(review.record));
+      let confirmed!: boolean;
+      await act(async () => {
+        confirmed = await confirmation;
+      });
+
+      expect(confirmed).toBe(true);
+      expect(readsBeforeStaleResponse).toBe(3);
+      expect(actions.attempt(review).phase).toBe("saved");
+      expect(options.onConfirmed).toHaveBeenCalledOnce();
+      expect(mutate).toHaveBeenCalledOnce();
+    },
+  );
+
   it("reviews without writes, cancels without dropping a draft, then archives the exact revision once", async () => {
     await act(async () => draft.setValue({ name: "Unsaved research" }));
     await request();

@@ -9,6 +9,7 @@ import {
   restoreWorkspace,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { discardSessionDraft } from "../library/session-drafts";
 import {
   directoryAttemptKey,
@@ -169,7 +170,7 @@ export function useDirectoryLifecycle({
             );
       if (!directoryLifecycleReceiptMatches(target, receipt))
         throw new Error("The Gateway did not confirm the exact reviewed lifecycle change.");
-      const recorded = await readRecord(target);
+      const recorded = await withFreshReads(() => readRecord(target));
       const acknowledged =
         target.kind === "workspace"
           ? { ...target, record: receipt as WorkspaceRecord }
