@@ -361,7 +361,7 @@ export async function runCockpitScheduleLifecycleProof({
             await page.getByRole("button", { name: "More areas and settings", exact: true }).click();
             await page.getByRole("button", { name: "Switch to classic Mission Control", exact: true }).click();
           } else {
-            await page.getByRole("button", { name: "Settings and account", exact: true }).click();
+            await page.getByRole("button", { name: "Settings and theme", exact: true }).click();
             await page.getByRole("menuitem", { name: "Switch to classic Mission Control", exact: true }).click();
           }
           await page.waitForSelector('html[data-shell="classic"] .mc-next-shell .mc-next-topbar', { timeout: 30_000 });

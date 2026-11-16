@@ -286,7 +286,7 @@ export function Sidebar({
         )}
         <Menu scopeKey={JSON.stringify([activeCitadelId, activeWorkspaceId, pathname, search, hash])}>
           <MenuTrigger
-            aria-label="Settings and account"
+            aria-label="Settings and theme"
             // ST-11: Settings has no Areas entry, so its gear is the sidebar's current item while Settings is open.
             aria-current={current === "settings" ? "page" : undefined}
             data-current-row=""
