@@ -1,5 +1,7 @@
+import type { ApprovalStatus } from "./approvals.js";
 import type { CapabilityCatalogEntry, SkillLifecycleState } from "./capabilities.js";
 import type { SkillCategoryId, SkillOrigin } from "./skill-categories.js";
+import type { SkillHubOperationSettlementDisposition } from "./skill-hub-lifecycle.js";
 import type { SkillRuntimeState, SkillSourceProvider } from "./skills.js";
 
 // ---------------------------------------------------------------------------
@@ -308,15 +310,16 @@ export interface CapabilitySkillOperationRequest {
 // Removing a left-over skill: POST /api/v1/capabilities/skills/removals
 // ---------------------------------------------------------------------------
 
-/** Asks to remove one revoked skill a plugin left behind. There is no field that chooses the skip; the Gateway decides it. */
+/** Asks to remove one revoked skill a plugin left behind. No field skips its approval: a removal always asks. */
 export interface CapabilitySkillRemovalRequest {
   workspaceId: string;
   skillId: string;
 }
 
 /**
- * What asking for a removal did. The removal always creates its approval; the operator's skip only resolves it.
- * - `approved`: approved, by the skip now or earlier, and its own effect removes the skill (or already has).
+ * What asking for a removal did. The removal always creates its approval, and no setting skips it.
+ * - `approved`: the same request handed back an approval the operator already gave; its own effect removes the skill (or
+ *   already has).
  * - `waiting`: it waits for the operator's approval, which is the one in `workspaceId`.
  */
 export type CapabilitySkillRemovalOutcome = {
@@ -324,6 +327,22 @@ export type CapabilitySkillRemovalOutcome = {
   approvalId: string;
   workspaceId: string;
 };
+
+/**
+ * One removal, read by its approval: GET /api/v1/capabilities/skills/removals/:approvalId?workspaceId=. `settlement` is
+ * there once the removal's effect has settled; until then only the approval's own status is known.
+ */
+export interface CapabilitySkillRemovalRead {
+  approvalId: string;
+  approvalStatus: ApprovalStatus;
+  settlement?: {
+    disposition: SkillHubOperationSettlementDisposition;
+    /** Why it settled as it did, as the effect recorded it (a code such as `runtime_projection_diverged`). */
+    reason?: string;
+    /** Temporary folders in the skills folder that an applied removal left because it couldn't confirm they were its own. */
+    otherScratchFolders?: number;
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Finding a skill to install: GET /api/v1/capabilities/skills/discover

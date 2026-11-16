@@ -15,9 +15,16 @@ import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 /** Each tab's owners, once: the install's folders and profile come from its config, and Skill Hub serves both tabs. */
 export interface CapabilitySkillsAndPluginsOwners
   extends
-    Omit<CapabilitySkillsOwners, "deploymentProfile" | "rootDir" | "pluginRecords" | "skillHub">,
-    Omit<CapabilityPluginsOwners, "skillHub" | "revokeSkill" | "readOperatorApprovalSkip"> {
+    Omit<
+      CapabilitySkillsOwners,
+      "deploymentProfile" | "rootDir" | "pluginRecords" | "skillHub" | "skillHubSettlements"
+    >,
+    Omit<CapabilityPluginsOwners, "skillHub" | "revokeSkill" | "readOperatorApprovalSkip" | "records"> {
   skillHub: CapabilitySkillsOwners["skillHub"] & CapabilityPluginsOwners["skillHub"];
+  /** The plugin records' storage, which also holds Skill Hub's settlements the Skills tab reads a removal's outcome from. */
+  records: CapabilityPluginsOwners["records"] & {
+    readonly skillHubOperations: CapabilitySkillsOwners["skillHubSettlements"];
+  };
 }
 
 export interface CapabilitySkillsAndPlugins {
@@ -48,6 +55,7 @@ export function composeCapabilitySkillsAndPlugins(
     // The live config: a deployment profile is read on every list and step, never kept.
     deploymentProfile: () => owners.config.assistant.deploymentProfile,
     rootDir: owners.config.rootDir,
+    skillHubSettlements: owners.records.skillHubOperations,
     pluginRecords: { list: () => plugins.readPlugins(), listRemoved: () => plugins.readRemovedPlugins() },
   });
   wired.skills = capabilitySkills;

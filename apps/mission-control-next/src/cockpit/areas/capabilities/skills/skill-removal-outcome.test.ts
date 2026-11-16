@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findRemovalSettlement, removalOutcomeNote } from "./skill-removal-outcome";
+import { removalOutcomeNote } from "./skill-removal-outcome";
 
 describe("removalOutcomeNote", () => {
   it("says nothing for an applied removal", () => {
@@ -46,36 +46,5 @@ describe("removalOutcomeNote", () => {
       expect(note).toMatch(/^Not removed\. /u);
       expect(note).not.toMatch(/_/u);
     }
-  });
-});
-
-describe("findRemovalSettlement", () => {
-  it("finds the settlement of exactly this approval", () => {
-    const settlement = {
-      settlementId: "settlement-1",
-      disposition: "blocked" as const,
-      resultSha256: "a".repeat(64),
-      evidenceEnvelopeId: "evidence-1",
-      journeyEventId: "journey-1",
-      settledAt: "2026-11-15T00:00:00.000Z",
-      reason: "bundled_skill",
-    };
-    const summary = (approvalId: string, settled = true) => ({
-      approvalId,
-      operationId: `operation-${approvalId}`,
-      operationKind: "remove" as const,
-      status: "approved" as const,
-      createdAt: "2026-11-15T00:00:00.000Z",
-      ...(settled ? { settlement } : {}),
-    });
-    const items = [
-      { approvals: { remove: summary("approval-other") } },
-      { approvals: { remove: summary("approval-1") } },
-    ];
-    expect(findRemovalSettlement(items, "approval-1")).toBe(settlement);
-    expect(
-      findRemovalSettlement([{ approvals: { remove: summary("approval-1", false) } }], "approval-1"),
-    ).toBeUndefined();
-    expect(findRemovalSettlement([{ approvals: {} }], "approval-1")).toBeUndefined();
   });
 });

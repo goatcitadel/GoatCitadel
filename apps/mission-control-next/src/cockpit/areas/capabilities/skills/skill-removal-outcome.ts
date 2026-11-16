@@ -1,6 +1,6 @@
-import type { SkillHubOperatorApprovalSummary } from "@goatcitadel/mission-control-shared/api/skill-hub";
+import type { CapabilitySkillRemovalRead } from "@goatcitadel/contracts";
 
-type Settlement = NonNullable<SkillHubOperatorApprovalSummary["settlement"]>;
+type Settlement = NonNullable<CapabilitySkillRemovalRead["settlement"]>;
 
 const FOLDER_CHANGED =
   "Not removed. The skill's folder no longer matches the files GoatCitadel checked, so nothing was deleted. Put the checked files back or delete the folder yourself, then remove the skill again.";
@@ -40,12 +40,4 @@ export function removalOutcomeNote(settlement: Pick<Settlement, "disposition" | 
     return NEEDS_A_LOOK;
   }
   return (settlement.reason ? BLOCKED_BY_REASON[settlement.reason] : undefined) ?? BLOCKED_CHANGED;
-}
-
-/** The settlement of one removal approval in the Skill Hub read, when the read lists it. */
-export function findRemovalSettlement(
-  items: ReadonlyArray<{ approvals: { remove?: SkillHubOperatorApprovalSummary } }>,
-  approvalId: string,
-): Settlement | undefined {
-  return items.find((item) => item.approvals.remove?.approvalId === approvalId)?.approvals.remove?.settlement;
 }

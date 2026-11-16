@@ -12,10 +12,12 @@ import {
   type CapabilitySkillInstall,
   type CapabilitySkillOperationRequest,
   type CapabilitySkillRemovalOutcome,
+  type CapabilitySkillRemovalRead,
   type CapabilitySkillRemovalRequest,
   type CapabilitySkillReviewRequest,
   type CapabilitySkillStateRequest,
   type DeploymentProfile,
+  type SkillHubOperationSettlementRecord,
   type SkillLifecycleRecord,
   type SkillRuntimeState,
 } from "@goatcitadel/contracts";
@@ -61,6 +63,7 @@ const CHECK_FAILED_MESSAGE = "This skill didn't pass GoatCitadel's checks.";
 const UNREADABLE_CHECK_MESSAGE = "This skill's check can't be read right now.";
 const NOT_REMOVABLE_MESSAGE = "This skill can't be removed.";
 const OTHER_WORKSPACE_MESSAGE = "This skill was added in another workspace. Remove it there.";
+const REMOVAL_NOT_FOUND_MESSAGE = "This removal wasn't found.";
 /** The review's own refusal codes are upper snake case; anything else names the request field it came in on. */
 const REVIEW_CODE = /^[A-Z][A-Z0-9_]*$/u;
 /** The request fields a refused source comes in on: the address (unsafe, unreadable, not allowed) or the pack. */
@@ -99,7 +102,7 @@ export interface CapabilitySkillActionSources {
    * One approval as the Inbox reads it: where it stands, and the state the skill was in when the owner made it
    * (`preview.currentState`, written in the same commit as the change it binds).
    */
-  readApproval(approvalId: string): Promise<Pick<ApprovalRequest, "preview" | "status">>;
+  readApproval(approvalId: string): Promise<Pick<ApprovalRequest, "kind" | "preview" | "status">>;
   /** One event on the approvals audit stream. */
   appendApprovalAudit(event: string, payload: Record<string, unknown>): Promise<void>;
   /** The install's deployment profile, read on every switch and step. */
@@ -134,7 +137,15 @@ export interface CapabilitySkillActionSources {
   readSkillLifecycle(workspaceId: string, skillId: string): Promise<CapabilitySkillLifecycleRead | undefined>;
   /** The ids of the skills plugin uninstalls removed, as the Skills tab reads them for "Removed with <plugin>". */
   listSkillsRemovedWithPlugins(): Promise<ReadonlySet<string>>;
+  /** Skill Hub's settlement of one operation, by its id, once its effect has settled. */
+  findSkillHubSettlement(operationId: string): Promise<SkillHubSettlementRead | undefined>;
 }
+
+/** What a removal's read takes from Skill Hub's settlement of its operation. */
+export type SkillHubSettlementRead = Pick<
+  SkillHubOperationSettlementRecord,
+  "workspaceId" | "approvalId" | "operationId" | "disposition" | "result"
+>;
 
 /** What a removal reads of a skill's runtime record. */
 export type CapabilitySkillLifecycleRead = Pick<SkillLifecycleRecord, "lifecycleState" | "provenance">;
@@ -349,6 +360,43 @@ export class CapabilitySkillActionsService {
     // The same request hands back the approval it already made; an approved one is never resolved again. Otherwise it
     // waits: a removal deletes files, so no setting skips its approval.
     return { status: approval.status === "approved" ? "approved" : "waiting", approvalId, workspaceId };
+  }
+
+  /**
+   * One removal, read by the approval the panel tracks: the approval's status and, once the effect has settled, the
+   * settlement Skill Hub recorded for that approval's own operation (never another approval's). It only reads. An
+   * approval that is not a Skill Hub removal in this workspace is not found (404), so no other approval can be read here.
+   */
+  public async readRemoval(input: { workspaceId: string; approvalId: string }): Promise<CapabilitySkillRemovalRead> {
+    const approval = await this.sources.readApproval(input.approvalId);
+    const intent = (approval.preview as { intent?: Record<string, unknown> } | undefined)?.intent;
+    if (
+      approval.kind !== SKILL_HUB_LIFECYCLE_APPROVAL_KIND ||
+      intent?.operationKind !== "remove" ||
+      intent.workspaceId !== input.workspaceId ||
+      typeof intent.operationId !== "string"
+    ) {
+      throw new NotFoundError(REMOVAL_NOT_FOUND_MESSAGE);
+    }
+    const read: CapabilitySkillRemovalRead = { approvalId: input.approvalId, approvalStatus: approval.status };
+    const settlement = await this.sources.findSkillHubSettlement(intent.operationId);
+    if (
+      !settlement ||
+      settlement.approvalId !== input.approvalId ||
+      settlement.workspaceId !== input.workspaceId ||
+      settlement.operationId !== intent.operationId
+    ) {
+      return read;
+    }
+    const { code, otherScratchFolders } = settlement.result;
+    return {
+      ...read,
+      settlement: {
+        disposition: settlement.disposition,
+        ...(typeof code === "string" ? { reason: code } : {}),
+        ...(typeof otherScratchFolders === "number" && otherScratchFolders > 0 ? { otherScratchFolders } : {}),
+      },
+    };
   }
 
   /**

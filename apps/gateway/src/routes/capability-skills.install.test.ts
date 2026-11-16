@@ -65,6 +65,7 @@ function realActions(overrides: Partial<CapabilitySkillActionSources> = {}): Cap
     listPluginRecords: vi.fn(async () => []),
     readSkillLifecycle: vi.fn(async () => undefined),
     listSkillsRemovedWithPlugins: vi.fn(async () => new Set(["extra:meeting-notes"])),
+    findSkillHubSettlement: vi.fn(async () => undefined),
     ...overrides,
   });
 }
@@ -566,6 +567,42 @@ describe("capability skill check and install routes", () => {
 
       expect(response.statusCode).toBe(503);
       expect(response.body).toContain("Skills can't be removed right now.");
+    });
+  });
+
+  describe("GET a removal", () => {
+    const READ_URL = "/api/v1/capabilities/skills/removals/approval-1?workspaceId=default";
+
+    it("answers the removal's read for that approval and workspace, uncached", async () => {
+      const read = {
+        approvalId: "approval-1",
+        approvalStatus: "approved",
+        settlement: { disposition: "applied", reason: "applied", otherScratchFolders: 1 },
+      };
+      const readRemoval = vi.fn(async () => read);
+      const { server } = await build({ actions: { readRemoval } });
+
+      const response = await server.inject({ method: "GET", url: READ_URL });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual(read);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(readRemoval).toHaveBeenCalledExactlyOnceWith({ workspaceId: "default", approvalId: "approval-1" });
+    });
+
+    it("answers a plain 404 for an approval that is not a removal here, and 400 without a workspace", async () => {
+      const readRemoval = vi.fn(async (): Promise<never> => {
+        throw new NotFoundError({ entity: "approval", id: "approval-1" });
+      });
+      const { server } = await build({ actions: { readRemoval } });
+
+      const missing = await server.inject({ method: "GET", url: READ_URL });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json().error).toBe("This removal wasn't found.");
+      expect(missing.body).not.toContain("approval-1");
+
+      const bad = await server.inject({ method: "GET", url: "/api/v1/capabilities/skills/removals/approval-1" });
+      expect(bad.statusCode).toBe(400);
     });
   });
 });

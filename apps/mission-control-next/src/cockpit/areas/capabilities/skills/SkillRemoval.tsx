@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ApprovalRequest, CapabilitySkillItem } from "@goatcitadel/contracts";
-import { requestCapabilitySkillRemoval } from "@goatcitadel/mission-control-shared/api/capability-skills";
+import {
+  fetchCapabilitySkillRemoval,
+  requestCapabilitySkillRemoval,
+} from "@goatcitadel/mission-control-shared/api/capability-skills";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { fetchSkillHubOperator } from "@goatcitadel/mission-control-shared/api/skill-hub";
 import { skillListQuery } from "../../../data/capability-skills-query";
 import { Button } from "../../../ui/Button";
 import { Dialog } from "../../../ui/Dialog";
 import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
-import { findRemovalSettlement, removalOutcomeNote } from "./skill-removal-outcome";
+import { removalOutcomeNote } from "./skill-removal-outcome";
 
 /** How often the list is read again while an approved removal is applied, and how many reads before it gives up. */
 const REMOVING_READ_MS = 3_000;
@@ -25,9 +27,9 @@ type Phase =
 
 /**
  * Reads the skill list again while an approved removal is applied, so the panel follows the list: once the skill is
- * gone the panel says so. Each read also looks up the removal's own settlement in the Skill Hub read: a removal that
- * settled without removing the skill stops the reads with the settlement's plain line. If neither comes, the removal
- * is offered again with a plain line.
+ * gone the panel says so. Each read also reads the removal by the approval it tracks: a removal that settled without
+ * removing the skill stops the reads with the settlement's plain line. If neither comes, the removal is offered again
+ * with a plain line.
  */
 function useRemovalReads(
   removal: { approvalId: string } | undefined,
@@ -52,10 +54,7 @@ function useRemovalReads(
     const read = async () => {
       void queryClient.invalidateQueries({ queryKey: key });
       try {
-        const settlement = findRemovalSettlement(
-          (await fetchSkillHubOperator({ workspaceId, limit: 100 })).items,
-          approvalId,
-        );
+        const { settlement } = await fetchCapabilitySkillRemoval({ workspaceId, approvalId });
         const note = settlement ? removalOutcomeNote(settlement) : undefined;
         if (note) stop(note);
       } catch {

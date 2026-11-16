@@ -17,6 +17,7 @@ import {
   type CapabilitySkillLifecycleRead,
   type OperatorSkillSkipReason,
   type PluginSkillListing,
+  type SkillHubSettlementRead,
 } from "./capability-skill-actions-service.js";
 import { ApprovalExpiredAfterCommitError } from "./approval-lifecycle-service.js";
 import { PLUGIN_SKILL_STEP_DECLINED_NOTE } from "./plugin-owned-refusal.js";
@@ -45,10 +46,11 @@ function pending(status: SkillLifecyclePendingApproval["status"] = "pending"): S
   };
 }
 
-type ApprovalRead = Pick<ApprovalRequest, "preview" | "status">;
+type ApprovalRead = Pick<ApprovalRequest, "kind" | "preview" | "status">;
 
 /** The approval as the Inbox reads it. By default it was made while the skill was on. */
 const approvalRead = (overrides: Partial<ApprovalRead> = {}): ApprovalRead => ({
+  kind: "skill.lifecycle",
   status: "pending",
   preview: { title: "Approve skill state change", skillId: SKILL, currentState: "enabled" },
   ...overrides,
@@ -74,6 +76,7 @@ function sources(overrides: Partial<CapabilitySkillActionSources> = {}) {
     listPluginRecords: vi.fn(async () => []),
     readSkillLifecycle: vi.fn(async (): Promise<CapabilitySkillLifecycleRead | undefined> => undefined),
     listSkillsRemovedWithPlugins: vi.fn(async (): Promise<ReadonlySet<string>> => new Set()),
+    findSkillHubSettlement: vi.fn(async (): Promise<SkillHubSettlementRead | undefined> => undefined),
     ...overrides,
   } satisfies CapabilitySkillActionSources;
 }
@@ -918,6 +921,95 @@ describe("CapabilitySkillActionsService.requestRemoval", () => {
       workspaceId: "default",
     });
     expect(approved.resolveApproval).not.toHaveBeenCalled();
+  });
+
+  describe("readRemoval", () => {
+    const intent = { operationId: "operation-remove", operationKind: "remove", workspaceId: "default" };
+    const removalApprovalRead = (overrides: Record<string, unknown> = {}) =>
+      vi.fn(
+        async (): Promise<ApprovalRead> => ({
+          kind: "skill_hub.lifecycle",
+          status: "approved",
+          preview: { schemaVersion: "goatcitadel.skill-hub-operation-intent.v1", intent: { ...intent, ...overrides } },
+        }),
+      );
+    const settlement: SkillHubSettlementRead = {
+      workspaceId: "default",
+      approvalId: "approval-remove",
+      operationId: "operation-remove",
+      disposition: "applied",
+      result: { code: "applied", otherScratchFolders: 2 },
+    };
+
+    it("reads the removal's own settlement by its approval, with its reason and left-over folders", async () => {
+      const parts = removalSources({
+        readApproval: removalApprovalRead(),
+        findSkillHubSettlement: vi.fn(async () => settlement),
+      });
+
+      const read = await new CapabilitySkillActionsService(parts).readRemoval({
+        workspaceId: "default",
+        approvalId: "approval-remove",
+      });
+
+      expect(read).toEqual({
+        approvalId: "approval-remove",
+        approvalStatus: "approved",
+        settlement: { disposition: "applied", reason: "applied", otherScratchFolders: 2 },
+      });
+      expect(parts.findSkillHubSettlement).toHaveBeenCalledExactlyOnceWith("operation-remove");
+    });
+
+    it("answers only the approval's status before the effect settles", async () => {
+      const parts = removalSources({
+        readApproval: removalApprovalRead(),
+        findSkillHubSettlement: vi.fn(async () => undefined),
+      });
+
+      await expect(
+        new CapabilitySkillActionsService(parts).readRemoval({ workspaceId: "default", approvalId: "approval-remove" }),
+      ).resolves.toEqual({ approvalId: "approval-remove", approvalStatus: "approved" });
+    });
+
+    it.each([
+      ["another step's approval", { operationKind: "revoke" }],
+      ["another workspace's removal", { workspaceId: "other" }],
+    ])("is not found for %s", async (_case, overrides) => {
+      const parts = removalSources({
+        readApproval: removalApprovalRead(overrides),
+        findSkillHubSettlement: vi.fn(async () => settlement),
+      });
+
+      await expect(
+        new CapabilitySkillActionsService(parts).readRemoval({ workspaceId: "default", approvalId: "approval-remove" }),
+      ).rejects.toMatchObject({ httpStatus: 404 });
+      expect(parts.findSkillHubSettlement).not.toHaveBeenCalled();
+    });
+
+    it("is not found for an approval of another kind, or a settlement bound to another approval", async () => {
+      const otherKind = removalSources({
+        readApproval: vi.fn(
+          async (): Promise<ApprovalRead> => ({ kind: "skill.lifecycle", status: "approved", preview: { intent } }),
+        ),
+      });
+      await expect(
+        new CapabilitySkillActionsService(otherKind).readRemoval({
+          workspaceId: "default",
+          approvalId: "approval-remove",
+        }),
+      ).rejects.toMatchObject({ httpStatus: 404 });
+
+      const crossed = removalSources({
+        readApproval: removalApprovalRead(),
+        findSkillHubSettlement: vi.fn(async () => ({ ...settlement, approvalId: "approval-other" })),
+      });
+      await expect(
+        new CapabilitySkillActionsService(crossed).readRemoval({
+          workspaceId: "default",
+          approvalId: "approval-remove",
+        }),
+      ).resolves.toEqual({ approvalId: "approval-remove", approvalStatus: "approved" });
+    });
   });
 
   it("still skips an install step with the setting on, so only the removal changed", async () => {

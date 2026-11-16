@@ -73,6 +73,9 @@ const removalBodySchema = z
   .object({ workspaceId: z.string().min(1).max(200), skillId: z.string().min(1).max(256) })
   .strict();
 
+const removalParamsSchema = z.object({ approvalId: z.string().min(1).max(256) }).strict();
+const REMOVAL_NOT_FOUND_MESSAGE = "This removal wasn't found.";
+
 /** The `details.reason` of the removal's own 409s, which keep their plain message. */
 const PLAIN_REMOVAL_REASONS: ReadonlySet<string> = new Set(["not_removable", "other_workspace"]);
 
@@ -309,6 +312,32 @@ export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(202).send(outcome);
     } catch (error) {
       return sendRouteError(reply, plainStepRefusal(error, request.log), request.log);
+    }
+  });
+
+  /**
+   * One removal, read by its approval: the approval's status and, once its effect has settled, how it settled (with
+   * the effect's own reason code and any temporary folders it left). It only reads. An approval that is not a Skill Hub
+   * removal in this workspace is a plain 404.
+   */
+  fastify.get("/api/v1/capabilities/skills/removals/:approvalId", operatorInstalls, async (request, reply) => {
+    const params = removalParamsSchema.safeParse(request.params);
+    const query = listQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid removal read." });
+    try {
+      markNoStore(reply);
+      return reply.send(
+        await requireActions(fastify, UNAVAILABLE_REMOVE_MESSAGE).readRemoval({
+          workspaceId: query.data.workspaceId,
+          approvalId: params.data.approvalId,
+        }),
+      );
+    } catch (error) {
+      return sendRouteError(
+        reply,
+        error instanceof NotFoundError ? new NotFoundError(REMOVAL_NOT_FOUND_MESSAGE) : error,
+        request.log,
+      );
     }
   });
 };
