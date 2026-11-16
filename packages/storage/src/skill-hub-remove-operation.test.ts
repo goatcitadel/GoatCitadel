@@ -145,8 +145,8 @@ describe("runtime skill record deletion", () => {
       ["extra:other"],
     );
 
-    assert.equal(settings.delete("curator_idle_skill_snapshot_v1:extra:meeting-notes"), true);
-    assert.equal(settings.delete("curator_idle_skill_snapshot_v1:extra:meeting-notes"), false);
+    assert.equal(settings.deleteCuratorIdleSnapshot("extra:meeting-notes"), true);
+    assert.equal(settings.deleteCuratorIdleSnapshot("extra:meeting-notes"), false);
     assert.equal(settings.get("curator_idle_skill_snapshot_v1:extra:meeting-notes"), undefined);
     assert.ok(settings.get("curator_idle_skill_snapshot_v1:extra:other"));
   });

@@ -170,8 +170,8 @@ describe("Skill Hub remove operation kind on live PostgreSQL", () => {
 
         assert.equal(lifecycle.deleteSavedState("extra:demo"), true);
         assert.equal(lifecycle.deleteSavedState("extra:demo"), false);
-        assert.equal(settings.delete("curator_idle_skill_snapshot_v1:extra:demo"), true);
-        assert.equal(settings.delete("curator_idle_skill_snapshot_v1:extra:demo"), false);
+        assert.equal(settings.deleteCuratorIdleSnapshot("extra:demo"), true);
+        assert.equal(settings.deleteCuratorIdleSnapshot("extra:demo"), false);
         const left = await scope.pool.query<{ skill_id: string }>("SELECT skill_id FROM skill_state ORDER BY skill_id");
         assert.deepEqual(
           left.rows.map((row) => row.skill_id),

@@ -5,6 +5,5 @@
  */
 export const SKILL_STATE_METADATA_SETTING_KEY = "skill_state_metadata_v1";
 
-export function curatorIdleSnapshotKey(skillId: string): string {
-  return `curator_idle_skill_snapshot_v1:${skillId}`;
-}
+/** The curator snapshot key is the storage repository's own, which alone may delete it. */
+export { curatorIdleSnapshotKey } from "@goatcitadel/storage";

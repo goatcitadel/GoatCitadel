@@ -31,7 +31,7 @@ import { parseSkillMarkdown } from "@goatcitadel/skills";
 import { CapabilityPluginStore } from "./capability-plugin-store.js";
 import { pluginSkillSource } from "./plugin-owned-refusal.js";
 import { takesPowerAway } from "./skill-hub-operation-power.js";
-import { curatorIdleSnapshotKey, SKILL_STATE_METADATA_SETTING_KEY } from "./skill-state-keys.js";
+import { SKILL_STATE_METADATA_SETTING_KEY } from "./skill-state-keys.js";
 import {
   withoutSkillMetadata,
   ownedSkillBlock,
@@ -643,7 +643,7 @@ export class SkillHubLifecycleService {
           }
           // Its saved state goes too (`withoutSkillMetadata`); a metadata write meanwhile rolls the removal back to retry.
           await storage.skillLifecycle.deleteSavedState(intent.skillId);
-          await storage.systemSettings.delete(curatorIdleSnapshotKey(intent.skillId));
+          await storage.systemSettings.deleteCuratorIdleSnapshot(intent.skillId);
           const metadata = await storage.systemSettings.get<unknown>(SKILL_STATE_METADATA_SETTING_KEY);
           const rest = withoutSkillMetadata(metadata?.value, intent.skillId);
           if (

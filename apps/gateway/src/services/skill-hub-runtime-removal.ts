@@ -231,7 +231,7 @@ export async function restoreStagedRemoval(
 /**
  * The skill metadata setting's value without one removed skill's entry (pinned, use counts, last use), or nothing when
  * it holds no entry for that skill. The removal's commit writes it back with compare and set, beside deleting the
- * skill's `skill_state` row and its curator idle-archive snapshot, so a later install of the same skill starts clean.
+ * skill's `skill_state` row and its curator idle-archive snapshot, so a later install of the same skill doesn't bring them back. Its past use in Chat is history, read elsewhere, and still counts.
  */
 export function withoutSkillMetadata(value: unknown, skillId: string): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value) || !Object.hasOwn(value, skillId)) return undefined;
@@ -419,6 +419,15 @@ export async function runRuntimeRemoval(context: RuntimeRemovalContext): Promise
 }
 
 /**
+ * Bumped whenever an applied removal's cleanup runs or fails, so System › Health's kept count of left-over folders is
+ * read again at once. Process-wide; a bump only ever makes that count be read sooner.
+ */
+let cleanupGeneration = 0;
+
+export function removalCleanupGeneration(): number {
+  return cleanupGeneration;
+}
+/**
  * After an applied activation or removal: deletes this operation's own staging and recovery folders through the confined
  * lifecycle filesystem, then reads the skills folder again. A cleanup that fails is recorded for the operator through
  * `recordFailure` and rethrown, so the effect is retried.
@@ -438,7 +447,9 @@ export async function finishAppliedProjection(
   try {
     await filesystem.removeTreeIfPresent(root, scratch.staging, signal);
     await filesystem.removeTreeIfPresent(root, scratch.backup, signal);
+    if (intent.operationKind === "remove") cleanupGeneration += 1;
   } catch (error) {
+    if (intent.operationKind === "remove") cleanupGeneration += 1;
     if (signal.aborted) throw error;
     try {
       await input.recordFailure(error);

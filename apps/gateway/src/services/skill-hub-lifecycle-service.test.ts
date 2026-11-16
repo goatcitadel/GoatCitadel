@@ -1040,7 +1040,7 @@ describe("SkillHubLifecycleService", () => {
       expect(reactivated.settlement.disposition).toBe("applied");
     }, 90_000);
 
-    it("deletes the skill's saved state with its record, so a reinstall starts clean", async () => {
+    it("deletes the skill's saved state with its record, so a reinstall doesn't bring its switch, pin or note back", async () => {
       const { harness } = await revokedHarness();
       const now = "2026-11-15T00:00:00.000Z";
       harness.storage.db
@@ -1191,6 +1191,52 @@ describe("SkillHubLifecycleService", () => {
       expect(harness.storage.skillHubOperations.listAppliedRemovalCandidateIds("workspace-1")).toEqual([]);
     }, 90_000);
 
+    it("rolls a removal back cleanly when the saved-state compare and set loses a race, and the retry finishes", async () => {
+      const { harness, runtimeDir } = await revokedHarness();
+      harness.storage.systemSettings.set("skill_state_metadata_v1", { "extra:demo": { pinned: true } });
+      let lose = true;
+      const settings = new Proxy(harness.asyncStorage.systemSettings, {
+        get(target, key, receiver) {
+          if (key !== "compareAndSet") return Reflect.get(target, key, receiver);
+          return async (...args: Parameters<typeof target.compareAndSet>) => {
+            if (lose && args[0] === "skill_state_metadata_v1") {
+              lose = false;
+              return undefined;
+            }
+            return await target.compareAndSet(...args);
+          };
+        },
+      });
+      const storage = new Proxy(harness.asyncStorage, {
+        get(target, key, receiver) {
+          return key === "systemSettings" ? settings : Reflect.get(target, key, receiver);
+        },
+      });
+      harness.lifecycle = new SkillHubLifecycleService({
+        rootDir: harness.rootDir,
+        candidateRoot: "data/capability-candidates",
+        skillsExtraRoot: "skills/extra",
+        artifactStore: harness.artifactStore,
+        storage,
+        filesystem: sharedFilesystem,
+      });
+      const request = await approve(harness, removeTemplate(harness, "operation-remove"));
+
+      await expect(harness.lifecycle.applyApprovedOperation(request)).rejects.toThrow(/saved state changed/);
+      // Rolled back whole: folder back where it was, record and fence intact, no settlement, the entry still there.
+      await expect(fs.stat(runtimeDir)).resolves.toBeTruthy();
+      expect(harness.storage.skillLifecycle.find("extra:demo")?.lifecycleState).toBe("revoked");
+      expect(harness.storage.skillAggregateRevisions.get("runtime_skill", "extra:demo")?.revision).toBe(2);
+      expect(harness.storage.skillHubOperations.findSettlementByOperationId("operation-remove")).toBeUndefined();
+      expect(harness.storage.systemSettings.get("skill_state_metadata_v1")?.value).toEqual({
+        "extra:demo": { pinned: true },
+      });
+
+      const retried = await harness.lifecycle.applyApprovedOperation(request);
+      expect(retried.settlement.disposition).toBe("applied");
+      expect(harness.storage.systemSettings.get("skill_state_metadata_v1")?.value).toEqual({});
+    }, 90_000);
+
     it("puts the folder back when the commit fails after it was moved", async () => {
       const loaded: { loader?: SkillsService } = {};
       const { harness, extraRoot, runtimeDir } = await revokedHarness({
@@ -1300,6 +1346,10 @@ describe("SkillHubLifecycleService", () => {
       });
       // No path is kept.
       expect(JSON.stringify(recorded)).not.toContain(extraRoot);
+      // System › Health finds it with one install-wide read.
+      expect(
+        harness.storage.governanceJourneyEvents.listSkillHubRemovalCleanupFailures().map((event) => event.eventId),
+      ).toEqual(["skill-hub:journey:operation-remove:cleanup"]);
       await expect(harness.lifecycle.applyApprovedOperation(request)).rejects.toThrow(/busy/);
 
       failCleanup = false;

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { composeCapabilityPlugins, type CapabilityPluginsOwners } from "./capability-plugins-composition.js";
 import type { CapabilityPluginsRouteService } from "./capability-plugins-route-service.js";
@@ -7,11 +8,7 @@ import {
   type CapabilitySkillsOwners,
 } from "./capability-skills-composition.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
-import {
-  CLEANUP_WORKSPACE_LIMIT,
-  countRemovalCleanupLeftovers,
-  removalCleanupFailureQuery,
-} from "./skill-hub-cleanup-leftovers.js";
+import { createRemovalCleanupCounter } from "./skill-hub-cleanup-leftovers.js";
 import { createSkillHubLifecycleFilesystem } from "./skill-hub-lifecycle-filesystem-composition.js";
 
 // The Skills tab and the Plugins tab, wired together. A plugin's skills take the Skills tab's own install steps, which
@@ -30,7 +27,7 @@ export interface CapabilitySkillsAndPluginsOwners
   skillHub: CapabilitySkillsOwners["skillHub"] & CapabilityPluginsOwners["skillHub"];
   /**
    * The plugin records' storage, which also holds Skill Hub's settlements the Skills tab reads a removal's outcome from,
-   * and the workspaces and Journey a removal's failed cleanups are read from.
+   * and the Journey a removal's failed cleanups are read from (one install-wide read).
    */
   records: CapabilityPluginsOwners["records"] & {
     readonly skillHubOperations: CapabilitySkillsOwners["skillHubSettlements"] & {
@@ -39,11 +36,8 @@ export interface CapabilitySkillsAndPluginsOwners
     readonly candidateSkillVersions: {
       list(limit: number): ReturnType<CapabilitySkillsOwners["skillHubLineages"]["listVersions"]>;
     };
-    readonly workspaces: { list(view: "all", limit: number): Promise<ReadonlyArray<{ workspaceId: string }>> };
     readonly governanceJourneyEvents: {
-      listPage(
-        input: ReturnType<typeof removalCleanupFailureQuery>,
-      ): Promise<{ items: ReadonlyArray<{ summary: Record<string, unknown> }> }>;
+      listSkillHubRemovalCleanupFailures(): Promise<ReadonlyArray<{ summary: Record<string, unknown> }>>;
     };
   };
 }
@@ -93,15 +87,15 @@ export function composeCapabilitySkillsAndPlugins(
   const rootDir = path.resolve(owners.config.rootDir);
   const filesystem = createSkillHubLifecycleFilesystem(rootDir, {});
   const skillsRoot = path.join(rootDir, "skills", "extra");
-  const { workspaces, governanceJourneyEvents } = owners.records;
+  const { governanceJourneyEvents } = owners.records;
   const removalCleanup = {
-    countLeftovers: () =>
-      countRemovalCleanupLeftovers(
-        async () => (await workspaces.list("all", CLEANUP_WORKSPACE_LIMIT)).map((workspace) => workspace.workspaceId),
-        async (workspaceId) => (await governanceJourneyEvents.listPage(removalCleanupFailureQuery(workspaceId))).items,
-        (folder) => filesystem.pathKind(skillsRoot, folder, new AbortController().signal),
-        skillsRoot,
-      ),
+    countLeftovers: createRemovalCleanupCounter(
+      () => governanceJourneyEvents.listSkillHubRemovalCleanupFailures(),
+      // A plain read: a missing skills folder answers none and is never created by this read.
+      async () => (await fs.stat(skillsRoot).catch(() => undefined))?.isDirectory() === true,
+      (folder) => filesystem.pathKind(skillsRoot, folder, new AbortController().signal),
+      skillsRoot,
+    ),
   };
   return { capabilitySkills: { ...capabilitySkills, removalCleanup }, capabilityPlugins: plugins.routes };
 }

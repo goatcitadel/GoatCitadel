@@ -139,8 +139,8 @@ function skillCleanupChecks(cleanup: HealthSummaryResponse["skillRemovalCleanup"
       status: { label: "Needs a look", tone: "waiting" },
       detail:
         count === 1
-          ? "A removed skill's folder is still in GoatCitadel's skills folder because deleting it failed. The skill itself is already removed, and GoatCitadel keeps trying to delete the folder."
-          : `The folders of ${plural(count, "removed skill")} are still in GoatCitadel's skills folder because deleting them failed. The skills themselves are already removed, and GoatCitadel keeps trying to delete the folders.`,
+          ? "A removed skill's folder is still in GoatCitadel's skills folder because deleting it failed. The skill itself is already removed, and GoatCitadel keeps trying to delete the folder. The failure is in the Journey timeline of the workspace the skill was removed from, which may not be this one."
+          : `The folders of ${plural(count, "removed skill")} are still in GoatCitadel's skills folder because deleting them failed. The skills themselves are already removed, and GoatCitadel keeps trying to delete the folders. The failures are in the Journey timeline of the workspaces the skills were removed from, which may not be this one.`,
       inspectPath: "/library/journey",
     },
   ];

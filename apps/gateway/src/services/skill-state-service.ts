@@ -43,6 +43,9 @@ import {
   type SkillLifecycleSubjectKind,
 } from "./skill-governance-journey-producer.js";
 import { curatorIdleSnapshotKey, SKILL_STATE_METADATA_SETTING_KEY } from "./skill-state-keys.js";
+import { logger } from "@goatcitadel/gateway-core";
+
+const skillStateLog = logger.child("skill-state");
 
 const SKILL_ACTIVATION_POLICY_SETTING_KEY = "skill_activation_policy_v1";
 const SKILL_ACTIVATION_POLICY_AGGREGATE_ID = "global";
@@ -103,7 +106,9 @@ export interface SkillStateServiceCtx {
     Storage,
     "db" | "governanceJourneyEvents" | "governedLifecycleEvents" | "runImmediateTransaction" | "skillLifecycle"
   >;
-  systemSettings: Pick<Storage["systemSettings"], "get" | "set">;
+  /** `compareAndSet`, when given, keeps a use count from putting back an entry a removal deleted meanwhile. */
+  systemSettings: Pick<Storage["systemSettings"], "get" | "set"> &
+    Partial<Pick<Storage["systemSettings"], "compareAndSet">>;
   skillAggregateRevisions: Storage["skillAggregateRevisions"];
   approvalAuthority?: SkillLifecycleApprovalAuthorityHost;
 }
@@ -1059,17 +1064,34 @@ export class SkillStateService {
     if (uniqueSkillIds.length === 0) {
       return;
     }
-    const metadata = await this.readSkillStateMetadata();
-    const now = new Date().toISOString();
+    const { systemSettings, storage } = this.ctx;
+    // An imported skill with no lifecycle record was removed (or never installed): its entry is never made again.
+    const counted: string[] = [];
     for (const skillId of uniqueSkillIds) {
-      const current = metadata[skillId] ?? {};
-      metadata[skillId] = {
-        ...current,
-        usageCount: (current.usageCount ?? 0) + 1,
-        lastUsedAt: now,
-      };
+      if (!skillId.startsWith("extra:") || (await storage.skillLifecycle.find(skillId))) counted.push(skillId);
     }
-    await this.ctx.systemSettings.set(SKILL_STATE_METADATA_SETTING_KEY, metadata);
+    if (counted.length === 0) return;
+    const now = new Date().toISOString();
+    const bump = (metadata: Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }>) => {
+      for (const skillId of counted) {
+        const current = metadata[skillId] ?? {};
+        metadata[skillId] = { ...current, usageCount: (current.usageCount ?? 0) + 1, lastUsedAt: now };
+      }
+      return metadata;
+    };
+    if (!systemSettings.compareAndSet) {
+      await systemSettings.set(SKILL_STATE_METADATA_SETTING_KEY, bump(await this.readSkillStateMetadata()));
+      return;
+    }
+    // Compare and set, so a write never puts back an entry a removal deleted after this read; one retry on a race.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const stored = await systemSettings.get<unknown>(SKILL_STATE_METADATA_SETTING_KEY);
+      const next = bump(normalizeSkillStateMetadata(stored?.value));
+      if (await systemSettings.compareAndSet(SKILL_STATE_METADATA_SETTING_KEY, stored, next, now)) return;
+    }
+    skillStateLog.warn("skill use counts changed twice while being recorded; this use was not counted", {
+      skillIds: counted,
+    });
   }
 
   async getActivationPolicy(): Promise<SkillActivationPolicy> {
@@ -1254,27 +1276,9 @@ export class SkillStateService {
   private async readSkillStateMetadata(): Promise<
     Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }>
   > {
-    const value = (
-      await this.ctx.systemSettings.get<Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }>>(
-        SKILL_STATE_METADATA_SETTING_KEY,
-      )
-    )?.value;
-    if (!value || typeof value !== "object") {
-      return {};
-    }
-    const output: Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }> = {};
-    for (const [skillId, metadata] of Object.entries(value)) {
-      if (!isRecord(metadata)) {
-        continue;
-      }
-      output[skillId] = {
-        pinned: metadata.pinned === true ? true : undefined,
-        usageCount:
-          typeof metadata.usageCount === "number" && metadata.usageCount >= 0 ? metadata.usageCount : undefined,
-        lastUsedAt: typeof metadata.lastUsedAt === "string" ? metadata.lastUsedAt : undefined,
-      };
-    }
-    return output;
+    return normalizeSkillStateMetadata(
+      (await this.ctx.systemSettings.get<unknown>(SKILL_STATE_METADATA_SETTING_KEY))?.value,
+    );
   }
 }
 
@@ -1558,4 +1562,21 @@ function normalizeSkillStateNote(note: string | undefined): string | undefined {
 
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** The skill metadata setting's value, read leniently: each skill's pinned flag, use count and last use. */
+function normalizeSkillStateMetadata(
+  value: unknown,
+): Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }> {
+  const output: Record<string, { pinned?: boolean; usageCount?: number; lastUsedAt?: string }> = {};
+  if (!value || typeof value !== "object") return output;
+  for (const [skillId, metadata] of Object.entries(value)) {
+    if (!isRecord(metadata)) continue;
+    output[skillId] = {
+      pinned: metadata.pinned === true ? true : undefined,
+      usageCount: typeof metadata.usageCount === "number" && metadata.usageCount >= 0 ? metadata.usageCount : undefined,
+      lastUsedAt: typeof metadata.lastUsedAt === "string" ? metadata.lastUsedAt : undefined,
+    };
+  }
+  return output;
 }

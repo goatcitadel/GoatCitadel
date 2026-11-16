@@ -243,14 +243,14 @@ describe("skill removal cleanup", () => {
       title: "Removed skill cleanup",
       status: { label: "Needs a look", tone: "waiting" },
       detail:
-        "A removed skill's folder is still in GoatCitadel's skills folder because deleting it failed. The skill itself is already removed, and GoatCitadel keeps trying to delete the folder.",
+        "A removed skill's folder is still in GoatCitadel's skills folder because deleting it failed. The skill itself is already removed, and GoatCitadel keeps trying to delete the folder. The failure is in the Journey timeline of the workspace the skill was removed from, which may not be this one.",
       inspectPath: "/library/journey",
     });
     const two = deriveHealthChecks({ ...healthy, skillRemovalCleanup: { leftFolders: 2 } }).find(
       (check) => check.id === "skill_cleanup",
     );
     expect(two?.detail).toBe(
-      "The folders of 2 removed skills are still in GoatCitadel's skills folder because deleting them failed. The skills themselves are already removed, and GoatCitadel keeps trying to delete the folders.",
+      "The folders of 2 removed skills are still in GoatCitadel's skills folder because deleting them failed. The skills themselves are already removed, and GoatCitadel keeps trying to delete the folders. The failures are in the Journey timeline of the workspaces the skills were removed from, which may not be this one.",
     );
   });
 

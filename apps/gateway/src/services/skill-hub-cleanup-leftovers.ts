@@ -1,42 +1,46 @@
-import { SKILL_HUB_LIFECYCLE_JOURNEY_EVENT_TYPE } from "@goatcitadel/contracts";
-import { projectionScratch } from "./skill-hub-runtime-removal.js";
+import { projectionScratch, removalCleanupGeneration } from "./skill-hub-runtime-removal.js";
 
-/** The Journey action an applied removal records once when deleting its moved-aside folder fails. */
-export const REMOVAL_CLEANUP_FAILED_ACTION = "remove_cleanup_failed";
-/** How many workspaces, and how many cleanup failures in each, are read; more than that are not counted. */
-export const CLEANUP_WORKSPACE_LIMIT = 200;
-const FAILURES_PER_WORKSPACE = 100;
+/** How long a count is kept before it is read again, unless a removal's cleanup ran or failed meanwhile. */
+export const REMOVAL_CLEANUP_COUNT_TTL_MS = 60_000;
 
-/** The Journey read for one workspace's recorded removal cleanup failures. */
-export function removalCleanupFailureQuery(workspaceId: string) {
-  return {
-    workspaceId,
-    eventTypes: [SKILL_HUB_LIFECYCLE_JOURNEY_EVENT_TYPE],
-    actions: [REMOVAL_CLEANUP_FAILED_ACTION],
-    limit: FAILURES_PER_WORKSPACE,
+/**
+ * System › Health's count of applied removals whose moved-aside folder is still in the skills folder after a failed
+ * cleanup. One install-wide read of the cleanup failures removals recorded in Journey (`listCleanupFailures`); with none
+ * it answers 0 and touches no file. Otherwise, when the runtime skills `root` doesn't exist it answers 0 (it never
+ * creates it: `rootExists` only reads), and else it asks, for each failed operation, whether its own staging or recovery
+ * folder is still there (`readFolderKind`, the confined lifecycle filesystem's read-only kind of a path). A folder that
+ * can't be read plainly still counts. The count is kept for `REMOVAL_CLEANUP_COUNT_TTL_MS`, or until a removal's
+ * cleanup runs or fails, so the health summary's frequent reads do the work once.
+ */
+export function createRemovalCleanupCounter(
+  listCleanupFailures: () => Promise<ReadonlyArray<{ summary: Record<string, unknown> }>>,
+  rootExists: () => Promise<boolean>,
+  readFolderKind: (folder: string) => Promise<string>,
+  root: string,
+  now: () => number = Date.now,
+): () => Promise<number> {
+  let kept: { value: number; at: number; generation: number } | undefined;
+  return async () => {
+    const generation = removalCleanupGeneration();
+    if (kept && kept.generation === generation && now() - kept.at < REMOVAL_CLEANUP_COUNT_TTL_MS) return kept.value;
+    const value = await countLeftovers(listCleanupFailures, rootExists, readFolderKind, root);
+    kept = { value, at: now(), generation };
+    return value;
   };
 }
 
-/**
- * How many applied removals still have their moved-aside folder in the skills folder after a failed cleanup. It reads
- * the cleanup failures each removal recorded in Journey (`listCleanupFailures`, one workspace at a time), then whether
- * that removal's own staging or recovery folder is still there (`readFolderKind`, the confined lifecycle filesystem's
- * read-only `pathKind` in the runtime skills `root`). The count drops as soon as a folder is gone, whether the retried
- * cleanup or the operator deleted it. A folder that can't be read as plainly gone still counts.
- */
-export async function countRemovalCleanupLeftovers(
-  listWorkspaceIds: () => Promise<readonly string[]>,
-  listCleanupFailures: (workspaceId: string) => Promise<ReadonlyArray<{ summary: Record<string, unknown> }>>,
+async function countLeftovers(
+  listCleanupFailures: () => Promise<ReadonlyArray<{ summary: Record<string, unknown> }>>,
+  rootExists: () => Promise<boolean>,
   readFolderKind: (folder: string) => Promise<string>,
   root: string,
 ): Promise<number> {
   const operations = new Set<string>();
-  for (const workspaceId of await listWorkspaceIds()) {
-    for (const event of await listCleanupFailures(workspaceId)) {
-      const operationId = event.summary.operationId;
-      if (typeof operationId === "string") operations.add(operationId);
-    }
+  for (const event of await listCleanupFailures()) {
+    const operationId = event.summary.operationId;
+    if (typeof operationId === "string") operations.add(operationId);
   }
+  if (operations.size === 0 || !(await rootExists())) return 0;
   let leftovers = 0;
   for (const operationId of operations) {
     const scratch = projectionScratch(root, operationId);

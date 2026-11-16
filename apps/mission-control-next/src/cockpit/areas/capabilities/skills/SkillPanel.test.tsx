@@ -19,6 +19,7 @@ import { connectorPanelSource } from "../connectors/connector-links";
 import { toolPanelSource } from "../tools/tool-links";
 import { setSkillSwitch } from "./skill-switch-store";
 import { SkillPanel } from "./SkillPanel";
+import { removalLeftoversKey } from "./skill-removal-outcome";
 import { SkillsTab } from "./SkillsTab";
 import { __resetSkillSwitchesForTests } from "./use-skill-switch";
 
@@ -974,6 +975,39 @@ describe("Skill panel removal", () => {
     expect(panelText()).toContain(
       "Removed. GoatCitadel left 2 temporary folders in the skills folder that it couldn't confirm were its own.",
     );
+  });
+
+  it("stops reading once the removal applied, and never says it didn't finish", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // An earlier removal's left-over line must not read as this one's.
+      client.setQueryData(removalLeftoversKey("ws-1", "extra:meeting-notes"), "an earlier line");
+      api.requestCapabilitySkillRemoval.mockResolvedValue({
+        status: "approved",
+        approvalId: APPROVAL_ID,
+        workspaceId: "ws-1",
+      });
+      api.fetchCapabilitySkillRemoval.mockResolvedValue({
+        approvalId: APPROVAL_ID,
+        approvalStatus: "approved",
+        settlement: { disposition: "applied", reason: "applied" },
+      });
+      await openLeftBehind();
+      await press(buttonIn(body(), "Remove skill"));
+      await press(buttonIn(dialog(), "Remove skill"));
+      expect(client.getQueryData(removalLeftoversKey("ws-1", "extra:meeting-notes"))).toBeUndefined();
+
+      await vi.waitFor(() => expect(panelText()).toContain("Removed Meeting notes."));
+      const reads = api.fetchCapabilitySkillRemoval.mock.calls.length;
+      // Well past the 20 reads the panel would otherwise make: nothing more is read, and no "didn't finish".
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(90_000);
+      });
+      expect(api.fetchCapabilitySkillRemoval.mock.calls.length).toBe(reads);
+      expect(panelText()).not.toContain("Removing didn't finish");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("explains a removal that left the folder alone, and lets you ask again", async () => {

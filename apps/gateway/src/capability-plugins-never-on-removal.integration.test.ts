@@ -70,6 +70,7 @@ describe.each(DRIVERS)("removing a never-switched-on left-over skill ($driver)",
   const originalEnv = new Map<string, string | undefined>();
   let root = "";
   let app: FastifyInstance | undefined;
+  let gateway: GatewayService | undefined;
   let sequence = 0;
 
   beforeAll(async () => {
@@ -84,6 +85,7 @@ describe.each(DRIVERS)("removing a never-switched-on left-over skill ($driver)",
     try {
       app = await buildApp();
       await app.ready();
+      gateway = caught.mock.contexts[0] as GatewayService | undefined;
     } finally {
       caught.mockRestore();
     }
@@ -187,6 +189,12 @@ describe.each(DRIVERS)("removing a never-switched-on left-over skill ($driver)",
         approvalId: removal.approvalId,
         approvalStatus: "pending",
       });
+      // Saved state for the skill (pinned, a use count), beside another skill's: the removal's commit rewrites the shared
+      // setting with compare and set inside its own transaction, on either database.
+      await gateway!.storage.systemSettings.set("skill_state_metadata_v1", {
+        [SKILL_ID]: { pinned: true, usageCount: 3 },
+        "extra:other": { usageCount: 1 },
+      });
       const approved = await inject("POST", `/api/v1/approvals/${removal.approvalId}/resolve`, { decision: "approve" });
       expect(approved.statusCode, approved.body).toBe(200);
       await vi.waitFor(async () => {
@@ -194,6 +202,9 @@ describe.each(DRIVERS)("removing a never-switched-on left-over skill ($driver)",
           disposition: "applied",
         });
       }, STEP_WAIT);
+      expect((await gateway!.storage.systemSettings.get("skill_state_metadata_v1"))?.value).toEqual({
+        "extra:other": { usageCount: 1 },
+      });
       // Nothing was ever in the skills folder for it, and nothing appears there.
       expect(fs.existsSync(path.join(root, "skills", "extra", "meeting-notes"))).toBe(false);
 

@@ -123,6 +123,44 @@ describe("skill state substrate (reads, defaults, usage metadata)", () => {
     expect((await harness.service.readSkillStates()).get("skill-alpha")).toMatchObject({ usageCount: 1 });
   });
 
+  it("never puts back a removed skill's use entry when its count races the removal", async () => {
+    const harness = createHarness();
+    const now = "2026-11-15T00:00:00.000Z";
+    harness.storage.skillLifecycle.upsert({
+      skillId: "extra:kept",
+      category: "community_imported",
+      lifecycleState: "approved",
+      trustLabel: "Approved upstream snapshot",
+      createdAt: now,
+      updatedAt: now,
+    });
+    harness.storage.systemSettings.set("skill_state_metadata_v1", {
+      "extra:gone": { pinned: true, usageCount: 4 },
+      "extra:kept": { usageCount: 1 },
+    });
+    // A removal of extra:gone commits between this count's read and its write.
+    const settings = harness.storage.systemSettings;
+    const compareAndSet = vi.spyOn(settings, "compareAndSet");
+    const realGet = settings.get.bind(settings);
+    let raced = false;
+    vi.spyOn(settings, "get").mockImplementation(((key: string) => {
+      const value = realGet(key);
+      if (!raced && key === "skill_state_metadata_v1") {
+        raced = true;
+        settings.set("skill_state_metadata_v1", { "extra:kept": { usageCount: 1 } });
+      }
+      return value;
+    }) as typeof settings.get);
+
+    await harness.service.recordSkillUsage(["extra:gone", "extra:kept"]);
+
+    const stored = settings.get<Record<string, unknown>>("skill_state_metadata_v1")?.value;
+    expect(stored).not.toHaveProperty("extra:gone");
+    expect(stored).toMatchObject({ "extra:kept": { usageCount: 2 } });
+    // The first write lost its compare and set to the removal; the retry read the value after it.
+    expect(compareAndSet).toHaveBeenCalledTimes(2);
+  });
+
   it("gives no state or fence to a loaded imported skill whose folder is gone and that has no record", async () => {
     const harness = createHarness();
     const parent = fs.mkdtempSync(path.join(os.tmpdir(), "goat-skill-state-gone-"));

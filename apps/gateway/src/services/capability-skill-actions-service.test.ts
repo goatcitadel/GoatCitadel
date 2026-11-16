@@ -1015,22 +1015,25 @@ describe("CapabilitySkillActionsService.requestRemoval", () => {
     });
   });
 
-  it("still skips an install step with the setting on, so only the removal changed", async () => {
-    const parts = sources({
-      readApprovalSkipSetting: vi.fn(async () => true),
-      createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("install_inactive", "pending") })),
-    });
+  it.each(["install_inactive", "activate"] as const)(
+    "still skips the %s step with the setting on, so only the removal changed",
+    async (operationKind) => {
+      const parts = sources({
+        readApprovalSkipSetting: vi.fn(async () => true),
+        createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval(operationKind, "pending") })),
+      });
 
-    const outcome = await new CapabilitySkillActionsService(parts).requestStep({
-      workspaceId: "default",
-      snapshotId: "skill-hub-review-1",
-      operationKind: "install_inactive",
-      actorId: ACTOR,
-    });
+      const outcome = await new CapabilitySkillActionsService(parts).requestStep({
+        workspaceId: "default",
+        snapshotId: "skill-hub-review-1",
+        operationKind,
+        actorId: ACTOR,
+      });
 
-    expect(outcome.status).toBe("approved");
-    expect(parts.resolveApproval).toHaveBeenCalledOnce();
-  });
+      expect(outcome.status).toBe("approved");
+      expect(parts.resolveApproval).toHaveBeenCalledOnce();
+    },
+  );
 
   it("refuses a skill added in another workspace, before any approval", async () => {
     const parts = removalSources({
