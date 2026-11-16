@@ -130,7 +130,7 @@ it("says how a browser session appears when there are none at all (U-SY-014)", a
   expect(container.textContent).not.toContain("A session appears here");
   await click("All");
   await vi.waitFor(() => expect(container.textContent).toContain("No browser sessions"));
-  expect(container.textContent).toContain("A session appears here when a browser errand in Chat opens one.");
+  expect(container.textContent).toContain("A session appears here when you create one with New browser session.");
   expect(container.textContent).not.toContain("match this filter");
   expect(button("Refresh sessions")).toBeDefined();
 });

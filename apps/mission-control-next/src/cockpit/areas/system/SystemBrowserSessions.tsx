@@ -175,7 +175,7 @@ function BrowserSessionsWorkspace({ workspaceId }: { workspaceId: string }) {
                 <EmptyState
                   headingLevel={3}
                   title="No browser sessions"
-                  description="A session appears here when a browser errand in Chat opens one."
+                  description="A session appears here when you create one with New browser session."
                 />
               ) : (
                 <p className="text-sm text-fg-muted">No browser sessions match this filter.</p>
