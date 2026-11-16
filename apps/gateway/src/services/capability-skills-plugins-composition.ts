@@ -7,7 +7,11 @@ import {
   type CapabilitySkillsOwners,
 } from "./capability-skills-composition.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
-import { countRemovalCleanupLeftovers, type RemovalCleanupLeftoverSources } from "./skill-hub-cleanup-leftovers.js";
+import {
+  CLEANUP_WORKSPACE_LIMIT,
+  countRemovalCleanupLeftovers,
+  removalCleanupFailureQuery,
+} from "./skill-hub-cleanup-leftovers.js";
 import { createSkillHubLifecycleFilesystem } from "./skill-hub-lifecycle-filesystem-composition.js";
 
 // The Skills tab and the Plugins tab, wired together. A plugin's skills take the Skills tab's own install steps, which
@@ -30,7 +34,13 @@ export interface CapabilitySkillsAndPluginsOwners
    */
   records: CapabilityPluginsOwners["records"] & {
     readonly skillHubOperations: CapabilitySkillsOwners["skillHubSettlements"];
-  } & RemovalCleanupLeftoverSources["storage"];
+    readonly workspaces: { list(view: "all", limit: number): Promise<ReadonlyArray<{ workspaceId: string }>> };
+    readonly governanceJourneyEvents: {
+      listPage(
+        input: ReturnType<typeof removalCleanupFailureQuery>,
+      ): Promise<{ items: ReadonlyArray<{ summary: Record<string, unknown> }> }>;
+    };
+  };
 }
 
 export interface CapabilitySkillsAndPlugins {
@@ -71,14 +81,16 @@ export function composeCapabilitySkillsAndPlugins(
   // The same runtime skills root Skill Hub's removals move folders aside in, read through the confined filesystem.
   const rootDir = path.resolve(owners.config.rootDir);
   const filesystem = createSkillHubLifecycleFilesystem(rootDir, {});
+  const skillsRoot = path.join(rootDir, "skills", "extra");
+  const { workspaces, governanceJourneyEvents } = owners.records;
   const removalCleanup = {
     countLeftovers: () =>
-      countRemovalCleanupLeftovers({
-        storage: owners.records,
-        filesystem,
-        root: path.join(rootDir, "skills", "extra"),
-        signal: new AbortController().signal,
-      }),
+      countRemovalCleanupLeftovers(
+        async () => (await workspaces.list("all", CLEANUP_WORKSPACE_LIMIT)).map((workspace) => workspace.workspaceId),
+        async (workspaceId) => (await governanceJourneyEvents.listPage(removalCleanupFailureQuery(workspaceId))).items,
+        (folder) => filesystem.pathKind(skillsRoot, folder, new AbortController().signal),
+        skillsRoot,
+      ),
   };
   return { capabilitySkills: { ...capabilitySkills, removalCleanup }, capabilityPlugins: plugins.routes };
 }
