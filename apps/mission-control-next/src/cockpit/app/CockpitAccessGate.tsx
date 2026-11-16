@@ -3,6 +3,7 @@ const GatewayAccessGate = lazy(async () => ({
   default: (await import("@goatcitadel/mission-control-shared/components/GatewayAccessGate")).GatewayAccessGate,
 }));
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import type { GatewayAccessSubmission } from "@goatcitadel/mission-control-shared/components/GatewayAccessGate";
 import type { GatewayAccessViewState } from "../../app/use-gateway-access";
 import { Button } from "../ui/Button";
 import { EmptyState } from "../ui/EmptyState";
@@ -19,7 +20,7 @@ export function CockpitAccessGate({
 }: {
   access: GatewayAccessViewState;
   busy: boolean;
-  onRetry: () => void;
+  onRetry: (submission?: GatewayAccessSubmission) => void;
 }) {
   const checking = access.status === "checking";
   const misconfigured = access.status === "misconfigured";
@@ -62,7 +63,7 @@ export function CockpitAccessGate({
         title={title}
         description={description}
         action={
-          <Button disabled={busy || checking} onClick={onRetry}>
+          <Button disabled={busy || checking} onClick={() => onRetry()}>
             {busy || checking ? "Checking…" : "Try again"}
           </Button>
         }
