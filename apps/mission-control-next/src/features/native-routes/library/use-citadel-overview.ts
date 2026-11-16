@@ -13,6 +13,7 @@ import {
   upsertCitadelCharter,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { useSessionDraft } from "./session-drafts";
 import { useDraftLeave } from "./DraftLeaveDialog";
 import { hasCitadelRecord, type DirectoryLifecycleReview } from "../settings/directory-lifecycle-binding";
@@ -323,7 +324,7 @@ export function useCitadelOverview(citadelId: string, navigationKey = "") {
             );
       if (getGatewayApiBaseUrl() !== installation || !overviewReceiptMatches(submitted, receipt))
         throw new Error("The structure owner did not acknowledge the reviewed change.");
-      const after = await getCitadelStructureSnapshot(citadelId);
+      const after = await withFreshReads(() => getCitadelStructureSnapshot(citadelId));
       if (
         getGatewayApiBaseUrl() !== installation ||
         !hasOverviewStructure(after, citadelId) ||
@@ -347,7 +348,7 @@ export function useCitadelOverview(citadelId: string, navigationKey = "") {
               ? "Citadel Charter saved and confirmed."
               : "Citadel template applied and confirmed.",
         });
-        void reload();
+        void withFreshReads(reload);
       }
       return clean;
     } catch (error) {

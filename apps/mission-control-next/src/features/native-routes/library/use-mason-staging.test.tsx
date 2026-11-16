@@ -3,13 +3,17 @@ import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CitadelStructureSnapshot, MasonSession } from "@goatcitadel/contracts";
+import { getCitadelStructureSnapshot } from "@goatcitadel/mission-control-shared/api/citadels";
 import { useMasonStaging } from "./use-mason-staging";
 import type { MasonReview } from "./use-citadel-mason";
 import { __resetCitadelStructureAttemptsForTests, citadelStructureAttempt, setCitadelStructureAttempt } from "./citadel-structure-state";
 import { deferredMason, masonBlueprint, masonSession, masonStructure, masonSummary, stagedMasonStructure } from "./mason.test-support";
 const api = vi.hoisted(() => ({ base: "http://one", getMasonSession: vi.fn(), getCitadelStructureSnapshot: vi.fn(), stageMasonBlueprint: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
-vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({ getGatewayApiBaseUrl: () => api.base }));
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
+  getGatewayApiBaseUrl: () => api.base,
+}));
 let root: Root, container: HTMLDivElement, scope: string, identity: string, owner: CitadelStructureSnapshot, session: MasonSession, candidate: MasonReview, control: ReturnType<typeof useMasonStaging>;
 function Harness() { control = useMasonStaging(scope, candidate, identity); return <p>{control.attempt.message}</p>; }
 async function render(next = scope) { scope = next; await act(async () => root.render(<StrictMode><Harness /></StrictMode>)); }
@@ -22,8 +26,38 @@ beforeEach(async () => {
   api.stageMasonBlueprint.mockImplementation(async () => { owner = stagedMasonStructure(owner); return { citadel: structuredClone(owner), review: masonSummary }; });
   container = document.createElement("div"); document.body.append(container); root = createRoot(container); await render();
 });
-afterEach(async () => { await act(async () => root.unmount()); container.remove(); __resetCitadelStructureAttemptsForTests(); });
+afterEach(async () => { await act(async () => root.unmount()); container.remove(); __resetCitadelStructureAttemptsForTests(); vi.unstubAllGlobals(); });
 describe("Mason structure staging", () => {
+  it("confirms a committed staging write while an older structure read is pending", async () => {
+    await prepare();
+    const before = owner;
+    const after = stagedMasonStructure(before);
+    const stale = deferredMason<Response>();
+    const write = deferredMason<{ citadel: CitadelStructureSnapshot; review: typeof masonSummary }>();
+    const fetchMock = vi.fn().mockReturnValueOnce(stale.promise).mockResolvedValueOnce(Response.json(after));
+    vi.stubGlobal("fetch", fetchMock);
+    api.getCitadelStructureSnapshot.mockResolvedValueOnce(before).mockImplementationOnce(getCitadelStructureSnapshot);
+    api.stageMasonBlueprint.mockReturnValueOnce(write.promise);
+
+    let pending!: Promise<boolean>;
+    await act(async () => { pending = control.confirm(); });
+    expect(api.stageMasonBlueprint).toHaveBeenCalledExactlyOnceWith("one", masonBlueprint, before.revision);
+    const background = getCitadelStructureSnapshot("one");
+    expect(fetchMock).toHaveBeenCalledOnce();
+    await act(async () => write.resolve({ citadel: after, review: masonSummary }));
+    const readsBeforeStaleResponse = fetchMock.mock.calls.length;
+    let confirmed!: boolean;
+    await act(async () => {
+      stale.resolve(Response.json(before));
+      expect(await background).toEqual(before);
+      confirmed = await pending;
+    });
+
+    expect(confirmed).toBe(true);
+    expect(readsBeforeStaleResponse).toBe(2);
+    expect(control.locked).toBe(false);
+  });
+
   it("requires review and explicit confirmation, uses exact CAS, then independently reads the structure", async () => {
     expect(await confirm()).toBe(false); await prepare(); expect(api.stageMasonBlueprint).not.toHaveBeenCalled(); expect(await confirm()).toBe(true);
     expect(api.stageMasonBlueprint).toHaveBeenCalledExactlyOnceWith("one", masonBlueprint, "a".repeat(64)); expect(api.getCitadelStructureSnapshot).toHaveBeenCalledTimes(3); expect(control.notice).toContain("confirmed");

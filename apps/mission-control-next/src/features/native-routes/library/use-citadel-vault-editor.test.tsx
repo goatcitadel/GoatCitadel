@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { CitadelVaultSnapshot } from "@goatcitadel/contracts";
+import { getCitadelVaultSnapshot } from "@goatcitadel/mission-control-shared/api/citadels-operations";
 import { useCitadelVaultEditor } from "./use-citadel-vault-editor";
 import { __resetSessionDraftsForTests } from "./session-drafts";
 import { __resetCitadelVaultAttemptsForTests, vaultAttempt } from "./citadel-vault-state";
@@ -13,7 +14,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   revealCitadelVaultSecret: api.reveal,
   isApiRequestError: (value: { kind?: string }) => value?.kind === "http",
 }));
-vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
+vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
   getGatewayApiBaseUrl: () => "http://fixture",
 }));
 let owner: CitadelVaultSnapshot,
@@ -85,6 +87,7 @@ afterEach(async () => {
   await act(async () => renderer?.unmount());
   renderer = undefined;
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 it("confirms a StrictMode store through exact receipt and independent metadata without revealing bytes", async () => {
   await mount();
@@ -98,6 +101,40 @@ it("confirms a StrictMode store through exact receipt and independent metadata w
   expect(control.draft).toEqual({ name: "", value: "" });
   expect(control.formOpen).toBe(false);
   expect(control.vault.snapshot).toEqual(owner);
+  expect(api.reveal).not.toHaveBeenCalled();
+});
+it("confirms a Vault store while an older metadata read is pending", async () => {
+  await mount();
+  await draft();
+  const before = owner;
+  const after = stored();
+  const stale = deferred<Response>();
+  const write = deferred<CitadelVaultSnapshot>();
+  const fetchMock = vi.fn().mockReturnValueOnce(stale.promise).mockResolvedValueOnce(Response.json(after));
+  vi.stubGlobal("fetch", fetchMock);
+  api.read.mockResolvedValueOnce(before).mockImplementationOnce(getCitadelVaultSnapshot);
+  api.store.mockReturnValueOnce(write.promise);
+
+  let pending!: Promise<boolean>;
+  await act(async () => {
+    pending = control.store();
+  });
+  expect(api.store).toHaveBeenCalledOnce();
+  const background = getCitadelVaultSnapshot("citadel");
+  expect(fetchMock).toHaveBeenCalledOnce();
+  await act(async () => write.resolve(after));
+  const readsBeforeStaleResponse = fetchMock.mock.calls.length;
+  let confirmed!: boolean;
+  await act(async () => {
+    stale.resolve(Response.json(before));
+    expect(await background).toEqual(before);
+    confirmed = await pending;
+  });
+
+  expect(confirmed).toBe(true);
+  expect(readsBeforeStaleResponse).toBe(2);
+  expect(control.vault.snapshot).toEqual(after);
+  expect(control.vault.locked).toBe(false);
   expect(api.reveal).not.toHaveBeenCalled();
 });
 it.each(["unmount", "away-back", "close"])("cancels before dispatch after %s during preflight", async (change) => {

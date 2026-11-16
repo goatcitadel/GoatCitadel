@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExter
 import type { CitadelVaultSnapshot } from "@goatcitadel/contracts";
 import { getCitadelVaultSnapshot } from "@goatcitadel/mission-control-shared/api/client";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/client";
 import { sameVaultValue } from "./citadel-vault-binding";
 import {
@@ -167,7 +168,7 @@ export function useCitadelVaultReview(citadelId: string) {
           (change && !vaultMutationMatches(before, saved, change))
         )
           throw new Error("The Vault owner did not acknowledge the reviewed change.");
-        const confirmed = await read();
+        const confirmed = await withFreshReads(read);
         if (!sameVaultValue(saved, confirmed))
           throw new Error("The saved Vault metadata could not be independently confirmed.");
         setVaultAttempt(key, { phase: "idle" });

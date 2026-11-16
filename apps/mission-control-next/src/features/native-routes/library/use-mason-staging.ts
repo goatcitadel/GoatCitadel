@@ -6,6 +6,7 @@ import {
   stageMasonBlueprint,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import {
   blueprintImportMatches,
   hasBlueprintStructure,
@@ -105,7 +106,7 @@ export function useMasonStaging(citadelId: string, candidate: MasonReview | null
         !sameBlueprintValue(receipt.review, captured.candidate.summary)
       )
         throw new Error("The staging receipt does not match the reviewed Blueprint.");
-      const after = await getCitadelStructureSnapshot(citadelId);
+      const after = await withFreshReads(() => getCitadelStructureSnapshot(citadelId));
       if (getGatewayApiBaseUrl() !== installation || !sameBlueprintValue(after, receipt.citadel))
         throw new Error("The staged structure could not be independently confirmed.");
       setAttempt({ phase: "idle" });
