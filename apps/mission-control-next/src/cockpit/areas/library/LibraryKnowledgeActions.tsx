@@ -239,7 +239,7 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
         {(props) => (
           <select
             {...props}
-            className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
+            className="min-w-0 w-full max-w-full rounded-md border border-line-control bg-raised p-2"
             value={draft.value.sessionId}
             onChange={(event) => draft.setValue({ ...draft.value, sessionId: event.target.value })}
           >
@@ -279,7 +279,7 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
         {(props) => (
           <input
             {...props}
-            className="min-w-0 w-full max-w-full rounded-md border border-line bg-raised p-2"
+            className="min-w-0 w-full max-w-full rounded-md border border-line-control bg-raised p-2"
             value={draft.value.query}
             onChange={(event) => draft.setValue({ ...draft.value, query: event.target.value })}
           />
