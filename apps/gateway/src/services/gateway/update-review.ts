@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readBoundedResponseText } from "../bounded-response-reader.js";
 import { assertSafeGitPositionalArg } from "../security-utils.js";
+import { isSkillHubScratchFolderName } from "@goatcitadel/skills";
 import { readBoundedSkillSourceManifestSync } from "../skill-content-integrity.js";
 
 const execFileAsync = promisify(execFile);
@@ -667,7 +668,8 @@ async function readInstalledSkillSourceManifests(
   const manifests: Array<InstalledSkillSourceManifest & { skillId: string }> = [];
   const entries = await fs.readdir(extraRoot, { withFileTypes: true });
   for (const entry of entries) {
-    if (!entry.isDirectory()) {
+    // Skill Hub's own staging and recovery folders are never installed skills.
+    if (!entry.isDirectory() || isSkillHubScratchFolderName(entry.name)) {
       continue;
     }
     const manifestPath = path.join(extraRoot, entry.name, "source.json");

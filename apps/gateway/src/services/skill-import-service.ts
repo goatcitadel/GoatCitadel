@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import AdmZip from "adm-zip";
-import { parseSkillMarkdown } from "@goatcitadel/skills";
+import { isSkillHubScratchFolderName, parseSkillMarkdown } from "@goatcitadel/skills";
 import { assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-engine";
 import { readBoundedResponseBytes, readBoundedResponseText } from "./bounded-response-reader.js";
 import {
@@ -1299,7 +1299,8 @@ export class SkillImportService {
       return manifests;
     }
     for (const entry of fsSync.readdirSync(extraRoot, { withFileTypes: true })) {
-      if (!entry.isDirectory()) {
+      // Skill Hub's own staging and recovery folders are never installed skills.
+      if (!entry.isDirectory() || isSkillHubScratchFolderName(entry.name)) {
         continue;
       }
       const sourceManifestPath = path.join(extraRoot, entry.name, "source.json");
@@ -1327,7 +1328,7 @@ export class SkillImportService {
     const extraRoot = path.resolve(this.rootDir, "skills", "extra");
     if (fsSync.existsSync(extraRoot)) {
       for (const entry of fsSync.readdirSync(extraRoot, { withFileTypes: true })) {
-        if (!entry.isDirectory()) {
+        if (!entry.isDirectory() || isSkillHubScratchFolderName(entry.name)) {
           continue;
         }
         if (input.inferredSkillId && entry.name === input.inferredSkillId) {

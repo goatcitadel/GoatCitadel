@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseSkillMarkdown, resolveSkillNameViolation, SkillFrontmatterSchema } from "./frontmatter.js";
-import { SkillsService, type SkillsLogger } from "./loader.js";
+import { isSkillHubScratchFolderName, SkillsService, type SkillsLogger } from "./loader.js";
 
 function makeLoggerSpy(): SkillsLogger {
   return { warn: vi.fn(), error: vi.fn() };
@@ -209,6 +209,8 @@ Demo body`;
 
     expect(loaded.map((skill) => skill.skillId)).toEqual(["extra:kept"]);
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(isSkillHubScratchFolderName(".skill-hub-0123456789abcdef01234567.backup")).toBe(true);
+    expect(isSkillHubScratchFolderName("skill-hub-notes")).toBe(false);
   });
 
   it("reports a malformed SKILL.md instead of silently dropping it", async () => {

@@ -98,10 +98,15 @@ async function loadSourceSkills(source: SkillSource, logger: SkillsLogger): Prom
   return loaded.filter((skill): skill is LoadedSkill => skill !== undefined);
 }
 
-// Skill Hub stages an activation and parks a removed skill's folder beside the skills it governs, under
-// `.skill-hub-<token>.staging` and `.skill-hub-<token>.backup`. Those folders are its own scratch, never skills: loading
-// one would put a skill back into the list while its record is being written or after it was deleted.
-const SKILL_HUB_SCRATCH_PREFIX = ".skill-hub-";
+/**
+ * Skill Hub stages an activation and parks a removed skill's folder beside the skills it governs, under
+ * `.skill-hub-<token>.staging` and `.skill-hub-<token>.backup`. Those folders are its own scratch, never installed
+ * skills: anything that lists the skills in a source folder skips them, or a skill would come back into the list while
+ * its record is being written or after it was deleted.
+ */
+export function isSkillHubScratchFolderName(name: string): boolean {
+  return name.startsWith(".skill-hub-");
+}
 
 // Symlinks and Windows junctions report isDirectory() === false on a Dirent, so
 // they used to vanish silently. A link is accepted only when it resolves to a
@@ -113,7 +118,7 @@ async function resolveSkillChildDir(
   entry: Dirent,
   logger: SkillsLogger,
 ): Promise<string | undefined> {
-  if (entry.name.startsWith(SKILL_HUB_SCRATCH_PREFIX)) {
+  if (isSkillHubScratchFolderName(entry.name)) {
     return undefined;
   }
   const entryPath = path.join(source.dir, entry.name);

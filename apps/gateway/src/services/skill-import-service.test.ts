@@ -508,6 +508,25 @@ describe("SkillImportService source catalog", () => {
     });
   });
 
+  it("never lists or matches Skill Hub's staging and recovery folders as installed skills", async () => {
+    const extraRoot = path.join(rootDir, "skills", "extra");
+    const manifest = JSON.stringify({
+      candidate: { sourceRef: "https://github.com/example/demo.git", canonicalKey: "github:example/demo" },
+    });
+    for (const name of [".skill-hub-0123456789abcdef01234567.backup", ".skill-hub-0123456789abcdef01234567.staging"]) {
+      fs.mkdirSync(path.join(extraRoot, name), { recursive: true });
+      fs.writeFileSync(path.join(extraRoot, name, "source.json"), manifest);
+    }
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+
+    expect(service.listInstalledSources()).toEqual([]);
+    // The duplicate-install check reads the same folder; it is private, so it is reached through its owner directly.
+    const matches = (
+      service as unknown as { findDuplicateInstallMatches(input: { canonicalKey: string }): unknown[] }
+    ).findDuplicateInstallMatches({ canonicalKey: "github:example/demo" });
+    expect(matches).toEqual([]);
+  });
+
   it("lists no installed sources when nothing is installed", () => {
     const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
 

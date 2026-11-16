@@ -171,6 +171,17 @@ describe("collectSkillSourceDrift", () => {
     expect(lsRemoteArgs).toContainEqual(["ls-remote", "--", "https://github.com/example/cloudflare-api", "HEAD"]);
   });
 
+  it("never reviews Skill Hub's staging or recovery folders as installed skills", async () => {
+    const scratch = path.join(rootDir, "skills", "extra", ".skill-hub-0123456789abcdef01234567.backup");
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(path.join(scratch, "source.json"), JSON.stringify({ candidate: { sourceRef: "C:/skills/x" } }));
+
+    const result = await collectSkillSourceDrift(rootDir, async () => ({ stdout: "def456\tHEAD\n", stderr: "" }));
+
+    expect(result.items.map((item) => item.skillId)).not.toContain(".skill-hub-0123456789abcdef01234567.backup");
+    expect(result.warnings.some((warning) => warning.includes(".skill-hub-"))).toBe(false);
+  });
+
   it("rejects a leading-dash upstream URL without passing it to git", async () => {
     const probedUrls: string[] = [];
     const result = await collectSkillSourceDrift(rootDir, async (_file, args) => {
