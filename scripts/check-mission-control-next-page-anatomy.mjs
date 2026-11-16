@@ -42,7 +42,7 @@ export const ANATOMY_RULES = [
   },
   {
     id: "card-surface",
-    budget: 8,
+    budget: 7,
     help: "make the page the only card; use ui/Section for sub-sections",
     // Card containers: a large radius with a border. Controls (inputs, buttons, chips) use rounded-md and stay out.
     // The Capabilities catalog's row cards are the exception (DESIGN.md › Page anatomy).

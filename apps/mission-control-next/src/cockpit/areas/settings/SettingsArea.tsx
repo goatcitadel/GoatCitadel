@@ -314,7 +314,7 @@ export function SettingsArea() {
                     aria-label={`${result.label} search results`}
                     className="min-w-0 border-t border-line-subtle pt-4 first:border-t-0 first:pt-0"
                   >
-                    <h2 className="text-base font-semibold text-fg">{result.label}</h2>
+                    <h2 className="font-display text-lg font-semibold text-fg">{result.label}</h2>
                     <SettingsDestinations entries={result.entries} onNavigate={goTo} />
                   </section>
                 ))
