@@ -465,6 +465,9 @@ test("the default type installs Chromium and the voice runtime; either can be un
   assert.match(iss, /Name: "voice"; [^\n]*; Types: full custom\r?\n/u);
 });
 
-test("setup installs the default voice model without replacing one already chosen", () => {
-  assert.match(renderSample(), /voice-runtime-cli\.js" install --model base\.en --keep-selection'/u);
+test("setup installs the default voice model into the install folder without replacing one already chosen", () => {
+  assert.match(
+    renderSample(),
+    /voice-runtime-cli\.js" install --model base\.en --keep-selection --home "\{app\}"'/u,
+  );
 });

@@ -30,6 +30,7 @@ describe("voice runtime CLI", () => {
           fileName: "ggml-base.en.bin",
         },
       ],
+      setHome: vi.fn(),
       log: vi.fn(),
       error: vi.fn(),
     };
@@ -83,7 +84,8 @@ describe("voice runtime CLI", () => {
       getManagedVoiceRuntimeStatus: vi.fn(async () => ({ selectedModelId: "custom.bin" }) as never),
     };
     await runCli(["install", "--model", "base.en", "--keep-selection"], unknown);
-    expect(unknown.installManagedVoiceRuntime).toHaveBeenCalledWith(undefined, { modelId: "base.en", activate: true });
+    // A choice this build does not know stays selected: the given model is added without being made active.
+    expect(unknown.installManagedVoiceRuntime).toHaveBeenCalledWith(undefined, { modelId: "base.en", activate: false });
 
     const plain: VoiceRuntimeCliDeps = {
       ...createDeps(),
@@ -91,6 +93,27 @@ describe("voice runtime CLI", () => {
     };
     await runCli(["install", "--model", "base.en"], plain);
     expect(plain.installManagedVoiceRuntime).toHaveBeenCalledWith(undefined, { modelId: "base.en", activate: true });
+  });
+
+  it("points at the named home before it reads or installs anything", async () => {
+    const order: string[] = [];
+    const deps: VoiceRuntimeCliDeps = {
+      ...createDeps(),
+      setHome: vi.fn((directory: string) => void order.push(`home:${directory}`)),
+      getManagedVoiceRuntimeStatus: vi.fn(async () => {
+        order.push("status");
+        return {} as never;
+      }),
+      installManagedVoiceRuntime: vi.fn(async () => {
+        order.push("install");
+        return { installed: true } as never;
+      }),
+    };
+    await runCli(["install", "--model", "base.en", "--keep-selection", "--home", "C:/Apps/GoatCitadel"], deps);
+    expect(order).toEqual(["home:C:/Apps/GoatCitadel", "status", "install"]);
+
+    const none = await runCli(["install", "--model", "base.en"]);
+    expect(none.setHome).not.toHaveBeenCalled();
   });
 
   it("prints status and sanitized model catalog output", async () => {
