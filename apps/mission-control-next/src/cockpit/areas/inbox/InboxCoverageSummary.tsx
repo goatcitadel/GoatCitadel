@@ -10,7 +10,7 @@ function summaryLine(projection: OperatorInboxResponse): string {
   const other = Math.max(0, total.known - decisions - updates);
   const parts = [
     decisions ? `${plural(decisions, "decision")} waiting` : "",
-    updates ? plural(updates, "update") : "",
+    updates ? plural(updates, "notice") : "",
     other ? plural(other, "other item") : "",
   ].filter(Boolean);
   const counts = parts.length ? `${parts.join(", ")}.` : "Nothing waiting.";
@@ -80,7 +80,7 @@ export function InboxEmptyState({ projection }: { projection: OperatorInboxRespo
         description={
           hasGap
             ? `Nothing found, but some sources couldn't be checked completely, so items may be missing.${lastChecked}`
-            : `Nothing needs your attention in the checked sources. Decisions, proposals and updates appear here when work needs you.${lastChecked}`
+            : `Nothing needs your attention in the checked sources. Decisions, proposals and notices appear here when work needs you.${lastChecked}`
         }
       />
       <div className="mx-auto w-fit max-w-md">

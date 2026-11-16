@@ -226,11 +226,11 @@ describe("viewed Updates presentation", () => {
     expect(container.querySelector('[aria-label="Inspector: Viewed report"]')).not.toBeNull();
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(0);
     expect(container.querySelector('[data-inbox-count="updates"]')?.textContent).toBe("At least 4");
-    expect(container.textContent).toContain("4 updates. Some sources couldn't be checked, so there may be more.");
-    expect(container.textContent).toContain("0 unread · 1 read from shown updates");
-    await clickButton("Show read updates (1)");
+    expect(container.textContent).toContain("4 notices. Some sources couldn't be checked, so there may be more.");
+    expect(container.textContent).toContain("0 unread · 1 read from shown notices");
+    await clickButton("Show read notices (1)");
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(1);
-    await clickButton("Hide read updates");
+    await clickButton("Hide read notices");
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(0);
     expect(data).toEqual(original);
     expect(JSON.stringify({ ...window.localStorage })).not.toBe(persistedBefore);
@@ -251,18 +251,18 @@ describe("viewed Updates presentation", () => {
     expect(document.activeElement).toBe(refresh);
   });
 
-  it("keeps Mark all shown updates read available during a background refetch", async () => {
+  it("keeps Mark all shown notices read available during a background refetch", async () => {
     const data = updateProjection();
     inboxMock.result = { data, isLoading: false, isError: false, isFetching: true, refetch: vi.fn() };
     await renderUpdates(new QueryClient());
     const markAll = [...container.querySelectorAll("button")].find(
-      (entry) => entry.textContent === "Mark all shown updates read",
+      (entry) => entry.textContent === "Mark all shown notices read",
     );
-    if (!markAll) throw new Error("Missing Mark all shown updates read button");
+    if (!markAll) throw new Error("Missing Mark all shown notices read button");
     expect(markAll.disabled).toBe(false);
     await act(async () => markAll.click());
     expect(isInboxUpdateViewed(inboxMock.installation, "default", update)).toBe(true);
-    expect(container.textContent).toContain("0 unread · 1 read from shown updates");
+    expect(container.textContent).toContain("0 unread · 1 read from shown notices");
   });
 
   it("opens a native Work owner link for a task deliverable without a Classic handoff", async () => {
@@ -330,7 +330,7 @@ describe("viewed Updates presentation", () => {
     });
     await renderUpdates(client);
     expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(1);
-    expect(container.textContent).toContain("1 unread · 0 read from shown updates");
+    expect(container.textContent).toContain("1 unread · 0 read from shown notices");
   });
 });
 
@@ -383,7 +383,7 @@ describe("InboxArea", () => {
     expect(container.textContent).toContain("You're all caught up");
     expect(container.querySelector("[data-inbox-count]")).toBeNull();
     expect(container.textContent).not.toContain("Nothing found here");
-    expect(container.textContent).not.toContain("Mark all shown updates read");
+    expect(container.textContent).not.toContain("Mark all shown notices read");
   });
 
   it("says when sources could not be read instead of claiming an all-clear", async () => {
@@ -798,9 +798,9 @@ it("acknowledges only shown update references and reports skipped operator recei
   });
   await renderUpdates(new QueryClient());
   const before = JSON.stringify({ ...localStorage });
-  await clickButton("Mark all shown updates read");
+  await clickButton("Mark all shown notices read");
   expect(apiMocks.markRead).toHaveBeenCalledWith("default", [{ id: update.id, version: update.version }]);
-  expect(container.textContent).toContain("1 update was not acknowledged");
+  expect(container.textContent).toContain("1 notice was not acknowledged");
   expect(container.querySelectorAll("[data-inbox-item]")).toHaveLength(1);
   expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
   expect(JSON.stringify({ ...localStorage })).toBe(before);
@@ -958,12 +958,12 @@ it.each([0, 1])(
       original(key, value);
     });
     try {
-      await clickButton("Mark all shown updates read");
+      await clickButton("Mark all shown notices read");
       expect(container.textContent).toContain("Read storage unavailable");
       expect(container.textContent).not.toContain("Read status is saved in this browser");
-      expect(container.textContent).toContain(String(savedBeforeDenial) + " read from shown updates");
+      expect(container.textContent).toContain(String(savedBeforeDenial) + " read from shown notices");
       const action = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (b) => b.textContent === "Mark all shown updates read",
+        (b) => b.textContent === "Mark all shown notices read",
       )!;
       expect(action.disabled).toBe(true);
     } finally {

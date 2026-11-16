@@ -52,7 +52,7 @@ export function useInboxAcknowledge({
           ),
         );
         const failed = saved.some((value) => !value);
-        if (failed) setReadNotice("Read storage unavailable. Unacknowledged updates remain unread.");
+        if (failed) setReadNotice("Read storage unavailable. Unacknowledged notices remain unread.");
       } else if (readScope === "operator") {
         let skipped = 0;
         for (let offset = 0; offset < updates.length; offset += 200) {
@@ -70,10 +70,10 @@ export function useInboxAcknowledge({
         }
         if (skipped)
           setReadNotice(
-            `${plural(skipped, "update was", "updates were")} not acknowledged. Changed or unavailable updates remain unread.`,
+            `${plural(skipped, "notice was", "notices were")} not acknowledged. Changed or unavailable notices remain unread.`,
           );
         await refetch();
-      } else setReadNotice("Read storage unavailable. Unacknowledged updates remain unread.");
+      } else setReadNotice("Read storage unavailable. Unacknowledged notices remain unread.");
     } catch {
       setReadNotice("Read status could not be saved. Refresh to check current receipts.");
     } finally {
