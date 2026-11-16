@@ -49,7 +49,7 @@ export function DialogRuntime({
             <NoFocusTooltips>
               <div className="mb-3 flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <DialogPrimitive.Title className="font-display text-lg font-semibold text-fg">
+                  <DialogPrimitive.Title className="font-display text-lg font-semibold wrap-anywhere text-fg">
                     {title}
                   </DialogPrimitive.Title>
                   {description ? (

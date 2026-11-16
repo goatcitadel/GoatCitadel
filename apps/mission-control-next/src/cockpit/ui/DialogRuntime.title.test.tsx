@@ -28,6 +28,7 @@ it("every dialog title is a section title (text-lg) that can shrink beside the c
   });
   const title = document.querySelector('[role="dialog"] h2')!;
   expect(title.className).toContain("text-lg");
+  expect(title.className).toContain("wrap-anywhere");
   expect(title.className).not.toContain("text-md");
   expect(title.parentElement!.className).toContain("min-w-0");
 });
