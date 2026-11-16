@@ -10,10 +10,13 @@ export function ChatPendingQuestion({
   prompt,
   pending,
   onSubmit,
+  onSkip,
 }: {
   prompt: ChatUserInputPromptRecord;
   pending: boolean;
   onSubmit: (response: ChatUserInputPromptResponse) => void;
+  /** Only an optional background question can be skipped; the prompt stays with the Gateway. */
+  onSkip?: () => void;
 }) {
   const [value, setValue] = useState("");
   const secure = Boolean(prompt.secureConfiguration);
@@ -34,6 +37,8 @@ export function ChatPendingQuestion({
       onSubmit={submit}
       className="mt-3 rounded-md border border-status-waiting bg-raised p-3 text-sm"
       aria-label="Pending question"
+      tabIndex={-1}
+      data-chat-waiting-decision=""
     >
       <h3 className="font-semibold text-fg">{prompt.title || "Your input is needed"}</h3>
       {background ? (
@@ -109,9 +114,16 @@ export function ChatPendingQuestion({
           )}
         </label>
       )}
-      <Button type="submit" variant="primary" size="sm" disabled={!canSubmit} className="mt-3">
-        {pending ? "Submitting…" : prompt.submitLabel?.trim() || "Submit response"}
-      </Button>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button type="submit" variant="primary" size="sm" disabled={!canSubmit}>
+          {pending ? "Submitting…" : prompt.submitLabel?.trim() || "Submit response"}
+        </Button>
+        {background && onSkip ? (
+          <Button type="button" size="sm" disabled={pending} onClick={onSkip}>
+            Skip question
+          </Button>
+        ) : null}
+      </div>
     </form>
   );
 }

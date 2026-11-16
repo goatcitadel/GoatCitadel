@@ -344,7 +344,15 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
     }),
   );
 
-  const summary = summarizeDesignQualityChecks(checks);
+  const sourcePresent = fs.existsSync(path.join(root, "apps", "mission-control-next", "src"));
+  const reported = sourcePresent ? checks : checks.map(markNotCheckedWithoutSource);
+  const summary = summarizeDesignQualityChecks(reported);
+  const warnings = [
+    ...(summary.advisoryCount > 0
+      ? ["Design quality advisories are calibrated signals, not release blockers unless promoted to P0."]
+      : []),
+    ...(sourcePresent ? [] : [SOURCE_SKIPPED_WARNING]),
+  ];
   return {
     state: "available",
     posture: {
@@ -356,11 +364,35 @@ export function readDesignQualityEvidence(repoRoot: string): OpsDesignQualitySna
       note: "Design quality evidence reads repo files only. It does not run providers, open browsers, mutate source, or update visual baselines.",
     },
     summary,
-    checks,
-    warnings:
-      summary.advisoryCount > 0
-        ? ["Design quality advisories are calibrated signals, not release blockers unless promoted to P0."]
-        : [],
+    checks: reported,
+    warnings,
+  };
+}
+
+/** Checks that read GoatCitadel's own source files; an install without them cannot say anything about them. */
+const SOURCE_FILE_CHECK_IDS: ReadonlySet<string> = new Set([
+  "mission-control.tokens",
+  "mission-control.raw-color-budget",
+  "design-quality.proof-lanes",
+  "skills.routing-hints.design-quality",
+  "mission-control.anti-slop.scan",
+  "mission-control.craft-floor.scan",
+]);
+const SOURCE_NOT_CHECKED_ACTION =
+  "Not checked: this install does not hold GoatCitadel's source files, which this check reads.";
+const SOURCE_SKIPPED_WARNING =
+  "Source checks were skipped because this install does not hold GoatCitadel's source files.";
+
+function markNotCheckedWithoutSource(item: OpsDesignQualityCheck): OpsDesignQualityCheck {
+  if (!SOURCE_FILE_CHECK_IDS.has(item.id)) return item;
+  return {
+    id: item.id,
+    label: item.label,
+    severity: "P3",
+    status: "unknown",
+    owner: item.owner,
+    evidence: item.evidence,
+    nextAction: SOURCE_NOT_CHECKED_ACTION,
   };
 }
 

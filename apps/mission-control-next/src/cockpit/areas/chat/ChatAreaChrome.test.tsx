@@ -6,7 +6,13 @@ import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/re
 import type { ChatSessionRecord, OnboardingState } from "@goatcitadel/contracts";
 import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
-import { ChatHeaderSubtitle, ChatSessionHeader, ChatSetupBanner, ChatSetupGate } from "./ChatAreaChrome";
+import {
+  ChatEmptyState,
+  ChatHeaderSubtitle,
+  ChatSessionHeader,
+  ChatSetupBanner,
+  ChatSetupGate,
+} from "./ChatAreaChrome";
 import type { ChannelConversationContext } from "./channel-conversation";
 
 const media = vi.hoisted(() => ({ phone: false }));
@@ -428,5 +434,32 @@ describe("ChatSetupGate", () => {
   it("keeps the advisory wording when a model is ready", async () => {
     await gate({ data: withModel, isError: false });
     expect(container.textContent).toContain("You can chat now.");
+  });
+});
+
+describe("ChatEmptyState", () => {
+  function renderEmpty(rail: Partial<MissionThreadedRenderSurfaceInput["sessionRail"]>) {
+    const base = input().sessionRail;
+    act(() => root.render(<ChatEmptyState rail={{ ...base, selectedSessionId: null, ...rail }} />));
+  }
+
+  it("invites the first conversation when the list is empty", () => {
+    renderEmpty({ missionSessions: [], search: "" });
+    expect(container.textContent).toContain("Start your first conversation");
+    expect(container.textContent).toContain("Ask GoatCitadel anything. Your conversations will be listed here.");
+    expect(container.textContent).not.toContain("Choose a conversation");
+  });
+
+  it("keeps Choose a conversation when there are conversations", () => {
+    renderEmpty({ search: "" });
+    expect(container.textContent).toContain("Choose a conversation");
+    expect(container.textContent).not.toContain("Start your first conversation");
+  });
+
+  it("keeps Choose a conversation for a search or the archive that found nothing", () => {
+    renderEmpty({ missionSessions: [], search: "zebra" });
+    expect(container.textContent).toContain("Choose a conversation");
+    renderEmpty({ missionSessions: [], search: "", historyView: "archived" });
+    expect(container.textContent).toContain("Choose a conversation");
   });
 });

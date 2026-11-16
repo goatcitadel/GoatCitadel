@@ -7,6 +7,8 @@ export interface ChatSessionCreation {
   message: string;
   mode: ChatMode;
   sessionId?: string;
+  /** Created and confirmed, but showing it failed: the palette keeps its recovery control visible on reopening. */
+  openFailed?: boolean;
 }
 
 const attempts = new Map<string, ChatSessionCreation>();
@@ -50,7 +52,12 @@ export function abandonChatSessionCreation(key: string, attempt: ChatSessionCrea
 
 export function useChatSessionCreation(key: string) {
   useSyncExternalStore(
-    (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     () => version,
     () => version,
   );
@@ -59,10 +66,17 @@ export function useChatSessionCreation(key: string) {
 
 export function assertChatSessionCreated(session: ChatSessionRecord, workspaceId: string, projectId?: string) {
   if (
-    !session.sessionId?.trim() || session.workspaceId !== workspaceId || session.projectId !== projectId ||
-    session.scope !== "mission" || session.mode !== "chat" || session.lifecycleStatus !== "active" ||
-    session.includeInHistory !== true || !Number.isSafeInteger(session.revision) || session.revision < 1
-  ) throw new Error("The Gateway did not acknowledge the requested new Chat conversation.");
+    !session.sessionId?.trim() ||
+    session.workspaceId !== workspaceId ||
+    session.projectId !== projectId ||
+    session.scope !== "mission" ||
+    session.mode !== "chat" ||
+    session.lifecycleStatus !== "active" ||
+    session.includeInHistory !== true ||
+    !Number.isSafeInteger(session.revision) ||
+    session.revision < 1
+  )
+    throw new Error("The Gateway did not acknowledge the requested new Chat conversation.");
 }
 
 export function resetChatSessionCreationForTests() {

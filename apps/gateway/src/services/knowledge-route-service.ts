@@ -3,6 +3,7 @@ import { createRouteService, type RoutePort, type RouteService } from "./route-s
 export const knowledgeRouteMethods = [
   "knowledgeApprovalResult",
   "knowledgeDocsIngest",
+  "knowledgeListDocuments",
   "knowledgeEmbeddingsIndex",
   "knowledgeEmbeddingsQuery",
   "knowledgeMemorySearch",

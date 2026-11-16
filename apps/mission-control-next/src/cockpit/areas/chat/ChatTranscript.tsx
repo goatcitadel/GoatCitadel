@@ -1,13 +1,15 @@
-import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Turn, ChatTranscriptEmpty, ChatTranscriptFooter, type TranscriptFooterContext } from "./ChatTranscriptContent";
 import { turnReadsDraft, useTurnActions } from "./use-turn-actions";
 import { selectTurnCapabilitySuggestions } from "./turn-capability-suggestions";
 import type { ChannelConversationContext } from "./channel-conversation";
 import { useChannelReading } from "./use-channel-conversation";
+import { ChatInspectorLoadFailure } from "./ChatInspectorLoadFailure";
 import {
-  hasUnsettledChatContextMutation,
-  CHAT_CONTEXT_RELOAD_NOTE,
-} from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
+  focusAfterJump,
+  JumpToLatestButton,
+  WaitingDecisionContext,
+  type WaitingDecision,
+} from "./chat-jump-to-latest";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { useDeferredVirtuoso } from "../../ui/DeferredVirtuoso";
@@ -242,6 +244,26 @@ export function ChatTranscript({
     [scrollRef, onNativeScroll, onReadingGesture],
   );
   const virtuoso = useRef<VirtuosoHandle>(null);
+  const region = useRef<HTMLDivElement>(null);
+  const [waiting, setWaiting] = useState<WaitingDecision>(null);
+  const mounted = useRef(true);
+  // Owned here, not by the button: the jump can make the button unmount before the timer fires.
+  const focusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (focusTimer.current) clearTimeout(focusTimer.current);
+    };
+  }, []);
+  const jumpAndFocus = () => {
+    jumpToLatest();
+    // CH-18: the button unmounts once the reader is at the end, so focus moves on after the jump.
+    focusTimer.current = setTimeout(
+      () => focusAfterJump(region.current, props.composerRef?.current ?? null, scrollRef.current, waiting),
+      0,
+    );
+  };
   // A jump to a message is the reader moving, so the transcript stops following new output, as it does for Home.
   const markReaderJump = useCallback(() => {
     readingGesture.current = true;
@@ -328,100 +350,77 @@ export function ChatTranscript({
     jumpToLatest,
   };
   return (
-    <div role="region" className="relative h-full min-h-0 flex-1" aria-label="Messages">
-      <h2 className="sr-only">Messages</h2>
-      <span role="status" aria-live="polite" className="sr-only">
-        {announcement}
-      </span>
-      <ChatTranscriptNavigation
-        scroller={scrollElement}
-        turns={visibleTurns}
-        turnKeys={turnKeys}
-        virtuoso={virtuoso}
-        onReaderJump={markReaderJump}
-      />
-      {!props.followOutput ? (
-        <button
-          type="button"
-          onClick={() => {
-            jumpToLatest();
-            // CH-18: the button unmounts once the reader is at the end, so focus moves to the composer.
-            const composer = props.composerRef.current;
-            if (composer && !composer.disabled) composer.focus({ preventScroll: true });
-            else scrollRef.current?.focus({ preventScroll: true });
-          }}
-          className="absolute bottom-3 right-3 z-10 rounded-md border border-accent bg-overlay px-3 py-2 text-sm text-accent shadow-overlay"
+    <WaitingDecisionContext.Provider value={setWaiting}>
+      <div ref={region} role="region" className="relative h-full min-h-0 flex-1" aria-label="Messages">
+        <h2 className="sr-only">Messages</h2>
+        <span role="status" aria-live="polite" className="sr-only">
+          {announcement}
+        </span>
+        <ChatTranscriptNavigation
+          scroller={scrollElement}
+          turns={visibleTurns}
+          turnKeys={turnKeys}
+          virtuoso={virtuoso}
+          onReaderJump={markReaderJump}
+        />
+        {!props.followOutput ? <JumpToLatestButton waiting={waiting} unread={unread} onJump={jumpAndFocus} /> : null}
+        <div
+          key={scopeKey}
+          ref={bindScroller}
+          data-transcript-scroller
+          data-follow-output="false"
+          tabIndex={0}
+          onKeyDown={onTranscriptBoundaryKey}
+          // #497: `relative` makes the scroller the containing block of the turns' absolute sr-only headings, so their
+          // overflow stays inside it instead of escaping to <main> and shifting the header and composer.
+          className="relative h-full w-full overflow-y-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
-          Jump to latest{unread ? ` · ${plural(unread, "new message")}` : ""}
-        </button>
-      ) : null}
-      <div
-        key={scopeKey}
-        ref={bindScroller}
-        data-transcript-scroller
-        data-follow-output="false"
-        tabIndex={0}
-        onKeyDown={onTranscriptBoundaryKey}
-        // #497: `relative` makes the scroller the containing block of the turns' absolute sr-only headings, so their
-        // overflow stays inside it instead of escaping to <main> and shifting the header and composer.
-        className="relative h-full w-full overflow-y-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
-      >
-        <div className="w-full">
-          {virtualized && Virtuoso && scrollElement ? (
-            <Virtuoso<ChatThreadTurnRecord, TranscriptFooterContext>
-              key={props.selectedSessionId}
-              ref={virtuoso}
-              customScrollParent={scrollElement}
-              data={visibleTurns}
-              initialTopMostItemIndex={props.followOutput ? visibleTurns.length - 1 : (initialIndex ?? 0)}
-              rangeChanged={rangeChanged}
-              // Render the first row immediately, then measure actual long and enlarged-text row heights.
-              initialItemCount={Math.min(visibleTurns.length, 1)}
-              className="w-full"
-              followOutput={false}
-              computeItemKey={(_index, turn) => turn.turnId}
-              components={TRANSCRIPT_COMPONENTS}
-              // Virtualized, the footer context carries no rendered-turn subset, so it is exactly Virtuoso's context.
-              context={footerContext}
-              itemContent={(index, turn) => renderTurn(turn, index + 1)}
-            />
-          ) : (
-            <>
-              {fallbackTurns.map((turn, index) => (
-                <div key={turn.turnId}>{renderTurn(turn, fallbackOffset + index + 1)}</div>
-              ))}
-              {!visibleTurns.length ? <ChatTranscriptEmpty context={footerContext} /> : null}
-            </>
-          )}
+          <div className="w-full">
+            {virtualized && Virtuoso && scrollElement ? (
+              <Virtuoso<ChatThreadTurnRecord, TranscriptFooterContext>
+                key={props.selectedSessionId}
+                ref={virtuoso}
+                customScrollParent={scrollElement}
+                data={visibleTurns}
+                initialTopMostItemIndex={props.followOutput ? visibleTurns.length - 1 : (initialIndex ?? 0)}
+                rangeChanged={rangeChanged}
+                // Render the first row immediately, then measure actual long and enlarged-text row heights.
+                initialItemCount={Math.min(visibleTurns.length, 1)}
+                className="w-full"
+                followOutput={false}
+                computeItemKey={(_index, turn) => turn.turnId}
+                components={TRANSCRIPT_COMPONENTS}
+                // Virtualized, the footer context carries no rendered-turn subset, so it is exactly Virtuoso's context.
+                context={footerContext}
+                itemContent={(index, turn) => renderTurn(turn, index + 1)}
+              />
+            ) : (
+              <>
+                {fallbackTurns.map((turn, index) => (
+                  <div key={turn.turnId}>{renderTurn(turn, fallbackOffset + index + 1)}</div>
+                ))}
+                {!visibleTurns.length ? <ChatTranscriptEmpty context={footerContext} /> : null}
+              </>
+            )}
+          </div>
+          {!virtualized && visibleTurns.length > 100 ? (
+            virtualizationFailure ? (
+              <p role="alert" className="p-3 text-sm text-fg-muted">
+                More messages could not be shown. Visible messages and pending decisions are still available.{" "}
+                <button type="button" onClick={retryVirtualization} className="text-accent underline">
+                  Try again
+                </button>{" "}
+                · <ChatInspectorLoadFailure current={() => mounted.current} />
+              </p>
+            ) : (
+              <p role="status" className="p-3 text-sm text-fg-muted">
+                Loading {visibleTurns.length} conversation turns…
+              </p>
+            )
+          ) : null}
+          <ChatTranscriptFooter context={footerContext} />
         </div>
-        {!virtualized && visibleTurns.length > 100 ? (
-          virtualizationFailure ? (
-            <p role="alert" className="p-3 text-sm text-fg-muted">
-              More messages could not be shown. Visible messages and pending decisions are still available.{" "}
-              <button type="button" onClick={retryVirtualization} className="text-accent underline">
-                Try again
-              </button>{" "}
-              ·{" "}
-              <button
-                type="button"
-                disabled={hasUnsettledChatContextMutation()}
-                title={hasUnsettledChatContextMutation() ? CHAT_CONTEXT_RELOAD_NOTE : undefined}
-                onClick={() => {
-                  if (!hasUnsettledChatContextMutation()) window.location.reload();
-                }}
-                className="text-accent underline"
-              >
-                Reload app
-              </button>
-            </p>
-          ) : (
-            <p role="status" className="p-3 text-sm text-fg-muted">
-              Loading {visibleTurns.length} conversation turns…
-            </p>
-          )
-        ) : null}
-        <ChatTranscriptFooter context={footerContext} />
       </div>
-    </div>
+    </WaitingDecisionContext.Provider>
   );
 }

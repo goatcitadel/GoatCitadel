@@ -14,6 +14,7 @@ export function ChatConversationsSheet({
   projectOptions,
   onOpenProjects,
   messaging,
+  unsentSessionId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -21,6 +22,7 @@ export function ChatConversationsSheet({
   projectOptions?: readonly ChatProjectFilterOption[];
   onOpenProjects?: () => void;
   messaging?: ConversationListMessaging;
+  unsentSessionId?: string | null;
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange} title="Conversations">
@@ -31,6 +33,7 @@ export function ChatConversationsSheet({
         onDone={() => onOpenChange(false)}
         onOpenProjects={onOpenProjects}
         messaging={messaging}
+        unsentSessionId={unsentSessionId}
       />
     </Sheet>
   );

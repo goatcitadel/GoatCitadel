@@ -1,6 +1,6 @@
 import { SystemOwnerLink } from "./SystemOwnerLink";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type CSSProperties } from "react";
+import { useState } from "react";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { fetchOpsSavedBoard, fetchOpsSavedBoards } from "@goatcitadel/mission-control-shared/api/ops-saved-boards";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -11,7 +11,7 @@ import { queryKeys } from "../../data/query-keys";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
-import { SystemDashboardWidget } from "./SystemDashboardWidget";
+import { SavedBoardGrid } from "./SavedBoardGrid";
 import { CockpitBoardEditor } from "./CockpitBoardEditor";
 import { BoardLifecycle } from "./BoardLifecycle";
 import { BoardDetails } from "./BoardDetails";
@@ -312,24 +312,7 @@ function BoardDetail({
       {record && !board.isError ? (
         <>
           <BoardDetails board={record} />
-          <div role="region" aria-label={`${record.name} widget grid`} className="cockpit-saved-board-grid">
-            {placements.map((placement) => (
-              <div
-                key={placement.widgetId}
-                className="cockpit-saved-board-placement"
-                style={
-                  {
-                    "--board-column-start": placement.x + 1,
-                    "--board-column-span": placement.width,
-                    "--board-row-start": placement.y + 1,
-                    "--board-row-span": placement.height,
-                  } as CSSProperties
-                }
-              >
-                <SystemDashboardWidget kind={placement.kind} workspaceId={workspaceId} />
-              </div>
-            ))}
-          </div>
+          <SavedBoardGrid label={`${record.name} widget grid`} placements={placements} workspaceId={workspaceId} />
         </>
       ) : null}
     </section>

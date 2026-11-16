@@ -124,16 +124,32 @@ it("mentions a decision at the end of a response only when one is waiting (CH-10
   expect(status()).toBe("Response ended. A decision is waiting for you.");
 });
 
-it("keeps Jump to latest to messages, and moves focus to the composer after jumping (CH-10, CH-18)", async () => {
+it("names the waiting approval on Jump to latest, and moves focus to its card (CH-18)", async () => {
   const thread = { sessionId: "session-1", turns: [turn("t1")] } as never;
   await render(
     <ChatTranscript
       props={props({ thread, followOutput: false, pendingApproval: { approvalId: "a", riskLevel: "safe" } as never })}
     />,
   );
-  const jump = [...container.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Jump to latest"))!;
-  expect(jump.textContent).not.toContain("Decision waiting");
+  const jump = [...container.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Jump to"))!;
+  expect(jump.textContent).toBe("Jump to the approval waiting for you");
   jump.focus();
-  await act(async () => jump.click());
+  await act(async () => {
+    jump.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(document.activeElement?.hasAttribute("data-chat-waiting-decision")).toBe(true);
+});
+
+it("keeps Jump to latest, and moves focus to the composer, when no decision is waiting (CH-18)", async () => {
+  const thread = { sessionId: "session-1", turns: [turn("t1")] } as never;
+  await render(<ChatTranscript props={props({ thread, followOutput: false })} />);
+  const jump = [...container.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Jump to"))!;
+  expect(jump.textContent).toBe("Jump to latest");
+  jump.focus();
+  await act(async () => {
+    jump.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
   expect(document.activeElement).toBe(composer);
 });

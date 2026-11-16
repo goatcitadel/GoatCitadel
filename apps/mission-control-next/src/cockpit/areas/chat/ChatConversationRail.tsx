@@ -12,6 +12,7 @@ export function ChatConversationRail({
   projectOptions,
   onOpenProjects,
   messaging,
+  unsentSessionId,
   yieldToInspector,
   sheetOpen,
   onSheetOpenChange,
@@ -20,6 +21,7 @@ export function ChatConversationRail({
   projectOptions?: Parameters<typeof ThreadList>[0]["projectOptions"];
   onOpenProjects: () => void;
   messaging?: ConversationListMessaging;
+  unsentSessionId?: string | null;
   yieldToInspector: boolean;
   sheetOpen: boolean;
   onSheetOpenChange: (open: boolean) => void;
@@ -31,6 +33,7 @@ export function ChatConversationRail({
         projectOptions={projectOptions}
         onOpenProjects={onOpenProjects}
         messaging={messaging}
+        unsentSessionId={unsentSessionId}
         yieldToInspector={yieldToInspector}
       />
       <ChatConversationsSheet
@@ -40,6 +43,7 @@ export function ChatConversationRail({
         projectOptions={projectOptions}
         onOpenProjects={onOpenProjects}
         messaging={messaging}
+        unsentSessionId={unsentSessionId}
       />
     </>
   );

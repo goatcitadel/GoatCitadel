@@ -106,6 +106,22 @@ export const knowledgeRoutes: FastifyPluginAsync = async (fastify) => {
       }
     },
   );
+  fastify.get("/api/v1/knowledge/documents", withRouteAccess(fastify, "operator"), async (request, reply) => {
+    const query = z
+      .object({
+        namespace: z.string().trim().min(1).max(200).optional(),
+        limit: z.coerce.number().int().min(1).max(200).default(50),
+      })
+      .strict()
+      .safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: "A valid Knowledge list query is required." });
+    reply.header("Cache-Control", "private, no-store");
+    try {
+      return reply.send(await fastify.services.knowledge.knowledgeListDocuments(query.data));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
+  });
   fastify.post("/api/v1/knowledge/memory/write", async (request, reply) => {
     const parsed = memoryWriteSchema.safeParse(request.body);
     if (!parsed.success) {

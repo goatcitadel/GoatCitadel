@@ -47,6 +47,27 @@ const click = async (label: string) => {
 const render = async () => {
   await act(async () => root.render(<HealthBackupAction />));
 };
+it("says where the latest backup was saved, and says so plainly when none is known", async () => {
+  await act(async () =>
+    root.render(
+      <HealthBackupAction
+        latestBackup={{ createdAt: "2026-11-15T09:00:00.000Z", outputPath: "/var/backups/x.backup" }}
+      />,
+    ),
+  );
+  expect(container.textContent).toContain("Latest backup saved");
+  expect(container.textContent).toContain("in this folder:");
+  expect(container.textContent).toContain("/var/backups/x.backup");
+  await act(async () => root.render(<HealthBackupAction latestBackup={null} />));
+  expect(container.textContent).toContain("Backups are saved in this installation's backup folder.");
+  expect(container.textContent).not.toContain("in this folder:");
+  await act(async () => root.render(<HealthBackupAction latestBackup={{ createdAt: "2026-11-15T09:00:00.000Z" }} />));
+  expect(container.textContent).toContain("Latest backup saved");
+  expect(container.textContent).not.toContain("in this folder:");
+  await act(async () => root.render(<HealthBackupAction />));
+  expect(container.textContent).not.toContain("Latest backup saved");
+  expect(container.textContent).not.toContain("backup folder");
+});
 it("shows governed scope, Cancel sends nothing, pending blocks duplicates, canonical receipt preserves verification boundary", async () => {
   await render();
   await click("Back up now");

@@ -9,6 +9,7 @@ export function ThreadList({
   onOpenProjects,
   messaging,
   yieldToInspector = false,
+  unsentSessionId,
 }: {
   rail: MissionThreadedSessionRailData;
   projectOptions?: readonly ChatProjectFilterOption[];
@@ -16,6 +17,7 @@ export function ThreadList({
   messaging?: ConversationListMessaging;
   /** While the inspector is open the rail waits for the extra-wide layout, so the transcript keeps its room. */
   yieldToInspector?: boolean;
+  unsentSessionId?: string | null;
 }) {
   return (
     <aside
@@ -31,6 +33,7 @@ export function ThreadList({
         projectOptions={projectOptions}
         onOpenProjects={onOpenProjects}
         messaging={messaging}
+        unsentSessionId={unsentSessionId}
       />
     </aside>
   );
