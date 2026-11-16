@@ -148,7 +148,7 @@ export function SkillRemoval({ item, workspaceId }: { item: CapabilitySkillItem;
         open={confirming}
         onOpenChange={setConfirming}
         title="Remove this skill?"
-        description={`Removes ${item.name} from this install. Its plugin was uninstalled, so the AI can't use it. GoatCitadel keeps its check and its records, so you can install it again later. This can't be undone here.`}
+        description={`Removes ${item.name} from this install and deletes its folder from GoatCitadel's skills folder. Its plugin was uninstalled, so the AI can't use it. GoatCitadel keeps its check and its records, so you can install it again later. This can't be undone here.`}
       >
         <div className="flex flex-wrap justify-end gap-2">
           <Button onClick={() => setConfirming(false)}>Keep it</Button>

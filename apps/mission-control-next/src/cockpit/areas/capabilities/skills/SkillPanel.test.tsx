@@ -837,7 +837,7 @@ describe("Skill panel removal", () => {
   });
   const WITHOUT_REMOVAL: CapabilitySkillItem = { ...LEFT_BEHIND, removable: undefined };
   const DESCRIPTION =
-    "Removes Meeting notes from this install. Its plugin was uninstalled, so the AI can't use it. GoatCitadel keeps its check and its records, so you can install it again later. This can't be undone here.";
+    "Removes Meeting notes from this install and deletes its folder from GoatCitadel's skills folder. Its plugin was uninstalled, so the AI can't use it. GoatCitadel keeps its check and its records, so you can install it again later. This can't be undone here.";
 
   /** The removal's approval as the Gateway makes it: danger, never expiring, linked to the workspace that asked. */
   function removalApproval(): ApprovalRequest {
