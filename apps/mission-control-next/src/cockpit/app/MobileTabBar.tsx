@@ -34,6 +34,7 @@ import { useCitadelName } from "../data/use-citadel-name";
 import { TechnicalDetails } from "../ui/TechnicalDetails";
 import { isModifiedClick } from "../lib/modified-click";
 import { cockpitHref } from "./cockpit-history";
+import { cockpitScopeLine } from "./scope-line";
 
 const TABS = [
   { area: "chat", label: "Chat", path: "/chat", Icon: MessageSquare },
@@ -63,9 +64,7 @@ export function MobileTabBar({
   // SH-01: the phone has no status row; the More tab carries a shaped marker when status needs a look.
   const health = useHealthDigestStatus(workspaceId, phone, true);
   const attention = phone && statusNeedsAttention(health.tone, streamState);
-  const scopeLine = citadelName.startsWith("Reading Citadel")
-    ? "Loading workspace…"
-    : `${citadelName} / ${workspaceName ?? "Workspace"}`;
+  const scopeLine = cockpitScopeLine(citadelName, workspaceName);
   const inboxCount = inboxCountLabel(
     !inbox.isError && inboxMatchesWorkspace(inbox.data, workspaceId) ? inbox.data : undefined,
   );

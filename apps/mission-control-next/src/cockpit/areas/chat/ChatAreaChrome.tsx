@@ -13,6 +13,7 @@ import { useModelLabel } from "../../data/use-model-label";
 import { presentDelegationRunStatus } from "./chat-vocabulary";
 import { projectFirstRunState } from "../settings/first-run-state";
 import type { ChannelConversationContext } from "./channel-conversation";
+import { ScopeLine } from "../../app/scope-line";
 import { ChatHostStatus } from "./ChatHostStatus";
 import { startConversation } from "./conversation-reuse";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -148,6 +149,7 @@ function ChatSessionHeaderRow({
       <header className="flex min-h-14 min-w-0 items-center gap-2 border-b border-line-subtle px-3 py-1">
         <div className="min-w-0 flex-1">
           {title}
+          <ScopeLine />
           <SelectedThreadActivity session={session} active={active} />
         </div>
         {conversations}
@@ -163,6 +165,7 @@ function ChatSessionHeaderRow({
           <div className="min-w-0">{title}</div>
           <SelectedThreadActivity session={session} active={active} />
         </div>
+        <ScopeLine />
         <ChatHeaderSubtitle
           active={active}
           projectName={session?.projectName}

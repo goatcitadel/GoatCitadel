@@ -31,6 +31,7 @@ function Probe() {
 }
 
 beforeEach(() => {
+  window.localStorage.removeItem("goatcitadel.cockpit.inspector.width.v1");
   // Existing docked-panel tests explicitly use a desktop viewport.
   narrow.matches = false;
   narrow.listeners.clear();
@@ -328,6 +329,88 @@ describe("inspector", () => {
     expect(container.querySelector("aside")).toBeNull();
   });
 
+  it("keeps the dragged width per area and reloads it when the area changes (U-GL-030)", async () => {
+    const tree = (area: string) => (
+      <InspectorProvider>
+        <Probe />
+        <InspectorPanel area={area} />
+      </InspectorProvider>
+    );
+    act(() => root.render(tree("work")));
+    act(() => api.open({ title: "Run", body: <p>Current run</p> }));
+    await vi.waitFor(() => expect(container.querySelector('[role="separator"]')).not.toBeNull());
+    const width = () => container.querySelector<HTMLDivElement>('[role="separator"]')!.getAttribute("aria-valuenow");
+    act(() =>
+      container
+        .querySelector('[role="separator"]')!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })),
+    );
+    expect(width()).toBe("392");
+    act(() => root.render(tree("chat")));
+    expect(width()).toBe("384");
+    act(() => root.render(tree("work")));
+    expect(width()).toBe("392");
+  });
+
+  it("stores a dragged width once, when the drag ends", async () => {
+    act(() =>
+      root.render(
+        <InspectorProvider>
+          <Probe />
+          <InspectorPanel area="work" />
+        </InspectorProvider>,
+      ),
+    );
+    act(() => api.open({ title: "Run", body: <p>Current run</p> }));
+    await vi.waitFor(() => expect(container.querySelector('[role="separator"]')).not.toBeNull());
+    const separator = container.querySelector<HTMLDivElement>('[role="separator"]')!;
+    Object.defineProperties(separator, {
+      setPointerCapture: { value: vi.fn() },
+      hasPointerCapture: { value: () => true },
+      releasePointerCapture: { value: vi.fn() },
+    });
+    const key = "goatcitadel.cockpit.inspector.width.v1";
+    const pointer = (type: string, clientX: number) =>
+      act(() => separator.dispatchEvent(new PointerEvent(type, { pointerId: 3, button: 0, clientX, bubbles: true })));
+    pointer("pointerdown", 600);
+    pointer("pointermove", 580);
+    pointer("pointermove", 560);
+    pointer("pointermove", 540);
+    expect(separator.getAttribute("aria-valuenow")).toBe("444");
+    expect(window.localStorage.getItem(key)).toBeNull();
+    pointer("pointerup", 540);
+    expect(JSON.parse(window.localStorage.getItem(key)!)).toEqual({ work: 444 });
+  });
+
+  it("lets a keyboard step during a drag win, so the stored width is the shown width", async () => {
+    act(() =>
+      root.render(
+        <InspectorProvider>
+          <Probe />
+          <InspectorPanel area="work" />
+        </InspectorProvider>,
+      ),
+    );
+    act(() => api.open({ title: "Run", body: <p>Current run</p> }));
+    await vi.waitFor(() => expect(container.querySelector('[role="separator"]')).not.toBeNull());
+    const separator = container.querySelector<HTMLDivElement>('[role="separator"]')!;
+    Object.defineProperties(separator, {
+      setPointerCapture: { value: vi.fn() },
+      hasPointerCapture: { value: () => true },
+      releasePointerCapture: { value: vi.fn() },
+    });
+    const pointer = (type: string, clientX: number) =>
+      act(() => separator.dispatchEvent(new PointerEvent(type, { pointerId: 3, button: 0, clientX, bubbles: true })));
+    pointer("pointerdown", 600);
+    pointer("pointermove", 580);
+    expect(separator.getAttribute("aria-valuenow")).toBe("404");
+    act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+    pointer("pointerup", 580);
+    expect(separator.getAttribute("aria-valuenow")).toBe("560");
+    const stored = JSON.parse(window.localStorage.getItem("goatcitadel.cockpit.inspector.width.v1")!);
+    expect(stored).toEqual({ work: 560 });
+  });
+
   it("bounds keyboard resize and releases pointer capture when its current inspector closes", async () => {
     act(() =>
       root.render(
@@ -341,9 +424,9 @@ describe("inspector", () => {
     await vi.waitFor(() => expect(container.querySelector('[role="separator"]')).not.toBeNull());
     const separator = container.querySelector<HTMLDivElement>('[role="separator"]')!;
     act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
-    expect(separator.getAttribute("aria-valuenow")).toBe("480");
+    expect(separator.getAttribute("aria-valuenow")).toBe("560");
     act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })));
-    expect(separator.getAttribute("aria-valuenow")).toBe("480");
+    expect(separator.getAttribute("aria-valuenow")).toBe("560");
     act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
     expect(separator.getAttribute("aria-valuenow")).toBe("360");
     const capture = vi.fn(),

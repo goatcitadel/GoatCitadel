@@ -6,6 +6,7 @@ import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/re
 import type { ChatSessionRecord, OnboardingState } from "@goatcitadel/contracts";
 import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
+import { ScopeLineProvider } from "../../app/scope-line";
 import {
   ChatEmptyState,
   ChatHeaderSubtitle,
@@ -19,6 +20,14 @@ const media = vi.hoisted(() => ({ phone: false }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({
   useMediaQuery: (query: string) =>
     media.phone && (query === RESPONSIVE_QUERIES.phone || query === RESPONSIVE_QUERIES.belowDesktop),
+}));
+
+vi.mock("../../data/use-citadel-name", () => ({ useCitadelNameRead: () => ({ phase: "ready", name: "Personal" }) }));
+vi.mock("../../data/use-workspace-name", () => ({
+  useWorkspaceNameRead: () => ({ phase: "ready", name: "Sandbox" }),
+}));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
+  useUiPreferences: () => ({ activeCitadelId: "personal", activeWorkspaceId: "sandbox" }),
 }));
 
 const outage = vi.hoisted(() => ({ recover: vi.fn() }));
@@ -99,6 +108,34 @@ function renderHeader(build = false) {
 }
 
 describe("ChatSessionHeader", () => {
+  it("shows the workspace below desktop width and not at desktop width (U-GL-027)", () => {
+    const render = () =>
+      act(() =>
+        root.render(
+          <ScopeLineProvider>
+            <ChatSessionHeader
+              input={input()}
+              active={null}
+              session={session}
+              selectedSessionId="session-1"
+              buildEditor={null}
+              onOpenProjects={vi.fn()}
+              onOpenConversations={vi.fn()}
+              onInspect={vi.fn()}
+            />
+          </ScopeLineProvider>,
+        ),
+      );
+    media.phone = true;
+    render();
+    expect(container.querySelector("header [data-cockpit-page-scope]")?.textContent).toBe("In Personal / Sandbox");
+    act(() => root.unmount());
+    root = createRoot(container);
+    media.phone = false;
+    render();
+    expect(container.querySelector("[data-cockpit-page-scope]")).toBeNull();
+  });
+
   it("hands the active conversation's error and refresh to the outage recovery (U-CH-026)", () => {
     const onDismissError = vi.fn();
     const onRefreshThread = vi.fn();

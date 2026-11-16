@@ -9,7 +9,10 @@ type WorkspaceItem = { workspaceId: string; name?: string };
  * Names workspaces from the sidebar's workspace list query (same key, so no extra request).
  * Returns undefined for ids outside the active Citadel; callers keep the raw id only in a detail.
  */
-export function useWorkspaceNameLookup(citadelId: string | undefined, enabled = true): (workspaceId?: string) => string | undefined {
+export function useWorkspaceNameLookup(
+  citadelId: string | undefined,
+  enabled = true,
+): (workspaceId?: string) => string | undefined {
   const workspaces = useQuery({
     queryKey: queryKeys.workspaces(citadelId),
     queryFn: () => fetchWorkspaces("active", 200, citadelId),
@@ -30,4 +33,25 @@ export function useActiveWorkspaceLabel(): string {
   const name = useWorkspaceName(activeCitadelId, activeWorkspaceId, Boolean(activeWorkspaceId));
   if (!activeWorkspaceId) return "No workspace selected";
   return name ?? "Current workspace";
+}
+
+/**
+ * The active workspace's name with the read's state kept distinct: still loading, failed (or the id is not in the
+ * list), or read. A fallback word is never returned as a name.
+ */
+export function useWorkspaceNameRead(
+  citadelId: string | undefined,
+  workspaceId: string | undefined,
+  enabled = true,
+): { phase: "loading" | "failed" | "ready"; name?: string } {
+  const workspaces = useQuery({
+    queryKey: queryKeys.workspaces(citadelId),
+    queryFn: () => fetchWorkspaces("active", 200, citadelId),
+    enabled,
+  });
+  if (workspaces.isError) return { phase: "failed" };
+  if (!workspaces.data) return { phase: "loading" };
+  const items = (workspaces.data as { items?: WorkspaceItem[] }).items;
+  const name = Array.isArray(items) ? items.find((item) => item.workspaceId === workspaceId)?.name : undefined;
+  return name ? { phase: "ready", name } : { phase: "failed" };
 }

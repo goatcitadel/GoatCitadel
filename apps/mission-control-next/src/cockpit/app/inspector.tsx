@@ -21,6 +21,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { IconButton } from "../ui/IconButton";
+import { readInspectorWidth, writeInspectorWidth } from "./inspector-width-preference";
 import { NoFocusTooltips } from "../ui/tooltip-focus";
 import {
   createDeferredDialogRuntime,
@@ -170,14 +171,19 @@ export function useInspector(): InspectorApi {
 const TYPING =
   'input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"]), select, textarea, [contenteditable]:not([contenteditable="false"])';
 
-export function InspectorPanel() {
+export function InspectorPanel({ area = "default" }: { area?: string }) {
   const { content, close } = useInspector();
   const isPhone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   // SH-02: 1024–1279px laptops get a non-modal panel over the page; only narrower widths and Expand are modal.
   const modal = useMediaQuery(RESPONSIVE_QUERIES.belowDesktop);
   const overlay = useMediaQuery(`(width < ${RESPONSIVE_BREAKPOINTS.wide}px)`);
   const panel = useRef<HTMLElement>(null);
-  const [width, setWidth] = useState(384);
+  const [stored, setStored] = useState(() => ({ area, width: readInspectorWidth(area) }));
+  // The width is remembered per area, so an area change reloads it (adjusting state during render, not in an effect).
+  if (stored.area !== area) setStored({ area, width: readInspectorWidth(area) });
+  const width = stored.width;
+  // The live width stays in state while dragging; the handle commits it to storage once, when the drag ends.
+  const setWidth = (next: number) => setStored({ area, width: next });
   const [expanded, setExpanded] = useState(false);
   const opened = useRef(false);
   const focusTarget = useRef<HTMLElement | null>(null);
@@ -262,7 +268,13 @@ export function InspectorPanel() {
         floating ? "absolute inset-y-0 right-0 z-30 shadow-overlay" : "relative"
       }`}
     >
-      {controls ? <controls.InspectorResizeHandle width={width} onChange={setWidth} /> : null}
+      {controls ? (
+        <controls.InspectorResizeHandle
+          width={width}
+          onChange={setWidth}
+          onCommit={(next) => writeInspectorWidth(area, next)}
+        />
+      ) : null}
       <NoFocusTooltips>
         <header className="flex h-12 items-center justify-between gap-2 border-b border-line-subtle px-3">
           <h2 title={content.title} className="min-w-0 truncate text-base font-medium text-fg">
