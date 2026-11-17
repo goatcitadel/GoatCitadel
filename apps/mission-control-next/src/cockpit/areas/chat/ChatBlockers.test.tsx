@@ -735,6 +735,33 @@ it("pauses the decision buttons while the shell says GoatCitadel is unreachable 
 });
 
 it.each([
+  { toolName: "memory.search", result: { items: [] }, message: "Search complete · 0 results" },
+  { toolName: "browser.search", result: { results: [{}] }, message: "Search complete · 1 result" },
+  { toolName: "memory.search", result: {}, message: "Search complete" },
+  {
+    toolName: "browser.search",
+    result: { backend: "official", backendUsed: false, results: [] },
+    message: "Search did not complete",
+  },
+])("shows $message from the recorded $toolName outcome", async ({ toolName, result, message }) => {
+  const latestTurn = {
+    turnId: "turn/1",
+    trace: { sessionId: "session/1", status: "completed" },
+    toolRuns: [
+      { turnId: "turn/1", sessionId: "session/1", approvalId: "approval/1", toolName, status: "executed", result },
+    ],
+  } as NonNullable<Parameters<typeof ChatBlockers>[0]["latestTurn"]>;
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers props={blockerProps({ pendingApproval: null })} latestTurn={latestTurn} />
+      </QueryClientProvider>,
+    ),
+  );
+  expect(container.querySelector('[role="status"]')?.textContent).toBe(message);
+});
+
+it.each([
   { hint: true, result: { ok: true, contentItems: [{}] }, message: "Request complete · 1 item" },
   {
     hint: true,
@@ -770,6 +797,63 @@ it.each([
   });
   expect(api.fetchApproval).toHaveBeenCalledWith("approval/1", expect.objectContaining({ workspaceId: "default" }));
   expect(container.querySelector('[aria-label="MCP request approval"] [role="status"]')?.textContent).toBe(message);
+});
+
+it("keeps a changed MCP warning visible and opens the refreshed exact action with Review again", async () => {
+  const kind = "mcp.fixture.read";
+  const original: ApprovalRequest = {
+    approvalId: "approval/1",
+    kind,
+    status: "pending",
+    riskLevel: "danger",
+    payload: {},
+    preview: { reviewKind: "mcp.operation", target: "Original fixture", requestArguments: "No arguments" },
+    linkage: { workspaceId: "default", sessionId: "session/1", turnId: "turn/1" },
+    explanationStatus: "pending",
+    createdAt: "2026-10-01T00:00:00Z",
+  };
+  const changed: ApprovalRequest = {
+    ...original,
+    payload: { item: "updated" },
+    preview: { ...original.preview, target: "Updated fixture", requestArguments: '{"item":"updated"}' },
+  };
+  let releaseRefresh!: (record: ApprovalRequest) => void;
+  const refresh = new Promise<ApprovalRequest>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  api.fetchApproval.mockResolvedValueOnce(original).mockResolvedValueOnce(changed).mockReturnValueOnce(refresh);
+  api.resolveApproval.mockClear();
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({ pendingApproval: { approvalId: original.approvalId, kind, riskLevel: "danger" } })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(findButton("Review danger approval")).toBeDefined());
+  await act(async () => findButton("Review danger approval")!.click());
+  expect(container.querySelector('[aria-label="Exact approval review"]')?.textContent).toContain("No arguments");
+  await act(async () => findButton("Approve once")!.click());
+  const warning = "This MCP action changed. Review the updated action before deciding.";
+  await vi.waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toBe(warning));
+  expect(findButton("Review again")).toBeUndefined();
+  expect(findButton("Approve once")).toBeUndefined();
+
+  await act(async () => releaseRefresh(changed));
+  await vi.waitFor(() => expect(findButton("Review again")).toBeDefined());
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(warning);
+  expect(findButton("Approve once")).toBeUndefined();
+  await act(async () => findButton("Review again")!.click());
+
+  const inline = container.querySelector('[aria-label="Exact approval review"]');
+  expect(inline?.textContent).toContain("Updated fixture");
+  expect(inline?.textContent).toContain('{"item":"updated"}');
+  expect(inline?.textContent).not.toContain("Original fixture");
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(warning);
+  expect(findButton("Approve once")).toBeDefined();
+  expect(api.resolveApproval).not.toHaveBeenCalled();
 });
 
 it.each([

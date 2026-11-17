@@ -16,7 +16,7 @@ const MCP_POLICY = { href: "/settings/permissions?view=advanced#trust-policy", l
 const MCP_PERMISSIONS = { href: "/settings/permissions#permission-profile", label: "Open Chat permissions" };
 const MCP_CITADEL = { href: "/settings/citadel#citadel-wards", label: "Open Citadel access rules" };
 const MCP_BLOCKER_LINKS: Record<ChatMcpAccessBlocker, { href: string; label: string }> = {
-  sign_in: { href: "/settings/access#gateway-auth", label: "Open Gateway sign-in" },
+  sign_in: { href: "/settings/access#gateway-auth", label: "Open sign-in settings" },
   tool_policy: MCP_POLICY,
   permission_profile: MCP_PERMISSIONS,
   scoped_grant: MCP_POLICY,

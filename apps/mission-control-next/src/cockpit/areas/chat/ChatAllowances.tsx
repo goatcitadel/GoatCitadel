@@ -49,7 +49,7 @@ function EndAllowance({
       try {
         const receipt = await revokeToolGrant(grant.grantId);
         if (!receipt.revoked || receipt.grantId !== grant.grantId) {
-          throw new Error("The Gateway did not confirm that this allowance ended.");
+          throw new Error("GoatCitadel could not confirm that the allowance ended.");
         }
         return false;
       } catch (cause) {

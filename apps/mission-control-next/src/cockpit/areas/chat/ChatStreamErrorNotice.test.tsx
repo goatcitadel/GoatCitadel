@@ -23,7 +23,7 @@ afterEach(() => {
 
 describe("Chat stream error notice", () => {
   it.each([
-    ["sign_in", "Open Gateway sign-in", "/settings/access"],
+    ["sign_in", "Open sign-in settings", "/settings/access"],
     ["tool_policy", "Inspect tool policy", "/settings/permissions"],
     ["server_disconnected", "Open MCP servers", "/capabilities/connectors"],
   ] as const)("opens the owner for an MCP %s blocker", async (reason, label, destination) => {
