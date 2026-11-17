@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionRecord, ChatThreadResponse } from "@goatcitadel/contracts";
 import { useChatSessionData, type ChatHistoryView } from "./useChatSessionData";
 import { runtimeCatalogBootstrapCache, sidebarBootstrapCache } from "./chat-session-data-bootstrap";
-import { notifyGatewayAccessChanged, setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  notifyGatewayAccessChanged,
+  setGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useChatSessionControls } from "./useChatSessionControls";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -332,7 +335,9 @@ describe("useChatSessionData", () => {
 
   it("keeps core startup independent of evidence code and discards a read across changed Gateway access", async () => {
     let release!: () => void;
-    evidenceImport.wait = new Promise<void>((resolve) => { release = resolve; });
+    evidenceImport.wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     let renderer!: ReactTestRenderer;
     try {
       await act(async () => {
@@ -814,6 +819,47 @@ describe("useChatSessionData", () => {
     });
     expect(latestHarness?.result.sidebarReadFailed).toBe(false);
     expect(latestHarness?.result.sessions?.items).toEqual([]);
+  });
+
+  it("keeps the sidebar failed until a deep-linked conversation can be read", async () => {
+    const workspaceId = "workspace-sidebar-deep-link-retry";
+    const linked = { ...makeSession("old-target"), workspaceId };
+    const newer = makeSession("newer");
+    const onRouteSessionUnavailable = vi.fn();
+    fetchChatSessionsMock.mockRejectedValueOnce(new Error("Conversation list unavailable"));
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <Harness
+          workspaceId={workspaceId}
+          routeSessionId={linked.sessionId}
+          onRouteSessionUnavailable={onRouteSessionUnavailable}
+        />,
+      );
+      await flushEffects();
+    });
+    expect(latestHarness!.result.sidebarReadFailed).toBe(true);
+
+    fetchChatSessionsMock
+      .mockResolvedValueOnce({ items: [newer] })
+      .mockRejectedValueOnce(new Error("Linked conversation unavailable"));
+    await act(async () => {
+      await expect(latestHarness!.result.loadSidebar("active", { bypassCache: true })).rejects.toThrow(
+        "Linked conversation unavailable",
+      );
+    });
+    expect(latestHarness!.result.sidebarReadFailed).toBe(true);
+    expect(latestHarness!.result.sessions).toBeNull();
+    expect(onRouteSessionUnavailable).not.toHaveBeenCalled();
+
+    fetchChatSessionsMock.mockResolvedValueOnce({ items: [newer] }).mockResolvedValueOnce({ items: [linked] });
+    await act(async () => {
+      await latestHarness!.result.loadSidebar("active", { bypassCache: true });
+    });
+    expect(latestHarness!.result.sidebarReadFailed).toBe(false);
+    expect(latestHarness!.result.sessions?.items).toEqual([newer, linked]);
+    expect(latestHarness!.selectedSessionId).toBe(linked.sessionId);
+    await act(async () => renderer.unmount());
   });
 
   it("fences competing historical hits and clears a pending hit when the selected session changes", async () => {

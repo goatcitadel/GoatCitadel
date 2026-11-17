@@ -19,7 +19,7 @@ import { chatSelectionHref } from "./chat-selection-evidence";
 import type { ChatInspectorTab } from "./chat-inspector-evidence";
 import { readCockpitHistory } from "../../app/cockpit-history";
 import { useInspector } from "../../app/inspector";
-import { InspectorSourceContext } from "../../app/inspector-context";
+import { InspectorSourceContext, type InspectorContent } from "../../app/inspector-context";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { channelPageHref, messagingView } from "../../app/routes";
 import { ChatMainColumn } from "./ChatMainColumn";
@@ -39,6 +39,20 @@ import "../../../features/threaded-surface/styles/btw-side-chat.css";
 import { useOptionalStableHandler, useStableHandler } from "../../../features/threaded-surface/useStableHandler";
 
 const LazyChatBuildEditor = lazy(async () => ({ default: (await import("./ChatBuildEditor")).ChatBuildEditor }));
+
+function conversationInspector(
+  input: MissionThreadedRenderSurfaceInput,
+  targetTurnId: string | null,
+  tab: ChatInspectorTab | null,
+  onOpenArtifact: (turnId: string, artifactId?: string) => void,
+): InspectorContent {
+  const initialTab = tab ?? inspectorTabFor(input.activeSessionSurfaceProps, targetTurnId);
+  return {
+    source: "chat",
+    title: "Conversation",
+    body: <DeferredChatInspector {...{ input, targetTurnId, initialTab, onOpenArtifact }} />,
+  };
+}
 
 export { artifactInspectorHistoryMatches, buildEditorTurnId, inspectorTabFor } from "./chat-area-inspector-target";
 
@@ -171,19 +185,7 @@ export function ChatAreaView({
     pendingArtifact.current = null;
     inspectorTurnId.current = pending.turnId;
     inspectorTab.current = "files";
-    open({
-      source: "chat",
-      focusOnOpen: true,
-      title: "Conversation",
-      body: (
-        <DeferredChatInspector
-          input={input}
-          targetTurnId={pending.turnId}
-          initialTab="files"
-          onOpenArtifact={openTranscriptArtifact}
-        />
-      ),
-    });
+    open({ ...conversationInspector(input, pending.turnId, "files", openTranscriptArtifact), focusOnOpen: true });
   }, [
     input,
     active,
@@ -217,17 +219,8 @@ export function ChatAreaView({
     inspectorTab.current = tab ?? inspectorTabFor(active, inspectorTurnId.current);
     if (turnId) active?.onSelectTurn(turnId);
     open({
-      source: "chat",
+      ...conversationInspector(input, inspectorTurnId.current, inspectorTab.current, openTranscriptArtifact),
       focusOnOpen: true,
-      title: "Conversation",
-      body: (
-        <DeferredChatInspector
-          input={input}
-          targetTurnId={inspectorTurnId.current}
-          initialTab={inspectorTab.current ?? inspectorTabFor(active, inspectorTurnId.current)}
-          onOpenArtifact={openTranscriptArtifact}
-        />
-      ),
     });
   };
   function openArtifact(turnId: string, artifactId?: string) {
@@ -287,18 +280,10 @@ export function ChatAreaView({
   useEffect(() => () => onVisibleSessionChange?.(undefined), [onVisibleSessionChange]);
   useEffect(() => {
     if (active && selectedSessionId)
-      register("chat", {
-        source: "chat",
-        title: "Conversation",
-        body: (
-          <DeferredChatInspector
-            input={input}
-            targetTurnId={inspectorTurnId.current}
-            initialTab={inspectorTab.current ?? inspectorTabFor(active, inspectorTurnId.current)}
-            onOpenArtifact={openTranscriptArtifact}
-          />
-        ),
-      });
+      register(
+        "chat",
+        conversationInspector(input, inspectorTurnId.current, inspectorTab.current, openTranscriptArtifact),
+      );
     else closeIfOpen("chat");
   }, [input, active, selectedSessionId, register, closeIfOpen, openTranscriptArtifact]);
   useEffect(() => () => closeIfOpen("chat"), [closeIfOpen]);

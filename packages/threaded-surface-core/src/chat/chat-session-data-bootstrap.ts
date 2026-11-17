@@ -10,10 +10,13 @@ import type {
   SkillListItem,
 } from "@goatcitadel/contracts";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
-import type {
-  ChatProjectsResponse,
-  ChatSessionsResponse,
-  RuntimeSettingsResponse,
+import {
+  fetchChatProjects,
+  fetchChatSessionSearch,
+  fetchChatSessions,
+  type ChatProjectsResponse,
+  type ChatSessionsResponse,
+  type RuntimeSettingsResponse,
 } from "@goatcitadel/mission-control-shared/api/client";
 
 export interface CommandCatalogItem {
@@ -62,6 +65,36 @@ export type RuntimeCatalogBootstrapResult = {
 
 export const sidebarBootstrapCache = new Map<string, BootstrapCacheEntry<SidebarBootstrapResult>>();
 export const runtimeCatalogBootstrapCache = new Map<string, BootstrapCacheEntry<RuntimeCatalogBootstrapResult>>();
+
+export async function readSidebarBootstrap({
+  workspaceId,
+  view,
+  query,
+  limit,
+  surfaceMode,
+}: {
+  workspaceId: string;
+  view: ChatHistoryView;
+  query: string;
+  limit: number;
+  surfaceMode?: ChatMode;
+}): Promise<SidebarBootstrapResult> {
+  const [projects, sessions] = await Promise.all([
+    fetchChatProjects("all", limit, workspaceId),
+    query
+      ? fetchChatSessionSearch({
+          query,
+          mode: "discovery",
+          view,
+          limit,
+          workspaceId,
+          surface: surfaceMode,
+          includeActivity: true,
+        }).then(projectChatSessionSearch)
+      : fetchChatSessions({ scope: "all", view, limit, workspaceId, mode: surfaceMode, includeActivity: true }),
+  ]);
+  return { projects, sessions };
+}
 
 export function resolveSidebarSessionLimit(historyView: ChatHistoryView, searchQuery: string): number {
   if (searchQuery.trim()) {
