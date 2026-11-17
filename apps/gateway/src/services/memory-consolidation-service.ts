@@ -163,7 +163,7 @@ export class MemoryConsolidationService {
       summary.sessionsSampled += 1;
       let drafted: DraftedCandidate[];
       try {
-        drafted = await this.draftSessionCandidates(session.sessionId, watermark, session.turnIds[0]);
+        drafted = await this.draftSessionCandidates(session.sessionId, watermark, session.traces);
       } catch (error) {
         if (isAuthoritativeModelUsageAccountingError(error)) {
           throw error;
@@ -198,7 +198,7 @@ export class MemoryConsolidationService {
             proposedInsight: candidate.insight,
             confidence: candidate.confidence,
             sourceSessionId: candidate.sessionId,
-            sourceTurnId: candidate.turnId,
+            ...(candidate.turnId ? { sourceTurnId: candidate.turnId } : {}),
             metadata: { consolidation: true, consolidationRunKind: "weekly" },
           },
           "memory-consolidation-job",
@@ -231,13 +231,23 @@ export class MemoryConsolidationService {
   private async draftSessionCandidates(
     sessionId: string,
     watermark: string,
-    turnId?: string,
+    traces: readonly ChatTurnTraceRecord[],
   ): Promise<DraftedCandidate[]> {
     const events = await this.deps.readTranscriptOrEmpty(sessionId);
-    const digest = buildTranscriptDigest(events);
+    const userMessageIds = new Set(traces.map((trace) => trace.userMessageId));
+    const assistantMessageIds = new Set(traces.map((trace) => trace.assistantMessageId));
+    const sourceEvents = events.filter(
+      (event) =>
+        event.sessionId === sessionId &&
+        ((event.type === "message.user" && userMessageIds.has(event.eventId)) ||
+          (event.type === "message.assistant" && assistantMessageIds.has(event.eventId))),
+    );
+    const digest = buildTranscriptDigest(sourceEvents);
     if (digest.length < MIN_DIGEST_CHARS) {
       return [];
     }
+    // A multi-turn digest only establishes session-level provenance for its drafts.
+    const turnId = traces.length === 1 ? traces[0]?.turnId : undefined;
     const defaults = await this.deps.resolveModelDefaults();
     const completion = await this.deps.createChatCompletion(
       {
@@ -257,7 +267,7 @@ export class MemoryConsolidationService {
         requestedModelId: defaults.model,
         lineage: {
           sessionId,
-          turnId,
+          ...(turnId ? { turnId } : {}),
           agentId: "memory-consolidator",
         },
       }),
@@ -283,16 +293,19 @@ function isQualifyingTrace(trace: ChatTurnTraceRecord): boolean {
   return true;
 }
 
-function pickSessions(traces: ChatTurnTraceRecord[], limit: number): Array<{ sessionId: string; turnIds: string[] }> {
-  const bySession = new Map<string, string[]>();
+function pickSessions(
+  traces: ChatTurnTraceRecord[],
+  limit: number,
+): Array<{ sessionId: string; traces: ChatTurnTraceRecord[] }> {
+  const bySession = new Map<string, ChatTurnTraceRecord[]>();
   for (const trace of traces) {
-    const turnIds = bySession.get(trace.sessionId) ?? [];
-    turnIds.push(trace.turnId);
-    bySession.set(trace.sessionId, turnIds);
+    const sessionTraces = bySession.get(trace.sessionId) ?? [];
+    sessionTraces.push(trace);
+    bySession.set(trace.sessionId, sessionTraces);
   }
   return Array.from(bySession.entries())
-    .map(([sessionId, turnIds]) => ({ sessionId, turnIds }))
-    .sort((a, b) => b.turnIds.length - a.turnIds.length)
+    .map(([sessionId, sessionTraces]) => ({ sessionId, traces: sessionTraces }))
+    .sort((a, b) => b.traces.length - a.traces.length)
     .slice(0, limit);
 }
 
@@ -319,8 +332,7 @@ function computeProcessedTraceWatermark(
 function buildTranscriptDigest(events: TranscriptEvent[]): string {
   const lines: string[] = [];
   let total = 0;
-  const messages = events.filter((event) => event.type === "message.user" || event.type === "message.assistant");
-  for (const event of messages.slice(-MAX_DIGEST_EVENTS)) {
+  for (const event of events.slice(-MAX_DIGEST_EVENTS)) {
     const text = extractEventText(event.payload);
     if (!text) {
       continue;
@@ -337,8 +349,9 @@ function buildTranscriptDigest(events: TranscriptEvent[]): string {
 }
 
 function extractEventText(payload: Record<string, unknown>): string | undefined {
-  for (const key of ["text", "content", "message"]) {
-    const value = payload[key];
+  const message = payload.message;
+  const messageContent = message && typeof message === "object" && "content" in message ? message.content : message;
+  for (const value of [messageContent, payload.text, payload.content]) {
     if (typeof value === "string" && value.trim()) {
       return value.trim();
     }

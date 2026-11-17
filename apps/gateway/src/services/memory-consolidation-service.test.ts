@@ -20,13 +20,15 @@ function buildTrace(
   } as ChatTurnTraceRecord;
 }
 
-function buildEvents(sessionId: string): TranscriptEvent[] {
-  const text =
-    "The deployment failed because the staging bucket region moved to eu-west-1 and the sync script still assumed us-east-1. " +
-    "We fixed it by reading the region from terraform outputs instead of hardcoding it.";
+function buildEvents(
+  sessionId: string,
+  turnId = "t1",
+  text = "The deployment failed because the staging bucket region moved to eu-west-1 and the sync script still assumed us-east-1. " +
+    "We fixed it by reading the region from terraform outputs instead of hardcoding it.",
+): TranscriptEvent[] {
   return [
     {
-      eventId: "e1",
+      eventId: `${turnId}-user`,
       actionId: "a1",
       idempotencyKey: "k1",
       sessionId,
@@ -35,10 +37,10 @@ function buildEvents(sessionId: string): TranscriptEvent[] {
       type: "message.user",
       actorType: "user",
       actorId: "operator",
-      payload: { text },
+      payload: { message: { role: "user", content: text } },
     },
     {
-      eventId: "e2",
+      eventId: `${turnId}-assistant`,
       actionId: "a2",
       idempotencyKey: "k2",
       sessionId,
@@ -47,7 +49,7 @@ function buildEvents(sessionId: string): TranscriptEvent[] {
       type: "message.assistant",
       actorType: "agent",
       actorId: "assistant",
-      payload: { text },
+      payload: { message: { role: "assistant", content: text } },
     },
   ];
 }
@@ -64,23 +66,24 @@ function createHarness(overrides: Partial<MemoryConsolidationDeps> = {}) {
   const proposed: Array<{ insight: string; actorId: string }> = [];
   const watermarks: string[] = [];
   const deps: MemoryConsolidationDeps = {
-    isFeatureEnabled: (flag) => flag === "memoryConsolidationV1Enabled" || flag === "memoryLifecycleAdminV1Enabled",
-    listCompletedTurnTracesSince: () => [buildTrace({ turnId: "t1", sessionId: "s1" })],
+    isFeatureEnabled: async (flag) =>
+      flag === "memoryConsolidationV1Enabled" || flag === "memoryLifecycleAdminV1Enabled",
+    listCompletedTurnTracesSince: async () => [buildTrace({ turnId: "t1", sessionId: "s1" })],
     readTranscriptOrEmpty: async (sessionId) => buildEvents(sessionId),
     createChatCompletion: vi.fn(async () => ({
       choices: [{ message: { content: DRAFT_JSON } }],
     })) as unknown as MemoryConsolidationDeps["createChatCompletion"],
-    resolveModelDefaults: () => ({ providerId: "glm", model: "glm-4-flash" }),
+    resolveModelDefaults: async () => ({ providerId: "glm", model: "glm-4-flash" }),
     proposeTraceMemoryCandidate: vi.fn(async (input, actorId) => {
       proposed.push({ insight: input.proposedInsight, actorId });
       return { candidateId: "c1" } as never;
     }),
-    listExistingInsightsForDedup: () => [],
-    getWatermark: () => "2026-06-24T00:00:00.000Z",
-    setWatermark: (iso) => {
+    listExistingInsightsForDedup: async () => [],
+    getWatermark: async () => "2026-06-24T00:00:00.000Z",
+    setWatermark: async (iso) => {
       watermarks.push(iso);
     },
-    publishRealtime: vi.fn(),
+    publishRealtime: vi.fn(async () => undefined),
     now: () => new Date("2026-07-05T10:00:00.000Z"),
     ...overrides,
   };
@@ -89,18 +92,57 @@ function createHarness(overrides: Partial<MemoryConsolidationDeps> = {}) {
 
 describe("MemoryConsolidationService", () => {
   it("mines qualifying traces, drafts, and proposes approval-gated candidates", async () => {
-    const { service, proposed, watermarks } = createHarness();
+    const { service, deps, proposed, watermarks } = createHarness();
     const summary = await service.runConsolidation();
     expect(summary.status).toBe("completed");
     expect(summary.proposed).toBe(1);
     expect(proposed[0].actorId).toBe("memory-consolidation-job");
     expect(proposed[0].insight).toContain("eu-west-1");
+    expect(deps.proposeTraceMemoryCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceSessionId: "s1", sourceTurnId: "t1" }),
+      "memory-consolidation-job",
+    );
     expect(watermarks).toEqual(["2026-07-01T00:00:00.000Z"]);
+  });
+
+  it("uses only messages from qualifying turns and cites their session when the digest spans turns", async () => {
+    const { service, deps } = createHarness({
+      listCompletedTurnTracesSince: async () => [
+        buildTrace({ turnId: "t1", sessionId: "s1" }),
+        buildTrace({ turnId: "t2", sessionId: "s1" }),
+        buildTrace({
+          turnId: "failed",
+          sessionId: "s1",
+          reflection: { attempted: true, attemptCount: 1, outcome: "still_failed" },
+        }),
+      ],
+      readTranscriptOrEmpty: async () => [
+        ...buildEvents("s1", "old", "Before the consolidation window"),
+        ...buildEvents("s1", "t1"),
+        ...buildEvents("s1", "t2", "The release checklist now includes the bucket-region check."),
+        ...buildEvents("s1", "failed", "Failed reflection content"),
+        ...buildEvents("other-session", "t2", "Foreign session content"),
+        ...buildEvents("s1", "unselected", "Unselected recent content"),
+      ],
+    });
+
+    expect((await service.runConsolidation()).proposed).toBe(1);
+
+    const [request, attribution] = vi.mocked(deps.createChatCompletion).mock.calls[0]!;
+    const digest = request.messages[1]?.content;
+    expect(digest).toContain("eu-west-1");
+    expect(digest).toContain("The release checklist");
+    expect(digest).not.toMatch(/Before the consolidation window|Failed reflection|Foreign session|Unselected recent/u);
+    expect(attribution.sessionId).toBe("s1");
+    expect(attribution).not.toHaveProperty("turnId");
+    const [proposal] = vi.mocked(deps.proposeTraceMemoryCandidate).mock.calls[0]!;
+    expect(proposal.sourceSessionId).toBe("s1");
+    expect(proposal).not.toHaveProperty("sourceTurnId");
   });
 
   it("does not advance the watermark past unsampled qualifying sessions", async () => {
     const { service, watermarks } = createHarness({
-      listCompletedTurnTracesSince: () => [
+      listCompletedTurnTracesSince: async () => [
         buildTrace({ turnId: "t1", sessionId: "s1", startedAt: "2026-07-01T00:00:01.000Z" }),
         buildTrace({ turnId: "t2", sessionId: "s2", startedAt: "2026-07-01T00:00:02.000Z" }),
         buildTrace({ turnId: "t3", sessionId: "s3", startedAt: "2026-07-01T00:00:03.000Z" }),
@@ -118,7 +160,7 @@ describe("MemoryConsolidationService", () => {
 
   it("is inert when the consolidation flag is off", async () => {
     const { service, deps, proposed } = createHarness({
-      isFeatureEnabled: (flag) => flag === "memoryLifecycleAdminV1Enabled",
+      isFeatureEnabled: async (flag) => flag === "memoryLifecycleAdminV1Enabled",
     });
     const summary = await service.runConsolidation();
     expect(summary.status).toBe("disabled");
@@ -128,7 +170,7 @@ describe("MemoryConsolidationService", () => {
 
   it("halts on the autonomy kill switch", async () => {
     const { service, deps, proposed } = createHarness({
-      isFeatureEnabled: () => true, // autonomyV1Disabled=true wins
+      isFeatureEnabled: async () => true, // autonomyV1Disabled=true wins
     });
     const summary = await service.runConsolidation();
     expect(summary.status).toBe("skipped_kill_switch");
@@ -138,7 +180,7 @@ describe("MemoryConsolidationService", () => {
 
   it("skips still_failed reflection turns and filters low-confidence drafts", async () => {
     const { service, proposed } = createHarness({
-      listCompletedTurnTracesSince: () => [
+      listCompletedTurnTracesSince: async () => [
         buildTrace({
           turnId: "t1",
           sessionId: "s1",
@@ -153,7 +195,7 @@ describe("MemoryConsolidationService", () => {
 
   it("deduplicates near-identical insights against existing memory", async () => {
     const { service, proposed } = createHarness({
-      listExistingInsightsForDedup: () => [
+      listExistingInsightsForDedup: async () => [
         "Staging bucket region is eu-west-1 and sync scripts must read it from terraform outputs.",
       ],
     });
