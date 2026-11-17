@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { useLayoutEffect } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -10,6 +11,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { useChannelSetupState, type ChannelSetupState } from "../sections/use-channel-setup-state";
 import { ChannelJourneyPanel } from "./ChannelJourneyPanel";
+import { useChannelJourney } from "./use-channel-journey";
 import { ChannelOperations } from "../../../../cockpit/areas/settings/ChannelOperations";
 import { __resetSessionViewStateForTests } from "../../../../hooks/use-session-view-state";
 import { __resetSessionDraftsForTests } from "../../library/session-drafts";
@@ -171,6 +173,55 @@ afterEach(async () => {
   renderer = undefined;
 });
 describe("feature-aware channel diagnostics", () => {
+  it("never commits the previous connection's evidence under the new selection", async () => {
+    const next = { ...connection, connectionId: "next-connection", label: "Next fixture" };
+    let finishJourney!: (value: ChannelSetupJourney) => void;
+    const nextJourney = new Promise<ChannelSetupJourney>((resolve) => {
+      finishJourney = resolve;
+    });
+    operations.fetchChannelSetupJourney.mockImplementation((id: string) =>
+      id === next.connectionId ? nextJourney : Promise.resolve(journey),
+    );
+    api.fetchAgenticChannelDeliveries.mockImplementation(async ({ connectionId }: { connectionId: string }) => ({
+      deliveries: connectionId === next.connectionId ? [] : [delivery],
+    }));
+    const committed: Array<{ selected?: string; journey?: string; delivery?: string; loading: boolean }> = [];
+    function SwitchingJourney() {
+      const { connectionId, result, loading, setSelected } = useChannelJourney([connection, next], false);
+      useLayoutEffect(() => {
+        committed.push({
+          selected: connectionId,
+          journey: result?.journey?.connectionId,
+          delivery: result?.deliveries[0]?.connectionId,
+          loading,
+        });
+      });
+      return <button onClick={() => setSelected(next.connectionId)}>Switch connection</button>;
+    }
+
+    await act(async () => {
+      renderer = create(<SwitchingJourney />);
+    });
+    expect(committed.at(-1)?.journey).toBe(connection.connectionId);
+    await act(async () => renderer!.root.findByType("button").props.onClick());
+    expect(committed.filter((item) => item.selected === next.connectionId)).toEqual(
+      expect.arrayContaining([{ selected: next.connectionId, journey: undefined, delivery: undefined, loading: true }]),
+    );
+    expect(
+      committed
+        .filter((item) => item.selected === next.connectionId)
+        .every((item) => item.journey === undefined && item.delivery === undefined),
+    ).toBe(true);
+    await act(async () =>
+      finishJourney({
+        ...journey,
+        connectionId: next.connectionId,
+        runtime: { ...journey.runtime, connectionId: next.connectionId },
+      }),
+    );
+    expect(committed.at(-1)).toMatchObject({ selected: next.connectionId, journey: next.connectionId, loading: false });
+  });
+
   for (const shell of ["classic", "cockpit"] as const) {
     it(shell + " skips disabled diagnostics without hiding journey or delivery evidence", async () => {
       const view = await render(shell);

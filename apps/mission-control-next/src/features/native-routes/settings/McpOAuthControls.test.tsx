@@ -3,6 +3,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { McpReviewedOAuthStartResponse, McpServerRecord } from "@goatcitadel/contracts";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { fetchMcpServer } from "@goatcitadel/mission-control-shared/api/mcp-operations";
 import { McpOAuthControls } from "./McpOAuthControls";
 import { commitMcpOAuth } from "./mcp-oauth-mutation";
 import { __resetMcpOAuthFlowsForTests, readMcpOAuthFlow } from "./mcp-oauth-flow-state";
@@ -140,6 +141,43 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root?.unmount());
   root = undefined;
+  vi.unstubAllGlobals();
+});
+
+it.each(["start", "complete"] as const)("confirms OAuth %s despite an older owner GET", async (action) => {
+  const args = { isCurrent: () => true, onDispatch: () => undefined };
+  if (action === "complete") {
+    expect(await commitMcpOAuth({ ...args, reviewed: initial, action: "start" })).toMatchObject({ status: "saved" });
+    api.fetchMcpServer.mockClear();
+  }
+  const before = action === "start" ? initial : started;
+  const after = action === "start" ? started : saved;
+  const write = deferred();
+  const older = deferred<Response>();
+  const fetchMock = vi.fn().mockReturnValueOnce(older.promise).mockResolvedValueOnce(Response.json(after));
+  vi.stubGlobal("fetch", fetchMock);
+  api.fetchMcpServer.mockResolvedValueOnce(before).mockImplementationOnce(fetchMcpServer);
+  const mutate = action === "start" ? api.startReviewedMcpOAuth : api.completeReviewedMcpOAuth;
+  mutate.mockReturnValueOnce(write.promise);
+
+  const pending = commitMcpOAuth({
+    ...args,
+    reviewed: before,
+    action,
+    ...(action === "complete" ? { code: "fixture-code", state } : {}),
+  });
+  await vi.waitFor(() => expect(mutate).toHaveBeenCalledOnce());
+  const background = fetchMcpServer(before.serverId);
+  expect(fetchMock).toHaveBeenCalledOnce();
+  write.resolve(action === "start" ? flow() : { version: 1, reviewed: review(started), state, server: saved });
+  await vi.waitFor(() => expect(api.fetchMcpServer).toHaveBeenCalledTimes(2));
+  const requestsBeforeOlderResponse = fetchMock.mock.calls.length;
+  older.resolve(Response.json(before));
+
+  expect(await background).toEqual(before);
+  expect(await pending).toMatchObject({ status: "saved", server: after });
+  expect(requestsBeforeOlderResponse).toBe(2);
+  expect(readMcpOAuthFlow(before.serverId)?.state).toBe(action === "start" ? state : undefined);
 });
 
 it("reviews and cancels with zero writes; start binds the exact owner and never automatically opens a page", async () => {

@@ -5,6 +5,7 @@ import {
   isApiRequestError,
   startReviewedMcpOAuth,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { mcpConnectionReviewMatches } from "./mcp-connection-mutation";
 import { mcpOAuthReview, mcpOAuthUnavailable, validMcpOAuthCompletion, validMcpOAuthStart } from "./mcp-oauth-binding";
 import { readMcpOAuthFlow, writeMcpOAuthFlow } from "./mcp-oauth-flow-state";
@@ -154,7 +155,7 @@ export async function commitMcpOAuth({
       const receipt = await trackMcpWrite(id, () => startReviewedMcpOAuth(id, mcpOAuthReview(before)));
       acknowledged = true;
       if (!validMcpOAuthStart(before, receipt)) throw new Error("Unbound handshake acknowledgement.");
-      saved = await fetchMcpServer(id);
+      saved = await withFreshReads(() => fetchMcpServer(id));
       if (canonicalJsonString(saved) !== canonicalJsonString(receipt.review.server))
         throw new Error("Handshake readback changed.");
       writeMcpOAuthFlow(id, receipt);
@@ -168,7 +169,7 @@ export async function commitMcpOAuth({
       );
       acknowledged = true;
       if (!validMcpOAuthCompletion(before, state!, receipt)) throw new Error("Unbound authentication acknowledgement.");
-      saved = await fetchMcpServer(id);
+      saved = await withFreshReads(() => fetchMcpServer(id));
       if (canonicalJsonString(saved) !== canonicalJsonString(receipt.server))
         throw new Error("Authentication readback changed.");
       writeMcpOAuthFlow(id);
