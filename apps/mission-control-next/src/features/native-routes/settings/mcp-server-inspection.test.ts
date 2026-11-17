@@ -1,5 +1,6 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { McpServerRecord } from "@goatcitadel/contracts";
+import { fetchMcpServer } from "@goatcitadel/mission-control-shared/api/mcp-operations";
 import { inspectMcpServer } from "./mcp-server-inspection";
 const api = vi.hoisted(() => ({ fetchMcpServer: vi.fn(), fetchMcpTools: vi.fn(), fetchMcpRemotePreview: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
@@ -7,6 +8,40 @@ const server = (): McpServerRecord => ({ serverId: "server", revision: "a".repea
   category: "development", trustTier: "restricted", costTier: "free", status: "disconnected", policy: { requireFirstToolApproval: true, redactionMode: "strict", allowedToolPatterns: [], blockedToolPatterns: [] }, createdAt: "2026-09-30T00:00:00Z", updatedAt: "2026-09-30T00:00:00Z" });
 const tool = { serverId: "server", toolName: "read", enabled: true, updatedAt: "2026-09-30T00:00:00Z" };
 beforeEach(() => { vi.resetAllMocks(); api.fetchMcpServer.mockResolvedValue(server()); api.fetchMcpTools.mockResolvedValue({ items: [tool] }); });
+afterEach(() => vi.unstubAllGlobals());
+
+it("rejects a changed saved server even while an older matching GET is pending", async () => {
+  const before = server();
+  const after = { ...before, revision: "b".repeat(64), label: "Updated fixture" };
+  let finishOlderRead!: (response: Response) => void;
+  const olderResponse = new Promise<Response>((resolve) => {
+    finishOlderRead = resolve;
+  });
+  let finishToolRead!: (value: { items: typeof tool[] }) => void;
+  const tools = new Promise<{ items: typeof tool[] }>((resolve) => {
+    finishToolRead = resolve;
+  });
+  const fetchMock = vi.fn().mockReturnValueOnce(olderResponse).mockResolvedValueOnce(Response.json(after));
+  vi.stubGlobal("fetch", fetchMock);
+  api.fetchMcpTools.mockReturnValueOnce(tools);
+  api.fetchMcpServer.mockResolvedValueOnce(before).mockImplementationOnce(fetchMcpServer);
+
+  const inspection = inspectMcpServer(before.serverId);
+  await vi.waitFor(() => expect(api.fetchMcpTools).toHaveBeenCalledOnce());
+  const background = fetchMcpServer(before.serverId);
+  const settled = Promise.allSettled([inspection, background]);
+  expect(fetchMock).toHaveBeenCalledOnce();
+  finishToolRead({ items: [tool] });
+  await vi.waitFor(() => expect(api.fetchMcpServer).toHaveBeenCalledTimes(2));
+  const readsBeforeOlderResponse = fetchMock.mock.calls.length;
+  finishOlderRead(Response.json(before));
+
+  expect(await settled).toEqual([
+    { status: "rejected", reason: expect.objectContaining({ message: expect.stringContaining("changed during inspection") }) },
+    { status: "fulfilled", value: before },
+  ]);
+  expect(readsBeforeOlderResponse).toBe(2);
+});
 it("keeps cached descriptor truth and rereads the exact saved owner", async () => {
   expect(await inspectMcpServer("server")).toMatchObject({ server: server(), tools: [tool], issues: [] });
   expect(api.fetchMcpServer).toHaveBeenCalledTimes(2); expect(api.fetchMcpTools).toHaveBeenCalledExactlyOnceWith("server");

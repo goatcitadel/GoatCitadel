@@ -1,6 +1,7 @@
 import { canonicalJsonString, type McpRemotePreviewItem, type McpToolRecord } from "@goatcitadel/contracts";
 import { fetchMcpRemotePreview, fetchMcpServer, fetchMcpTools } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { hasMcpServerBinding, mcpServerReviewMatches } from "./mcp-server-mutation";
 
 /** Existing saved-server and cached-inventory reads only; never discovers, connects or invokes a tool. */
@@ -12,7 +13,7 @@ export async function inspectMcpServer(serverId: string) {
     fetchMcpTools(serverId),
     server.transport === "stdio" ? Promise.resolve(null) : fetchMcpRemotePreview(),
   ]);
-  const current = await fetchMcpServer(serverId);
+  const current = await withFreshReads(() => fetchMcpServer(serverId));
   if (!mcpServerReviewMatches(server, current) || canonicalJsonString(server) !== canonicalJsonString(current))
     throw new Error("The server changed during inspection. Refresh to inspect a consistent saved configuration.");
   const issues: string[] = [];
