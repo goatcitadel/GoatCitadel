@@ -1,3 +1,14 @@
+.cockpit-gallery-install-button > span,
+.cockpit-gallery-install-button::after {
+  grid-area: 1 / 1;
+}
+
+/* Reserve the longer label even when text is enlarged. */
+.cockpit-gallery-install-button::after {
+  content: attr(data-width-label);
+  visibility: hidden;
+}
+
 /* These are entrance previews. Dismissal and pointer-driven drawer motion keep their existing timing. */
 @media (prefers-reduced-motion: no-preference) {
   .cockpit-gallery-menu[data-state="open"] {

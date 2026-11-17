@@ -214,12 +214,12 @@ export function GalleryDistortionWave() {
             <div className="space-y-2">
               <Button
                 size="sm"
-                className="inline-grid min-w-32! whitespace-nowrap after:invisible after:[grid-area:1/1] after:content-[attr(data-width-label)]"
+                className="cockpit-gallery-install-button inline-grid min-w-32! whitespace-nowrap"
                 data-width-label={SIMULATE_INSTALL_LABEL}
                 aria-describedby="gallery-install-result"
                 onClick={() => run("button", () => setInstalled((current) => !current), "#gallery-install-result")}
               >
-                <span className="[grid-area:1/1]">{installed ? "Reset demo" : SIMULATE_INSTALL_LABEL}</span>
+                <span>{installed ? "Reset demo" : SIMULATE_INSTALL_LABEL}</span>
               </Button>
               <p id="gallery-install-result" className="min-h-5 rounded-sm bg-sunken px-2 text-sm text-fg-secondary">
                 {installed ? "Installed." : ""}
