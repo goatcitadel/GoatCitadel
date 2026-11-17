@@ -25,7 +25,8 @@ export function citadelPresenceInit({clientId,observerKey,limit=256,gatewayOrigi
  else {
   const wrapper=function(...args){
    try{
-    const input=args[0],request=typeof Request!=="undefined"&&input instanceof Request;
+    const input = args[0];
+    const request = typeof Request !== "undefined" && input instanceof Request;
     const raw=typeof input==="string"?input:request?input.url:input instanceof URL?input.href:null;
     const method=String(args[1]?.method??(request?input.method:"GET")).toUpperCase();
     if(raw!==null && raw.length<=4096 && method==="PUT") {

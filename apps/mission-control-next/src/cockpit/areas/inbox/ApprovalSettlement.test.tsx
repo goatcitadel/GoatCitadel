@@ -367,6 +367,9 @@ it("explains a decision that had no waiting run in plain words", async () => {
     "Approved. Nothing was waiting to use this approval, so no memory was saved.",
   );
   expect(noRunLine(base, 0)).toBe("Approved. Nothing was waiting to use this approval, so nothing ran.");
+  expect(noRunLine({ ...(base as object), actionOutcome: "executed" } as never, 0)).toBe(
+    "Approved. The approved action ran.",
+  );
   expect(noRunLine({ ...(base as object), status: "rejected" } as never, 0)).toBe(
     "Nothing was waiting on this decision.",
   );

@@ -1,4 +1,9 @@
-import { readHistoricalStaticMcpBinding, assertHistoricalStaticMcpScope, isConnectedStaticServer, scopeFromHook } from "./mcp-static-profile-authority.js";
+import {
+  readHistoricalStaticMcpBinding,
+  assertHistoricalStaticMcpScope,
+  isConnectedStaticServer,
+  scopeFromHook,
+} from "./mcp-static-profile-authority.js";
 import { McpStaticChatAdmissionService } from "./mcp-static-chat-admission-service.js";
 import {
   canonicalJsonString,
@@ -89,7 +94,7 @@ export interface McpStaticChatServiceOptions {
     readAdmission(
       scope: McpRequesterAdmissionScope,
     ): Promise<{ references: ChatTurnFeatureReferences; referenceSha256: string } | undefined>;
-    assertToolAllowed(scope: McpRequesterAdmissionScope, canonicalName: string): Promise<void>;
+    assertToolAllowed(scope: McpRequesterAdmissionScope, canonicalName: string, serverId: string): Promise<void>;
   };
 }
 

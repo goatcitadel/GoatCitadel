@@ -31,7 +31,7 @@ export function observeExecutionRejections(execute, read, emit, maximum = 8) {
     catch (error) {
       if (sequence < limit) {
         sequence += 1;
-        let diagnostic = UNCLASSIFIED;
+        let diagnostic;
         try { diagnostic = project(read(error)); }
         catch { diagnostic = UNCLASSIFIED; }
         emitWithoutReplacingOutcome(emit, EXECUTION_DIAGNOSTIC_PREFIX + JSON.stringify({ sequence, ...diagnostic }));

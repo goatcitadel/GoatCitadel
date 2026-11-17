@@ -413,8 +413,8 @@ export function useChatSessionData(input: ChatSessionDataInput) {
           });
           if (!loadedSidebarPages.current.cursors.includes(cursor)) loadedSidebarPages.current.cursors.push(cursor);
           updateSidebarNextCursor(nextSessions.nextCursor ?? null);
-        } catch (error) {
-          if (isCurrent()) throw error;
+        } catch {
+          if (isCurrent()) setError("Couldn't load more Chat sessions. Try again.");
         } finally {
           if (isCurrent()) {
             setSidebarLoadingMore(false);
@@ -493,6 +493,7 @@ export function useChatSessionData(input: ChatSessionDataInput) {
       renderedRouteSelection,
       renderedSidebarScope,
       searchQuery,
+      setError,
       setSelectedSessionId,
       surfaceMode,
       updateSidebarNextCursor,

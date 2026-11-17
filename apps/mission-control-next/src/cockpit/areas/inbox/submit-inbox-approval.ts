@@ -171,7 +171,7 @@ export async function submitInboxApproval({
       return { message, grant };
     }
     const result = await resolveApproval(approval.approvalId, decision);
-    if (!matchesInboxApprovalDecision(item, approval, result.approval, workspaceId, decision)) {
+    if (!matchesInboxApprovalDecision(item, approval, result.approval, workspaceId, decision, result.durableRunId)) {
       throw new Error("The returned record does not confirm this approval and decision.");
     }
     const message = approvalDecisionMessage(result.approval, result.effects);

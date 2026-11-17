@@ -315,19 +315,23 @@ export function sidebarActivityReconcileKey(
       ? (thread.turns.find((turn) => turn.turnId === thread.activeLeafTurnId) ??
         thread.turns.filter((turn) => turn.branch?.isSelectedPath).at(-1))
       : undefined;
-  const listedActivity = sessions?.items.find((item) => item.sessionId === selectedSessionId)?.activity?.latestTurn;
-  return !latestThreadTurn ||
-    !listedActivity ||
-    latestThreadTurn.turnId !== listedActivity.turnId ||
-    latestThreadTurn.trace.status === listedActivity.status
-    ? null
-    : JSON.stringify([
-        sidebarScopeKey,
-        selectedSessionId,
-        latestThreadTurn.turnId,
-        latestThreadTurn.trace.status,
-        listedActivity?.status,
-      ]);
+  const activity = sessions?.items.find((item) => item.sessionId === selectedSessionId)?.activity;
+  if (!latestThreadTurn || !activity) return null;
+  const listedActivity = activity.latestTurn;
+  if (listedActivity?.turnId === latestThreadTurn.turnId) {
+    if (listedActivity.status === latestThreadTurn.trace.status) return null;
+  } else if (listedActivity && Date.parse(listedActivity.startedAt) > Date.parse(latestThreadTurn.trace.startedAt)) {
+    // The sidebar can legitimately be ahead of the open thread.
+    return null;
+  }
+  return JSON.stringify([
+    sidebarScopeKey,
+    selectedSessionId,
+    latestThreadTurn.turnId,
+    latestThreadTurn.trace.status,
+    listedActivity?.turnId,
+    listedActivity?.status,
+  ]);
 }
 
 export function chatViewRefreshPhase(

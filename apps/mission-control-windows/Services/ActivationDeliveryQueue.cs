@@ -24,9 +24,9 @@ internal static class ActivationRequestResolver
     internal static ActivationDelivery ResolveNotificationArguments(string arguments)
     {
         string? route = null;
-        foreach (var pair in arguments.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        var pairs = arguments.Split('&', StringSplitOptions.RemoveEmptyEntries).Select(pair => pair.Split('=', 2));
+        foreach (var parts in pairs)
         {
-            var parts = pair.Split('=', 2);
             if (string.Equals(Uri.UnescapeDataString(parts[0]), "route", StringComparison.OrdinalIgnoreCase))
             {
                 route = parts.Length == 2 ? Uri.UnescapeDataString(parts[1]) : null;

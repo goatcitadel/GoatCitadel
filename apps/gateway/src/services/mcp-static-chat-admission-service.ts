@@ -125,7 +125,7 @@ export class McpStaticChatAdmissionService {
         for (const name of explicitNames) {
           const toolName = name.slice(server.serverId.length + 5);
           if (mcpServerToolRule(server, toolName)) throw mcpChatAccessError("server_tool_policy");
-          await this.options.admission.assertToolAllowed(input.scope, name);
+          await this.options.admission.assertToolAllowed(input.scope, name, server.serverId);
         }
         const connection = await this.transport.connection(server, false).catch((error: unknown) => {
           if (signal.aborted) throw error;
@@ -158,7 +158,13 @@ export class McpStaticChatAdmissionService {
           if (tools.length > 16) throw new Error("Name up to sixteen exact tools for the selected static MCP server.");
           if (!tools.length)
             throw mcpChatAccessError(snapshot.catalog.tools.length ? "server_tool_policy" : "tool_unavailable");
-          for (const tool of tools) await this.options.admission.assertToolAllowed(input.scope, tool.canonicalToolName);
+          for (const tool of tools) {
+            await this.options.admission.assertToolAllowed(
+              input.scope,
+              tool.canonicalToolName,
+              connection.server.serverId,
+            );
+          }
           const receipt = buildStaticMcpAdmissionReceipt(
             input.scope,
             connection.server,
@@ -209,7 +215,11 @@ export class McpStaticChatAdmissionService {
           connection.guard,
         );
         for (const candidate of collectNativeMcpChatCatalogCandidates([], [], [snapshot])) {
-          await this.options.admission!.assertToolAllowed(context.scope, candidate.tool.canonicalToolName);
+          await this.options.admission!.assertToolAllowed(
+            context.scope,
+            candidate.tool.canonicalToolName,
+            receipt.serverId,
+          );
           result.push(bindNativeStaticAdmissionMcpChatToolSchema(candidate, receipt));
         }
         await this.assertAdmissionScope(context.scope, context.assertCurrent);
@@ -260,7 +270,7 @@ export class McpStaticChatAdmissionService {
     if (selected.length !== 1) throw unavailable();
     const receipt = selected[0]!;
     const tool = receipt.selectedTools.find((entry) => entry.canonicalToolName === canonicalName)!;
-    await this.options.admission!.assertToolAllowed(context.scope, canonicalName);
+    await this.options.admission!.assertToolAllowed(context.scope, canonicalName, receipt.serverId);
     await this.options.assertMcpServerInScope({
       serverId: receipt.serverId,
       toolName: tool.rawRemoteToolName,

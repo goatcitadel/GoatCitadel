@@ -167,4 +167,32 @@ describe("inbox approval guard", () => {
     ).toBe(false);
     expect(matchesInboxApprovalDecision(item, reviewed, undefined, "workspace-a", "approve")).toBe(false);
   });
+
+  it("allows only the resolution's wait-run change to the reviewed linkage", () => {
+    const settled: ApprovalRequest = {
+      ...reviewed,
+      status: "approved",
+      linkage: { ...reviewed.linkage, durableRunId: "wait-run" },
+    };
+    expect(matchesInboxApprovalDecision(item, reviewed, settled, "workspace-a", "approve")).toBe(true);
+    expect(matchesInboxApprovalDecision(item, reviewed, settled, "workspace-a", "approve", "other-run")).toBe(false);
+    const originallyLinked = { ...reviewed, linkage: { ...reviewed.linkage, durableRunId: "original" } };
+    expect(matchesInboxApprovalDecision(item, originallyLinked, settled, "workspace-a", "approve")).toBe(false);
+    expect(matchesInboxApprovalDecision(item, originallyLinked, settled, "workspace-a", "approve", "wait-run")).toBe(
+      true,
+    );
+    const wrongTurn = { ...settled, linkage: { ...settled.linkage, turnId: "other-turn" } };
+    expect(matchesInboxApprovalDecision(item, reviewed, wrongTurn, "workspace-a", "approve", "wait-run")).toBe(false);
+    const sealed = { ...reviewed, kind: "skill_hub.lifecycle" };
+    expect(
+      matchesInboxApprovalDecision(
+        item,
+        sealed,
+        { ...settled, kind: sealed.kind },
+        "workspace-a",
+        "approve",
+        "wait-run",
+      ),
+    ).toBe(false);
+  });
 });
