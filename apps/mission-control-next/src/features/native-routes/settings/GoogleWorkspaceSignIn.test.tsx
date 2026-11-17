@@ -109,6 +109,14 @@ function button(label: string, scope: ParentNode = document): HTMLButtonElement 
   return found as HTMLButtonElement;
 }
 
+function waitForDialogAction(label: string) {
+  return vi.waitFor(() => {
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+    if (!dialog) throw new Error("No Google dialog");
+    return { dialog, action: button(label, dialog) };
+  });
+}
+
 async function click(element: HTMLElement) {
   await act(async () => element.click());
   await settle();
@@ -135,9 +143,7 @@ afterEach(() => {
 describe("Connect Google", () => {
   it("opens Google setup in the browser before starting sign-in in the desktop app", async () => {
     vi.stubGlobal("chrome", { webview: {} });
-    api.fetchGoogleWorkspaceOAuthStatus.mockResolvedValue(
-      status({ connected: true, clientSecretSource: "keychain" }),
-    );
+    api.fetchGoogleWorkspaceOAuthStatus.mockResolvedValue(status({ connected: true, clientSecretSource: "keychain" }));
     await render();
 
     const browserLink = [...container!.querySelectorAll("a")].find(
@@ -185,7 +191,7 @@ describe("Connect Google", () => {
     expect(container!.textContent).toContain("Send Gmail · Off · Asks for approval every time");
 
     await click(button("Connect Google", container!));
-    const dialog = document.querySelector('[role="dialog"]')!;
+    const { dialog, action: continueToGoogle } = await waitForDialogAction("Continue to Google");
     expect(dialog.textContent).toContain("Review Google access");
     for (const scope of [
       "https://www.googleapis.com/auth/gmail.readonly",
@@ -196,13 +202,13 @@ describe("Connect Google", () => {
       expect(dialog.textContent).toContain(scope);
     expect(api.startGoogleWorkspaceOAuth).not.toHaveBeenCalled();
     // A client secret is required before anything is sent.
-    expect(button("Continue to Google", dialog).disabled).toBe(true);
+    expect(continueToGoogle.disabled).toBe(true);
     const calendar = [...dialog.querySelectorAll("label")].find((item) =>
       item.textContent?.startsWith("Read Calendar events"),
     )!;
     await click(calendar.querySelector("input")!);
     await type(dialog.querySelector('input[type="password"]')!, "GOCSPX-desktop-secret");
-    await click(button("Continue to Google", dialog));
+    await click(continueToGoogle);
 
     expect(api.startGoogleWorkspaceOAuth).toHaveBeenCalledWith(CONNECTION_ID, {
       capabilities: ["gmail.read", "calendar.read"],
@@ -246,9 +252,8 @@ describe("Connect Google", () => {
     });
     await render();
     await click(button("Connect Google", container!));
-    const dialog = document.querySelector('[role="dialog"]')!;
     // The saved secret is kept: the field is optional now.
-    await click(button("Continue to Google", dialog));
+    await click((await waitForDialogAction("Continue to Google")).action);
     expect(api.startGoogleWorkspaceOAuth).toHaveBeenCalledWith(CONNECTION_ID, { capabilities: ["gmail.read"] });
     window.history.replaceState(
       null,
@@ -278,9 +283,9 @@ describe("Connect Google", () => {
 
     await click(button("Disconnect Google", container!));
     expect(api.disconnectGoogleWorkspaceOAuth).not.toHaveBeenCalled();
-    const modal = document.querySelector('[role="dialog"]')!;
+    const { dialog: modal, action: disconnectGoogle } = await waitForDialogAction("Disconnect Google");
     expect(modal.textContent).toContain("Disconnect Google?");
-    await click(button("Disconnect Google", modal));
+    await click(disconnectGoogle);
     expect(api.disconnectGoogleWorkspaceOAuth).toHaveBeenCalledWith(CONNECTION_ID);
     expect(container!.querySelector('[role="alert"]')?.textContent).toMatch(/did not confirm the revocation/);
   });
@@ -305,11 +310,11 @@ describe("Connect Google", () => {
     });
     await render();
     await click(button("Reconnect Google", container!));
-    await click(button("Continue to Google", document.querySelector('[role="dialog"]')!));
+    await click((await waitForDialogAction("Continue to Google")).action);
     expect(container!.textContent).toContain("Open Google sign-in");
 
     await click(button("Disconnect Google", container!));
-    await click(button("Disconnect Google", document.querySelector('[role="dialog"]')!));
+    await click((await waitForDialogAction("Disconnect Google")).action);
     expect(api.disconnectGoogleWorkspaceOAuth).toHaveBeenCalledWith(CONNECTION_ID);
     expect(container!.textContent).not.toContain("Open Google sign-in");
 
