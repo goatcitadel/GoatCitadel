@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readMcpToolPolicyBinding } from "@goatcitadel/policy-engine";
+import { assertMcpAdmissionToolAllowed, type McpAdmissionToolPolicyHost } from "./mcp-admission-tool-policy-guard.js";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalJsonString, type ChatTurnFeatureReferences, type McpServerRecord } from "@goatcitadel/contracts";
 import {
@@ -165,6 +167,38 @@ function fixture() {
     },
   };
 }
+
+it("checks the exact admitted MCP server when a shorter saved ID also matches", async () => {
+  const {
+    state: { scope },
+  } = fixture();
+  const assertScope = vi.fn(async () => {});
+  const inspectAccess = vi.fn<McpAdmissionToolPolicyHost["inspectAccess"]>(async (request, options) => {
+    expect(readMcpToolPolicyBinding(options?.mcpToolBinding, request.toolName)).toMatchObject({
+      serverId: "tenant.with.dots",
+      nativeToolName: "search",
+    });
+    return {
+      toolName: request.toolName,
+      allowed: true,
+      requiresApproval: false,
+      riskLevel: "safe",
+      reasonCodes: [],
+    };
+  });
+  const host: McpAdmissionToolPolicyHost = {
+    readMcpServers: async () => [{ serverId: "tenant" }, { serverId: "tenant.with.dots" }] as McpServerRecord[],
+    assertMcpServerInCapabilityScope: assertScope,
+    prepareToolAccessEvaluation: async (request) => request,
+    inspectAccess,
+    recordDevDiagnostic: vi.fn(),
+  };
+  await assertMcpAdmissionToolAllowed(host, scope, "mcp.tenant.with.dots.search", "tenant.with.dots");
+  expect(assertScope).toHaveBeenCalledWith(
+    expect.objectContaining({ serverId: "tenant.with.dots", toolName: "search" }),
+  );
+  expect(inspectAccess).toHaveBeenCalledTimes(1);
+});
 
 describe("requester MCP feature admission", () => {
   it("rejects duplicate requester selections before discovery and missing saved-tool actor authority", async () => {

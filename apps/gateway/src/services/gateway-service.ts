@@ -2722,7 +2722,7 @@ export class GatewayService {
             },
           }
         : {}),
-      assertToolAllowed: (scope, name) => this.assertRequesterAdmissionToolAllowed(scope, name),
+      assertToolAllowed: (scope, name, serverId) => this.assertRequesterAdmissionToolAllowed(scope, name, serverId),
       getNetworkAllowlist: () => this.config.toolPolicy.sandbox.networkAllowlist,
       recordDiagnostic: (reasonCode) =>
         this.recordDevDiagnostic({
@@ -2738,7 +2738,7 @@ export class GatewayService {
         enabled: () => this.isFeatureEnabled("chatStaticMcpV1Enabled"),
         assertScopeCurrent: (scope) => assertMcpRequesterAdmissionScopeCurrent(this.storage, scope),
         readAdmission: (scope) => this.storage.sessionMutationAdmissions.findFeatureReferences(scope),
-        assertToolAllowed: (scope, name) => this.assertRequesterAdmissionToolAllowed(scope, name),
+        assertToolAllowed: (scope, name, serverId) => this.assertRequesterAdmissionToolAllowed(scope, name, serverId),
       },
       registry: {
         readServers: () => this.mcpServerStore.readServers(),
@@ -7879,6 +7879,7 @@ export class GatewayService {
   private async assertRequesterAdmissionToolAllowed(
     scope: import("@goatcitadel/contracts").McpRequesterAdmissionScope,
     canonicalName: string,
+    serverId: string,
   ): Promise<void> {
     return assertMcpAdmissionToolAllowed(
       {
@@ -7890,6 +7891,7 @@ export class GatewayService {
       },
       scope,
       canonicalName,
+      serverId,
     );
   }
 

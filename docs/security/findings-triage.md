@@ -244,6 +244,18 @@ The current endpoint returned three open findings before the August pre-QA closu
 Re-read the endpoint after every push. A source repair is not considered cleared until the
 finding disappears or an evidence-backed non-actionable finding is dismissed/recorded.
 
+### 2026-11-17 Windows interop findings
+
+The 31 `cs/call-to-unmanaged-code` and 23 `cs/unmanaged-code` findings on `10d13982e` identify intentional Win32 boundaries.
+
+| Owner | Required native behavior |
+|---|---|
+| `scripts/packaging/lib/NativeCompilerJob.cs` | Starts the compiler with its handles and private Job Object assigned atomically. The same APIs verify the retained caller handle, pin the compiler path against replacement, and retire the complete process tree. Managed `Process.Start` does not carry the Job and handle-list attributes at creation. |
+| `apps/mission-control-windows/MainWindow.xaml.cs` | Calls `SetForegroundWindow` after WinUI activation to bring the existing window forward for a desktop activation. WinUI activation alone can leave it behind another foreground window. |
+| `apps/mission-control-windows/Services/NotificationService.cs` | Sets the AppUserModelID required for unpackaged notifications only after checking the registered activator points to this executable. |
+
+Retain these calls. The findings report the native boundary itself and identify no faulty call or signature. Review any newly reported location before using this disposition.
+
 ---
 
 ## 8. Code Quality — AI findings

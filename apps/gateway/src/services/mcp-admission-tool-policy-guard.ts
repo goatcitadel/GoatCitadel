@@ -26,13 +26,21 @@ export async function assertMcpAdmissionToolAllowed(
   host: McpAdmissionToolPolicyHost,
   scope: McpRequesterAdmissionScope,
   canonicalName: string,
+  serverId: string,
 ): Promise<void> {
-  const matches = (await host.readMcpServers()).filter((server) => canonicalName.startsWith(`mcp.${server.serverId}.`));
-  if (matches.length !== 1) throw new McpRequesterResolutionError("requester_scope_mismatch");
-  const server = matches[0]!;
-  const nativeToolName = canonicalName.slice(`mcp.${server.serverId}.`.length);
+  // The caller supplies the identity from the saved connection or admission receipt.
+  // A canonical name alone can match both a dotted server ID and a shorter prefix.
+  const prefix = `mcp.${serverId}.`;
+  const nativeToolName = canonicalName.slice(prefix.length);
+  if (
+    !canonicalName.startsWith(prefix) ||
+    !nativeToolName ||
+    !(await host.readMcpServers()).some((server) => server.serverId === serverId)
+  ) {
+    throw new McpRequesterResolutionError("requester_scope_mismatch");
+  }
   await host.assertMcpServerInCapabilityScope({
-    serverId: server.serverId,
+    serverId,
     toolName: nativeToolName,
     workspaceId: scope.workspaceId,
     sessionId: scope.sessionId,
@@ -50,7 +58,7 @@ export async function assertMcpAdmissionToolAllowed(
   const access = await host.inspectAccess(request, {
     mcpToolBinding: createMcpToolPolicyBinding({
       canonicalName,
-      serverId: server.serverId,
+      serverId,
       nativeToolName,
     }),
   });

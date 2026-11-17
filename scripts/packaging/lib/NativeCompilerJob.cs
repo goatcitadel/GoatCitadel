@@ -33,7 +33,8 @@ public static class NativeCompilerJob {
                     if (remaining > 0) Bytes.Write(buffer, 0, Math.Min(count, remaining));
                     if (count > remaining) Interlocked.Exchange(ref Overflow, 1);
                 }
-            } catch { Interlocked.Exchange(ref Failed, 1); }
+            } catch (IOException) { Interlocked.Exchange(ref Failed, 1); }
+            catch (ObjectDisposedException) { Interlocked.Exchange(ref Failed, 1); }
         }
     }
 
@@ -121,7 +122,11 @@ public static class NativeCompilerJob {
         } catch (Win32Exception error) {
             result.NativeError = error.NativeErrorCode;
             result.ErrorCode = error.NativeErrorCode == 2 || error.NativeErrorCode == 3 ? "ENOENT" : "ECOMPILEROWNER";
-        } catch { result.ErrorCode = "ECOMPILEROWNER"; }
+        } catch (InvalidOperationException) { result.ErrorCode = "ECOMPILEROWNER"; }
+        catch (ArgumentException) { result.ErrorCode = "ECOMPILEROWNER"; }
+        catch (IOException) { result.ErrorCode = "ECOMPILEROWNER"; }
+        catch (UnauthorizedAccessException) { result.ErrorCode = "ECOMPILEROWNER"; }
+        catch (NotSupportedException) { result.ErrorCode = "ECOMPILEROWNER"; }
         finally {
             // Root exit is captured before teardown; child retirement never turns
             // a failed compilation, deadline, overflow or parent death into success.
@@ -134,7 +139,7 @@ public static class NativeCompilerJob {
                     Stopwatch drain = Stopwatch.StartNew();
                     do { result.JobEmpty = ActiveProcesses(job) == 0; if (result.JobEmpty) break; Thread.Sleep(10); } while (drain.ElapsedMilliseconds < 2000);
                 } else result.JobEmpty = !created;
-            } catch { result.JobEmpty = false; }
+            } catch (Win32Exception) { result.JobEmpty = false; }
             finally {
                 Close(ref job); Close(ref process.Thread); Close(ref process.Process);
                 Close(ref stdoutWrite); Close(ref stderrWrite); Close(ref input); Close(ref stdoutRead); Close(ref stderrRead);
@@ -144,11 +149,16 @@ public static class NativeCompilerJob {
                 if (jobList != IntPtr.Zero) Marshal.FreeHGlobal(jobList);
                 if (environment != IntPtr.Zero) Marshal.FreeHGlobal(environment);
             }
-            try {
-                List<Task> pumps = new List<Task>(); if (outTask != null) pumps.Add(outTask); if (errTask != null) pumps.Add(errTask);
-                if (!Task.WaitAll(pumps.ToArray(), 2000)) result.JobEmpty = false;
-            } catch { result.JobEmpty = false; }
-            if (stdout != null) stdout.Dispose(); if (stderr != null) stderr.Dispose();
+            // Keep the pipes open until the terminated job has drained its output.
+            using (stdout)
+            using (stderr) {
+                try {
+                    List<Task> pumps = new List<Task>();
+                    if (outTask != null) pumps.Add(outTask);
+                    if (errTask != null) pumps.Add(errTask);
+                    if (!Task.WaitAll(pumps.ToArray(), 2000)) result.JobEmpty = false;
+                } catch (AggregateException) { result.JobEmpty = false; }
+            }
             if (outTask == null || outTask.IsCompleted) result.Stdout = outPump.Bytes.ToArray();
             if (errTask == null || errTask.IsCompleted) result.Stderr = errPump.Bytes.ToArray();
             if (result.ErrorCode == null && (outPump.Overflow != 0 || errPump.Overflow != 0)) result.ErrorCode = "ENOBUFS";

@@ -139,7 +139,7 @@ export interface McpRequesterAdmissionRuntimeHost {
   /** Configured actor-bound connection owner. No shared credential or endpoint fallback is permitted. */
   readConnection?(scope: McpRequesterAdmissionScope, connectionId: string): Promise<McpRequesterAdmissionCurrentState>;
   /** Fresh deny-wins policy, grants and approval posture remain Gateway-owned. */
-  assertToolAllowed(scope: McpRequesterAdmissionScope, canonicalToolName: string): Promise<void>;
+  assertToolAllowed(scope: McpRequesterAdmissionScope, canonicalToolName: string, serverId: string): Promise<void>;
   getNetworkAllowlist(): readonly string[];
   recordDiagnostic(reasonCode: McpRequesterResolutionReasonCode): void;
   now?(): number;
@@ -214,11 +214,11 @@ export function composeMcpRequesterAdmissionRuntime(
     canonicalToolName: string,
   ) => {
     const live = await readReceipts(handle);
-    if (!live.receipts.some((entry) => entry.bindingId === receipt.bindingId))
-      throw new McpRequesterResolutionError("resolver_binding_drift");
-    await host.assertToolAllowed(live.context.scope, canonicalToolName);
+    const bound = live.receipts.find((entry) => entry.bindingId === receipt.bindingId);
+    if (!bound) throw new McpRequesterResolutionError("resolver_binding_drift");
+    await host.assertToolAllowed(live.context.scope, canonicalToolName, bound.serverId);
     return {
-      ...(await readConnection(live.context.scope, receipt.connectionId, live.context.assertCurrent)),
+      ...(await readConnection(live.context.scope, bound.connectionId, live.context.assertCurrent)),
       referenceSha256: live.context.referenceSha256,
     };
   };
@@ -252,7 +252,8 @@ export function composeMcpRequesterAdmissionRuntime(
           extractMcpRequesterDiscoveryOutputInput(current.server.serverId, result.rawToolsListResult),
           scanner,
         );
-        for (const name of input.selectedToolNames) await host.assertToolAllowed(input.scope, name);
+        for (const name of input.selectedToolNames)
+          await host.assertToolAllowed(input.scope, name, current.server.serverId);
         const fresh = await readConnection(input.scope, input.connectionId, input.assertCurrent);
         // Recheck the discovery authority after transport, before persisting selected evidence.
         assertMcpAdmissionCurrent(authority, fresh);

@@ -1962,11 +1962,35 @@ describe("useChatSessionData", () => {
   );
 });
 
-it("rereads the canonical batched list when thread settlement disagrees with retained activity", async () => {
+it("reports a pagination failure and keeps the loaded sessions and retry cursor", async () => {
+  setupApiDefaults();
+  fetchChatSessionsMock.mockImplementation(async (query) => {
+    if (query.cursor === "page-two") throw new Error("Page unavailable");
+    return { items: [makeSession("session-1")], nextCursor: "page-two" };
+  });
+  let renderer: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(<Harness workspaceId="pagination-failure" />);
+  });
+  await act(async () => {
+    await latestHarness!.result.loadSidebar("active", { append: true });
+  });
+  expect(latestHarness!.errors).toContain("Couldn't load more Chat sessions. Try again.");
+  expect(latestHarness!.result.sessions?.items.map(({ sessionId }) => sessionId)).toEqual(["session-1"]);
+  expect(latestHarness!.result.sidebarNextCursor).toBe("page-two");
+  expect(latestHarness!.result.sidebarLoadingMore).toBe(false);
+  await act(async () => renderer!.unmount());
+});
+
+it.each([
+  { turnId: "turn-1", status: "waiting_for_approval" },
+  { turnId: "older-turn", status: "completed", startedAt: "2026-04-30T00:00:00.000Z" },
+  null,
+])("rereads the canonical batched list when thread settlement disagrees with %j", async (latestTurn) => {
   setupApiDefaults();
   const waiting = {
     ...makeSession("session-1"),
-    activity: { latestTurn: { turnId: "turn-1", status: "waiting_for_approval" } },
+    activity: { latestTurn },
   };
   fetchChatSessionsMock.mockResolvedValueOnce({ items: [waiting] }).mockImplementation(async (query) => ({
     items: [{ ...waiting, activity: { latestTurn: { turnId: "turn-1", status: "completed" } } }],

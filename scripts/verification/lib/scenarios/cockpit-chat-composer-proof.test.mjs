@@ -70,7 +70,9 @@ function modelOptionsOwner563({expanded=false,triggers=1,popups=1,controls="owne
   },getByRole:(role,options)=>{
     if(role==="dialog"){assert.equal(options.name,"Message options");return{isVisible:async()=>false};}
     assert.equal(role,"button","Page-level model combobox access bypasses the current popup owner");
-    assert.ok(options.name instanceof RegExp&&options.name.test("Owned model · Standard · Model and reasoning options"));return trigger;
+    assert.ok(options.name instanceof RegExp);
+    assert.ok(options.name.test("Owned model · Standard · Model and reasoning options"));
+    return trigger;
   },waitForTimeout:async value=>{waits.push(value);}};
   return{page,popup,actions,lookups,waits};
 }

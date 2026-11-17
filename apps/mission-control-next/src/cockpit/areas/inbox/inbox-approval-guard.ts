@@ -1,4 +1,9 @@
-import { canonicalJsonString, type ApprovalRequest, type OperatorInboxItem } from "@goatcitadel/contracts";
+import {
+  canonicalJsonString,
+  hasSealedApprovalLinkage,
+  type ApprovalRequest,
+  type OperatorInboxItem,
+} from "@goatcitadel/contracts";
 
 /** Shown when the click-time re-read finds the reviewed approval changed, decided, expired or gone; nothing is sent. */
 export const CHANGED_APPROVAL_RECORD =
@@ -86,11 +91,25 @@ export function matchesInboxApprovalDecision(
   returned: ApprovalRequest | undefined,
   workspaceId: string,
   decision: "approve" | "reject",
+  wakeRunId?: string,
 ): boolean {
-  return (
-    returned !== undefined &&
-    matchesScope(item, returned, workspaceId) &&
-    returned.status === (decision === "approve" ? "approved" : "rejected") &&
-    actionBinding(returned) === actionBinding(reviewed)
-  );
+  if (
+    !returned ||
+    !matchesScope(item, returned, workspaceId) ||
+    returned.status !== (decision === "approve" ? "approved" : "rejected")
+  ) {
+    return false;
+  }
+  if (actionBinding(returned) === actionBinding(reviewed)) return true;
+  if (!returned.linkage || hasSealedApprovalLinkage(reviewed.kind)) return false;
+
+  // A readback can add a wait run. Replacing an existing run also requires
+  // the explicit wake-run ID from the same resolution response.
+  const { durableRunId, ...linkage } = returned.linkage;
+  const originalRunId = reviewed.linkage?.durableRunId;
+  if (!durableRunId?.trim()) return false;
+  if (wakeRunId === undefined ? originalRunId !== undefined : durableRunId !== wakeRunId) return false;
+  const originalLinkage =
+    !reviewed.linkage && Object.keys(linkage).length === 0 ? undefined : { ...linkage, durableRunId: originalRunId };
+  return actionBinding({ ...returned, linkage: originalLinkage }) === actionBinding(reviewed);
 }
