@@ -5,18 +5,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { buildReleaseManifest } from "./lib/package-renderers.mjs";
 import { requirePackagingTarget } from "./lib/packaging-targets.mjs";
 
 const scriptPath = fileURLToPath(new URL("./validate-windows-bundle.ps1", import.meta.url));
 const target = requirePackagingTarget("windows-x64");
+const AdmZip = createRequire(new URL("../../apps/gateway/package.json", import.meta.url))("adm-zip");
 
 test(
   "Windows installer payload validator proves hashes and required PE architecture before promotion",
   { skip: process.platform === "win32" ? false : "Windows PowerShell and PE validation require Windows." },
   () => {
     const stageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-installer-stage-"));
+    const archiveRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-installer-archive-"));
     try {
       const requiredFiles = [
         "app/desktop/GoatCitadel-Mission-Control-Windows.exe",
@@ -24,6 +27,8 @@ test(
         "app/mission-control/dist/index.html",
         "app/runtime/node/node.exe",
         "bin/goatcitadel.cmd",
+        "app/\uE000.txt",
+        "app/\u{10000}.txt",
       ];
       for (const relativePath of requiredFiles) {
         const filePath = path.join(stageRoot, ...relativePath.split("/"));
@@ -67,6 +72,80 @@ test(
       const valid = runValidator(stageRoot);
       assert.equal(valid.status, 0, valid.stderr || valid.stdout);
       assert.match(valid.stdout, /Validated staged GoatCitadel bundle windows-x64 1\.0\.0/);
+      assert.match(valid.stdout, /GOATCITADEL_PROGRESS Hashing 0\/7/);
+      assert.match(valid.stdout, /GOATCITADEL_PROGRESS Verified 7\/7/);
+      const originalDesktopPath = manifest.payload.files[0].path;
+      manifest.payload.files[0].path = originalDesktopPath.replace("app/desktop/", "app/Desktop/");
+      writeManifest(stageRoot, manifest);
+      assert.equal(runValidator(stageRoot).status, 0, "Windows directory casing aliases remain valid");
+      manifest.payload.files[0].path = originalDesktopPath;
+      writeManifest(stageRoot, manifest);
+
+      const archive = new AdmZip();
+      archive.addLocalFolder(path.join(stageRoot, "app"), "app");
+      archive.addLocalFolder(path.join(stageRoot, "bin"), "bin");
+      const baselineArchive = archive.toBuffer();
+      let archiveCase = 0;
+      const runArchive = (change = () => {}) => {
+        const zip = new AdmZip(baselineArchive);
+        change(zip);
+        const archivePath = path.join(archiveRoot, `${archiveCase++}.zip`);
+        zip.writeZip(archivePath);
+        const destination = fs.mkdtempSync(path.join(archiveRoot, "stage-"));
+        return { result: runValidator(destination, { archivePath }), destination, archivePath };
+      };
+      const streamed = runArchive();
+      assert.equal(streamed.result.status, 0, streamed.result.stderr);
+      assert.match(streamed.result.stdout, /GOATCITADEL_PROGRESS Extracting-and-hashing 7\/7/);
+      assert.doesNotMatch(streamed.result.stdout, /GOATCITADEL_PROGRESS Hashing/);
+      assert.deepEqual(
+        fs.readFileSync(path.join(streamed.destination, "bin", "goatcitadel.cmd")),
+        fs.readFileSync(path.join(stageRoot, "bin", "goatcitadel.cmd")),
+      );
+      const assertArchiveRejected = (change, pattern) => {
+        const { result } = runArchive(change);
+        assert.notEqual(result.status, 0);
+        assert.match(`${result.stdout} ${result.stderr}`.replace(/\s+/gu, " "), pattern);
+        assert.doesNotMatch(result.stdout, /GOATCITADEL_PROGRESS Verified/);
+      };
+      assertArchiveRejected(
+        (zip) =>
+          zip.updateFile(
+            "bin/goatcitadel.cmd",
+            Buffer.from("X".repeat(fs.statSync(path.join(stageRoot, "bin", "goatcitadel.cmd")).size)),
+          ),
+        /hash does not match/,
+      );
+      assertArchiveRejected((zip) => zip.deleteFile("bin/goatcitadel.cmd"), /missing a manifested payload file/);
+      assertArchiveRejected((zip) => zip.addFile("app/unlisted.txt", Buffer.from("extra")), /unlisted file/);
+      assertArchiveRejected(
+        (zip) => zip.addFile("bin/GOATCITADEL.cmd", Buffer.from("collision")),
+        /case-colliding path/,
+      );
+      assertArchiveRejected((zip) => zip.addFile("app/../escape", Buffer.from("escape")), /unsafe|unexpected root/);
+      assertArchiveRejected((zip) => {
+        zip.addFile("app/link", Buffer.from("target"));
+        zip.getEntry("app/link").attr = 0xa1ff0000;
+      }, /symlink, junction or special/);
+      assert.notEqual(runValidator(stageRoot, { installedRoot: true, archivePath: streamed.archivePath }).status, 0);
+
+      const firstPath = manifest.payload.files[0].path;
+      manifest.payload.files[0].path = "app/../escape";
+      writeManifest(stageRoot, manifest);
+      assert.match(runValidator(stageRoot).stderr, /payload path is unsafe/);
+      manifest.payload.files[0].path = firstPath;
+      manifest.payload.files.reverse();
+      writeManifest(stageRoot, manifest);
+      assert.match(runValidator(stageRoot).stderr, /strictly path-sorted/);
+      manifest.payload.files.reverse();
+      writeManifest(stageRoot, manifest);
+      fs.writeFileSync(path.join(stageRoot, "app", "unlisted.txt"), "unexpected");
+      assert.match(runValidator(stageRoot).stderr, /unlisted file/);
+      fs.rmSync(path.join(stageRoot, "app", "unlisted.txt"));
+      const junction = path.join(stageRoot, "app", "linked-runtime");
+      fs.symlinkSync(path.join(stageRoot, "app", "runtime"), junction, "junction");
+      assert.match(runValidator(stageRoot).stderr, /symlink or junction/);
+      fs.rmSync(junction);
 
       // Installed-root validation runs while Inno's own root artifacts and the custom
       // transaction directories coexist with app/ and bin/. Those root siblings are not
@@ -94,7 +173,10 @@ test(
       writeManifest(stageRoot, manifest);
       const wrongArchitecture = runValidator(stageRoot);
       assert.notEqual(wrongArchitecture.status, 0);
-      assert.match(`${wrongArchitecture.stdout}\n${wrongArchitecture.stderr}`, /targets machine 0xAA64; expected 0x8664/i);
+      assert.match(
+        `${wrongArchitecture.stdout}\n${wrongArchitecture.stderr}`,
+        /targets machine 0xAA64; expected 0x8664/i,
+      );
       writeMinimalPe(hostPath, 0x8664);
       hostRecord.sha256 = originalHostHash;
       writeManifest(stageRoot, manifest);
@@ -104,7 +186,7 @@ test(
       fs.writeFileSync(launcherPath, "X".repeat(fs.statSync(launcherPath).size), "ascii");
       const corrupt = runValidator(stageRoot);
       assert.notEqual(corrupt.status, 0);
-      assert.match(`${corrupt.stdout}\n${corrupt.stderr}`, /hash does not match its manifest record/i);
+      assert.match(`${corrupt.stdout}\n${corrupt.stderr}`, /hash does not match its manifest\s+record/i);
 
       fs.writeFileSync(launcherPath, originalLauncher);
       fs.rmSync(hostPath);
@@ -113,11 +195,12 @@ test(
       assert.match(`${missingHost.stdout}\n${missingHost.stderr}`, /payload file is missing|required manifested file/i);
     } finally {
       fs.rmSync(stageRoot, { recursive: true, force: true });
+      fs.rmSync(archiveRoot, { recursive: true, force: true });
     }
   },
 );
 
-function runValidator(stageRoot, { installedRoot = false } = {}) {
+function runValidator(stageRoot, { installedRoot = false, archivePath } = {}) {
   const args = [
     "-NoLogo",
     "-NoProfile",
@@ -132,15 +215,13 @@ function runValidator(stageRoot, { installedRoot = false } = {}) {
     "windows-x64",
     "-Version",
     "1.0.0",
+    "-ProgressOutput",
   ];
   if (installedRoot) {
     args.push("-InstalledRoot");
   }
-  return spawnSync(
-    "powershell.exe",
-    args,
-    { encoding: "utf8", windowsHide: true },
-  );
+  if (archivePath) args.push("-ArchivePath", archivePath);
+  return spawnSync("powershell.exe", args, { encoding: "utf8", windowsHide: true });
 }
 
 function writeMinimalPe(filePath, machine) {

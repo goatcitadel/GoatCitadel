@@ -31,5 +31,10 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage --coverage.reportOnFailure",
     "lint": "tsc -b tsconfig.json"
-  }
+  },
+  "files": [
+    "dist",
+    "fonts",
+    "scripts"
+  ]
 }

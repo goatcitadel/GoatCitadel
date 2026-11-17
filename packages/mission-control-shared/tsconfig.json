@@ -23,5 +23,5 @@
     "src/components/ResizablePaneLayout.tsx",
     "src/components/OperatorSplitLayout.tsx"
   ],
-  "references": [{ "path": "../contracts" }]
+  "references": [{ "path": "../contracts" }, { "path": "../session-control-client" }]
 }

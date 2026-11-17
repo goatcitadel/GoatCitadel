@@ -57,6 +57,22 @@ test("metadata publication and removal are atomic and compare-aware", () => {
   }
 });
 
+test("config publication supports a bounded larger document without widening metadata reads", () => {
+  const root = createFixtureRoot();
+  try {
+    const filePath = path.join(root, "config.json");
+    const value = { settings: "x".repeat(8192) };
+    const result = atomicCompareAndPublishJson({ filePath, expectedFingerprint: null, value, maxBytes: 16384 });
+    assert.equal(result.published, true);
+    assert.equal(readManagedStateFile(filePath).oversized, true);
+    assert.deepEqual(JSON.parse(readManagedStateFile(filePath, 16384).raw), value);
+    const stale = atomicCompareAndPublishJson({ filePath, expectedFingerprint: null, value: {}, maxBytes: 16384 });
+    assert.equal(stale.reason, "compare_conflict");
+  } finally {
+    removeFixtureRoot(root);
+  }
+});
+
 test("concurrent launch decisions serialize across processes and publish one owner", async () => {
   const fixtureRoot = createFixtureRoot();
   try {

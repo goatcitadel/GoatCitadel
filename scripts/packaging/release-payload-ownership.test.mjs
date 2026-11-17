@@ -56,12 +56,20 @@ test("bundles exclude nested shard coverage while preserving similarly named run
   context.after(() => cleanup(tempRoot));
   const payloadRoot = path.join(tempRoot, "deploy");
   const storage = path.join(payloadRoot, "node_modules", "@goatcitadel", "storage");
-  const discarded = ["coverage-shard-1/tmp/v8.json", "coverage-shard-4/coverage-final.json", "coverage/snapshot.json"];
+  const discarded = [
+    "coverage-shard-1/tmp/v8.json",
+    "coverage-shard-4/coverage-final.json",
+    "coverage/snapshot.json",
+    "dist/repo.test.js",
+    "dist/repo.test.d.ts",
+    "src/repo.test.ts",
+  ];
   const retained = [
     "dist/runtime.js",
     "dist/coverage-shard-1",
     "coverage-tools/index.js",
     "coverage-shard-runtime/index.js",
+    "dist/runtime.d.ts",
   ];
   for (const relative of [...discarded, ...retained]) {
     const file = path.join(storage, relative);
@@ -71,6 +79,9 @@ test("bundles exclude nested shard coverage while preserving similarly named run
   const sourceCoverage = path.join(tempRoot, "workspace-source", "coverage-shard-1", "coverage-final.json");
   fs.mkdirSync(path.dirname(sourceCoverage), { recursive: true });
   fs.writeFileSync(sourceCoverage, "keep workspace evidence\n");
+  const thirdPartyTest = path.join(payloadRoot, "node_modules", "parser", "spec.js");
+  fs.mkdirSync(path.dirname(thirdPartyTest), { recursive: true });
+  fs.writeFileSync(thirdPartyTest, "runtime parser specification\n");
 
   pruneReleaseResidue(payloadRoot, cleanup);
 
@@ -78,4 +89,5 @@ test("bundles exclude nested shard coverage while preserving similarly named run
   for (const relative of retained)
     assert.equal(fs.readFileSync(path.join(storage, relative), "utf8"), "fixture\n", relative);
   assert.equal(fs.readFileSync(sourceCoverage, "utf8"), "keep workspace evidence\n");
+  assert.equal(fs.readFileSync(thirdPartyTest, "utf8"), "runtime parser specification\n");
 });

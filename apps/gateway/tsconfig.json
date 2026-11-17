@@ -17,6 +17,6 @@
     { "path": "../../packages/orchestration" },
     { "path": "../../packages/policy-engine" },
     { "path": "../../packages/skills" },
-    { "path": "../../packages/mission-control-shared" }
+    { "path": "../../packages/session-control-client" }
   ]
 }
