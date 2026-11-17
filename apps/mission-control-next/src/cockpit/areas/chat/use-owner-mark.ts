@@ -4,6 +4,7 @@ import {
   commitIntegrationConnectionUpdate,
   useIntegrationConnectionMutation,
 } from "../../../features/native-routes/settings/integration-connection-mutation";
+import { beginChannelOperation } from "../../../features/native-routes/settings/sections/channel-setup-state";
 import { verifyIntegrationReadback } from "../../../features/native-routes/settings/sections/integration-editor-receipts";
 import { ownerActorIdsWith } from "./channel-page-model";
 
@@ -28,6 +29,8 @@ export function useOwnerMark(connection: IntegrationConnection, reload: () => Pr
 
   async function mark(actorId: string, isOwner: boolean) {
     if (busy) return;
+    const operation = beginChannelOperation();
+    if (!operation) return;
     const reviewed = connection;
     setSaving(actorId);
     setNote(null);
@@ -39,7 +42,7 @@ export function useOwnerMark(connection: IntegrationConnection, reload: () => Pr
       },
       isCurrent: () => mounted.current,
       verify: verifyIntegrationReadback,
-    });
+    }).finally(operation.finish);
     if (!mounted.current) return;
     setSaving(null);
     // A lost or locked answer is said once for the page by ChannelLockNote; only a refused save is said here.
