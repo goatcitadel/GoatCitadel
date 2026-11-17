@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
-import type { ApprovalRequest } from "@goatcitadel/contracts";
+import type { ApprovalEffectRecord, ApprovalReplaySnapshot, ApprovalRequest } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { presentRunStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
@@ -19,6 +19,27 @@ import { TimeText } from "../../ui/TimeText";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 import { presentErrorText } from "../../lib/present-error";
 import { presentApprovalEffectKind, presentApprovalEffectStatus, presentApprovalEvent } from "./inbox-vocabulary";
+
+function actionExecutionLabel(effect: ApprovalEffectRecord, replay: ApprovalReplaySnapshot): string {
+  const recorded = replay.approval.actionOutcome;
+  if (recorded === "executed") return "Ran";
+  if (recorded === "policy_blocked") return "Blocked by policy";
+  if (recorded === "delivery_failed") return "Delivery failed";
+  if (recorded === "unknown") return "Couldn't verify outcome";
+  const action = replay.pendingAction?.approvalId === replay.approval.approvalId ? replay.pendingAction : undefined;
+  switch (action?.resolutionStatus) {
+    case "executed":
+      return "Ran";
+    case "failed":
+      return "Failed";
+    case "rejected":
+      return "Not run";
+    default:
+      return effect.status === "completed" || effect.status === "skipped"
+        ? "Couldn't verify outcome"
+        : presentApprovalEffectStatus(effect.status).label;
+  }
+}
 
 /**
  * What a decision with no linked original run means, in plain words. A missing run says nothing about the
@@ -76,6 +97,7 @@ export function ApprovalSettlement({
     },
   });
   const state = query.data;
+  const actionEffects = state?.replay.effects.filter((effect) => effect.effectKind === "pending_action_execute");
   const onFollowOnChangeRef = useRef(onFollowOnChange);
   onFollowOnChangeRef.current = onFollowOnChange;
   const followOnKey = state
@@ -84,6 +106,8 @@ export function ApprovalSettlement({
         approval.approvalId,
         access.identity,
         state.replay.approval.status,
+        state.replay.approval.actionOutcome,
+        state.replay.pendingAction?.resolutionStatus,
         state.replay.effects.map((effect) => [effect.effectId, effect.status]),
         [state.run?.runId, state.run?.status],
         [state.wait?.runId, state.wait?.status],
@@ -109,6 +133,15 @@ export function ApprovalSettlement({
         {approvalDecisionMessage(settled, state?.replay.effects)}
       </p>
       {resolution ? <p className="text-fg-secondary">{resolution}</p> : null}
+      {state && actionEffects?.length ? (
+        <ul aria-label="Approved action outcomes" className="space-y-1 text-fg-secondary">
+          {actionEffects.map((effect) => (
+            <li key={effect.effectId}>
+              {presentApprovalEffectKind(effect.effectKind)} · {actionExecutionLabel(effect, state.replay)}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {state ? (
         <details>
           <summary>Decision history</summary>

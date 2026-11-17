@@ -32,7 +32,7 @@ const record = (approvalId: string, extra: Partial<ApprovalRequest>): ApprovalRe
   ...extra,
 });
 const records: Record<string, ApprovalRequest> = {
-  linked: record("linked", { linkage: { workspaceId: "ws-a" } }),
+  linked: record("linked", { linkage: { workspaceId: "ws-a", toolName: "fs.read" }, preview: { path: "notes.md" } }),
   skill: record("skill", { kind: "skill.lifecycle", riskLevel: "caution" }),
 };
 const inboxItem = (approvalId: string, riskLevel: "safe" | "caution", installWide: boolean): OperatorInboxItem => ({
@@ -41,9 +41,14 @@ const inboxItem = (approvalId: string, riskLevel: "safe" | "caution", installWid
   group: "needs_decision",
   riskLevel,
   title: "Approval",
-  summary: "Summary",
+  summary: "Path: notes.md",
   createdAt: "2026-10-29T12:00:00.000Z",
-  source: { workspaceId: "ws-a", approvalId, ...(installWide ? { installWide: true as const } : {}) },
+  source: {
+    workspaceId: "ws-a",
+    approvalId,
+    toolName: "fs.read",
+    ...(installWide ? { installWide: true as const } : {}),
+  },
   href: "/inbox",
 });
 
@@ -75,26 +80,31 @@ async function renderRow(item: OperatorInboxItem) {
       </QueryClientProvider>,
     ),
   );
-  await vi.waitFor(() => expect(bar.props).toHaveBeenCalled());
-  const [approvalId, options] = api.fetchApproval.mock.calls[0] as [string, Record<string, unknown>];
-  const props = bar.props.mock.lastCall![0] as { approval: ApprovalRequest; workspaceId: string | null };
-  return { approvalId, options, props };
 }
 
 describe("Inbox row decision", () => {
-  it("reads an approval of no workspace without one and decides it with none", async () => {
-    const { approvalId, options, props } = await renderRow(inboxItem("skill", "caution", true));
-    expect(approvalId).toBe("skill");
-    expect(options).not.toHaveProperty("workspaceId");
-    expect(props.approval.approvalId).toBe("skill");
-    expect(props.workspaceId).toBeNull();
+  it("leaves an installation-wide approval to the review screen", async () => {
+    await renderRow(inboxItem("skill", "safe", true));
+    expect(api.fetchApproval).not.toHaveBeenCalled();
+    expect(bar.props).not.toHaveBeenCalled();
   });
 
   it("still reads and decides a linked approval in its workspace", async () => {
-    const { approvalId, options, props } = await renderRow(inboxItem("linked", "safe", false));
+    await renderRow(inboxItem("linked", "safe", false));
+    await vi.waitFor(() => expect(bar.props).toHaveBeenCalled());
+    const [approvalId, options] = api.fetchApproval.mock.calls[0] as [string, Record<string, unknown>];
+    const props = bar.props.mock.lastCall![0] as { approval: ApprovalRequest; workspaceId: string };
     expect(approvalId).toBe("linked");
     expect(options).toHaveProperty("workspaceId", "ws-a");
     expect(props.approval.approvalId).toBe("linked");
     expect(props.workspaceId).toBe("ws-a");
+  });
+
+  it("withholds quick decisions when the fetched path differs from the projected path", async () => {
+    await renderRow({ ...inboxItem("linked", "safe", false), summary: "Path: other.md" });
+    await vi.waitFor(() =>
+      expect(client.getQueryState(client.getQueryCache().getAll()[0]!.queryKey)?.status).toBe("success"),
+    );
+    expect(bar.props).not.toHaveBeenCalled();
   });
 });

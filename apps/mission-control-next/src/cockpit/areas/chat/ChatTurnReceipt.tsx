@@ -45,9 +45,9 @@ export function TurnReceipt({
   if (!onInspectTurn) return <p className={RECEIPT_CLASS}>{details || status}</p>;
   return (
     <button type="button" onClick={() => onInspectTurn(turn.turnId)} className={`${RECEIPT_CLASS} hover:text-accent`}>
-      {details || status}
-      {/* The name starts with the visible receipt (WCAG 2.5.3), then says what the button does. */}
-      <span className="sr-only"> · Open message details</span>
+      <span>
+        <span className="font-medium text-accent">What ran</span> · {details || status}
+      </span>
     </button>
   );
 }

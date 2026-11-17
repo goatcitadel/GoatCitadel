@@ -46,7 +46,7 @@ type Input = {
   ) => void;
   sessionData: Pick<
     ReturnType<typeof useChatSessionData>,
-    "projects" | "loading" | "sidebarNextCursor" | "sidebarLoadingMore" | "loadSidebar"
+    "projects" | "loading" | "sidebarNextCursor" | "sidebarLoadingMore" | "sidebarReadFailed" | "loadSidebar"
   >;
   threadController: Pick<
     ReturnType<typeof useChatThreadController>,
@@ -175,6 +175,7 @@ export function useChatSessionRailPresentation({
     () => ({
       mode: surfaceState.messageMode,
       loading: sessionData.loading,
+      historyUnavailable: sessionData.sidebarReadFailed,
       showProjectCreate: sessionControls.showProjectCreate,
       creatingSession: Boolean(sessionControls.creatingSessionMode),
       search,
@@ -226,6 +227,7 @@ export function useChatSessionRailPresentation({
     }),
     [
       sessionData.loading,
+      sessionData.sidebarReadFailed,
       sessionControls.archiveWorkspacePending,
       threadController.availableFolders,
       blockHistoricalMutation,

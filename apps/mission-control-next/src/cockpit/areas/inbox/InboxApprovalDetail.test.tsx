@@ -477,23 +477,30 @@ describe("Inbox approval detail states (IN-05, IN-07, IN-16)", () => {
   });
 
   it("presents a memory-write preview without hashes, byte counts or mid-word breaks (IN-L01)", async () => {
+    const content = `The demo operator wants model choice visible.\n  [redacted]\n\n${"Long content. ".repeat(130)}End of preview.`;
     api.fetchApproval.mockResolvedValue({
       ...approval,
       kind: "tool_invoke",
-      linkage: { workspaceId: "default", toolName: "memory.write" },
+      linkage: { workspaceId: "default", toolName: "memory.write", sessionId: "source-conversation" },
+      explanationStatus: "failed",
       preview: {
         toolName: "memory.write",
         target: "Memory namespace: demo.goatcitadel",
         title: "Operator preference: visible proof",
         summary:
           "Approval permits this exact request to persist a memory document and indexed content. Admission is not proof of a saved document; execution and lifecycle policy still apply.",
-        content: "The demo operator wants model choice visible.",
+        content,
         contentSummary: `Exact original content: 136 UTF-8 bytes; SHA-256 ${"a".repeat(64)}. Redaction does not change approved executable arguments.`,
       },
     });
     await render();
     await settleUntil(() => Boolean(container.querySelector('[aria-label="Action preview"]')));
     const preview = container.querySelector('[aria-label="Action preview"]')!;
+    expect(preview.querySelector("h4")?.textContent).toBe("Save this preference to memory?");
+    expect(preview.textContent).toContain("Requested from: A conversation in this workspace.");
+    expect(preview.textContent).toContain("Storage target: Memory namespace: demo.goatcitadel");
+    expect(preview.querySelector("details[open] pre")?.textContent).toBe(content);
+    expect(container.textContent?.split(content)).toHaveLength(2);
     expect(preview.textContent).toContain("demo.goatcitadel");
     expect(preview.textContent).toContain("Content size: 136 B");
     // A decision input that shares the hash's line stays visible; only the hash clause moves.

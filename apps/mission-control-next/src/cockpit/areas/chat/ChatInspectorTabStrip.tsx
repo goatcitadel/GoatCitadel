@@ -1,10 +1,5 @@
-import { useScrollEdges } from "../../ui/use-scroll-edges";
 import { TABS, type ChatInspectorTab } from "./chat-inspector-evidence";
 
-/**
- * The inspector's tab list. It owns the edge measuring so the hook mounts together with the strip: the inspector body
- * renders the strip only once a conversation is open, and a measure taken before that would find no element.
- */
 export function ChatInspectorTabStrip({
   tab,
   onSelect,
@@ -12,16 +7,8 @@ export function ChatInspectorTabStrip({
   tab: ChatInspectorTab;
   onSelect: (tab: ChatInspectorTab) => void;
 }) {
-  const { ref, start, end } = useScrollEdges<HTMLDivElement>([]);
   return (
-    <div
-      ref={ref}
-      role="tablist"
-      aria-label="Conversation inspector"
-      data-overflow-start={start || undefined}
-      data-overflow-end={end || undefined}
-      className="cockpit-overflow-fade flex gap-1 overflow-x-auto whitespace-nowrap rounded-md bg-sunken p-1"
-    >
+    <div role="tablist" aria-label="Conversation inspector" className="flex flex-wrap gap-1 rounded-md bg-sunken p-1">
       {TABS.map((entry) => (
         <button
           key={entry.id}
@@ -49,7 +36,7 @@ export function ChatInspectorTabStrip({
             onSelect(TABS[next]!.id);
             (event.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
           }}
-          className="min-h-8 shrink-0 rounded-md px-2 text-xs font-medium text-fg-secondary hover:bg-raised aria-selected:bg-raised aria-selected:text-fg"
+          className="min-h-8 rounded-md px-2 text-xs font-medium text-fg-secondary hover:bg-raised aria-selected:bg-raised aria-selected:text-fg max-sm:min-h-11"
         >
           {entry.label}
         </button>

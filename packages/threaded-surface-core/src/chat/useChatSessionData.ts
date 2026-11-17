@@ -164,6 +164,7 @@ export function useChatSessionData(input: ChatSessionDataInput) {
   const loadSidebarGenerationRef = useRef(0);
   const sidebarScopeKey = chatSidebarScopeKey(input);
   const sidebarScope = useRef({ key: sidebarScopeKey });
+  const [failedSidebarScope, setFailedSidebarScope] = useState<typeof sidebarScope.current | null>(null);
   if (sidebarScope.current.key !== sidebarScopeKey) sidebarScope.current = { key: sidebarScopeKey };
   const renderedSidebarScope = sidebarScope.current;
   const loadedSidebarPages = useRef<{ scope: typeof renderedSidebarScope; cursors: Array<string | undefined> }>({
@@ -454,10 +455,14 @@ export function useChatSessionData(input: ChatSessionDataInput) {
           { bypassCache: options.bypassCache },
         ));
       } catch (error) {
-        if (isCurrent()) throw error;
+        if (isCurrent()) {
+          setFailedSidebarScope(renderedSidebarScope);
+          throw error;
+        }
         return;
       }
       if (!isCurrent()) return;
+      setFailedSidebarScope(null);
       const requestedSessionId = !trimmedSearchQuery ? input.routeSessionId?.trim() : undefined;
       if (requestedSessionId && !nextSessions.items.some((item) => item.sessionId === requestedSessionId)) {
         // A deep link may be older than the first page. Read only that exact,
@@ -1036,6 +1041,7 @@ export function useChatSessionData(input: ChatSessionDataInput) {
     messagesLoading,
     secondaryLoading,
     sidebarNextCursor,
+    sidebarReadFailed: failedSidebarScope === renderedSidebarScope,
     sidebarLoadingMore,
     historicalWindow,
     historicalWindowLoading,

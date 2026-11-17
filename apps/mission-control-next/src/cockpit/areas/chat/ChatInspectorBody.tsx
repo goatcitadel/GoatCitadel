@@ -34,10 +34,12 @@ export function ChatInspector({
   input,
   targetTurnId,
   initialTab = "run",
+  onOpenArtifact,
 }: {
   input: MissionThreadedRenderSurfaceInput;
   targetTurnId?: string | null;
   initialTab?: ChatInspectorTab;
+  onOpenArtifact?: (turnId: string, artifactId: string) => void;
 }) {
   const [tab, setTab] = useState<ChatInspectorTab>(initialTab);
   useEffect(() => setTab(initialTab), [initialTab]);
@@ -52,9 +54,10 @@ export function ChatInspector({
         turn.trace.turnId === turn.turnId,
     ) ?? [];
   const selectedTurn =
-    visibleTurns.find((turn) => turn.turnId === targetTurnId) ??
-    visibleTurns.find((turn) => turn.turnId === active.selectedTurnId) ??
-    visibleTurns.at(-1);
+    targetTurnId != null
+      ? visibleTurns.find((turn) => turn.turnId === targetTurnId)
+      : (visibleTurns.find((turn) => turn.turnId === active.selectedTurnId) ?? visibleTurns.at(-1));
+  const unavailableTurn = targetTurnId != null && !selectedTurn;
   const run =
     selectedTurn && active.delegationRun?.attachedTurnId === selectedTurn.turnId ? active.delegationRun : null;
   const openedArtifact = dock?.activeGeneratedArtifact;
@@ -104,7 +107,22 @@ export function ChatInspector({
           </>
         ) : null}
 
-        {tab === "turn" ? <ChatInspectorTurnPanel selectedTurn={selectedTurn} /> : null}
+        {tab === "turn" ? (
+          unavailableTurn ? (
+            <p className="text-sm text-fg-muted">
+              Recorded details for this message are unavailable in the current conversation view.
+            </p>
+          ) : (
+            <ChatInspectorTurnPanel
+              selectedTurn={selectedTurn}
+              onOpenArtifact={
+                selectedTurn && currentContextMatchesSession && onOpenArtifact
+                  ? (artifactId) => onOpenArtifact(selectedTurn.turnId, artifactId)
+                  : undefined
+              }
+            />
+          )
+        ) : null}
 
         {tab === "sources" ? <SourcesPanel turn={selectedTurn} /> : null}
 

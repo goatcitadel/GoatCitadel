@@ -144,6 +144,7 @@ export function ChatAreaView({
     ready: boolean;
   } | null>(null);
   const [artifactReadRevision, setArtifactReadRevision] = useState(0);
+  const openTranscriptArtifact = useStableHandler(openArtifact);
   useEffect(() => {
     const pending = pendingArtifact.current;
     if (!pending) return;
@@ -172,8 +173,16 @@ export function ChatAreaView({
     inspectorTab.current = "files";
     open({
       source: "chat",
+      focusOnOpen: true,
       title: "Conversation",
-      body: <DeferredChatInspector input={input} targetTurnId={pending.turnId} initialTab="files" />,
+      body: (
+        <DeferredChatInspector
+          input={input}
+          targetTurnId={pending.turnId}
+          initialTab="files"
+          onOpenArtifact={openTranscriptArtifact}
+        />
+      ),
     });
   }, [
     input,
@@ -184,6 +193,7 @@ export function ChatAreaView({
     activeWorkspaceId,
     getDismissalGeneration,
     artifactReadRevision,
+    openTranscriptArtifact,
   ]);
   useEffect(
     () => () => {
@@ -215,11 +225,12 @@ export function ChatAreaView({
           input={input}
           targetTurnId={inspectorTurnId.current}
           initialTab={inspectorTab.current ?? inspectorTabFor(active, inspectorTurnId.current)}
+          onOpenArtifact={openTranscriptArtifact}
         />
       ),
     });
   };
-  const openArtifact = (turnId: string, artifactId?: string) => {
+  function openArtifact(turnId: string, artifactId?: string) {
     if (!active) return;
     const exactId =
       artifactId ?? active.thread?.turns.find((turn) => turn.turnId === turnId)?.generatedArtifacts?.[0]?.artifactId;
@@ -247,11 +258,10 @@ export function ChatAreaView({
         if (pendingArtifact.current === pending) pendingArtifact.current = null;
       },
     );
-  };
+  }
   // The transcript's turns are memoized, so its handlers keep one identity and call the latest versions.
   const inspectTurn = useStableHandler((turnId: string) => openInspector(turnId, "turn"));
   const inspectRun = useStableHandler((turnId: string) => openInspector(turnId, "run"));
-  const openTranscriptArtifact = useStableHandler(openArtifact);
   const startNewConversation = useStableHandler(() => void input.sessionRail.onCreateSession());
   const reviewChangePlan = useOptionalStableHandler(input.onReviewChangePlan);
   const openProjects = () => navigate("/chat/projects");
@@ -285,11 +295,12 @@ export function ChatAreaView({
             input={input}
             targetTurnId={inspectorTurnId.current}
             initialTab={inspectorTab.current ?? inspectorTabFor(active, inspectorTurnId.current)}
+            onOpenArtifact={openTranscriptArtifact}
           />
         ),
       });
     else closeIfOpen("chat");
-  }, [input, active, selectedSessionId, register, closeIfOpen]);
+  }, [input, active, selectedSessionId, register, closeIfOpen, openTranscriptArtifact]);
   useEffect(() => () => closeIfOpen("chat"), [closeIfOpen]);
   return (
     <section aria-label="Chat" className="flex min-h-0 min-w-0 flex-1">
@@ -335,7 +346,11 @@ export function ChatAreaView({
         {active ? (
           <DeferredProjectAssignmentReview active={active} search={search} identity={inspectorIdentity} />
         ) : null}
-        <ChatSetupGate onboarding={onboarding} hidden={buildOpen} onSetup={() => navigate("/settings/first-run")} />
+        <ChatSetupGate
+          onboarding={onboarding}
+          hidden={buildOpen || !active}
+          onSetup={() => navigate("/settings/first-run")}
+        />
         {buildOpen && active?.streamError ? (
           <ChatStreamErrorNotice
             error={active.streamError}
@@ -376,6 +391,8 @@ export function ChatAreaView({
         ) : (
           <ChatEmptyState
             rail={input.sessionRail}
+            onboarding={onboarding}
+            onSetup={() => navigate("/settings/first-run")}
             onOpenConversations={() => setConversationsOpen(true)}
             railYields={Boolean(inspectorContent)}
           />

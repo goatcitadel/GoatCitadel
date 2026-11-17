@@ -5,12 +5,15 @@ import { queryKeys } from "../../data/query-keys";
 import { ApprovalDecisionBar } from "./ApprovalDecisionBar";
 import { inboxApprovalRecordKey, readInboxApproval } from "./inbox-record-read";
 
-/** Only the two lowest risk tiers may be decided straight from the list; everything else opens for review. */
+/** Quick decisions are limited to safe reads whose single destination can be shown in full on the row. */
 export function canDecideInRow(item: OperatorInboxItem): boolean {
   return (
     item.kind === "approval" &&
     Boolean(item.source.approvalId) &&
-    (item.riskLevel === "safe" || item.riskLevel === "caution")
+    item.riskLevel === "safe" &&
+    !item.source.installWide &&
+    item.source.toolName === "fs.read" &&
+    /^Path: \S/u.test(item.summary)
   );
 }
 
@@ -30,17 +33,27 @@ export function InboxRowDecision({
   const access = useProjectAccess(workspaceId);
   const queryClient = useQueryClient();
   const approvalId = item.source.approvalId;
-  // An approval of no workspace is read and decided without one, as in the detail panel.
-  const installWide = item.source.installWide === true;
-  const queryKey = inboxApprovalRecordKey(workspaceId, installWide, approvalId!, access.identity);
+  const eligible = canDecideInRow(item);
+  const queryKey = inboxApprovalRecordKey(workspaceId, false, approvalId!, access.identity);
   const query = useQuery({
     queryKey,
-    queryFn: ({ signal }) => readInboxApproval(approvalId!, { workspaceId, installWide, signal }),
-    enabled: Boolean(approvalId),
+    queryFn: ({ signal }) => readInboxApproval(approvalId!, { workspaceId, installWide: false, signal }),
+    enabled: eligible,
     staleTime: 15_000,
   });
   const approval = query.data;
-  if (!approval || approval.status !== "pending") return null;
+  if (
+    !eligible ||
+    !approval ||
+    approval.status !== "pending" ||
+    approval.riskLevel !== "safe" ||
+    (approval.linkage?.toolName ?? approval.kind) !== "fs.read" ||
+    approval.mcpElicitation ||
+    approval.preview?.outsideRootRead === true ||
+    typeof approval.preview?.path !== "string" ||
+    item.summary !== `Path: ${approval.preview.path}`
+  )
+    return null;
   const refresh = (message: string, settled: boolean) => {
     onDecision(message, settled);
     void queryClient.resetQueries({ queryKey, exact: true });
@@ -51,7 +64,7 @@ export function InboxRowDecision({
       compact
       item={item}
       approval={approval}
-      workspaceId={installWide ? null : workspaceId}
+      workspaceId={workspaceId}
       onResolved={(message) => refresh(message, true)}
       onInvalidated={(message) =>
         refresh(message ?? "The approval changed. Review the refreshed record before deciding.", false)

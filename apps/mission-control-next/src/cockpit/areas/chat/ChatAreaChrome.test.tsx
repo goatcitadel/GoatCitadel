@@ -475,9 +475,12 @@ describe("ChatSetupGate", () => {
 });
 
 describe("ChatEmptyState", () => {
-  function renderEmpty(rail: Partial<MissionThreadedRenderSurfaceInput["sessionRail"]>) {
+  function renderEmpty(
+    rail: Partial<MissionThreadedRenderSurfaceInput["sessionRail"]>,
+    options: Partial<React.ComponentProps<typeof ChatEmptyState>> = {},
+  ) {
     const base = input().sessionRail;
-    act(() => root.render(<ChatEmptyState rail={{ ...base, selectedSessionId: null, ...rail }} />));
+    act(() => root.render(<ChatEmptyState rail={{ ...base, selectedSessionId: null, ...rail }} {...options} />));
   }
 
   it("invites the first conversation when the list is empty", () => {
@@ -498,5 +501,44 @@ describe("ChatEmptyState", () => {
     expect(container.textContent).toContain("Choose a conversation");
     renderEmpty({ missionSessions: [], search: "", historyView: "archived" });
     expect(container.textContent).toContain("Choose a conversation");
+  });
+
+  it("keeps the read-only example available when setup is needed", () => {
+    const onCreateSession = vi.fn();
+    const onSetup = vi.fn();
+    const state = onboardingFixture();
+    renderEmpty(
+      { missionSessions: [], onCreateSession },
+      {
+        onboarding: {
+          data: {
+            ...state,
+            settings: {
+              ...state.settings,
+              llm: { ...state.settings.llm, activeProviderId: "", activeModel: "" },
+            },
+          },
+          isError: false,
+        },
+        onSetup,
+      },
+    );
+    expect(container.querySelector("summary")?.textContent).toBe("See a sample approval");
+    expect(container.querySelector("details")?.textContent).toContain("Recorded result");
+    expect(onCreateSession).not.toHaveBeenCalled();
+    const setup = container.querySelector<HTMLButtonElement>("button.bg-accent");
+    expect(setup?.textContent).toBe("Set up a model");
+    act(() => setup?.click());
+    expect(onSetup).toHaveBeenCalledOnce();
+  });
+
+  it("does not treat a scoped, partial or failed read as first use", () => {
+    for (const rail of [{ selectedProjectId: "project" }, { hasMoreSessions: true }, { selectedTag: "release" }]) {
+      renderEmpty({ missionSessions: [], ...rail });
+      expect(container.textContent).not.toContain("See a sample approval");
+    }
+    renderEmpty({ missionSessions: [], historyUnavailable: true });
+    expect(container.textContent).toContain("Couldn't confirm conversation history");
+    expect(container.textContent).not.toContain("See a sample approval");
   });
 });

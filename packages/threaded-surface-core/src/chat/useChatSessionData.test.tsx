@@ -798,6 +798,22 @@ describe("useChatSessionData", () => {
     expect(latestHarness?.result.sessions?.items.map((item) => item.sessionId)).toEqual(["session-newest"]);
     expect(latestHarness?.errors).not.toContain("stale sidebar failed");
     expect(latestHarness?.result.sidebarLoadingMore).toBe(false);
+    expect(latestHarness?.result.sidebarReadFailed).toBe(false);
+  });
+
+  it("reports a scoped sidebar failure until a new read of that list succeeds", async () => {
+    fetchChatSessionsMock.mockRejectedValueOnce(new Error("Conversation list unavailable"));
+    await act(async () => {
+      create(<Harness workspaceId="workspace-sidebar-unavailable" />);
+      await flushEffects();
+    });
+    expect(latestHarness?.result.sidebarReadFailed).toBe(true);
+    fetchChatSessionsMock.mockResolvedValueOnce({ items: [] });
+    await act(async () => {
+      await latestHarness!.result.loadSidebar("active", { bypassCache: true });
+    });
+    expect(latestHarness?.result.sidebarReadFailed).toBe(false);
+    expect(latestHarness?.result.sessions?.items).toEqual([]);
   });
 
   it("fences competing historical hits and clears a pending hit when the selected session changes", async () => {

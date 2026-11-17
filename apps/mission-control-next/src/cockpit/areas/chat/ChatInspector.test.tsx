@@ -96,9 +96,6 @@ describe("conversation inspector", () => {
     const panel = container.querySelector('[role="tabpanel"]')!;
     expect(panel.getAttribute("aria-labelledby")).toBe("cockpit-inspector-tab-turn");
     expect(panel.hasAttribute("aria-label")).toBe(false);
-    expect(container.querySelector('[role="tablist"]')?.className).toContain("overflow-x-auto");
-    // The tab strip fades the side that hides more tabs (U-CH-048).
-    expect(container.querySelector('[role="tablist"]')?.className).toContain("cockpit-overflow-fade");
     await act(async () =>
       (container.querySelector('[role="tab"][aria-controls="cockpit-inspector-sources"]') as HTMLButtonElement).click(),
     );
@@ -187,6 +184,38 @@ describe("conversation inspector", () => {
     expect(container.textContent).not.toContain("Recorded review details");
   });
 
+  it("does not substitute the newest turn when an explicitly requested turn is unavailable", async () => {
+    const input = fixture();
+    await act(async () => root.render(<ChatInspector input={input} targetTurnId="stale-turn" initialTab="turn" />));
+    const panel = container.querySelector('[role="tabpanel"]');
+    expect(panel?.textContent).toContain("Recorded details for this message are unavailable");
+    expect(panel?.querySelector("dl")).toBeNull();
+  });
+
+  it("passes the selected turn and exact output to the scoped opener without switching tabs early", async () => {
+    const input = fixture();
+    const onOpenArtifact = vi.fn();
+    input.activeSessionSurfaceProps!.thread!.turns[0]!.generatedArtifacts = [
+      {
+        artifactId: "artifact-b",
+        title: "Brief",
+        kind: "markdown",
+        version: 1,
+        sourceSurface: "chat",
+        createdAt: "2026-11-16T00:00:00Z",
+      },
+    ];
+    await act(async () =>
+      root.render(
+        <ChatInspector input={input} targetTurnId="turn-1" initialTab="turn" onOpenArtifact={onOpenArtifact} />,
+      ),
+    );
+    const open = [...container.querySelectorAll("button")].find((button) => button.textContent === "Open Brief")!;
+    await act(async () => open.click());
+    expect(onOpenArtifact).toHaveBeenCalledExactlyOnceWith("turn-1", "artifact-b");
+    expect(container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Message");
+  });
+
   it.each(["verified", "admission_verified"] as const)(
     "separates recorded turn context and scopes %s source inspection",
     async (status) => {
@@ -266,16 +295,17 @@ describe("conversation inspector", () => {
     },
   );
 
-  it("fades the tab strip's hidden side when the conversation opens after the inspector did (U-CH-048)", async () => {
+  it("can reach the last tab with the keyboard when a conversation opens after the inspector did", async () => {
     const empty = { ...fixture(), activeSessionSurfaceProps: null } as unknown as MissionThreadedRenderSurfaceInput;
     await act(async () => root.render(<ChatInspector input={empty} />));
     expect(container.querySelector('[role="tablist"]')).toBeNull();
     await act(async () => root.render(<ChatInspector input={fixture()} />));
     const strip = container.querySelector<HTMLElement>('[role="tablist"]')!;
-    Object.defineProperty(strip, "scrollWidth", { configurable: true, value: 600 });
-    Object.defineProperty(strip, "clientWidth", { configurable: true, value: 300 });
-    await act(async () => strip.dispatchEvent(new Event("scroll")));
-    expect(strip.hasAttribute("data-overflow-end")).toBe(true);
+    const first = strip.querySelector<HTMLButtonElement>('[role="tab"][tabindex="0"]')!;
+    first.focus();
+    await act(async () => first.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+    expect(document.activeElement?.textContent).toBe("Background");
+    expect(document.activeElement?.getAttribute("aria-selected")).toBe("true");
   });
 
   it("offers session control for the selected conversation", async () => {

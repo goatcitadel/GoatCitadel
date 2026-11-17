@@ -1311,7 +1311,14 @@ test("cockpit inline decisions keep the exact durable approval and user-input re
       .map((operation) => operation.sessionKey),
     ["approval", "userInput"],
   );
-  assert.ok(cockpit.operations.some((operation) => operation.kind === "confirm" && operation.name === "Approve once"));
+  const review = cockpit.operations.findIndex(
+    (operation) => operation.kind === "click" && operation.name === "Review danger approval",
+  );
+  assert.ok(review >= 0);
+  assert.deepEqual(cockpit.operations.slice(review + 1, review + 3), [
+    { kind: "assert-control", name: "Hide review", exact: true },
+    { kind: "click", name: "Approve once", exact: true },
+  ]);
   assert.deepEqual(cockpit.operations.at(-1), { kind: "api", probe: "cockpit-inline-decisions" });
   const leave = cockpit.operations.findIndex(
     (operation) => operation.kind === "fixture-session" && operation.sessionKey === "userInput",

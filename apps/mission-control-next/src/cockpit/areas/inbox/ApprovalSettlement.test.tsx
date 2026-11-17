@@ -15,7 +15,11 @@ vi.mock("../../../features/native-routes/projects/use-project-access", () => ({
 
 const approval = { approvalId: "approval-a", status: "approved", kind: "tool_invoke" } as ApprovalRequest;
 const state = (effect: string, run: string, runId = "run-a", wait = "completed", waitId = "wait-a") => ({
-  replay: { approval, effects: [{ effectId: "effect-a", status: effect }], events: [] },
+  replay: {
+    approval,
+    effects: [{ effectId: "effect-a", effectKind: "pending_action_execute", status: effect }],
+    events: [],
+  },
   run: { runId, status: run },
   wait: { runId: waitId, status: wait },
 });
@@ -86,13 +90,40 @@ it("notifies Chat when a slow effect or linked run changes, without refreshing o
   const notify = vi.fn();
   await render(notify);
   await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+  const outcome = () => container.querySelector('[aria-label="Approved action outcomes"]')?.textContent;
+  expect(outcome()).toBe("Run the approved action · Running");
+  expect(outcome()).not.toMatch(/saved|verified/i);
   await refresh(state("running", "waiting"));
   expect(notify).toHaveBeenCalledTimes(1);
   await refresh(state("completed", "running"));
   expect(notify).toHaveBeenCalledTimes(2);
+  expect(outcome()).toBe("Run the approved action · Couldn't verify outcome");
   await refresh(state("completed", "completed"));
   expect(notify).toHaveBeenCalledTimes(3);
   expect(container.textContent).toContain("Original linked work: Done");
+});
+
+it("keeps a completed worker with a missing action distinguishable from a recorded execution", async () => {
+  const execution = (result: Record<string, string>, resolutionStatus?: string) => {
+    const snapshot = state("completed", "completed");
+    return {
+      ...snapshot,
+      replay: {
+        ...snapshot.replay,
+        effects: [{ ...snapshot.replay.effects[0]!, result }],
+        pendingAction: resolutionStatus ? { approvalId: approval.approvalId, resolutionStatus } : undefined,
+      },
+    };
+  };
+  mocks.read.mockResolvedValue(execution({ resolutionStatus: "missing" }));
+  await render(vi.fn());
+  await waitForRefresh(false);
+  const outcome = () => container.querySelector('[aria-label="Approved action outcomes"]')?.textContent;
+  expect(outcome()).toBe("Run the approved action · Couldn't verify outcome");
+  await refresh(execution({ outcome: "executed" }, "failed"));
+  expect(outcome()).toBe("Run the approved action · Failed");
+  await refresh(execution({ outcome: "executed" }, "executed"));
+  expect(outcome()).toBe("Run the approved action · Ran");
 });
 
 it("shows background checking as quiet text instead of a live region", async () => {

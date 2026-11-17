@@ -29,6 +29,8 @@ export interface MissionThreadedSessionRailData {
   mode: ChatMode;
   /** Initial conversation discovery is still pending; an empty list is not yet an empty history. */
   loading?: boolean;
+  /** The scoped conversation list could not be read. */
+  historyUnavailable?: boolean;
   showProjectCreate: boolean;
   creatingSession: boolean;
   search: string;
