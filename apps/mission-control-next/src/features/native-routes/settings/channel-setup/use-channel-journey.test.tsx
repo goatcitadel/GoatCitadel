@@ -196,7 +196,11 @@ describe("feature-aware channel diagnostics", () => {
           loading,
         });
       });
-      return <button onClick={() => setSelected(next.connectionId)}>Switch connection</button>;
+      return (
+        <button type="button" onClick={() => setSelected(next.connectionId)}>
+          Switch connection
+        </button>
+      );
     }
 
     await act(async () => {
