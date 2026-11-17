@@ -63,10 +63,15 @@ describe("saved MCP admission through Gateway composition", () => {
       };
       const assertAllowed = (
         GatewayService.prototype as unknown as {
-          assertRequesterAdmissionToolAllowed(this: unknown, currentScope: typeof scope, name: string): Promise<void>;
+          assertRequesterAdmissionToolAllowed(
+            this: unknown,
+            currentScope: typeof scope,
+            name: string,
+            serverId: string,
+          ): Promise<void>;
         }
       ).assertRequesterAdmissionToolAllowed;
-      const result = assertAllowed.call(stub, scope, "mcp.selected-server.read");
+      const result = assertAllowed.call(stub, scope, "mcp.selected-server.read", "selected-server");
       if (allowed) {
         await expect(result).resolves.toBeUndefined();
         expect(stub.recordDevDiagnostic).not.toHaveBeenCalled();
