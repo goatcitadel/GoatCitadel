@@ -1039,11 +1039,11 @@ describe("ChatTranscript", () => {
     expect(container.textContent).not.toContain("Assistant hidden");
     await act(async () => vi.dynamicImportSettled());
     const receipt = [...container.querySelectorAll("button")].find((button) =>
-      button.textContent?.endsWith(" · Open message details"),
+      button.textContent?.startsWith("What ran"),
     );
-    // The receipt's accessible name starts with its visible model, cost and timing text.
+    // The receipt's accessible name starts with the visible action.
     expect(receipt?.hasAttribute("aria-label")).toBe(false);
-    expect(receipt?.textContent).toMatch(/^.+ · Cost .+ · Open message details$/);
+    expect(receipt?.textContent).toMatch(/^What ran · .+ · Cost .+$/);
     await act(async () => receipt?.click());
     // The receipt opens the Chat inspector's Message tab for this turn.
     expect(onInspectTurn).toHaveBeenCalledWith("visible");

@@ -19,7 +19,7 @@ import { chatSelectionHref } from "./chat-selection-evidence";
 import type { ChatInspectorTab } from "./chat-inspector-evidence";
 import { readCockpitHistory } from "../../app/cockpit-history";
 import { useInspector } from "../../app/inspector";
-import { InspectorSourceContext } from "../../app/inspector-context";
+import { InspectorSourceContext, type InspectorContent } from "../../app/inspector-context";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { channelPageHref, messagingView } from "../../app/routes";
 import { ChatMainColumn } from "./ChatMainColumn";
@@ -39,6 +39,20 @@ import "../../../features/threaded-surface/styles/btw-side-chat.css";
 import { useOptionalStableHandler, useStableHandler } from "../../../features/threaded-surface/useStableHandler";
 
 const LazyChatBuildEditor = lazy(async () => ({ default: (await import("./ChatBuildEditor")).ChatBuildEditor }));
+
+function conversationInspector(
+  input: MissionThreadedRenderSurfaceInput,
+  targetTurnId: string | null,
+  tab: ChatInspectorTab | null,
+  onOpenArtifact: (turnId: string, artifactId?: string) => void,
+): InspectorContent {
+  const initialTab = tab ?? inspectorTabFor(input.activeSessionSurfaceProps, targetTurnId);
+  return {
+    source: "chat",
+    title: "Conversation",
+    body: <DeferredChatInspector {...{ input, targetTurnId, initialTab, onOpenArtifact }} />,
+  };
+}
 
 export { artifactInspectorHistoryMatches, buildEditorTurnId, inspectorTabFor } from "./chat-area-inspector-target";
 
@@ -144,6 +158,7 @@ export function ChatAreaView({
     ready: boolean;
   } | null>(null);
   const [artifactReadRevision, setArtifactReadRevision] = useState(0);
+  const openTranscriptArtifact = useStableHandler(openArtifact);
   useEffect(() => {
     const pending = pendingArtifact.current;
     if (!pending) return;
@@ -170,11 +185,7 @@ export function ChatAreaView({
     pendingArtifact.current = null;
     inspectorTurnId.current = pending.turnId;
     inspectorTab.current = "files";
-    open({
-      source: "chat",
-      title: "Conversation",
-      body: <DeferredChatInspector input={input} targetTurnId={pending.turnId} initialTab="files" />,
-    });
+    open({ ...conversationInspector(input, pending.turnId, "files", openTranscriptArtifact), focusOnOpen: true });
   }, [
     input,
     active,
@@ -184,6 +195,7 @@ export function ChatAreaView({
     activeWorkspaceId,
     getDismissalGeneration,
     artifactReadRevision,
+    openTranscriptArtifact,
   ]);
   useEffect(
     () => () => {
@@ -207,19 +219,11 @@ export function ChatAreaView({
     inspectorTab.current = tab ?? inspectorTabFor(active, inspectorTurnId.current);
     if (turnId) active?.onSelectTurn(turnId);
     open({
-      source: "chat",
+      ...conversationInspector(input, inspectorTurnId.current, inspectorTab.current, openTranscriptArtifact),
       focusOnOpen: true,
-      title: "Conversation",
-      body: (
-        <DeferredChatInspector
-          input={input}
-          targetTurnId={inspectorTurnId.current}
-          initialTab={inspectorTab.current ?? inspectorTabFor(active, inspectorTurnId.current)}
-        />
-      ),
     });
   };
-  const openArtifact = (turnId: string, artifactId?: string) => {
+  function openArtifact(turnId: string, artifactId?: string) {
     if (!active) return;
     const exactId =
       artifactId ?? active.thread?.turns.find((turn) => turn.turnId === turnId)?.generatedArtifacts?.[0]?.artifactId;
@@ -247,11 +251,10 @@ export function ChatAreaView({
         if (pendingArtifact.current === pending) pendingArtifact.current = null;
       },
     );
-  };
+  }
   // The transcript's turns are memoized, so its handlers keep one identity and call the latest versions.
   const inspectTurn = useStableHandler((turnId: string) => openInspector(turnId, "turn"));
   const inspectRun = useStableHandler((turnId: string) => openInspector(turnId, "run"));
-  const openTranscriptArtifact = useStableHandler(openArtifact);
   const startNewConversation = useStableHandler(() => void input.sessionRail.onCreateSession());
   const reviewChangePlan = useOptionalStableHandler(input.onReviewChangePlan);
   const openProjects = () => navigate("/chat/projects");
@@ -277,19 +280,12 @@ export function ChatAreaView({
   useEffect(() => () => onVisibleSessionChange?.(undefined), [onVisibleSessionChange]);
   useEffect(() => {
     if (active && selectedSessionId)
-      register("chat", {
-        source: "chat",
-        title: "Conversation",
-        body: (
-          <DeferredChatInspector
-            input={input}
-            targetTurnId={inspectorTurnId.current}
-            initialTab={inspectorTab.current ?? inspectorTabFor(active, inspectorTurnId.current)}
-          />
-        ),
-      });
+      register(
+        "chat",
+        conversationInspector(input, inspectorTurnId.current, inspectorTab.current, openTranscriptArtifact),
+      );
     else closeIfOpen("chat");
-  }, [input, active, selectedSessionId, register, closeIfOpen]);
+  }, [input, active, selectedSessionId, register, closeIfOpen, openTranscriptArtifact]);
   useEffect(() => () => closeIfOpen("chat"), [closeIfOpen]);
   return (
     <section aria-label="Chat" className="flex min-h-0 min-w-0 flex-1">
@@ -335,7 +331,11 @@ export function ChatAreaView({
         {active ? (
           <DeferredProjectAssignmentReview active={active} search={search} identity={inspectorIdentity} />
         ) : null}
-        <ChatSetupGate onboarding={onboarding} hidden={buildOpen} onSetup={() => navigate("/settings/first-run")} />
+        <ChatSetupGate
+          onboarding={onboarding}
+          hidden={buildOpen || !active}
+          onSetup={() => navigate("/settings/first-run")}
+        />
         {buildOpen && active?.streamError ? (
           <ChatStreamErrorNotice
             error={active.streamError}
@@ -376,6 +376,8 @@ export function ChatAreaView({
         ) : (
           <ChatEmptyState
             rail={input.sessionRail}
+            onboarding={onboarding}
+            onSetup={() => navigate("/settings/first-run")}
             onOpenConversations={() => setConversationsOpen(true)}
             railYields={Boolean(inspectorContent)}
           />

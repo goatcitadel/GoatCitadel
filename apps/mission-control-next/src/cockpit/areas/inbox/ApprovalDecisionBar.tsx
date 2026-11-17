@@ -63,6 +63,8 @@ interface ApprovalDecisionBarProps {
   checking?: boolean;
   /** The surrounding view already states the expiry (Inbox approval detail), so the review summary leaves it out. */
   expiryShownNearby?: boolean;
+  /** A reviewer directly above the decision bar already presents the exact request. */
+  summaryShownNearby?: boolean;
   /** An in-row decision: the buttons and their outcome only. The detail panel keeps the full review. */
   compact?: boolean;
   /** Pin the Approve/Deny buttons to the bottom of the scrolling panel so they never need a scroll to reach. */
@@ -151,6 +153,7 @@ function ApprovalDecisionReview({
   workspaceId,
   focusAction,
   expiryShownNearby = false,
+  summaryShownNearby = false,
   compact = false,
   stickyDecisions = false,
   reviewedInPlace = false,
@@ -387,7 +390,7 @@ function ApprovalDecisionReview({
         review={review}
         loading={specialist.loading}
         unavailable={specialist.unavailable}
-        showSummary={!compact && !reviewInCard}
+        showSummary={!compact && !reviewInCard && !summaryShownNearby}
         hasPreview={hasPreview || specializedReview}
         showExpiry={!expiryShownNearby}
       />

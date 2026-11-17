@@ -12,6 +12,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
+import { buildApprovalReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-generic-evidence";
 import {
   presentApprovalOutcome,
   presentApprovalStatus,
@@ -25,6 +26,7 @@ import { queryKeys } from "../../data/query-keys";
 import { inboxApprovalRecordKey, readInboxApproval } from "./inbox-record-read";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { hasExpired, useMinuteClock } from "./use-minute-clock";
+import { ApprovalReviewSummaryContent, reviewsMemoryWrite } from "./ApprovalReviewSummaryContent";
 
 export function InboxApprovalDetail({
   item,
@@ -81,6 +83,8 @@ export function InboxApprovalDetail({
   const approval = view.record?.status === "pending" ? view.record : undefined;
   const settled = view.record && view.record.status !== "pending" ? view.record : undefined;
   const evidence = approval ? buildApprovalEvidenceModel(approval.preview) : null;
+  const memoryPreview =
+    approval && reviewsMemoryWrite(approval) ? buildApprovalReviewEvidenceModel(approval.preview) : null;
   // A decided record stays evidence: its request is shown read-only, never with decision controls.
   const settledEvidence = settled ? buildApprovalEvidenceModel(settled.preview) : null;
   const specialist = Boolean(approval && ["code_mode.run", "remote_worker.native_runtime"].includes(approval.kind));
@@ -195,14 +199,14 @@ export function InboxApprovalDetail({
             />
           </div>
           {approval.expiresAt ? <p className="text-fg-muted">{approvalExpiryLabel(approval.expiresAt, now)}</p> : null}
-          {explanationFailed ? (
+          {explanationFailed && !memoryPreview ? (
             <p role="alert">Approval summary unavailable. Review the action preview before deciding.</p>
-          ) : (
+          ) : !memoryPreview ? (
             <p className="text-fg-secondary">
               {approvalExplanationLine(approval.explanation?.summary, approval.explanationStatus)}
             </p>
-          )}
-          {approval.explanation?.riskExplanation ? (
+          ) : null}
+          {!memoryPreview && approval.explanation?.riskExplanation ? (
             <p className="text-fg-secondary">{approval.explanation.riskExplanation}</p>
           ) : null}
           {approval.explanationError ? (
@@ -213,7 +217,27 @@ export function InboxApprovalDetail({
           {approval.explanation?.saferAlternative ? (
             <p className="text-fg-secondary">Safer option: {approval.explanation.saferAlternative}</p>
           ) : null}
-          {evidence ? (
+          {memoryPreview ? (
+            <section aria-label="Action preview" className="border-t border-line-subtle pt-3">
+              <ApprovalReviewSummaryContent
+                approval={approval}
+                evidence={memoryPreview}
+                workspaceId={workspaceId}
+                showExpiry={false}
+              />
+              {explanationFailed ? (
+                <p className="mt-2 text-xs text-fg-muted">
+                  Approval summary unavailable. The recorded action is shown above.
+                </p>
+              ) : null}
+              {approval.explanation?.summary ? (
+                <details className="mt-2">
+                  <summary className="cursor-pointer">Approval explanation</summary>
+                  <p className="mt-1 text-fg-secondary">{approval.explanation.summary}</p>
+                </details>
+              ) : null}
+            </section>
+          ) : evidence ? (
             <section aria-label="Action preview" className="space-y-2 border-t border-line-subtle pt-3">
               <h4 className="font-medium text-fg">Action preview</h4>
               {evidence.targets.length ? (
@@ -296,6 +320,7 @@ export function InboxApprovalDetail({
             <InboxApprovalActions
               // This detail states the expiry above, so the decision summary leaves it out.
               expiryShownNearby
+              summaryShownNearby={Boolean(memoryPreview)}
               stickyDecisions
               specialistEvidence={specialistEvidence}
               item={item}

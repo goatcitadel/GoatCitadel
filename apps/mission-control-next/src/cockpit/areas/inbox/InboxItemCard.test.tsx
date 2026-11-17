@@ -43,10 +43,15 @@ it("names the target from the Inbox summary and never reads the approval record 
   client.clear();
 });
 
-it("offers in-row decisions only for safe and caution approvals; danger and nuclear keep a Review button", async () => {
+it("reserves quick decisions for safe file reads with the path visible", async () => {
   const { canDecideInRow } = await import("./InboxRowDecision");
-  expect(canDecideInRow({ ...item, riskLevel: "safe" })).toBe(true);
-  expect(canDecideInRow({ ...item, riskLevel: "caution" })).toBe(true);
+  const read = { ...item, summary: "Path: notes.md", source: { ...item.source, toolName: "fs.read" } };
+  expect(canDecideInRow({ ...read, riskLevel: "safe" })).toBe(true);
+  expect(canDecideInRow({ ...read, riskLevel: "caution" })).toBe(false);
+  expect(canDecideInRow({ ...read, riskLevel: "safe", source: { ...read.source, installWide: true } })).toBe(false);
+  expect(
+    canDecideInRow({ ...read, riskLevel: "safe", summary: "Target details are available in the approval record." }),
+  ).toBe(false);
   expect(canDecideInRow({ ...item, riskLevel: "danger" })).toBe(false);
   expect(canDecideInRow({ ...item, riskLevel: "nuclear" })).toBe(false);
   expect(canDecideInRow({ ...item, kind: "failed_run", riskLevel: "safe" })).toBe(false);
@@ -68,9 +73,49 @@ it("offers in-row decisions only for safe and caution approvals; danger and nucl
       </QueryClientProvider>,
     ),
   );
-  expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toContain("Review");
+  expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toContain("Review request");
   expect(container.textContent).not.toContain("Approve once");
   expect(container.querySelector("article")?.className).not.toContain("rounded-lg");
+  act(() => root.unmount());
+  client.clear();
+});
+
+it("distinguishes requests to write memory while keeping the decision on the review screen", () => {
+  const client = new QueryClient();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  act(() =>
+    root.render(
+      <QueryClientProvider client={client}>
+        {["Writes memory · Operator preference: visible proof", "Writes memory · Launch rule"].map((summary, index) => (
+          <InboxItemCard
+            key={summary}
+            item={{
+              ...item,
+              summary,
+              riskLevel: "caution",
+              source: { ...item.source, toolName: "memory.write", sessionId: "s", approvalId: String(index) },
+            }}
+            workspaceId="w"
+            selected={false}
+            contextOpen={false}
+            onDetails={() => undefined}
+            onToggleContext={() => undefined}
+            onDecision={() => undefined}
+          />
+        ))}
+      </QueryClientProvider>,
+    ),
+  );
+  expect([...container.querySelectorAll("h3")].map((heading) => heading.textContent)).toEqual([
+    "Save memory: Operator preference: visible proof",
+    "Save memory: Launch rule",
+  ]);
+  expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
+    "Review request",
+    "Review request",
+  ]);
+  expect(client.isFetching()).toBe(0);
   act(() => root.unmount());
   client.clear();
 });

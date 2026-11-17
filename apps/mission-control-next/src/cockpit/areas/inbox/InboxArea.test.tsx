@@ -564,7 +564,7 @@ describe("InboxArea", () => {
     expect(container.querySelector('[data-inbox-count="needs_attention"]')).toBeNull();
     const link = container.querySelector('a[href="/chat?sessionId=session-1&workspaceId=default&shell=cockpit"]');
     expect(link?.textContent).toContain("Open in Chat");
-    const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review");
+    const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review request");
     if (!details) throw new Error("Missing details control");
     const input = document.createElement("input");
     container.appendChild(input);
@@ -1141,7 +1141,7 @@ describe("decision focus, shortcuts, filters and expiry (IN-05, IN-07, IN-08, IN
         "approval:second",
       ),
     );
-    expect(document.activeElement?.textContent).toBe("Details");
+    expect(document.activeElement?.textContent).toBe("Review request");
     // The inspector keeps the notice as plain text: one announcement, one focus move.
     const notice = document.querySelector("[data-inbox-decision-notice]");
     expect(notice?.getAttribute("role")).toBeNull();

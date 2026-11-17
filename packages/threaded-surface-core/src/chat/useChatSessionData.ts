@@ -22,7 +22,6 @@ import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/cl
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatThreadState } from "./use-chat-thread-state";
 import {
-  fetchChatProjects,
   fetchChatSessionCoreState,
   fetchChatSessions,
   fetchChatSessionSearch,
@@ -49,6 +48,7 @@ import {
   ignoredPrebootstrapRefreshDiagnostic,
   appendSidebarSessions,
   projectChatSessionSearch,
+  readSidebarBootstrap,
   reconcileSidebarSessions,
   routeFallbackSessionId,
   selectSidebarSession,
@@ -73,7 +73,12 @@ let historyCode: Promise<ChatHistoryCode> | undefined;
 type ChatSessionEvidenceCode = typeof import("./chat-session-evidence-code.js");
 let evidenceCode: Promise<ChatSessionEvidenceCode> | undefined;
 
-const EMPTY_CATALOG = { commands: { items: [] }, skills: { items: [] }, servers: { items: [] }, templates: { items: [] } };
+const EMPTY_CATALOG = {
+  commands: { items: [] },
+  skills: { items: [] },
+  servers: { items: [] },
+  templates: { items: [] },
+};
 
 function loadChatHistoryCode() {
   return (historyCode ??= import("./chat-session-history-code.js").catch((error: unknown) => {
@@ -164,6 +169,7 @@ export function useChatSessionData(input: ChatSessionDataInput) {
   const loadSidebarGenerationRef = useRef(0);
   const sidebarScopeKey = chatSidebarScopeKey(input);
   const sidebarScope = useRef({ key: sidebarScopeKey });
+  const [failedSidebarScope, setFailedSidebarScope] = useState<typeof sidebarScope.current | null>(null);
   if (sidebarScope.current.key !== sidebarScopeKey) sidebarScope.current = { key: sidebarScopeKey };
   const renderedSidebarScope = sidebarScope.current;
   const loadedSidebarPages = useRef<{ scope: typeof renderedSidebarScope; cursors: Array<string | undefined> }>({
@@ -289,9 +295,8 @@ export function useChatSessionData(input: ChatSessionDataInput) {
         setSidebarLoadingMore(false);
         // Repeat the retained page reads in batches. Preserve their ordering and
         // continuation anchor; a completed turn may reorder the server's first page.
-        const cursors = loadedSidebarPages.current.cursors.length
-          ? [...loadedSidebarPages.current.cursors]
-          : [undefined];
+        const retainedCursors = loadedSidebarPages.current.cursors;
+        const cursors = retainedCursors.length ? [...retainedCursors] : [undefined];
         try {
           const pages = await Promise.all(
             cursors.map((cursor) =>
@@ -350,6 +355,14 @@ export function useChatSessionData(input: ChatSessionDataInput) {
             if (!current || !isCurrent()) return current;
             return reconcileSidebarSessions(current, members, records);
           });
+          // Reconciliation cannot bootstrap a missing list or hydrate an unapplied deep link.
+          if (
+            retainedCursors.length &&
+            sessionsRef.current &&
+            nextHistoryView === historyView &&
+            (trimmedSearchQuery || !input.routeSessionId?.trim() || renderedRouteSelection.applied)
+          )
+            setFailedSidebarScope((current) => (isCurrent() ? null : current));
         } catch (error) {
           if (isCurrent()) throw error;
         }
@@ -421,61 +434,47 @@ export function useChatSessionData(input: ChatSessionDataInput) {
         sessionLimit,
         surfaceMode ?? "all",
       ]);
+      const requestedSessionId = !trimmedSearchQuery ? input.routeSessionId?.trim() : undefined;
       let nextProjects: ChatProjectsResponse;
       let nextSessions: ChatSessionsResponse;
       try {
         ({ projects: nextProjects, sessions: nextSessions } = await getDevBootstrapPromise(
           sidebarBootstrapCache,
           cacheKey,
-          async () => {
-            const [projects, sessions] = await Promise.all([
-              fetchChatProjects("all", sessionLimit, workspaceId),
-              trimmedSearchQuery
-                ? fetchChatSessionSearch({
-                    query: trimmedSearchQuery,
-                    mode: "discovery",
-                    view: nextHistoryView,
-                    limit: sessionLimit,
-                    workspaceId,
-                    surface: surfaceMode,
-                    includeActivity: true,
-                  }).then<ChatSessionsResponse>(projectChatSessionSearch)
-                : fetchChatSessions({
-                    scope: "all",
-                    view: nextHistoryView,
-                    limit: sessionLimit,
-                    workspaceId,
-                    mode: surfaceMode,
-                    includeActivity: true,
-                  }),
-            ]);
-            return { projects, sessions };
-          },
+          () =>
+            readSidebarBootstrap({
+              workspaceId,
+              view: nextHistoryView,
+              query: trimmedSearchQuery,
+              limit: sessionLimit,
+              surfaceMode,
+            }),
           { bypassCache: options.bypassCache },
         ));
-      } catch (error) {
-        if (isCurrent()) throw error;
-        return;
-      }
-      if (!isCurrent()) return;
-      const requestedSessionId = !trimmedSearchQuery ? input.routeSessionId?.trim() : undefined;
-      if (requestedSessionId && !nextSessions.items.some((item) => item.sessionId === requestedSessionId)) {
-        // A deep link may be older than the first page. Read only that exact,
-        // visible, scoped owner; a missing/foreign response must never select a recent Chat.
-        const record = await readRoute(requestedSessionId);
         if (!isCurrent()) return;
-        // A stale link still shows the list and opens the first conversation; the host clears the address.
-        if (record) nextSessions = { ...nextSessions, items: [...nextSessions.items, record] };
-        else if (!renderedRouteSelection.applied) {
-          routeSessionUnavailableRef.current?.(
-            requestedSessionId,
-            routeFallbackSessionId(selectedSessionIdRef.current, nextSessions, options),
-          );
+        if (requestedSessionId && !nextSessions.items.some((item) => item.sessionId === requestedSessionId)) {
+          // A deep link may be older than the first page. Read only that exact,
+          // visible, scoped owner; a missing/foreign response must never select a recent Chat.
+          const record = await readRoute(requestedSessionId);
+          if (!isCurrent()) return;
+          // A stale link still shows the list and opens the first conversation; the host clears the address.
+          if (record) nextSessions = { ...nextSessions, items: [...nextSessions.items, record] };
+          else if (!renderedRouteSelection.applied) {
+            routeSessionUnavailableRef.current?.(
+              requestedSessionId,
+              routeFallbackSessionId(selectedSessionIdRef.current, nextSessions, options),
+            );
+          }
         }
+      } catch (error) {
+        if (!isCurrent()) return;
+        setFailedSidebarScope(renderedSidebarScope);
+        throw error;
       }
       loadedSidebarPages.current.cursors = [undefined];
       setProjects(nextProjects);
       setSessions(nextSessions);
+      setFailedSidebarScope(null);
       updateSidebarNextCursor(nextSessions.nextCursor ?? null);
       if (options.preserveSelection) return;
       // The URL admits the initial selection; it must not undo a later user
@@ -569,7 +568,8 @@ export function useChatSessionData(input: ChatSessionDataInput) {
       if (!target || currentWindow?.anchor.state !== "found" || !cursor) return false;
       const generation = ++historicalContinuationGenerationRef.current;
       const gatewayCurrent = gatewayScopeCurrent();
-      const ownsContinuation = () => sidebarMounted.current && generation === historicalContinuationGenerationRef.current;
+      const ownsContinuation = () =>
+        sidebarMounted.current && generation === historicalContinuationGenerationRef.current;
       const current = () => ownsContinuation() && gatewayCurrent();
       setHistoricalContinuationLoading(direction);
       setHistoricalContinuationError(null);
@@ -741,45 +741,48 @@ export function useChatSessionData(input: ChatSessionDataInput) {
     [loadSessionCoreStateInternal],
   );
 
-  const loadSessionSecondaryState = useCallback(async (sessionId: string, options: ChatSecondaryLoadOptions = {}) => {
-    const background = options.background ?? false;
-    // Same fence as the core loader: only foreground loads may target a session not yet shown.
-    if (
-      secondaryScope.current !== renderedSecondaryScope ||
-      (background && sessionId !== selectedSessionIdRef.current)
-    )
-      return;
-    const generation = ++loadSecondaryGenerationRef.current;
-    const selectedAtStart = selectedSessionIdRef.current;
-    const gatewayCurrent = gatewayScopeCurrent();
-    const isLatest = () => sidebarMounted.current && generation === loadSecondaryGenerationRef.current;
-    const stillOwnsRead = () => isLatest() && secondaryScope.current === renderedSecondaryScope && gatewayCurrent();
-    if (!background) {
-      setSecondaryLoading(true);
-    }
-    try {
-      const { readSessionEvidence } = await loadChatSessionEvidenceCode();
+  const loadSessionSecondaryState = useCallback(
+    async (sessionId: string, options: ChatSecondaryLoadOptions = {}) => {
+      const background = options.background ?? false;
+      // Same fence as the core loader: only foreground loads may target a session not yet shown.
       if (
-        !stillOwnsRead() ||
-        (sessionId !== selectedSessionIdRef.current && selectedAtStart !== selectedSessionIdRef.current)
+        secondaryScope.current !== renderedSecondaryScope ||
+        (background && sessionId !== selectedSessionIdRef.current)
       )
         return;
-      const { proactive, runs, memory, specialists, artifacts, attachments } = await readSessionEvidence(sessionId);
-      if (!stillOwnsRead() || sessionId !== selectedSessionIdRef.current) return;
-      setProactiveStatus(proactive.policy);
-      setProactiveRuns(runs.items);
-      setLearnedMemory(memory.items);
-      setSpecialistCandidates(specialists.items);
-      setGeneratedArtifacts(artifacts);
-      setThreadKnowledgeAttachments(attachments);
-    } catch (error) {
-      if (stillOwnsRead()) throw error;
-    } finally {
-      if (isLatest()) {
-        setSecondaryLoading(false);
+      const generation = ++loadSecondaryGenerationRef.current;
+      const selectedAtStart = selectedSessionIdRef.current;
+      const gatewayCurrent = gatewayScopeCurrent();
+      const isLatest = () => sidebarMounted.current && generation === loadSecondaryGenerationRef.current;
+      const stillOwnsRead = () => isLatest() && secondaryScope.current === renderedSecondaryScope && gatewayCurrent();
+      if (!background) {
+        setSecondaryLoading(true);
       }
-    }
-  }, [renderedSecondaryScope]);
+      try {
+        const { readSessionEvidence } = await loadChatSessionEvidenceCode();
+        if (
+          !stillOwnsRead() ||
+          (sessionId !== selectedSessionIdRef.current && selectedAtStart !== selectedSessionIdRef.current)
+        )
+          return;
+        const { proactive, runs, memory, specialists, artifacts, attachments } = await readSessionEvidence(sessionId);
+        if (!stillOwnsRead() || sessionId !== selectedSessionIdRef.current) return;
+        setProactiveStatus(proactive.policy);
+        setProactiveRuns(runs.items);
+        setLearnedMemory(memory.items);
+        setSpecialistCandidates(specialists.items);
+        setGeneratedArtifacts(artifacts);
+        setThreadKnowledgeAttachments(attachments);
+      } catch (error) {
+        if (stillOwnsRead()) throw error;
+      } finally {
+        if (isLatest()) {
+          setSecondaryLoading(false);
+        }
+      }
+    },
+    [renderedSecondaryScope],
+  );
 
   const loadSessionState = useCallback(
     async (sessionId: string, options: ChatSessionLoadOptions = {}) => {
@@ -1036,6 +1039,7 @@ export function useChatSessionData(input: ChatSessionDataInput) {
     messagesLoading,
     secondaryLoading,
     sidebarNextCursor,
+    sidebarReadFailed: failedSidebarScope === renderedSidebarScope,
     sidebarLoadingMore,
     historicalWindow,
     historicalWindowLoading,

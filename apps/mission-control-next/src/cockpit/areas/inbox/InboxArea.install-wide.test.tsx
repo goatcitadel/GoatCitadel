@@ -200,8 +200,8 @@ async function openSkillApproval() {
   await renderInbox();
   const row = container.querySelector("[data-inbox-item]");
   expect(row?.textContent).toContain("Turn on skill planner");
-  const review = [...(row?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Review");
-  if (!review) throw new Error("Missing Review button");
+  const review = [...(row?.querySelectorAll("button") ?? [])].find((button) => button.textContent === "Review request");
+  if (!review) throw new Error("Missing Review request button");
   await act(async () => review.click());
   expect(inspector()).not.toBeNull();
   await settleUntil(() => Boolean(inspectorButton("Deny")));

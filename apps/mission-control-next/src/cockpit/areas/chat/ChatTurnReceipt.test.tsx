@@ -55,7 +55,7 @@ describe("TurnReceipt", () => {
     );
     const receipt = container.querySelector("button")!;
     // The accessible name starts with the visible receipt.
-    expect(receipt.textContent).toMatch(/^model-a · .+ · Open message details$/);
+    expect(receipt.textContent).toMatch(/^What ran · model-a · .+$/);
     await act(async () => receipt.click());
     // The Chat area owns the inspector (source "chat") and opens its Message tab for this turn; the receipt no longer
     // opens a second, receipt-only details view.

@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionRecord, ChatThreadResponse } from "@goatcitadel/contracts";
 import { useChatSessionData, type ChatHistoryView } from "./useChatSessionData";
 import { runtimeCatalogBootstrapCache, sidebarBootstrapCache } from "./chat-session-data-bootstrap";
-import { notifyGatewayAccessChanged, setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  notifyGatewayAccessChanged,
+  setGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useChatSessionControls } from "./useChatSessionControls";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -332,7 +335,9 @@ describe("useChatSessionData", () => {
 
   it("keeps core startup independent of evidence code and discards a read across changed Gateway access", async () => {
     let release!: () => void;
-    evidenceImport.wait = new Promise<void>((resolve) => { release = resolve; });
+    evidenceImport.wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     let renderer!: ReactTestRenderer;
     try {
       await act(async () => {
@@ -798,6 +803,114 @@ describe("useChatSessionData", () => {
     expect(latestHarness?.result.sessions?.items.map((item) => item.sessionId)).toEqual(["session-newest"]);
     expect(latestHarness?.errors).not.toContain("stale sidebar failed");
     expect(latestHarness?.result.sidebarLoadingMore).toBe(false);
+    expect(latestHarness?.result.sidebarReadFailed).toBe(false);
+  });
+
+  it("reports a scoped sidebar failure until a new read of that list succeeds", async () => {
+    fetchChatSessionsMock.mockRejectedValueOnce(new Error("Conversation list unavailable"));
+    await act(async () => {
+      create(<Harness workspaceId="workspace-sidebar-unavailable" />);
+      await flushEffects();
+    });
+    expect(latestHarness?.result.sidebarReadFailed).toBe(true);
+    fetchChatSessionsMock.mockResolvedValueOnce({ items: [] });
+    await act(async () => {
+      await latestHarness!.result.loadSidebar("active", { bypassCache: true });
+    });
+    expect(latestHarness?.result.sidebarReadFailed).toBe(false);
+    expect(latestHarness?.result.sessions?.items).toEqual([]);
+  });
+
+  it("keeps the sidebar failed until a deep-linked conversation can be read", async () => {
+    const workspaceId = "workspace-sidebar-deep-link-retry";
+    const linked = { ...makeSession("old-target"), workspaceId };
+    const newer = makeSession("newer");
+    const onRouteSessionUnavailable = vi.fn();
+    fetchChatSessionsMock.mockRejectedValueOnce(new Error("Conversation list unavailable"));
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <Harness
+          workspaceId={workspaceId}
+          routeSessionId={linked.sessionId}
+          onRouteSessionUnavailable={onRouteSessionUnavailable}
+        />,
+      );
+      await flushEffects();
+    });
+    expect(latestHarness!.result.sidebarReadFailed).toBe(true);
+
+    fetchChatSessionsMock
+      .mockResolvedValueOnce({ items: [newer] })
+      .mockRejectedValueOnce(new Error("Linked conversation unavailable"));
+    await act(async () => {
+      await expect(latestHarness!.result.loadSidebar("active", { bypassCache: true })).rejects.toThrow(
+        "Linked conversation unavailable",
+      );
+    });
+    expect(latestHarness!.result.sidebarReadFailed).toBe(true);
+    expect(latestHarness!.result.sessions).toBeNull();
+    expect(onRouteSessionUnavailable).not.toHaveBeenCalled();
+
+    fetchChatSessionsMock.mockResolvedValueOnce({ items: [newer] });
+    await act(async () => {
+      await latestHarness!.result.loadSidebar("active", { reconcileLoadedRange: true });
+    });
+    expect(latestHarness!.result.sidebarReadFailed).toBe(true);
+    expect(latestHarness!.result.sessions).toBeNull();
+
+    fetchChatSessionsMock.mockResolvedValueOnce({ items: [newer] }).mockResolvedValueOnce({ items: [linked] });
+    await act(async () => {
+      await latestHarness!.result.loadSidebar("active", { bypassCache: true });
+    });
+    expect(latestHarness!.result.sidebarReadFailed).toBe(false);
+    expect(latestHarness!.result.sessions?.items).toEqual([newer, linked]);
+    expect(latestHarness!.selectedSessionId).toBe(linked.sessionId);
+    await act(async () => renderer.unmount());
+  });
+
+  it("clears a sidebar failure after verifying and refreshing its retained pages", async () => {
+    const initial = [makeSession("first"), makeSession("second")];
+    const refreshed = [makeSession("first", "First updated"), makeSession("second", "Second updated")];
+    let membershipComplete = false;
+    fetchChatSessionsMock.mockImplementation(async (query) =>
+      query.sessionIds
+        ? { items: refreshed, membership: { sessionIds: query.sessionIds, complete: membershipComplete } }
+        : query.cursor
+          ? { items: [initial[1]], nextCursor: "third-page" }
+          : { items: [initial[0]], nextCursor: "second-page" },
+    );
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness workspaceId="workspace-sidebar-retained-recovery" />);
+      await flushEffects();
+    });
+    await act(async () => {
+      await latestHarness!.result.loadSidebar("active", { append: true });
+    });
+    expect(latestHarness!.result.sessions?.items).toEqual(initial);
+    expect(latestHarness!.result.sidebarNextCursor).toBe("third-page");
+
+    fetchChatSessionsMock.mockRejectedValueOnce(new Error("Conversation list unavailable"));
+    await act(async () => {
+      await expect(latestHarness!.result.loadSidebar("active", { bypassCache: true })).rejects.toThrow(
+        "Conversation list unavailable",
+      );
+      await expect(latestHarness!.result.loadSidebar("active", { reconcileLoadedRange: true })).rejects.toThrow(
+        "Conversation membership could not be verified",
+      );
+    });
+    expect(latestHarness!.result.sidebarReadFailed).toBe(true);
+    expect(latestHarness!.result.sessions?.items).toEqual(initial);
+
+    membershipComplete = true;
+    await act(async () => {
+      await latestHarness!.result.loadSidebar("active", { reconcileLoadedRange: true });
+    });
+    expect(latestHarness!.result.sessions?.items).toEqual(refreshed);
+    expect(latestHarness!.result.sidebarReadFailed).toBe(false);
+    expect(latestHarness!.result.sidebarNextCursor).toBe("third-page");
+    await act(async () => renderer.unmount());
   });
 
   it("fences competing historical hits and clears a pending hit when the selected session changes", async () => {

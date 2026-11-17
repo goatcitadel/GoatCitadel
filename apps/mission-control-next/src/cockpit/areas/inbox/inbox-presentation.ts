@@ -69,7 +69,17 @@ export function inboxCountTitle(count: string): string {
 
 /** A tool approval is named like the Chat approval card ("Create document"); other items keep the server title. */
 export function inboxItemTitle(item: OperatorInboxItem): string {
+  const subject = inboxMemorySubject(item);
+  if (subject) return `Save memory: ${subject}`;
   return item.kind === "approval" && item.source.toolName ? presentApprovalAction(item.source.toolName) : item.title;
+}
+
+/** Use only the target summary already projected for this row, never the memory payload. */
+export function inboxMemorySubject(item: OperatorInboxItem): string | undefined {
+  if (item.kind !== "approval" || !["memory.write", "memory.upsert"].includes(item.source.toolName ?? ""))
+    return undefined;
+  const prefix = "Writes memory · ";
+  return item.summary.startsWith(prefix) ? item.summary.slice(prefix.length).trim() || undefined : undefined;
 }
 
 export function inboxItemKindLabel(kind: OperatorInboxItem["kind"]): string {

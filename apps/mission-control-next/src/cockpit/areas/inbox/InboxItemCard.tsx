@@ -7,7 +7,7 @@ import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TimeText } from "../../ui/TimeText";
 import { approvalExpiryLabel } from "./approval-preview";
-import { inboxItemKindLabel, inboxItemTitle } from "./inbox-presentation";
+import { inboxItemKindLabel, inboxItemTitle, inboxMemorySubject } from "./inbox-presentation";
 import { InboxOwnerLink } from "./InboxOwnerLink";
 import { canDecideInRow, InboxRowDecision } from "./InboxRowDecision";
 import { InboxSourceContext } from "./InboxSourceContext";
@@ -33,7 +33,8 @@ export function InboxItemCard({
 }) {
   const now = useMinuteClock(item.expiresAt);
   const expired = hasExpired(item.expiresAt, now);
-  const dangerous = item.kind === "approval" && (item.riskLevel === "danger" || item.riskLevel === "nuclear");
+  const isApproval = item.kind === "approval";
+  const hasQuickDecision = Boolean(onDecision && !expired && canDecideInRow(item));
   return (
     <article
       data-selected={selected}
@@ -47,7 +48,7 @@ export function InboxItemCard({
             {selected ? <span className="font-semibold text-fg"> · Selected</span> : null}
           </p>
           <h3 className="mt-1 text-md font-semibold text-fg">{inboxItemTitle(item)}</h3>
-          <p className="mt-1 text-sm text-fg-secondary">{item.summary}</p>
+          {inboxMemorySubject(item) ? null : <p className="mt-1 text-sm text-fg-secondary">{item.summary}</p>}
         </div>
         <div className="flex flex-wrap gap-2">
           {expired ? <StatusBadge status={presentApprovalOutcome("expired")} /> : null}
@@ -60,20 +61,25 @@ export function InboxItemCard({
         </p>
       ) : null}
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <Button size="sm" data-inbox-detail onClick={onDetails}>
-          {dangerous ? "Review" : "Details"}
+        <Button
+          size="sm"
+          variant={isApproval && !hasQuickDecision && !expired ? "primary" : "secondary"}
+          data-inbox-detail
+          onClick={onDetails}
+        >
+          {isApproval && !expired ? "Review request" : "Details"}
         </Button>
-        {onDecision && canDecideInRow(item) ? (
+        {onDecision && hasQuickDecision ? (
           <InboxRowDecision item={item} workspaceId={workspaceId} onDecision={onDecision} />
         ) : null}
         <InboxOwnerLink item={item} workspaceId={workspaceId} />
-        {item.source.sessionId ? (
+        {!isApproval && item.source.sessionId ? (
           <Button size="sm" aria-expanded={contextOpen} onClick={onToggleContext}>
             {contextOpen ? "Hide source context" : "Show source context"}
           </Button>
         ) : null}
       </div>
-      {contextOpen ? (
+      {!isApproval && contextOpen ? (
         <div className="mt-3">
           <InboxSourceContext item={item} workspaceId={workspaceId} />
         </div>

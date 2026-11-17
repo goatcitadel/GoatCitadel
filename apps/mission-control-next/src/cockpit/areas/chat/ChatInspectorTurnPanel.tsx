@@ -10,6 +10,7 @@ import {
   FallbackDetailRow,
   ModelDetailRow,
   ModelTechnicalDetails,
+  SourcesPanel,
 } from "./chat-inspector-evidence";
 import { presentToolRunStatus } from "./chat-vocabulary";
 import { recordedCostLabel, subscriptionCostLabel } from "./recorded-cost";
@@ -17,6 +18,7 @@ import { useProviderAuthMode } from "../../data/use-model-label";
 import { presentErrorText } from "../../lib/present-error";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 import { recordedTurnTime } from "./chat-turn-timing";
+import { Button } from "../../ui/Button";
 
 /** Start to finish, waits included. "Model time" below is the time inside model calls only. */
 function totalTimeLabel(turn: ChatThreadTurnRecord): string {
@@ -26,7 +28,13 @@ function totalTimeLabel(turn: ChatThreadTurnRecord): string {
 }
 
 /** The inspector Message tab: status, model, fallback, counts, total and model time, cost and tool calls for one turn. */
-export function ChatInspectorTurnPanel({ selectedTurn }: { selectedTurn: ChatThreadTurnRecord | undefined }) {
+export function ChatInspectorTurnPanel({
+  selectedTurn,
+  onOpenArtifact,
+}: {
+  selectedTurn: ChatThreadTurnRecord | undefined;
+  onOpenArtifact?: (artifactId: string) => void;
+}) {
   const usage = selectedTurn?.trace.completion?.usage;
   const hasRecordedTokenUsage =
     (usage?.inputTokens ?? 0) > 0 || (usage?.outputTokens ?? 0) > 0 || (usage?.cachedInputTokens ?? 0) > 0;
@@ -37,6 +45,7 @@ export function ChatInspectorTurnPanel({ selectedTurn }: { selectedTurn: ChatThr
   if (!selectedTurn) return <p className="text-sm text-fg-muted">No message is available yet.</p>;
   return (
     <div className="space-y-3">
+      <h3 className="font-medium text-fg">What ran</h3>
       <StatusBadge status={presentChatTurnStatus(selectedTurn.trace.status)} />
       <dl>
         <ModelDetailRow
@@ -81,6 +90,38 @@ export function ChatInspectorTurnPanel({ selectedTurn }: { selectedTurn: ChatThr
             </li>
           ))}
         </ol>
+      ) : null}
+      <section aria-label="What it used" className="space-y-2 border-t border-line-subtle pt-3">
+        <h3 className="font-medium text-fg">What it used</h3>
+        <SourcesPanel turn={selectedTurn} />
+        {selectedTurn.userMessage?.attachments?.length ? (
+          <div className="space-y-1 text-sm">
+            <p className="text-fg-secondary">Attached to your message</p>
+            <ul className="space-y-1 wrap-anywhere">
+              {selectedTurn.userMessage.attachments.map((file) => (
+                <li key={file.attachmentId}>{file.fileName}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </section>
+      {selectedTurn.generatedArtifacts?.length ? (
+        <section aria-label="Outputs" className="space-y-2 border-t border-line-subtle pt-3">
+          <h3 className="font-medium text-fg">Outputs</h3>
+          <ul className="space-y-1">
+            {selectedTurn.generatedArtifacts.map((artifact) => (
+              <li key={artifact.artifactId}>
+                {onOpenArtifact ? (
+                  <Button size="sm" onClick={() => onOpenArtifact(artifact.artifactId)}>
+                    Open {artifact.title}
+                  </Button>
+                ) : (
+                  artifact.title
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
       {selectedTurn.trace.durable?.runId ? (
         <NativeOwnerLink
