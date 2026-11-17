@@ -35,6 +35,30 @@ test("managed install ports persist independently and reject invalid collisions"
   }
 });
 
+test("managed origins follow the Gateway's selected env file and process precedence", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-selected-env-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const profileEnv = path.join(root, "runtime-root", ".env");
+  const customEnv = path.join(root, "custom.env");
+  fs.mkdirSync(path.dirname(profileEnv), { recursive: true });
+  fs.writeFileSync(profileEnv, "GOATCITADEL_ALLOWED_ORIGINS=https://profile.example\n");
+  fs.writeFileSync(customEnv, "GOATCITADEL_ALLOWED_ORIGINS=https://custom.example\n");
+  for (const selector of [customEnv, "../../custom.env"]) {
+    const env = { GOATCITADEL_LOCAL_ENV_FILE: selector };
+    assert.equal(installedRuntimeAllowedOrigins(root, undefined, env), "https://custom.example");
+    assert.equal(installedRuntimeAllowedOrigins(root, undefined, {
+      ...env, GOATCITADEL_ALLOWED_ORIGINS: "https://process.example",
+    }), "https://process.example");
+  }
+  fs.unlinkSync(profileEnv);
+  assert.equal(installedRuntimeAllowedOrigins(root, undefined, {
+    GOATCITADEL_LOCAL_ENV_FILE: customEnv,
+  }), "https://custom.example");
+  assert.equal(installedRuntimeAllowedOrigins(root, undefined, {
+    GOATCITADEL_LOCAL_ENV_FILE: "missing.env",
+  }), "http://127.0.0.1:5173");
+});
+
 test("fresh launches choose a free managed UI port without attaching to the default listener", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-fresh-ports-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

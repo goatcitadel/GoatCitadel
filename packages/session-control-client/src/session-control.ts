@@ -69,6 +69,13 @@ export interface SessionControlClientConfig {
    * requires it). It appears in content-free projections and is never a secret.
    */
   readonly clientInstanceId?: string;
+  /** Deadline for control reads, including response bodies. Defaults to 30 seconds. */
+  readonly controlReadTimeoutMs?: number;
+}
+
+export interface SessionControlReadOptions {
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
 }
 
 export interface SessionControlEventStreamOptions {
@@ -83,7 +90,7 @@ export interface SessionControlClient {
   /** Register a pending, session-scoped control request (submits only the token hash). */
   createExternalRequest(sessionId: string, input: SessionControlRequestInput): Promise<SessionControlRequestResponse>;
   /** Read the content-free current owner/generation/lease + visible pending requests. */
-  getControl(sessionId: string): Promise<SessionControlDetailResponse>;
+  getControl(sessionId: string, options?: SessionControlReadOptions): Promise<SessionControlDetailResponse>;
   /** Renew the live lease. Presents the plaintext control secret in the token header. */
   heartbeat(
     sessionId: string,
@@ -162,6 +169,43 @@ export function createSessionControlClient(config: SessionControlClientConfig): 
   const baseUrl = trimTrailingSlashes(config.baseUrl);
 
   async function execute<TResponse>(command: SessionControlCommand): Promise<TResponse> {
+    if (command.method !== "GET" || command.returnRawResponse) return executeRequest<TResponse>(command);
+    const timeoutMs = command.timeoutMs ?? config.controlReadTimeoutMs ?? 30_000;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+      throw new TypeError("Control read timeout must be a positive timer duration.");
+    }
+    const deadline = new AbortController();
+    const signal = command.signal ? AbortSignal.any([command.signal, deadline.signal]) : deadline.signal;
+    let onAbort: () => void = () => {};
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () =>
+        reject(
+          new ApiRequestError(`Control read cancelled or timed out: ${command.path}`, {
+            kind: "network",
+            method: command.method,
+            path: command.path,
+            cause: signal.reason,
+          }),
+        );
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+    const timer = setTimeout(
+      () => deadline.abort(new DOMException("Control read deadline exceeded", "TimeoutError")),
+      timeoutMs,
+    );
+    try {
+      return await Promise.race([
+        aborted,
+        signal.aborted ? aborted : executeRequest<TResponse>({ ...command, signal }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  async function executeRequest<TResponse>(command: SessionControlCommand): Promise<TResponse> {
     const path = command.path;
     const authHeaders = await config.authorize({ method: command.method, path, body: command.body });
     const headers: Record<string, string> = {
@@ -249,11 +293,13 @@ export function createSessionControlClient(config: SessionControlClientConfig): 
         idempotencyKey: input.idempotencyKey,
       });
     },
-    getControl(sessionId) {
+    getControl(sessionId, options) {
       return execute<SessionControlDetailResponse>({
         method: "GET",
         path: controlPath(sessionId, ""),
         body: undefined,
+        signal: options?.signal,
+        timeoutMs: options?.timeoutMs,
       });
     },
     heartbeat(sessionId, input, controlSecret) {
@@ -311,6 +357,7 @@ interface SessionControlCommand {
   readonly controlSecret?: string;
   readonly generation?: number;
   readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
   readonly returnRawResponse?: boolean;
 }
 

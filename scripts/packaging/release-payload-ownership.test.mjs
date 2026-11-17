@@ -79,7 +79,7 @@ test("bundles exclude nested shard coverage while preserving similarly named run
   const sourceCoverage = path.join(tempRoot, "workspace-source", "coverage-shard-1", "coverage-final.json");
   fs.mkdirSync(path.dirname(sourceCoverage), { recursive: true });
   fs.writeFileSync(sourceCoverage, "keep workspace evidence\n");
-  const thirdPartyTest = path.join(payloadRoot, "node_modules", "parser", "spec.js");
+  const thirdPartyTest = path.join(payloadRoot, "node_modules", "parser", "dist", "grammar.spec.js");
   fs.mkdirSync(path.dirname(thirdPartyTest), { recursive: true });
   fs.writeFileSync(thirdPartyTest, "runtime parser specification\n");
 

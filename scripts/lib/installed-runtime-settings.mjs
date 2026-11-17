@@ -7,16 +7,22 @@ import { atomicCompareAndPublishJson, withManagedLifecycleLock } from "./managed
 const DEFAULT_PORTS = { gatewayPort: 8787, uiPort: 5173 };
 
 /** Allow exactly the managed UI origin when no operator allowlist was supplied. */
-export function installedRuntimeAllowedOrigins(installRoot, configuredOrigins) {
+export function installedRuntimeAllowedOrigins(installRoot, configuredOrigins, env = process.env) {
   return (
     configuredOrigins?.trim() ||
-    readInstalledProfileEnv(installRoot).GOATCITADEL_ALLOWED_ORIGINS?.trim() ||
+    env.GOATCITADEL_ALLOWED_ORIGINS?.trim() ||
+    readInstalledProfileEnv(installRoot, env).GOATCITADEL_ALLOWED_ORIGINS?.trim() ||
     `http://127.0.0.1:${readInstalledRuntimeSettings(installRoot).uiPort}`
   );
 }
 
-function readInstalledProfileEnv(installRoot) {
-  const envPath = path.join(installRoot, "runtime-root", ".env");
+function readInstalledProfileEnv(installRoot, env = process.env) {
+  // The packaged Gateway resolves an explicit selector against its working directory.
+  // A missing selected file does not fall back to a different profile's allowlist.
+  const selectedFile = env.GOATCITADEL_LOCAL_ENV_FILE?.trim();
+  const envPath = selectedFile
+    ? path.resolve(installRoot, "app", "gateway", selectedFile)
+    : path.join(installRoot, "runtime-root", ".env");
   return fs.existsSync(envPath) ? parseEnv(fs.readFileSync(envPath, "utf8")) : {};
 }
 

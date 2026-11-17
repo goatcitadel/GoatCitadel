@@ -79,7 +79,7 @@
     "tools": "tsx src/tui/tools-cli.ts",
     "voice:runtime": "tsx src/voice-runtime-cli.ts",
     "admin": "tsx src/admin-cli.ts",
-    "session-control": "tsx src/session-control-cli.ts",
+    "session-control": "pnpm --filter @goatcitadel/session-control-client build && tsx src/session-control-cli.ts",
     "config:sync": "tsx src/config-sync.ts",
     "lint": "node ../../scripts/run-with-worktree-output-lock.mjs --label=lint:gateway -- pnpm exec tsc -b tsconfig.json"
   }
