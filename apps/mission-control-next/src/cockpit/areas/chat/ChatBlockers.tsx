@@ -191,7 +191,7 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
           aria-label={
             linkedRead?.toolName === "browser.storage.get" ? "Browser storage approval" : `${readTitle} approval`
           }
-          className="mt-3 rounded-md border border-line-subtle bg-raised p-3 text-sm"
+          className="mt-3 border-l-2 border-line-subtle pl-3 text-sm"
         >
           <h3 className="font-semibold text-fg">{readTitle}</h3>
           <p ref={noticeRef} data-approval-read-status tabIndex={-1} className="mt-1 text-fg-secondary outline-none">

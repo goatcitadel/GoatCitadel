@@ -359,7 +359,10 @@ it("shows the memory query and uses the Inbox decision owner for a low-risk Chat
   const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent === "Approve once")!;
   expect(button.disabled).toBe(false);
   expect(container.textContent).toContain("launch decisions");
-  await act(async () => button.click());
+  await act(async () => {
+    button.click();
+    await vi.dynamicImportSettled();
+  });
   await vi.waitFor(() => expect(container.textContent).toContain("Decision recorded"));
   expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("safe-new", "approve");
   expect(api.fetchApproval).toHaveBeenCalledWith("safe-new", { workspaceId: "default" });

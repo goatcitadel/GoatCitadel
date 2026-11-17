@@ -6,6 +6,8 @@ import { request } from "@goatcitadel/mission-control-shared/api/client-core";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { Button } from "../../ui/Button";
+import { Field } from "../../ui/Field";
+import { formatClockTime } from "@goatcitadel/mission-control-shared/content/format";
 
 const path = "/api/v1/settings/mcp-test-allowance";
 const queryKey = ["settings", "mcp-test-allowance"];
@@ -16,10 +18,7 @@ export function McpTestAllowanceSettings() {
   const workspaceId = activeWorkspaceId ?? "default";
   const [open, setOpen] = useState(false);
   return (
-    <details
-      className="rounded-md border border-line px-3 py-2"
-      onToggle={(event) => setOpen(event.currentTarget.open)}
-    >
+    <details className="border-t border-line-subtle pt-3" onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="cursor-pointer text-sm font-semibold text-fg">Temporary read-only MCP allowance</summary>
       {open ? <AllowanceEditor key={workspaceId} workspaceId={workspaceId} /> : null}
     </details>
@@ -70,7 +69,7 @@ function AllowanceEditor({ workspaceId }: { workspaceId: string }) {
         {error
           ? describeApiError(error, "Could not update the temporary MCP allowance.").summary
           : active
-            ? `Active for ${active.toolName} until ${new Date(active.expiresAt).toLocaleTimeString()}.`
+            ? `Active for ${active.toolName} until ${formatClockTime(active.expiresAt)}.`
             : save.isSuccess
               ? "Allowance ended."
               : ""}
@@ -112,38 +111,40 @@ function AllowanceEditor({ workspaceId }: { workspaceId: string }) {
               if (candidate && session && !save.isPending) save.mutate();
             }}
           >
-            <label className="block">
-              Read-only MCP tool
-              <select
-                aria-label="Read-only MCP tool"
-                className={field}
-                value={serverId}
-                onChange={(event) => setServerId(event.target.value)}
-              >
-                <option value="">Choose a connected fixture</option>
-                {state.data?.candidates.map((item) => (
-                  <option key={item.serverId} value={item.serverId}>
-                    {item.label} · {item.toolName}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="block">
-              Chat in this workspace
-              <select
-                aria-label="Chat in this workspace"
-                className={field}
-                value={sessionId}
-                onChange={(event) => setSessionId(event.target.value)}
-              >
-                <option value="">{sessions.isPending ? "Loading Chats…" : "Choose a Chat"}</option>
-                {sessions.data?.items.map((item) => (
-                  <option key={item.sessionId} value={item.sessionId}>
-                    {item.title || "Untitled Chat"}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <Field label="Read-only MCP tool">
+              {(fieldProps) => (
+                <select
+                  {...fieldProps}
+                  className={field}
+                  value={serverId}
+                  onChange={(event) => setServerId(event.target.value)}
+                >
+                  <option value="">Choose a connected fixture</option>
+                  {state.data?.candidates.map((item) => (
+                    <option key={item.serverId} value={item.serverId}>
+                      {item.label} · {item.toolName}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
+            <Field label="Chat in this workspace">
+              {(fieldProps) => (
+                <select
+                  {...fieldProps}
+                  className={field}
+                  value={sessionId}
+                  onChange={(event) => setSessionId(event.target.value)}
+                >
+                  <option value="">{sessions.isPending ? "Loading Chats…" : "Choose a Chat"}</option>
+                  {sessions.data?.items.map((item) => (
+                    <option key={item.sessionId} value={item.sessionId}>
+                      {item.title || "Untitled Chat"}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
             <Button type="submit" size="sm" disabled={!candidate || !session || save.isPending}>
               Allow for five minutes
             </Button>

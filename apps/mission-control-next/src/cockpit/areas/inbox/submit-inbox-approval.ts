@@ -4,6 +4,7 @@ import type {
   OperatorInboxItem,
   ToolGrantRecord,
 } from "@goatcitadel/contracts";
+import { formatAbsoluteTime } from "@goatcitadel/mission-control-shared/content/format";
 import { resolveApproval } from "@goatcitadel/mission-control-shared/api/client";
 import { approveChatToolTemporarily } from "@goatcitadel/mission-control-shared/api/chat";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -101,7 +102,11 @@ export async function submitInboxApproval({
       )
     ) {
       onError(CHANGED_APPROVAL_RECORD);
-      onInvalidated(CHANGED_APPROVAL_RECORD);
+      if (approval.kind.startsWith("mcp.") && approval.preview?.reviewKind === "mcp.operation") {
+        onInvalidated(CHANGED_APPROVAL_RECORD);
+      } else {
+        onInvalidated();
+      }
       return;
     }
     if (specializedReview && decision === "approve") {
@@ -160,7 +165,7 @@ export async function submitInboxApproval({
         throw new Error("The recorded allowance does not match this Chat and tool.");
       }
       const message = grant
-        ? `Approved. This tool is allowed in this Chat until ${new Date(expires).toLocaleString()}.`
+        ? `Approved. This tool is allowed in this Chat until ${formatAbsoluteTime(expires)}.`
         : "Approved once. The temporary allowance could not be created.";
       updateInboxApprovalAttempt(workspaceId, approval.approvalId, token, "resolved", message);
       return { message, grant };

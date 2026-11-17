@@ -176,7 +176,7 @@ function ChatAllowanceList(chat: ChatScope) {
           Loading allowances…
         </p>
       ) : active.length ? (
-        <ul aria-label="Active Chat allowances" className="mt-2 space-y-2">
+        <ul aria-label="Active Chat allowances" className="mt-2 divide-y divide-line-subtle">
           {active.map((grant) => {
             const tool = presentApprovalAction(grant.toolPattern);
             const targets = [
@@ -186,7 +186,7 @@ function ChatAllowanceList(chat: ChatScope) {
               ...(grant.constraints?.referenceRoots?.map((root) => root.label) ?? []),
             ];
             return (
-              <li key={grant.grantId} className="space-y-1 rounded-md border border-line-subtle p-2">
+              <li key={grant.grantId} className="space-y-1 py-2">
                 <p className="font-medium">{tool}</p>
                 {targets.length ? <p className="break-words text-fg-muted">{targets.join(", ")}</p> : null}
                 <p className="text-fg-muted">

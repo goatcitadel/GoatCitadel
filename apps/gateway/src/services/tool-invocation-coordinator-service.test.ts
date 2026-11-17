@@ -4018,7 +4018,7 @@ describe("MCP approval setting: server-authored relief through real policy", () 
     async (approvalMode) => {
       const f = fixture({ posture: "nothing_asks", approvalMode, host: HARDENED });
       expect((await f.coordinator.invokeTool(wrapperCall())).outcome).toBe("approval_required");
-      expect(f.policyInvoke.mock.calls[0]?.[1]).toBeUndefined();
+      expect(f.policyInvoke.mock.calls[0]?.[1]?.mcpApprovalRelief).toBeUndefined();
       expect(await f.coordinator.invokeMcpTool(directCall())).toMatchObject({ ok: false, approvalRequired: true });
       expect(f.host.invokeMcpRuntimeTool).not.toHaveBeenCalled();
     },
@@ -4078,7 +4078,7 @@ describe("MCP approval setting: server-authored relief through real policy", () 
     const f = fixture({ posture: "nothing_asks", ...setup, tools: "tools" in setup ? [...setup.tools] : undefined });
     const result = await f.coordinator.invokeTool(wrapperCall(overrides as Partial<ToolInvokeRequest>));
     expect(result.outcome).not.toBe("executed");
-    expect(f.policyInvoke.mock.calls[0]?.[1]).toBeUndefined();
+    expect(f.policyInvoke.mock.calls[0]?.[1]?.mcpApprovalRelief).toBeUndefined();
     expect((await firstResult<ToolInvokeResult>(f.policyInvoke)).outcome).toBe("approval_required");
   });
 
@@ -4097,7 +4097,7 @@ describe("MCP approval setting: server-authored relief through real policy", () 
       mcpApprovalRelief: true,
     } as ToolInvokeRequest;
     expect((await f.coordinator.invokeTool(smuggled)).outcome).toBe("approval_required");
-    expect(f.policyInvoke.mock.calls[0]?.[1]).toBeUndefined();
+    expect(f.policyInvoke.mock.calls[0]?.[1]?.mcpApprovalRelief).toBeUndefined();
     expect(await f.coordinator.invokeMcpTool(directCall({ mcpApprovalRelief: true }))).toMatchObject({
       ok: false,
       approvalRequired: true,
