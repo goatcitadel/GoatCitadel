@@ -365,18 +365,24 @@ describe("Plugin panel", () => {
     await renderTab(`/capabilities/plugins?shell=cockpit&item=plugin%3A${PLUGIN_ID}`);
     await press(button("Uninstall", body()));
 
-    const lines = [...(dialog()?.querySelectorAll("li") ?? [])].map((item) => item.textContent);
+    const confirmation = await vi.waitFor(async () => {
+      await act(async () => {});
+      const modal = dialog();
+      expect(button("Keep it", modal)).toBeDefined();
+      return modal!;
+    });
+    const lines = [...confirmation.querySelectorAll("li")].map((item) => item.textContent);
     expect(lines).toEqual([
       "Removes: Calendar, Meeting notes and Page checks",
       "Stays: Git, and the hosts it allowed (calendar.example.com)",
       "Deletes the runs of its prompt packs.",
     ]);
-    expect(dialog()?.textContent).toContain("This can't be undone here.");
-    expect(dialog()?.textContent).toContain(
+    expect(confirmation.textContent).toContain("This can't be undone here.");
+    expect(confirmation.textContent).toContain(
       "This can't be undone here. A skill it added stays until you remove it in Capabilities › Skills. Until then it can't be installed again.",
     );
-    expect(dialog()?.textContent).not.toContain("Installing it again adds its pieces back.");
-    await press(button("Keep it", dialog()));
+    expect(confirmation.textContent).not.toContain("Installing it again adds its pieces back.");
+    await press(button("Keep it", confirmation));
     expect(api.uninstallCapabilityPlugin).not.toHaveBeenCalled();
   });
 
