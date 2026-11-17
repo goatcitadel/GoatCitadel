@@ -27,6 +27,7 @@ import { Button } from "../../ui/Button";
 import { hasExpired, useMinuteClock } from "./use-minute-clock";
 import { approvalReviewRecord, CHANGED_APPROVAL_RECORD, canResolveInboxApproval } from "./inbox-approval-guard";
 import { ApprovalDecisionPreview, ApprovalDecisionHelp } from "./ApprovalDecisionPreview";
+import { ApprovalReviewSummaryContent } from "./ApprovalReviewSummaryContent";
 import { useApprovalReviewEvidence } from "./use-approval-review-evidence";
 import { splitApprovalExplanation } from "./approval-preview";
 import { approvalDecisionMessage, approvalResolutionLine } from "./approval-settlement";
@@ -175,13 +176,13 @@ function ApprovalDecisionReview({
   const [notice, setNotice] = useState("");
   const [rechecking, setRechecking] = useState(false);
   const current = useRef(true);
-  const sessionChanged = Boolean(sessionId && approval.linkage?.sessionId && sessionId !== approval.linkage.sessionId);
   // The selected-workspace comparison is the one check an install-wide Settings approval skips; the rest still apply.
-  const scopeChanged = scopeDiffers(installationSetting, approval, activeWorkspaceId, workspaceId) || sessionChanged;
+  const scopeChanged =
+    scopeDiffers(installationSetting, approval, activeWorkspaceId, workspaceId) ||
+    Boolean(sessionId && approval.linkage?.sessionId && sessionId !== approval.linkage.sessionId);
   const specialist = useDeferredApprovalCode(specialistApprovalCode, Boolean(specialistEvidence));
-  const specialistCode = specialist.code;
   const specialistReady = Boolean(
-    specialistEvidence && specialistCode?.specialistEvidenceMatches(approval, specialistEvidence),
+    specialistEvidence && specialist.code?.specialistEvidenceMatches(approval, specialistEvidence),
   );
   const review = useApprovalReviewEvidence(approval);
   const hasPreview = Boolean(review.evidence) || specialistReady;
@@ -193,9 +194,7 @@ function ApprovalDecisionReview({
     canOfferChatToolGrant(approval, sessionId, workspaceId),
   );
   const specializedReview =
-    Boolean(approval.mcpElicitation) ||
-    approval.kind === "remote_worker.native_runtime" ||
-    approval.kind === "code_mode.run";
+    Boolean(approval.mcpElicitation) || ["remote_worker.native_runtime", "code_mode.run"].includes(approval.kind);
   // One shared minute clock plus a single re-render at the expiry moment, instead of a per-second re-render (IN-05).
   const expired = hasExpired(approval.expiresAt, useMinuteClock(approval.expiresAt));
   useLayoutEffect(() => {
@@ -257,7 +256,7 @@ function ApprovalDecisionReview({
         specializedReview,
         specialistReady,
         specialistEvidence,
-        specialistCode,
+        specialistCode: specialist.code,
         prepareApprove,
         readCurrent,
         isCurrent: () => current.current && access.current(),
@@ -417,8 +416,8 @@ function ApprovalDecisionReview({
               reviewedApproval={approval}
               reviewEvidence={review.evidence}
               specialistReview={
-                specialistReady && specialistEvidence && specialistCode ? (
-                  <specialistCode.SpecialistApprovalReview approval={approval} evidence={specialistEvidence} />
+                specialistReady && specialistEvidence && specialist.code ? (
+                  <specialist.code.SpecialistApprovalReview approval={approval} evidence={specialistEvidence} />
                 ) : undefined
               }
               pending={Boolean(attempt) || (specializedReview && !specialistReady)}

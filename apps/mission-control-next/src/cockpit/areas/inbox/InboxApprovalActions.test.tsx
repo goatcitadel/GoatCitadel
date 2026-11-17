@@ -104,7 +104,10 @@ function deferred<T>() {
 
 async function openConfirmation(label = "Review danger approval") {
   await vi.waitFor(() => expect(button(label).disabled).toBe(false));
-  await act(async () => button(label).click());
+  await act(async () => {
+    button(label).click();
+    await vi.dynamicImportSettled();
+  });
   await vi.waitFor(() => expect(document.querySelector('[aria-label="Approval action details"]')).not.toBeNull());
 }
 

@@ -84,7 +84,7 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
   });
   // CH-02: a failed read is an error, not "checking"; a missing record is its own state. Both offer a way forward.
   const recordFailed = recordQuery.isError && !recordQuery.data;
-  const reviewedApproval = recordQuery.data?.approvalId === approvalId ? recordQuery.data : undefined;
+  const reviewedApproval = approvalId && recordQuery.data?.approvalId === approvalId ? recordQuery.data : undefined;
   // Retained stream signals can omit risk metadata. Hydrate only from the
   // matching pending canonical record; unavailable/settled records stay closed.
   const approval =
