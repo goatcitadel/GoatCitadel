@@ -16,6 +16,7 @@ import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { Section } from "../../../ui/Section";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
+import { InstallConfirmationIcon } from "../InstallConfirmationIcon";
 import { ConnectorInstallPanel } from "./ConnectorInstallPanel";
 import { InstallStatus } from "./ConnectorInstallProgress";
 import { ChatBlockNote, ConnectionLines, ConnectorHeader, HiddenNote, TechnicalRows } from "./ConnectorPanelParts";
@@ -242,6 +243,10 @@ function TemplateConnectorPanel({
   return (
     <>
       {view ?? <ConnectorInstallPanel item={template} install={install} reliefAvailable={list.reliefAvailable} />}
+      <p className="text-sm text-fg" hidden={state.phase !== "done"}>
+        <InstallConfirmationIcon identity={template.id} completed={state.phase === "done"} />
+        {state.phase === "done" ? " Installed." : null}
+      </p>
       <InstallStatus anchor={anchor} state={state} doneWords="Installed." />
     </>
   );

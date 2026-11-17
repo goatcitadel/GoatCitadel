@@ -406,10 +406,10 @@ describe("withInstallProgress", () => {
     expect(withInstallProgress(item(), presentConnectorState(item()), flow)).toEqual({
       label: "Available",
       tone: "waiting",
-      reason: "Waiting on you in Inbox",
+      reason: "Waiting for your approval",
     });
     // A saved row the install already made waits on the same approval.
-    expect(withInstallProgress(saved, presentConnectorState(saved), flow).reason).toBe("Waiting on you in Inbox");
+    expect(withInstallProgress(saved, presentConnectorState(saved), flow).reason).toBe("Waiting for your approval");
   });
 
   // M6: signing in waits on the operator, like an Inbox approval (R87), so the row says so in the waiting tone.

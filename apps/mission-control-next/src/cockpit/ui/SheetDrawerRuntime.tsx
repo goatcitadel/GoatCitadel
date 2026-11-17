@@ -1,6 +1,7 @@
 import type { ComponentProps, ReactNode, RefObject } from "react";
 import { X } from "lucide-react";
 import { Drawer } from "vaul";
+import { cn } from "../lib/cn";
 import { IconButton } from "./IconButton";
 import { NoFocusTooltips } from "./tooltip-focus";
 
@@ -13,6 +14,7 @@ export function SheetDrawerRuntime({
   closeLabel,
   title,
   side,
+  contentClassName,
   children,
 }: {
   open: boolean;
@@ -23,6 +25,7 @@ export function SheetDrawerRuntime({
   closeLabel: string;
   title: string;
   side: boolean;
+  contentClassName?: string;
   children: ReactNode;
 }) {
   return (
@@ -34,11 +37,12 @@ export function SheetDrawerRuntime({
           aria-describedby={undefined}
           onOpenAutoFocus={onOpenAutoFocus}
           onCloseAutoFocus={onCloseAutoFocus}
-          className={
+          className={cn(
             side
               ? "fixed inset-y-0 right-0 z-50 flex h-full w-full max-w-2xl flex-col overflow-hidden border-l border-line bg-overlay"
-              : "cockpit-sheet cockpit-safe-bottom fixed inset-x-0 bottom-0 z-50 flex flex-col overflow-hidden rounded-t-lg border border-line bg-overlay"
-          }
+              : "cockpit-sheet cockpit-safe-bottom fixed inset-x-0 bottom-0 z-50 flex flex-col overflow-hidden rounded-t-lg border border-line bg-overlay",
+            contentClassName,
+          )}
         >
           <NoFocusTooltips>
             {side ? null : <Drawer.Handle className="mx-auto mt-2 shrink-0" />}

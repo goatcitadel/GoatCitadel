@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InspectorPanel, InspectorProvider } from "../../../app/inspector";
 import { queryKeys } from "../../../data/query-keys";
 import { ConnectorPanel } from "./ConnectorPanel";
+import { createInstallFlow, deleteInstallFlow, templateKey, updateInstallFlow } from "./connector-install-store";
 import { ConnectorsTab } from "./ConnectorsTab";
 import { resumeActionFor } from "./ConnectorResumeControls";
 import { prepareReadyDialogFixture } from "../../../../test/ready-dialog-fixture";
@@ -230,6 +231,36 @@ describe("resumeActionFor", () => {
 });
 
 describe("Connector panel", () => {
+  it("keeps one new confirmation across the handoff from the template to the saved server", async () => {
+    const flow = createInstallFlow([templateKey("context7")]);
+    try {
+      updateInstallFlow(flow.id, { state: { phase: "working", step: "connect" } });
+      await renderPanel(CONTEXT7.id);
+      expect(container.querySelector(".cockpit-install-confirmed")).toBeNull();
+
+      const saved = { ...LINEAR, templateId: CONTEXT7.templateId, description: "Saved Context7 connector." };
+      await act(async () => {
+        updateInstallFlow(flow.id, { state: { phase: "done", serverId: "linear" }, serverId: "linear" });
+        client.setQueryData(KEY, response([saved]));
+      });
+      expect(text()).toContain("Saved Context7 connector.");
+      const icon = container.querySelector(".cockpit-install-confirmed");
+      expect(icon?.parentElement?.textContent).toContain("Installed.");
+      expect(container.querySelectorAll(".cockpit-install-confirmed")).toHaveLength(1);
+
+      await act(async () => {
+        client.setQueryData(KEY, response([{ ...saved }]));
+      });
+      expect(container.querySelector(".cockpit-install-confirmed")).toBe(icon);
+      await act(async () => root.render(null));
+      await renderPanel(CONTEXT7.id, [saved]);
+      expect(container.querySelector(".cockpit-install-confirmed")).toBeNull();
+    } finally {
+      await act(async () => {
+        deleteInstallFlow(flow.id);
+      });
+    }
+  });
   it("shows the kind, category, state and reason", async () => {
     await renderPanel(LINEAR.id);
     expect(text()).toContain("MCP · Development");

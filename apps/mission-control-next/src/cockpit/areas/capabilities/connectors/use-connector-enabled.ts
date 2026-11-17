@@ -89,8 +89,12 @@ export function useConnectorEnabled(item: CapabilityConnectorItem): ConnectorEna
   const busy = useRef(false);
 
   const { serverId, serverRevision } = item;
-  // When the confirming read failed, the cached row is the one from before the save, so the saved choice is shown.
-  const enabled = shown ?? failure?.saved ?? item.state !== "turned_off";
+  // A confirming read updates the cache before the list observer delivers its item. Use that same row so clearing
+  // the pending state or a read warning cannot briefly show the old switch value.
+  const listState = client
+    .getQueryData<CapabilityConnectorsResponse>(listKey)
+    ?.items.find((row) => row.id === item.id)?.state;
+  const enabled = shown ?? failure?.saved ?? (listState ?? item.state) !== "turned_off";
   // A server that is on can always be switched off. A switched-off one is checked before it is switched on, with the
   // same rule Settings uses. The check is off (not a missing `queryFn`) when nothing needs it, so a re-read of the
   // server after a save is skipped instead of failing.

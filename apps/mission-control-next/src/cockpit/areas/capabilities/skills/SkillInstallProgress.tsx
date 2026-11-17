@@ -1,4 +1,6 @@
+import { useLayoutEffect, useRef } from "react";
 import type { CapabilitySkillInstall } from "@goatcitadel/contracts";
+import { useInstallApprovalPresentation } from "../../../data/install-approval-presentation";
 import { Button } from "../../../ui/Button";
 import { Section } from "../../../ui/Section";
 import { StatusBadge } from "../../../ui/StatusBadge";
@@ -27,11 +29,18 @@ function waitingInstall(flow: SkillInstall): WaitingInstall | undefined {
 }
 
 /**
- * The step's approval, decided in the panel: it opens on its own once per approval, and its "Review the change" button
- * opens it again. It belongs to the workspace the check was made in, so it is read there, whichever workspace is on
- * screen now. A decision is read back at once rather than at the next check.
+ * The step's approval stays below the step that is waiting. It belongs to the workspace the check was made in.
+ * A decision is read back at once rather than at the next check.
  */
-function ApprovalInPlace({ flow, install }: { flow: SkillInstall; install: WaitingInstall }) {
+function ApprovalInPlace({
+  flow,
+  install,
+  returnFocus,
+}: {
+  flow: SkillInstall;
+  install: WaitingInstall;
+  returnFocus: () => void;
+}) {
   const words = approvalWords(install.step, install.name, useFeatureSwitchOn("chatSkillInstructionsV1Enabled"));
   return (
     <SettingsApprovalDialog
@@ -39,7 +48,8 @@ function ApprovalInPlace({ flow, install }: { flow: SkillInstall; install: Waiti
       workspaceId={flow.workspaceId}
       title={words.title}
       summary={words.summary}
-      reviewLabel="Review the change"
+      presentation="inline"
+      returnFocus={returnFocus}
       loadFailureHint="Reload to try again."
       onResolved={() => flow.checkNow()}
     />
@@ -97,20 +107,41 @@ export function SkillInstallProgress({
   const stops = stopLines(flow);
   const checkAgain = (flow.state.phase === "failed" && !switchOnStopped(flow)) || flow.state.phase === "check_failed";
   const offerSwitchOn = install?.step === "installed_off" && !flow.chain && flow.state.phase === "following";
+  const offerInstall = install?.step === "check_passed" && (flow.state.phase === "ready" || flow.asking);
+  const progress = useInstallApprovalPresentation("skill", waiting?.approvalId, flow.asking);
+  const pressed = useRef(false);
+  const focusProgress = () => progress.current?.focus({ preventScroll: true });
+  const confirm = () => {
+    pressed.current = true;
+    flow.confirm();
+  };
+  useLayoutEffect(() => {
+    if (flow.asking || !pressed.current) return;
+    pressed.current = false;
+    if (offerInstall || offerSwitchOn) return;
+    const active = document.activeElement;
+    if (active === document.body || active === progress.current?.closest('[role="dialog"]')) {
+      progress.current?.focus({ preventScroll: true });
+    }
+  }, [flow.asking, offerInstall, offerSwitchOn, progress]);
   return (
     <Section title="Progress" headingLevel={3}>
-      <div className="space-y-3 text-sm">
+      <div
+        ref={progress}
+        tabIndex={-1}
+        className="space-y-3 rounded-sm text-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+      >
         {steps.length > 0 ? (
           <ol className="divide-y divide-line-subtle">
             {steps.map((row) => (
-              <li key={row.name} className="flex flex-wrap items-center justify-between gap-2 py-2">
-                <span className="font-medium text-fg">{row.name}</span>
-                <span className="flex flex-wrap items-center gap-2">
+              <li key={row.name} className="space-y-2 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium text-fg">{row.name}</span>
                   <StatusBadge status={row.status} />
-                  {waiting && row.status.tone === "waiting" ? (
-                    <ApprovalInPlace key={waiting.approvalId} flow={flow} install={waiting} />
-                  ) : null}
-                </span>
+                </div>
+                {waiting && row.status.tone === "waiting" ? (
+                  <ApprovalInPlace key={waiting.approvalId} flow={flow} install={waiting} returnFocus={focusProgress} />
+                ) : null}
               </li>
             ))}
           </ol>
@@ -125,13 +156,13 @@ export function SkillInstallProgress({
             ))}
           </div>
         ) : null}
-        {install?.step === "check_passed" && (flow.state.phase === "ready" || flow.asking) ? (
-          <Button variant="primary" loading={flow.asking} loadingLabel="Asking…" onClick={flow.confirm}>
+        {offerInstall ? (
+          <Button variant="primary" loading={flow.asking} loadingLabel="Asking…" onClick={confirm}>
             Install and switch on
           </Button>
         ) : null}
         {offerSwitchOn ? (
-          <Button variant="primary" loading={flow.asking} loadingLabel="Asking…" onClick={flow.confirm}>
+          <Button variant="primary" loading={flow.asking} loadingLabel="Asking…" onClick={confirm}>
             Switch on
           </Button>
         ) : null}

@@ -4,6 +4,7 @@ import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMedi
 import { isModifiedClick } from "../lib/modified-click";
 import { TAB_CLASS, TAB_CURRENT_PAGE_CLASS } from "./tab-style";
 import { useScrollEdges } from "./use-scroll-edges";
+import { useControlWave, warmControlWave } from "./use-control-wave";
 
 export interface OverflowTab {
   id: string;
@@ -44,6 +45,7 @@ export function OverflowTabs({
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const picker = phone && tabs.length >= PICKER_MIN_TABS;
   const { ref: row, ...edges } = useScrollEdges<HTMLElement>([tabs.length, picker]);
+  const { play } = useControlWave();
   useEffect(() => {
     // Set the row's own scroll position: scrollIntoView would also move the keyboard start point (U-GL-046).
     const element = row.current;
@@ -83,10 +85,15 @@ export function OverflowTabs({
           key={tab.id}
           href={tab.href}
           aria-current={current === tab.id ? "page" : undefined}
+          onPointerEnter={warmControlWave}
+          onFocus={warmControlWave}
           onClick={(event) => {
             if (isModifiedClick(event)) return;
             event.preventDefault();
             navigate(tab.href);
+            if (current !== tab.id) {
+              play(event.currentTarget, event.currentTarget, event.nativeEvent, { preserveText: true });
+            }
           }}
           className={`shrink-0 ${TAB_CLASS} ${TAB_CURRENT_PAGE_CLASS}`}
         >

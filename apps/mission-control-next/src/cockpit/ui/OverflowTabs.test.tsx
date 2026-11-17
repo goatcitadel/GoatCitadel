@@ -4,13 +4,15 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { OverflowTabs, nearestScrollLeft } from "./OverflowTabs";
 
-const media = vi.hoisted(() => ({ phone: false }));
+const { media, play } = vi.hoisted(() => ({ media: { phone: false }, play: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({ useMediaQuery: () => media.phone }));
+vi.mock("./use-control-wave", () => ({ useControlWave: () => ({ play }), warmControlWave: vi.fn() }));
 
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   media.phone = false;
+  play.mockClear();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -37,8 +39,12 @@ it("keeps the tabs as named links and marks the side that hides more tabs", asyn
   await act(async () => nav.dispatchEvent(new Event("scroll")));
   expect(nav.hasAttribute("data-overflow-end")).toBe(true);
   expect(nav.hasAttribute("data-overflow-start")).toBe(false);
-  await act(async () => (nav.querySelector('a[href="/work"]') as HTMLAnchorElement).click());
+  const board = nav.querySelector<HTMLAnchorElement>('a[href="/work"]')!;
+  await act(async () => board.click());
   expect(navigate).toHaveBeenCalledWith("/work");
+  expect(play).toHaveBeenCalledExactlyOnceWith(board, board, expect.anything(), { preserveText: true });
+  await act(async () => nav.querySelector<HTMLAnchorElement>('a[aria-current="page"]')!.click());
+  expect(play).toHaveBeenCalledTimes(1);
 });
 
 it("never calls scrollIntoView, so the first Tab still starts at the top of the page (U-GL-046)", async () => {
@@ -77,6 +83,7 @@ it("replaces a long strip with a section picker on a phone and navigates on chan
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
   expect(navigate).toHaveBeenCalledWith("/lib/5");
+  expect(play).not.toHaveBeenCalled();
 });
 
 it("keeps the strip on wider screens and for short tab sets on a phone", async () => {

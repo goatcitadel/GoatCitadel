@@ -101,13 +101,7 @@ export function ConnectorInstallPanel({
           </NativeOwnerLink>
         </p>
       ) : (
-        <ConnectorInstallProgress
-          install={install}
-          scope={item.id}
-          steps={installSteps(item)}
-          doneLine="Installed."
-          action={action}
-        />
+        <ConnectorInstallProgress install={install} scope={item.id} steps={installSteps(item)} action={action} />
       )}
 
       <NativeOwnerLink scope={item.id} href={connectorSettingsHref(item)} className="text-sm">

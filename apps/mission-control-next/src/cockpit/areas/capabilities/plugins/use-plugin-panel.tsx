@@ -3,6 +3,7 @@ import { useDeliberateOpen } from "../deliberate-open";
 import type { CapabilityPluginListItem, CapabilityPluginListResponse } from "@goatcitadel/contracts";
 import { useInspector } from "../../../app/inspector";
 import { useCockpitRoute } from "../../../app/use-cockpit-route";
+import type { InstallCompletionHandoff } from "../InstallConfirmationIcon";
 import { PluginPanel } from "./PluginPanel";
 import {
   PLUGINS_HREF,
@@ -82,6 +83,7 @@ function useAddressPanel(
 export function usePluginPanel(
   list: CapabilityPluginListResponse | undefined,
   onInstall: (item: CapabilityPluginListItem) => void,
+  takeCompletion: (key: string) => InstallCompletionHandoff | undefined,
 ): { open: (item: CapabilityPluginListItem) => void } {
   const { open: openInspector } = useInspector();
   const { search, navigate } = useCockpitRoute();
@@ -94,10 +96,10 @@ export function usePluginPanel(
         source: pluginPanelSource(id),
         focusOnOpen: deliberate.take(pluginPanelSource(id)),
         title,
-        body: <PluginPanel pluginId={id} onInstall={onInstall} />,
+        body: <PluginPanel pluginId={id} onInstall={onInstall} showCompletion={takeCompletion(pluginInstallKey(id))} />,
       });
     },
-    [openInspector, onInstall, deliberate],
+    [openInspector, onInstall, deliberate, takeCompletion],
   );
   useAddressPanel(usePanelPlugin(search, list), show, asked);
   const linkedId = pluginIdFromSearch(search);

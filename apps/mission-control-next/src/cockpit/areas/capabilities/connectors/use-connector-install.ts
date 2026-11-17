@@ -370,7 +370,7 @@ function recoverWaitingInstalls(items: readonly CapabilityConnectorItem[], conte
 
 /**
  * Takes on one Capabilities install that waits in Inbox for a template in the list, as the flow that made it would
- * follow it: the row reads "Waiting on you in Inbox", Stop withdraws it, and an approval goes on to sign in, switch it
+ * follow it: the panel shows the approval, Stop withdraws it, and an approval goes on to sign in, switch it
  * on and connect it. A template that already has a flow in this tab keeps it, and a plan another tab follows is left
  * to that tab.
  */
@@ -423,13 +423,13 @@ export interface ConnectorInstall {
   submitManualCode(code: string, state: string): void;
   /** While signing in: asks for a new sign-in request in place of the one waiting (R94). */
   restartSignIn(): void;
+  /** Read the owning plan after the inline decision; the decision alone doesn't settle the install. */
+  checkApproval(): Promise<void> | undefined;
   cancel(): void;
-  /** Reads the install's plan now, for after its approval was decided in place. The poll goes on as before. */
-  checkApproval(): void;
 }
 
 /**
- * One-button install for a connector row, driven end to end: the install plan (waiting in Inbox when it asks), sign-in
+ * One-button install for a connector row, driven end to end: the install plan (waiting for approval when it asks), sign-in
  * for OAuth apps, switch on, connect. A saved server's row resumes at sign-in or connect. The flow lives outside the
  * component (R68): a template row and the saved server's row that replaces it find the same flow. The store reads the
  * plan whether or not anything is mounted, and the flow goes on by itself until it signs in or is done (R88).
@@ -458,11 +458,13 @@ export function useConnectorInstall(item: CapabilityConnectorItem): ConnectorIns
     restartSignIn: () => {
       if (ownerCustody === custody && id !== undefined) restartSignIn(id);
     },
+    checkApproval: () => {
+      if (ownerCustody === custody && id !== undefined && readInstallFlow(id)?.state.phase === "waiting_inbox") {
+        return readPlan(id);
+      }
+    },
     cancel: () => {
       if (ownerCustody === custody && id !== undefined) cancelFlow(id);
-    },
-    checkApproval: () => {
-      if (ownerCustody === custody && id !== undefined) void readPlan(id);
     },
   };
 }

@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useRef, useState } from "react";
-import { Check } from "lucide-react";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Button } from "../../ui/Button";
+import { useControlWave, warmControlWave } from "../../ui/use-control-wave";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/Popover";
 
 export interface CategoryOption {
@@ -12,23 +12,32 @@ export interface CategoryOption {
 const DEFAULT_VISIBLE_COUNT = 3;
 const DEFAULT_LABEL = "Categories";
 
-const CategoryChip = forwardRef<HTMLButtonElement, { label: string; pressed?: boolean; onClick: () => void }>(
-  function CategoryChip({ label, pressed, onClick }, ref) {
-    return (
-      <Button
-        ref={ref}
-        size="sm"
-        aria-pressed={pressed}
-        onClick={onClick}
-        className="rounded-full aria-pressed:border-accent aria-pressed:bg-sunken"
-      >
-        {/* The check keeps the selected state readable without colour. */}
-        {pressed ? <Check aria-hidden="true" className="size-3.5" /> : null}
-        {label}
-      </Button>
-    );
-  },
-);
+const CategoryChip = forwardRef<
+  HTMLButtonElement,
+  {
+    label: string;
+    pressed?: boolean;
+    onClick: () => void;
+    playWave?: ReturnType<typeof useControlWave>["play"];
+  }
+>(function CategoryChip({ label, pressed, onClick, playWave }, ref) {
+  return (
+    <Button
+      ref={ref}
+      size="sm"
+      aria-pressed={pressed}
+      onPointerEnter={playWave ? warmControlWave : undefined}
+      onFocus={playWave ? warmControlWave : undefined}
+      onClick={(event) => {
+        onClick();
+        playWave?.(event.currentTarget, event.currentTarget, event.nativeEvent);
+      }}
+      className="rounded-full whitespace-nowrap aria-pressed:border-accent aria-pressed:bg-sunken aria-pressed:inset-ring-1 aria-pressed:inset-ring-accent"
+    >
+      {label}
+    </Button>
+  );
+});
 
 /**
  * Category buttons for a Capabilities list. "All" comes first, then the first `visibleCount` options (default 3); the
@@ -54,6 +63,7 @@ export function CategoryFilter({
   label?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const { play: playWave } = useControlWave();
   const allChip = useRef<HTMLButtonElement>(null);
   const rowChips = useRef(new Map<string, HTMLButtonElement>());
   const overflowButton = useRef<HTMLButtonElement>(null);
@@ -93,7 +103,13 @@ export function CategoryFilter({
 
   return (
     <div role="group" aria-label={label} className="flex flex-wrap items-center gap-1.5">
-      <CategoryChip ref={allChip} label="All" pressed={active.length === 0} onClick={() => onChange([])} />
+      <CategoryChip
+        ref={allChip}
+        label="All"
+        pressed={active.length === 0}
+        onClick={() => onChange([])}
+        playWave={active.length > 0 ? playWave : undefined}
+      />
       {visible.map((option) => (
         <CategoryChip
           key={option.id}
@@ -104,6 +120,7 @@ export function CategoryFilter({
           label={option.label}
           pressed={active.includes(option.id)}
           onClick={() => toggle(option.id)}
+          playWave={playWave}
         />
       ))}
       {hidden.length > 0 ? (

@@ -1,5 +1,6 @@
-import { useId, useRef } from "react";
-import type { CapabilitySkillItem } from "@goatcitadel/contracts";
+import { useId, useRef, type RefObject } from "react";
+import type { CapabilitySkillItem, CapabilitySkillState } from "@goatcitadel/contracts";
+import { skillStateApprovalEvidence } from "@goatcitadel/mission-control-shared/content/skill-state-approval-evidence";
 import { Button } from "../../../ui/Button";
 import { Switch } from "../../../ui/Switch";
 import { FeatureOffLink } from "../../settings/FeatureOffLink";
@@ -16,22 +17,47 @@ export const SKILLS_IN_CHAT_OFF_LINE = "Chat can't use skills yet: Skills in Cha
 const PAUSED_NOTE =
   "Paused skills are used when you name them in Chat. Chat picks one on its own for a close match only if you've turned off first use confirmation.";
 
+function displayState(value: unknown): CapabilitySkillState | undefined {
+  if (value === "enabled") return "on";
+  if (value === "disabled") return "off";
+  if (value === "sleep") return "paused";
+  return undefined;
+}
+
 /**
- * The approval the change waits on, decided here: it opens on its own once, and "Review the change" opens it again.
- * The change is approved where it was asked for, in one click, so nothing here points at the Inbox, although it also
- * waits there. A decline publishes no skill event, so the switch is asked to read the approval at once rather than at
- * its next check.
+ * Review the pending change next to the switch. A decline publishes no skill event, so check it here without waiting
+ * for the next scheduled read.
  */
-function ApprovalInPlace({ item, sw, approvalId }: { item: CapabilitySkillItem; sw: SkillSwitch; approvalId: string }) {
+function ApprovalInPlace({
+  item,
+  sw,
+  approvalId,
+  switchButton,
+}: {
+  item: CapabilitySkillItem;
+  sw: SkillSwitch;
+  approvalId: string;
+  switchButton: RefObject<HTMLButtonElement | null>;
+}) {
   return (
     <SettingsApprovalDialog
       approvalId={approvalId}
       workspaceId={null}
       title="Approve this skill change?"
-      // Only names the change for the operator, under the approval's own title; the review says what it applies.
-      summary={presentSkillChange(item.name, sw.waitingTarget, item.state)}
-      reviewLabel="Review the change"
+      summary={(approval) => {
+        const preview = approval.preview;
+        if (preview?.skillId === item.skillId && skillStateApprovalEvidence(approval)) {
+          return presentSkillChange(
+            item.name,
+            displayState(preview.state),
+            displayState(preview.currentState) ?? item.state,
+          );
+        }
+        return presentSkillChange(item.name, sw.waitingTarget, item.state);
+      }}
+      presentation="inline"
       loadFailureHint="Reload to try again."
+      returnFocus={() => switchButton.current?.focus({ preventScroll: true })}
       onResolved={() => sw.checkApproval()}
     />
   );
@@ -40,7 +66,7 @@ function ApprovalInPlace({ item, sw, approvalId }: { item: CapabilitySkillItem; 
 /**
  * The panel's switch, named "Turn it on or off: <name>" so it never shares a name with the skill's row. The state word
  * stands once, in the badge at the top of the panel, so the switch prints none beside itself. Under it: why the change
- * waits, or what the state means; the approval in place with "Review the change"; why the last change didn't happen;
+ * waits, or what the state means; the inline approval; why the last change didn't happen;
  * and Pause or Resume.
  *
  * Beside the page the skill's row reads the wait and a failure out, so the panel stays quiet; a modal inspector hides
@@ -59,6 +85,7 @@ export function SkillPanelSwitch({
 }) {
   const noteId = useId();
   const skillsInChatOn = useFeatureSwitchOn("chatSkillInstructionsV1Enabled");
+  const switchButton = useRef<HTMLButtonElement>(null);
   // A failure the store kept from before the panel opened was read out when it happened (see SkillRow).
   const mountedWith = useRef(sw.failure);
   if (!item.switchable) {
@@ -72,6 +99,7 @@ export function SkillPanelSwitch({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="text-sm font-medium text-fg">Turn it on or off</span>
         <Switch
+          ref={switchButton}
           checked={sw.checked}
           onCheckedChange={sw.setOn}
           label={`Turn it on or off: ${item.name}`}
@@ -100,7 +128,13 @@ export function SkillPanelSwitch({
         {item.pinned ? <p>{PINNED_NOTE}</p> : null}
       </div>
       {sw.waitingApprovalId ? (
-        <ApprovalInPlace key={sw.waitingApprovalId} item={item} sw={sw} approvalId={sw.waitingApprovalId} />
+        <ApprovalInPlace
+          key={sw.waitingApprovalId}
+          item={item}
+          sw={sw}
+          approvalId={sw.waitingApprovalId}
+          switchButton={switchButton}
+        />
       ) : null}
       {sw.failure ? (
         <div role={announceFailure ? "alert" : undefined} className="space-y-1 text-sm text-status-failed">

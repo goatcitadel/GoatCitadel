@@ -1,0 +1,66 @@
+.cockpit-evidence-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: fit-content;
+  list-style: none;
+}
+
+.cockpit-evidence-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.cockpit-evidence-disclosure[open] > summary > .cockpit-evidence-chevron {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cockpit-composer-plus-panel[data-state="open"] {
+    transform-origin: var(--radix-popover-content-transform-origin);
+    animation: cockpit-composer-plus-enter var(--motion-base) var(--motion-ease);
+  }
+
+  .cockpit-evidence-disclosure[open] > summary > .cockpit-evidence-chevron {
+    transition: transform var(--motion-fast) var(--motion-ease);
+  }
+
+  .cockpit-evidence-disclosure[open] > div {
+    animation: cockpit-evidence-enter var(--motion-fast) var(--motion-ease);
+  }
+
+  .cockpit-install-confirmed,
+  .cockpit-install-confirmed-badge > svg {
+    animation: cockpit-install-confirmed var(--motion-slow) var(--motion-ease);
+  }
+}
+
+@keyframes cockpit-composer-plus-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes cockpit-evidence-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes cockpit-install-confirmed {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

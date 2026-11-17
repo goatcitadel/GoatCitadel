@@ -40,7 +40,7 @@ export function PluginsTab() {
   const view = recordView(query);
   const filters = usePluginFilters();
   const installPanel = usePluginInstallPanel(view.record);
-  const pluginPanel = usePluginPanel(view.record, installPanel.install);
+  const pluginPanel = usePluginPanel(view.record, installPanel.install, installPanel.takeCompletion);
   const response = view.record;
   if (!response) return <FirstRead query={query} view={view} />;
   return (

@@ -2,6 +2,7 @@
 @import "./accessible-controls.css";
 @import "./gateway-access.css";
 @import "./cockpit-tokens.css";
+@import "./cockpit-interaction-motion.css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/hanken-grotesk";
 

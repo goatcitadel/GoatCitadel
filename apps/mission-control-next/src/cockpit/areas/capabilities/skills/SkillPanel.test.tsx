@@ -202,6 +202,7 @@ const dialog = () =>
   [...document.body.querySelectorAll<HTMLElement>('[role="dialog"]')].find(
     (entry) => !entry.querySelector('[data-inspector-body="true"]'),
   );
+const review = () => body()?.querySelector("section[aria-labelledby]");
 const buttonIn = (parent: ParentNode | null | undefined, name: string) =>
   [...(parent?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
     (entry) => entry.textContent?.trim() === name || entry.getAttribute("aria-label") === name,
@@ -310,8 +311,8 @@ afterEach(() => {
   container.remove();
   client.clear();
   __resetSkillSwitchesForTests();
-  __resetSettingsApprovalDialogsForTests();
   __resetInboxApprovalAttemptsForTests();
+  __resetSettingsApprovalDialogsForTests();
   vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");
 });
@@ -582,34 +583,34 @@ describe("Skill panel switch", () => {
     expect(panelText()).toContain("Pinned. Change it through a proposal in Library.");
   });
 
-  it("opens the approval in place once, naming the skill under its own title", async () => {
+  it("keeps review and decisions beside the switch without opening a dialog", async () => {
     await renderTab();
     await openPanel("Planner");
+    const toggle = body()!.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    toggle.focus();
     waitOnPlanner();
     await settle();
 
-    await vi.waitFor(() => expect(dialog()).toBeDefined());
-    // The approval's own title stays; the panel's line says which skill and what change, from the click that asked.
-    expect(dialog()?.querySelector("h2")?.textContent).toBe("Approve skill state change");
-    expect(dialog()?.textContent).toContain("Turn Planner on");
+    await vi.waitFor(() => expect(buttonIn(review(), "Approve once")).toBeDefined());
+    expect(dialog()).toBeUndefined();
+    expect(document.activeElement).toBe(toggle);
+    expect(review()?.querySelector("h3")?.textContent).toBe("Approve skill state change");
+    expect(review()?.textContent).toContain("Turn Planner on");
+    expect(review()?.textContent).toContain("Applies to every workspace.");
+    expect(review()?.querySelector("details")?.open).toBe(false);
     // The approval belongs to no workspace, so it is read without one.
     expect(approvals.fetchApproval).toHaveBeenCalled();
     for (const [, options] of approvals.fetchApproval.mock.calls) {
       expect(options === undefined || !("workspaceId" in (options as object))).toBe(true);
     }
-    // The way back to it stands beside the line that says the change waits.
     expect(panelText()).toContain("The change applies once you approve it.");
-    expect(buttonIn(body(), "Review the change")).toBeDefined();
-
-    // Closed, it doesn't open on its own again when View opens the panel again.
-    await press(buttonIn(dialog(), "Close dialog"));
-    expect(dialog()).toBeUndefined();
     await press(buttonIn(document.body, "Close inspector"));
     await openPanel("Planner");
+    await vi.waitFor(() => expect(buttonIn(review(), "Approve once")).toBeDefined());
     expect(dialog()).toBeUndefined();
   });
 
-  it("opens the approval in place when a row switch asks", async () => {
+  it("keeps the list in place when a row switch asks and opens the panel on Review", async () => {
     // Notes waits on an approval found when the list loads: nobody here just asked, so nothing opens by itself.
     api.fetchCapabilitySkills.mockResolvedValue(
       listOf(
@@ -622,47 +623,26 @@ describe("Skill panel switch", () => {
     expect(body()).toBeNull();
     expect(dialog()).toBeUndefined();
 
-    // Flipping Planner's switch in its row brings up its panel with the approval open, so one more click approves it.
-    await press(rowOf("Planner").querySelector<HTMLElement>('button[role="switch"]'));
+    const toggle = rowOf("Planner").querySelector<HTMLElement>('button[role="switch"]');
+    await press(toggle);
     expect(api.setCapabilitySkillState).toHaveBeenCalledExactlyOnceWith({
       workspaceId: "ws-1",
       skillId: "planner",
       state: "enabled",
       expectedRevision: 3,
     });
-    await vi.waitFor(() => expect(inspectorNamed("Planner")).not.toBeNull());
-    await vi.waitFor(() => expect(dialog()).toBeDefined());
-    expect(dialog()?.textContent).toContain("Turn Planner on");
-    await press(buttonIn(dialog(), "Approve once"));
-    expect(decisions.resolveApproval).toHaveBeenCalledExactlyOnceWith(APPROVAL_ID, "approve");
-  });
-
-  it("reopens the approval from the panel", async () => {
-    await renderTab();
-    await openPanel("Planner");
-    waitOnPlanner();
-    await vi.waitFor(() => expect(dialog()).toBeDefined());
-    await press(buttonIn(dialog(), "Close dialog"));
-    expect(dialog()).toBeUndefined();
-
-    await press(buttonIn(body(), "Review the change"));
-    expect(dialog()?.textContent).toContain("Turn Planner on");
-    await press(buttonIn(dialog(), "Close dialog"));
-
-    // The row's Review button, with the panel open: the approval opens again in place.
-    await press(buttonIn(rowOf("Planner"), "Review Planner"));
-    await vi.waitFor(() => expect(dialog()).toBeDefined());
-    await press(buttonIn(dialog(), "Close dialog"));
-
-    // And with the panel closed: it opens the panel, and the approval in it.
-    await press(buttonIn(document.body, "Close inspector"));
     expect(body()).toBeNull();
+    expect(document.activeElement).toBe(toggle);
     await press(buttonIn(rowOf("Planner"), "Review Planner"));
     await vi.waitFor(() => expect(inspectorNamed("Planner")).not.toBeNull());
-    await vi.waitFor(() => expect(dialog()).toBeDefined());
+    await vi.waitFor(() => expect(buttonIn(review(), "Approve once")).toBeDefined());
+    expect(review()?.textContent).toContain("Turn Planner on");
+    expect(dialog()).toBeUndefined();
+    await press(buttonIn(review(), "Approve once"));
+    await vi.waitFor(() => expect(decisions.resolveApproval).toHaveBeenCalledExactlyOnceWith(APPROVAL_ID, "approve"));
   });
 
-  it("names a wait found on load without guessing what it asks for", async () => {
+  it("names the exact recorded change for a wait found on load", async () => {
     api.fetchCapabilitySkills.mockResolvedValue(
       listOf(
         ITEMS.map((entry) => (entry.skillId === "planner" ? { ...entry, pendingApprovalId: APPROVAL_ID } : entry)),
@@ -670,9 +650,8 @@ describe("Skill panel switch", () => {
     );
     await renderTab();
     await openPanel("Planner");
-    await vi.waitFor(() => expect(dialog()).toBeDefined());
-    expect(dialog()?.textContent).toContain("Change Planner");
-    expect(dialog()?.textContent).not.toContain("Turn Planner on");
+    await vi.waitFor(() => expect(buttonIn(review(), "Approve once")).toBeDefined());
+    expect(review()?.textContent).toContain("Turn Planner on");
   });
 
   it("approves a skill change in its panel and never points it at the Inbox, where it also waits", async () => {
@@ -686,14 +665,11 @@ describe("Skill panel switch", () => {
     };
     noInbox(rowOf("Planner"));
     await openPanel("Planner");
-    await vi.waitFor(() => expect(dialog()).toBeDefined());
+    await vi.waitFor(() => expect(buttonIn(review(), "Approve once")).toBeDefined());
     noInbox(body());
-    noInbox(dialog());
-    await press(buttonIn(dialog(), "Close dialog"));
 
     // Nor when the approval can't be read: the panel says it will try again, and reloading is the way forward.
     await press(buttonIn(document.body, "Close inspector"));
-    __resetSettingsApprovalDialogsForTests();
     client.removeQueries({ queryKey: ["approvals", "record"] });
     approvals.fetchApproval.mockRejectedValue(new Error("offline"));
     act(() =>
@@ -717,11 +693,12 @@ describe("Skill panel switch", () => {
     await renderTab();
     await openPanel("Planner");
     waitOnPlanner();
-    await vi.waitFor(() => expect(dialog()).toBeDefined());
+    await vi.waitFor(() => expect(buttonIn(review(), "Approve once")).toBeDefined());
 
-    await press(buttonIn(dialog(), "Approve once"));
+    await press(buttonIn(review(), "Approve once"));
     expect(decisions.resolveApproval).toHaveBeenCalledExactlyOnceWith(APPROVAL_ID, "approve");
-    expect(dialog()).toBeUndefined();
+    expect(buttonIn(review(), "Approve once")).toBeUndefined();
+    expect(document.activeElement).toBe(body()?.querySelector('[role="switch"]'));
     for (const [, options] of approvals.fetchApproval.mock.calls) {
       expect(options === undefined || !("workspaceId" in (options as object))).toBe(true);
     }
@@ -731,13 +708,13 @@ describe("Skill panel switch", () => {
     await renderTab();
     await openPanel("Planner");
     waitOnPlanner();
-    await vi.waitFor(() => expect(dialog()).toBeDefined());
+    await vi.waitFor(() => expect(buttonIn(review(), "Deny")).toBeDefined());
 
-    await press(buttonIn(dialog(), "Deny"));
+    await press(buttonIn(review(), "Deny"));
     expect(decisions.resolveApproval).toHaveBeenCalledExactlyOnceWith(APPROVAL_ID, "reject");
     // The switch reads the approval at once, without waiting for its next check.
     await vi.waitFor(() => expect(panelText()).toContain("Not changed. The change was declined."));
-    expect(buttonIn(body(), "Review the change")).toBeUndefined();
+    expect(buttonIn(review(), "Deny")).toBeUndefined();
   });
 });
 

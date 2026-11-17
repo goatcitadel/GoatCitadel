@@ -13,6 +13,8 @@ import { StatusBadge } from "../ui/StatusBadge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/Tabs";
 import { Tooltip } from "../ui/Tooltip";
 import { THEME_OPTIONS } from "./theme-options";
+import { GalleryDistortionWave } from "./GalleryDistortionWave";
+import "./gallery-motion.css";
 
 const STATUSES = [
   { label: "Running", tone: "running" },
@@ -71,7 +73,7 @@ export function Gallery() {
       <section aria-label="Menus and overlays" className="flex flex-wrap gap-2">
         <Menu>
           <MenuTrigger className="rounded-md border border-line px-3 py-2 text-sm">Open menu</MenuTrigger>
-          <MenuContent>
+          <MenuContent className="cockpit-gallery-menu">
             <MenuItem>First action</MenuItem>
             <MenuItem disabled>Unavailable action</MenuItem>
             <MenuItem>Second action</MenuItem>
@@ -83,11 +85,17 @@ export function Gallery() {
           open={dialogOpen}
           onOpenChange={setDialogOpen}
           title="Example dialog"
+          contentClassName="cockpit-gallery-dialog"
           description="A focused decision surface."
         >
           <p className="text-sm text-fg-secondary">Dialog content</p>
         </Dialog>
-        <Sheet open={sheetOpen} onOpenChange={setSheetOpen} title="Example sheet">
+        <Sheet
+          open={sheetOpen}
+          onOpenChange={setSheetOpen}
+          title="Example sheet"
+          contentClassName="cockpit-gallery-sheet"
+        >
           <p className="text-sm text-fg-secondary">Sheet content</p>
         </Sheet>
       </section>
@@ -105,6 +113,7 @@ export function Gallery() {
           </TabsContent>
         </Tabs>
       </section>
+      <GalleryDistortionWave />
       <section aria-label="Loading" className="flex flex-col gap-2">
         <Skeleton className="h-4 w-64" />
         <Skeleton className="h-4 w-40" />

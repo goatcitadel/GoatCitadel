@@ -518,10 +518,8 @@ describe("Discover while an install is on its way in", () => {
     [...document.body.querySelectorAll("li")].find(
       (row) => row.querySelector("h3")?.textContent === name && !row.closest('[data-inspector-body="true"]'),
     );
-  const approvalDialog = (title: string) =>
-    [...document.body.querySelectorAll<HTMLElement>('[role="dialog"]')].find(
-      (entry) => entry.querySelector("h2")?.textContent === title,
-    );
+  const approvalReview = (title: string) =>
+    [...(body()?.querySelectorAll("section") ?? [])].find((entry) => entry.querySelector("h3")?.textContent === title);
 
   beforeEach(() => {
     // The app keeps a read fresh for 30 seconds and doesn't read again on focus: only a refresh reads Discover again.
@@ -561,7 +559,7 @@ describe("Discover while an install is on its way in", () => {
     expect(discoverRow("Himalaya")?.textContent).toContain("Not installed");
 
     await press(button("Install and switch on", body()));
-    await vi.waitFor(() => expect(approvalDialog("Approve installing Himalaya?")).toBeDefined());
+    await vi.waitFor(() => expect(approvalReview("Approve installing Himalaya?")).toBeDefined());
 
     // Without waiting for the list to go stale, the row says the install isn't finished and offers to continue it.
     await vi.waitFor(() => expect(discoverRow("Himalaya")?.textContent).toContain("Install not finished"));
@@ -573,14 +571,14 @@ describe("Discover while an install is on its way in", () => {
     await renderTab("/capabilities/skills?view=discover&shell=cockpit");
     await press(button("Install Himalaya"));
     await press(button("Install and switch on", body()));
-    await vi.waitFor(() => expect(approvalDialog("Approve installing Himalaya?")).toBeDefined());
+    await vi.waitFor(() => expect(approvalReview("Approve installing Himalaya?")).toBeDefined());
 
     // Installed once approved, it asks to switch on, which is declined in place.
     installs = [checked({ step: "installed_off" })];
-    await press(button("Approve once", approvalDialog("Approve installing Himalaya?")));
-    await vi.waitFor(() => expect(approvalDialog("Approve switching on Himalaya?")).toBeDefined());
+    await press(button("Approve once", approvalReview("Approve installing Himalaya?")));
+    await vi.waitFor(() => expect(approvalReview("Approve switching on Himalaya?")).toBeDefined());
     installs = [checked({ step: "installed_off" })];
-    await press(button("Deny", approvalDialog("Approve switching on Himalaya?")));
+    await press(button("Deny", approvalReview("Approve switching on Himalaya?")));
     await vi.waitFor(() => expect(body()?.textContent).toContain("The request to switch it on was declined."));
     await vi.waitFor(() => expect(discoverRow("Himalaya")?.textContent).toContain("Install not finished"));
 

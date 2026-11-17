@@ -8,6 +8,7 @@ import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { Section } from "../../../ui/Section";
 import { StatusBadge } from "../../../ui/StatusBadge";
+import { useInstallConfirmation, type InstallCompletionHandoff } from "../InstallConfirmationIcon";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { ClaudeCodeDetails, WhatItIs, WhereItComesFrom } from "./PluginInstallAbout";
 import { PluginLeftOut } from "./PluginLeftOut";
@@ -20,6 +21,7 @@ const NOT_INSTALLED = "This plugin isn't installed.";
 
 export interface PluginPanelProps {
   pluginId: string;
+  showCompletion?: InstallCompletionHandoff;
   /** A built-in plugin's Install, from the panel of one that isn't installed yet. */
   onInstall: (item: CapabilityPluginListItem) => void;
 }
@@ -30,14 +32,20 @@ export interface PluginPanelProps {
  * it comes from, what it added (each piece with its state and the link GoatCitadel wrote for it), Uninstall, and the
  * ids, the full pin and the manifest's hash in Technical details. Every state and link is GoatCitadel's.
  */
-export function PluginPanel({ pluginId, onInstall }: PluginPanelProps) {
+export function PluginPanel({ pluginId, onInstall, showCompletion }: PluginPanelProps) {
   const { activeWorkspaceId } = useUiPreferences();
   // The tab keeps the list; the panel follows its cache entry and never reads it itself.
   const list = useQuery({ ...pluginListQuery(activeWorkspaceId), enabled: false }).data;
   const installed = list?.installed.find((item) => item.pluginId === pluginId);
   const builtIn = installed ? undefined : list?.builtIn.find((item) => item.pluginId === pluginId);
   if (builtIn) return <AvailableBuiltIn item={builtIn} onInstall={onInstall} />;
-  return <InstalledPlugin pluginId={pluginId} workspaceId={installed?.workspaceId ?? activeWorkspaceId} />;
+  return (
+    <InstalledPlugin
+      pluginId={pluginId}
+      showCompletion={showCompletion}
+      workspaceId={installed?.workspaceId ?? activeWorkspaceId}
+    />
+  );
 }
 
 /** A built-in plugin not installed yet, from the cached list alone: it has no detail to read. */
@@ -66,10 +74,18 @@ function AvailableBuiltIn({
   );
 }
 
-function InstalledPlugin({ pluginId, workspaceId }: { pluginId: string; workspaceId: string }) {
+function InstalledPlugin({
+  pluginId,
+  workspaceId,
+  showCompletion,
+}: {
+  pluginId: string;
+  workspaceId: string;
+  showCompletion?: InstallCompletionHandoff;
+}) {
   const read = useQuery(pluginDetailQuery(workspaceId, pluginId));
   if (!read.data) return <DetailReadLine read={read} />;
-  return <PluginDetailView detail={read.data} />;
+  return <PluginDetailView detail={read.data} showCompletion={showCompletion} />;
 }
 
 /** The detail on its way, why it can't be read, or that the plugin isn't installed. */
@@ -88,10 +104,20 @@ function DetailReadLine({ read }: { read: UseQueryResult<CapabilityPluginDetail>
   );
 }
 
-function PluginDetailView({ detail }: { detail: CapabilityPluginDetail }) {
+function PluginDetailView({
+  detail,
+  showCompletion,
+}: {
+  detail: CapabilityPluginDetail;
+  showCompletion?: InstallCompletionHandoff;
+}) {
+  const animate = useInstallConfirmation(detail.pluginId, detail.state === "installed", showCompletion);
   return (
     <div className="space-y-4 text-sm text-fg-secondary">
-      <StatusBadge status={presentPluginState(detail)} />
+      <StatusBadge
+        status={presentPluginState(detail)}
+        className={animate ? "cockpit-install-confirmed-badge" : undefined}
+      />
       <WhatItIs plugin={detail} />
       <WhereItComesFrom plugin={detail} />
       <Section title="What it added" headingLevel={3}>

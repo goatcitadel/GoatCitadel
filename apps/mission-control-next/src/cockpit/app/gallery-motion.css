@@ -1,0 +1,38 @@
+/* These are entrance previews. Dismissal and pointer-driven drawer motion keep their existing timing. */
+@media (prefers-reduced-motion: no-preference) {
+  .cockpit-gallery-menu[data-state="open"] {
+    transform-origin: var(--radix-dropdown-menu-content-transform-origin);
+    animation: cockpit-gallery-menu-enter var(--motion-slow) var(--motion-ease);
+  }
+
+  .cockpit-gallery-dialog[data-state="open"] {
+    animation: cockpit-gallery-dialog-enter var(--motion-slow) var(--motion-ease);
+  }
+
+  html[data-shell="cockpit"] .cockpit-gallery-sheet[data-vaul-drawer][data-state="open"] {
+    /* Vaul's entrance is 500ms. Give the preview another half of the fast motion token. */
+    animation-duration: calc(500ms + var(--motion-fast) / 2);
+  }
+}
+
+@keyframes cockpit-gallery-menu-enter {
+  from {
+    opacity: 0;
+    scale: 0.97;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@keyframes cockpit-gallery-dialog-enter {
+  from {
+    opacity: 0;
+    translate: 0 0.375rem;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}

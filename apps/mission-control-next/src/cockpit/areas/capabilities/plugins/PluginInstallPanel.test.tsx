@@ -109,6 +109,13 @@ const alerts = () => [...container.querySelectorAll('[role="alert"]')].map((aler
 const dialog = () => document.body.querySelector<HTMLElement>('[role="dialog"]');
 const secretField = () => container.querySelector<HTMLInputElement>('input[type="password"]');
 
+function inlineApproval(title: string) {
+  expect(dialog()).toBeNull();
+  const review = section(title);
+  if (!review) throw new Error(`Missing inline review: ${title}`);
+  return review;
+}
+
 /**
  * Lets every pending answer and render through. The rounds step 1ms: a zero-delay timer set while another timer runs
  * (the query cache's notifications, after a paced read) is due 1ms later under fake timers, never at once.
@@ -445,39 +452,41 @@ describe("Plugin install panel: what the operator judges", () => {
 });
 
 describe("Plugin install panel: installing", () => {
-  it("opens each approval in place when the setting is off", async () => {
+  it("reviews the plugin and both skill approvals inline when the setting is off", async () => {
     list = listAnswer(false);
     gateway.skip = false;
     await render(INSPECTION_ID);
     await press(button("Install"));
 
     // The plugin's own approval keeps the title GoatCitadel gives it.
-    expect(dialog()?.querySelector("h2")?.textContent).toBe("Install Meeting tools");
+    const installReview = inlineApproval("Install Meeting tools");
+    expect(installReview.querySelector("details")?.open).toBe(false);
     expect(approvals.fetchApproval).toHaveBeenCalledWith(
       PLUGIN_APPROVAL,
       expect.objectContaining({ workspaceId: "ws-1" }),
     );
     expect(text()).toContain("Waiting for your approval to install Meeting tools.");
     approvePlugin(gateway);
-    await press(button("Approve once", dialog()!));
+    await press(button("Approve once", installReview));
     expect(onMove).toHaveBeenLastCalledWith(PLUGIN_KEY);
 
-    // At the plugin's own address, its skill's two steps each open their approval in place.
+    // At the plugin's own address, each skill step shows its approval inline.
     await render(PLUGIN_KEY);
-    expect(dialog()?.querySelector("h2")?.textContent).toBe("Approve installing Meeting notes?");
+    const skillInstallReview = inlineApproval("Approve installing Meeting notes?");
     expect(text()).toContain("Waiting for your approval to install Meeting notes.");
     approveStep(gateway, "notes", "install_inactive");
-    await press(button("Approve once", dialog()!));
+    await press(button("Approve once", skillInstallReview));
+    expect(document.activeElement).toBe(container.querySelector('[role="status"]'));
     await beat(1_000);
-    expect(dialog()?.querySelector("h2")?.textContent).toBe("Approve switching on Meeting notes?");
+    const skillActivationReview = inlineApproval("Approve switching on Meeting notes?");
     // Never Installed before the skill is switched on.
     expect(text()).not.toContain("is installed");
     approveStep(gateway, "notes", "activate");
-    await press(button("Approve once", dialog()!));
+    await press(button("Approve once", skillActivationReview));
     await beat(1_000);
 
     expect(gateway.steps).toEqual(["snap-notes install_inactive", "snap-notes activate"]);
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Meeting tools is installed.");
+    expect(container.querySelector('[role="status"]')?.textContent?.trim()).toBe("Meeting tools is installed.");
     expect(text()).toContain("Takes effect in new chats.");
     expect(dialog()).toBeNull();
   });
@@ -582,23 +591,23 @@ describe("Plugin install panel: installing", () => {
     });
     await render(PLUGIN_KEY);
 
-    expect(dialog()?.querySelector("h2")?.textContent).toBe("Approve installing Meeting notes?");
-    expect(dialog()?.textContent).toContain(
+    const skillInstallReview = inlineApproval("Approve installing Meeting notes?");
+    expect(skillInstallReview.textContent).toContain(
       "Installs Meeting notes switched off. It can't be used until you switch it on.",
     );
     expect(text()).toContain("Waiting for your approval to install Meeting notes.");
 
     approveStep(gateway, "notes", "install_inactive");
-    await press(button("Approve once", dialog()!));
+    await press(button("Approve once", skillInstallReview));
     await beat(1_000);
     // No second Continue: the switch-on step is asked for, as it is without a reload.
     expect(button("Continue")).toBeUndefined();
     expect(gateway.steps).toEqual(["snap-notes activate"]);
-    expect(dialog()?.querySelector("h2")?.textContent).toBe("Approve switching on Meeting notes?");
+    const skillActivationReview = inlineApproval("Approve switching on Meeting notes?");
     approveStep(gateway, "notes", "activate");
-    await press(button("Approve once", dialog()!));
+    await press(button("Approve once", skillActivationReview));
     await beat(1_000);
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Meeting tools is installed.");
+    expect(container.querySelector('[role="status"]')?.textContent?.trim()).toBe("Meeting tools is installed.");
   });
 
   it("asks nothing more after a reloaded skill approval is declined", async () => {
@@ -616,7 +625,7 @@ describe("Plugin install panel: installing", () => {
     };
     await render(PLUGIN_KEY);
 
-    await press(button("Approve once", dialog()!));
+    await press(button("Approve once", inlineApproval("Approve installing Meeting notes?")));
     await beat(1_000);
     expect(skills.requestCapabilitySkillOperation).not.toHaveBeenCalled();
     expect(button("Continue")).toBeDefined();

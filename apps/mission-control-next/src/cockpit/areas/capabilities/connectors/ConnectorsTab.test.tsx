@@ -198,7 +198,7 @@ describe("Connectors tab", () => {
     await render();
     await vi.waitFor(() => expect(text()).toContain("Notion"));
     const notion = [...container.querySelectorAll("li")].find((row) => row.textContent?.includes("Notion"))!;
-    expect(notion.textContent).toContain("Waiting on you in Inbox");
+    expect(notion.textContent).toContain("Waiting for your approval");
     expect(notion.textContent).not.toContain("Not installed");
     expect(notion.querySelector("[data-tone]")?.getAttribute("data-tone")).toBe("waiting");
     // The row's button still opens the panel, which has the Inbox link.

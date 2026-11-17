@@ -5,7 +5,7 @@ import {
   useDeferredDialogRuntime,
 } from "@goatcitadel/mission-control-shared/components/ui/deferred-dialog";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type Ref } from "react";
 import { useDeferredOverlay } from "../../ui/deferred-overlay-owner";
 import { ListPlus, SendHorizontal, SlidersHorizontal, Square } from "lucide-react";
 import { Button } from "../../ui/Button";
@@ -13,6 +13,7 @@ import { Dialog } from "../../ui/Dialog";
 import { IconButton } from "../../ui/IconButton";
 import { Sheet } from "../../ui/Sheet";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { warmControlWave } from "../../ui/use-control-wave";
 import { ChatComposerNotices } from "./ChatComposerControls";
 import { attachmentUploadErrorText } from "./chat-upload-error-copy";
 import { loadChatComposerSources } from "./load-chat-composer-sources";
@@ -244,12 +245,14 @@ export function ChatComposerPhoneActions({
   props,
   canSubmit,
   submitLabel,
+  sendButton,
   optionsOpen,
   onOpenOptions,
 }: {
   props: ComposerProps;
   canSubmit: boolean;
   submitLabel: string;
+  sendButton: Ref<HTMLButtonElement>;
   optionsOpen: boolean;
   onOpenOptions: () => void;
 }) {
@@ -280,7 +283,16 @@ export function ChatComposerPhoneActions({
           }}
         />
       ) : null}
-      <Button type="submit" variant="primary" className="size-11 px-0" disabled={!canSubmit} title={submitLabel}>
+      <Button
+        ref={sendButton}
+        type="submit"
+        variant="primary"
+        className="size-11 px-0"
+        disabled={!canSubmit}
+        title={submitLabel}
+        onPointerEnter={warmControlWave}
+        onFocus={warmControlWave}
+      >
         {submitIcon}
         <span className="sr-only">{submitLabel}</span>
       </Button>
