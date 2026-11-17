@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
 import { SKILL_HUB_LIFECYCLE_APPROVAL_KIND } from "@goatcitadel/contracts";
+import { isApprovalHandledInPlace, subscribeApprovalsHandledInPlace } from "./approvals-handled-in-place";
 
 const APPROVAL_KINDS_BY_PANEL = {
   connector: ["change_plan_effect"],
@@ -20,8 +21,10 @@ const listeners = new Set<() => void>();
 
 export function subscribeInstallApprovalPresentation(listener: () => void): () => void {
   listeners.add(listener);
+  const stopFollowingReview = subscribeApprovalsHandledInPlace(listener);
   return () => {
     listeners.delete(listener);
+    stopFollowingReview();
   };
 }
 
@@ -61,23 +64,26 @@ function canPresent(entry: Presentation, approvalKind: unknown): boolean {
 }
 
 export function isInstallApprovalPresented(approvalId: string, approvalKind: unknown): boolean {
+  if (!isApprovalHandledInPlace(approvalId)) return false;
   for (const entry of presentations) {
     if (entry.approvalId === approvalId && canPresent(entry, approvalKind)) return true;
   }
   return false;
 }
 
-function hasRequestingPanel(approvalKind: unknown): boolean {
-  return [...presentations].some((entry) => entry.requesting && canPresent(entry, approvalKind));
+function hasWaitingPanel(approvalId: string, approvalKind: unknown): boolean {
+  return [...presentations].some(
+    (entry) => (entry.requesting || entry.approvalId === approvalId) && canPresent(entry, approvalKind),
+  );
 }
 
-/** Realtime may arrive while the visible panel is still asking for the receipt that supplies its exact ID. */
+/** Realtime can precede both the install receipt and the validated review of its approval. */
 export function waitForInstallApprovalPresentation(
   approvalId: string,
   approvalKind: unknown,
 ): Promise<void> | undefined {
   if (isInstallApprovalPresented(approvalId, approvalKind)) return undefined;
-  if (!hasRequestingPanel(approvalKind)) return undefined;
+  if (!hasWaitingPanel(approvalId, approvalKind)) return undefined;
   return new Promise((resolve) => {
     // An unrelated decision must still notify even when the install request has stalled.
     const timer = setTimeout(finish, 1_000);
@@ -88,7 +94,7 @@ export function waitForInstallApprovalPresentation(
       resolve();
     }
     function check() {
-      if (isInstallApprovalPresented(approvalId, approvalKind) || !hasRequestingPanel(approvalKind)) finish();
+      if (isInstallApprovalPresented(approvalId, approvalKind) || !hasWaitingPanel(approvalId, approvalKind)) finish();
     }
   });
 }

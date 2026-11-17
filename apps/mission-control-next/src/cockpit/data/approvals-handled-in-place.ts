@@ -1,14 +1,28 @@
 // Approvals that a dialog on screen is already offering to decide where the change was made. The notification for
 // such an approval (an Inbox toast with "Open Inbox item") would sit on top of that dialog, so it is not shown.
 const mounted = new Map<string, number>();
+const listeners = new Set<() => void>();
+
+export function subscribeApprovalsHandledInPlace(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function publish() {
+  for (const listener of listeners) listener();
+}
 
 /** Called while a dialog for the approval is mounted. Returns what ends it. */
 export function registerApprovalHandledInPlace(approvalId: string): () => void {
-  mounted.set(approvalId, (mounted.get(approvalId) ?? 0) + 1);
+  const count = mounted.get(approvalId) ?? 0;
+  mounted.set(approvalId, count + 1);
+  if (count === 0) publish();
   return () => {
     const left = (mounted.get(approvalId) ?? 1) - 1;
     if (left > 0) mounted.set(approvalId, left);
-    else mounted.delete(approvalId);
+    else if (mounted.delete(approvalId)) publish();
   };
 }
 

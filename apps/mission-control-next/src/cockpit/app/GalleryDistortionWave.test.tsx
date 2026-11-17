@@ -16,7 +16,7 @@ const wave = vi.hoisted(() =>
 );
 vi.mock("distortion-wave", () => ({ distortionWave: wave, warmupWave: vi.fn(() => true) }));
 
-it("scopes waves to their controls and applies rapid switch activations in order", async () => {
+it("scopes waves to their controls and applies a second switch click during an active wave", async () => {
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }));
   const host = document.createElement("div");
   document.body.append(host);
@@ -33,11 +33,23 @@ it("scopes waves to their controls and applies rapid switch activations in order
       toggle.click();
     });
     expect(wave).toHaveBeenCalledOnce();
-    expect(wave.mock.calls[0]?.[0]).toBe(toggle.closest("[data-wave-target]"));
-    expect(wave.mock.calls[0]?.[2]).not.toHaveProperty("duration");
+    const [target, commitFirstClick, options] = wave.mock.calls[0]!;
+    const firstWave = wave.mock.results[0]!.value;
+    expect(target).toBe(toggle.closest("[data-wave-target]"));
+    expect(options).not.toHaveProperty("duration");
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     await act(async () => {
+      commitFirstClick();
+    });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    await act(async () => {
       toggle.click();
+    });
+    expect(firstWave.skip).toHaveBeenCalledOnce();
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    await act(async () => {
+      commitFirstClick();
     });
     expect(toggle.getAttribute("aria-checked")).toBe("false");
 

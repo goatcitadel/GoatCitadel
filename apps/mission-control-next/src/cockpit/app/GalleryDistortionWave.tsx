@@ -47,9 +47,7 @@ function WaveExample({
               ...(preserveText ? { intensity: 0, blur: 0, blurNear: 0, blurAhead: 0, blurBehind: 0 } : {}),
             });
             // An interrupted capture can reject the readiness promises even when the update succeeded.
-            void transition.ready.catch(() => {});
-            void transition.updateCallbackDone.catch(() => {});
-            void transition.covered.catch(() => {});
+            void Promise.allSettled([transition.ready, transition.updateCallbackDone, transition.covered]);
             return transition;
           }
         : undefined;
@@ -96,7 +94,8 @@ export function GalleryDistortionWave() {
           kit.warmupWave();
           setWave(kit);
         })
-        .catch(() => {});
+        // The examples still apply their updates when the optional effect can't load.
+        .catch(() => undefined);
     };
     load();
     motion.addEventListener("change", load);

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { attachCockpitToastHost, resetCockpitToastRuntimeForTests } from "../ui/toast-runtime";
 import { toast } from "sonner";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -93,11 +93,16 @@ type InstallPanelFixture = {
   panel: Parameters<typeof useInstallApprovalPresentation>[0];
   approvalId?: string;
   requesting: boolean;
+  ready?: boolean;
   hidden?: boolean;
 };
 
-function InstallPanel({ panel, approvalId, requesting, hidden }: InstallPanelFixture) {
+function InstallPanel({ panel, approvalId, requesting, ready, hidden }: InstallPanelFixture) {
   const progress = useInstallApprovalPresentation(panel, approvalId, requesting);
+  useEffect(
+    () => (approvalId && ready && !hidden ? registerApprovalHandledInPlace(approvalId) : undefined),
+    [approvalId, ready, hidden],
+  );
   return (
     <div data-inspector-body="true" hidden={hidden}>
       <div ref={progress}>Install progress</div>
@@ -398,6 +403,8 @@ describe("cockpit owner-backed notifications", () => {
       expect(mocks.warning).not.toHaveBeenCalled();
 
       await render({ installPanel: { panel, approvalId: "a", requesting: false } });
+      expect(mocks.warning).not.toHaveBeenCalled();
+      await render({ installPanel: { panel, approvalId: "a", requesting: false, ready: true } });
       await emit({ ...event, eventId: "already-visible", payload: { kind } });
       expect(mocks.warning).not.toHaveBeenCalled();
       expect(client.getQueryData(queryKeys.inbox("w"))).toEqual(projection);
@@ -417,6 +424,19 @@ describe("cockpit owner-backed notifications", () => {
     expect(mocks.warning).toHaveBeenCalledTimes(1);
     mocks.warning.mock.calls[0]![1].action.onClick();
     expect(mocks.navigate).toHaveBeenCalledWith("/inbox?approvalId=a&workspaceId=w");
+  });
+
+  it("keeps the Inbox toast when an exact install receipt has no readable review", async () => {
+    const kind = "change_plan_effect";
+    await render({ installPanel: { panel: "connector", requesting: true } });
+    await emit({ ...event, payload: { kind } });
+    await render({ installPanel: { panel: "connector", approvalId: "a", requesting: false } });
+
+    await vi.waitFor(() => expect(mocks.warning).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+    expect(mocks.dismiss).not.toHaveBeenCalled();
+    mocks.warning.mock.calls[0]![1].action.onClick();
+    expect(mocks.navigate).toHaveBeenCalledWith("/inbox?approvalId=a&workspaceId=w");
+    expect(client.getQueryData(queryKeys.inbox("w"))).toEqual(projection);
   });
 
   it.each([
@@ -439,6 +459,8 @@ describe("cockpit owner-backed notifications", () => {
     await vi.waitFor(() => expect(mocks.warning).toHaveBeenCalledTimes(1), { timeout: 2_000 });
 
     await render({ installPanel: { panel, approvalId: "a", requesting: false } });
+    expect(mocks.dismiss).not.toHaveBeenCalled();
+    await render({ installPanel: { panel, approvalId: "a", requesting: false, ready: true } });
     expect(mocks.dismiss).toHaveBeenCalledExactlyOnceWith("inbox:w:approval:a");
     expect(client.getQueryData(queryKeys.inbox("w"))).toEqual(projection);
   });
@@ -451,12 +473,12 @@ describe("cockpit owner-backed notifications", () => {
       await emit({ ...event, payload: { kind } });
       expect(mocks.warning).toHaveBeenCalledTimes(1);
 
-      await render({ installPanel: { panel, approvalId: "b", requesting: false } });
-      await render({ installPanel: { panel, approvalId: "a", requesting: false, hidden: true } });
+      await render({ installPanel: { panel, approvalId: "b", requesting: false, ready: true } });
+      await render({ installPanel: { panel, approvalId: "a", requesting: false, ready: true, hidden: true } });
       expect(mocks.dismiss).not.toHaveBeenCalled();
 
       await render();
-      await render({ installPanel: { panel, approvalId: "a", requesting: false } });
+      await render({ installPanel: { panel, approvalId: "a", requesting: false, ready: true } });
       expect(mocks.dismiss).toHaveBeenCalledExactlyOnceWith("inbox:w:approval:a");
       expect(client.getQueryData(queryKeys.inbox("w"))).toEqual(projection);
     },

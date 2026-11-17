@@ -117,7 +117,7 @@ export function SettingsApprovalDialog({
       approval.kind !== "change_plan_effect" ||
       approval.payload?.planId !== installationPlanId),
   );
-  const pending = approval?.status === "pending" && !mismatched;
+  const pending = approval?.status === "pending" && !query.isError && !mismatched;
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState<string>();
   // Where focus was when the dialog opened, so a decision (which removes the Review button) hands it back to the setting.
