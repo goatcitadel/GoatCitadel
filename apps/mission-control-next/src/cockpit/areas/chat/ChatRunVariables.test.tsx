@@ -96,11 +96,8 @@ it("keeps closed fields cold and can close a panel while its fields load", async
 
 it("preserves typed bindings and clear values through the controller callbacks", async () => {
   const props = panel();
-  await act(async () => {
-    root.render(<ChatRunVariables panel={props} />);
-    await vi.dynamicImportSettled();
-  });
-  const count = input("Count") as HTMLInputElement;
+  await act(async () => root.render(<ChatRunVariables panel={props} />));
+  const count = (await vi.waitFor(() => input("Count"))) as HTMLInputElement;
   expect(count.type).toBe("number");
   expect(count.min).toBe("1");
   expect(count.max).toBe("5");
@@ -127,6 +124,7 @@ it("keeps help associations distinct between mounted forms and delegates review/
       </>,
     ),
   );
+  await vi.waitFor(() => expect(container.querySelectorAll('[aria-label="Public"]')).toHaveLength(2));
   const controls = [...container.querySelectorAll<HTMLInputElement>('[aria-label="Public"]')];
   const ids = controls.map((control) => control.getAttribute("aria-describedby"));
   expect(new Set(ids).size).toBe(2);
