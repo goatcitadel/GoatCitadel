@@ -852,6 +852,13 @@ describe("useChatSessionData", () => {
     expect(latestHarness!.result.sessions).toBeNull();
     expect(onRouteSessionUnavailable).not.toHaveBeenCalled();
 
+    fetchChatSessionsMock.mockResolvedValueOnce({ items: [newer] });
+    await act(async () => {
+      await latestHarness!.result.loadSidebar("active", { reconcileLoadedRange: true });
+    });
+    expect(latestHarness!.result.sidebarReadFailed).toBe(true);
+    expect(latestHarness!.result.sessions).toBeNull();
+
     fetchChatSessionsMock.mockResolvedValueOnce({ items: [newer] }).mockResolvedValueOnce({ items: [linked] });
     await act(async () => {
       await latestHarness!.result.loadSidebar("active", { bypassCache: true });
@@ -859,6 +866,50 @@ describe("useChatSessionData", () => {
     expect(latestHarness!.result.sidebarReadFailed).toBe(false);
     expect(latestHarness!.result.sessions?.items).toEqual([newer, linked]);
     expect(latestHarness!.selectedSessionId).toBe(linked.sessionId);
+    await act(async () => renderer.unmount());
+  });
+
+  it("clears a sidebar failure after verifying and refreshing its retained pages", async () => {
+    const initial = [makeSession("first"), makeSession("second")];
+    const refreshed = [makeSession("first", "First updated"), makeSession("second", "Second updated")];
+    let membershipComplete = false;
+    fetchChatSessionsMock.mockImplementation(async (query) =>
+      query.sessionIds
+        ? { items: refreshed, membership: { sessionIds: query.sessionIds, complete: membershipComplete } }
+        : query.cursor
+          ? { items: [initial[1]], nextCursor: "third-page" }
+          : { items: [initial[0]], nextCursor: "second-page" },
+    );
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness workspaceId="workspace-sidebar-retained-recovery" />);
+      await flushEffects();
+    });
+    await act(async () => {
+      await latestHarness!.result.loadSidebar("active", { append: true });
+    });
+    expect(latestHarness!.result.sessions?.items).toEqual(initial);
+    expect(latestHarness!.result.sidebarNextCursor).toBe("third-page");
+
+    fetchChatSessionsMock.mockRejectedValueOnce(new Error("Conversation list unavailable"));
+    await act(async () => {
+      await expect(latestHarness!.result.loadSidebar("active", { bypassCache: true })).rejects.toThrow(
+        "Conversation list unavailable",
+      );
+      await expect(latestHarness!.result.loadSidebar("active", { reconcileLoadedRange: true })).rejects.toThrow(
+        "Conversation membership could not be verified",
+      );
+    });
+    expect(latestHarness!.result.sidebarReadFailed).toBe(true);
+    expect(latestHarness!.result.sessions?.items).toEqual(initial);
+
+    membershipComplete = true;
+    await act(async () => {
+      await latestHarness!.result.loadSidebar("active", { reconcileLoadedRange: true });
+    });
+    expect(latestHarness!.result.sessions?.items).toEqual(refreshed);
+    expect(latestHarness!.result.sidebarReadFailed).toBe(false);
+    expect(latestHarness!.result.sidebarNextCursor).toBe("third-page");
     await act(async () => renderer.unmount());
   });
 

@@ -295,9 +295,8 @@ export function useChatSessionData(input: ChatSessionDataInput) {
         setSidebarLoadingMore(false);
         // Repeat the retained page reads in batches. Preserve their ordering and
         // continuation anchor; a completed turn may reorder the server's first page.
-        const cursors = loadedSidebarPages.current.cursors.length
-          ? [...loadedSidebarPages.current.cursors]
-          : [undefined];
+        const retainedCursors = loadedSidebarPages.current.cursors;
+        const cursors = retainedCursors.length ? [...retainedCursors] : [undefined];
         try {
           const pages = await Promise.all(
             cursors.map((cursor) =>
@@ -356,6 +355,14 @@ export function useChatSessionData(input: ChatSessionDataInput) {
             if (!current || !isCurrent()) return current;
             return reconcileSidebarSessions(current, members, records);
           });
+          // Reconciliation cannot bootstrap a missing list or hydrate an unapplied deep link.
+          if (
+            retainedCursors.length &&
+            sessionsRef.current &&
+            nextHistoryView === historyView &&
+            (trimmedSearchQuery || !input.routeSessionId?.trim() || renderedRouteSelection.applied)
+          )
+            setFailedSidebarScope((current) => (isCurrent() ? null : current));
         } catch (error) {
           if (isCurrent()) throw error;
         }
