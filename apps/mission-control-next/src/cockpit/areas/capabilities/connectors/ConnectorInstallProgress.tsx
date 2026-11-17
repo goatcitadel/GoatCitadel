@@ -1,13 +1,14 @@
-import { useState, type Ref } from "react";
+import { useRef, useState, type Ref } from "react";
 import { Check, Circle, Hand, LoaderCircle, X, type LucideIcon } from "lucide-react";
 import type { CapabilityConnectorItem } from "@goatcitadel/contracts";
+import { useInstallApprovalPresentation } from "../../../data/install-approval-presentation";
 import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { cn } from "../../../lib/cn";
+import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
 import { ConnectorSignInStep, signInTimeWords, useSignInTimeLeft, type SignInTimeLeft } from "./ConnectorSignInStep";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
 import { isActiveInstallState } from "./connector-install-store";
 import { inboxApprovalHref, type ConnectorNextLink } from "./connector-links";
 import type { ConnectorInstall, ConnectorInstallState, ConnectorInstallStep } from "./use-connector-install";
@@ -16,7 +17,7 @@ import type { ConnectorInstall, ConnectorInstallState, ConnectorInstallStep } fr
 export type InstallStepId = "approval" | "plan" | "sign_in" | "switch_on" | "connect";
 const STEP_ORDER: readonly InstallStepId[] = ["approval", "plan", "sign_in", "switch_on", "connect"];
 const STEP_TITLES: Readonly<Record<InstallStepId, string>> = {
-  approval: "Approve",
+  approval: "Approve install",
   plan: "Allow and save",
   sign_in: "Sign in",
   switch_on: "Switch on",
@@ -53,7 +54,7 @@ const FAILED_WORDS: Readonly<Partial<Record<ConnectorInstallStep, string>>> = {
   switch_on: "Couldn't switch it on.",
   connect: "Couldn't connect it.",
 };
-const WAITING_INBOX = "Waiting on you in Inbox";
+const WAITING_APPROVAL = "Waiting for your approval";
 const SIGNING_IN = "Finish signing in in your browser";
 
 const stepOf = (step: ConnectorInstallStep): InstallStepId => (step === "finish_sign_in" ? "sign_in" : step);
@@ -109,7 +110,7 @@ export function installAnnouncement(
     case "working":
       return BUSY_WORDS[state.step];
     case "waiting_inbox":
-      return WAITING_INBOX;
+      return WAITING_APPROVAL;
     case "signing_in":
       // Once the request is short of time the fields a mismatch was about are gone, so the swap is what's said.
       return signInTime === "open" ? (state.manualError ?? SIGNING_IN) : signInTimeWords(signInTime);
@@ -213,35 +214,46 @@ function ChangedList({ changed, heading }: { changed: readonly string[]; heading
   );
 }
 
-function PhaseBody({ install, scope, doneLine }: { install: ConnectorInstall; scope: string; doneLine?: string }) {
+function PhaseBody({
+  install,
+  scope,
+  canReviewApproval,
+  returnFocus,
+}: {
+  install: ConnectorInstall;
+  scope: string;
+  canReviewApproval: boolean;
+  returnFocus: () => void;
+}) {
   const { state } = install;
-  const { activeWorkspaceId } = useUiPreferences();
   switch (state.phase) {
-    case "waiting_inbox":
-      return (
-        <div className="space-y-2 text-sm text-fg-secondary">
-          {/* The approval opens here; the Inbox copy stays one link away for whoever prefers it. */}
-          {/* The Gateway makes every connector install in the Default workspace, so it can only be read and decided there. */}
-          {activeWorkspaceId === "default" ? (
-            <SettingsApprovalDialog
-              approvalId={state.approvalId}
-              title="Approve this connector install?"
-              reviewLabel="Review the install"
-              dangerReview
-              onResolved={() => install.checkApproval()}
-            />
-          ) : (
-            <p>This approval is in the Default workspace's Inbox.</p>
-          )}
-          <p>
-            <span className="font-medium text-fg">{WAITING_INBOX}</span>{" "}
-            <NativeOwnerLink scope={scope} href={inboxApprovalHref(state.approvalId)}>
-              Open in Inbox
-            </NativeOwnerLink>
-          </p>
-          <p>This request expires after 15 minutes.</p>
-        </div>
+    case "waiting_inbox": {
+      const inboxLink = (
+        <NativeOwnerLink scope={scope} href={inboxApprovalHref(state.approvalId)}>
+          Open in Inbox
+        </NativeOwnerLink>
       );
+      // Connector changes are approved in Default, where the Gateway creates their plans.
+      if (!canReviewApproval) {
+        return (
+          <p className="text-sm text-fg-secondary">This approval is in the Default workspace's Inbox. {inboxLink}</p>
+        );
+      }
+      return (
+        <SettingsApprovalDialog
+          key={state.approvalId}
+          approvalId={state.approvalId}
+          workspaceId="default"
+          presentation="inline"
+          title="Approve this connector install?"
+          installationPlanId={state.planId}
+          dangerReview
+          loadFailureHint={inboxLink}
+          returnFocus={returnFocus}
+          onResolved={install.checkApproval}
+        />
+      );
+    }
     case "signing_in":
       return <ConnectorSignInStep state={state} submit={install.submitManualCode} restart={install.restartSignIn} />;
     case "failed": {
@@ -282,8 +294,6 @@ function PhaseBody({ install, scope, doneLine }: { install: ConnectorInstall; sc
           <ChangedList changed={state.changed} heading="What changed" />
         </div>
       );
-    case "done":
-      return doneLine ? <p className="text-sm text-fg">{doneLine}</p> : null;
     default:
       return null;
   }
@@ -301,20 +311,25 @@ export function ConnectorInstallProgress({
   scope,
   steps,
   action,
-  doneLine,
 }: {
   install: ConnectorInstall;
   /** The panel this sits in, for the Inbox link's leave review. */
   scope: string;
-  /** The steps this flow runs. The Inbox step joins them once the flow has waited there. */
+  /** The steps this flow runs. The approval step joins them if the install needs it. */
   steps: readonly InstallStepId[];
   /** The button that starts the flow. Left out, there is none (a finished install has nothing left to start). */
   action?: { label: string; run: () => void };
-  /** Said once the flow is done, while the panel still shows it. */
-  doneLine?: string;
 }) {
   const { state } = install;
-  // The hook doesn't say whether the flow waited in Inbox, so this view remembers it saw that.
+  const primary = useRef<HTMLButtonElement>(null);
+  const { activeWorkspaceId } = useUiPreferences();
+  const canReviewApproval = activeWorkspaceId === "default";
+  const approvalPresentation = useInstallApprovalPresentation(
+    "connector",
+    canReviewApproval && state.phase === "waiting_inbox" ? state.approvalId : undefined,
+    canReviewApproval && state.phase === "working" && state.step === "plan",
+  );
+  // The hook doesn't retain its earlier phases, so the progress list remembers the approval step.
   const [waited, setWaited] = useState(false);
   if (state.phase === "waiting_inbox" && !waited) setWaited(true);
   const current = currentStep(state);
@@ -323,12 +338,21 @@ export function ConnectorInstallProgress({
   );
   const showSteps = isActiveInstallState(state) || (state.phase === "failed" && FAILED_WORDS[state.step] !== undefined);
   const settled = state.phase === "failed" || state.phase === "stopped";
+  const phaseBody = (
+    <PhaseBody
+      install={install}
+      scope={scope}
+      canReviewApproval={canReviewApproval}
+      returnFocus={() => primary.current?.focus({ preventScroll: true })}
+    />
+  );
   return (
-    <div className="space-y-3">
+    <div ref={approvalPresentation} className="space-y-3">
       {action || canStopInstall(state) || settled ? (
         <div className="flex flex-wrap items-center gap-2">
           {action ? (
             <Button
+              ref={primary}
               data-flow-primary=""
               variant="primary"
               size="sm"
@@ -354,8 +378,9 @@ export function ConnectorInstallProgress({
           ) : null}
         </div>
       ) : null}
+      {state.phase === "waiting_inbox" ? phaseBody : null}
       {showSteps ? <StepList steps={listed} state={state} /> : null}
-      <PhaseBody install={install} scope={scope} doneLine={doneLine} />
+      {state.phase !== "waiting_inbox" ? phaseBody : null}
     </div>
   );
 }

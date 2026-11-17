@@ -2,7 +2,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { CapabilityConnectorItem, CapabilityConnectorsResponse, McpServerRecord } from "@goatcitadel/contracts";
+import type {
+  ApprovalRequest,
+  CapabilityConnectorItem,
+  CapabilityConnectorsResponse,
+  McpServerRecord,
+} from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InspectorPanel, InspectorProvider } from "../../../app/inspector";
 import { queryKeys } from "../../../data/query-keys";
@@ -28,6 +33,11 @@ const mcp = vi.hoisted(() => ({
 vi.mock("@goatcitadel/mission-control-shared/api/mcp-operations", () => mcp);
 const connectorsApi = vi.hoisted(() => ({ fetchCapabilityConnectors: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/capability-connectors", () => connectorsApi);
+const approvalApi = vi.hoisted(() => ({ fetchApproval: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (original) => ({
+  ...(await original<typeof import("@goatcitadel/mission-control-shared/api/approvals")>()),
+  ...approvalApi,
+}));
 const route = vi.hoisted(() => ({ search: "", navigate: vi.fn() }));
 vi.mock("../../../app/use-cockpit-route", () => ({ useCockpitRoute: () => route }));
 
@@ -47,8 +57,8 @@ const flows = vi.hoisted(() => {
     resume: vi.fn(),
     submitManualCode: vi.fn(),
     restartSignIn: vi.fn(),
-    cancel: vi.fn(),
     checkApproval: vi.fn(),
+    cancel: vi.fn(),
     keyOf,
     read: (item: { source: string; templateId?: string; serverId?: string }) => entries.get(keyOf(item)) ?? IDLE,
     set(key: string, entry: Entry | undefined) {
@@ -79,8 +89,8 @@ vi.mock("./use-connector-install", async () => {
         resume: (from: string) => flows.resume(item.id, from),
         submitManualCode: (code: string, state: string) => flows.submitManualCode(code, state),
         restartSignIn: () => flows.restartSignIn(item.id),
-        cancel: () => flows.cancel(item.id),
         checkApproval: () => flows.checkApproval(item.id),
+        cancel: () => flows.cancel(item.id),
       };
     },
     useConnectorInstallStatus: (item: CapabilityConnectorItem) =>
@@ -89,22 +99,24 @@ vi.mock("./use-connector-install", async () => {
   };
 });
 
-// The in-place approval dialog has its own tests (SettingsApprovalDialog.test.tsx).
-vi.mock("../../settings/SettingsApprovalDialog", () => ({
-  SettingsApprovalDialog: (props: {
-    approvalId: string;
-    dangerReview?: boolean;
-    onResolved: (status: undefined) => void;
-  }) => (
-    <section data-in-place-approval={props.approvalId} data-danger-review={String(props.dangerReview === true)}>
-      <button type="button" onClick={() => props.onResolved(undefined)}>
-        Resolve in place
-      </button>
-    </section>
-  ),
+const decisions = vi.hoisted(() => ({ resolveApproval: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
+  ...(await original<object>()),
+  ...decisions,
 }));
 
 const REVISION = "a".repeat(64);
+const APPROVAL: ApprovalRequest = {
+  approvalId: "approval-1",
+  kind: "change_plan_effect",
+  riskLevel: "caution",
+  status: "pending",
+  payload: { planId: "plan-1", intentHash: REVISION },
+  preview: { title: "Install Example", summary: "Save and allow Example." },
+  linkage: { workspaceId: "default" },
+  createdAt: "2026-10-27T10:00:00.000Z",
+  explanationStatus: "not_requested",
+};
 const KEY = queryKeys.capabilityConnectors("ws-1");
 const AUTHORIZE_URL = "https://auth.linear.app/oauth/authorize?scope=read+write&state=state-1";
 
@@ -265,12 +277,15 @@ beforeEach(() => {
     flows.resume,
     flows.submitManualCode,
     flows.restartSignIn,
+    flows.checkApproval,
     flows.cancel,
   ])
     mock.mockReset();
   flows.clear();
   mcp.fetchMcpTools.mockResolvedValue({ items: [] });
   mcp.fetchMcpServer.mockResolvedValue(savedServer());
+  approvalApi.fetchApproval.mockReset().mockResolvedValue(APPROVAL);
+  decisions.resolveApproval.mockReset();
   route.search = "";
   prefs.showTechnicalDetails = false;
   prefs.activeWorkspaceId = "ws-1";
@@ -401,59 +416,85 @@ describe("Install progress", () => {
     expect(flows.start).not.toHaveBeenCalled();
   });
 
-  it("shows Waiting on you in Inbox with a link", async () => {
+  it("shows an exact install approval in the same panel", async () => {
     await renderPanel(EXAMPLE.id, [EXAMPLE]);
     // The panel's own list stays as it was read; only where the approval is decided changes.
     prefs.activeWorkspaceId = "default";
     setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
-    expect(text()).toContain("Waiting on you in Inbox");
-    expect(text()).toContain("This request expires after 15 minutes.");
-    const target = href(link("Open in Inbox"));
-    expect(target.pathname).toBe("/inbox");
-    expect(target.searchParams.get("approvalId")).toBe("approval-1");
-    expect(target.searchParams.get("workspaceId")).toBe("default");
+    await vi.waitFor(() => expect(button("Approve once")).toBeDefined());
+    expect(approvalApi.fetchApproval).toHaveBeenCalledWith(
+      "approval-1",
+      expect.objectContaining({ workspaceId: "default" }),
+    );
+    expect(text()).toContain("Save and allow Example.");
+    expect(body().querySelector('[role="dialog"]')).toBeNull();
+    expect(button("Deny")).toBeDefined();
+    expect(link("Open in Inbox")).toBeUndefined();
     expect(steps()).toEqual([
-      "Approve · Waiting",
+      "Approve install · Waiting",
       "Allow and save · Not started",
       "Switch on · Not started",
       "Connect · Not started",
     ]);
-    expect(status()).toBe("Waiting on you in Inbox");
+    expect(status()).toBe("Waiting for your approval");
     expect(text()).not.toContain("Installed");
-    expect(body().querySelector("[data-in-place-approval]")?.getAttribute("data-in-place-approval")).toBe("approval-1");
     expect(body().querySelector('button[aria-busy="true"]')?.textContent).toBe("Waiting on your approval…");
     await act(async () => button("Stop")?.click());
     expect(flows.cancel).toHaveBeenCalledExactlyOnceWith(EXAMPLE.id);
 
     // Approved: the step it waited on stays in the list, done.
     setFlow(EXAMPLE, { phase: "working", step: "plan" });
-    expect(steps().slice(0, 2)).toEqual(["Approve · Done", "Allow and save · In progress"]);
-    expect(body().querySelector("[data-in-place-approval]")).toBeNull();
+    expect(steps().slice(0, 2)).toEqual(["Approve install · Done", "Allow and save · In progress"]);
+    expect(text()).not.toContain("Save and allow Example.");
   });
 
-  it("does not open the approval in the panel from another workspace, and says where it is", async () => {
-    // The Gateway makes every install in the Default workspace, so another workspace's dialog could only dead-end.
+  it("keeps the approval in the Default workspace from another workspace", async () => {
     await renderPanel(EXAMPLE.id, [EXAMPLE]);
     setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
-    expect(body().querySelector("[data-in-place-approval]")).toBeNull();
     expect(text()).toContain("This approval is in the Default workspace's Inbox.");
     const target = href(link("Open in Inbox"));
     expect(target.searchParams.get("approvalId")).toBe("approval-1");
     expect(target.searchParams.get("workspaceId")).toBe("default");
+    expect(approvalApi.fetchApproval).not.toHaveBeenCalled();
+    expect(button("Deny")).toBeUndefined();
   });
 
-  it("opens the approval in the panel and reads the plan again once it is decided there", async () => {
+  it("keeps the danger review inline and reads the plan again after the exact decision", async () => {
+    let approval: ApprovalRequest = {
+      ...APPROVAL,
+      riskLevel: "danger",
+      preview: { ...APPROVAL.preview, summary: "Save and allow Example on mcp.example.com." },
+    };
+    approvalApi.fetchApproval.mockImplementation(async () => approval);
+    decisions.resolveApproval.mockImplementation(async () => {
+      approval = { ...approval, status: "approved", resolvedBy: "operator", resolvedAt: "2026-10-27T10:01:00.000Z" };
+      return { approval, effects: [] };
+    });
     await renderPanel(EXAMPLE.id, [EXAMPLE]);
-    // The panel's own list stays as it was read; only where the approval is decided changes.
     prefs.activeWorkspaceId = "default";
     setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "plan-1" });
-    expect(text()).toContain("Waiting on your approval…");
-    // A connector install is always danger, so its dialog keeps the two-step review.
-    expect(body().querySelector("[data-in-place-approval]")?.getAttribute("data-danger-review")).toBe("true");
-    expect(link("Open in Inbox")).toBeDefined();
-    expect(flows.checkApproval).not.toHaveBeenCalled();
-    await act(async () => button("Resolve in place")?.click());
-    expect(flows.checkApproval).toHaveBeenCalledExactlyOnceWith(EXAMPLE.id);
+
+    await vi.waitFor(() => expect(button("Review danger approval")).toBeDefined());
+    expect(button("Approve once")).toBeUndefined();
+    await act(async () => button("Review danger approval")?.click());
+    expect(body().querySelector('[role="dialog"]')).toBeNull();
+    expect(body().querySelector('[aria-label="Exact approval review"]')?.textContent).toContain("mcp.example.com");
+    await act(async () => button("Approve once")?.click());
+    await vi.waitFor(() => expect(flows.checkApproval).toHaveBeenCalledExactlyOnceWith(EXAMPLE.id));
+    expect(decisions.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-1", "approve");
+  });
+
+  it("withholds inline decisions for another plan and keeps the exact Inbox link", async () => {
+    await renderPanel(EXAMPLE.id, [EXAMPLE]);
+    prefs.activeWorkspaceId = "default";
+    setFlow(EXAMPLE, { phase: "waiting_inbox", approvalId: "approval-1", planId: "another-plan" });
+    await vi.waitFor(() => expect(link("Open in Inbox")).toBeDefined());
+    const target = href(link("Open in Inbox"));
+    expect(target.pathname).toBe("/inbox");
+    expect(target.searchParams.get("approvalId")).toBe("approval-1");
+    expect(target.searchParams.get("workspaceId")).toBe("default");
+    expect(button("Approve once")).toBeUndefined();
+    expect(button("Deny")).toBeUndefined();
   });
 
   it("asks to finish signing in in the browser, with the pasted code behind a disclosure", async () => {

@@ -70,7 +70,7 @@ export function ChatComposerPlusMenu({
       <PopoverContent
         side="top"
         aria-label="Add and options"
-        className="w-80 space-y-2 text-xs text-fg-secondary"
+        className="cockpit-composer-plus-panel w-80 space-y-2 text-xs text-fg-secondary"
         onCloseAutoFocus={(event) => {
           if (handedOff.current) event.preventDefault();
           handedOff.current = false;

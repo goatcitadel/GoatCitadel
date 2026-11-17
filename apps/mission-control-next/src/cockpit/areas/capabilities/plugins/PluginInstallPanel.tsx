@@ -11,6 +11,7 @@ import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { CANT_BE_INSTALLED } from "./plugin-check-copy";
 import { ClaudeCodeDetails, WhatHappensNext, WhatItIs, WhereItComesFrom, type ShownPlugin } from "./PluginInstallAbout";
 import { PluginLeftOut } from "./PluginLeftOut";
+import type { InstallCompletionHandoff } from "../InstallConfirmationIcon";
 import { PluginInstallProgress } from "./PluginInstallProgress";
 import { PluginPieceList } from "./PluginPieceList";
 import { PluginSourceForm } from "./PluginSourceForm";
@@ -33,6 +34,7 @@ export interface PluginInstallPanelProps {
   form?: PluginSourceFormKind;
   /** The workspace an unfinished plugin was installed in, from its list row: its detail is read there. */
   pluginWorkspaceId?: string;
+  handedOff?: InstallCompletionHandoff;
   /** Moves the panel to the key its flow moved to: a check's own, then the plugin's. */
   onMove: (target: string) => void;
 }
@@ -158,7 +160,13 @@ function useHookSecrets(flow: PluginInstall) {
  * after a reload, the Gateway's inspection or the plugin's detail is the truth. Every check, state and refusal is the
  * Gateway's; the panel only words them.
  */
-export function PluginInstallPanel({ installKey, form, pluginWorkspaceId, onMove }: PluginInstallPanelProps) {
+export function PluginInstallPanel({
+  installKey,
+  form,
+  pluginWorkspaceId,
+  handedOff,
+  onMove,
+}: PluginInstallPanelProps) {
   const [custody] = useState(pluginInstallCustody);
   // Kept by the panel, not by the removal's own part or the body, so it stays through the check made again after it.
   const [removedLine, setRemovedLine] = useState<string>();
@@ -200,6 +208,7 @@ export function PluginInstallPanel({ installKey, form, pluginWorkspaceId, onMove
       installKey={installKey}
       offerCheckAgain={!form}
       plugin={plugin}
+      handedOff={handedOff}
       removedLine={removedLine}
       onLeftoverRemoved={setRemovedLine}
     />
@@ -244,6 +253,7 @@ function PluginInstallBody({
   flow,
   installKey,
   offerCheckAgain,
+  handedOff,
   plugin,
   removedLine,
   onLeftoverRemoved,
@@ -255,6 +265,7 @@ function PluginInstallBody({
   installKey: string;
   /** Without a source form of its own, the panel checks its source again from a button. */
   offerCheckAgain: boolean;
+  handedOff?: InstallCompletionHandoff;
   plugin: ShownPlugin | undefined;
 }) {
   const { activeWorkspaceId } = useUiPreferences();
@@ -294,6 +305,7 @@ function PluginInstallBody({
       {state.phase === "ready" ? <WhatHappensNext inspection={state.inspection} skip={skip} /> : null}
       <PluginInstallProgress
         flow={flow}
+        handedOff={handedOff}
         name={plugin?.name || "this plugin"}
         secretsReady={secrets.ready}
         onInstall={secrets.install}

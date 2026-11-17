@@ -1,16 +1,23 @@
 // @vitest-environment happy-dom
 import { attachCockpitToastHost, resetCockpitToastRuntimeForTests } from "../ui/toast-runtime";
 import { toast } from "sonner";
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OperatorInboxResponse, RealtimeEvent } from "@goatcitadel/contracts";
+import {
+  SKILL_HUB_LIFECYCLE_APPROVAL_KIND,
+  SKILL_LIFECYCLE_APPROVAL_KIND,
+  type OperatorInboxResponse,
+  type RealtimeEvent,
+} from "@goatcitadel/contracts";
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRealtime } from "./realtime";
 import { queryKeys } from "./query-keys";
 import { __resetApprovalsHandledInPlaceForTests, registerApprovalHandledInPlace } from "./approvals-handled-in-place";
 import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { clearSkillSwitchStore, SAVING, setSkillSwitch } from "../areas/capabilities/skills/skill-switch-store";
+import { useInstallApprovalPresentation } from "./install-approval-presentation";
 
 const mocks = vi.hoisted(() => ({
   installation: "http://owner-a.invalid",
@@ -82,19 +89,42 @@ const defaultPreferences: UiNotificationPreferences = {
   desktopEnabled: false,
   onlyWhenUnfocused: false,
 };
+type InstallPanelFixture = {
+  panel: Parameters<typeof useInstallApprovalPresentation>[0];
+  approvalId?: string;
+  requesting: boolean;
+  ready?: boolean;
+  hidden?: boolean;
+};
+
+function InstallPanel({ panel, approvalId, requesting, ready, hidden }: InstallPanelFixture) {
+  const progress = useInstallApprovalPresentation(panel, approvalId, requesting);
+  useEffect(
+    () => (approvalId && ready && !hidden ? registerApprovalHandledInPlace(approvalId) : undefined),
+    [approvalId, ready, hidden],
+  );
+  return (
+    <div data-inspector-body="true" hidden={hidden}>
+      <div ref={progress}>Install progress</div>
+    </div>
+  );
+}
+
 function Harness({
   workspaceId = "w",
   visibleSessionId,
   enabled = true,
   notificationPreferences = defaultPreferences,
+  installPanel,
 }: {
   workspaceId?: string;
   visibleSessionId?: string;
   enabled?: boolean;
   notificationPreferences?: UiNotificationPreferences;
+  installPanel?: InstallPanelFixture;
 }) {
   useCockpitRealtime({ queryClient: client, enabled, workspaceId, visibleSessionId, notificationPreferences });
-  return null;
+  return installPanel ? <InstallPanel {...installPanel} /> : null;
 }
 async function render(props = {}) {
   await act(async () => {
@@ -149,6 +179,8 @@ it("keeps replay silent and drops a live attention read if access changes while 
 });
 afterEach(() => {
   act(() => root.unmount());
+  clearSkillSwitchStore();
+  window.history.replaceState(null, "", "/");
   client.clear();
   container.remove();
   vi.restoreAllMocks();
@@ -334,6 +366,124 @@ describe("cockpit owner-backed notifications", () => {
     expect(mocks.warning).toHaveBeenCalledTimes(1);
     expect(mocks.warning.mock.calls[0]![1].description).toBeUndefined();
   });
+
+  it.each([
+    ["the local approval is actionable beside the switch", "/capabilities/skills", "a", false, 0],
+    ["the inspected skill owns the exact approval", "/capabilities/skills?item=skill%3Acoding", "a", false, 0],
+    ["a different request produced the Inbox item", "/capabilities/skills", "b", false, 1],
+    ["the local view recovered the wait from the list", "/capabilities/skills", "a", true, 1],
+    ["the operator left Skills before the switch responded", "/work", "a", false, 1],
+  ])("keeps the Inbox record when %s", async (_caseName, itemPath, localId, recovered, toastCount) => {
+    window.history.replaceState(null, "", "/capabilities/skills");
+    setSkillSwitch("coding", SAVING);
+    await render();
+    await emit({ ...event, payload: { kind: SKILL_LIFECYCLE_APPROVAL_KIND } });
+    expect(client.getQueryData(queryKeys.inbox("w"))).toEqual(projection);
+    expect(mocks.warning).not.toHaveBeenCalled();
+
+    window.history.replaceState(null, "", itemPath);
+    await act(async () => {
+      setSkillSwitch("coding", { phase: "waiting", skillId: "coding", from: "off", approvalId: localId, recovered });
+    });
+    expect(mocks.warning).toHaveBeenCalledTimes(toastCount);
+    expect(client.getQueryData(queryKeys.inbox("w"))).toEqual(projection);
+  });
+
+  it.each([
+    ["connector", "change_plan_effect"],
+    ["plugin", "change_plan_effect"],
+    ["plugin", SKILL_HUB_LIFECYCLE_APPROVAL_KIND],
+    ["skill", SKILL_HUB_LIFECYCLE_APPROVAL_KIND],
+  ] as const)(
+    "keeps a %s install approval inline when realtime arrives before its receipt (%s)",
+    async (panel, kind) => {
+      await render({ installPanel: { panel, requesting: true } });
+      await emit({ ...event, payload: { kind } });
+      expect(client.getQueryData(queryKeys.inbox("w"))).toEqual(projection);
+      expect(mocks.warning).not.toHaveBeenCalled();
+
+      await render({ installPanel: { panel, approvalId: "a", requesting: false } });
+      expect(mocks.warning).not.toHaveBeenCalled();
+      await render({ installPanel: { panel, approvalId: "a", requesting: false, ready: true } });
+      await emit({ ...event, eventId: "already-visible", payload: { kind } });
+      expect(mocks.warning).not.toHaveBeenCalled();
+      expect(client.getQueryData(queryKeys.inbox("w"))).toEqual(projection);
+    },
+  );
+
+  it.each([
+    ["closes", undefined],
+    ["becomes hidden", { panel: "plugin", approvalId: "a", requesting: false, hidden: true }],
+    ["presents an unrelated approval", { panel: "plugin", approvalId: "b", requesting: false }],
+  ] as const)("keeps the exact Inbox toast when the install panel %s", async (_caseName, installPanel) => {
+    await render({ installPanel: { panel: "plugin", requesting: true } });
+    await emit({ ...event, payload: { kind: "change_plan_effect" } });
+    expect(mocks.warning).not.toHaveBeenCalled();
+
+    await render({ installPanel });
+    expect(mocks.warning).toHaveBeenCalledTimes(1);
+    mocks.warning.mock.calls[0]![1].action.onClick();
+    expect(mocks.navigate).toHaveBeenCalledWith("/inbox?approvalId=a&workspaceId=w");
+  });
+
+  it("keeps the Inbox toast when an exact install receipt has no readable review", async () => {
+    const kind = "change_plan_effect";
+    await render({ installPanel: { panel: "connector", requesting: true } });
+    await emit({ ...event, payload: { kind } });
+    await render({ installPanel: { panel: "connector", approvalId: "a", requesting: false } });
+
+    await vi.waitFor(() => expect(mocks.warning).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+    expect(mocks.dismiss).not.toHaveBeenCalled();
+    mocks.warning.mock.calls[0]![1].action.onClick();
+    expect(mocks.navigate).toHaveBeenCalledWith("/inbox?approvalId=a&workspaceId=w");
+    expect(client.getQueryData(queryKeys.inbox("w"))).toEqual(projection);
+  });
+
+  it.each([
+    ["connector", "tool.execute"],
+    ["skill", SKILL_LIFECYCLE_APPROVAL_KIND],
+    ["skill", "change_plan_effect"],
+  ] as const)("delivers other approval kinds while a %s install is asking (%s)", async (panel, kind) => {
+    await render({ installPanel: { panel, requesting: true } });
+    await emit({ ...event, payload: { kind } });
+    expect(mocks.warning).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["connector", "change_plan_effect"],
+    ["skill", SKILL_HUB_LIFECYCLE_APPROVAL_KIND],
+  ] as const)("dismisses the fallback toast for a late %s install receipt (%s)", async (panel, kind) => {
+    await render({ installPanel: { panel, requesting: true } });
+    await emit({ ...event, payload: { kind } });
+    expect(mocks.warning).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(mocks.warning).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+
+    await render({ installPanel: { panel, approvalId: "a", requesting: false } });
+    expect(mocks.dismiss).not.toHaveBeenCalled();
+    await render({ installPanel: { panel, approvalId: "a", requesting: false, ready: true } });
+    expect(mocks.dismiss).toHaveBeenCalledExactlyOnceWith("inbox:w:approval:a");
+    expect(client.getQueryData(queryKeys.inbox("w"))).toEqual(projection);
+  });
+
+  it.each(["plugin", "skill"] as const)(
+    "dismisses a shown %s install toast only when its own review opens",
+    async (panel) => {
+      const kind = SKILL_HUB_LIFECYCLE_APPROVAL_KIND;
+      await render();
+      await emit({ ...event, payload: { kind } });
+      expect(mocks.warning).toHaveBeenCalledTimes(1);
+
+      await render({ installPanel: { panel, approvalId: "b", requesting: false, ready: true } });
+      await render({ installPanel: { panel, approvalId: "a", requesting: false, ready: true, hidden: true } });
+      expect(mocks.dismiss).not.toHaveBeenCalled();
+
+      await render();
+      await render({ installPanel: { panel, approvalId: "a", requesting: false, ready: true } });
+      expect(mocks.dismiss).toHaveBeenCalledExactlyOnceWith("inbox:w:approval:a");
+      expect(client.getQueryData(queryKeys.inbox("w"))).toEqual(projection);
+    },
+  );
+
   it("uses current reviewed navigation without reconnecting the stream or replaying a shown toast", async () => {
     await render();
     await emit();

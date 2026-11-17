@@ -120,14 +120,19 @@ const headings = () => [...container.querySelectorAll("h3")].map((heading) => he
 const section = (title: string) =>
   [...container.querySelectorAll("section")].find((entry) => entry.querySelector("h3")?.textContent === title);
 const lines = (title: string) => [...(section(title)?.querySelectorAll("li") ?? [])].map((line) => line.textContent);
-/** Each step as "<name> <status>", with the button beside a step that waits. */
+/** Each step as "<name> <status>", without its approval review. */
 const steps = () =>
   [...(section("Progress")?.querySelectorAll("ol > li") ?? [])].map((row) =>
-    [...row.querySelectorAll(":scope > span:first-child, [data-tone], button")]
-      .map((part) => part.textContent?.trim())
-      .join(" "),
+    [...(row.firstElementChild?.children ?? [])].map((part) => part.textContent?.trim()).join(" "),
   );
 const dialog = () => document.body.querySelector<HTMLElement>('[role="dialog"]');
+
+function inlineApproval(title: string) {
+  expect(dialog()).toBeNull();
+  const review = section(title);
+  if (!review) throw new Error(`Missing inline review: ${title}`);
+  return review;
+}
 
 async function settle() {
   await act(async () => {
@@ -377,41 +382,44 @@ describe("Install panel: what the operator judges", () => {
 });
 
 describe("Install panel: installing", () => {
-  it("waits for each step in place when the setting is off", async () => {
+  it("reviews each step inline when the setting is off", async () => {
     answerSteps("waiting");
     await render();
     await press(button("Install and switch on"));
 
     await settle();
-    expect(dialog()).not.toBeNull();
-    expect(dialog()?.querySelector("h2")?.textContent).toBe("Approve installing Himalaya?");
-    expect(dialog()?.textContent).toContain("Installs Himalaya switched off. It can't be used until you switch it on.");
+    const installReview = inlineApproval("Approve installing Himalaya?");
+    expect(installReview.textContent).toContain(
+      "Installs Himalaya switched off. It can't be used until you switch it on.",
+    );
+    expect(installReview.parentElement?.firstElementChild?.textContent).toContain("Install");
+    const progress = installReview.closest('[tabindex="-1"]');
+    expect(document.activeElement).toBe(progress);
     // A Skill Hub approval belongs to the workspace that asked, so it is read there, never in "default".
     expect(approvals.fetchApproval).toHaveBeenCalledWith(
       "approval-install",
       expect.objectContaining({ workspaceId: "ws-1" }),
     );
     expect(steps()[1]).toContain("Waiting for your approval");
-    expect(button("Review the change")).toBeDefined();
-    for (const where of [container, dialog()!]) {
-      expect(where.querySelector('a[href*="inbox"]')).toBeNull();
-      expect(where.textContent).not.toContain("Inbox");
-    }
+    expect(container.querySelector('a[href*="inbox"]')).toBeNull();
+    expect(text()).not.toContain("Inbox");
     expect(api.requestCapabilitySkillOperation).toHaveBeenCalledTimes(1);
 
     // Approved in place: read at once, and installed it asks to switch on, which waits for its own approval.
     server = checked({ step: "installed_off" });
-    await vi.waitFor(() => expect(button("Approve once", dialog()!)?.disabled).toBe(false));
-    await press(button("Approve once", dialog()!));
+    await vi.waitFor(() => expect(button("Approve once", installReview)?.disabled).toBe(false));
+    await press(button("Approve once", installReview));
     await vi.waitFor(() => expect(decisions.resolveApproval).toHaveBeenCalledWith("approval-install", "approve"));
     await settle();
-    expect(dialog()?.querySelector("h2")?.textContent).toBe("Approve switching on Himalaya?");
-    expect(dialog()?.textContent).toContain("Lets the AI use Himalaya in new chats.");
+    const activationReview = inlineApproval("Approve switching on Himalaya?");
+    expect(activationReview.textContent).toContain("Lets the AI use Himalaya in new chats.");
+    expect(activationReview.parentElement?.firstElementChild?.textContent).toContain("Switch on");
+    expect(document.activeElement).toBe(progress);
     expect(api.requestCapabilitySkillOperation.mock.calls.map(([request]) => request.operationKind)).toEqual([
       "install_inactive",
       "activate",
     ]);
-    expect(steps()).toEqual(["Check Passed", "Install Done", "Switch on Waiting for your approval Review the change"]);
+    expect(steps()).toEqual(["Check Passed", "Install Done", "Switch on Waiting for your approval"]);
     expect(onDone).not.toHaveBeenCalled();
   });
 
@@ -454,7 +462,7 @@ describe("Install panel: installing", () => {
       operationKind: "activate",
     });
     await settle();
-    expect(dialog()?.querySelector("h2")?.textContent).toBe("Approve switching on Himalaya?");
+    inlineApproval("Approve switching on Himalaya?");
   });
 
   it("says the request was declined and offers Install again", async () => {
@@ -462,8 +470,7 @@ describe("Install panel: installing", () => {
     await render();
     await press(button("Install and switch on"));
     await settle();
-    expect(dialog()).not.toBeNull();
-    await press(button("Close dialog", dialog()!));
+    inlineApproval("Approve installing Himalaya?");
 
     // Declined in the Inbox: the next read finds the check as it was.
     server = checked();
@@ -474,7 +481,7 @@ describe("Install panel: installing", () => {
     expect(declined?.querySelector(".text-status-failed")).toBeNull();
     expect(declined?.className).not.toContain("text-status-failed");
     expect(button("Install and switch on")?.disabled).toBe(false);
-    expect(button("Review the change")).toBeUndefined();
+    expect(section("Approve installing Himalaya?")).toBeUndefined();
   });
 
   it("names the step that didn't finish and checks the source again afresh", async () => {
@@ -607,8 +614,7 @@ describe("Install panel: installing", () => {
     answerSteps("waiting");
     await render();
     await press(button("Install and switch on"));
-    expect(dialog()).not.toBeNull();
-    await press(button("Close dialog", dialog()!));
+    inlineApproval("Approve installing Himalaya?");
 
     // Another workspace is on screen now; the panel opens again on the same install.
     act(() => root.unmount());

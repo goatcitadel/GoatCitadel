@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
+import { useInstallApprovalPresentation } from "../../../data/install-approval-presentation";
 import { Button } from "../../../ui/Button";
+import { InstallConfirmationIcon, type InstallCompletionHandoff } from "../InstallConfirmationIcon";
 import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
 import { CANT_BE_INSTALLED } from "./plugin-check-copy";
 import {
@@ -46,41 +48,46 @@ function isUninstalling(flow: PluginInstall): boolean {
   return flow.state.phase === "failed" && flow.state.detail?.state === "uninstalling";
 }
 
+function waitingApprovalId({ asking, state }: PluginInstall): string | undefined {
+  if (asking) return undefined;
+  if (state.phase === "planned") return state.approvalId;
+  if (state.phase === "following") return state.waitingApprovalId;
+  return undefined;
+}
+
 /**
  * The approval the install waits for, decided in the panel: the plugin's own (titled by GoatCitadel, "Install <name>")
  * or a skill's step ("Approve installing <skill>?", "Approve switching on <skill>?"). It belongs to the workspace the
  * plugin was checked or installed in, so it is read there; a decision is read back at once.
  */
-function ApprovalInPlace({ flow, name }: { flow: PluginInstall; name: string }) {
+function ApprovalInPlace({
+  approvalId,
+  flow,
+  name,
+  returnFocus,
+}: {
+  approvalId: string;
+  flow: PluginInstall;
+  name: string;
+  returnFocus: () => void;
+}) {
   const { state } = flow;
-  if (flow.asking) return null;
-  if (state.phase === "planned" && state.approvalId) {
-    // GoatCitadel's own title ("Install <name>") shows; the question is only the fallback.
-    return (
-      <SettingsApprovalDialog
-        key={state.approvalId}
-        approvalId={state.approvalId}
-        workspaceId={flow.workspaceId}
-        title={`Approve installing ${name}?`}
-        reviewLabel="Review the change"
-        loadFailureHint="Reload to try again."
-        onResolved={() => flow.checkNow()}
-      />
-    );
-  }
-  if (state.phase !== "following" || !state.waitingApprovalId) return null;
-  const piece = state.detail.pieces.find((item) => item.pendingApprovalId === state.waitingApprovalId);
-  const words = stepApprovalWords(flow.waitingStep, piece?.label ?? name);
+  const skillStep = state.phase === "following";
+  const piece = skillStep ? state.detail.pieces.find((item) => item.pendingApprovalId === approvalId) : undefined;
+  // For the plan, GoatCitadel's own title ("Install <name>") shows when available.
+  const words = skillStep
+    ? stepApprovalWords(flow.waitingStep, piece?.label ?? name)
+    : { title: `Approve installing ${name}?`, summary: undefined };
   return (
     <SettingsApprovalDialog
-      key={state.waitingApprovalId}
-      approvalId={state.waitingApprovalId}
+      approvalId={approvalId}
       workspaceId={flow.workspaceId}
       title={words.title}
       {...(words.summary ? { summary: words.summary } : {})}
-      reviewLabel="Review the change"
+      presentation="inline"
+      returnFocus={returnFocus}
       loadFailureHint="Reload to try again."
-      onResolved={(status) => flow.checkNow(status)}
+      onResolved={(status) => flow.checkNow(skillStep ? status : undefined)}
     />
   );
 }
@@ -104,20 +111,23 @@ export function PluginInstallProgress({
   secretsReady,
   onInstall,
   onCheckAgain,
+  handedOff,
 }: {
   flow: PluginInstall;
   name: string;
   secretsReady: boolean;
   onInstall: () => void;
   onCheckAgain?: () => void;
+  handedOff?: InstallCompletionHandoff;
 }) {
   const { state } = flow;
   const stops = stopLines(flow);
   const done = state.phase === "done" && state.detail ? changesNewChats(state.detail.pieces) : false;
   const { status, pressed } = useFocusKept(actionOf(flow, Boolean(onCheckAgain)));
+  const approvalId = waitingApprovalId(flow);
+  const approvalPresentation = useInstallApprovalPresentation("plugin", approvalId, flow.asking);
   return (
-    <div className="space-y-3">
-      <ApprovalInPlace flow={flow} name={name} />
+    <div ref={approvalPresentation} className="space-y-3">
       {stops.length > 0 ? (
         <div role="alert" className="space-y-1">
           {stops.map((line) => (
@@ -138,8 +148,19 @@ export function PluginInstallProgress({
       />
       {/* Always in place, so each new line is read out; the pieces' rows carry it on screen too. */}
       <p ref={status} tabIndex={-1} role="status" className="text-fg focus:outline-none">
+        <InstallConfirmationIcon identity={flow.workspaceId} completed={state.phase === "done"} handedOff={handedOff} />
+        {state.phase === "done" ? " " : null}
         {progressLine(flow, name)}
       </p>
+      {approvalId ? (
+        <ApprovalInPlace
+          key={approvalId}
+          approvalId={approvalId}
+          flow={flow}
+          name={name}
+          returnFocus={() => status.current?.focus({ preventScroll: true })}
+        />
+      ) : null}
     </div>
   );
 }

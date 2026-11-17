@@ -115,6 +115,36 @@ export function readSkillSwitch(skillId: string): SkillSwitchEntry | undefined {
   return entries.get(skillId);
 }
 
+function localApprovalOwner(approvalId: string): string | undefined {
+  for (const entry of entries.values()) {
+    if (entry.phase === "waiting" && !entry.recovered && entry.approvalId === approvalId) return entry.skillId;
+  }
+  return undefined;
+}
+
+function hasSavingSwitch(): boolean {
+  return [...entries.values()].some((entry) => entry.phase === "saving");
+}
+
+/** An approval event can reach the browser before the switch request returns its approval ID. */
+export async function waitForLocalSkillApproval(approvalId: string): Promise<string | undefined> {
+  const owner = localApprovalOwner(approvalId);
+  if (owner || !hasSavingSwitch()) return owner;
+  return new Promise((resolve) => {
+    // Leave unrelated notifications free to show even if a switch request hangs.
+    const timer = setTimeout(() => finish(undefined), 1_000);
+    const stop = subscribe(() => {
+      const skillId = localApprovalOwner(approvalId);
+      if (skillId || !hasSavingSwitch()) finish(skillId);
+    });
+    function finish(skillId: string | undefined) {
+      clearTimeout(timer);
+      stop();
+      resolve(skillId);
+    }
+  });
+}
+
 /** Replaces the skill's entry; `undefined` forgets it, so the switch shows the list's own state again. */
 export function setSkillSwitch(skillId: string, entry: SkillSwitchEntry | undefined) {
   if (entries.get(skillId) === entry) return;

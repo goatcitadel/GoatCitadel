@@ -6,7 +6,6 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { useInspector } from "../../../app/inspector";
 import { useCockpitRoute } from "../../../app/use-cockpit-route";
 import { skillInstallQuery, skillListQuery } from "../../../data/capability-skills-query";
-import { reopenSettingsApproval } from "../../settings/SettingsApprovalDialog";
 import { SkillInstallPanel } from "./SkillInstallPanel";
 import {
   installIdFromSearch,
@@ -155,9 +154,6 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
       const checkId = item.installSnapshotId;
       // Every row on its way in names its check; one that doesn't (an older Gateway) is checked afresh instead.
       if (!checkId) return install(item);
-      // A waiting step this page already follows opens its approval at once, as a skill row's Review button does.
-      const followed = installOf(readSkillInstall(checkId)?.state);
-      if (followed?.approvalId) reopenSettingsApproval(followed.approvalId);
       deliberate.go(checkId, () => navigate(installItemHref(checkId, view)));
     },
     importFromGit: () => {

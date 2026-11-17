@@ -6,7 +6,7 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { useInspector } from "../../../app/inspector";
 import { useCockpitRoute } from "../../../app/use-cockpit-route";
 import { pluginInspectionQuery } from "../../../data/capability-plugins-query";
-import { reopenSettingsApproval } from "../../settings/SettingsApprovalDialog";
+import type { InstallCompletionHandoff } from "../InstallConfirmationIcon";
 import { PluginInstallPanel } from "./PluginInstallPanel";
 import { pluginInstallCustody } from "./plugin-install-flow";
 import {
@@ -109,12 +109,14 @@ export interface PluginInstallPanelOpener {
   resume(item: CapabilityPluginListItem): void;
   /** "Install from Git" or "Add from folder": opens that form, empty. */
   openSource(kind: PluginSourceFormKind): void;
+  takeCompletion(key: string): InstallCompletionHandoff | undefined;
 }
 
 /** Opens the install panel in the inspector, and moves the address with the panel as its flow moves. */
 function usePanelShow(custody: number) {
-  const { open: openInspector, content } = useInspector();
-  const { navigate } = useCockpitRoute();
+  const handoff = useRef<{ key: string; dismissal: number }>(undefined);
+  const { open: openInspector, content, getDismissalGeneration } = useInspector();
+  const { navigate, search } = useCockpitRoute();
   // The panel this page last asked the inspector for, and with which inspector.
   const asked = useRef<{ key: string; inspectorOpen: typeof openInspector } | null>(null);
   const deliberate = useDeliberateOpen();
@@ -123,12 +125,30 @@ function usePanelShow(custody: number) {
     (from: string, to: string) => {
       if (custody !== pluginInstallCustody()) return;
       const pluginId = pluginIdOfInstallKey(to);
+      if (pluginId) handoff.current = { key: to, dismissal: getDismissalGeneration() };
       // A check's own address replaces the one it moves from, so going back doesn't land on a finished step.
       const replace = !isDraftPluginInstallKey(from);
       navigate(pluginId ? pluginItemHref(pluginId) : pluginInstallItemHref(to), replace ? { replace } : undefined);
     },
-    [navigate, custody],
+    [navigate, custody, getDismissalGeneration],
   );
+
+  const takeCompletion = useCallback(
+    (key: string): InstallCompletionHandoff | undefined => {
+      const pending = handoff.current;
+      if (pending?.key !== key) return undefined;
+      handoff.current = undefined;
+      if (pending.dismissal !== getDismissalGeneration() || readPluginInstall(key)?.state.phase !== "done")
+        return undefined;
+      return { played: false };
+    },
+    [getDismissalGeneration],
+  );
+
+  useEffect(() => {
+    const id = pluginIdFromSearch(search);
+    if (handoff.current && (!id || handoff.current.key !== pluginInstallKey(id))) handoff.current = undefined;
+  }, [search]);
 
   const show = useCallback(
     (key: string, title: string, panel: Omit<PanelTarget, "key" | "title"> = {}) => {
@@ -138,12 +158,19 @@ function usePanelShow(custody: number) {
         source: pluginInstallSource(key),
         focusOnOpen: deliberate.take(key),
         title,
-        body: <PluginInstallPanel installKey={key} {...panel} onMove={(to) => move(key, to)} />,
+        body: (
+          <PluginInstallPanel
+            installKey={key}
+            {...panel}
+            handedOff={takeCompletion(key)}
+            onMove={(to) => move(key, to)}
+          />
+        ),
       });
     },
-    [openInspector, move, custody, deliberate],
+    [openInspector, move, custody, deliberate, takeCompletion],
   );
-  return { show, asked, openInspector, content, deliberate };
+  return { show, asked, openInspector, content, deliberate, takeCompletion };
 }
 
 /** Opens the panel the address names, once per inspector, and clears the address when that panel is closed. */
@@ -214,6 +241,7 @@ export function usePluginInstallPanel(list: CapabilityPluginListResponse | undef
   useAddressPanel(usePanelTarget(search, list, custody), panels, custody);
 
   return {
+    takeCompletion: panels.takeCompletion,
     install: (item) => {
       if (custody !== pluginInstallCustody()) return;
       const key = draftPluginInstallKey(`built_in:${item.pluginId}`);
@@ -229,11 +257,6 @@ export function usePluginInstallPanel(list: CapabilityPluginListResponse | undef
     },
     resume: (item) => {
       if (custody !== pluginInstallCustody()) return;
-      // A waiting approval this page already follows opens at once.
-      const followed = readPluginInstall(pluginInstallKey(item.pluginId))?.state;
-      if (followed?.phase === "following" && followed.waitingApprovalId) {
-        reopenSettingsApproval(followed.waitingApprovalId);
-      }
       panels.deliberate.go(pluginInstallKey(item.pluginId), () => navigate(pluginItemHref(item.pluginId)));
     },
     openSource: (kind) => {

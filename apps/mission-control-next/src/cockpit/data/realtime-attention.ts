@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import type { OperatorInboxResponse } from "@goatcitadel/contracts";
+import { SKILL_LIFECYCLE_APPROVAL_KIND, type OperatorInboxResponse } from "@goatcitadel/contracts";
 import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import type { RealtimeEvent } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { decideNotificationDelivery } from "@goatcitadel/mission-control-shared/state/notification-policy";
@@ -7,10 +7,26 @@ import type { DerivedRealtimeNotification } from "@goatcitadel/mission-control-s
 import { playOperatorAttentionSound } from "@goatcitadel/mission-control-shared/state/operator-attention";
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { showBrowserNotification } from "../../app/browser-notification";
+import { readCockpitLocation } from "../app/cockpit-back-guard";
+import { SKILLS_HREF, skillIdFromSearch, skillsViewFromSearch } from "../areas/capabilities/skills/skill-links";
+import { waitForLocalSkillApproval } from "../areas/capabilities/skills/skill-switch-store";
 import { requestCockpitToast } from "../ui/toast-runtime";
 import { isApprovalHandledInPlace } from "./approvals-handled-in-place";
 import { inboxItemLocation, inboxToastDescription, resolveInboxNotificationItem } from "./inbox-notification";
+import {
+  isInstallApprovalPresented,
+  subscribeInstallApprovalPresentation,
+  waitForInstallApprovalPresentation,
+} from "./install-approval-presentation";
 import { queryKeys } from "./query-keys";
+
+function showsSkillReview(skillId?: string): boolean {
+  const { pathname, search } = readCockpitLocation();
+  if (pathname.replace(/\/+$/u, "") !== SKILLS_HREF) return false;
+  const openSkillId = skillIdFromSearch(search);
+  if (openSkillId) return skillId === undefined || openSkillId === skillId;
+  return !new URLSearchParams(search).has("item") && skillsViewFromSearch(search) === "installed";
+}
 
 /**
  * Retains live notification waiters across replaced reads. Only a successful owner fetch settles
@@ -104,14 +120,21 @@ export function createRealtimeAttention({
 }) {
   const inboxReader = createInboxReader(queryClient);
   const delivered = new Set<string>();
-  const approvalToastIds = new Map<string, string>();
+  const approvalToasts = new Map<string, { id: string; approvalKind: unknown }>();
+  const dismissApproval = (approvalId: string) => {
+    const shown = approvalToasts.get(approvalId);
+    approvalToasts.delete(approvalId);
+    if (shown) requestCockpitToast((toast) => toast.dismiss(shown.id), isCurrent);
+  };
+  const stopFollowingInstallReviews = subscribeInstallApprovalPresentation(() => {
+    if (!isCurrent()) return;
+    for (const [approvalId, { approvalKind }] of approvalToasts) {
+      if (isInstallApprovalPresented(approvalId, approvalKind)) dismissApproval(approvalId);
+    }
+  });
 
   return {
-    dismissApproval(approvalId: string) {
-      const shownId = approvalToastIds.get(approvalId);
-      approvalToastIds.delete(approvalId);
-      if (shownId) requestCockpitToast((toast) => toast.dismiss(shownId), isCurrent);
-    },
+    dismissApproval,
     deliver(
       event: RealtimeEvent,
       notification: DerivedRealtimeNotification,
@@ -140,10 +163,13 @@ export function createRealtimeAttention({
             if (isCurrentWorkspace()) navigate(inboxItemLocation(item));
           };
           const id = `inbox:${scopeWorkspaceId}:${item.id}`;
-          if (approvalId) approvalToastIds.set(approvalId, id);
-          // Only the toast is held back for an approval a dialog is already showing; the sound and the desktop
-          // notification still say something new needs the operator.
-          if (preferences.toastsEnabled && !(approvalId && isApprovalHandledInPlace(approvalId)))
+          const approvalKind = event.payload.kind;
+          // Both in-place reviewers suppress only the extra toast. Sound and desktop delivery still follow preferences.
+          const handledInPlace = () =>
+            approvalId &&
+            (isApprovalHandledInPlace(approvalId) || isInstallApprovalPresented(approvalId, approvalKind));
+          const showToast = () => {
+            if (!isCurrentWorkspace() || (approvalId && settledApprovalIds.has(approvalId)) || handledInPlace()) return;
             requestCockpitToast(
               (toast) => {
                 const show =
@@ -154,12 +180,14 @@ export function createRealtimeAttention({
                   duration: inboxToastDuration(notification.tone),
                   action: { label: "Open Inbox item", onClick: open },
                 });
+                if (approvalId) approvalToasts.set(approvalId, { id, approvalKind });
               },
               () => {
                 const currentPreferences = readPreferences();
                 return (
                   isCurrentWorkspace() &&
-                  !(approvalId && (settledApprovalIds.has(approvalId) || isApprovalHandledInPlace(approvalId))) &&
+                  !(approvalId && settledApprovalIds.has(approvalId)) &&
+                  !handledInPlace() &&
                   currentPreferences.toastsEnabled &&
                   !(currentPreferences.onlyWhenUnfocused && pageFocused()) &&
                   decideNotificationDelivery(notification, {
@@ -171,6 +199,18 @@ export function createRealtimeAttention({
                 );
               },
             );
+          };
+          if (preferences.toastsEnabled) {
+            if (approvalId && approvalKind === SKILL_LIFECYCLE_APPROVAL_KIND && showsSkillReview()) {
+              void waitForLocalSkillApproval(approvalId).then((skillId) => {
+                if (!skillId || !showsSkillReview(skillId)) showToast();
+              });
+            } else {
+              const waiting = approvalId ? waitForInstallApprovalPresentation(approvalId, approvalKind) : undefined;
+              if (waiting) void waiting.then(showToast);
+              else showToast();
+            }
+          }
           if (deliveryDecision.sound) void playOperatorAttentionSound(notification.soundCue, preferences.soundMode);
           if (deliveryDecision.desktop && preferences.desktopEnabled && document.visibilityState === "hidden") {
             showBrowserNotification(item.title, notification.tone, { tag: id, onClick: open });
@@ -180,6 +220,9 @@ export function createRealtimeAttention({
           /* Ignore failed owner reads; a retained signal must not become a current item. */
         });
     },
-    dispose: inboxReader.dispose,
+    dispose() {
+      stopFollowingInstallReviews();
+      inboxReader.dispose();
+    },
   };
 }

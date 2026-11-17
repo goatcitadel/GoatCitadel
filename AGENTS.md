@@ -268,7 +268,7 @@ Common proof lanes include:
 - `pnpm docs:check`
 - `git diff --check`
 
-For UI changes, include visual or browser proof when practical.
+Every UI/UX review and change requires visual inspection and interaction testing in the rendered app. Check every component in scope, including anything potentially visible in another state, viewport, theme, or interaction. Open overlays and disclosures, exercise the relevant controls, and watch animations and transitions as they run. Check for visual defects such as layout shifts, clipping, unintended text resizing, motion artifacts, and lost focus. Source review, builds, and automated tests supplement rendered checks. Report which components and states were verified and identify any that could not be rendered or tested.
 
 For installer, desktop, release, auth, backup, provider, or Code Mode changes, use the repo's named verification lanes rather than relying on build success alone.
 

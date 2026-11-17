@@ -1,10 +1,9 @@
-import { useEffect, useId, useRef } from "react";
+import { useId, useRef } from "react";
 import { SKILL_ORIGIN_LABELS, type CapabilitySkillItem } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { Switch } from "../../../ui/Switch";
-import { reopenSettingsApproval } from "../../settings/SettingsApprovalDialog";
 import { LetterIcon } from "../LetterIcon";
 import { FromPluginLink } from "../plugins/FromPluginLink";
 import { CANT_SWITCH_NOTE, PINNED_NOTE, presentSkillState, SKILL_TONE_TEXT } from "./skill-view";
@@ -36,10 +35,7 @@ export interface SkillRowProps {
  * (`useSkillSwitch`), so a request, a wait for approval or a failure shows on all of them. `item` should be the live
  * row from the cached list.
  *
- * A change that waits is approved in the skill's panel, where it was asked for, and the row never points at the Inbox,
- * although it also waits there: the row's Review button opens the panel with the approval open in it. A flip of the
- * row's own switch that starts a wait opens the panel by itself, so approving takes one more click; a wait found when
- * the list loads opens nothing.
+ * The row stays in the list when a change waits. Review opens the skill's panel with the decision beside its switch.
  */
 export function SkillRow({ item, uses, onView }: SkillRowProps) {
   const sw = useSkillSwitch(item);
@@ -50,18 +46,6 @@ export function SkillRow({ item, uses, onView }: SkillRowProps) {
   // different object, even with the same words.
   const mountedWith = useRef(sw.failure);
   const announceFailure = sw.failure !== mountedWith.current;
-  // Set by a flip of this row's switch until its request settles. A flip in the panel leaves it alone: the panel is
-  // already open there.
-  const flipped = useRef(false);
-  const flip = (next: boolean) => {
-    flipped.current = true;
-    sw.setOn(next);
-  };
-  useEffect(() => {
-    if (!flipped.current || sw.pending) return;
-    flipped.current = false;
-    if (sw.waiting && sw.waitStartedHere) onView(item.skillId);
-  }, [sw.pending, sw.waiting, sw.waitStartedHere, item.skillId, onView]);
   return (
     <li className="min-w-0 rounded-lg border border-line-subtle bg-raised p-3">
       <div className="flex min-w-0 items-start gap-3">
@@ -77,7 +61,7 @@ export function SkillRow({ item, uses, onView }: SkillRowProps) {
             {item.switchable ? (
               <Switch
                 checked={sw.checked}
-                onCheckedChange={flip}
+                onCheckedChange={sw.setOn}
                 label={item.name}
                 onText={state.label}
                 offText={state.label}
@@ -94,15 +78,7 @@ export function SkillRow({ item, uses, onView }: SkillRowProps) {
             )}
             {sw.waitingApprovalId ? (
               // The name comes last so the accessible name starts with the visible word.
-              <Button
-                size="sm"
-                aria-label={`Review ${item.name}`}
-                onClick={() => {
-                  // The approval may have been offered and closed already: ask for it to open again in the panel.
-                  if (sw.waitingApprovalId) reopenSettingsApproval(sw.waitingApprovalId);
-                  onView(item.skillId);
-                }}
-              >
+              <Button size="sm" aria-label={`Review ${item.name}`} onClick={() => onView(item.skillId)}>
                 Review
               </Button>
             ) : null}

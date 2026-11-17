@@ -3,6 +3,7 @@ export type { ComposerProps } from "./ChatTextComposer.types";
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "../../ui/Button";
+import { warmControlWave } from "../../ui/use-control-wave";
 import {
   ChatComposerPhoneActions,
   ChatComposerTools,
@@ -29,6 +30,7 @@ import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/re
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { ChatLongInputNotice } from "./ChatLongInputNotice";
 import { useCoarsePointer } from "../../lib/use-coarse-pointer";
+import { useChatSendWave } from "./use-chat-send-wave";
 
 const REASON_ID = "cockpit-chat-send-reason";
 /** Short route checks are not worth announcing; only a check that outlasts this delay is shown. */
@@ -74,6 +76,7 @@ export function ChatTextComposer({
   // Phones fold the mode, model, attach, sources and voice controls into one sheet; touch keyboards have no Shift.
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const coarse = useCoarsePointer();
+  const { sendButton, requestSendWave } = useChatSendWave(phone, props);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const modelOptionsRequest: ModelOptionsRequest = useRef(null);
   const channelConversation = Boolean(props.channelReply || props.channelCheck);
@@ -169,6 +172,8 @@ export function ChatTextComposer({
       onOpenSchedules?.();
       return;
     }
+    // Wait for the stable, committed streaming controls after preflight. The send follows its normal path.
+    if (!localReady && !channelConversation && !props.hasActiveStream) requestSendWave();
     props.onSend();
     props.composerRef.current?.focus();
   };
@@ -319,6 +324,7 @@ export function ChatTextComposer({
               props={props}
               canSubmit={canSubmit}
               submitLabel={submitLabel}
+              sendButton={sendButton}
               optionsOpen={optionsOpen}
               onOpenOptions={() => setOptionsOpen(true)}
             />
@@ -340,11 +346,20 @@ export function ChatTextComposer({
                     requestRef={modelOptionsRequest}
                   />
                 )}
-                {props.hasActiveStream ? (
-                  <Button type="submit" variant="primary" size="sm" disabled={!canSubmit}>
+                <Button
+                  ref={sendButton}
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  className={props.hasActiveStream ? undefined : "max-w-64"}
+                  disabled={!canSubmit}
+                  onPointerEnter={warmControlWave}
+                  onFocus={warmControlWave}
+                >
+                  <span className={props.hasActiveStream ? undefined : "truncate whitespace-nowrap"}>
                     {submitLabel}
-                  </Button>
-                ) : null}
+                  </span>
+                </Button>
                 {props.hasActiveStream ? (
                   <Button
                     type="button"
@@ -358,11 +373,7 @@ export function ChatTextComposer({
                   >
                     {props.isStopPending ? "Stopping…" : "Stop response"}
                   </Button>
-                ) : (
-                  <Button type="submit" variant="primary" size="sm" className="max-w-64" disabled={!canSubmit}>
-                    <span className="truncate">{submitLabel}</span>
-                  </Button>
-                )}
+                ) : null}
               </div>
             </div>
           )}

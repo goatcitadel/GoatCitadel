@@ -69,4 +69,4 @@ Use the smallest lane that proves the behavior, then widen according to risk.
 - Visual changes: run `pnpm verify:visual:regression` when practical. Use `verify:visual:rebaseline` only for an intentional, reviewed baseline change.
 - Always run `git diff --check` for the edited slice.
 
-Add or update focused tests for changed behavior. For meaningful UI changes, include browser or visual proof when practical and report any environment-dependent proof that was not run.
+Add or update focused tests for changed behavior. Follow the repository-wide rendered UI review requirement for every Mission Control component in scope, including potentially visible states.

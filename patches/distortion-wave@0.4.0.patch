@@ -1,0 +1,15 @@
+diff --git a/dist/distortion-wave.js b/dist/distortion-wave.js
+index 1d668fbde3a965abbcc698c7835c539240efbb3d..bdff5fc5e264b8af8d2c431d7ba82ec5e4fa6bba 100644
+--- a/dist/distortion-wave.js
++++ b/dist/distortion-wave.js
+@@ -50,7 +50,9 @@ function styleText(cs, def, parentCS, isRoot, onUrl) {
+     if (skipProp(p)) continue;
+     const v = cs.getPropertyValue(p);
+     if (!v) continue;
+-    if (v === def.get(p) && (isRoot || !parentCS || parentCS.getPropertyValue(p) === v)) continue;
++    // A 0px border on a borderless probe can become medium when the capture serializes a solid border style.
++    const borderWidth = /^border-(top|right|bottom|left)-width$/.test(p);
++    if (!borderWidth && v === def.get(p) && (isRoot || !parentCS || parentCS.getPropertyValue(p) === v)) continue;
+     if (onUrl && URL_PROPS.has(p) && v.includes("url(")) onUrl(p, v);
+     out += `${p}:${v};`;
+   }

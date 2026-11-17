@@ -47,6 +47,11 @@ overrides:
   glob@13.0.6: 14.0.2
   minimatch@10.2.4: 11.0.1
 
+patchedDependencies:
+  distortion-wave@0.4.0:
+    hash: 0aa736a090a1e0af1010e96b305989d91a0e33dd35db586e4ee20aee16b3efa4
+    path: patches/distortion-wave@0.4.0.patch
+
 importers:
 
   .:
@@ -324,6 +329,9 @@ importers:
       cmdk:
         specifier: 1.1.1
         version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      distortion-wave:
+        specifier: 0.4.0
+        version: 0.4.0(patch_hash=0aa736a090a1e0af1010e96b305989d91a0e33dd35db586e4ee20aee16b3efa4)
       lucide-react:
         specifier: 0.542.0
         version: 0.542.0(react@19.2.5)
@@ -4137,6 +4145,10 @@ packages:
 
   discord.js@14.25.1:
     resolution: {integrity: sha512-2l0gsPOLPs5t6GFZfQZKnL1OJNYFcuC/ETWsW4VtKVD/tg4ICa9x+jb9bkPffkMdRpRpuUaO/fKkHCBeiCKh8g==}
+    engines: {node: '>=18'}
+
+  distortion-wave@0.4.0:
+    resolution: {integrity: sha512-VYbHxcgjQ5Pi4i6ugYOlO9vCXozoTRNYcwGApd4jgZSA0z+4TuhdWdqD4qoDXCo3Kiymwl/3A6onuVO/RkJbhQ==}
     engines: {node: '>=18'}
 
   dnd-core@14.0.1:
@@ -10091,6 +10103,8 @@ snapshots:
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
+
+  distortion-wave@0.4.0(patch_hash=0aa736a090a1e0af1010e96b305989d91a0e33dd35db586e4ee20aee16b3efa4): {}
 
   dnd-core@14.0.1:
     dependencies:

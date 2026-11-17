@@ -230,7 +230,7 @@ export function connectedAnnouncement(item: Pick<CapabilityConnectorItem, "hidde
 
 /**
  * A row whose install flow is running says so instead of its own reason (R87), read from the flow, never moving it.
- * A flow that waits on the operator says so in the waiting tone: "Waiting on you in Inbox" for its approval, "Waiting
+ * A flow that waits on the operator says so in the waiting tone: "Waiting for your approval" for its approval, "Waiting
  * on you to sign in" while its sign-in page is open (M6). Any other running phase reads "Installing" on a template row
  * and "Connecting" on a saved server, whose flow may be its own sign-in or connect rather than an install; both in the
  * running tone, so the row never looks ready while it isn't. The badge keeps the row's own state word, and a finished,
@@ -241,7 +241,7 @@ export function withInstallProgress(
   state: StatusPresentation & { reason: string },
   flow: ConnectorInstallState,
 ): StatusPresentation & { reason: string } {
-  if (flow.phase === "waiting_inbox") return { ...state, tone: "waiting", reason: "Waiting on you in Inbox" };
+  if (flow.phase === "waiting_inbox") return { ...state, tone: "waiting", reason: "Waiting for your approval" };
   if (flow.phase === "signing_in") return { ...state, tone: "waiting", reason: "Waiting on you to sign in" };
   if (!isActiveInstallState(flow)) return state;
   return { ...state, tone: "running", reason: item.source === "mcp_server" ? "Connecting" : "Installing" };

@@ -44,6 +44,7 @@ export function Sheet({
   sideOnDesktop = false,
   onCloseAutoFocus,
   closeLabel = "Close sheet",
+  contentClassName,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -51,6 +52,7 @@ export function Sheet({
   children: ReactNode;
   sideOnDesktop?: boolean;
   closeLabel?: string;
+  contentClassName?: string;
   onCloseAutoFocus?: ComponentProps<DrawerContent>["onCloseAutoFocus"];
 }) {
   const isDesktop = useMediaQuery(RESPONSIVE_QUERIES.abovePhone);
@@ -310,6 +312,7 @@ export function Sheet({
           closeLabel={closeLabel}
           title={title}
           side={side}
+          contentClassName={contentClassName}
         >
           {children}
         </Drawer>

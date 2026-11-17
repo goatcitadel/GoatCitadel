@@ -4,10 +4,18 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Switch, type SwitchProps } from "./Switch";
 
+const { playWave, stopWave } = vi.hoisted(() => ({ playWave: vi.fn(), stopWave: vi.fn() }));
+
+vi.mock("./use-control-wave", () => ({
+  useControlWave: () => ({ play: playWave, stop: stopWave }),
+  warmControlWave: vi.fn(),
+}));
+
 let root: Root;
 let container: HTMLDivElement;
 
 beforeEach(() => {
+  playWave.mockClear();
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -51,6 +59,56 @@ describe("cockpit Switch", () => {
     act(() => findSwitch().click());
     expect(onCheckedChange).toHaveBeenCalledTimes(1);
     expect(onCheckedChange).toHaveBeenCalledWith(false);
+  });
+
+  it("starts the wave on the track only after the requested state has settled", () => {
+    const { onCheckedChange } = renderSwitch({ checked: true });
+    const control = findSwitch();
+    act(() => control.click());
+    expect(onCheckedChange).toHaveBeenCalledWith(false);
+    expect(playWave).not.toHaveBeenCalled();
+
+    renderSwitch({ checked: true, pending: true });
+    renderSwitch({ checked: false, pending: true });
+    expect(playWave).not.toHaveBeenCalled();
+
+    renderSwitch({ checked: false });
+    expect(playWave).toHaveBeenCalledOnce();
+    expect(playWave).toHaveBeenCalledWith(control.firstElementChild, control, expect.any(MouseEvent));
+  });
+
+  it("plays when the saved state arrives just after pending clears", () => {
+    renderSwitch({ checked: true });
+    act(() => findSwitch().click());
+    renderSwitch({ checked: true, pending: true });
+    renderSwitch({ checked: true });
+    expect(playWave).not.toHaveBeenCalled();
+    renderSwitch({ checked: false });
+    expect(playWave).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])("discards an unresolved wave before a later update (pending: %s)", (wasPending) => {
+    vi.useFakeTimers();
+    try {
+      renderSwitch({ checked: true });
+      act(() => findSwitch().click());
+      if (wasPending) {
+        renderSwitch({ checked: true, pending: true });
+        renderSwitch({ checked: true });
+      }
+      vi.advanceTimersByTime(250);
+      renderSwitch({ checked: false });
+      expect(playWave).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets the gallery own its demo wave", () => {
+    renderSwitch({ checked: false, wave: false });
+    act(() => findSwitch().click());
+    renderSwitch({ checked: true, wave: false });
+    expect(playWave).not.toHaveBeenCalled();
   });
 
   it("is unavailable while pending", () => {

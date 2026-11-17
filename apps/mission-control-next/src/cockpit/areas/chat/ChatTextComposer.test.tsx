@@ -36,6 +36,11 @@ vi.mock("./use-chat-model-labels", () => ({ useChatModelLabels: () => (modelId: 
 // Width and pointer are off by default (a desktop with a keyboard); the phone and touch tests switch them on.
 const media = vi.hoisted(() => ({ phone: false, coarse: false }));
 const phoneOptions = vi.hoisted(() => ({ load: vi.fn<() => Promise<void> | undefined>() }));
+const controlWave = vi.hoisted(() => ({ play: vi.fn(), stop: vi.fn() }));
+vi.mock("../../ui/use-control-wave", () => ({
+  useControlWave: () => controlWave,
+  warmControlWave: vi.fn(),
+}));
 vi.mock(import("./ChatComposerPhoneOptions"), async (importOriginal) => {
   await phoneOptions.load();
   return importOriginal();
@@ -70,6 +75,7 @@ let container: HTMLDivElement;
 beforeEach(() => {
   media.phone = false;
   media.coarse = false;
+  controlWave.play.mockClear();
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -85,6 +91,38 @@ function sendButton(): HTMLButtonElement {
   if (!(button instanceof HTMLButtonElement)) throw new Error("Missing Send button");
   return button;
 }
+
+it.each([false, true])("sends immediately with a text-preserving control wave (phone: %s)", async (phone) => {
+  media.phone = phone;
+  const props = composerProps({ draft: "A message" });
+  await act(async () => root.render(<ChatTextComposer props={props} />));
+  const button = sendButton();
+  await act(async () => {
+    button.click();
+    expect(props.onSend).toHaveBeenCalledOnce();
+  });
+  expect(controlWave.play).not.toHaveBeenCalled();
+  await act(async () => root.render(<ChatTextComposer props={{ ...props, hasActiveStream: true }} />));
+  expect(controlWave.play).toHaveBeenCalledWith(button, button, undefined, {
+    preserveText: true,
+    stopOnContentChange: true,
+  });
+  expect(document.activeElement).toBe(props.composerRef.current);
+});
+
+it("sends immediately on Enter with a centered wave", async () => {
+  const props = composerProps({ draft: "A message" });
+  await act(async () => root.render(<ChatTextComposer props={props} />));
+  const draft = props.composerRef.current!;
+  await act(async () => draft.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  const button = sendButton();
+  expect(props.onSend).toHaveBeenCalledOnce();
+  await act(async () => root.render(<ChatTextComposer props={{ ...props, hasActiveStream: true }} />));
+  expect(controlWave.play).toHaveBeenCalledWith(button, button, undefined, {
+    preserveText: true,
+    stopOnContentChange: true,
+  });
+});
 
 it("loads phone options only on request and leaves a dismissed sheet closed when loading completes", async () => {
   let finishLoading!: () => void;

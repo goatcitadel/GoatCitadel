@@ -161,7 +161,7 @@ export function ModelTechnicalDetails({
 }) {
   if (!providerId && !modelId) return null;
   return (
-    <TechnicalDetails label="Model technical details">
+    <TechnicalDetails label="Model technical details" animate>
       <dl className="font-mono text-xs">
         <DetailRow label="Provider ID" value={providerId || "Not recorded"} />
         <DetailRow label="Model ID" value={modelId || "Not recorded"} />

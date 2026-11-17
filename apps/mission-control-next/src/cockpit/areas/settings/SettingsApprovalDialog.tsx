@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
@@ -13,6 +13,7 @@ import { nullWhenMissing } from "../inbox/inbox-record-read";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { restoreFocusAfterClose } from "../../ui/focus-return";
+import { DisclosureSummary } from "../../ui/DisclosureSummary";
 import { StatusBadge } from "../../ui/StatusBadge";
 
 // Approvals already offered in this app session, so a re-render or remount never reopens one the operator closed.
@@ -30,7 +31,7 @@ function subscribeReopenAsks(listener: () => void) {
 
 /**
  * Opens an approval's dialog again although it was offered already: at once where it is on screen, or as soon as it
- * mounts. For a control outside the dialog that asks to review the change, such as a skill row's Review button.
+ * mounts. For a control outside the dialog that asks to review the change.
  */
 export function reopenSettingsApproval(approvalId: string) {
   offered.delete(approvalId);
@@ -40,9 +41,8 @@ export function reopenSettingsApproval(approvalId: string) {
 
 /**
  * The approval for a change, decided where the operator asked for it: a Settings save, or a skill switched in its
- * panel. It opens on its own once, shows the change in one line with the full review behind "Show details", and
- * approves in one click at any level below nuclear. It mounts the shared decision bar, so the pre-dispatch re-read,
- * risk gate and idempotency lock match the Inbox.
+ * panel. The dialog opens on its own once. An inline review stays next to the originating control.
+ * Both use the shared decision bar and its pre-dispatch re-read, risk gate and idempotency lock.
  *
  * A Settings change belongs to its workspace and is read there. A skill change belongs to no workspace
  * (`workspaceId={null}`), so every read of it is unscoped: scoped to any workspace, it would not be found.
@@ -58,6 +58,9 @@ export function SettingsApprovalDialog({
   loadFailureHint = "Use Refresh change status, or decide it in Inbox.",
   installationSetting = false,
   dangerReview = false,
+  presentation = "dialog",
+  installationPlanId,
+  returnFocus,
   onResolved,
 }: {
   approvalId: string;
@@ -69,11 +72,16 @@ export function SettingsApprovalDialog({
    * A line under the title naming what the approval is for, in the owner's words (a skill panel: "Turn Planner on").
    * Shown only when the approval's own preview has no summary; it never replaces what the approval says.
    */
-  summary?: string;
+  summary?: string | ((approval: ApprovalRequest) => string);
   /** The words of the button that opens the dialog again. */
   reviewLabel?: string;
   /** What to do when the approval can't be read, after the sentence that says so. */
-  loadFailureHint?: string;
+  loadFailureHint?: ReactNode;
+  presentation?: "dialog" | "inline";
+  /** An installation-wide connector plan, stored and reviewed in the default workspace. */
+  installationPlanId?: string;
+  /** Restores focus to the originating control when the inline decision dismisses itself. */
+  returnFocus?: () => void;
   /**
    * The change applies to the whole installation (a Settings change), so it is decided here from any selected
    * workspace. The bar still checks that the approval itself is the install-wide Settings shape.
@@ -102,7 +110,14 @@ export function SettingsApprovalDialog({
     staleTime: 15_000,
   });
   const approval = query.data;
-  const pending = approval?.status === "pending";
+  const mismatched = Boolean(
+    installationPlanId &&
+    query.isSuccess &&
+    (approval?.approvalId !== approvalId ||
+      approval.kind !== "change_plan_effect" ||
+      approval.payload?.planId !== installationPlanId),
+  );
+  const pending = approval?.status === "pending" && !query.isError && !mismatched;
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState<string>();
   // Where focus was when the dialog opened, so a decision (which removes the Review button) hands it back to the setting.
@@ -110,13 +125,13 @@ export function SettingsApprovalDialog({
   // A decision was made and focus has not been handed back yet. The owner often drops this dialog from its own
   // `onResolved`, so the unmount hands focus back too; whichever comes first does it, once.
   const owed = useRef(false);
-  const returnFocus = () => {
+  const restoreDialogFocus = () => {
     if (!owed.current) return;
     owed.current = false;
     restoreFocusAfterClose(origin.current.opener, origin.current.region);
   };
-  const returnFocusRef = useRef(returnFocus);
-  returnFocusRef.current = returnFocus;
+  const returnFocusRef = useRef(restoreDialogFocus);
+  returnFocusRef.current = restoreDialogFocus;
   useEffect(() => () => returnFocusRef.current(), []);
   const rememberOrigin = () => {
     owed.current = false;
@@ -124,36 +139,48 @@ export function SettingsApprovalDialog({
     const opener = active instanceof HTMLElement && active !== document.body ? active : null;
     origin.current = { opener, region: opener?.closest("section") ?? null };
   };
+  const reviewTitleId = useId();
+  const inlineReview = useRef<HTMLElement>(null);
+  const inlineFocus = useRef(false);
   const reopenAsk = useSyncExternalStore(
     subscribeReopenAsks,
     () => reopenAsks.get(approvalId) ?? 0,
     () => 0,
   );
 
-  // While this dialog is open on a pending approval it is decided here, so its Inbox toast would sit on top of it.
-  // Only while the dialog is open on the loaded, still pending record: while it loads, if it can't be read, or once
-  // it is closed (the button that opens it again may be off screen), the toast stays.
+  // Register only while the exact pending review is offered. A closed dialog or failed read leaves Inbox available.
+  const reviewOpen = presentation === "inline" || open;
   useEffect(
-    () => (pending && open ? registerApprovalHandledInPlace(approvalId) : undefined),
-    [approvalId, pending, open],
+    () => (pending && reviewOpen ? registerApprovalHandledInPlace(approvalId) : undefined),
+    [approvalId, pending, reviewOpen],
   );
 
   // Opens once per approval, and again after each ask to reopen it (which clears it from `offered`).
   useEffect(() => {
-    if (!pending || offered.has(approvalId)) return;
+    if (presentation === "inline" || !pending || offered.has(approvalId)) return;
     offered.add(approvalId);
     rememberOrigin();
     setOpen(true);
-  }, [approvalId, pending, reopenAsk]);
+  }, [approvalId, pending, presentation, reopenAsk]);
 
   const settle = (text?: string) => {
+    // A disabled decision button can send focus to the body or to its containing sheet.
+    const focused = document.activeElement;
+    const section = inlineReview.current;
+    if (
+      inlineFocus.current &&
+      section &&
+      (focused === document.body || focused === section.closest('[role="dialog"]') || section.contains(focused))
+    ) {
+      returnFocus?.();
+    }
     setMessage(text);
     void queryClient.resetQueries({ queryKey, exact: true });
     void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(scope) });
   };
 
   // Not a live region: the cockpit live-region budget only goes down, and this sits under the change's own status.
-  if (query.isError)
+  if (query.isError || mismatched)
     return (
       <p className="text-sm text-status-failed">The approval for this change could not be loaded. {loadFailureHint}</p>
     );
@@ -161,6 +188,79 @@ export function SettingsApprovalDialog({
   if (!pending) return null;
   const preview = approval.preview as { title?: unknown; summary?: unknown; impact?: unknown } | undefined;
   const line = (value: unknown) => (typeof value === "string" && value.trim() ? value : undefined);
+  const reviewTitle = line(preview?.title) ?? title;
+  const description = line(preview?.summary) ?? line(typeof summary === "function" ? summary(approval) : summary);
+  const impact =
+    line(preview?.impact) ??
+    (presentation === "inline" && workspaceId === null ? "Applies to every workspace." : undefined);
+  const needsDangerReview = dangerReview && approval.riskLevel === "danger";
+  const review = (
+    <div
+      className={
+        presentation === "inline" ? "space-y-2 text-sm text-fg-secondary" : "space-y-3 text-sm text-fg-secondary"
+      }
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        {approval.riskLevel ? <StatusBadge status={presentRiskLevel(approval.riskLevel)} /> : null}
+        {impact ? <p>{impact}</p> : null}
+      </div>
+      <details>
+        <DisclosureSummary className="cursor-pointer whitespace-nowrap font-medium text-fg">
+          Show details
+        </DisclosureSummary>
+        <div className="mt-2 max-h-72 overflow-y-auto">
+          <ApprovalReviewSummary approval={approval} workspaceId={scope} />
+        </div>
+      </details>
+      <ApprovalDecisionBar
+        compact
+        reviewedInPlace={!needsDangerReview}
+        inlineDangerReview={presentation === "inline" && needsDangerReview}
+        installationSetting={installationSetting}
+        approval={approval}
+        workspaceId={workspaceId}
+        onResolved={() => {
+          if (presentation === "dialog") owed.current = true;
+          setOpen(false);
+          settle();
+          void fetchApproval(approvalId, readScope)
+            .then((record) => record.status)
+            .catch(() => undefined)
+            .then((status) => onResolved(status))
+            .finally(restoreDialogFocus);
+        }}
+        onInvalidated={(text) => settle(text ?? "The approval changed. Review the refreshed record before deciding.")}
+      />
+      {message ? <p className="text-fg-muted">{message}</p> : null}
+    </div>
+  );
+  if (presentation === "inline") {
+    return (
+      <section
+        ref={inlineReview}
+        aria-labelledby={reviewTitleId}
+        className="space-y-2 border-t border-line-subtle pt-3"
+        onFocusCapture={() => {
+          inlineFocus.current = true;
+        }}
+        onBlurCapture={(event) => {
+          const { currentTarget, relatedTarget } = event;
+          if (
+            relatedTarget &&
+            relatedTarget !== currentTarget.closest('[role="dialog"]') &&
+            !currentTarget.contains(relatedTarget)
+          )
+            inlineFocus.current = false;
+        }}
+      >
+        <h3 id={reviewTitleId} className="text-sm font-semibold text-fg">
+          {reviewTitle}
+        </h3>
+        {description ? <p className="text-sm text-fg-secondary">{description}</p> : null}
+        {review}
+      </section>
+    );
+  }
   return (
     <>
       <Button
@@ -173,45 +273,8 @@ export function SettingsApprovalDialog({
       >
         {reviewLabel}
       </Button>
-      <Dialog
-        open={open}
-        onOpenChange={setOpen}
-        title={line(preview?.title) ?? title}
-        description={line(preview?.summary) ?? line(summary)}
-      >
-        <div className="space-y-3 text-sm text-fg-secondary">
-          <div className="flex flex-wrap items-center gap-2">
-            {approval.riskLevel ? <StatusBadge status={presentRiskLevel(approval.riskLevel)} /> : null}
-            {line(preview?.impact) ? <p>{line(preview?.impact)}</p> : null}
-          </div>
-          <details>
-            <summary className="cursor-pointer font-medium text-fg">Show details</summary>
-            <div className="mt-2 max-h-72 overflow-y-auto">
-              <ApprovalReviewSummary approval={approval} workspaceId={scope} />
-            </div>
-          </details>
-          <ApprovalDecisionBar
-            compact
-            reviewedInPlace={!(dangerReview && approval.riskLevel === "danger")}
-            installationSetting={installationSetting}
-            approval={approval}
-            workspaceId={workspaceId}
-            onResolved={() => {
-              owed.current = true;
-              setOpen(false);
-              settle();
-              void fetchApproval(approvalId, readScope)
-                .then((record) => record.status)
-                .catch(() => undefined)
-                .then((status) => onResolved(status))
-                .finally(() => returnFocus());
-            }}
-            onInvalidated={(text) =>
-              settle(text ?? "The approval changed. Review the refreshed record before deciding.")
-            }
-          />
-          {message ? <p className="text-fg-muted">{message}</p> : null}
-        </div>
+      <Dialog open={open} onOpenChange={setOpen} title={reviewTitle} description={description}>
+        {review}
       </Dialog>
     </>
   );

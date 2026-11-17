@@ -33,9 +33,11 @@ function flowAt(state: PluginInstallState): PluginInstall {
   };
 }
 
-async function render(flow: PluginInstall) {
+async function render(flow: PluginInstall, handedOff?: { played: boolean }) {
   await act(async () =>
-    root.render(<PluginInstallProgress flow={flow} name="Meeting tools" secretsReady onInstall={vi.fn()} />),
+    root.render(
+      <PluginInstallProgress flow={flow} name="Meeting tools" secretsReady onInstall={vi.fn()} handedOff={handedOff} />,
+    ),
   );
 }
 
@@ -51,6 +53,36 @@ afterEach(() => {
 });
 
 describe("PluginInstallProgress", () => {
+  it("animates the current confirmed install once while leaving the status text in place", async () => {
+    const done = { phase: "done", pluginId: PLUGIN_ID, detail: DETAIL } as const;
+    await render(flowAt({ phase: "following", detail: DETAIL }));
+    expect(container.querySelector(".cockpit-install-confirmed")).toBeNull();
+    await render(flowAt(done));
+
+    const status = container.querySelector('[role="status"]');
+    const icon = status?.querySelector(".cockpit-install-confirmed");
+    expect(icon).toBeTruthy();
+    expect(status?.textContent).toContain("Meeting tools is installed.");
+    await render(flowAt(done));
+    expect(status?.querySelector(".cockpit-install-confirmed")).toBe(icon);
+  });
+
+  it("does not replay a handed-off confirmation when the inspector remounts its body", async () => {
+    const completion = { played: false };
+    const flow = flowAt({ phase: "done", pluginId: PLUGIN_ID, detail: DETAIL });
+    await render(flow, completion);
+    expect(container.querySelector(".cockpit-install-confirmed")).toBeTruthy();
+
+    await act(async () => root.render(null));
+    await render(flow, completion);
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("Meeting tools is installed.");
+    expect(container.querySelector(".cockpit-install-confirmed")).toBeNull();
+  });
+  it("opens a previously completed install without replaying its confirmation", async () => {
+    await render(flowAt({ phase: "done", pluginId: PLUGIN_ID, detail: DETAIL }));
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("Meeting tools is installed.");
+    expect(container.querySelector(".cockpit-install-confirmed")).toBeNull();
+  });
   it("says a plugin handed over to its uninstall in a quiet line, never as a failure", async () => {
     const message = "This plugin is being uninstalled.";
     await render(flowAt({ phase: "failed", message, detail: { ...DETAIL, state: "uninstalling" } }));
