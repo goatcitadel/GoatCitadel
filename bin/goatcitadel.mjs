@@ -1898,6 +1898,7 @@ function startPackagedGateway(nodeExecutable, gatewayUrl, expectedFingerprint) {
         baseDir,
         runtimeProcessEnv.GOATCITADEL_ALLOWED_ORIGINS,
         runtimeProcessEnv,
+        packagedGatewayDir,
       ),
       [GATEWAY_STARTUP_FAILURE_ENV]: startupFailurePath,
     },

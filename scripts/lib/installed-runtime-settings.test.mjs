@@ -46,17 +46,45 @@ test("managed origins follow the Gateway's selected env file and process precede
   for (const selector of [customEnv, "../../custom.env"]) {
     const env = { GOATCITADEL_LOCAL_ENV_FILE: selector };
     assert.equal(installedRuntimeAllowedOrigins(root, undefined, env), "https://custom.example");
-    assert.equal(installedRuntimeAllowedOrigins(root, undefined, {
-      ...env, GOATCITADEL_ALLOWED_ORIGINS: "https://process.example",
-    }), "https://process.example");
+    assert.equal(
+      installedRuntimeAllowedOrigins(root, undefined, {
+        ...env,
+        GOATCITADEL_ALLOWED_ORIGINS: "https://process.example",
+      }),
+      "https://process.example",
+    );
   }
   fs.unlinkSync(profileEnv);
-  assert.equal(installedRuntimeAllowedOrigins(root, undefined, {
-    GOATCITADEL_LOCAL_ENV_FILE: customEnv,
-  }), "https://custom.example");
-  assert.equal(installedRuntimeAllowedOrigins(root, undefined, {
-    GOATCITADEL_LOCAL_ENV_FILE: "missing.env",
-  }), "http://127.0.0.1:5173");
+  const relocatedApp = path.join(root, "relocated-app");
+  fs.mkdirSync(path.join(relocatedApp, "gateway"), { recursive: true });
+  fs.writeFileSync(
+    path.join(relocatedApp, "gateway", "custom.env"),
+    "GOATCITADEL_ALLOWED_ORIGINS=https://relocated.example\n",
+  );
+  const relativeEnv = { GOATCITADEL_LOCAL_ENV_FILE: "custom.env" };
+  assert.equal(
+    installedRuntimeAllowedOrigins(root, undefined, relativeEnv, path.join(relocatedApp, "gateway")),
+    "https://relocated.example",
+  );
+  assert.equal(
+    installedRuntimeAllowedOrigins(root, undefined, {
+      ...relativeEnv,
+      GOATCITADEL_APP_DIR: relocatedApp,
+    }),
+    "https://relocated.example",
+  );
+  assert.equal(
+    installedRuntimeAllowedOrigins(root, undefined, {
+      GOATCITADEL_LOCAL_ENV_FILE: customEnv,
+    }),
+    "https://custom.example",
+  );
+  assert.equal(
+    installedRuntimeAllowedOrigins(root, undefined, {
+      GOATCITADEL_LOCAL_ENV_FILE: "missing.env",
+    }),
+    "http://127.0.0.1:5173",
+  );
 });
 
 test("fresh launches choose a free managed UI port without attaching to the default listener", async (t) => {

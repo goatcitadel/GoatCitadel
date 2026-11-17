@@ -7,21 +7,24 @@ import { atomicCompareAndPublishJson, withManagedLifecycleLock } from "./managed
 const DEFAULT_PORTS = { gatewayPort: 8787, uiPort: 5173 };
 
 /** Allow exactly the managed UI origin when no operator allowlist was supplied. */
-export function installedRuntimeAllowedOrigins(installRoot, configuredOrigins, env = process.env) {
+export function installedRuntimeAllowedOrigins(installRoot, configuredOrigins, env = process.env, gatewayDir) {
   return (
     configuredOrigins?.trim() ||
     env.GOATCITADEL_ALLOWED_ORIGINS?.trim() ||
-    readInstalledProfileEnv(installRoot, env).GOATCITADEL_ALLOWED_ORIGINS?.trim() ||
+    readInstalledProfileEnv(installRoot, env, gatewayDir).GOATCITADEL_ALLOWED_ORIGINS?.trim() ||
     `http://127.0.0.1:${readInstalledRuntimeSettings(installRoot).uiPort}`
   );
 }
 
-function readInstalledProfileEnv(installRoot, env = process.env) {
+function readInstalledProfileEnv(installRoot, env = process.env, gatewayDir) {
   // The packaged Gateway resolves an explicit selector against its working directory.
   // A missing selected file does not fall back to a different profile's allowlist.
   const selectedFile = env.GOATCITADEL_LOCAL_ENV_FILE?.trim();
+  const appDir = env.GOATCITADEL_APP_DIR?.trim();
+  const selectedGatewayDir =
+    gatewayDir ?? path.join(appDir ? path.resolve(appDir) : path.join(installRoot, "app"), "gateway");
   const envPath = selectedFile
-    ? path.resolve(installRoot, "app", "gateway", selectedFile)
+    ? path.resolve(selectedGatewayDir, selectedFile)
     : path.join(installRoot, "runtime-root", ".env");
   return fs.existsSync(envPath) ? parseEnv(fs.readFileSync(envPath, "utf8")) : {};
 }
