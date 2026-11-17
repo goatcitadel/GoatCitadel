@@ -68,7 +68,12 @@ export function shouldIgnoreWatchedEntryName(name: string): boolean {
 }
 
 export function isWatchableSourceFile(filePath: string): boolean {
-  return WATCHABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+  const extension = path.extname(filePath);
+  if (!WATCHABLE_EXTENSIONS.has(extension.toLowerCase())) {
+    return false;
+  }
+  const stem = path.basename(filePath, extension).toLowerCase();
+  return !stem.endsWith(".test") && !stem.endsWith(".spec");
 }
 
 export function formatSignatureEntry(repoRoot: string, targetPath: string, mtimeMs: number): string {

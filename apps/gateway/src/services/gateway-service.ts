@@ -918,6 +918,7 @@ import { ReplayExecutionSkippedError } from "./replay-execution.js";
 import {
   evaluateDeploymentProfileToolAccess,
   policyContextHasOperatorApproval,
+  isLocalDevChatStorageTest,
 } from "../browser-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import {
@@ -955,6 +956,7 @@ import { listChatModelSuggestions } from "./chat-model-suggestions.js";
 import { isVisibleMcpTemplateRecord } from "./mcp-template-visibility.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { applyMcpRedaction, wildcardMatch } from "./mcp-server-policy.js";
+import { LocalMcpFixtureTestService } from "./local-mcp-fixture-test.js";
 import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
 import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
 import { SkillHubLifecycleService } from "./skill-hub-lifecycle-service.js";
@@ -1069,6 +1071,7 @@ export class GatewayService {
   private readonly eventIngestService: EventIngestService;
   public readonly modelUsageAccounting: ModelUsageAccountingService;
   public readonly policyEngine: ToolPolicyEngine;
+  public readonly localMcpFixtureTest: LocalMcpFixtureTestService;
   public readonly secretStore: SecretStoreService;
   private readonly providerSecretStaging: ProviderSecretStaging;
   public readonly runtimeConfigurationService: RuntimeConfigurationService;
@@ -1406,6 +1409,7 @@ export class GatewayService {
     });
     this.browserSessionRuntimeService = new BrowserSessionRuntimeService({
       gatewaySql: this.gatewaySql,
+      requireChatSession: (sessionId) => this.requireChatSession(sessionId),
       publishRealtime: async (eventType, source, payload) => {
         await this.publishRealtime(eventType, source, payload);
       },
@@ -1484,12 +1488,38 @@ export class GatewayService {
       chatAutoApprovalEnabled: isChatAutoApprovalEnabled(this.storage),
       overwrite: createWindowsAutoOverwrite((request) => this.policyEngine.inspectAccess(request)),
     });
+    this.localMcpFixtureTest = new LocalMcpFixtureTestService({
+      available: () =>
+        this.config.assistant.deploymentProfile !== "remote_hardened" &&
+        this.config.assistant.auth.mode === "token" &&
+        !this.config.assistant.auth.allowLoopbackBypass &&
+        this.config.toolPolicy.tools.deny.includes("mcp.invoke"),
+      readServers: () => this.readMcpServers(),
+      readTools: () => this.readMcpTools(),
+      readSession: async (sessionId) => (await this.storage.chatSessionMeta.get(sessionId)) ?? undefined,
+    });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
-      resolveExecutionRestriction: (request, stage, approvalId) =>
-        this.chatAutoActions.inspect(request, stage, approvalId),
+      matchesLocalMcpFixture: (request, serverId) => this.localMcpFixtureTest.matches(request, serverId),
+      resolveExecutionRestriction: async (request, stage, approvalId) => {
+        const profile = this.config.assistant.deploymentProfile;
+        if (request.toolName === "browser.storage.get" && profile !== "trusted_local") {
+          if (profile === "local_dev" && isLocalDevChatStorageTest(request)) {
+            return { kind: "review", reason: "The local browser storage test requires approval for this read." };
+          }
+          return {
+            kind: "block",
+            reason: "This browser storage read is unavailable in the current deployment profile.",
+          };
+        }
+        return this.chatAutoActions.inspect(request, stage, approvalId);
+      },
       // Canonical approval creation registers the durable wait run and retryable observability envelope.
       createApproval: async (input, onCreated, authority) => await this.createApproval(input, onCreated, authority),
-      assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
+      assertBrowserSessionAccess: (check) =>
+        this.browserSessionRuntimeService.assertAccess(
+          check,
+          this.config.assistant.deploymentProfile === "local_dev" && check.toolName === "browser.storage.get",
+        ),
       resolveOutsideRootWriteEligibility: (request) => isOutsideRootWriteEligible(request, { storage: this.storage }),
       readAttachmentBytes: async (request, attachmentId, window) => {
         // Session-scoped (checked before any bytes are read) and ranged: only the call's window is read.
@@ -2833,9 +2863,16 @@ export class GatewayService {
       },
       isValidToolName: (name) => isValidToolName(name),
       evaluateToolDeploymentGuard: (request) =>
-        evaluateDeploymentProfileToolAccess(this.config.assistant.deploymentProfile, request.toolName, request.args, {
-          operatorApproved: policyContextHasOperatorApproval(request.policyContext),
-        }),
+        this.config.assistant.deploymentProfile === "local_dev" && isLocalDevChatStorageTest(request)
+          ? null
+          : evaluateDeploymentProfileToolAccess(
+              this.config.assistant.deploymentProfile,
+              request.toolName,
+              request.args,
+              {
+                operatorApproved: policyContextHasOperatorApproval(request.policyContext),
+              },
+            ),
       isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag),
       resolveToolHookWorkspaceId: async (request) => await this.resolveToolHookWorkspaceId(request),
       resolveWorkspacePathBridgeBeforeExecution: this.workspacePathBridgeRuntime.executionResolver.resolve,

@@ -238,6 +238,18 @@ describe("dev supervisor helper decisions", () => {
     );
   });
 
+  it.each([
+    "apps/gateway/src/chat-static-mcp.integration.test.ts",
+    "packages/contracts/src/chat.spec.TSX",
+    "packages/contracts/src/example.TEST.json",
+  ])("ignores edits to test file %s", (file) => {
+    expect(isWatchableSourceFile(file)).toBe(false);
+  });
+
+  it("keeps watching source whose name contains test", () => {
+    expect(isWatchableSourceFile("apps/gateway/src/services/mcp-server-test-evidence.ts")).toBe(true);
+  });
+
   it("prunes restart failures outside the active supervisor budget window", () => {
     const failures = [1_000, 5_000, 30_000, 61_000];
     pruneFailureTimestamps(failures, 65_000, 60_000);

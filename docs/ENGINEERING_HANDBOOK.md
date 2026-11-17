@@ -819,6 +819,19 @@ pnpm config:sync
 
 `pnpm dev` and `pnpm dev:ui` default to `@goatcitadel/mission-control-next`; `pnpm dev:ui:legacy` keeps the prior shell available for rollback or comparison.
 
+To check which policy-engine code a running Gateway imported, send an operator-authenticated
+`GET /api/v1/ops/loaded-builds`. The response is available without development diagnostics.
+`policyEngine.browserSessionAccess.revision` identifies the browser session access behavior.
+The value `await-async-guard-v1` identifies the fix that waits for the Gateway check before
+using browser session state. Compare `browserSessionAccess.sha256` with the value from the
+build you intend to run. `executionSha256` combines the loaded engine class, tool and browser
+dispatchers, and browser session access fingerprint. To identify which inputs changed, compare
+`executionComponents.toolPolicyEngine`, `executionComponents.toolExecutor`,
+`executionComponents.browserDispatcher`, and `browserSessionAccess.sha256` across two responses.
+The component values are SHA-256 hashes captured at module load. They may differ across
+transpilers. On-disk rebuilds leave the running process's values intact.
+A `null` policy-engine result means the loaded module does not provide this diagnostic.
+
 ### 12.2 Quality Gates
 
 ```bash

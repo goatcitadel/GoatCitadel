@@ -64,6 +64,7 @@ const DIRECTORY_KEYS: readonly QueryKey[] = [
 const TOOL_KEYS: readonly QueryKey[] = [
   queryKeys.capabilities(),
   ["settings", "tool-grants"],
+  ["tools", "chat-allowances"],
   ["settings", "local-operator-overrides"],
   ["settings", "permission-selection"],
   ["approvals", "workspace-tools-profile"],

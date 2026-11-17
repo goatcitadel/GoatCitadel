@@ -42,11 +42,33 @@ describe("browser session routes", () => {
     app.decorateRequest("authActorSource", "loopback");
     app.decorate("requireOperatorAuth", async () => undefined);
     app.decorate("gatewayRuntime", {
-      browserSessionRuntimeService: new BrowserSessionRuntimeService({ gatewaySql: transactionalSql(db) }),
+      browserSessionRuntimeService: new BrowserSessionRuntimeService({
+        gatewaySql: transactionalSql(db),
+        requireChatSession: async (sessionId) => ({
+          sessionId,
+          workspaceId: "workspace-1",
+          scope: "mission",
+          lifecycleStatus: sessionId === "closed-chat" ? "archived" : "active",
+        }),
+      }),
     });
     await app.register(browserSessionsRoutes);
     return app;
   }
+
+  it("provisions the canonical Chat browser session without granting state access", async () => {
+    const fastify = await buildApp();
+    const url = "/api/v1/browser-sessions/for-chat/test-chat";
+    const first = await fastify.inject({ method: "POST", url, payload: { workspaceId: "untrusted" } });
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ sessionId: "test-chat", workspaceId: "workspace-1" });
+    expect((await fastify.inject({ method: "POST", url })).json()).toEqual(first.json());
+    const grants = await fastify.inject({ method: "GET", url: "/api/v1/browser-sessions/test-chat/grants" });
+    expect(grants.json()).toEqual([]);
+    expect(
+      (await fastify.inject({ method: "POST", url: "/api/v1/browser-sessions/for-chat/closed-chat" })).statusCode,
+    ).toBe(409);
+  });
 
   it("creates sessions, lists grants, rotates grants, and records events", async () => {
     const fastify = await buildApp();

@@ -4,6 +4,17 @@ import { canonicalJsonString, type ApprovalRequest, type OperatorInboxItem } fro
 export const CHANGED_APPROVAL_RECORD =
   "This approval changed or is no longer in the current pending queue. Refresh it before deciding.";
 
+/** Advisory explanations can arrive during a decision on an exact, structured tool preview. */
+export function approvalReviewRecord(approval: ApprovalRequest) {
+  if (
+    !(approval.kind.startsWith("mcp.") && approval.preview?.reviewKind === "mcp.operation") &&
+    !(approval.preview?.reviewKind === "knowledge.operation" && approval.preview.toolName === approval.kind)
+  )
+    return approval;
+  const { explanation: _explanation, explanationStatus: _status, explanationError: _error, ...review } = approval;
+  return review;
+}
+
 export function inboxApprovalReviewKey(
   item: OperatorInboxItem | undefined,
   approval: ApprovalRequest,
@@ -16,7 +27,7 @@ export function inboxApprovalReviewKey(
     itemId: item?.id,
     kind: item?.kind,
     source: item?.source,
-    approval,
+    approval: approvalReviewRecord(approval),
   });
 }
 
@@ -47,7 +58,7 @@ export function canResolveInboxApproval(
     !reviewed.mcpElicitation &&
     current !== undefined &&
     current.status === "pending" &&
-    canonicalJsonString(current) === canonicalJsonString(reviewed) &&
+    canonicalJsonString(approvalReviewRecord(current)) === canonicalJsonString(approvalReviewRecord(reviewed)) &&
     (!current.expiresAt || Date.parse(current.expiresAt) > now)
   );
 }

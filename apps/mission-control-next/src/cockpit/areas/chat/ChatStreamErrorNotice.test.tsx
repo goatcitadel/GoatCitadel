@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CHAT_MCP_ACCESS_MESSAGES } from "@goatcitadel/contracts";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
@@ -21,6 +22,25 @@ afterEach(() => {
 });
 
 describe("Chat stream error notice", () => {
+  it.each([
+    ["sign_in", "Open Gateway sign-in", "/settings/access"],
+    ["tool_policy", "Inspect tool policy", "/settings/permissions"],
+    ["server_disconnected", "Open MCP servers", "/capabilities/connectors"],
+  ] as const)("opens the owner for an MCP %s blocker", async (reason, label, destination) => {
+    const error = `API error 409: ${JSON.stringify({
+      code: "STATE_CONFLICT",
+      error: CHAT_MCP_ACCESS_MESSAGES[reason],
+      details: { mcpAccessBlocker: reason },
+    })}`;
+    const onReload = vi.fn();
+    await act(async () => root.render(<ChatStreamErrorNotice error={error} source="send" onReload={onReload} />));
+    const notice = container.querySelector('[role="alert"]');
+    expect(notice?.textContent).toContain(CHAT_MCP_ACCESS_MESSAGES[reason]);
+    expect(notice?.querySelector("a")?.textContent).toBe(label);
+    expect(notice?.querySelector("a")?.getAttribute("href")).toContain(destination);
+    expect(notice?.querySelector("button, details")).toBeNull();
+  });
+
   it("shows plain-language copy for a recognized network failure", async () => {
     await act(async () => root.render(<ChatStreamErrorNotice error="Failed to fetch" source="send" />));
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Can't reach the GoatCitadel gateway");

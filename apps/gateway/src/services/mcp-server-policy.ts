@@ -55,6 +55,20 @@ export function wildcardMatch(value: string, pattern: string): boolean {
   return regex.test(value);
 }
 
+export function mcpServerToolRule(
+  server: Pick<McpServerRecord, "policy">,
+  toolName: string,
+  matches = wildcardMatch,
+): "blocked" | "not_allowed" | undefined {
+  if (server.policy.blockedToolPatterns.some((pattern) => matches(toolName, pattern))) return "blocked";
+  if (
+    server.policy.allowedToolPatterns.length &&
+    !server.policy.allowedToolPatterns.some((pattern) => matches(toolName, pattern))
+  ) {
+    return "not_allowed";
+  }
+}
+
 export function applyMcpRedaction(
   payload: Record<string, unknown>,
   mode: McpServerPolicy["redactionMode"],

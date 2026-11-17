@@ -1,4 +1,5 @@
 import { hasSealedApprovalLinkage, type ApprovalEffectRecord, type ApprovalRequest } from "@goatcitadel/contracts";
+import { withLegacyToolApprovalPreview } from "@goatcitadel/policy-engine";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { withCanonicalApprovalOutcome } from "./approval-canonical-outcome.js";
 import { deriveApprovalResolutionEffectsResult } from "./approval-resolution-effects-service.js";
@@ -10,10 +11,10 @@ type ApprovalResultStorage = Pick<
   "approvals" | "approvalEffects" | "approvalEvents" | "pendingApprovalActions"
 >;
 
-/** Projects durable follow-up delivery state onto an approval API record. */
+/** Projects durable follow-up delivery state and legacy tool previews onto an approval API record. */
 export function withApprovalFollowUp(approval: ApprovalRequest, effects: ApprovalEffectRecord[]): ApprovalRequest {
   return {
-    ...approval,
+    ...withLegacyToolApprovalPreview(approval),
     followUp: deriveApprovalFollowUp(effects),
   };
 }

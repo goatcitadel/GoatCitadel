@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   evaluateComputerUseSafety,
   evaluateDeploymentProfileToolAccess,
+  isLocalDevChatStorageTest,
   isRestrictedBrowserStateTool,
   policyContextHasOperatorApproval,
 } from "./browser-runtime-guardrails.js";
@@ -37,6 +38,29 @@ describe("browser-runtime-guardrails: restricted browser-state tools", () => {
 
   it("allows restricted browser-state tools in trusted_local", () => {
     expect(evaluateDeploymentProfileToolAccess("trusted_local", "browser.cookies.get", {})).toBeNull();
+  });
+
+  it("recognizes only the scoped local storage fixture on a server-bound Chat turn", () => {
+    const request = {
+      toolName: "browser.storage.get",
+      args: { origin: "https://goatcitadel-storage-check.invalid", storage: "local" },
+      agentId: "assistant",
+      sessionId: "chat-session",
+      turnId: "chat-turn",
+      surface: "chat" as const,
+    };
+    expect(isLocalDevChatStorageTest(request)).toBe(true);
+    expect(isLocalDevChatStorageTest({ ...request, turnId: undefined })).toBe(false);
+    expect(isLocalDevChatStorageTest({ ...request, surface: "tools" })).toBe(false);
+    expect(isLocalDevChatStorageTest({ ...request, toolName: "browser.storage.set" })).toBe(false);
+    expect(isLocalDevChatStorageTest({ ...request, args: { ...request.args, storage: "both" } })).toBe(false);
+    expect(isLocalDevChatStorageTest({ ...request, args: { ...request.args, origin: "https://example.com" } })).toBe(
+      false,
+    );
+    expect(evaluateDeploymentProfileToolAccess("local_dev", request.toolName, request.args)?.statusCode).toBe(403);
+    expect(evaluateDeploymentProfileToolAccess("remote_hardened", request.toolName, request.args)?.statusCode).toBe(
+      403,
+    );
   });
 });
 

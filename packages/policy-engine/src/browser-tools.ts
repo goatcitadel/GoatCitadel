@@ -1,4 +1,5 @@
 /* eslint-disable max-lines */
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -57,7 +58,7 @@ export interface BrowserExecutionContext {
   signal?: AbortSignal;
   matchedGrantAllowedHosts?: string[];
   fullWebAccess?: boolean;
-  assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
+  assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void | Promise<void>;
   /** Process-local protected credential lookup; never serialized into browser tool arguments. */
   resolveCredential?: ResolveOfficialSearchCredential;
   /** Keychain-held Firecrawl key; the configured environment variable stays the fallback. */
@@ -875,7 +876,7 @@ async function executeBrowserCookiesGet(
   _config: ToolPolicyConfig,
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
-  const browserSessionId = requireBrowserSessionId(args, executionContext, "browser.cookies.get");
+  const browserSessionId = await requireBrowserSessionId(args, executionContext, "browser.cookies.get");
   const state = cloneBrowserSessionState(getBrowserSessionState(browserSessionId));
   const filter = buildBrowserCookieFilter(args);
   assertBrowserCookieFilterAllowedForGrant(filter, executionContext);
@@ -895,7 +896,7 @@ async function executeBrowserCookiesSet(
   config: ToolPolicyConfig,
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
-  const browserSessionId = requireBrowserSessionId(args, executionContext, "browser.cookies.set");
+  const browserSessionId = await requireBrowserSessionId(args, executionContext, "browser.cookies.set");
   const rawCookies = Array.isArray(args.cookies) ? args.cookies : [args];
   if (rawCookies.length === 0) {
     throw new Error("browser.cookies.set requires a cookie object or cookies array");
@@ -925,7 +926,7 @@ async function executeBrowserCookiesClear(
   args: Record<string, unknown>,
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
-  const browserSessionId = requireBrowserSessionId(args, executionContext, "browser.cookies.clear");
+  const browserSessionId = await requireBrowserSessionId(args, executionContext, "browser.cookies.clear");
   const state = cloneBrowserSessionState(getBrowserSessionState(browserSessionId));
   const filter = buildBrowserCookieFilter(args);
   assertBrowserCookieFilterAllowedForGrant(filter, executionContext);
@@ -949,14 +950,17 @@ async function executeBrowserStorageGet(
   args: Record<string, unknown>,
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
-  const browserSessionId = requireBrowserSessionId(args, executionContext, "browser.storage.get");
-  const state = cloneBrowserSessionState(getBrowserSessionState(browserSessionId));
+  if (executionContext?.assertBrowserSessionAccess && !readBrowserStorageOrigin(args.origin)) {
+    throw new Error("browser.storage.get requires one explicit HTTP or HTTPS origin.");
+  }
+  const browserSessionId = await requireBrowserSessionId(args, executionContext, "browser.storage.get");
   const storage = parseBrowserStorageKind(args.storage, "both", true);
   const origin = asString(args.origin);
 
   if (origin) {
     const normalizedOrigin = normalizeBrowserOrigin(origin);
     assertHostAllowedForGrant(normalizedOrigin, executionContext);
+    const state = getBrowserSessionState(browserSessionId);
     return {
       action: "storage.get",
       browserSessionId,
@@ -970,6 +974,7 @@ async function executeBrowserStorageGet(
     };
   }
 
+  const state = cloneBrowserSessionState(getBrowserSessionState(browserSessionId));
   return {
     action: "storage.get",
     browserSessionId,
@@ -985,7 +990,7 @@ async function executeBrowserStorageSet(
   config: ToolPolicyConfig,
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
-  const browserSessionId = requireBrowserSessionId(args, executionContext, "browser.storage.set");
+  const browserSessionId = await requireBrowserSessionId(args, executionContext, "browser.storage.set");
   const storage = parseBrowserStorageKind(args.storage, "local");
   const origin = normalizeBrowserOriginForConfig(asNonEmptyString(args.origin, "origin"), config, executionContext);
   const entries = normalizeBrowserStorageEntries(args);
@@ -1011,7 +1016,7 @@ async function executeBrowserStorageClear(
   args: Record<string, unknown>,
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
-  const browserSessionId = requireBrowserSessionId(args, executionContext, "browser.storage.clear");
+  const browserSessionId = await requireBrowserSessionId(args, executionContext, "browser.storage.clear");
   const storage = parseBrowserStorageKind(args.storage, "both", true);
   const key = asString(args.key);
   const origin = asString(args.origin);
@@ -1055,7 +1060,7 @@ async function executeBrowserContextConfigure(
   args: Record<string, unknown>,
   executionContext?: BrowserExecutionContext,
 ): Promise<Record<string, unknown>> {
-  const browserSessionId = requireBrowserSessionId(args, executionContext, "browser.context.configure");
+  const browserSessionId = await requireBrowserSessionId(args, executionContext, "browser.context.configure");
   let state = cloneBrowserSessionState(getBrowserSessionState(browserSessionId));
 
   if (asBoolean(args.reset, false)) {
@@ -1207,33 +1212,59 @@ function browserPageStateModeForTool(toolName: BrowserToolName): BrowserPageStat
   return toolName === "browser.interact" ? "session" : "stateless";
 }
 
-function requireBrowserSessionId(
+async function requireBrowserSessionId(
   args: Record<string, unknown>,
   executionContext: BrowserExecutionContext | undefined,
   toolName: BrowserToolName,
-): string {
+): Promise<string> {
   const browserSessionId = resolveBrowserSessionId(args, executionContext);
   if (!browserSessionId) {
     throw new Error(`${toolName} requires active session context`);
   }
-  assertBrowserSessionScope(browserSessionId, toolName, executionContext, args);
+  await assertBrowserSessionScope(browserSessionId, toolName, executionContext, args);
   return browserSessionId;
 }
 
-function assertBrowserSessionScope(
+// Capture the loaded guard and callers once, including the await at each call site.
+export const loadedBrowserSessionAccessBuild = Object.freeze({
+  revision: "await-async-guard-v1",
+  sha256: createHash("sha256")
+    .update(
+      JSON.stringify(
+        [
+          assertBrowserSessionScope,
+          requireBrowserSessionId,
+          executeBrowserCookiesGet,
+          executeBrowserCookiesSet,
+          executeBrowserCookiesClear,
+          executeBrowserStorageGet,
+          executeBrowserStorageSet,
+          executeBrowserStorageClear,
+          executeBrowserContextConfigure,
+          withBrowserPage,
+        ].map((implementation) => Function.prototype.toString.call(implementation)),
+      ),
+    )
+    .digest("hex"),
+});
+
+async function assertBrowserSessionScope(
   browserSessionId: string,
   toolName: BrowserToolName,
   executionContext?: BrowserExecutionContext,
   args?: Record<string, unknown>,
-): void {
+): Promise<void> {
   if (!executionContext?.assertBrowserSessionAccess) {
     return;
   }
-  executionContext.assertBrowserSessionAccess({
+  await executionContext.assertBrowserSessionAccess({
     sessionId: browserSessionId,
     actorId: executionContext.actorId ?? "agent",
     requiredScope: requiredBrowserSessionScope(toolName),
-    host: resolveBrowserSessionGrantHost(args),
+    host:
+      toolName === "browser.storage.get"
+        ? readBrowserStorageOrigin(args?.origin)?.hostname
+        : resolveBrowserSessionGrantHost(args),
     toolName,
     runId: executionContext.runId,
   });
@@ -1476,6 +1507,20 @@ function parseBrowserStorageKind(
     return parsed;
   }
   throw new Error(`storage must be ${allowBoth ? "local, session, or both" : "local or session"}`);
+}
+
+export function readBrowserStorageOrigin(value: unknown): URL | undefined {
+  const input = asString(value);
+  if (!input) return undefined;
+  try {
+    const url = new URL(input);
+    if ((url.protocol === "http:" || url.protocol === "https:") && url.href === `${url.origin}/`) {
+      return url;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 function normalizeBrowserOrigin(input: string): string {
@@ -1779,7 +1824,7 @@ async function withBrowserPage(
   const stateMode = options?.stateMode ?? "stateless";
   const browserSessionId = stateMode === "session" ? resolveBrowserSessionId(args, executionContext) : undefined;
   if (browserSessionId) {
-    assertBrowserSessionScope(browserSessionId, "browser.interact", executionContext, args);
+    await assertBrowserSessionScope(browserSessionId, "browser.interact", executionContext, args);
   }
   const previousSessionState = browserSessionId
     ? cloneBrowserSessionState(getBrowserSessionState(browserSessionId))

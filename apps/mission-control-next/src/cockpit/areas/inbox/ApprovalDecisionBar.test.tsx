@@ -9,10 +9,17 @@ import { ApprovalDecisionBar } from "./ApprovalDecisionBar";
 import { __resetInboxApprovalAttemptsForTests } from "./inbox-approval-attempts";
 import { refuseNetwork } from "../../../test/refuse-network";
 
-const api = vi.hoisted(() => ({ fetchApproval: vi.fn(), resolveApproval: vi.fn() }));
+const api = vi.hoisted(() => ({
+  fetchApproval: vi.fn(),
+  resolveApproval: vi.fn(),
+  approveChatToolTemporarily: vi.fn(),
+}));
 const preferences = vi.hoisted(() => ({ activeWorkspaceId: "default", showTechnicalDetails: false }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ resolveApproval: api.resolveApproval }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApproval: api.fetchApproval }));
+vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
+  approveChatToolTemporarily: api.approveChatToolTemporarily,
+}));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => preferences }));
 // The review summary names workspaces from the workspace list.
 vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
@@ -35,6 +42,7 @@ beforeEach(() => {
   __resetInboxApprovalAttemptsForTests();
   api.fetchApproval.mockReset().mockResolvedValue(approval);
   api.resolveApproval.mockReset();
+  api.approveChatToolTemporarily.mockReset();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -81,6 +89,73 @@ it("denies in one neutral click, because denying is the safe choice", async () =
   await act(async () => deny.click());
   expect(document.body.querySelector("[role=dialog]")).toBeNull();
   await vi.waitFor(() => expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "reject"));
+});
+
+it("offers a timed allowance inline next to Approve once and submits the chosen preset for this Chat", async () => {
+  const record: ApprovalRequest = {
+    ...approval,
+    kind: "memory.search",
+    riskLevel: "safe",
+    payload: { query: "notes" },
+    preview: { reviewKind: "knowledge.operation", toolName: "memory.search", query: "notes", target: "Memory" },
+    linkage: {
+      actionType: "tool.invoke",
+      toolName: "memory.search",
+      sessionId: "chat-1",
+      workspaceId: "default",
+      turnId: "turn-1",
+    },
+  };
+  const onTemporaryGrantResolved = vi.fn();
+  api.fetchApproval.mockResolvedValueOnce(record).mockResolvedValueOnce({ ...record, status: "approved" });
+  api.approveChatToolTemporarily.mockResolvedValue({
+    approvalId: record.approvalId,
+    grant: {
+      toolPattern: record.kind,
+      decision: "allow",
+      scope: "session",
+      scopeRef: "chat-1",
+      grantType: "ttl",
+      expiresAt: "2099-01-01T00:00:00Z",
+    },
+  });
+  const render = (sessionId: string) =>
+    act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ApprovalDecisionBar
+            approval={record}
+            workspaceId="default"
+            sessionId={sessionId}
+            onTemporaryGrantResolved={onTemporaryGrantResolved}
+            onInvalidated={vi.fn()}
+            onResolved={vi.fn()}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+  await render("chat-2");
+  expect(button("Allow this tool in this Chat")).toBeUndefined();
+  await render("chat-1");
+  expect(button("Approve once")).toBeDefined();
+  await act(async () => button("Allow this tool in this Chat").click());
+  expect(container.querySelector('[role="dialog"]')).toBeNull();
+  const duration = container.querySelector("select")!;
+  expect(Array.from(duration.options, (option) => option.text)).toEqual(["15 minutes", "1 hour", "8 hours"]);
+  await act(async () => {
+    duration.value = "8h";
+    duration.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(api.approveChatToolTemporarily).not.toHaveBeenCalled();
+  await act(async () => button("Approve and allow").click());
+  await vi.waitFor(() =>
+    expect(onTemporaryGrantResolved).toHaveBeenCalledWith(
+      expect.stringContaining("allowed in this Chat until"),
+      expect.objectContaining({ scopeRef: "chat-1" }),
+    ),
+  );
+  expect(api.approveChatToolTemporarily).toHaveBeenCalledExactlyOnceWith("chat-1", record.approvalId, "8h");
+  expect(api.resolveApproval).not.toHaveBeenCalled();
 });
 
 it("shows Expired before the missing-preview message", async () => {

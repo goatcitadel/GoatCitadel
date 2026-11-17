@@ -1,4 +1,5 @@
 import { ChatConversationSettings } from "./ChatConversationSettings";
+import { ChatAllowances } from "./ChatAllowances";
 import {
   DetailRow,
   SourcesPanel,
@@ -273,6 +274,13 @@ export function ChatInspector({
             </p>
             {dock && currentContextMatchesSession && !active.historicalReadOnly ? (
               <ChatConversationSettings dock={dock} />
+            ) : null}
+            {dock?.selectedSessionId && currentContextMatchesSession && !active.historicalReadOnly ? (
+              <ChatAllowances
+                key={dock.selectedSessionId}
+                workspaceId={active.workspaceId}
+                sessionId={dock.selectedSessionId}
+              />
             ) : null}
             {dock?.selectedSessionId ? (
               <SessionControlManager

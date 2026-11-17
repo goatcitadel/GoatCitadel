@@ -1,4 +1,4 @@
-import { lazy, useState, type ReactNode } from "react";
+import { lazy, useId, useRef, useState, type ReactNode } from "react";
 import { ShieldAlert } from "lucide-react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
@@ -7,7 +7,9 @@ import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/st
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { useApprovalConnectionLost } from "./ChatApprovalPausedFieldset";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { DeferredChatLeaf } from "./DeferredChatLeaves";
+import { ApprovalReviewSummaryContent } from "../inbox/ApprovalReviewSummaryContent";
 import { useApprovalReviewEvidence } from "../inbox/use-approval-review-evidence";
 
 const RiskApprovalConfirmationBody = lazy(async () => ({
@@ -23,6 +25,7 @@ export function RiskApprovalAction({
   onApprove,
   specialistReview,
   reviewedInPlace = false,
+  inlineDangerReview = false,
   approveLabel,
   reviewLabel,
   confirmLabel,
@@ -44,6 +47,7 @@ export function RiskApprovalAction({
    * preview approves in one click instead of opening a second review. Nuclear keeps its typed confirmation.
    */
   reviewedInPlace?: boolean;
+  inlineDangerReview?: boolean;
   /** Names the one-click approve button for an action with its own wording, such as "Run it". */
   approveLabel?: string;
   /** Names the button that opens a danger-level review; nuclear keeps "Review nuclear approval" so its tier shows. */
@@ -63,6 +67,8 @@ export function RiskApprovalAction({
   const [confirmOpen, setConfirmOpen] = useState(false);
   // GoatCitadel is unreachable: approving waits, including inside the confirmation dialog, which stays open.
   const connectionLost = useApprovalConnectionLost();
+  const reviewId = useId();
+  const reviewTrigger = useRef<HTMLButtonElement>(null);
   const confirmAction = confirmLabel ?? "Approve once";
   const disabled =
     pending || connectionLost || Boolean(approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now());
@@ -74,6 +80,14 @@ export function RiskApprovalAction({
       : null;
   const review = useApprovalReviewEvidence(reviewed, reviewed ? reviewEvidence : undefined);
   const evidence = review.evidence;
+  const mcpArguments =
+    reviewed?.preview?.reviewKind === "mcp.operation" && typeof reviewed.preview.requestArguments === "string"
+      ? reviewed.preview.requestArguments
+      : undefined;
+  const inlineEvidence =
+    mcpArguments !== undefined && evidence
+      ? { ...evidence, changes: evidence.changes.filter((change) => change.label !== "MCP arguments") }
+      : evidence;
   const hasActionPreview =
     Boolean(specialistReview) ||
     Boolean(
@@ -98,6 +112,78 @@ export function RiskApprovalAction({
       <p className="text-xs text-fg-muted">
         This runtime request can be approved only after its runtime review loads. Use Deny to refuse it now.
       </p>
+    );
+  if (inlineDangerReview && approval.riskLevel === "danger" && !specialistReview && reviewed)
+    return (
+      <>
+        <Button
+          ref={reviewTrigger}
+          type="button"
+          variant="danger"
+          size="sm"
+          disabled={disabled}
+          aria-expanded={confirmOpen}
+          aria-controls={reviewId}
+          onClick={() => setConfirmOpen((open) => !open)}
+        >
+          <ShieldAlert aria-hidden="true" className="size-4 shrink-0" />
+          {confirmOpen ? "Hide review" : (reviewLabel ?? "Review danger approval")}
+        </Button>
+        <section
+          id={reviewId}
+          aria-label="Exact approval review"
+          hidden={!confirmOpen}
+          className="min-w-0 basis-full space-y-3 border-t border-line-subtle pt-3"
+        >
+          {confirmOpen ? (
+            <>
+              <ApprovalReviewSummaryContent
+                approval={reviewed}
+                evidence={inlineEvidence}
+                workspaceId={workspaceId ?? reviewed.linkage?.workspaceId ?? "Scope unavailable"}
+              />
+              {mcpArguments !== undefined ? (
+                <div className="space-y-1 text-sm text-fg-secondary">
+                  <p className="font-semibold">Request arguments</p>
+                  <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-sunken p-2">
+                    {mcpArguments}
+                  </pre>
+                </div>
+              ) : null}
+              {consequence}
+              <TechnicalDetails label="Full persisted action preview">
+                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-sunken p-2 font-mono text-xs">
+                  {JSON.stringify(reviewed.preview, null, 2)}
+                </pre>
+              </TechnicalDetails>
+              {!hasActionPreview ? (
+                <p role="alert">The exact action preview is unavailable. You can still deny it.</p>
+              ) : null}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="danger"
+                  disabled={disabled || !hasActionPreview}
+                  onClick={onApprove}
+                >
+                  {confirmAction}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => {
+                    setConfirmOpen(false);
+                    reviewTrigger.current?.focus();
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </section>
+      </>
     );
   // Only the two lowest tiers approve in one click. Danger opens the evidence review, and nuclear
   // or any risk level this build doesn't know also needs the typed confirmation.

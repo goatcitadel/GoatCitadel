@@ -132,6 +132,29 @@ async function typeConfirmation(value: string) {
 }
 
 describe("Inbox approval decisions", () => {
+  it("shows the memory search query and submits an explicit approval", async () => {
+    const record: ApprovalRequest = {
+      ...approval,
+      kind: "memory.search",
+      riskLevel: "safe",
+      payload: { query: "launch decisions", limit: 3 },
+      preview: {
+        reviewKind: "knowledge.operation",
+        toolName: "memory.search",
+        query: "launch decisions",
+        target: "Memory namespace: all namespaces",
+        optionsSummary: "Maximum results: 3",
+      },
+    };
+    api.fetchApproval.mockResolvedValue(record);
+    api.resolveApproval.mockResolvedValue({ approval: { ...record, status: "approved" }, effects: [] });
+    renderActions(record);
+    expect(container.textContent).toContain("launch decisions");
+    expect(container.textContent).toContain("Maximum results: 3");
+    await act(async () => button("Approve once").click());
+    await vi.waitFor(() => expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith(record.approvalId, "approve"));
+  });
+
   function knowledgeApproval(legacy = false): ApprovalRequest {
     const payload = {
       workspaceId: "default",

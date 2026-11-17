@@ -11,7 +11,7 @@ export function selectExplicitStaticMcpServers<T extends { serverId: string }>(
   // Server IDs can contain dots. A canonical tool mention belongs to the
   // longest saved server prefix, never another server whose ID is a prefix.
   const ordered = [...servers].sort((a, b) => b.serverId.length - a.serverId.length);
-  const canonicalMentions = content.match(/(?<![\p{L}\p{N}_.:/-])mcp\.[^\s"'`<>{}()[\],;!?]+/gu) ?? [];
+  const canonicalMentions = explicitMcpCanonicalMentions(content);
   const canonicalServers = new Set(
     canonicalMentions.flatMap((mention) => {
       const server = ordered.find(
@@ -25,4 +25,9 @@ export function selectExplicitStaticMcpServers<T extends { serverId: string }>(
   return servers.filter(
     (server) => hasExplicitMcpIdentifier(content, server.serverId) || canonicalServers.has(server.serverId),
   );
+}
+
+export function explicitMcpCanonicalMentions(content: string): string[] {
+  const canonicalMentions = content.match(/(?<![\p{L}\p{N}_.:/-])mcp\.[^\s"'`<>{}()[\],;!?]+/gu) ?? [];
+  return canonicalMentions.map((mention) => mention.replace(/\.$/u, ""));
 }

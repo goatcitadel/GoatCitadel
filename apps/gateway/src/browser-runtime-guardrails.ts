@@ -1,4 +1,16 @@
-import type { DeploymentProfile } from "@goatcitadel/contracts";
+import type { DeploymentProfile, ToolInvokeRequest } from "@goatcitadel/contracts";
+
+export const LOCAL_DEV_STORAGE_TEST_ORIGIN = "https://goatcitadel-storage-check.invalid";
+
+export function isLocalDevChatStorageTest(request: ToolInvokeRequest): boolean {
+  return (
+    request.toolName === "browser.storage.get" &&
+    request.surface === "chat" &&
+    Boolean(request.turnId) &&
+    request.args.origin === LOCAL_DEV_STORAGE_TEST_ORIGIN &&
+    request.args.storage === "local"
+  );
+}
 
 const RESTRICTED_BROWSER_STATE_TOOLS = new Set([
   "browser.cookies.get",

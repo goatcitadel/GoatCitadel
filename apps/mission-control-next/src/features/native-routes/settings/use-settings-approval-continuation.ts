@@ -4,12 +4,17 @@ import {
   fetchApprovalReplay,
   fetchChangePlan,
   respondToChangePlan,
+  resolveApproval,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { getGatewayAccessRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import {
   continuationAction,
+  gatewayAuthApprovalChange,
   planSnapshot,
   requireApprovedBinding,
   requireContinuationReceipt,
+  requireSettingsApprovalBinding,
 } from "./settings-approval-continuation-binding";
 
 type Attempt = { state: "checking" | "submitted" | "recorded" | "uncertain"; message: string };
@@ -33,10 +38,12 @@ export function useSettingsApprovalContinuation({
   plan,
   workspaceId = "default",
   onSettled,
+  approveGatewayAuth = false,
 }: {
   plan?: ChangePlanRecord;
   workspaceId?: string;
   onSettled: () => Promise<unknown>;
+  approveGatewayAuth?: boolean;
 }) {
   const snapshot = planSnapshot(plan);
   const key = JSON.stringify([workspaceId, plan?.planId]);
@@ -65,8 +72,14 @@ export function useSettingsApprovalContinuation({
   async function continueApproved(): Promise<boolean> {
     if (!plan || !snapshot || !eligible || attempts.has(key)) return false;
     const token = current.current.generation;
+    const accessRevision = approveGatewayAuth ? getGatewayAccessRevision() : undefined;
+    const installation = approveGatewayAuth ? getGatewayApiBaseUrl() : undefined;
     const isCurrent = () =>
-      mounted.current && current.current.generation === token && current.current.identity === identity;
+      mounted.current &&
+      current.current.generation === token &&
+      current.current.identity === identity &&
+      (accessRevision === undefined || getGatewayAccessRevision() === accessRevision) &&
+      (installation === undefined || getGatewayApiBaseUrl() === installation);
     const context = { workspaceId };
     publish(key, { state: "checking", message: "Checking the current plan and required approval…" });
     setNotice(undefined);
@@ -79,8 +92,25 @@ export function useSettingsApprovalContinuation({
         throw new Error("The Settings change has changed. Refresh its status and review it again.");
       }
       const action = continuationAction(fresh, workspaceId)!;
-      const approval = await fetchApprovalReplay(action.approvalId);
+      let approval = await fetchApprovalReplay(action.approvalId);
       if (!isCurrent()) return false;
+      if (approveGatewayAuth && gatewayAuthApprovalChange(fresh)) {
+        const reviewed = requireSettingsApprovalBinding(fresh, approval);
+        if (reviewed.status === "pending") {
+          if (reviewed.expiresAt && !(Date.parse(reviewed.expiresAt) > Date.now())) {
+            throw new Error("The approval expired. Review a new sign-in change to continue.");
+          }
+          const beforeApproval = await fetchChangePlan(plan.planId, context);
+          if (!isCurrent()) return false;
+          if (planSnapshot(beforeApproval) !== snapshot) {
+            throw new Error("The Settings change has changed. Refresh and review it again.");
+          }
+          await resolveApproval(action.approvalId, "approve");
+          if (!isCurrent()) return false;
+          approval = await fetchApprovalReplay(action.approvalId);
+          if (!isCurrent()) return false;
+        }
+      }
       requireApprovedBinding(fresh, approval);
       const latest = await fetchChangePlan(plan.planId, context);
       if (!isCurrent()) return false;
@@ -88,7 +118,12 @@ export function useSettingsApprovalContinuation({
         throw new Error("The Settings change has changed. Refresh its status and review it again.");
       }
       dispatched = true;
-      publish(key, { state: "submitted", message: "Continuing the approved Settings change…" });
+      publish(key, {
+        state: "submitted",
+        message: approveGatewayAuth
+          ? "Applying the approved sign-in settings…"
+          : "Continuing the approved Settings change…",
+      });
       const receipt = await respondToChangePlan(plan.planId, context, {
         expectedRevision: latest.revision,
         actionId: action.actionId,

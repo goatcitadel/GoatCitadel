@@ -1,20 +1,22 @@
+import { useChatSpecialistApproval } from "./use-chat-specialist-approval";
+import { ChatExpiredApprovalRecovery } from "./ChatExpiredApprovalRecovery";
+import { errandScreenshotAttachmentId, useChatApprovalFeedback } from "./use-chat-approval-feedback";
 import { RiskBadge } from "../../ui/RiskBadge";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
-import { useQuery } from "@tanstack/react-query";
-import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
+import { isBackgroundChatUserInputPrompt, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { lazy, useEffect, useId, useRef, useState } from "react";
+import { lazy, useEffect, useRef, useState } from "react";
 import { AttachmentImage } from "../../ui/AttachmentImage";
 import { ChatApprovalRenderer } from "./ChatApprovalRenderer";
+import { ChatAllowanceReceipt } from "./ChatAllowances";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
 import { useGatewayUnavailable } from "../../app/gateway-unavailable-context";
-import { nullWhenMissing } from "../inbox/inbox-record-read";
 import { approvalExpiredUnresolved } from "../inbox/approval-settlement";
 import { hasExpired, useMinuteClock } from "../inbox/use-minute-clock";
 import { useApprovalDeadlineCheck } from "./use-approval-deadline-check";
+import { CHANGED_APPROVAL_RECORD } from "../inbox/inbox-approval-guard";
 import { DeferredChatLeaf } from "./DeferredChatLeaves";
 import { presentApprovalAction } from "./chat-vocabulary";
 import { approvalTargetLine } from "../inbox/approval-target";
@@ -22,14 +24,6 @@ import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/conte
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
 import { useReportWaitingDecision } from "./chat-jump-to-latest";
-import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { specialistApprovalCode } from "../inbox/load-specialist-approval-code";
-import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import {
-  getGatewayAccessRevision,
-  getGatewayCallerScopeRevision,
-} from "@goatcitadel/mission-control-shared/api/access-scope";
-
 const ChatPendingQuestion = lazy(async () => ({
   default: (await import("./ChatPendingQuestion")).ChatPendingQuestion,
 }));
@@ -48,12 +42,7 @@ type Blockers = Pick<
 > &
   Partial<Pick<MissionThreadedActiveSessionSurfaceProps, "composerRef" | "thread" | "onDraftChange" | "draft">>;
 
-function errandScreenshotAttachmentId(preview: Record<string, unknown> | undefined): string | undefined {
-  const id = preview?.screenshotAttachmentId;
-  return typeof id === "string" && id.trim() ? id.trim() : undefined;
-}
-
-export function ChatBlockers({ props }: { props: Blockers }) {
+export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTurn?: ChatThreadTurnRecord }) {
   // The Gateway cannot be reached, so decisions cannot be sent.
   const gatewayUnavailable = useGatewayUnavailable();
   const { activeWorkspaceId } = useUiPreferences();
@@ -61,9 +50,24 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   const { search, hash } = useCockpitRoute();
   const pendingApproval = props.pendingApproval;
   const approvalId = pendingApproval?.approvalId;
-  const [receipt, setReceipt] = useState<{ scope: string; message: string }>();
-  const noticeScope = JSON.stringify([workspaceId, props.selectedSessionId, approvalId]);
-  const notice = receipt?.scope === noticeScope ? receipt.message : "";
+  const {
+    linkedRead,
+    readTitle,
+    readStatus,
+    recordQuery,
+    noticeScope,
+    notice,
+    setReceipt,
+    currentChatAccess,
+    chatAccessScope,
+    otherTabNotice,
+    setOtherTabReceipt,
+    temporaryGrantNotice,
+    setTemporaryGrantReceipt,
+    rereview,
+    refreshMcpReview,
+    setApprovedRead,
+  } = useChatApprovalFeedback(workspaceId, props.selectedSessionId, approvalId, latestTurn);
   // CH-18: a decision replaces its buttons. If focus was inside and fell to <body>, move it once to the
   // settlement message, or to the composer when the whole card is gone.
   const focusWithin = useRef(false);
@@ -77,14 +81,6 @@ export function ChatBlockers({ props }: { props: Blockers }) {
     const composer = composerRef?.current;
     if (noticeRef.current) noticeRef.current.focus({ preventScroll: true });
     else if (composer && !composer.disabled) composer.focus({ preventScroll: true });
-  });
-  const recordQuery = useQuery({
-    // The same key as the Inbox approval detail, so moving between them is a cache hit (IN-11).
-    queryKey: ["approvals", "record", workspaceId, approvalId],
-    queryFn: ({ signal }) => nullWhenMissing(fetchApproval(approvalId!, { workspaceId, signal })),
-    // Every risk RiskApprovalAction reviews needs the persisted evidence; only safe and caution are one-click.
-    enabled: Boolean(approvalId),
-    staleTime: 0,
   });
   // CH-02: a failed read is an error, not "checking"; a missing record is its own state. Both offer a way forward.
   const recordFailed = recordQuery.isError && !recordQuery.data;
@@ -108,38 +104,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
     approval?.kind === "code_mode.request" ||
     approval?.toolName === "code_mode.request" ||
     reviewedApproval?.kind === "code_mode.request";
-  // A Code Mode run approval is approved only against the exact code and target it reads back (as the Inbox does).
-  const specialistTarget =
-    reviewedApproval?.status === "pending" && reviewedApproval.kind === "code_mode.run" ? reviewedApproval : undefined;
-  const specialistQuery = useQuery({
-    queryKey: ["approvals", "specialist", workspaceId, specialistTarget],
-    queryFn: async ({ signal }) => {
-      const installation = getGatewayApiBaseUrl();
-      const access = getGatewayAccessRevision();
-      const caller = getGatewayCallerScopeRevision();
-      const assertCurrent = () => {
-        signal.throwIfAborted();
-        if (
-          installation !== getGatewayApiBaseUrl() ||
-          access !== getGatewayAccessRevision() ||
-          caller !== getGatewayCallerScopeRevision()
-        )
-          throw new DOMException("Approval access changed.", "AbortError");
-      };
-      const { readSpecialistEvidence, specialistEvidenceMatches } = await specialistApprovalCode.load();
-      assertCurrent();
-      const evidence = await readSpecialistEvidence(specialistTarget!);
-      assertCurrent();
-      return specialistEvidenceMatches(specialistTarget!, evidence) ? evidence : null;
-    },
-    enabled: Boolean(specialistTarget),
-    retry: false,
-    staleTime: 0,
-  });
-  const specialistEvidence =
-    specialistTarget && !specialistQuery.isError && specialistQuery.data ? specialistQuery.data : undefined;
-  // Until the evidence matches, Approve stays disabled: say why, as the Inbox detail does, and offer a fresh read.
-  const specialistChecking = !specialistQuery.isError && (specialistQuery.isPending || specialistQuery.isFetching);
+  const { specialistEvidence, specialistStatus } = useChatSpecialistApproval(workspaceId, reviewedApproval);
   // A browser errand step shows the picture of the page the errand is about to act on, above the decision.
   const errandScreenshotId =
     reviewedApproval?.kind === "browser.errand.action" || approval?.kind === "browser.errand.action"
@@ -178,26 +143,6 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   const approvalWaiting = Boolean(approval) && !ownedByCodeModeCard && !decided && !lapsed;
   useReportWaitingDecision(approvalWaiting ? "approval" : input && !skipped.has(questionScope) ? "question" : null);
   const deadlineCheck = useApprovalDeadlineCheck({ approvalId, lapsed, read: () => recordQuery.refetch() });
-  const [askBlocked, setAskBlocked] = useState(false);
-  // The text Ask again itself put in the box: it is the request, not something the operator typed.
-  const restored = useRef<string | undefined>(undefined);
-  const blockedNoteId = useId();
-  const draftHasText = Boolean(props.draft?.trim()) && props.draft !== restored.current;
-  const originalRequest = props.thread?.turns.find((turn) => turn.turnId === reviewedApproval?.linkage?.turnId)
-    ?.userMessage.content;
-  function askAgain() {
-    // Never replace what the operator has already typed.
-    if (draftHasText) {
-      setAskBlocked(true);
-      return;
-    }
-    setAskBlocked(false);
-    if (originalRequest && props.draft !== originalRequest) {
-      restored.current = originalRequest;
-      props.onDraftChange?.(originalRequest);
-    }
-    props.composerRef?.current?.focus();
-  }
   function continuationHref(destination: "/inbox", selectedApprovalId?: string) {
     const parameters = new URLSearchParams(search);
     parameters.set("workspaceId", workspaceId);
@@ -218,7 +163,37 @@ export function ChatBlockers({ props }: { props: Blockers }) {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) focusWithin.current = false;
       }}
     >
-      {approval && !ownedByCodeModeCard ? (
+      {otherTabNotice ? (
+        <p role="status" className="mt-3 text-sm text-fg-secondary">
+          {otherTabNotice}
+        </p>
+      ) : null}
+      {temporaryGrantNotice?.grant && props.selectedSessionId ? (
+        <ChatAllowanceReceipt
+          key={temporaryGrantNotice.grant.grantId}
+          workspaceId={workspaceId}
+          sessionId={props.selectedSessionId}
+          grant={temporaryGrantNotice.grant}
+          message={temporaryGrantNotice.message}
+        />
+      ) : temporaryGrantNotice ? (
+        <p role="status" className="mt-3 text-sm text-fg-secondary">
+          {temporaryGrantNotice.message}
+        </p>
+      ) : null}
+      {readStatus && readTitle ? (
+        <section
+          aria-label={
+            linkedRead?.toolName === "browser.storage.get" ? "Browser storage approval" : `${readTitle} approval`
+          }
+          className="mt-3 rounded-md border border-line-subtle bg-raised p-3 text-sm"
+        >
+          <h3 className="font-semibold text-fg">{readTitle}</h3>
+          <p ref={noticeRef} role="status" tabIndex={-1} className="mt-1 text-fg-secondary outline-none">
+            {readStatus}
+          </p>
+        </section>
+      ) : approval && !ownedByCodeModeCard ? (
         <section
           aria-label={decided ? "Decided approval" : "Pending approval"}
           tabIndex={-1}
@@ -268,29 +243,23 @@ export function ChatBlockers({ props }: { props: Blockers }) {
               {notice}
             </p>
           ) : null}
-          {specialistTarget && !specialistEvidence ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <p role={specialistChecking ? "status" : "alert"} className={specialistChecking ? "text-fg-muted" : ""}>
-                {specialistChecking
-                  ? "Checking the specialist review…"
-                  : specialistQuery.error
-                    ? describeApiError(specialistQuery.error).summary
-                    : "The specialist review is unavailable or changed. Check again before approving."}
+          {rereview && !decided ? (
+            <div className="mt-2 space-y-1">
+              <p role="alert" className="text-status-failed">
+                This MCP action changed. Review the updated action before deciding.
               </p>
-              {specialistChecking ? null : (
-                // A read that failed after an earlier answer stays failed while it is read again, so the button
-                // waits for that read, as in the Inbox detail.
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={specialistQuery.isFetching}
-                  onClick={() => void specialistQuery.refetch()}
-                >
-                  Check again
+              {rereview.phase === "checking" ? (
+                <p role="status" className="text-fg-muted">
+                  Refreshing the action…
+                </p>
+              ) : rereview.phase === "failed" && reviewedApproval ? (
+                <Button size="sm" onClick={() => void refreshMcpReview()}>
+                  Retry refresh
                 </Button>
-              )}
+              ) : null}
             </div>
           ) : null}
+          {specialistStatus}
           {errandScreenshotId ? (
             <AttachmentImage
               attachmentId={errandScreenshotId}
@@ -299,27 +268,83 @@ export function ChatBlockers({ props }: { props: Blockers }) {
             />
           ) : null}
           <ChatApprovalRenderer
+            key={rereview?.sequence}
             approvalId={approval.approvalId}
             approval={reviewedApproval}
             workspaceId={workspaceId}
             sessionId={props.selectedSessionId ?? undefined}
+            inlineDangerReview
+            reviewAgain={Boolean(rereview)}
+            withholdApprove={Boolean(
+              rereview &&
+              (rereview.phase !== "ready" ||
+                reviewedApproval?.preview?.reviewKind !== "mcp.operation" ||
+                typeof reviewedApproval.preview.requestArguments !== "string" ||
+                reviewedApproval.riskLevel !== "danger"),
+            )}
             specialistEvidence={specialistEvidence}
             recordPending={recordQuery.isPending && !recordQuery.isError}
             recovery={{
               failed: recordFailed,
               retrying: recordQuery.isFetching,
-              onRetry: () => void recordQuery.refetch(),
+              onRetry: () => void (rereview ? refreshMcpReview() : recordQuery.refetch()),
               onDeny: props.onDenyPending,
               denying: props.approvalPending,
             }}
             checking={recordQuery.isFetching || props.approvalPending}
+            onApproved={() => {
+              if (latestTurn && linkedRead?.approvalId === approval.approvalId) {
+                setApprovedRead({ workspaceId, turnId: latestTurn.turnId, toolRunId: linkedRead.toolRunId });
+              }
+            }}
+            onTemporaryGrantResolved={(message, grant) => {
+              if (!currentChatAccess()) return;
+              setTemporaryGrantReceipt({
+                scope: chatAccessScope,
+                approvalId: approval.approvalId,
+                turnId: reviewedApproval?.linkage?.turnId,
+                message,
+                grant,
+              });
+              void recordQuery.refetch();
+              props.onRefreshThread();
+            }}
+            conflictRecovery={
+              reviewedApproval?.preview?.reviewKind === "mcp.operation" ||
+              reviewedApproval?.preview?.reviewKind === "knowledge.operation"
+                ? {
+                    isCurrent: currentChatAccess,
+                    onDecision: (decision, message) => {
+                      setOtherTabReceipt({
+                        scope: chatAccessScope,
+                        approvalId: approval.approvalId,
+                        turnId: reviewedApproval.linkage?.turnId ?? latestTurn?.turnId,
+                        message,
+                      });
+                      if (decision === "approve" && latestTurn && linkedRead?.approvalId === approval.approvalId) {
+                        setApprovedRead({ workspaceId, turnId: latestTurn.turnId, toolRunId: linkedRead.toolRunId });
+                      }
+                      void recordQuery.refetch();
+                      props.onRefreshThread();
+                    },
+                  }
+                : undefined
+            }
             onResolved={(message) => {
               setReceipt({ scope: noticeScope, message });
               void recordQuery.refetch();
               props.onRefreshThread();
             }}
-            onInvalidated={() => {
-              void recordQuery.refetch();
+            onInvalidated={(message) => {
+              if (
+                message === CHANGED_APPROVAL_RECORD &&
+                reviewedApproval?.preview?.reviewKind === "mcp.operation" &&
+                reviewedApproval.kind.startsWith("mcp.")
+              ) {
+                void refreshMcpReview();
+              } else {
+                void recordQuery.refetch();
+              }
               props.onRefreshThread();
             }}
             onFollowOnChange={props.onRefreshThread}
@@ -339,28 +364,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
               )}
             </div>
           ) : null}
-          {expired ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <p>
-                The action did not run.
-                {originalRequest ? " Ask again to put your request back in the message box." : ""}
-                {askBlocked && draftHasText ? (
-                  <span id={blockedNoteId}> Your message box already has text. Clear it to ask again.</span>
-                ) : null}
-              </p>
-              {originalRequest ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  aria-describedby={askBlocked && draftHasText ? blockedNoteId : undefined}
-                  onClick={askAgain}
-                >
-                  Ask again
-                </Button>
-              ) : null}
-            </div>
-          ) : null}
+          {expired ? <ChatExpiredApprovalRecovery props={props} turnId={reviewedApproval?.linkage?.turnId} /> : null}
           <NativeOwnerLink
             href={continuationHref("/inbox", approval.approvalId)}
             scope={noticeScope}

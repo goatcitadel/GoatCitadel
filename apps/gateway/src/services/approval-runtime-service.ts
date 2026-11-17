@@ -6,6 +6,7 @@ import type {
   ApprovalListResponse,
   ApprovalRequest,
   ApprovalResolveInput,
+  ChatToolGrantDuration,
   ToolGrantCreateInput,
   ToolGrantRecord,
   ToolGrantScope,
@@ -85,6 +86,7 @@ export interface ApprovalRuntime {
       allowScope?: "once" | "session" | "workspace";
       resolvedBy?: string;
       writeGrant?: ChatApprovalWriteGrantChoice;
+      temporaryGrantDuration?: ChatToolGrantDuration;
     },
   ): Promise<{
     allowScope: "once" | "session" | "workspace";
@@ -216,6 +218,7 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
       allowScope?: "once" | "session" | "workspace";
       resolvedBy?: string;
       writeGrant?: ChatApprovalWriteGrantChoice;
+      temporaryGrantDuration?: ChatToolGrantDuration;
     },
   ): Promise<{
     allowScope: "once" | "session" | "workspace";

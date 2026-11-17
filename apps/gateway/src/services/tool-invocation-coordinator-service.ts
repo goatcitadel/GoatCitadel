@@ -37,7 +37,8 @@ import {
   type OwnDeliveryMarker,
   type ToolProcessSpawnBoundary,
 } from "@goatcitadel/policy-engine";
-import { resolveMcpApprovalRelief } from "./mcp-approval-relief.js";
+import { hasMcpReadOnlyHint, resolveMcpApprovalRelief } from "./mcp-approval-relief.js";
+import { mcpServerToolRule } from "./mcp-server-policy.js";
 import type { HooksService } from "./hooks-service.js";
 import { parseToolCallHookPatch } from "./hook-patch-helpers.js";
 import {
@@ -557,6 +558,7 @@ export interface ToolInvocationCoordinatorHost {
         mcpToolBinding?: McpToolPolicyBinding;
         meshToolBinding?: MeshToolPolicyBinding;
         mcpApprovalRelief?: McpApprovalRelief;
+        mcpReadOnlyHint?: true;
         ownDelivery?: OwnDeliveryMarker;
       },
     ): Promise<ToolInvokeResult>;
@@ -1590,12 +1592,17 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     const policyRequest = { ...request, externalRuntime: true };
     // Server-authored from the saved server setting and stored tool labels only.
     const mcpApprovalRelief = await resolveMcpApprovalRelief(this.host, request, nativeBinding?.policyBinding);
+    const mcpReadOnlyHint =
+      request.turnId &&
+      request.toolRunId &&
+      (await hasMcpReadOnlyHint(this.host, request, nativeBinding?.policyBinding));
     const policyOptions = {
       ...(nativeBinding ? { mcpToolBinding: nativeBinding.policyBinding } : {}),
       ...(mcpApprovalRelief ? { mcpApprovalRelief } : {}),
+      ...(mcpReadOnlyHint ? { mcpReadOnlyHint: true as const } : {}),
     };
     const policyResult =
-      nativeBinding || mcpApprovalRelief
+      nativeBinding || mcpApprovalRelief || mcpReadOnlyHint
         ? await this.host.policyEngine.invoke(policyRequest, policyOptions)
         : await this.host.policyEngine.invoke(policyRequest);
     const failure = buildExternalRuntimePolicyFailure(policyResult, "MCP runtime");
@@ -1872,16 +1879,16 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     consent?: { approvedInvocation: true },
     relievedByApprovalSetting = false,
   ): Promise<McpInvokeResponse | undefined> {
-    if (server.policy.blockedToolPatterns.some((pattern) => this.host.matchesWildcard(input.toolName, pattern))) {
+    const rule = mcpServerToolRule(server, input.toolName, (value, pattern) =>
+      this.host.matchesWildcard(value, pattern),
+    );
+    if (rule === "blocked") {
       return {
         ok: false,
         error: `MCP policy blocked tool ${input.toolName} on server ${server.serverId}.`,
       };
     }
-    if (
-      server.policy.allowedToolPatterns.length > 0 &&
-      !server.policy.allowedToolPatterns.some((pattern) => this.host.matchesWildcard(input.toolName, pattern))
-    ) {
+    if (rule === "not_allowed") {
       return {
         ok: false,
         error: `MCP policy does not allow tool ${input.toolName} on server ${server.serverId}.`,

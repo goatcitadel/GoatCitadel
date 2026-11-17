@@ -1,5 +1,6 @@
 import {
   canonicalJsonString,
+  PolicyViolationError,
   resolveMcpServerConnectionMode,
   readChatTurnFeatureReferences,
   type McpServerRecord,
@@ -29,8 +30,16 @@ import {
   collectNativeMcpChatCatalogCandidates,
   type NativeMcpChatToolSchema,
 } from "./gateway/native-mcp-chat-catalog.js";
-import { hasExplicitMcpIdentifier, selectExplicitStaticMcpServers } from "./mcp-static-selection.js";
+import {
+  explicitMcpCanonicalMentions,
+  hasExplicitMcpIdentifier,
+  selectExplicitStaticMcpServers,
+} from "./mcp-static-selection.js";
 import type { StaticMcpCatalogSnapshot } from "./mcp-static-catalog.js";
+import { mcpChatAccessError } from "./mcp-chat-access-error.js";
+import { isConnectedStaticServer } from "./mcp-static-profile-authority.js";
+import { isMcpAuthReadinessInvokeBlocked, resolveMcpInvokeAuthReadiness } from "./mcp-oauth-token-service.js";
+import { mcpServerToolRule } from "./mcp-server-policy.js";
 
 export interface StaticMcpAdmissionTransportPort {
   connection(
@@ -85,28 +94,70 @@ export class McpStaticChatAdmissionService {
     const timer = setTimeout(() => controller.abort(), 30_000);
     timer.unref();
     const receipts: McpStaticAdmissionConnection[] = [];
+    const serverOrder = [...selected].sort((a, b) => b.serverId.length - a.serverId.length);
+    const mentions = explicitMcpCanonicalMentions(input.content);
     try {
       for (const server of selected) {
-        await this.options.assertMcpServerInScope({
-          serverId: server.serverId,
-          toolName: "__admission_discovery__",
-          agentId: "assistant",
-          workspaceId: input.scope.workspaceId,
-          sessionId: input.scope.sessionId,
+        await this.options
+          .assertMcpServerInScope({
+            serverId: server.serverId,
+            toolName: "__admission_discovery__",
+            agentId: "assistant",
+            workspaceId: input.scope.workspaceId,
+            sessionId: input.scope.sessionId,
+          })
+          .catch((error: unknown) => {
+            if (error instanceof PolicyViolationError) throw mcpChatAccessError("workspace_scope");
+            throw error;
+          });
+        if (!server.enabled) throw mcpChatAccessError("server_disabled");
+        if (server.trustTier === "quarantined") throw mcpChatAccessError("server_quarantined");
+        if (isMcpAuthReadinessInvokeBlocked(resolveMcpInvokeAuthReadiness(server))) {
+          throw mcpChatAccessError("server_sign_in");
+        }
+        if (!isConnectedStaticServer(server)) throw mcpChatAccessError("server_disconnected");
+        const explicitNames = new Set(
+          mentions.filter(
+            (mention) => serverOrder.find(({ serverId }) => mention.startsWith(`mcp.${serverId}.`)) === server,
+          ),
+        );
+        // A named call can be checked before opening a connection. Discovery still verifies it exists.
+        for (const name of explicitNames) {
+          const toolName = name.slice(server.serverId.length + 5);
+          if (mcpServerToolRule(server, toolName)) throw mcpChatAccessError("server_tool_policy");
+          await this.options.admission.assertToolAllowed(input.scope, name);
+        }
+        const connection = await this.transport.connection(server, false).catch((error: unknown) => {
+          if (signal.aborted) throw error;
+          throw mcpChatAccessError("discovery_failed");
         });
-        const connection = await this.transport.connection(server, false);
         try {
           signal.throwIfAborted();
-          const raw = await discoverStaticMcpToolsList(connection.server, 10_000, connection.transport, signal);
-          const snapshot = this.transport.normalize(connection.server, raw, connection.guard);
+          const snapshot = await discoverStaticMcpToolsList(connection.server, 10_000, connection.transport, signal)
+            .then((raw) => this.transport.normalize(connection.server, raw, connection.guard))
+            .catch((error: unknown) => {
+              if (signal.aborted) throw error;
+              throw mcpChatAccessError("discovery_failed");
+            });
+          if (
+            [...explicitNames].some((name) => !snapshot.catalog.tools.some((tool) => tool.canonicalToolName === name))
+          ) {
+            throw mcpChatAccessError("tool_unavailable");
+          }
           const explicitlyNamed = snapshot.catalog.tools.filter(
             (tool) =>
               hasExplicitMcpIdentifier(input.content, tool.canonicalToolName) ||
               hasExplicitMcpIdentifier(input.content, tool.rawRemoteToolName),
           );
-          const tools = explicitlyNamed.length ? explicitlyNamed : snapshot.catalog.tools;
+          if (explicitlyNamed.some((tool) => mcpServerToolRule(connection.server, tool.rawRemoteToolName))) {
+            throw mcpChatAccessError("server_tool_policy");
+          }
+          const tools = explicitlyNamed.length
+            ? explicitlyNamed
+            : snapshot.catalog.tools.filter((tool) => !mcpServerToolRule(connection.server, tool.rawRemoteToolName));
           if (tools.length > 16) throw new Error("Name up to sixteen exact tools for the selected static MCP server.");
-          if (!tools.length) throw new Error("Selected static MCP server has no available tools.");
+          if (!tools.length)
+            throw mcpChatAccessError(snapshot.catalog.tools.length ? "server_tool_policy" : "tool_unavailable");
           for (const tool of tools) await this.options.admission.assertToolAllowed(input.scope, tool.canonicalToolName);
           const receipt = buildStaticMcpAdmissionReceipt(
             input.scope,

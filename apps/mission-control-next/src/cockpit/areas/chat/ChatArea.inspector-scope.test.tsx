@@ -157,15 +157,18 @@ it("opens the Inspect panel on Message for an ordinary turn", async () => {
     expect(document.body.textContent).toContain("a:latest:turn");
     // A press on Inspect hands focus to the panel (U-GL-039).
     expect(document.activeElement?.closest("aside")).not.toBeNull();
+    const updated = input("a", {
+      thread: { turns: [ordinary, withRun] },
+      delegationRun: { attachedTurnId: "delegated" },
+    });
+    // Refreshing the registered details body must not change its initial tab
+    // and reset the operator's current tab while the inspector is open.
+    await act(async () => root.render(render(updated)));
+    expect(document.body.textContent).toContain("a:latest:turn");
     await act(async () => {
       inspectButton().click();
     });
     // Only a turn with an attached run opens on Run.
-    await act(async () => {
-      root.render(
-        render(input("a", { thread: { turns: [ordinary, withRun] }, delegationRun: { attachedTurnId: "delegated" } })),
-      );
-    });
     await act(async () => {
       inspectButton().click();
     });

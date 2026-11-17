@@ -202,7 +202,9 @@ export function ChatAreaView({
   const openInspector = (turnId?: string, tab?: ChatInspectorTab) => {
     if (inspectorView.current !== renderedInspectorView) return;
     inspectorTurnId.current = turnId ?? null;
-    inspectorTab.current = tab ?? null;
+    // The default is chosen once when opening. A running turn can later gain
+    // or lose a run, but that must not reset the tab the operator is reading.
+    inspectorTab.current = tab ?? inspectorTabFor(active, inspectorTurnId.current);
     if (turnId) active?.onSelectTurn(turnId);
     open({
       source: "chat",

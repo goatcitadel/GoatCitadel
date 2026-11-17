@@ -4,6 +4,7 @@ import type {
   ChatSpecialistCandidateRecord,
   ChatSpecialistCandidateSuggestionRecord,
   ChatThreadResponse,
+  ChatToolGrantDuration,
   ChatUserInputPromptAnswerRequest,
   ChatUserInputPromptAnswerResponse,
   OutsideRootWriteGrantChoice,
@@ -55,6 +56,17 @@ export async function approveChatTool(
       ...(options?.allowScope ? { allowScope: options.allowScope } : {}),
       ...(options?.writeGrant ? { writeGrant: options.writeGrant } : {}),
     }),
+  });
+}
+
+export async function approveChatToolTemporarily(
+  sessionId: string,
+  approvalId: string,
+  duration: ChatToolGrantDuration,
+): Promise<ApproveChatToolResult> {
+  return request<ApproveChatToolResult>("/api/v1/chat/tools/approve-temporarily", {
+    method: "POST",
+    body: JSON.stringify({ sessionId, approvalId, duration }),
   });
 }
 

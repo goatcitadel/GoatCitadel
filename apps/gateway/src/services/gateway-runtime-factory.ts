@@ -8,6 +8,7 @@ import type { McpRequesterResolverRegistryInput } from "./mcp-requester-resoluti
 import type { CronRunSnapshot } from "./gateway/cron-automation-service.js";
 import type { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import type { BrowserErrandService } from "./browser-errands/browser-errand-service.js";
+import type { LocalMcpFixtureTestService } from "./local-mcp-fixture-test.js";
 import type { ReviewReadinessService } from "./review-readiness-service.js";
 import type { RuntimeAuthorityProjectionService } from "./runtime-authority-projection-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
@@ -27,6 +28,7 @@ type GatewayLogger = {
 export interface GatewayRuntimePort {
   readonly browserSessionRuntimeService: BrowserSessionRuntimeService;
   readonly browserErrandService: Pick<BrowserErrandService, "getStatus" | "stop">;
+  readonly localMcpFixtureTest: LocalMcpFixtureTestService;
   readonly mutationIdempotencyStore: MutationIdempotencyStore;
   readonly reviewReadinessService: ReviewReadinessService;
   readonly runtimeAuthorityProjectionService: RuntimeAuthorityProjectionService;
@@ -135,6 +137,9 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
     },
     get browserErrandService() {
       return gateway.browserErrandService;
+    },
+    get localMcpFixtureTest() {
+      return gateway.localMcpFixtureTest;
     },
     get mutationIdempotencyStore() {
       return gateway.mutationIdempotencyStore;

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   __browserPageStateModeForTests,
   __resolveBrowserSessionIdForTests,
@@ -53,7 +53,7 @@ describe("resolveBrowserSessionId (codex #24)", () => {
     expect(__browserPageStateModeForTests("browser.interact")).toBe("session");
   });
 
-  it("requires the gateway browser-session grant hook when provided", async () => {
+  describe("governed browser storage reads", () => {
     const config: ToolPolicyConfig = {
       profiles: {},
       tools: { allow: ["browser.storage.get"], deny: [] },
@@ -67,14 +67,41 @@ describe("resolveBrowserSessionId (codex #24)", () => {
       },
     };
 
-    await expect(
-      executeBrowserTool("browser.storage.get", {}, config, {
+    it.each([{}, { origin: "file:///tmp/test" }, { origin: "https://example.com/path" }])(
+      "rejects requests without an exact web origin: %j",
+      async (args) => {
+        const assertBrowserSessionAccess = vi.fn();
+        await expect(
+          executeBrowserTool("browser.storage.get", args, config, {
+            sessionId: "browser-session-1",
+            assertBrowserSessionAccess,
+          }),
+        ).rejects.toThrow("requires one explicit HTTP or HTTPS origin");
+        expect(assertBrowserSessionAccess).not.toHaveBeenCalled();
+      },
+    );
+
+    it("checks the storage origin and waits for the async grant denial", async () => {
+      const assertBrowserSessionAccess = vi.fn(async () => {
+        await Promise.resolve();
+        throw new Error("missing browser session grant");
+      });
+      await expect(
+        executeBrowserTool(
+          "browser.storage.get",
+          { origin: "https://other.example", url: "https://example.com", browserSessionId: "other-session" },
+          config,
+          { sessionId: "browser-session-1", actorId: "agent-1", assertBrowserSessionAccess },
+        ),
+      ).rejects.toThrow("missing browser session grant");
+      expect(assertBrowserSessionAccess).toHaveBeenCalledExactlyOnceWith({
         sessionId: "browser-session-1",
         actorId: "agent-1",
-        assertBrowserSessionAccess: () => {
-          throw new Error("missing browser session grant");
-        },
-      }),
-    ).rejects.toThrow("missing browser session grant");
+        requiredScope: "state",
+        host: "other.example",
+        toolName: "browser.storage.get",
+        runId: undefined,
+      });
+    });
   });
 });

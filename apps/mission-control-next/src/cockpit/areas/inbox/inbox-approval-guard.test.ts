@@ -77,6 +77,32 @@ describe("inbox approval guard", () => {
     expect(canResolveInboxApproval(item, first, second, "workspace-a")).toBe(true);
   });
 
+  it("accepts an advisory Search memory explanation but requires the same query and Chat", () => {
+    const memory: ApprovalRequest = {
+      ...reviewed,
+      kind: "memory.search",
+      payload: { query: "notes" },
+      preview: { reviewKind: "knowledge.operation", toolName: "memory.search", query: "notes" },
+      linkage: { ...reviewed.linkage, sessionId: "chat-1" },
+    };
+    const explained: ApprovalRequest = { ...memory, explanationStatus: "completed" };
+    expect(canResolveInboxApproval(item, memory, explained, "workspace-a")).toBe(true);
+    expect(canResolveInboxApproval(item, memory, { ...explained, payload: { query: "other" } }, "workspace-a")).toBe(
+      false,
+    );
+    expect(
+      canResolveInboxApproval(
+        item,
+        memory,
+        {
+          ...explained,
+          linkage: { ...memory.linkage, sessionId: "chat-2" },
+        },
+        "workspace-a",
+      ),
+    ).toBe(false);
+  });
+
   it("blocks specialized requests and unavailable expiry evidence", () => {
     for (const kind of ["remote_worker.native_runtime", "code_mode.run"]) {
       const record = { ...reviewed, kind };

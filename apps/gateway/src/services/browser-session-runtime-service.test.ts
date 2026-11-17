@@ -46,6 +46,30 @@ describe("BrowserSessionRuntimeService", () => {
     db = undefined;
   });
 
+  it("can require a grant that explicitly names the requested storage host", async () => {
+    db = new DatabaseSync(":memory:");
+    const service = new BrowserSessionRuntimeService({ gatewaySql: transactionalSql(db) });
+    const session = await service.createSession({ actorId: "operator" });
+    const check = {
+      sessionId: session.sessionId,
+      actorId: "assistant",
+      requiredScope: "state" as const,
+      host: "goatcitadel-storage-check.invalid",
+      toolName: "browser.storage.get",
+    };
+    await service.createGrant(session.sessionId, { actorId: check.actorId, scopes: ["state"] }, "operator");
+    await expect(service.assertAccess(check, true)).rejects.toThrow("does not grant state access");
+    await service.createGrant(
+      session.sessionId,
+      { actorId: check.actorId, scopes: ["state"], allowedHosts: [check.host] },
+      "operator",
+    );
+    await expect(service.assertAccess(check, true)).resolves.toBeUndefined();
+    await expect(service.assertAccess({ ...check, host: "example.com" }, true)).rejects.toThrow(
+      "does not grant state access",
+    );
+  });
+
   it("creates local sessions, enforces scoped grants, and records events", async () => {
     db = new DatabaseSync(":memory:");
     const service = new BrowserSessionRuntimeService({ gatewaySql: transactionalSql(db) });

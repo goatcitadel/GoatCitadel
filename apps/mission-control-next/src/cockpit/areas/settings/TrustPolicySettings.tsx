@@ -3,6 +3,7 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { resolveCockpitContinuation } from "../../app/cockpit-compatibility";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { McpTestAllowanceSettings } from "./McpTestAllowanceSettings";
 import { useTrustPolicySnapshot } from "../../../features/native-routes/settings/use-trust-policy-snapshot";
 import { buildTrustPolicyRows } from "../../../features/native-routes/settings/trust-policy-rows";
 import {
@@ -75,6 +76,7 @@ export function TrustPolicySettings() {
           Refresh trust records
         </Button>
       </header>
+      <McpTestAllowanceSettings />
       {loading ? (
         <p role="status" className="text-sm text-fg-muted">
           {data ? "Refreshing trust records; the previous records stay visible." : "Loading trust records…"}
