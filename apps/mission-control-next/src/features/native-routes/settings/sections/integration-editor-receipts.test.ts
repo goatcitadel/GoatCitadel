@@ -1,6 +1,56 @@
-import { describe, expect, it } from "vitest";
-import { redactStructuredSecrets } from "@goatcitadel/contracts";
-import { integrationPublicConfigMatches } from "./integration-editor-receipts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { redactStructuredSecrets, type IntegrationConnection } from "@goatcitadel/contracts";
+import { fetchIntegrationConnection } from "@goatcitadel/mission-control-shared/api/integrations-operations";
+import {
+  integrationPublicConfigMatches,
+  verifyIntegrationDeleted,
+  verifyIntegrationReadback,
+} from "./integration-editor-receipts";
+
+describe("integration receipt readback", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each(["update", "deletion"])("verifies a committed %s while an older GET is in flight", async (action) => {
+    const before: IntegrationConnection = {
+      connectionId: "fixture/channel",
+      catalogId: "channel.telegram",
+      kind: "channel",
+      key: "telegram",
+      label: "Fixture channel",
+      enabled: true,
+      status: "connected",
+      config: {},
+      revision: "a".repeat(64),
+      createdAt: "2026-11-01T00:00:00.000Z",
+      updatedAt: "2026-11-01T00:00:00.000Z",
+    };
+    const saved = { ...before, enabled: false, revision: "b".repeat(64) };
+    const after =
+      action === "update" ? Response.json(saved) : Response.json({ code: "ENTITY_NOT_FOUND" }, { status: 404 });
+    let finishOlder!: (response: Response) => void;
+    const olderResponse = new Promise<Response>((resolve) => {
+      finishOlder = resolve;
+    });
+    const fetchMock = vi.fn().mockReturnValueOnce(olderResponse).mockResolvedValueOnce(after);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const background = fetchIntegrationConnection(before.connectionId);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const confirmation =
+      action === "update"
+        ? verifyIntegrationReadback(saved)
+        : verifyIntegrationDeleted(before.connectionId, { deleted: true });
+    const settled = Promise.allSettled([background, confirmation]);
+    const readsBeforeOlderResponse = fetchMock.mock.calls.length;
+    finishOlder(Response.json(before));
+
+    expect(await settled).toEqual([
+      { status: "fulfilled", value: before },
+      { status: "fulfilled", value: undefined },
+    ]);
+    expect(readsBeforeOlderResponse).toBe(2);
+  });
+});
 
 /** The canonical structured redactor the Gateway's public projection starts from. */
 function project<T>(value: T): T {
