@@ -6,6 +6,7 @@ import {
   updateMcpServer,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { readPluginOwnedRefusal } from "@goatcitadel/mission-control-shared/api/plugin-owned-refusal";
 import { isRuntimeInvokableMcpServer } from "./helpers/mcp-helpers";
 import { mcpLines, reviewedMcpPolicy } from "./mcp-policy-fields";
@@ -257,7 +258,7 @@ export async function commitMcpServerDelete({
     acknowledged = true;
     let absent = false;
     try {
-      await fetchMcpServer(id);
+      await withFreshReads(() => fetchMcpServer(id));
     } catch (error) {
       absent =
         isApiRequestError(error) &&

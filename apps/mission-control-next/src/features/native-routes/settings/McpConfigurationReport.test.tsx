@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ConnectorDiagnosticReport, McpServerRecord } from "@goatcitadel/contracts";
+import { fetchMcpServer } from "@goatcitadel/mission-control-shared/api/mcp-operations";
 import { McpConfigurationReport, __resetMcpConfigurationReportsForTests } from "./McpConfigurationReport";
 const api = vi.hoisted(() => ({ fetchMcpServer: vi.fn(), runMcpServerHealthCheck: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal) => ({
@@ -73,6 +74,36 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root?.unmount());
   root = undefined;
+  vi.unstubAllGlobals();
+});
+it("withholds a report when saved metadata changed despite an older pending GET", async () => {
+  let finishReport!: (value: ConnectorDiagnosticReport) => void;
+  api.runMcpServerHealthCheck.mockReturnValueOnce(new Promise<ConnectorDiagnosticReport>((resolve) => {
+    finishReport = resolve;
+  }));
+  let finishOlder!: (response: Response) => void;
+  const older = new Promise<Response>((resolve) => { finishOlder = resolve; });
+  const changed = { ...server, revision: "b".repeat(64) };
+  const fetchMock = vi.fn().mockReturnValueOnce(older).mockResolvedValueOnce(Response.json(changed));
+  vi.stubGlobal("fetch", fetchMock);
+  api.fetchMcpServer.mockResolvedValueOnce(server).mockImplementationOnce(fetchMcpServer);
+
+  await render();
+  await click();
+  expect(api.runMcpServerHealthCheck).toHaveBeenCalledOnce();
+  const background = fetchMcpServer(server.serverId);
+  expect(fetchMock).toHaveBeenCalledOnce();
+  await act(async () => finishReport(report));
+  expect(api.fetchMcpServer).toHaveBeenCalledTimes(2);
+  const readsBeforeOlderResponse = fetchMock.mock.calls.length;
+  await act(async () => {
+    finishOlder(Response.json(server));
+    expect(await background).toEqual(server);
+  });
+
+  expect(content()).not.toContain("Server is disabled.");
+  expect(content()).toContain("outcome is unconfirmed");
+  expect(readsBeforeOlderResponse).toBe(2);
 });
 it("records only after an explicit action and confirms unchanged metadata around the report", async () => {
   await render();

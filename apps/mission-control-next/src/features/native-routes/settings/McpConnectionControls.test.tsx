@@ -3,6 +3,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { McpServerRecord } from "@goatcitadel/contracts";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { fetchMcpServer } from "@goatcitadel/mission-control-shared/api/mcp-operations";
 import { McpConnectionControls } from "./McpConnectionControls";
 import { commitMcpConnection } from "./mcp-connection-mutation";
 import { commitMcpServerUpdate, __resetMcpServerMutationsForTests } from "./mcp-server-mutation";
@@ -88,6 +89,7 @@ async function render(scope = "workspace", record = server) {
 const button = (label: string) => root!.root.findAllByType("button").find((item) => item.props.children === label)!;
 const click = (label: string) => act(async () => button(label).props.onClick());
 const content = () => JSON.stringify(root!.toJSON());
+const unexpectedFetch = vi.fn(() => { throw new Error("No network in connection tests"); });
 beforeEach(() => {
   vi.resetAllMocks();
   __resetMcpServerMutationsForTests();
@@ -100,18 +102,37 @@ beforeEach(() => {
     api.fetchMcpServer.mockResolvedValue(saved("disconnect"));
     return receipt("disconnect");
   });
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(() => {
-      throw new Error("No network in connection tests");
-    }),
-  );
+  vi.stubGlobal("fetch", unexpectedFetch);
 });
 afterEach(async () => {
   await act(async () => root?.unmount());
   root = undefined;
-  expect(globalThis.fetch).not.toHaveBeenCalled();
+  expect(unexpectedFetch).not.toHaveBeenCalled();
   vi.unstubAllGlobals();
+});
+
+it.each(["connect", "disconnect"] as const)("confirms %s despite an older pending owner GET", async (action) => {
+  const before = action === "connect" ? server : { ...server, status: "connected" as const };
+  const write = deferred<ReturnType<typeof receipt>>();
+  const older = deferred<Response>();
+  const fetchMock = vi.fn().mockReturnValueOnce(older.promise).mockResolvedValueOnce(Response.json(saved(action)));
+  vi.stubGlobal("fetch", fetchMock);
+  api.fetchMcpServer.mockResolvedValueOnce(before).mockImplementationOnce(fetchMcpServer);
+  const mutate = action === "connect" ? api.connectReviewedMcpServer : api.disconnectReviewedMcpServer;
+  mutate.mockReturnValueOnce(write.promise);
+
+  const pending = commitMcpConnection({ reviewed: before, action, isCurrent: () => true });
+  await vi.waitFor(() => expect(mutate).toHaveBeenCalledOnce());
+  const background = fetchMcpServer(before.serverId);
+  expect(fetchMock).toHaveBeenCalledOnce();
+  write.resolve(receipt(action));
+  await vi.waitFor(() => expect(api.fetchMcpServer).toHaveBeenCalledTimes(2));
+  const readsBeforeOlderResponse = fetchMock.mock.calls.length;
+  older.resolve(Response.json(before));
+
+  expect(await background).toEqual(before);
+  expect(await pending).toMatchObject({ status: "saved", server: saved(action) });
+  expect(readsBeforeOlderResponse).toBe(2);
 });
 
 it.each(["connect", "disconnect"] as const)(

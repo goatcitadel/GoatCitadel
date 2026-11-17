@@ -5,6 +5,7 @@ import {
   runMcpServerHealthCheck,
   isApiRequestError,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { withFreshReads } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { hasMcpServerBinding } from "./mcp-server-mutation";
 
 type State = {
@@ -111,7 +112,8 @@ export function McpConfigurationReport({
         )
       )
         throw new Error("The configuration report does not match this server.");
-      if (binding(await fetchMcpServer(id)) !== snapshot)
+      const after = await withFreshReads(() => fetchMcpServer(id));
+      if (binding(after) !== snapshot)
         throw new Error("The server changed while its report was recorded.");
       write(id, {
         phase: "recorded",
