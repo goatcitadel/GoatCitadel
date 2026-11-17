@@ -202,7 +202,16 @@ export function useChatApprovalFeedback(
       current?.sequence === sequence ? { ...current, phase: ready ? "ready" : "failed" } : current,
     );
   };
+  const announcement = [
+    otherTabNotice,
+    temporaryGrantNotice?.grant ? null : temporaryGrantNotice?.message,
+    readTitle ? readStatus : null,
+    notice,
+  ]
+    .filter(Boolean)
+    .join(" ");
   return {
+    announcement,
     linkedRead,
     readTitle,
     readStatus,

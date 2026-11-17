@@ -156,9 +156,7 @@ export function RiskApprovalAction({
                   {JSON.stringify(reviewed.preview, null, 2)}
                 </pre>
               </TechnicalDetails>
-              {!hasActionPreview ? (
-                <p role="alert">The exact action preview is unavailable. You can still deny it.</p>
-              ) : null}
+              {!hasActionPreview ? <p>The exact action preview is unavailable. You can still deny it.</p> : null}
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"

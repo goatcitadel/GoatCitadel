@@ -572,14 +572,16 @@ export class ToolPolicyEngine {
     return (await this.storage.toolGrants.listActive(scope, scopeRef)).slice(0, limit);
   }
 
-  public createGrant(input: ToolGrantCreateInput): Promise<ToolGrantRecord> {
+  public createGrant(input: ToolGrantCreateInput, ttlMs?: number): Promise<ToolGrantRecord> {
     let validated: ToolGrantCreateInput;
     try {
       validated = validateWriteRootsGrantInput(input, this.config.sandbox);
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
-    return this.storage.toolGrants.create(validated);
+    return ttlMs === undefined
+      ? this.storage.toolGrants.create(validated)
+      : this.storage.toolGrants.createTtlForDuration(validated, ttlMs);
   }
 
   /** The engine-authored outside-root write record of an approval, if it has one. */

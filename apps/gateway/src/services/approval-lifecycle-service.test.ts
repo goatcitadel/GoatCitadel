@@ -4451,8 +4451,10 @@ describe("resolveChatToolApproval temporary tool allowance", () => {
       approval: { ...approval, status: "approved" },
       resolutionEffects: { chatTurnResume: { resumed: true, turnId: "turn-1", durableRunId: "run-1" } },
     } as never);
-    const createGrant = vi.fn((input) => ({ ...input, grantId: "grant-1" }));
-    Object.assign(host.storage, { toolGrants: { createTtlForDuration: createGrant } });
+    const createGrant = host.policyEngine.createGrant.mockImplementation(async (input) => ({
+      ...input,
+      grantId: "grant-1",
+    }));
     return { host, approval, createGrant };
   }
 
@@ -4478,7 +4480,6 @@ describe("resolveChatToolApproval temporary tool allowance", () => {
     );
     expect(result).toMatchObject({ resumed: true, resumedTurnId: "turn-1", grant: { grantId: "grant-1" } });
     expect(host.policyEngine.listActiveGrants).not.toHaveBeenCalled();
-    expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
   });
 
   it.each(["other Chat", "other workspace", "danger", "denied"] as const)(
@@ -4496,7 +4497,6 @@ describe("resolveChatToolApproval temporary tool allowance", () => {
       ).rejects.toThrow();
       expect(host.resolveApproval).not.toHaveBeenCalled();
       expect(createGrant).not.toHaveBeenCalled();
-      expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
     },
   );
 
@@ -4510,7 +4510,6 @@ describe("resolveChatToolApproval temporary tool allowance", () => {
       }),
     ).rejects.toThrow("Already decided");
     expect(createGrant).not.toHaveBeenCalled();
-    expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
   });
 });
 
@@ -4571,7 +4570,6 @@ describe("resolveChatToolApproval outside-root write folder grants", () => {
       scopeRef: "session-1",
       createdBy: "operator-test",
     });
-    expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
     expect(result.grant?.grantId).toBe("grant-folder-1");
     expect(result.grantError).toBeUndefined();
     expect(host.publishRealtime).toHaveBeenCalledWith(
@@ -4589,7 +4587,6 @@ describe("resolveChatToolApproval outside-root write folder grants", () => {
     });
     expect(result.allowScope).toBe("once");
     expect(host.policyEngine.mintOutsideRootWriteGrant).not.toHaveBeenCalled();
-    expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
   });
 
   it.each([

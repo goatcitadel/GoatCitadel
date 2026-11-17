@@ -42,15 +42,17 @@ export function useChatSpecialistApproval(workspaceId: string, reviewedApproval:
     specialistTarget && !specialistQuery.isError && specialistQuery.data ? specialistQuery.data : undefined;
   // Until the evidence matches, Approve stays disabled: say why, as the Inbox detail does, and offer a fresh read.
   const specialistChecking = !specialistQuery.isError && (specialistQuery.isPending || specialistQuery.isFetching);
+  const specialistFailure =
+    specialistTarget && !specialistEvidence && !specialistChecking
+      ? specialistQuery.error
+        ? describeApiError(specialistQuery.error).summary
+        : "The specialist review is unavailable or changed. Check again before approving."
+      : undefined;
   const specialistStatus =
     specialistTarget && !specialistEvidence ? (
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <p role={specialistChecking ? "status" : "alert"} className={specialistChecking ? "text-fg-muted" : ""}>
-          {specialistChecking
-            ? "Checking the specialist review…"
-            : specialistQuery.error
-              ? describeApiError(specialistQuery.error).summary
-              : "The specialist review is unavailable or changed. Check again before approving."}
+        <p aria-busy={specialistChecking} className={specialistChecking ? "text-fg-muted" : ""}>
+          {specialistChecking ? "Checking the specialist review…" : specialistFailure}
         </p>
         {specialistChecking ? null : (
           // A read that failed after an earlier answer stays failed while it is read again, so the button
@@ -66,5 +68,5 @@ export function useChatSpecialistApproval(workspaceId: string, reviewedApproval:
         )}
       </div>
     ) : null;
-  return { specialistEvidence, specialistStatus };
+  return { specialistEvidence, specialistStatus, specialistFailure };
 }

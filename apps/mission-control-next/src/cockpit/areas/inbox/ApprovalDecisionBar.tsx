@@ -436,20 +436,15 @@ function ApprovalDecisionReview({
         {allowance.trigger}
       </div>
       {allowance.panel}
-      {attempt ? (
-        <p role={attempt.phase === "uncertain" ? "alert" : "status"} className="text-fg-muted">
-          {attempt.message}
+      {attempt || notice ? (
+        <p role={attempt?.phase === "uncertain" ? "alert" : "status"} className="text-fg-muted">
+          {attempt?.message ?? notice}
         </p>
       ) : null}
       {attempt?.phase === "uncertain" ? (
         <Button type="button" size="sm" disabled={rechecking} onClick={() => void checkAgain()}>
           Check again
         </Button>
-      ) : null}
-      {notice ? (
-        <p role="status" className="text-fg-muted">
-          {notice}
-        </p>
       ) : null}
       {error && !(reviewAgain && error === CHANGED_APPROVAL_RECORD) ? (
         <p role="alert" className="text-status-failed">

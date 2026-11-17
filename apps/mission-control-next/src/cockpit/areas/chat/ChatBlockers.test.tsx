@@ -796,7 +796,9 @@ it.each([
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   expect(api.fetchApproval).toHaveBeenCalledWith("approval/1", expect.objectContaining({ workspaceId: "default" }));
-  expect(container.querySelector('[aria-label="MCP request approval"] [role="status"]')?.textContent).toBe(message);
+  expect(container.querySelector('[aria-label="MCP request approval"] [data-approval-read-status]')?.textContent).toBe(
+    message,
+  );
 });
 
 it("keeps a changed MCP warning visible and opens the refreshed exact action with Review again", async () => {
@@ -837,13 +839,13 @@ it("keeps a changed MCP warning visible and opens the refreshed exact action wit
   expect(container.querySelector('[aria-label="Exact approval review"]')?.textContent).toContain("No arguments");
   await act(async () => findButton("Approve once")!.click());
   const warning = "This MCP action changed. Review the updated action before deciding.";
-  await vi.waitFor(() => expect(container.querySelector('[role="alert"]')?.textContent).toBe(warning));
+  await vi.waitFor(() => expect(container.querySelector("[data-approval-warning]")?.textContent).toBe(warning));
   expect(findButton("Review again")).toBeUndefined();
   expect(findButton("Approve once")).toBeUndefined();
 
   await act(async () => releaseRefresh(changed));
   await vi.waitFor(() => expect(findButton("Review again")).toBeDefined());
-  expect(container.querySelector('[role="alert"]')?.textContent).toBe(warning);
+  expect(container.querySelector("[data-approval-warning]")?.textContent).toBe(warning);
   expect(findButton("Approve once")).toBeUndefined();
   await act(async () => findButton("Review again")!.click());
 
@@ -851,7 +853,7 @@ it("keeps a changed MCP warning visible and opens the refreshed exact action wit
   expect(inline?.textContent).toContain("Updated fixture");
   expect(inline?.textContent).toContain('{"item":"updated"}');
   expect(inline?.textContent).not.toContain("Original fixture");
-  expect(container.querySelector('[role="alert"]')?.textContent).toBe(warning);
+  expect(container.querySelector("[data-approval-warning]")?.textContent).toBe(warning);
   expect(findButton("Approve once")).toBeDefined();
   expect(api.resolveApproval).not.toHaveBeenCalled();
 });
@@ -1177,7 +1179,7 @@ it("says why a code_mode.run approval can't be approved yet, and checks the code
     ),
   );
   await vi.waitFor(() => expect(findButton("Check again")).toBeDefined());
-  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Gateway unavailable");
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("Gateway unavailable");
   expect(findButton("Review danger approval")!.disabled).toBe(true);
   specialist.read.mockResolvedValue({ replay: { approval: record, events: [], effects: [] } });
   await act(async () => findButton("Check again")!.click());

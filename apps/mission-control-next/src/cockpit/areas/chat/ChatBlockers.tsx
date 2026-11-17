@@ -28,6 +28,8 @@ const ChatPendingQuestion = lazy(async () => ({
   default: (await import("./ChatPendingQuestion")).ChatPendingQuestion,
 }));
 
+const changedActionWarning = "This MCP action changed. Review the updated action before deciding.";
+
 type Blockers = Pick<
   MissionThreadedActiveSessionSurfaceProps,
   | "pendingApproval"
@@ -51,6 +53,7 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
   const pendingApproval = props.pendingApproval;
   const approvalId = pendingApproval?.approvalId;
   const {
+    announcement,
     linkedRead,
     readTitle,
     readStatus,
@@ -104,7 +107,10 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
     approval?.kind === "code_mode.request" ||
     approval?.toolName === "code_mode.request" ||
     reviewedApproval?.kind === "code_mode.request";
-  const { specialistEvidence, specialistStatus } = useChatSpecialistApproval(workspaceId, reviewedApproval);
+  const { specialistEvidence, specialistStatus, specialistFailure } = useChatSpecialistApproval(
+    workspaceId,
+    reviewedApproval,
+  );
   // A browser errand step shows the picture of the page the errand is about to act on, above the decision.
   const errandScreenshotId =
     reviewedApproval?.kind === "browser.errand.action" || approval?.kind === "browser.errand.action"
@@ -163,11 +169,12 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) focusWithin.current = false;
       }}
     >
-      {otherTabNotice ? (
-        <p role="status" className="mt-3 text-sm text-fg-secondary">
-          {otherTabNotice}
-        </p>
-      ) : null}
+      <p role="status" className="sr-only">
+        {[announcement, specialistFailure, rereview && !decided ? changedActionWarning : null]
+          .filter(Boolean)
+          .join(" ")}
+      </p>
+      {otherTabNotice ? <p className="mt-3 text-sm text-fg-secondary">{otherTabNotice}</p> : null}
       {temporaryGrantNotice?.grant && props.selectedSessionId ? (
         <ChatAllowanceReceipt
           key={temporaryGrantNotice.grant.grantId}
@@ -177,9 +184,7 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
           message={temporaryGrantNotice.message}
         />
       ) : temporaryGrantNotice ? (
-        <p role="status" className="mt-3 text-sm text-fg-secondary">
-          {temporaryGrantNotice.message}
-        </p>
+        <p className="mt-3 text-sm text-fg-secondary">{temporaryGrantNotice.message}</p>
       ) : null}
       {readStatus && readTitle ? (
         <section
@@ -189,7 +194,7 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
           className="mt-3 rounded-md border border-line-subtle bg-raised p-3 text-sm"
         >
           <h3 className="font-semibold text-fg">{readTitle}</h3>
-          <p ref={noticeRef} role="status" tabIndex={-1} className="mt-1 text-fg-secondary outline-none">
+          <p ref={noticeRef} data-approval-read-status tabIndex={-1} className="mt-1 text-fg-secondary outline-none">
             {readStatus}
           </p>
         </section>
@@ -239,19 +244,17 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
             </TechnicalDetails>
           ) : null}
           {notice ? (
-            <p ref={noticeRef} role="status" tabIndex={-1} className="outline-none">
+            <p ref={noticeRef} tabIndex={-1} className="outline-none">
               {notice}
             </p>
           ) : null}
           {rereview && !decided ? (
             <div className="mt-2 space-y-1">
-              <p role="alert" className="text-status-failed">
-                This MCP action changed. Review the updated action before deciding.
+              <p data-approval-warning className="text-status-failed">
+                {changedActionWarning}
               </p>
               {rereview.phase === "checking" ? (
-                <p role="status" className="text-fg-muted">
-                  Refreshing the action…
-                </p>
+                <p className="text-fg-muted">Refreshing the action…</p>
               ) : rereview.phase === "failed" && reviewedApproval ? (
                 <Button size="sm" onClick={() => void refreshMcpReview()}>
                   Retry refresh

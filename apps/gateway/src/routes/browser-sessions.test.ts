@@ -41,16 +41,19 @@ describe("browser session routes", () => {
     app.decorateRequest("authActorId", "operator-test");
     app.decorateRequest("authActorSource", "loopback");
     app.decorate("requireOperatorAuth", async () => undefined);
+    const browserSessionRuntimeService = new BrowserSessionRuntimeService({ gatewaySql: transactionalSql(db) });
     app.decorate("gatewayRuntime", {
-      browserSessionRuntimeService: new BrowserSessionRuntimeService({
-        gatewaySql: transactionalSql(db),
-        requireChatSession: async (sessionId) => ({
-          sessionId,
-          workspaceId: "workspace-1",
-          scope: "mission",
-          lifecycleStatus: sessionId === "closed-chat" ? "archived" : "active",
-        }),
-      }),
+      browserSessionRuntimeService,
+      provisionChatBrowserSession: (sessionId: string, actorId: string) =>
+        browserSessionRuntimeService.provisionForChat(
+          {
+            sessionId,
+            workspaceId: "workspace-1",
+            scope: "mission",
+            lifecycleStatus: sessionId === "closed-chat" ? "archived" : "active",
+          },
+          actorId,
+        ),
     });
     await app.register(browserSessionsRoutes);
     return app;

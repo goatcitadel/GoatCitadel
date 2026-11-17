@@ -1,3 +1,4 @@
+import { provisionCanonicalChatBrowserSession } from "../browser-runtime-guardrails.js";
 import { composeGatewayNativeWorkerHandler } from "./remote-worker-gateway-handler-composition.js";
 import type { CompanionPrincipalPurpose, DatabaseCutoverRequest, LlmRuntimeConfig } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
@@ -8,7 +9,7 @@ import type { McpRequesterResolverRegistryInput } from "./mcp-requester-resoluti
 import type { CronRunSnapshot } from "./gateway/cron-automation-service.js";
 import type { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import type { BrowserErrandService } from "./browser-errands/browser-errand-service.js";
-import type { LocalMcpFixtureTestService } from "./local-mcp-fixture-test.js";
+import type { LocalMcpFixtureTestService } from "../dev-diagnostics/local-mcp-fixture-test.js";
 import type { ReviewReadinessService } from "./review-readiness-service.js";
 import type { RuntimeAuthorityProjectionService } from "./runtime-authority-projection-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
@@ -27,6 +28,10 @@ type GatewayLogger = {
 
 export interface GatewayRuntimePort {
   readonly browserSessionRuntimeService: BrowserSessionRuntimeService;
+  provisionChatBrowserSession(
+    sessionId: string,
+    actorId: string,
+  ): ReturnType<BrowserSessionRuntimeService["provisionForChat"]>;
   readonly browserErrandService: Pick<BrowserErrandService, "getStatus" | "stop">;
   readonly localMcpFixtureTest: LocalMcpFixtureTestService;
   readonly mutationIdempotencyStore: MutationIdempotencyStore;
@@ -134,6 +139,9 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
   return {
     get browserSessionRuntimeService() {
       return gateway.browserSessionRuntimeService;
+    },
+    async provisionChatBrowserSession(sessionId, actorId) {
+      return provisionCanonicalChatBrowserSession(gateway, sessionId, actorId);
     },
     get browserErrandService() {
       return gateway.browserErrandService;

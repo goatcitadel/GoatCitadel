@@ -131,7 +131,7 @@ export function ChatAllowanceReceipt({
             : message;
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-fg-secondary">
-      <p role="status">{status}</p>
+      <AllowanceStatus message={status} />
       {!ended && !expired && scope.query.isError ? (
         <Button type="button" size="sm" onClick={() => void scope.query.refetch()}>
           Try again
@@ -144,6 +144,14 @@ export function ChatAllowanceReceipt({
   );
 }
 
+function AllowanceStatus({ message }: { message: string }) {
+  return (
+    <p role="status" className={message ? "mt-2" : "sr-only"}>
+      {message}
+    </p>
+  );
+}
+
 function ChatAllowanceList(chat: ChatScope) {
   const scope = useChatAllowances(chat);
   const [notice, setNotice] = useState("");
@@ -152,31 +160,22 @@ function ChatAllowanceList(chat: ChatScope) {
     return !next || Date.parse(grant.expiresAt) < Date.parse(next) ? grant.expiresAt : next;
   }, undefined);
   const now = Math.max(useMinuteClock(nextExpiry), Date.now());
-  if (scope.query.isError)
-    return (
-      <div className="mt-2">
-        {notice ? <p role="status">{notice}</p> : null}
-        <p role="alert">Could not load this Chat’s allowances.</p>
+  const active = scope.query.data?.filter((grant) => isActive(grant, now));
+  const message = [notice, scope.query.isError ? "Could not load this Chat’s allowances." : ""]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <>
+      <AllowanceStatus message={message} />
+      {scope.query.isError ? (
         <Button size="sm" onClick={() => void scope.query.refetch()}>
           Try again
         </Button>
-      </div>
-    );
-  if (!scope.query.data)
-    return (
-      <p role="status" className="mt-2">
-        Loading allowances…
-      </p>
-    );
-  const active = scope.query.data.filter((grant) => isActive(grant, now));
-  return (
-    <>
-      {notice ? (
-        <p role="status" className="mt-2">
-          {notice}
+      ) : !active ? (
+        <p aria-busy="true" className="mt-2">
+          Loading allowances…
         </p>
-      ) : null}
-      {active.length ? (
+      ) : active.length ? (
         <ul aria-label="Active Chat allowances" className="mt-2 space-y-2">
           {active.map((grant) => {
             const tool = presentApprovalAction(grant.toolPattern);

@@ -133,7 +133,6 @@ export interface ApprovalLifecycleHost {
     | "chatSessionMeta"
     | "chatTurnTraces"
     | "chatToolRuns"
-    | "toolGrants"
     | "durableRuns"
     | "codeModeRuns"
     | "governanceJourneyEvents"
@@ -366,8 +365,9 @@ export async function listToolGrants(
 export async function createToolGrant(
   host: ApprovalLifecycleHost,
   input: ToolGrantCreateInput,
+  ...duration: [ttlMs?: number]
 ): Promise<ToolGrantRecord> {
-  const grant = await host.policyEngine.createGrant(input);
+  const grant = await host.policyEngine.createGrant(input, ...duration);
   await publishToolGrantCreated((event) => host.publishRealtime("system", "tools", event), grant);
   return grant;
 }
@@ -1532,7 +1532,7 @@ export async function resolveChatToolApproval(
   const toolPattern = turn?.toolName ?? existingInlineApproval?.toolName ?? approval.kind;
   const duration = options?.temporaryGrantDuration;
   if (duration) {
-    const workspaceId = (await host.storage.chatSessionMeta.get(sessionId))?.workspaceId;
+    const workspaceId = await readChatApprovalWorkspace(host, sessionId);
     if (
       decision !== "approve" ||
       allowScope !== "session" ||
@@ -1581,7 +1581,8 @@ export async function resolveChatToolApproval(
     // Only the canonical winning decision can mint this grant. Do not reuse
     // an existing grant or copy this allowance to a parent or workspace.
     try {
-      grant = await host.storage.toolGrants.createTtlForDuration(
+      grant = await createToolGrant(
+        host,
         {
           toolPattern,
           decision: "allow",
@@ -1591,7 +1592,6 @@ export async function resolveChatToolApproval(
         },
         CHAT_TOOL_GRANT_DURATION_MS[duration],
       );
-      await publishToolGrantCreated((event) => host.publishRealtime("system", "tools", event), grant);
     } catch {
       grantError = "The temporary allowance could not be created.";
     }
@@ -1748,6 +1748,10 @@ async function resolveChatApprovalSessionGrantScopeRefs(
   return [...scopeRefs];
 }
 
+async function readChatApprovalWorkspace(host: ApprovalLifecycleHost, sessionId: string): Promise<string | undefined> {
+  return (await host.storage.chatSessionMeta.get(sessionId))?.workspaceId;
+}
+
 async function resolveChatApprovalWorkspaceScopeRef(
   host: ApprovalLifecycleHost,
   approval: ApprovalRequest,
@@ -1758,7 +1762,7 @@ async function resolveChatApprovalWorkspaceScopeRef(
     typeof approval.linkage?.workspaceId === "string" && approval.linkage.workspaceId.trim()
       ? approval.linkage.workspaceId.trim()
       : undefined;
-  const metaWorkspaceId = (await host.storage.chatSessionMeta.get(sessionId))?.workspaceId?.trim();
+  const metaWorkspaceId = (await readChatApprovalWorkspace(host, sessionId))?.trim();
   const workspaceId =
     linkageWorkspaceId ??
     (typeof payload.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim() : undefined) ??

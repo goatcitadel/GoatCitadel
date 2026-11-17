@@ -1,3 +1,6 @@
+import type { AsyncStorage } from "@goatcitadel/storage";
+import type { GatewayRuntimeConfig } from "../config.js";
+import type { McpServerStore } from "../services/mcp-server-store.js";
 import { randomUUID } from "node:crypto";
 import {
   ConflictError,
@@ -10,7 +13,7 @@ import {
   type McpToolRecord,
   type ToolAccessEvaluateRequest,
 } from "@goatcitadel/contracts";
-import { isConnectedStaticServer } from "./mcp-static-profile-authority.js";
+import { isConnectedStaticServer } from "../services/mcp-static-profile-authority.js";
 
 const ALLOWANCE_TTL_MS = 5 * 60_000;
 
@@ -157,4 +160,25 @@ export class LocalMcpFixtureTestService {
     const { actorId: _actorId, ...allowance } = current;
     return allowance;
   }
+}
+
+export function createLocalMcpFixtureTest(
+  currentConfig: () => GatewayRuntimeConfig,
+  serverStore: Pick<McpServerStore, "readServers" | "readTools">,
+  sessionMeta: AsyncStorage["chatSessionMeta"],
+): LocalMcpFixtureTestService {
+  return new LocalMcpFixtureTestService({
+    available: () => {
+      const { assistant, toolPolicy } = currentConfig();
+      return (
+        assistant.deploymentProfile !== "remote_hardened" &&
+        assistant.auth.mode === "token" &&
+        !assistant.auth.allowLoopbackBypass &&
+        toolPolicy.tools.deny.includes("mcp.invoke")
+      );
+    },
+    readServers: () => serverStore.readServers(),
+    readTools: () => serverStore.readTools(),
+    readSession: async (sessionId) => (await sessionMeta.get(sessionId)) ?? undefined,
+  });
 }

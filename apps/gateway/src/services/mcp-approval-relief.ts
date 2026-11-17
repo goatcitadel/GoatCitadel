@@ -37,8 +37,7 @@ export async function hasMcpReadOnlyHint(
 ): Promise<boolean> {
   const target = readMcpApprovalReliefTarget(request, binding);
   if (!target) return false;
-  const tools = await port.listMcpTools(target.serverId).catch(() => []);
-  const matches = tools.filter((tool) => tool.serverId === target.serverId && tool.toolName === target.nativeToolName);
+  const matches = await listMatchingMcpTools(port, target).catch(() => []);
   return (
     matches.length > 0 &&
     matches.every((tool) => tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint !== true)
@@ -96,9 +95,7 @@ export async function resolveMcpApprovalRelief(
   ) {
     return undefined;
   }
-  const entries = (await port.listMcpTools(target.serverId)).filter(
-    (tool) => tool.serverId === target.serverId && tool.toolName === target.nativeToolName,
-  );
+  const entries = await listMatchingMcpTools(port, target);
   // Every same-named entry must independently allow it; an unlabelled or disagreeing duplicate asks.
   if (entries.length === 0 || entries.some((tool) => mcpCallAsksFirst(posture, tool.annotations))) {
     return undefined;
@@ -123,6 +120,15 @@ export async function resolveMcpToolPolicyOptions(
     ...(mcpToolBinding ? { mcpToolBinding } : {}),
     ...(mcpApprovalRelief ? { mcpApprovalRelief } : {}),
   };
+}
+
+async function listMatchingMcpTools(
+  port: Pick<McpApprovalReliefPort, "listMcpTools">,
+  target: { serverId: string; nativeToolName: string },
+): Promise<McpToolRecord[]> {
+  return (await port.listMcpTools(target.serverId)).filter(
+    (tool) => tool.serverId === target.serverId && tool.toolName === target.nativeToolName,
+  );
 }
 
 function readMcpApprovalReliefTarget(

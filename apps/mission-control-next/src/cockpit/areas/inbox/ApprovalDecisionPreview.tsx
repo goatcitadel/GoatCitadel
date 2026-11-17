@@ -23,21 +23,19 @@ export function ApprovalDecisionPreview({
 }) {
   return review.loading || loading ? (
     <p aria-busy="true">Loading the exact approval preview…</p>
-  ) : review.unavailable || unavailable ? (
-    <p role="alert">The approval preview could not load. Reopen the review or use Deny.</p>
-  ) : hasPreview ? (
-    !showSummary ? null : (
-      <ApprovalReviewSummaryContent
-        approval={approval}
-        workspaceId={workspaceId}
-        evidence={review.evidence}
-        showExpiry={showExpiry}
-      />
-    )
-  ) : (
+  ) : review.unavailable || unavailable || !hasPreview ? (
     <p role="alert">
-      The exact action preview is unavailable, so this approval can&apos;t be approved. You can still deny it.
+      {review.unavailable || unavailable
+        ? "The approval preview could not load. Reopen the review or use Deny."
+        : "The exact action preview is unavailable, so this approval can't be approved. You can still deny it."}
     </p>
+  ) : !showSummary ? null : (
+    <ApprovalReviewSummaryContent
+      approval={approval}
+      workspaceId={workspaceId}
+      evidence={review.evidence}
+      showExpiry={showExpiry}
+    />
   );
 }
 

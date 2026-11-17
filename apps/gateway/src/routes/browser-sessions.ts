@@ -73,10 +73,7 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post("/api/v1/browser-sessions/for-chat/:sessionId", operatorOnly, async (request, reply) => {
     try {
       const { sessionId } = sessionParamsSchema.parse(request.params);
-      const session = await fastify.gatewayRuntime.browserSessionRuntimeService.provisionForChat(
-        sessionId,
-        resolveActorId(request),
-      );
+      const session = await fastify.gatewayRuntime.provisionChatBrowserSession(sessionId, resolveActorId(request));
       await markMutationCommitted(request);
       return reply.send(session);
     } catch (error) {

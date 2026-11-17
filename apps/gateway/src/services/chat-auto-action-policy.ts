@@ -1,3 +1,4 @@
+import type { GatewayRuntimeConfig } from "../config.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -16,7 +17,11 @@ import {
 } from "@goatcitadel/contracts";
 import { ToolExecutionAlreadyClaimedError, type ToolExecutionRestriction } from "@goatcitadel/policy-engine";
 import type { AsyncStorage } from "@goatcitadel/storage";
-import { withCurrentChatApprovalAuthority, type ChatApprovalModeDependencies } from "./chat-approval-mode-service.js";
+import {
+  isChatAutoApprovalEnabled,
+  withCurrentChatApprovalAuthority,
+  type ChatApprovalModeDependencies,
+} from "./chat-approval-mode-service.js";
 import { assertChatTurnToolUseOpen } from "./chat-turn-control.js";
 import {
   executeManagedProjectFile,
@@ -874,4 +879,18 @@ function fileMutationBinding(binding: ChatAutoBinding, request: ToolInvokeReques
   return createHash("sha256")
     .update(canonicalJsonString({ binding, toolName, args, turnId, toolRunId, agentId, target }), "utf8")
     .digest("hex");
+}
+
+export function createGatewayChatAutoActions(
+  config: Pick<GatewayRuntimeConfig, "rootDir" | "assistant">,
+  storage: AsyncStorage,
+  inspect: Parameters<typeof createWindowsAutoOverwrite>[0],
+): ChatAutoActionPolicy {
+  return new ChatAutoActionPolicy({
+    storage,
+    rootDir: config.rootDir,
+    workspaceDir: config.assistant.workspaceDir,
+    chatAutoApprovalEnabled: isChatAutoApprovalEnabled(storage),
+    overwrite: createWindowsAutoOverwrite(inspect),
+  });
 }

@@ -66,18 +66,21 @@ function AllowanceEditor({ workspaceId }: { workspaceId: string }) {
   return (
     <div className="mt-3 space-y-3 text-sm text-fg-secondary">
       <p>Allow one connected local fixture tool in one Chat for five minutes. Each call still requires Approve once.</p>
-      {error ? (
-        <p role="alert">{describeApiError(error, "Could not update the temporary MCP allowance.").summary}</p>
-      ) : null}
-      {state.isPending ? <p role="status">Loading MCP test tools…</p> : null}
+      <p role="status" className={error || active ? "" : "sr-only"}>
+        {error
+          ? describeApiError(error, "Could not update the temporary MCP allowance.").summary
+          : active
+            ? `Active for ${active.toolName} until ${new Date(active.expiresAt).toLocaleTimeString()}.`
+            : save.isSuccess
+              ? "Allowance ended."
+              : ""}
+      </p>
+      {state.isPending ? <p aria-busy="true">Loading MCP test tools…</p> : null}
       {state.data?.available === false ? (
         <p>Available with local Token sign-in, Loopback bypass off, and the global MCP deny in place.</p>
       ) : null}
       {active ? (
         <div className="space-y-2">
-          <p role="status">
-            Active for <strong>{active.toolName}</strong> until {new Date(active.expiresAt).toLocaleTimeString()}.
-          </p>
           <p>
             In the selected Chat, ask Terra to use the read-only tool with selector{" "}
             <code className="break-all">

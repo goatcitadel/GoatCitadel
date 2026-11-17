@@ -25,9 +25,6 @@ import {
 
 export interface BrowserSessionRuntimeDependencies {
   gatewaySql: AsyncGatewaySqlRepository;
-  requireChatSession?(
-    sessionId: string,
-  ): Promise<Pick<ChatSessionRecord, "sessionId" | "workspaceId" | "scope" | "lifecycleStatus">>;
   publishRealtime?(eventType: string, source: string, payload: Record<string, unknown>): Promise<unknown>;
   describeState?(sessionId: string): BrowserSessionStateSummary;
 }
@@ -111,9 +108,11 @@ export class BrowserSessionRuntimeService {
     return await this.insertSession(input, requestId);
   }
 
-  public async provisionForChat(sessionId: string, actorId: string): Promise<BrowserSessionRecord> {
-    const chat = await this.deps.requireChatSession?.(sessionId);
-    if (!chat || chat.scope !== "mission" || chat.lifecycleStatus !== "active" || !chat.workspaceId) {
+  public async provisionForChat(
+    chat: Pick<ChatSessionRecord, "sessionId" | "workspaceId" | "scope" | "lifecycleStatus">,
+    actorId: string,
+  ): Promise<BrowserSessionRecord> {
+    if (chat.scope !== "mission" || chat.lifecycleStatus !== "active" || !chat.workspaceId) {
       throw new ConflictError({ message: "Browser state requires an active Chat conversation in a workspace." });
     }
     return this.insertSession(
