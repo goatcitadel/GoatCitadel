@@ -1,3 +1,5 @@
+import { useApprovalDecisionFocus } from "./use-approval-decision-focus";
+import { useChatAllowanceControls } from "./use-chat-allowance-controls";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import type { SpecialistEvidence } from "./specialist-approval-evidence";
 import { specialistEvidenceKey } from "./specialist-approval-key";
@@ -5,10 +7,17 @@ import { specialistApprovalCode } from "./load-specialist-approval-code";
 import { useDeferredApprovalCode } from "./use-deferred-approval-code";
 import { connectorSetupHref } from "../../app/routes";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { scopeDiffers } from "./installation-settings-approval";
-import { canonicalJsonString, type ApprovalRequest, type OperatorInboxItem } from "@goatcitadel/contracts";
+import {
+  canOfferChatToolGrant,
+  canonicalJsonString,
+  type ApprovalRequest,
+  type ChatToolGrantDuration,
+  type OperatorInboxItem,
+  type ToolGrantRecord,
+} from "@goatcitadel/contracts";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -16,7 +25,8 @@ import { RiskApprovalAction } from "../chat/RiskApprovalAction";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { hasExpired, useMinuteClock } from "./use-minute-clock";
-import { CHANGED_APPROVAL_RECORD, canResolveInboxApproval } from "./inbox-approval-guard";
+import { approvalReviewRecord, CHANGED_APPROVAL_RECORD, canResolveInboxApproval } from "./inbox-approval-guard";
+import { ApprovalDecisionPreview, ApprovalDecisionHelp } from "./ApprovalDecisionPreview";
 import { ApprovalReviewSummaryContent } from "./ApprovalReviewSummaryContent";
 import { useApprovalReviewEvidence } from "./use-approval-review-evidence";
 import { splitApprovalExplanation } from "./approval-preview";
@@ -69,6 +79,10 @@ interface ApprovalDecisionBarProps {
    * workspace; it is still read and decided in the workspace it was created in.
    */
   installationSetting?: boolean;
+  /** Lets the conversation card open its ordinary danger review without an overlay. */
+  inlineDangerReview?: boolean;
+  /** The conversation refreshed an MCP action after a stale decision. */
+  reviewAgain?: boolean;
   /** Wording for the one-click approve button, when the action has its own ("Run it"). */
   approveLabel?: string;
   /** Styles the approve button as a danger action with a shield. */
@@ -82,6 +96,13 @@ interface ApprovalDecisionBarProps {
    */
   prepareApprove?: PrepareApprove;
   onResolved: (message: string) => void;
+  onApproved?: () => void;
+  onTemporaryGrantResolved?: (message: string, grant?: ToolGrantRecord) => void;
+  /** Chat owns this receipt so it can outlive the pending review when another tab settles it. */
+  conflictRecovery?: {
+    isCurrent: () => boolean;
+    onDecision: (decision: "approve" | "reject", message: string) => void;
+  };
   /**
    * The click was not sent. `message` says why when it is not that the record changed, and `line` is that message as
    * the bar shows it, with the link to its next step when there is one.
@@ -98,7 +119,7 @@ export function ApprovalDecisionBar(props: ApprovalDecisionBarProps) {
     <ApprovalDecisionReview
       key={canonicalJsonString([
         props.item,
-        props.approval,
+        approvalReviewRecord(props.approval),
         props.workspaceId,
         scope,
         props.sessionId,
@@ -134,11 +155,16 @@ function ApprovalDecisionReview({
   stickyDecisions = false,
   reviewedInPlace = false,
   installationSetting = false,
+  inlineDangerReview = false,
+  reviewAgain = false,
   approveLabel,
   approveDanger = false,
   withholdApprove = false,
   prepareApprove,
   onResolved,
+  onApproved,
+  onTemporaryGrantResolved,
+  conflictRecovery,
   onInvalidated,
   detached,
   activeWorkspaceId,
@@ -150,62 +176,39 @@ function ApprovalDecisionReview({
   const [notice, setNotice] = useState("");
   const [rechecking, setRechecking] = useState(false);
   const current = useRef(true);
-  const approveRef = useRef<HTMLSpanElement>(null);
-  const approveFocus = useRef<{ origin: Element | null; cancel: () => void } | null>(null);
-  const denyRef = useRef<HTMLButtonElement>(null);
-  const sessionChanged = Boolean(sessionId && approval.linkage?.sessionId && sessionId !== approval.linkage.sessionId);
   // The selected-workspace comparison is the one check an install-wide Settings approval skips; the rest still apply.
-  const scopeChanged = scopeDiffers(installationSetting, approval, activeWorkspaceId, workspaceId) || sessionChanged;
+  const scopeChanged =
+    scopeDiffers(installationSetting, approval, activeWorkspaceId, workspaceId) ||
+    Boolean(sessionId && approval.linkage?.sessionId && sessionId !== approval.linkage.sessionId);
   const specialist = useDeferredApprovalCode(specialistApprovalCode, Boolean(specialistEvidence));
-  const specialistCode = specialist.code;
   const specialistReady = Boolean(
-    specialistEvidence && specialistCode?.specialistEvidenceMatches(approval, specialistEvidence),
+    specialistEvidence && specialist.code?.specialistEvidenceMatches(approval, specialistEvidence),
   );
   const review = useApprovalReviewEvidence(approval);
   const hasPreview = Boolean(review.evidence) || specialistReady;
+  const offerTemporaryGrant = Boolean(
+    onTemporaryGrantResolved &&
+    sessionId &&
+    hasPreview &&
+    !withholdApprove &&
+    canOfferChatToolGrant(approval, sessionId, workspaceId),
+  );
   const specializedReview =
-    Boolean(approval.mcpElicitation) ||
-    approval.kind === "remote_worker.native_runtime" ||
-    approval.kind === "code_mode.run";
+    Boolean(approval.mcpElicitation) || ["remote_worker.native_runtime", "code_mode.run"].includes(approval.kind);
   // One shared minute clock plus a single re-render at the expiry moment, instead of a per-second re-render (IN-05).
-  const now = useMinuteClock(approval.expiresAt);
-  const expired = hasExpired(approval.expiresAt, now);
+  const expired = hasExpired(approval.expiresAt, useMinuteClock(approval.expiresAt));
   useLayoutEffect(() => {
     current.current = true;
     return () => {
       current.current = false;
     };
   }, []);
-  useEffect(() => {
-    if (focusAction !== "approve") return;
-    const origin = document.activeElement;
-    const cancel = () => {
-      approveFocus.current = null;
-      document.removeEventListener("focusin", onFocus);
-    };
-    const onFocus = (event: FocusEvent) => {
-      if (event.target !== origin) cancel();
-    };
-    // An explicit keyboard request can outlive a cold preview. Moving focus gives it up.
-    approveFocus.current = { origin, cancel };
-    document.addEventListener("focusin", onFocus);
-    return cancel;
-  }, [focusAction, approval.approvalId]);
-  useEffect(() => {
-    const request = approveFocus.current;
-    if (!request || !hasPreview) return;
-    if (document.activeElement !== request.origin || request.origin === denyRef.current) {
-      request.cancel();
-      return;
-    }
-    const button = approveRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
-    if (!button) return;
-    request.cancel();
-    button.focus();
-  }, [focusAction, approval.approvalId, hasPreview, specialistReady]);
-  useEffect(() => {
-    if (focusAction === "deny") denyRef.current?.focus();
-  }, [focusAction, approval.approvalId]);
+  const { approveRef, denyRef } = useApprovalDecisionFocus(
+    focusAction,
+    approval.approvalId,
+    hasPreview,
+    specialistReady,
+  );
 
   /** The current record, read where it lives: in its workspace, or unscoped for a detached approval. */
   function readCurrent() {
@@ -220,12 +223,13 @@ function ApprovalDecisionReview({
     void queryClient.invalidateQueries({ queryKey: ["approval-settlement", workspaceId, approval.approvalId] });
   }
 
-  async function decide(decision: "approve" | "reject") {
+  async function decide(decision: "approve" | "reject", duration?: ChatToolGrantDuration) {
     if (
       !current.current ||
       !access.current() ||
       (!hasPreview && decision !== "reject") ||
       scopeChanged ||
+      (duration && (!offerTemporaryGrant || decision !== "approve" || !sessionId)) ||
       !canResolveInboxApproval(
         item,
         approval,
@@ -240,10 +244,10 @@ function ApprovalDecisionReview({
     if (!token) return;
     setError("");
     setNotice("");
-    let resolvedMessage: string | undefined;
+    let result: Awaited<ReturnType<typeof import("./submit-inbox-approval").submitInboxApproval>>;
     try {
       const { submitInboxApproval } = await import("./submit-inbox-approval");
-      resolvedMessage = await submitInboxApproval({
+      result = await submitInboxApproval({
         approval,
         decision,
         workspaceId,
@@ -252,10 +256,12 @@ function ApprovalDecisionReview({
         specializedReview,
         specialistReady,
         specialistEvidence,
-        specialistCode,
+        specialistCode: specialist.code,
         prepareApprove,
         readCurrent,
         isCurrent: () => current.current && access.current(),
+        canRecoverConflict: conflictRecovery?.isCurrent,
+        temporaryGrant: duration && sessionId ? { sessionId, duration } : undefined,
         onError: setError,
         onInvalidated,
       });
@@ -266,8 +272,14 @@ function ApprovalDecisionReview({
     } finally {
       releaseInboxApprovalCheck(workspaceId, approval.approvalId, token);
     }
-    if (resolvedMessage) {
-      if (current.current) onResolved(resolvedMessage);
+    if (result) {
+      if (result.decisionElsewhere) {
+        if (conflictRecovery?.isCurrent()) conflictRecovery.onDecision(result.decisionElsewhere, result.message);
+      } else {
+        if (decision === "approve" && access.current()) onApproved?.();
+        if (duration) onTemporaryGrantResolved?.(result.message, result.grant);
+        else if (current.current) onResolved(result.message);
+      }
       invalidateOwnerReads();
     }
   }
@@ -309,6 +321,11 @@ function ApprovalDecisionReview({
     }
   }
 
+  const allowance = useChatAllowanceControls(
+    offerTemporaryGrant,
+    Boolean(attempt),
+    (duration) => void decide("approve", duration),
+  );
   if (scopeChanged)
     return (
       <p role="alert" className="text-fg-secondary">
@@ -359,27 +376,21 @@ function ApprovalDecisionReview({
     );
   // Without the exact action preview nothing can be approved, but denying withholds the action, so Deny stays.
   const canApprove = (hasPreview || specializedReview) && !withholdApprove;
+  const reviewInCard =
+    inlineDangerReview && approval.riskLevel === "danger" && !specializedReview && !reviewedInPlace && canApprove;
 
   return (
     <div className="space-y-2 border-t border-line-subtle pt-3">
-      {review.loading || specialist.loading ? (
-        <p aria-busy="true">Loading the exact approval preview…</p>
-      ) : review.unavailable || specialist.unavailable ? (
-        <p role="alert">The approval preview could not load. Reopen the review or use Deny.</p>
-      ) : hasPreview || specializedReview ? (
-        compact ? null : (
-          <ApprovalReviewSummaryContent
-            approval={approval}
-            workspaceId={workspaceId}
-            evidence={review.evidence}
-            showExpiry={!expiryShownNearby}
-          />
-        )
-      ) : (
-        <p role="alert">
-          The exact action preview is unavailable, so this approval can&apos;t be approved. You can still deny it.
-        </p>
-      )}
+      <ApprovalDecisionPreview
+        approval={approval}
+        workspaceId={workspaceId}
+        review={review}
+        loading={specialist.loading}
+        unavailable={specialist.unavailable}
+        showSummary={!compact && !reviewInCard}
+        hasPreview={hasPreview || specializedReview}
+        showExpiry={!expiryShownNearby}
+      />
       <div
         role="group"
         aria-label="Approval decisions"
@@ -390,7 +401,7 @@ function ApprovalDecisionReview({
         }
       >
         {canApprove ? (
-          <span ref={approveRef} className="inline-flex">
+          <div ref={approveRef} className={reviewInCard ? "contents" : "inline-flex"}>
             <RiskApprovalAction
               workspaceId={workspaceId}
               approval={{
@@ -405,25 +416,29 @@ function ApprovalDecisionReview({
               reviewedApproval={approval}
               reviewEvidence={review.evidence}
               specialistReview={
-                specialistReady && specialistEvidence && specialistCode ? (
-                  <specialistCode.SpecialistApprovalReview approval={approval} evidence={specialistEvidence} />
+                specialistReady && specialistEvidence && specialist.code ? (
+                  <specialist.code.SpecialistApprovalReview approval={approval} evidence={specialistEvidence} />
                 ) : undefined
               }
               pending={Boolean(attempt) || (specializedReview && !specialistReady)}
               reviewedInPlace={reviewedInPlace}
+              inlineDangerReview={reviewInCard}
+              reviewLabel={reviewAgain ? "Review again" : undefined}
               approveLabel={approveLabel}
               approveDanger={approveDanger}
               onApprove={() => void decide("approve")}
             />
-          </span>
+          </div>
         ) : null}
         <Button ref={denyRef} type="button" size="sm" disabled={Boolean(attempt)} onClick={() => void decide("reject")}>
           Deny
         </Button>
+        {allowance.trigger}
       </div>
-      {attempt ? (
-        <p role={attempt.phase === "uncertain" ? "alert" : "status"} className="text-fg-muted">
-          {attempt.message}
+      {allowance.panel}
+      {attempt || notice ? (
+        <p role={attempt?.phase === "uncertain" ? "alert" : "status"} className="text-fg-muted">
+          {attempt?.message ?? notice}
         </p>
       ) : null}
       {attempt?.phase === "uncertain" ? (
@@ -431,31 +446,12 @@ function ApprovalDecisionReview({
           Check again
         </Button>
       ) : null}
-      {notice ? (
-        <p role="status" className="text-fg-muted">
-          {notice}
-        </p>
-      ) : null}
-      {error ? (
+      {error && !(reviewAgain && error === CHANGED_APPROVAL_RECORD) ? (
         <p role="alert" className="text-status-failed">
           {error}
         </p>
       ) : null}
-      {compact ? null : (
-        <details className="text-xs text-fg-muted">
-          <summary className="cursor-pointer font-medium text-fg-secondary">How this decision works</summary>
-          <div className="mt-1 space-y-1">
-            <p>
-              The current pending record is checked again before either decision. Approval alone does not prove the
-              action ran.
-            </p>
-            <p>
-              To change this request, open its source and submit a new request. Editing an approval withdraws the
-              original action; it does not authorize a replacement. Project-wide always-allow is unavailable here.
-            </p>
-          </div>
-        </details>
-      )}
+      {compact ? null : <ApprovalDecisionHelp />}
     </div>
   );
 }

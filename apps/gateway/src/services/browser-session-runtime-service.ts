@@ -14,6 +14,7 @@ import {
   type BrowserSessionRecord,
   type BrowserSessionStateProjection,
   type BrowserSessionStateSummary,
+  type ChatSessionRecord,
 } from "@goatcitadel/contracts";
 import type { AsyncGatewaySqlRepository } from "@goatcitadel/storage";
 import {
@@ -107,11 +108,29 @@ export class BrowserSessionRuntimeService {
     return await this.insertSession(input, requestId);
   }
 
-  private async insertSession(input: BrowserSessionCreateInput, requestId?: string): Promise<BrowserSessionRecord> {
+  public async provisionForChat(
+    chat: Pick<ChatSessionRecord, "sessionId" | "workspaceId" | "scope" | "lifecycleStatus">,
+    actorId: string,
+  ): Promise<BrowserSessionRecord> {
+    if (chat.scope !== "mission" || chat.lifecycleStatus !== "active" || !chat.workspaceId) {
+      throw new ConflictError({ message: "Browser state requires an active Chat conversation in a workspace." });
+    }
+    return this.insertSession(
+      { workspaceId: chat.workspaceId, label: "Chat browser session", actorId },
+      undefined,
+      chat.sessionId,
+    );
+  }
+
+  private async insertSession(
+    input: BrowserSessionCreateInput,
+    requestId?: string,
+    chatSessionId?: string,
+  ): Promise<BrowserSessionRecord> {
     await this.waitForSchema();
     const now = new Date().toISOString();
     const session: BrowserSessionRecord = {
-      sessionId: randomUUID(),
+      sessionId: chatSessionId ?? randomUUID(),
       workspaceId: input.workspaceId?.trim() || undefined,
       label: input.label?.trim() || "Shared browser session",
       status: "active",
@@ -120,8 +139,8 @@ export class BrowserSessionRuntimeService {
       updatedAt: now,
     };
     // The row and its request-ID event commit together, so a replay can always find what it created.
-    await this.transaction(async () => {
-      await this.deps.gatewaySql
+    const created = await this.transaction(async () => {
+      const inserted = await this.deps.gatewaySql
         .prepare(
           `
           INSERT INTO browser_sessions (
@@ -129,6 +148,7 @@ export class BrowserSessionRuntimeService {
           ) VALUES (
             @sessionId, @workspaceId, @label, @status, @createdBy, @createdAt, @updatedAt, NULL
           )
+          ON CONFLICT (session_id) DO NOTHING
         `,
         )
         .run({
@@ -140,11 +160,20 @@ export class BrowserSessionRuntimeService {
           createdAt: session.createdAt,
           updatedAt: session.updatedAt,
         });
+      if (inserted.changes === 0) return false;
       await this.recordEvent(session.sessionId, "session_created", session.createdBy, {
         label: session.label,
         ...(requestId ? { requestId } : {}),
       });
+      return true;
     });
+    if (!created) {
+      const existing = await this.requireSession(session.sessionId);
+      if (!chatSessionId || existing.workspaceId !== session.workspaceId || existing.status !== "active") {
+        throw new ConflictError({ message: "The browser session cannot be provisioned for this conversation." });
+      }
+      return existing;
+    }
     await this.publish("browser_session_created", { sessionId: session.sessionId, workspaceId: session.workspaceId });
     return session;
   }
@@ -493,7 +522,7 @@ export class BrowserSessionRuntimeService {
     return rows.map(mapGrantRow);
   }
 
-  public async assertAccess(check: BrowserSessionAccessCheck): Promise<void> {
+  public async assertAccess(check: BrowserSessionAccessCheck, requireHostScopedGrant = false): Promise<void> {
     await this.waitForSchema();
     const session = await this.requireSession(check.sessionId);
     const host = check.host ? normalizeHost(check.host) : undefined;
@@ -510,7 +539,9 @@ export class BrowserSessionRuntimeService {
     const activeGrants = await this.listActiveGrants(check.sessionId, check.actorId);
     const allowed = activeGrants.some((grant) => {
       const hasScope = grant.scopes.some((scope) => SCOPE_RANK[scope] >= SCOPE_RANK[check.requiredScope]);
-      const hasHost = !host || grant.allowedHosts.length === 0 || grant.allowedHosts.includes(host);
+      const hasHost = requireHostScopedGrant
+        ? Boolean(host && grant.allowedHosts.includes(host))
+        : !host || grant.allowedHosts.length === 0 || grant.allowedHosts.includes(host);
       return hasScope && hasHost;
     });
     if (!allowed) {

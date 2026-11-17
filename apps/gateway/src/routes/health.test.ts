@@ -85,7 +85,40 @@ describe("health route", () => {
       const detailedResponse = await app.inject({ method: "GET", url: "/api/v1/ops/readiness" });
       expect(detailedResponse.statusCode).toBe(401);
       expect(detailedResponse.json()).toEqual({ error: "Operator authentication is required." });
+      const loadedBuildsResponse = await app.inject({ method: "GET", url: "/api/v1/ops/loaded-builds" });
+      expect(loadedBuildsResponse.statusCode).toBe(401);
       expect(getDatabaseHealthSnapshot).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("reports stable loaded policy-engine identifiers without using the health service", async () => {
+    const app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    await app.register(healthRoute);
+
+    try {
+      const url = "/api/v1/ops/loaded-builds";
+      const response = await app.inject({ method: "GET", url });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toEqual({
+        policyEngine: {
+          executionSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          executionComponents: {
+            toolPolicyEngine: expect.stringMatching(/^[a-f0-9]{64}$/u),
+            toolExecutor: expect.stringMatching(/^[a-f0-9]{64}$/u),
+            browserDispatcher: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          },
+          browserSessionAccess: {
+            revision: "await-async-guard-v1",
+            sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          },
+        },
+      });
+      const secondResponse = await app.inject({ method: "GET", url });
+      expect(secondResponse.json()).toEqual(response.json());
     } finally {
       await app.close();
     }

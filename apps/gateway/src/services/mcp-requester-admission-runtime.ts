@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import {
   canonicalJsonString,
-  ConflictError,
   readChatTurnFeatureReferences,
   type ChatTurnFeatureReferences,
   type McpRequesterAdmissionConnection,
@@ -43,6 +42,7 @@ import type { ActiveTurnAdmission } from "./chat-turn-types.js";
 import type { McpStaticChatService } from "./mcp-static-chat-service.js";
 import { requesterScopeFromActiveAdmission } from "./mcp-requester-admission-scope.js";
 import type { LlmCompletionHost } from "./llm-completion-host.js";
+import { mcpChatAccessError } from "./mcp-chat-access-error.js";
 
 interface McpAdmissionSelectionHost {
   assertTurnAdmissionWrite(admission: ActiveTurnAdmission): Promise<void>;
@@ -71,10 +71,7 @@ export async function selectSavedMcpChatAdmission(
       message: "Selected saved MCP tools require an authenticated Chat actor.",
       context: { reasonCode: "authenticated_actor_required" },
     });
-    throw new ConflictError({
-      message:
-        "Saved MCP tools in Chat require an authenticated operator session. Configure supported Gateway authentication and start a new Chat turn.",
-    });
+    throw mcpChatAccessError("sign_in");
   }
   return host.staticChat.discoverAdmission({
     scope: requesterScopeFromActiveAdmission(input.admission),

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
+import type { ToolGrantRecord } from "@goatcitadel/contracts";
 import { createInvalidationBatcher, throttleIntervalFor } from "./invalidation-batcher";
 import {
   getGatewayApiBaseUrl,
@@ -105,6 +106,24 @@ export function invalidateForEvent(event: RealtimeEvent, sink: RealtimeSink): vo
   }
   const resolution = resolveRealtimeEvent(event);
   if (resolution.kind === "ignored") return;
+  const sessionId = event.links?.sessionId;
+  if (
+    event.eventAuthority === "retained_stream" &&
+    event.eventType === "tool_invoked" &&
+    (event.source === "policy" || event.source === "tools" || event.source === "mcp") &&
+    sessionId &&
+    event.payload.outcome !== "approval_required"
+  ) {
+    // A completed invocation can spend a one-use grant without a grant event.
+    // Refresh only the matching Chat and only while a one-use grant is listed.
+    sink.invalidate(
+      ["tools", "chat-allowances", sessionId],
+      (query) =>
+        (query.state.data as ToolGrantRecord[] | undefined)?.some(
+          (grant) => grant.grantType === "one_time" && !grant.revokedAt && (grant.usesRemaining ?? 0) > 0,
+        ) ?? false,
+    );
+  }
   if (resolution.kind === "unmapped") {
     for (const topic of resolution.topics) sink.unmapped(topic, event);
     return;

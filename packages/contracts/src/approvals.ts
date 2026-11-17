@@ -131,6 +131,32 @@ export interface ApprovalListResponse {
   nextCursor?: string;
 }
 
+export const CHAT_TOOL_GRANT_DURATIONS = ["15m", "1h", "8h"] as const;
+export type ChatToolGrantDuration = (typeof CHAT_TOOL_GRANT_DURATIONS)[number];
+
+export const CHAT_TOOL_GRANT_DURATION_MS: Record<ChatToolGrantDuration, number> = {
+  "15m": 15 * 60_000,
+  "1h": 60 * 60_000,
+  "8h": 8 * 60 * 60_000,
+};
+
+/** Tools whose ordinary approval prompts may be covered by a grant for this Chat. */
+export function canOfferChatToolGrant(approval: ApprovalRequest, sessionId: string, workspaceId: string): boolean {
+  return (
+    approval.status === "pending" &&
+    (approval.riskLevel === "safe" || approval.riskLevel === "caution") &&
+    ["memory.search", "memory.read", "docs.search"].includes(approval.kind) &&
+    approval.preview?.reviewKind === "knowledge.operation" &&
+    approval.preview.toolName === approval.kind &&
+    !approval.mcpElicitation &&
+    approval.linkage?.actionType === "tool.invoke" &&
+    approval.linkage.toolName === approval.kind &&
+    approval.linkage.sessionId === sessionId &&
+    approval.linkage.workspaceId === workspaceId &&
+    Boolean(approval.linkage.turnId)
+  );
+}
+
 /**
  * An approval with no linkage belongs to the install, not to a workspace (a skill switch change is one),
  * so every workspace's Inbox lists it. A linkage that exists but names no workspace is not install-wide.

@@ -16,6 +16,7 @@ import {
   createApproval,
   createToolGrant,
   expirePendingApprovals,
+  getApproval,
   listApprovals,
   listApprovalsPage,
   revokeToolGrant,
@@ -628,7 +629,11 @@ describe("approval lifecycle service", () => {
 
     expect(await revokeToolGrant(host, "grant-1", "operator-test")).toBe(true);
     expect(host.policyEngine.revokeGrant).toHaveBeenCalledTimes(1);
-    expect(host.publishRealtime).toHaveBeenCalledTimes(1);
+    expect(host.publishRealtime).toHaveBeenCalledExactlyOnceWith("system", "tools", {
+      type: "tool_grant_revoked",
+      grantId: "grant-1",
+      revokedBy: "operator-test",
+    });
   });
 
   it("does not hide tool-grant policy mutation failures", async () => {
@@ -920,6 +925,26 @@ describe("approval lifecycle service", () => {
       items: [expect.objectContaining({ approvalId: "approval-1" })],
       nextCursor: "opaque-next-cursor",
     });
+    expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
+  });
+
+  it("supplies a review preview for a legacy memory search in the detail and queue reads", async () => {
+    const host = createApprovalHarness();
+    const stored: ApprovalRequest = {
+      ...(await host.storage.approvals.get("approval-1")),
+      kind: "memory.search",
+      payload: { query: "launch decisions", limit: 3 },
+      preview: { toolName: "memory.search" },
+      linkage: { workspaceId: "workspace-1", actionType: "tool.invoke", toolName: "memory.search" },
+    };
+    host.storage.approvals.get = vi.fn(async () => stored);
+    host.storage.approvals.listPage = vi.fn(async () => ({ items: [stored] }));
+
+    const detail = await getApproval(host, stored.approvalId, "workspace-1");
+    expect(detail.preview).toMatchObject({ query: "launch decisions", optionsSummary: "Maximum results: 3" });
+    expect((await listApprovalsPage(host, { workspaceId: "workspace-1", status: "pending" })).items).toEqual([detail]);
+    await expect(getApproval(host, stored.approvalId, "workspace-2")).rejects.toBeInstanceOf(NotFoundError);
+    expect(stored.preview).toEqual({ toolName: "memory.search" });
     expect(host.storage.approvals.resolve).not.toHaveBeenCalled();
   });
 
@@ -4412,6 +4437,82 @@ function createInMemoryApprovalEffectsStore(effectRows: ApprovalEffectRecord[]) 
   };
 }
 
+describe("resolveChatToolApproval temporary tool allowance", () => {
+  function setup() {
+    const toolName = "memory.search";
+    const host = createApprovalHarness({ approvalKind: toolName, chatToolName: toolName });
+    const approval = host.storage.approvals.get("approval-1");
+    Object.assign(approval, {
+      riskLevel: "safe",
+      preview: { reviewKind: "knowledge.operation", toolName, query: "notes" },
+      linkage: { ...approval.linkage, turnId: "turn-1", toolName, actionType: "tool.invoke" },
+    });
+    host.resolveApproval.mockResolvedValue({
+      approval: { ...approval, status: "approved" },
+      resolutionEffects: { chatTurnResume: { resumed: true, turnId: "turn-1", durableRunId: "run-1" } },
+    } as never);
+    const createGrant = host.policyEngine.createGrant.mockImplementation(async (input) => ({
+      ...input,
+      grantId: "grant-1",
+    }));
+    return { host, approval, createGrant };
+  }
+
+  it.each([
+    ["15m", 15],
+    ["1h", 60],
+    ["8h", 480],
+  ] as const)("mints one %s grant for the exact Chat and resumes its turn", async (duration, minutes) => {
+    const { host, createGrant } = setup();
+    const result = await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+      allowScope: "session",
+      temporaryGrantDuration: duration,
+    });
+    expect(createGrant).toHaveBeenCalledExactlyOnceWith(
+      {
+        toolPattern: "memory.search",
+        scope: "session",
+        scopeRef: "session-1",
+        decision: "allow",
+        createdBy: "operator",
+      },
+      minutes * 60_000,
+    );
+    expect(result).toMatchObject({ resumed: true, resumedTurnId: "turn-1", grant: { grantId: "grant-1" } });
+    expect(host.policyEngine.listActiveGrants).not.toHaveBeenCalled();
+  });
+
+  it.each(["other Chat", "other workspace", "danger", "denied"] as const)(
+    "refuses %s before creating a grant",
+    async (testCase) => {
+      const { host, approval, createGrant } = setup();
+      if (testCase === "other workspace") approval.linkage!.workspaceId = "other";
+      if (testCase === "danger") approval.riskLevel = "danger";
+      if (testCase === "denied") approval.status = "rejected";
+      await expect(
+        resolveChatToolApproval(host, testCase === "other Chat" ? "session-2" : "session-1", "approval-1", "approve", {
+          allowScope: "session",
+          temporaryGrantDuration: "15m",
+        }),
+      ).rejects.toThrow();
+      expect(host.resolveApproval).not.toHaveBeenCalled();
+      expect(createGrant).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not create a grant when another approval decision wins the race", async () => {
+    const { host, createGrant } = setup();
+    host.resolveApproval.mockRejectedValueOnce(new ConflictError({ message: "Already decided" }));
+    await expect(
+      resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+        allowScope: "session",
+        temporaryGrantDuration: "15m",
+      }),
+    ).rejects.toThrow("Already decided");
+    expect(createGrant).not.toHaveBeenCalled();
+  });
+});
+
 describe("resolveChatToolApproval outside-root write folder grants", () => {
   const rootId = "owr_0123456789abcdef";
   const details: OutsideRootWriteApprovalDetails = {
@@ -4469,7 +4570,6 @@ describe("resolveChatToolApproval outside-root write folder grants", () => {
       scopeRef: "session-1",
       createdBy: "operator-test",
     });
-    expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
     expect(result.grant?.grantId).toBe("grant-folder-1");
     expect(result.grantError).toBeUndefined();
     expect(host.publishRealtime).toHaveBeenCalledWith(
@@ -4487,7 +4587,6 @@ describe("resolveChatToolApproval outside-root write folder grants", () => {
     });
     expect(result.allowScope).toBe("once");
     expect(host.policyEngine.mintOutsideRootWriteGrant).not.toHaveBeenCalled();
-    expect(host.policyEngine.createGrant).not.toHaveBeenCalled();
   });
 
   it.each([

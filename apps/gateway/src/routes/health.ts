@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { DatabaseHealthSnapshot } from "@goatcitadel/contracts";
+import * as policyEngine from "@goatcitadel/policy-engine";
 import type { ConfigGenerationHealthSnapshot } from "../services/config-generation-service.js";
 import type { SharedHostLifecycleSnapshot } from "../services/shared-host-lifecycle-service.js";
 import { withRouteAccess } from "./route-access.js";
@@ -24,6 +25,13 @@ export const healthRoute: FastifyPluginAsync = async (fastify) => {
         service: "gateway",
         ...buildManagedHealthIdentity("gateway"),
       });
+  });
+
+  fastify.get("/api/v1/ops/loaded-builds", withRouteAccess(fastify, "operator"), async (_request, reply) => {
+    // Older engine builds can still be loaded alongside a Gateway that knows about this route.
+    return reply
+      .header("Cache-Control", "no-store")
+      .send({ policyEngine: policyEngine.loadedPolicyEngineBuild ?? null });
   });
 
   fastify.get("/api/v1/ops/readiness", withRouteAccess(fastify, "operator"), async (_request, reply) => {

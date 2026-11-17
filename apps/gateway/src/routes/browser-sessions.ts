@@ -2,6 +2,7 @@ import type { FastifyBaseLogger, FastifyPluginAsync, FastifyReply } from "fastif
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
+import { markMutationCommitted } from "../plugins/idempotency.js";
 
 const scopeSchema = z.enum(["read", "interact", "state", "admin"]);
 
@@ -64,6 +65,17 @@ export const browserSessionsRoutes: FastifyPluginAsync = async (fastify) => {
         actorId: resolveActorId(request),
       });
       return reply.code(201).send(session);
+    } catch (error) {
+      return sendBrowserSessionRouteError(reply, error, request.log);
+    }
+  });
+
+  fastify.post("/api/v1/browser-sessions/for-chat/:sessionId", operatorOnly, async (request, reply) => {
+    try {
+      const { sessionId } = sessionParamsSchema.parse(request.params);
+      const session = await fastify.gatewayRuntime.provisionChatBrowserSession(sessionId, resolveActorId(request));
+      await markMutationCommitted(request);
+      return reply.send(session);
     } catch (error) {
       return sendBrowserSessionRouteError(reply, error, request.log);
     }

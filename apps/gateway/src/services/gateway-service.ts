@@ -75,7 +75,6 @@ import {
   type ApprovalCreateAuthority,
   ToolPolicyEngine,
   assertWritePathInJail,
-  describeBrowserSessionState,
   fetchAllowlisted,
   RUNTIME_CONFIGURE_TOOL_NAME,
   type LocalEmbeddingLeaseRequest,
@@ -754,7 +753,7 @@ import type { RemoteWorkerChatAuthorityDependencies } from "./remote-worker-chat
 import { remoteWorkerAssignmentRuntimeActivated } from "./remote-worker-assignment-runtime-composition.js";
 import { RemoteWorkerChatExecutionService } from "./remote-worker-chat-execution-service.js";
 import { RemoteWorkerChatPlacementService } from "./remote-worker-chat-placement-service.js";
-import { ChatAutoActionPolicy, createWindowsAutoOverwrite } from "./chat-auto-action-policy.js";
+import { createGatewayChatAutoActions, type ChatAutoActionPolicy } from "./chat-auto-action-policy.js";
 import { isManagedProjectFileTool } from "@goatcitadel/contracts";
 import { isChatAutoApprovalEnabled } from "./chat-approval-mode-service.js";
 import { assertChatAutoCodeModeAllowed, runChatCodeModeRequest } from "./code-mode-request-tool.js";
@@ -881,7 +880,7 @@ import type { BaseAgentPromptSkill, BaseAgentPromptToolset } from "./base-agent-
 import { filterBasePromptToolsetByPolicy, type BasePromptCatalogScope } from "./base-prompt-capability-catalog.js";
 import { resolveProbeCitadelId, withBasePromptPolicyScope } from "./base-prompt-policy-scope.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
-import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
+import type { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import { ReviewReadinessService } from "./review-readiness-service.js";
 import { ChatSessionStatusService } from "./chat-session-status-service.js";
 import { ChatTimerService } from "./chat-timer-service.js";
@@ -916,8 +915,9 @@ import { sendQueuedChannelDeliveryWithParts } from "./channel-delivery-part-serv
 import { getInboundBotLoopGuard, VOICE_TRANSCRIPT_CONTENT_PREFIX } from "./channel-inbound-dispatch.js";
 import { ReplayExecutionSkippedError } from "./replay-execution.js";
 import {
-  evaluateDeploymentProfileToolAccess,
-  policyContextHasOperatorApproval,
+  createGatewayBrowserSessions,
+  createBrowserPolicyHooks,
+  evaluateBrowserToolDeployment,
 } from "../browser-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import {
@@ -955,6 +955,7 @@ import { listChatModelSuggestions } from "./chat-model-suggestions.js";
 import { isVisibleMcpTemplateRecord } from "./mcp-template-visibility.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { applyMcpRedaction, wildcardMatch } from "./mcp-server-policy.js";
+import { createLocalMcpFixtureTest } from "../dev-diagnostics/local-mcp-fixture-test.js";
 import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
 import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
 import { SkillHubLifecycleService } from "./skill-hub-lifecycle-service.js";
@@ -1069,6 +1070,7 @@ export class GatewayService {
   private readonly eventIngestService: EventIngestService;
   public readonly modelUsageAccounting: ModelUsageAccountingService;
   public readonly policyEngine: ToolPolicyEngine;
+  public readonly localMcpFixtureTest: ReturnType<typeof createLocalMcpFixtureTest>;
   public readonly secretStore: SecretStoreService;
   private readonly providerSecretStaging: ProviderSecretStaging;
   public readonly runtimeConfigurationService: RuntimeConfigurationService;
@@ -1404,13 +1406,7 @@ export class GatewayService {
       errandReplies: () => this.browserErrandService.channelReplies,
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
-    this.browserSessionRuntimeService = new BrowserSessionRuntimeService({
-      gatewaySql: this.gatewaySql,
-      publishRealtime: async (eventType, source, payload) => {
-        await this.publishRealtime(eventType, source, payload);
-      },
-      describeState: describeBrowserSessionState,
-    });
+    this.browserSessionRuntimeService = createGatewayBrowserSessions(this.gatewaySql, this.publishRealtime.bind(this));
     this.workspacePathBridgeRuntime = new WorkspacePathBridgeRuntime({
       storage: this.storage,
       rootDir: config.rootDir,
@@ -1477,19 +1473,18 @@ export class GatewayService {
         }),
     });
     this.googleWorkspaceOAuth = new GoogleWorkspaceOAuthService({ secretStore, storage: this.storage });
-    this.chatAutoActions = new ChatAutoActionPolicy({
-      storage: this.storage,
-      rootDir: config.rootDir,
-      workspaceDir: config.assistant.workspaceDir,
-      chatAutoApprovalEnabled: isChatAutoApprovalEnabled(this.storage),
-      overwrite: createWindowsAutoOverwrite((request) => this.policyEngine.inspectAccess(request)),
-    });
+    this.chatAutoActions = createGatewayChatAutoActions(config, this.storage, (request) =>
+      this.policyEngine.inspectAccess(request),
+    );
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
-      resolveExecutionRestriction: (request, stage, approvalId) =>
-        this.chatAutoActions.inspect(request, stage, approvalId),
+      matchesLocalMcpFixture: (request, serverId) => this.localMcpFixtureTest.matches(request, serverId),
+      ...createBrowserPolicyHooks(
+        () => this.config.assistant.deploymentProfile,
+        this.browserSessionRuntimeService,
+        this.chatAutoActions,
+      ),
       // Canonical approval creation registers the durable wait run and retryable observability envelope.
       createApproval: async (input, onCreated, authority) => await this.createApproval(input, onCreated, authority),
-      assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
       resolveOutsideRootWriteEligibility: (request) => isOutsideRootWriteEligible(request, { storage: this.storage }),
       readAttachmentBytes: async (request, attachmentId, window) => {
         // Session-scoped (checked before any bytes are read) and ranged: only the call's window is read.
@@ -2833,9 +2828,7 @@ export class GatewayService {
       },
       isValidToolName: (name) => isValidToolName(name),
       evaluateToolDeploymentGuard: (request) =>
-        evaluateDeploymentProfileToolAccess(this.config.assistant.deploymentProfile, request.toolName, request.args, {
-          operatorApproved: policyContextHasOperatorApproval(request.policyContext),
-        }),
+        evaluateBrowserToolDeployment(this.config.assistant.deploymentProfile, request),
       isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag),
       resolveToolHookWorkspaceId: async (request) => await this.resolveToolHookWorkspaceId(request),
       resolveWorkspacePathBridgeBeforeExecution: this.workspacePathBridgeRuntime.executionResolver.resolve,
@@ -3212,6 +3205,11 @@ export class GatewayService {
       approvalInbox: this.storage.approvalInbox,
       runImmediateTransaction: (callback) => this.storage.runImmediateTransaction(callback),
     });
+    this.localMcpFixtureTest = createLocalMcpFixtureTest(
+      () => this.config,
+      this.mcpServerStore,
+      this.storage.chatSessionMeta,
+    );
     this.mcpAdministration = composeMcpAdministration(this.mcpServerStore, {
       storage: { approvalInbox: this.storage.approvalInbox },
       captureMcpServerSessionCloser: (serverId) => this.mcpStdioSessions.captureServerCloser(serverId),

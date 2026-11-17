@@ -483,6 +483,69 @@ describe("ToolPolicyEngine permission profile upper bound", () => {
 });
 
 describe("ToolPolicyEngine grants", () => {
+  it("honors a temporary knowledge grant only for its tool and Chat until the exact expiry", async () => {
+    const runtimeDir = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-chat-grant-"));
+    tempRoots.push(runtimeDir);
+    const sqlite = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(runtimeDir, "transcripts"),
+      auditDir: path.join(runtimeDir, "audit"),
+    });
+    const storage = createSqliteAsyncStorage(sqlite);
+    const config: ToolPolicyConfig = {
+      ...policyConfig,
+      tools: { ...policyConfig.tools, approvalMode: "approve_all" },
+    };
+    const engine = new ToolPolicyEngine(config, storage);
+    const invoke = (toolName: string, sessionId: string) =>
+      engine.evaluateAccess({
+        toolName,
+        args: { query: "notes" },
+        agentId: "chat",
+        workspaceId: "workspace-1",
+        sessionId,
+      });
+    try {
+      const grant = await storage.toolGrants.createTtlForDuration(
+        {
+          decision: "allow",
+          toolPattern: "memory.search",
+          scope: "session",
+          scopeRef: "chat-1",
+          createdBy: "operator",
+        },
+        15 * 60_000,
+      );
+      expect(Date.parse(grant.expiresAt!) - Date.parse(grant.createdAt)).toBe(15 * 60_000);
+      await expect(invoke("memory.search", "chat-1")).resolves.toMatchObject({
+        allowed: true,
+        requiresApproval: false,
+        matchedGrantId: grant.grantId,
+      });
+      await expect(invoke("memory.search", "chat-2")).resolves.toMatchObject({ requiresApproval: true });
+      await expect(invoke("docs.search", "chat-1")).resolves.toMatchObject({ requiresApproval: true });
+      const denyEngine = new ToolPolicyEngine(
+        { ...config, tools: { ...config.tools, deny: ["memory.search"] } },
+        storage,
+      );
+      await expect(
+        denyEngine.evaluateAccess({
+          toolName: "memory.search",
+          args: { query: "notes" },
+          agentId: "chat",
+          sessionId: "chat-1",
+        }),
+      ).resolves.toMatchObject({ allowed: false });
+      // Advance this fixture's expiry to database now without waiting 15 minutes.
+      sqlite.db
+        .prepare("UPDATE tool_grants SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE grant_id = ?")
+        .run(grant.grantId);
+      await expect(invoke("memory.search", "chat-1")).resolves.toMatchObject({ requiresApproval: true });
+    } finally {
+      await storage.close();
+    }
+  }, 60_000);
+
   it("passes grant list, create, and revoke operations through to storage", async () => {
     const storage = createStorageStub();
     const grant = {
@@ -5824,7 +5887,12 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
       vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
       vi.stubEnv("GIT_CONFIG_GLOBAL", path.join(root, "empty-git-config"));
       const git = (...args: string[]) =>
-        execFileSync("git", args, { cwd: root, env: buildScrubbedSpawnEnv(), encoding: "utf8", windowsHide: true }).trim();
+        execFileSync("git", args, {
+          cwd: root,
+          env: buildScrubbedSpawnEnv(),
+          encoding: "utf8",
+          windowsHide: true,
+        }).trim();
       git("init", "--quiet", "--template=");
       expect(await fs.realpath(git("rev-parse", "--show-toplevel"))).toBe(root);
       process.chdir(root);

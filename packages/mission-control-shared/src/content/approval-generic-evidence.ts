@@ -249,6 +249,8 @@ function collectApprovalEvidence(
             collector.exact,
             true,
           );
+        } else if (record.reviewKind === "mcp.operation" && key === "requestArguments") {
+          pushEvidenceBlock(collector.changes, collector.seenBlocks, "MCP arguments", value, collector.exact, true);
         } else if (isFilesystemKey(key) || /^(candidateId|versionId|subjectId|subjectKind|scopeKind)$/.test(key)) {
           addTarget(collector, humanizeKey(key), value);
         } else if (isLikelyCommandKey(key) && value.trim()) {

@@ -218,7 +218,13 @@ describe("named MCP policy execution", () => {
     const pending = await asyncStorage.pendingApprovalActions.find(approvalId);
     expect(pending?.request).toMatchObject({ toolName: request().toolName, args: request().args });
     expect(JSON.stringify(pending)).not.toContain("mcpToolBinding");
-    expect((await asyncStorage.approvals.get(approvalId)).linkage?.toolName).toBe(request().toolName);
+    const approval = await asyncStorage.approvals.get(approvalId);
+    expect(approval.linkage?.toolName).toBe(request().toolName);
+    expect(approval.preview).toMatchObject({
+      reviewKind: "mcp.operation",
+      target: expect.stringContaining(" · tool "),
+    });
+    expect(approval.preview.requestArguments).toBe(JSON.stringify(request().args, null, 2));
     await asyncStorage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator" });
     const missing = await engine.executeApprovedAction(approvalId, undefined, {
       deferResolution: true,

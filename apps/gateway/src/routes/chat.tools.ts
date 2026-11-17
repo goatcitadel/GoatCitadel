@@ -1,6 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { OUTSIDE_ROOT_WRITE_GRANT_DURATION_CHOICES, OUTSIDE_ROOT_WRITE_ROOT_ID_PATTERN } from "@goatcitadel/contracts";
+import {
+  CHAT_TOOL_GRANT_DURATIONS,
+  ConflictError,
+  OUTSIDE_ROOT_WRITE_GRANT_DURATION_CHOICES,
+  OUTSIDE_ROOT_WRITE_ROOT_ID_PATTERN,
+} from "@goatcitadel/contracts";
 import type { CodeModeApprovalQueueItem } from "../services/capability-system-service.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 
@@ -17,6 +22,14 @@ const chatToolDecisionSchema = z.object({
     .strict()
     .optional(),
 });
+
+const temporaryChatToolApprovalSchema = z
+  .object({
+    sessionId: z.string().min(1),
+    approvalId: z.string().min(1),
+    duration: z.enum(CHAT_TOOL_GRANT_DURATIONS),
+  })
+  .strict();
 
 const chatToolApprovalsQuerySchema = z.object({
   sessionId: z.string().min(1),
@@ -103,6 +116,32 @@ export function registerChatToolRoutes(fastify: FastifyInstance): void {
       return reply.code(400).send({ error: (error as Error).message });
     }
   });
+
+  // A separate, strict route prevents a newer client from accidentally
+  // creating an indefinite grant when connected to an older Gateway.
+  fastify.post(
+    "/api/v1/chat/tools/approve-temporarily",
+    { preHandler: fastify.requireOperatorAuth },
+    async (request, reply) => {
+      const body = temporaryChatToolApprovalSchema.safeParse(request.body);
+      if (!body.success) {
+        return reply.code(400).send({ error: body.error.flatten() });
+      }
+      const { sessionId, approvalId, duration } = body.data;
+      try {
+        const result = await fastify.services.chatTools.resolveChatToolApproval(sessionId, approvalId, "approve", {
+          allowScope: "session",
+          temporaryGrantDuration: duration,
+          resolvedBy: resolveActorId(request),
+        });
+        await markMutationCommitted(request);
+        return reply.send({ ok: true, approvalId, ...result });
+      } catch (error) {
+        await markMutationCommittedFromError(request, error);
+        return reply.code(error instanceof ConflictError ? 409 : 400).send({ error: (error as Error).message });
+      }
+    },
+  );
 
   fastify.post("/api/v1/chat/tools/deny", async (request, reply) => {
     const body = chatToolDecisionSchema.safeParse(request.body);

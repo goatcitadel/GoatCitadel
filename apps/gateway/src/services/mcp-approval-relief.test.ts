@@ -7,7 +7,7 @@ import {
   type McpToolRecord,
 } from "@goatcitadel/contracts";
 import { createMcpToolPolicyBinding } from "@goatcitadel/policy-engine";
-import { resolveMcpApprovalRelief, type McpApprovalReliefPort } from "./mcp-approval-relief.js";
+import { hasMcpReadOnlyHint, resolveMcpApprovalRelief, type McpApprovalReliefPort } from "./mcp-approval-relief.js";
 
 function server(overrides: Partial<McpServerRecord> = {}, posture?: McpApprovalPosture): McpServerRecord {
   return {
@@ -62,6 +62,17 @@ function port(
 const wrapper = (args: Record<string, unknown> = { serverId: "srv-1", toolName: "tool.echo", arguments: {} }) => ({
   toolName: "mcp.invoke",
   args,
+});
+
+it("projects the read-only hint only for matching, consistently annotated inventory entries", async () => {
+  expect(await hasMcpReadOnlyHint(port(server()), wrapper())).toBe(true);
+  for (const tools of [
+    [tool({ readOnlyHint: true }, "different.tool")],
+    [tool({ readOnlyHint: true }), tool()],
+    [tool({ readOnlyHint: true, destructiveHint: true })],
+  ]) {
+    expect(await hasMcpReadOnlyHint(port(server(), tools), wrapper())).toBe(false);
+  }
 });
 
 describe("resolveMcpApprovalRelief", () => {

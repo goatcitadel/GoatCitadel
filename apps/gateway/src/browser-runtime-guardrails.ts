@@ -1,4 +1,26 @@
-import type { DeploymentProfile } from "@goatcitadel/contracts";
+import type { AsyncGatewaySqlRepository } from "@goatcitadel/storage";
+import {
+  BrowserSessionRuntimeService,
+  type BrowserSessionRuntimeDependencies,
+} from "./services/browser-session-runtime-service.js";
+import {
+  describeBrowserSessionState,
+  type ToolExecutionRestriction,
+  type ToolPolicyEngineRuntimeHooks,
+} from "@goatcitadel/policy-engine";
+import type { DeploymentProfile, ToolInvokeRequest } from "@goatcitadel/contracts";
+
+export const LOCAL_DEV_STORAGE_TEST_ORIGIN = "https://goatcitadel-storage-check.invalid";
+
+export function isLocalDevChatStorageTest(request: ToolInvokeRequest): boolean {
+  return (
+    request.toolName === "browser.storage.get" &&
+    request.surface === "chat" &&
+    Boolean(request.turnId) &&
+    request.args.origin === LOCAL_DEV_STORAGE_TEST_ORIGIN &&
+    request.args.storage === "local"
+  );
+}
 
 const RESTRICTED_BROWSER_STATE_TOOLS = new Set([
   "browser.cookies.get",
@@ -145,4 +167,60 @@ export function evaluateDeploymentProfileToolAccess(
       operatorApproved: false,
     },
   };
+}
+
+export function resolveBrowserStorageRestriction(
+  profile: DeploymentProfile,
+  request: ToolInvokeRequest,
+): ToolExecutionRestriction | undefined {
+  if (request.toolName !== "browser.storage.get" || profile === "trusted_local") return undefined;
+  if (profile === "local_dev" && isLocalDevChatStorageTest(request)) {
+    return { kind: "review", reason: "The local browser storage test requires approval for this read." };
+  }
+  return { kind: "block", reason: "This browser storage read is unavailable in the current deployment profile." };
+}
+
+export function evaluateBrowserToolDeployment(
+  profile: DeploymentProfile,
+  request: ToolInvokeRequest,
+): BrowserRuntimeGuardrailViolation | null {
+  if (profile === "local_dev" && isLocalDevChatStorageTest(request)) return null;
+  return evaluateDeploymentProfileToolAccess(profile, request.toolName, request.args, {
+    operatorApproved: policyContextHasOperatorApproval(request.policyContext),
+  });
+}
+
+export function createBrowserPolicyHooks(
+  readProfile: () => DeploymentProfile,
+  browserSessions: Pick<
+    import("./services/browser-session-runtime-service.js").BrowserSessionRuntimeService,
+    "assertAccess"
+  >,
+  autoActions: Pick<import("./services/chat-auto-action-policy.js").ChatAutoActionPolicy, "inspect">,
+): Pick<ToolPolicyEngineRuntimeHooks, "resolveExecutionRestriction" | "assertBrowserSessionAccess"> {
+  return {
+    resolveExecutionRestriction: async (request, stage, approvalId) =>
+      resolveBrowserStorageRestriction(readProfile(), request) ?? autoActions.inspect(request, stage, approvalId),
+    assertBrowserSessionAccess: (check) =>
+      browserSessions.assertAccess(check, readProfile() === "local_dev" && check.toolName === "browser.storage.get"),
+  };
+}
+
+export function createGatewayBrowserSessions(
+  gatewaySql: AsyncGatewaySqlRepository,
+  publishRealtime: NonNullable<BrowserSessionRuntimeDependencies["publishRealtime"]>,
+): BrowserSessionRuntimeService {
+  return new BrowserSessionRuntimeService({ gatewaySql, publishRealtime, describeState: describeBrowserSessionState });
+}
+
+export async function provisionCanonicalChatBrowserSession(
+  runtime: Pick<
+    import("./services/gateway-service.js").GatewayService,
+    "browserSessionRuntimeService" | "requireChatSession"
+  >,
+  sessionId: string,
+  actorId: string,
+) {
+  const chat = await runtime.requireChatSession(sessionId);
+  return runtime.browserSessionRuntimeService.provisionForChat(chat, actorId);
 }

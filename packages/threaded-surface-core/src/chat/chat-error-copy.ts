@@ -1,6 +1,9 @@
+import { CHAT_MCP_ACCESS_MESSAGES, type ChatMcpAccessBlocker } from "@goatcitadel/contracts";
+
 export interface ChatUiErrorDescriptor {
   summary: string;
   raw?: string;
+  mcpAccessBlocker?: ChatMcpAccessBlocker;
 }
 
 export type ChatErrorSource =
@@ -92,6 +95,33 @@ function describeWriteConflict(value: string, source: ChatErrorSource | null | u
   return "Another change to this conversation is still finishing. Try again in a moment.";
 }
 
+function extractMcpAccessBlocker(value: string): ChatMcpAccessBlocker | undefined {
+  // An SSE failure carries the public message. Before the stream starts, the same
+  // failure arrives as a typed HTTP conflict with the safe reason in its details.
+  const message = value.trim();
+  const match = Object.entries(CHAT_MCP_ACCESS_MESSAGES).find(([, text]) => text === message);
+  if (match) return match[0] as ChatMcpAccessBlocker;
+  if (!message.startsWith("API error 409: ")) return undefined;
+  try {
+    const body = JSON.parse(message.slice("API error 409: ".length)) as {
+      code?: string;
+      error?: string;
+      details?: { mcpAccessBlocker?: string };
+    };
+    const reason = body.details?.mcpAccessBlocker;
+    if (
+      body.code === "STATE_CONFLICT" &&
+      reason &&
+      Object.hasOwn(CHAT_MCP_ACCESS_MESSAGES, reason) &&
+      CHAT_MCP_ACCESS_MESSAGES[reason as ChatMcpAccessBlocker] === body.error
+    ) {
+      return reason as ChatMcpAccessBlocker;
+    }
+  } catch {
+    // Keep unrelated or malformed API errors on the existing path.
+  }
+}
+
 export function describeChatUiError(
   value?: string | null,
   source: ChatErrorSource | null = "other",
@@ -99,6 +129,8 @@ export function describeChatUiError(
   if (!value) {
     return null;
   }
+  const mcpAccessBlocker = extractMcpAccessBlocker(value);
+  if (mcpAccessBlocker) return { summary: CHAT_MCP_ACCESS_MESSAGES[mcpAccessBlocker], mcpAccessBlocker };
   const normalized = value.toLowerCase();
   const retryNote = shouldIncludeRetryNote(source) ? RETRY_NOTE : "";
   const externalServiceError = extractTypedExternalServiceError(value);

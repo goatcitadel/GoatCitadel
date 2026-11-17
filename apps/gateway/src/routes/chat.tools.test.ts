@@ -19,6 +19,9 @@ describe("chat tool routes", () => {
     app = Fastify();
     app.decorateRequest("authActorId", "operator-test");
     app.decorateRequest("authActorSource", "loopback");
+    app.decorate("requireOperatorAuth", async (request, reply) => {
+      if (request.headers.authorization === "non-operator") await reply.code(403).send();
+    });
     app.decorate("services", { chatTools } as never);
     registerChatToolRoutes(app);
     return app;
@@ -200,5 +203,34 @@ describe("chat tool routes", () => {
     });
     expect(rejected.map((response) => response.statusCode)).toEqual([400, 400, 400]);
     expect(resolveChatToolApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts only an operator and a supported duration on the temporary Chat route", async () => {
+    const resolveChatToolApproval = vi.fn(async () => ({ allowScope: "session", resumed: true }));
+    const gateway = createApp({ resolveChatToolApproval });
+    const url = "/api/v1/chat/tools/approve-temporarily";
+    const payload = { sessionId: "session-1", approvalId: "approval-1", duration: "1h" };
+    for (const invalid of [
+      { ...payload, duration: "24h" },
+      { ...payload, allowScope: "workspace" },
+    ]) {
+      expect((await gateway.inject({ method: "POST", url, payload: invalid })).statusCode).toBe(400);
+    }
+    expect(
+      (
+        await gateway.inject({
+          method: "POST",
+          url,
+          payload,
+          headers: { authorization: "non-operator" },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect((await gateway.inject({ method: "POST", url, payload })).statusCode).toBe(200);
+    expect(resolveChatToolApproval).toHaveBeenCalledExactlyOnceWith("session-1", "approval-1", "approve", {
+      allowScope: "session",
+      temporaryGrantDuration: "1h",
+      resolvedBy: "operator-test",
+    });
   });
 });

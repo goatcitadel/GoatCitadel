@@ -13,7 +13,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   APPROVAL_EXPIRY_ACTOR_ID,
+  CHAT_TOOL_GRANT_DURATION_MS,
   buildToolEffectEvidence,
+  canOfferChatToolGrant,
   MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
   canonicalJsonString,
   assertMeshCapabilityActivationApprovalPayload,
@@ -25,6 +27,7 @@ import {
   isChatTurnTerminalStatus,
   NotFoundError,
   type ChatTurnTraceRecord,
+  type ChatToolGrantDuration,
   type ApprovalBulkResolveInput,
   type ApprovalBulkResolveResult,
   type ApprovalCreateInput,
@@ -362,8 +365,9 @@ export async function listToolGrants(
 export async function createToolGrant(
   host: ApprovalLifecycleHost,
   input: ToolGrantCreateInput,
+  ...duration: [ttlMs?: number]
 ): Promise<ToolGrantRecord> {
-  const grant = await host.policyEngine.createGrant(input);
+  const grant = await host.policyEngine.createGrant(input, ...duration);
   await publishToolGrantCreated((event) => host.publishRealtime("system", "tools", event), grant);
   return grant;
 }
@@ -1489,6 +1493,7 @@ export async function resolveChatToolApproval(
     resolvedBy?: string;
     /** Outside-root write approvals only: the server-offered folder to open, and for how long. */
     writeGrant?: ChatApprovalWriteGrantChoice;
+    temporaryGrantDuration?: ChatToolGrantDuration;
   },
 ): Promise<{
   allowScope: "once" | "session" | "workspace";
@@ -1513,6 +1518,9 @@ export async function resolveChatToolApproval(
     throw new Error(`Approval ${approvalId} is not attached to session ${sessionId}.`);
   }
   if (approval.status !== "pending") {
+    if (options?.temporaryGrantDuration) {
+      throw new ConflictError({ message: "This approval was already decided." });
+    }
     return {
       allowScope: options?.allowScope ?? "once",
       resumed: false,
@@ -1522,6 +1530,23 @@ export async function resolveChatToolApproval(
   const allowScope = decision === "approve" && isCodeModeApproval(approval) ? "once" : requestedAllowScope;
   const resolvedBy = options?.resolvedBy?.trim() || "operator";
   const toolPattern = turn?.toolName ?? existingInlineApproval?.toolName ?? approval.kind;
+  const duration = options?.temporaryGrantDuration;
+  if (duration) {
+    const workspaceId = await readChatApprovalWorkspace(host, sessionId);
+    if (
+      decision !== "approve" ||
+      allowScope !== "session" ||
+      options.writeGrant ||
+      !Object.hasOwn(CHAT_TOOL_GRANT_DURATION_MS, duration) ||
+      !workspaceId ||
+      !canOfferChatToolGrant(approval, sessionId, workspaceId) ||
+      !turn ||
+      turn.toolName !== approval.kind ||
+      turn.turnId !== approval.linkage?.turnId
+    ) {
+      throw new ValidationError({ message: "This approval cannot open a temporary allowance for this Chat." });
+    }
+  }
   let grant: ToolGrantRecord | undefined;
   let grantError: string | undefined;
   const policyEngine = host.policyEngine;
@@ -1534,7 +1559,7 @@ export async function resolveChatToolApproval(
     writeGrant: options?.writeGrant,
   });
   const persistentGrantScope =
-    !outsideRootWrite && decision === "approve" && allowScope !== "once"
+    !duration && !outsideRootWrite && decision === "approve" && allowScope !== "once"
       ? allowScope === "workspace"
         ? ("workspace" as const)
         : ("session" as const)
@@ -1548,8 +1573,29 @@ export async function resolveChatToolApproval(
   const resolution = await host.resolveApproval(approvalId, {
     decision,
     resolvedBy,
-    resolutionNote: buildChatApprovalResolutionNote(decision, allowScope),
+    resolutionNote: duration
+      ? "Approved from Chat with a request for a temporary tool allowance."
+      : buildChatApprovalResolutionNote(decision, allowScope),
   });
+  if (duration) {
+    // Only the canonical winning decision can mint this grant. Do not reuse
+    // an existing grant or copy this allowance to a parent or workspace.
+    try {
+      grant = await createToolGrant(
+        host,
+        {
+          toolPattern,
+          decision: "allow",
+          scope: "session",
+          scopeRef: sessionId,
+          createdBy: resolvedBy,
+        },
+        CHAT_TOOL_GRANT_DURATION_MS[duration],
+      );
+    } catch {
+      grantError = "The temporary allowance could not be created.";
+    }
+  }
   let persistentGrantRequest:
     | {
         scope: "session" | "workspace";
@@ -1702,6 +1748,10 @@ async function resolveChatApprovalSessionGrantScopeRefs(
   return [...scopeRefs];
 }
 
+async function readChatApprovalWorkspace(host: ApprovalLifecycleHost, sessionId: string): Promise<string | undefined> {
+  return (await host.storage.chatSessionMeta.get(sessionId))?.workspaceId;
+}
+
 async function resolveChatApprovalWorkspaceScopeRef(
   host: ApprovalLifecycleHost,
   approval: ApprovalRequest,
@@ -1712,7 +1762,7 @@ async function resolveChatApprovalWorkspaceScopeRef(
     typeof approval.linkage?.workspaceId === "string" && approval.linkage.workspaceId.trim()
       ? approval.linkage.workspaceId.trim()
       : undefined;
-  const metaWorkspaceId = (await host.storage.chatSessionMeta.get(sessionId))?.workspaceId?.trim();
+  const metaWorkspaceId = (await readChatApprovalWorkspace(host, sessionId))?.trim();
   const workspaceId =
     linkageWorkspaceId ??
     (typeof payload.workspaceId === "string" && payload.workspaceId.trim() ? payload.workspaceId.trim() : undefined) ??

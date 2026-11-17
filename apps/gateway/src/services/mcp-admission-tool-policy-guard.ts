@@ -6,6 +6,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { createMcpToolPolicyBinding, type ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import { McpRequesterResolutionError } from "./mcp-requester-resolution.js";
+import { mcpChatAccessError } from "./mcp-chat-access-error.js";
 export interface McpAdmissionToolPolicyHost {
   readMcpServers(): Promise<McpServerRecord[]>;
   assertMcpServerInCapabilityScope(request: McpInvokeRequest): Promise<void>;
@@ -62,6 +63,11 @@ export async function assertMcpAdmissionToolAllowed(
       sessionId: scope.sessionId,
       context: { reasonCodes: access.reasonCodes, permissionProfileId: access.permissionProfileId },
     });
-    throw new McpRequesterResolutionError("operation_denied");
+    const codes = new Set(access.reasonCodes);
+    if (codes.has("policy_deny") || codes.has("policy_disallow")) throw mcpChatAccessError("tool_policy");
+    if (codes.has("permission_profile_upper_bound")) throw mcpChatAccessError("permission_profile");
+    if (codes.has("citadel_ward_deny")) throw mcpChatAccessError("citadel_policy");
+    if (codes.has("grant_deny") || codes.has("grant_constraints_block")) throw mcpChatAccessError("scoped_grant");
+    throw mcpChatAccessError("policy_unavailable");
   }
 }

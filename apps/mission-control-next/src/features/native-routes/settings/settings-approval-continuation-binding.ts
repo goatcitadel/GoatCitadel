@@ -63,7 +63,7 @@ function approvalPayloadBinding(plan: ChangePlanRecord) {
 }
 
 /** The approval is authored before the awaiting action, so its action hash can differ. */
-export function requireApprovedBinding(plan: ChangePlanRecord, replay: ApprovalReplaySnapshot) {
+export function requireSettingsApprovalBinding(plan: ChangePlanRecord, replay: ApprovalReplaySnapshot) {
   const approval = replay?.approval;
   const action = continuationAction(plan, plan.origin.workspaceId);
   const expected = approvalPayloadBinding(plan);
@@ -78,11 +78,33 @@ export function requireApprovedBinding(plan: ChangePlanRecord, replay: ApprovalR
       canonicalJsonString(expected)
   )
     throw new Error("Approval evidence does not match this Settings change. Refresh and review its required approval.");
+  return approval;
+}
+
+export function requireApprovedBinding(plan: ChangePlanRecord, replay: ApprovalReplaySnapshot) {
+  const approval = requireSettingsApprovalBinding(plan, replay);
   if (approval.status === "pending") {
     throw new Error("The approval is not approved yet. Review the required approval first.");
   }
   if (approval.status !== "approved" || (approval.resolutionOutcome && approval.resolutionOutcome !== "approved")) {
     throw new Error("The required approval is not approved. Review its recorded decision before continuing.");
+  }
+}
+
+export function gatewayAuthApprovalChange(plan: ChangePlanRecord | undefined) {
+  const change = plan?.request?.kind === "runtime_configuration" ? plan.request.change : undefined;
+  if (
+    change?.operation === "gateway_auth_configuration" &&
+    plan?.scope === "runtime" &&
+    plan.origin?.workspaceId === "default" &&
+    plan.target?.ownerId === "runtime_settings" &&
+    plan.target.resourceId === change.operation &&
+    Number.isSafeInteger(plan.target.expectedRevision) &&
+    plan.adapter?.adapterId === "runtime-configuration" &&
+    plan.adapter.version === 2 &&
+    continuationAction(plan, "default")
+  ) {
+    return change;
   }
 }
 

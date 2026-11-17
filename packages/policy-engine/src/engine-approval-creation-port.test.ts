@@ -115,6 +115,53 @@ function createHarness() {
 }
 
 describe("ToolPolicyEngine canonical approval creation", () => {
+  it.each([
+    { toolName: "memory.search", args: { query: "launch decisions" }, preview: { query: "launch decisions" } },
+    { toolName: "git.commit", args: { message: "Record changes" }, preview: { input: "Record changes" } },
+    { toolName: "git.branch.switch", args: { branch: "review" }, preview: { branchTarget: "review" } },
+    { toolName: "git.add", args: { paths: ["workspace/notes.md"] }, preview: { paths: ["workspace/notes.md"] } },
+    { toolName: "browser.search", args: { query: "launch decisions" }, preview: { input: "launch decisions" } },
+    {
+      toolName: "session.history",
+      args: { messageId: "anchor-1", sequence: 42 },
+      preview: { target: "This conversation", input: "Message anchor-1, sequence 42" },
+    },
+    {
+      toolName: "schedule.manage",
+      args: { op: "cancel", jobId: "morning-briefing" },
+      preview: { target: "Schedule morning-briefing" },
+    },
+    {
+      toolName: "schedule.manage",
+      args: { op: "create", schedule: "0 9 * * 1", prompt: "Summarize the week" },
+      preview: { scheduleSummary: "0 9 * * 1", input: "Summarize the week" },
+    },
+    {
+      toolName: "notify.request",
+      args: { eventType: "turn.completed", title: "Report ready", message: "The report is ready to review." },
+      preview: { title: "Report ready", input: "The report is ready to review." },
+    },
+  ])("saves review evidence when policy requires approval for $toolName", async ({ toolName, args, preview }) => {
+    const harness = createHarness();
+    const createApproval = vi.fn(async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitPort) => {
+      const created = harness.create(input);
+      await finalizeExtension(onCreated?.(created), created);
+      return created;
+    });
+    const engine = new ToolPolicyEngine(
+      { ...policyConfig, tools: { ...policyConfig.tools, approvalMode: "approve_all" } },
+      harness.storage,
+      undefined,
+      { createApproval },
+    );
+    await expect(engine.invoke({ ...createRequest(), toolName, args })).resolves.toMatchObject({
+      outcome: "approval_required",
+    });
+    expect(harness.create).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: toolName, payload: args, preview: expect.objectContaining(preview) }),
+    );
+  });
+
   it("returns canonical wait/provenance truth even when the legacy approval audit sink is unavailable", async () => {
     const harness = createHarness();
     const createApproval = vi.fn(

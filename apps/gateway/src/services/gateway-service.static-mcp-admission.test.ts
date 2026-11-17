@@ -1,3 +1,4 @@
+import { CHAT_MCP_ACCESS_MESSAGES } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
 import type { ActiveTurnAdmission } from "./chat-turn-types.js";
 import type { ChatFeatureAdmissionHost } from "./chat-feature-admission-service.js";
@@ -70,7 +71,11 @@ describe("saved MCP admission through Gateway composition", () => {
         await expect(result).resolves.toBeUndefined();
         expect(stub.recordDevDiagnostic).not.toHaveBeenCalled();
       } else {
-        await expect(result).rejects.toThrow(/Inspect current Chat permissions/);
+        await expect(result).rejects.toMatchObject({
+          code: "STATE_CONFLICT",
+          message: CHAT_MCP_ACCESS_MESSAGES.tool_policy,
+          details: { mcpAccessBlocker: "tool_policy" },
+        });
         expect(stub.recordDevDiagnostic).toHaveBeenCalledWith(
           expect.objectContaining({
             event: "mcp.admission.policy_denied",

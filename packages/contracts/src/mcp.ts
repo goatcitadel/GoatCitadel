@@ -419,6 +419,34 @@ export interface McpToolRecord {
   updatedAt: string;
 }
 
+export interface McpTestAllowanceCandidate {
+  serverId: string;
+  serverRevision: string;
+  connectionRevision: string;
+  label: string;
+  toolName: string;
+}
+
+export interface McpTestAllowanceRequest {
+  serverId: string;
+  serverRevision: string;
+  connectionRevision: string;
+  toolName: string;
+  workspaceId: string;
+  sessionId: string;
+}
+
+export interface McpTestAllowance extends McpTestAllowanceRequest {
+  allowanceId: string;
+  expiresAt: string;
+}
+
+export interface McpTestAllowanceStatus {
+  available: boolean;
+  candidates: McpTestAllowanceCandidate[];
+  allowance: McpTestAllowance | null;
+}
+
 /**
  * Whether a tool call must still ask the operator under a server's approval setting.
  * Pure and fail-closed: an unset setting, an unknown setting, or a tool with no labels asks, and a tool marked

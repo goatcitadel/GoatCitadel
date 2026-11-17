@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
+import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { ChatBlockers } from "./ChatBlockers";
 import { GatewayUnavailableContext } from "../../app/gateway-unavailable-context";
 
@@ -12,6 +13,7 @@ const api = vi.hoisted(() => ({
   fetchApprovals: vi.fn(),
   resolveApproval: vi.fn(),
   fetchApprovalReplay: vi.fn(),
+  approveChatToolTemporarily: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
   fetchApproval: api.fetchApproval,
@@ -20,6 +22,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchApprovals: api.fetchApprovals,
   resolveApproval: api.resolveApproval,
+}));
+vi.mock("@goatcitadel/mission-control-shared/api/chat", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/chat")>()),
+  approveChatToolTemporarily: api.approveChatToolTemporarily,
 }));
 // The approval reviews name workspaces from the workspace list.
 vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
@@ -87,6 +93,7 @@ afterEach(() => {
   client.clear();
   api.fetchApproval.mockReset();
   api.fetchApprovals.mockReset();
+  api.approveChatToolTemporarily.mockReset();
   expect(takeRequests()).toEqual([]);
 });
 
@@ -163,8 +170,18 @@ describe("Chat blockers", () => {
     );
     await act(async () => review?.click());
     expect(onApprovePending).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Confirm danger-level action");
-    expect(document.body.textContent).toContain("pnpm test");
+    expect(review?.getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    const inline = container.querySelector<HTMLElement>('[aria-label="Exact approval review"]');
+    expect(inline?.hidden).toBe(false);
+    expect(inline?.textContent).toContain("pnpm test");
+    expect([...inline!.querySelectorAll("button")].some((button) => button.textContent === "Approve once")).toBe(true);
+    await act(async () =>
+      [...inline!.querySelectorAll("button")].find((button) => button.textContent === "Cancel")!.click(),
+    );
+    expect(inline?.hidden).toBe(true);
+    expect(document.activeElement).toBe(review);
+    expect(onApprovePending).not.toHaveBeenCalled();
   });
 
   it("loads persisted evidence for nuclear risk before its review", async () => {
@@ -288,14 +305,20 @@ describe("Chat blockers", () => {
   });
 });
 
-it("uses the Inbox decision owner for a low-risk Chat action and retains its receipt", async () => {
+it("shows the memory query and uses the Inbox decision owner for a low-risk Chat approval", async () => {
   const record = {
     approvalId: "safe-new",
-    kind: "tool_invoke",
+    kind: "memory.search",
     status: "pending",
     riskLevel: "safe",
-    payload: {},
-    preview: { path: "test.txt" },
+    payload: { query: "launch decisions" },
+    preview: {
+      reviewKind: "knowledge.operation",
+      toolName: "memory.search",
+      query: "launch decisions",
+      target: "Memory namespace: all namespaces",
+      optionsSummary: "Maximum results: 12",
+    },
     createdAt: "2026-10-01T00:00:00Z",
     explanationStatus: "not_requested",
   };
@@ -335,7 +358,11 @@ it("uses the Inbox decision owner for a low-risk Chat action and retains its rec
   );
   const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent === "Approve once")!;
   expect(button.disabled).toBe(false);
-  await act(async () => button.click());
+  expect(container.textContent).toContain("launch decisions");
+  await act(async () => {
+    button.click();
+    await vi.dynamicImportSettled();
+  });
   await vi.waitFor(() => expect(container.textContent).toContain("Decision recorded"));
   expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("safe-new", "approve");
   expect(api.fetchApproval).toHaveBeenCalledWith("safe-new", { workspaceId: "default" });
@@ -710,6 +737,309 @@ it("pauses the decision buttons while the shell says GoatCitadel is unreachable 
   expect(findButton("Approve once")!.closest("fieldset")?.disabled).toBe(false);
 });
 
+it.each([
+  { toolName: "memory.search", result: { items: [] }, message: "Search complete · 0 results" },
+  { toolName: "browser.search", result: { results: [{}] }, message: "Search complete · 1 result" },
+  { toolName: "memory.search", result: {}, message: "Search complete" },
+  {
+    toolName: "browser.search",
+    result: { backend: "official", backendUsed: false, results: [] },
+    message: "Search did not complete",
+  },
+])("shows $message from the recorded $toolName outcome", async ({ toolName, result, message }) => {
+  const latestTurn = {
+    turnId: "turn/1",
+    trace: { sessionId: "session/1", status: "completed" },
+    toolRuns: [
+      { turnId: "turn/1", sessionId: "session/1", approvalId: "approval/1", toolName, status: "executed", result },
+    ],
+  } as NonNullable<Parameters<typeof ChatBlockers>[0]["latestTurn"]>;
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers props={blockerProps({ pendingApproval: null })} latestTurn={latestTurn} />
+      </QueryClientProvider>,
+    ),
+  );
+  expect(container.querySelector('[role="status"]')?.textContent).toBe(message);
+});
+
+it.each([
+  { hint: true, result: { ok: true, contentItems: [{}] }, message: "Request complete · 1 item" },
+  {
+    hint: true,
+    result: { ok: false, externalOutcome: "unknown_after_send" },
+    message: "Request outcome unknown",
+  },
+  { hint: undefined, result: { ok: true, contentItems: [{}] }, message: undefined },
+])("uses the saved read-only MCP review for $message", async ({ hint, result, message }) => {
+  const toolName = "mcp.fixture.read";
+  api.fetchApproval.mockResolvedValue({
+    approvalId: "approval/1",
+    kind: toolName,
+    status: "approved",
+    linkage: { sessionId: "session/1", turnId: "turn/1" },
+    preview: { reviewKind: "mcp.operation", mcpReadOnlyHint: hint },
+  });
+  const latestTurn = {
+    turnId: "turn/1",
+    trace: { sessionId: "session/1", status: "completed" },
+    toolRuns: [
+      { turnId: "turn/1", sessionId: "session/1", approvalId: "approval/1", toolName, status: "executed", result },
+    ],
+  } as unknown as NonNullable<Parameters<typeof ChatBlockers>[0]["latestTurn"]>;
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers props={blockerProps({ pendingApproval: null })} latestTurn={latestTurn} />
+      </QueryClientProvider>,
+    ),
+  );
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  expect(api.fetchApproval).toHaveBeenCalledWith("approval/1", expect.objectContaining({ workspaceId: "default" }));
+  expect(container.querySelector('[aria-label="MCP request approval"] [data-approval-read-status]')?.textContent).toBe(
+    message,
+  );
+});
+
+it("keeps a changed MCP warning visible and opens the refreshed exact action with Review again", async () => {
+  const kind = "mcp.fixture.read";
+  const original: ApprovalRequest = {
+    approvalId: "approval/1",
+    kind,
+    status: "pending",
+    riskLevel: "danger",
+    payload: {},
+    preview: { reviewKind: "mcp.operation", target: "Original fixture", requestArguments: "No arguments" },
+    linkage: { workspaceId: "default", sessionId: "session/1", turnId: "turn/1" },
+    explanationStatus: "pending",
+    createdAt: "2026-10-01T00:00:00Z",
+  };
+  const changed: ApprovalRequest = {
+    ...original,
+    payload: { item: "updated" },
+    preview: { ...original.preview, target: "Updated fixture", requestArguments: '{"item":"updated"}' },
+  };
+  let releaseRefresh!: (record: ApprovalRequest) => void;
+  const refresh = new Promise<ApprovalRequest>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  api.fetchApproval.mockResolvedValueOnce(original).mockResolvedValueOnce(changed).mockReturnValueOnce(refresh);
+  api.resolveApproval.mockClear();
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({ pendingApproval: { approvalId: original.approvalId, kind, riskLevel: "danger" } })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(findButton("Review danger approval")).toBeDefined());
+  await act(async () => findButton("Review danger approval")!.click());
+  expect(container.querySelector('[aria-label="Exact approval review"]')?.textContent).toContain("No arguments");
+  await act(async () => findButton("Approve once")!.click());
+  const warning = "This MCP action changed. Review the updated action before deciding.";
+  await vi.waitFor(() => expect(container.querySelector("[data-approval-warning]")?.textContent).toBe(warning));
+  expect(findButton("Review again")).toBeUndefined();
+  expect(findButton("Approve once")).toBeUndefined();
+
+  await act(async () => releaseRefresh(changed));
+  await vi.waitFor(() => expect(findButton("Review again")).toBeDefined());
+  expect(container.querySelector("[data-approval-warning]")?.textContent).toBe(warning);
+  expect(findButton("Approve once")).toBeUndefined();
+  await act(async () => findButton("Review again")!.click());
+
+  const inline = container.querySelector('[aria-label="Exact approval review"]');
+  expect(inline?.textContent).toContain("Updated fixture");
+  expect(inline?.textContent).toContain('{"item":"updated"}');
+  expect(inline?.textContent).not.toContain("Original fixture");
+  expect(container.querySelector("[data-approval-warning]")?.textContent).toBe(warning);
+  expect(findButton("Approve once")).toBeDefined();
+  expect(api.resolveApproval).not.toHaveBeenCalled();
+});
+
+it.each([
+  { decision: "approve", status: "approved" as const, matches: true, notice: "Approved in another tab" },
+  { decision: "approve", status: "rejected" as const, matches: true, notice: "Denied in another tab" },
+  { decision: "approve", status: "approved" as const, matches: false, notice: undefined },
+  { decision: "approve", status: "rejected" as const, matches: false, notice: undefined },
+  { decision: "reject", status: "approved" as const, matches: true, notice: "Approved in another tab" },
+  { decision: "reject", status: "approved" as const, matches: false, notice: undefined },
+  { decision: "reject", status: "rejected" as const, matches: true, notice: "Denied in another tab" },
+  { decision: "reject", status: "rejected" as const, matches: false, notice: undefined },
+])(
+  "reconciles a $status conflict after $decision when the MCP action matches ($matches)",
+  async ({ decision, status, matches, notice }) => {
+    const { ApiRequestError } = await import("@goatcitadel/mission-control-shared/api/http-internal");
+    const kind = "mcp.fixture.read";
+    const record: ApprovalRequest = {
+      approvalId: `approval/conflict-${decision}-${status}-${matches}`,
+      kind,
+      status: "pending",
+      riskLevel: "danger",
+      payload: {},
+      preview: {
+        reviewKind: "mcp.operation",
+        target: "Fixture",
+        requestArguments: "No arguments",
+        mcpReadOnlyHint: true,
+      },
+      linkage: { workspaceId: "default", sessionId: "session/1", turnId: "turn/1" },
+      explanationStatus: "pending",
+      createdAt: "2026-10-01T00:00:00Z",
+    };
+    const settled: ApprovalRequest = {
+      ...record,
+      status,
+      payload: matches ? record.payload : { changed: true },
+    };
+    let sendConflict!: (error: Error) => void;
+    api.fetchApproval.mockResolvedValue(record);
+    api.resolveApproval.mockReset().mockReturnValue(
+      new Promise((_, reject) => {
+        sendConflict = reject;
+      }),
+    );
+    const onRefreshThread = vi.fn();
+    const makeTurn = (phase: "waiting_for_approval" | "running" | "completed") =>
+      ({
+        turnId: "turn/1",
+        trace: { sessionId: "session/1", status: phase },
+        toolRuns: [
+          {
+            toolRunId: "tool/1",
+            turnId: "turn/1",
+            sessionId: "session/1",
+            approvalId: record.approvalId,
+            toolName: kind,
+            status: phase === "completed" ? (status === "approved" ? "executed" : "blocked") : "approval_required",
+            ...(phase === "completed" && status === "approved" ? { result: { ok: true, contentItems: [{}] } } : {}),
+          },
+        ],
+      }) as unknown as NonNullable<Parameters<typeof ChatBlockers>[0]["latestTurn"]>;
+    const render = (phase: Parameters<typeof makeTurn>[0]) =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChatBlockers
+            props={blockerProps({
+              pendingApproval:
+                phase === "waiting_for_approval" ? { approvalId: record.approvalId, kind, riskLevel: "danger" } : null,
+              onRefreshThread,
+            })}
+            latestTurn={makeTurn(phase)}
+          />
+        </QueryClientProvider>,
+      );
+    await act(async () => render("waiting_for_approval"));
+    await vi.waitFor(() => expect(findButton("Review danger approval")).toBeDefined());
+    await act(async () => findButton("Review danger approval")!.click());
+    await act(async () => findButton(decision === "approve" ? "Approve once" : "Deny")!.click());
+    await vi.waitFor(() => expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith(record.approvalId, decision));
+    api.fetchApproval.mockResolvedValue(settled);
+    await act(async () => {
+      client.setQueryData(["approvals", "record", "default", record.approvalId], settled);
+      render("running");
+    });
+    expect(findButton("Approve once")).toBeUndefined();
+    expect(container.textContent).not.toContain("Request complete");
+    expect(container.textContent).not.toContain("in another tab");
+    await act(async () =>
+      sendConflict(
+        new ApiRequestError("already resolved", {
+          kind: "http",
+          method: "POST",
+          path: `/api/v1/approvals/${record.approvalId}/resolve`,
+          status: 409,
+        }),
+      ),
+    );
+    if (notice) {
+      await vi.waitFor(() => expect(container.textContent).toContain(notice));
+      expect(onRefreshThread).toHaveBeenCalledOnce();
+    } else {
+      expect(container.textContent).not.toContain("in another tab");
+      expect(onRefreshThread).not.toHaveBeenCalled();
+    }
+    expect(container.textContent?.includes("Resuming this turn…")).toBe(matches && status === "approved");
+    await act(async () => render("completed"));
+    expect(container.textContent?.includes("Request complete · 1 item")).toBe(status === "approved");
+    expect(container.textContent?.includes("in another tab")).toBe(matches);
+    if (notice) expect(container.textContent).toContain(notice);
+    expect(api.resolveApproval).toHaveBeenCalledOnce();
+  },
+);
+
+it.each([
+  { outcome: "approved", status: "approved", timely: "before", message: "Approved in another tab" },
+  { outcome: "denied", status: "rejected", timely: "before", message: "Denied in another tab" },
+  { outcome: "expired", status: "rejected", timely: "before", message: "Approval expired." },
+  { outcome: "withdrawn", status: "rejected", timely: "before", message: "Approval withdrawn." },
+  { outcome: "denied", status: "rejected", timely: "after", message: "Denied in another tab" },
+] as const)(
+  "reconciles a memory allowance decision settled $timely submit as $outcome",
+  async ({ outcome, status, timely, message }) => {
+    const { ApiRequestError } = await import("@goatcitadel/mission-control-shared/api/http-internal");
+    const approval: ApprovalRequest = {
+      approvalId: `knowledge/${outcome}-${timely}`,
+      kind: "memory.search",
+      riskLevel: "safe",
+      status: "pending",
+      payload: { query: "notes" },
+      preview: { reviewKind: "knowledge.operation", toolName: "memory.search", query: "notes", target: "Memory" },
+      linkage: {
+        actionType: "tool.invoke",
+        toolName: "memory.search",
+        sessionId: "session/1",
+        workspaceId: "default",
+        turnId: "turn/1",
+      },
+      createdAt: "2026-11-16T18:00:00Z",
+      explanationStatus: "pending",
+    };
+    const settled: ApprovalRequest = { ...approval, status, resolutionOutcome: outcome };
+    const onRefreshThread = vi.fn();
+    api.resolveApproval.mockClear();
+    api.fetchApproval.mockResolvedValue(approval);
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChatBlockers
+            props={blockerProps({
+              pendingApproval: { approvalId: approval.approvalId, kind: approval.kind, riskLevel: "safe" },
+              onRefreshThread,
+            })}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(findButton("Allow this tool in this Chat")).toBeDefined());
+    await act(async () => findButton("Allow this tool in this Chat")!.click());
+    if (timely === "before") {
+      api.fetchApproval.mockResolvedValue(settled);
+    } else {
+      api.approveChatToolTemporarily.mockImplementationOnce(async () => {
+        api.fetchApproval.mockResolvedValue(settled);
+        throw new ApiRequestError("already decided", {
+          kind: "http",
+          method: "POST",
+          path: "/api/v1/chat/tools/approve-temporarily",
+          status: 409,
+        });
+      });
+    }
+    await act(async () => findButton("Approve and allow")!.click());
+    await vi.waitFor(() => expect(container.textContent).toContain(message));
+    expect(container.textContent).not.toContain("This tool is allowed");
+    if (outcome !== "denied") expect(container.textContent).not.toContain("Denied in another tab");
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+    expect(api.approveChatToolTemporarily).toHaveBeenCalledTimes(timely === "before" ? 0 : 1);
+    expect(onRefreshThread).toHaveBeenCalledOnce();
+  },
+);
+
 it("shows a failed record read as an error with Try again and Deny, not as checking (CH-02)", async () => {
   api.fetchApproval.mockRejectedValue(new Error("fixture outage"));
   const onDenyPending = vi.fn();
@@ -852,7 +1182,7 @@ it("says why a code_mode.run approval can't be approved yet, and checks the code
     ),
   );
   await vi.waitFor(() => expect(findButton("Check again")).toBeDefined());
-  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Gateway unavailable");
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("Gateway unavailable");
   expect(findButton("Review danger approval")!.disabled).toBe(true);
   specialist.read.mockResolvedValue({ replay: { approval: record, events: [], effects: [] } });
   await act(async () => findButton("Check again")!.click());

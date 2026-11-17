@@ -29,6 +29,21 @@ export interface McpApprovalReliefPort {
 
 const CANONICAL_MCP_TOOL_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$/;
 
+/** Display metadata from stored MCP annotations. It does not establish the tool's effect or change policy. */
+export async function hasMcpReadOnlyHint(
+  port: Pick<McpApprovalReliefPort, "listMcpTools">,
+  request: Parameters<typeof resolveMcpApprovalRelief>[1],
+  binding?: McpToolPolicyBinding,
+): Promise<boolean> {
+  const target = readMcpApprovalReliefTarget(request, binding);
+  if (!target) return false;
+  const matches = await listMatchingMcpTools(port, target).catch(() => []);
+  return (
+    matches.length > 0 &&
+    matches.every((tool) => tool.annotations?.readOnlyHint === true && tool.annotations.destructiveHint !== true)
+  );
+}
+
 /**
  * Whether a connector's approval setting can let any call run on its own on this install. A remote_hardened install
  * never relaxes an approval, matching every other operator relaxation there (the Settings approval skip, bypass,
@@ -80,9 +95,7 @@ export async function resolveMcpApprovalRelief(
   ) {
     return undefined;
   }
-  const entries = (await port.listMcpTools(target.serverId)).filter(
-    (tool) => tool.serverId === target.serverId && tool.toolName === target.nativeToolName,
-  );
+  const entries = await listMatchingMcpTools(port, target);
   // Every same-named entry must independently allow it; an unlabelled or disagreeing duplicate asks.
   if (entries.length === 0 || entries.some((tool) => mcpCallAsksFirst(posture, tool.annotations))) {
     return undefined;
@@ -107,6 +120,15 @@ export async function resolveMcpToolPolicyOptions(
     ...(mcpToolBinding ? { mcpToolBinding } : {}),
     ...(mcpApprovalRelief ? { mcpApprovalRelief } : {}),
   };
+}
+
+async function listMatchingMcpTools(
+  port: Pick<McpApprovalReliefPort, "listMcpTools">,
+  target: { serverId: string; nativeToolName: string },
+): Promise<McpToolRecord[]> {
+  return (await port.listMcpTools(target.serverId)).filter(
+    (tool) => tool.serverId === target.serverId && tool.toolName === target.nativeToolName,
+  );
 }
 
 function readMcpApprovalReliefTarget(

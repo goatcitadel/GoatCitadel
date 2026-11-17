@@ -176,7 +176,7 @@ export interface ToolExecutorRuntimeHooks {
    */
   acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease;
   prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch;
-  assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void;
+  assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void | Promise<void>;
   /** Resolve protected official-search credentials at execution time, before environment fallback. */
   resolveCredential?: ResolveOfficialSearchCredential;
   /** Resolve the keychain-held Firecrawl key at execution time, before environment fallback. */

@@ -1123,6 +1123,27 @@ export type ChatTurnRecoveryAction =
   | "shorten_conversation"
   | "check_provider_plan";
 
+/** Public, credential-free findings from the Gateway's MCP admission checks in Chat. */
+export const CHAT_MCP_ACCESS_MESSAGES = {
+  sign_in:
+    "Saved MCP tools in Chat require an authenticated operator session. Configure supported Gateway authentication and start a new Chat turn.",
+  tool_policy: "The Gateway tool policy denies this MCP tool. Review the MCP rules in your tool policy.",
+  permission_profile: "This Chat’s permission profile does not include the selected MCP tool.",
+  scoped_grant: "A scoped tool grant blocks this MCP request.",
+  citadel_policy: "A Citadel access rule denies this MCP tool.",
+  workspace_scope: "The selected MCP server is outside this workspace’s capability scope.",
+  server_disabled: "The selected MCP server is disabled.",
+  server_quarantined: "The selected MCP server is quarantined.",
+  server_sign_in: "The selected MCP server needs to be signed in again.",
+  server_disconnected: "The selected MCP server is disconnected.",
+  server_tool_policy: "The selected MCP server’s tool rules block this MCP tool.",
+  tool_unavailable: "The requested MCP tool is unavailable on the selected server.",
+  discovery_failed: "Chat could not read the selected MCP server’s tool catalog.",
+  policy_unavailable: "Chat could not verify access to the selected MCP tool.",
+} as const;
+
+export type ChatMcpAccessBlocker = keyof typeof CHAT_MCP_ACCESS_MESSAGES;
+
 export interface ChatTurnFailureRecord {
   failureClass: ChatTurnFailureClass;
   message: string;

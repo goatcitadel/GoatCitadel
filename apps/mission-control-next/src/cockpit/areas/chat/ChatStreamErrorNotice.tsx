@@ -1,3 +1,4 @@
+import type { ChatMcpAccessBlocker } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { describeThreadedUiError } from "../../../features/threaded-surface/threaded-error-copy";
 import { Button } from "../../ui/Button";
@@ -10,6 +11,26 @@ const INTERRUPTED =
 
 /** A send that failed because no model is chosen: a reload cannot help, setup can. */
 const MODEL_SETUP_ERROR = /no model provider|no model is selected/i;
+const MCP_CONNECTORS = { href: "/capabilities/connectors/advanced#mcp-servers", label: "Open MCP servers" };
+const MCP_POLICY = { href: "/settings/permissions?view=advanced#trust-policy", label: "Inspect tool policy" };
+const MCP_PERMISSIONS = { href: "/settings/permissions#permission-profile", label: "Open Chat permissions" };
+const MCP_CITADEL = { href: "/settings/citadel#citadel-wards", label: "Open Citadel access rules" };
+const MCP_BLOCKER_LINKS: Record<ChatMcpAccessBlocker, { href: string; label: string }> = {
+  sign_in: { href: "/settings/access#gateway-auth", label: "Open sign-in settings" },
+  tool_policy: MCP_POLICY,
+  permission_profile: MCP_PERMISSIONS,
+  scoped_grant: MCP_POLICY,
+  citadel_policy: MCP_CITADEL,
+  workspace_scope: MCP_CONNECTORS,
+  server_disabled: MCP_CONNECTORS,
+  server_quarantined: MCP_CONNECTORS,
+  server_sign_in: MCP_CONNECTORS,
+  server_disconnected: MCP_CONNECTORS,
+  server_tool_policy: MCP_CONNECTORS,
+  tool_unavailable: MCP_CONNECTORS,
+  discovery_failed: MCP_CONNECTORS,
+  policy_unavailable: MCP_POLICY,
+};
 
 /**
  * The one notice for Chat errors, in the transcript and above the build editor. It maps a raw controller error to
@@ -29,7 +50,9 @@ export function ChatStreamErrorNotice({
 }) {
   const mapped = describeThreadedUiError(error, source ?? "other");
   const needsModel = MODEL_SETUP_ERROR.test(error);
-  const recognized = Boolean(mapped && mapped.raw !== undefined);
+  const blocker = mapped?.mcpAccessBlocker;
+  const owner = blocker ? MCP_BLOCKER_LINKS[blocker] : undefined;
+  const recognized = Boolean(mapped && (mapped.raw !== undefined || blocker));
   return (
     <div
       role="alert"
@@ -43,7 +66,11 @@ export function ChatStreamErrorNotice({
           Set up a model
         </NativeOwnerLink>
       ) : null}
-      {onReload && !needsModel ? (
+      {owner ? (
+        <NativeOwnerLink href={owner.href} scope="chat-mcp-access" className="text-sm">
+          {owner.label}
+        </NativeOwnerLink>
+      ) : onReload && !needsModel ? (
         <Button size="sm" onClick={onReload}>
           Reload conversation
         </Button>

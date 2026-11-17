@@ -25,6 +25,7 @@ import { citadelsRoutes } from "./routes/citadels.js";
 import { complianceRoutes } from "./routes/compliance.js";
 import { costsRoutes } from "./routes/costs.js";
 import { browserErrandsRoutes } from "./routes/browser-errands.js";
+import { mcpTestAllowanceRoutes } from "./routes/mcp-test-allowance.js";
 import { browserSessionsRoutes } from "./routes/browser-sessions.js";
 import { reviewReadinessRoutes } from "./routes/review-readiness.js";
 import { runtimeAuthorityRoutes } from "./routes/runtime-authority.js";
@@ -424,6 +425,7 @@ export async function buildApp(options: GatewayPluginOptions = {}) {
     await app.register(costsRoutes);
     await app.register(browserSessionsRoutes);
     await app.register(browserErrandsRoutes);
+    await app.register(mcpTestAllowanceRoutes);
     await app.register(reviewReadinessRoutes);
     await app.register(runtimeAuthorityRoutes);
     await app.register(skillsRoutes);

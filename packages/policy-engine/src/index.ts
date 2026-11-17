@@ -1,7 +1,9 @@
 export * from "./tool-registry.js";
 export * from "./policy-resolver.js";
 export * from "./approval-gate.js";
+export { withLegacyToolApprovalPreview } from "./knowledge-approval-preview.js";
 export * from "./engine.js";
+export { loadedPolicyEngineBuild } from "./loaded-build.js";
 export {
   createMcpToolPolicyBinding,
   readMcpToolPolicyBinding,

@@ -10,6 +10,7 @@ import { useGatewayAuthSettings } from "./use-gateway-auth-settings";
 import { useGatewayAuthContinuation } from "./use-gateway-auth-continuation";
 import { useGatewayInstallToken } from "./use-gateway-install-token";
 import { GatewayAuthReview } from "./GatewayAuthReview";
+import { gatewayAuthApprovalChange } from "./settings-approval-continuation-binding";
 
 export function GatewayAuthEditor({
   settings,
@@ -48,9 +49,11 @@ export function GatewayAuthEditor({
   const receipt = change.change?.receipt;
   const action = receipt?.requiredAction;
   const confirmed = settingsChangeIsConfirmed(change.change);
+  const reviewedAuth = confirmed ? undefined : gatewayAuthApprovalChange(change.change?.plan);
   const approved = useSettingsApprovalContinuation({
     plan: confirmed ? undefined : change.change?.plan,
     onSettled: change.refresh,
+    approveGatewayAuth: Boolean(reviewedAuth),
   });
   const button = cockpit
     ? "min-h-10 rounded-md border border-line bg-raised px-3 py-2 text-sm text-fg disabled:opacity-50"
@@ -244,12 +247,20 @@ export function GatewayAuthEditor({
           ) : null}
           {approved.visible ? (
             <div>
+              {reviewedAuth ? (
+                <p>
+                  Auth mode: {reviewedAuth.mode}. Loopback bypass: {reviewedAuth.allowLoopbackBypass ? "on" : "off"}.
+                  {reviewedAuth.basicUsername ? ` Username: ${reviewedAuth.basicUsername}.` : ""}
+                  {reviewedAuth.replaceCredential ? " Uses the new credential you submitted." : ""}
+                  {" Applies to every workspace and may require signing in again."}
+                </p>
+              ) : null}
               <Action
                 className={button}
-                disabled={approved.disabled || Boolean(control.attempt)}
+                disabled={approved.disabled || Boolean(control.attempt) || (Boolean(reviewedAuth) && !available)}
                 onClick={() => void approved.continueApproved()}
               >
-                Continue approved change
+                {reviewedAuth ? "Approve and apply" : "Continue approved change"}
               </Action>
               {approved.message ? <p role="status">{approved.message}</p> : null}
             </div>

@@ -874,13 +874,15 @@ describe("ChatTranscript", () => {
         .find((button) => button.textContent === "Review danger approval")!
         .click(),
     );
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    const openInlineReview = () => container.querySelector('[aria-label="Exact approval review"]:not([hidden])');
+    expect(openInlineReview()).not.toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     await render({
       ...props,
       pendingApproval: { ...approval },
       notices: [{ id: "refresh", tone: "success", content: "Fresh observation", timestamp: "2026-10-01T00:00:00Z" }],
     });
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(openInlineReview()).not.toBeNull();
     expect(onApprovePending).not.toHaveBeenCalled();
     await act(async () => {
       client.setQueryData(["approvals", "record", "default", approval.approvalId], {
@@ -889,7 +891,7 @@ describe("ChatTranscript", () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
-    expect(document.querySelector('[role="dialog"][data-state="open"]')).toBeNull();
+    expect(openInlineReview()).toBeNull();
     expect(onApprovePending).not.toHaveBeenCalled();
   });
 

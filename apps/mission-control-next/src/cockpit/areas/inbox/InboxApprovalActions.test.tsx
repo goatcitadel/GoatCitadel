@@ -104,7 +104,10 @@ function deferred<T>() {
 
 async function openConfirmation(label = "Review danger approval") {
   await vi.waitFor(() => expect(button(label).disabled).toBe(false));
-  await act(async () => button(label).click());
+  await act(async () => {
+    button(label).click();
+    await vi.dynamicImportSettled();
+  });
   await vi.waitFor(() => expect(document.querySelector('[aria-label="Approval action details"]')).not.toBeNull());
 }
 
@@ -132,6 +135,90 @@ async function typeConfirmation(value: string) {
 }
 
 describe("Inbox approval decisions", () => {
+  it("shows the memory search query and submits an explicit approval", async () => {
+    const record: ApprovalRequest = {
+      ...approval,
+      kind: "memory.search",
+      riskLevel: "safe",
+      payload: { query: "launch decisions", limit: 3 },
+      preview: {
+        reviewKind: "knowledge.operation",
+        toolName: "memory.search",
+        query: "launch decisions",
+        target: "Memory namespace: all namespaces",
+        optionsSummary: "Maximum results: 3",
+      },
+    };
+    api.fetchApproval.mockResolvedValue(record);
+    api.resolveApproval.mockResolvedValue({ approval: { ...record, status: "approved" }, effects: [] });
+    renderActions(record);
+    expect(container.textContent).toContain("launch decisions");
+    expect(container.textContent).toContain("Maximum results: 3");
+    await act(async () => button("Approve once").click());
+    await vi.waitFor(() => expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith(record.approvalId, "approve"));
+  });
+
+  it("keeps a single inline MCP decision in flight while the advisory explanation arrives", async () => {
+    const record: ApprovalRequest = {
+      ...approval,
+      kind: "mcp.fixture.feature_quality_read",
+      preview: {
+        reviewKind: "mcp.operation",
+        targets: ["Server fixture · tool feature_quality_read"],
+        mcpReadOnlyHint: true,
+        requestArguments: "No arguments",
+      },
+      linkage: { workspaceId: "default", sessionId: "session", turnId: "turn" },
+    };
+    const explained: ApprovalRequest = {
+      ...record,
+      explanationStatus: "completed",
+      explanation: {
+        summary: "Reads one fixture value.",
+        riskExplanation: "The request is limited to the local fixture.",
+        generatedAt: record.createdAt,
+        model: "gpt-6.1-terra",
+      },
+    };
+    const read = deferred<ApprovalRequest>();
+    const onApproved = vi.fn();
+    const onResolved = vi.fn();
+    const onInvalidated = vi.fn();
+    function render(approval: ApprovalRequest) {
+      act(() =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <ApprovalDecisionBar
+              approval={approval}
+              workspaceId="default"
+              sessionId="session"
+              inlineDangerReview
+              onApproved={onApproved}
+              onResolved={onResolved}
+              onInvalidated={onInvalidated}
+            />
+          </QueryClientProvider>,
+        ),
+      );
+    }
+    api.fetchApproval.mockReturnValue(read.promise);
+    api.resolveApproval.mockResolvedValue({ approval: { ...explained, status: "approved" }, effects: [] });
+    render(record);
+    await act(async () => button("Review danger approval").click());
+    await act(async () => {
+      button("Approve once").click();
+      await vi.dynamicImportSettled();
+    });
+    expect(api.fetchApproval).toHaveBeenCalledOnce();
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+    render(explained);
+    await act(async () => read.resolve(explained));
+    expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith(record.approvalId, "approve");
+    expect(onApproved).toHaveBeenCalledOnce();
+    expect(onResolved).toHaveBeenCalledOnce();
+    expect(onInvalidated).not.toHaveBeenCalled();
+  });
+
   function knowledgeApproval(legacy = false): ApprovalRequest {
     const payload = {
       workspaceId: "default",

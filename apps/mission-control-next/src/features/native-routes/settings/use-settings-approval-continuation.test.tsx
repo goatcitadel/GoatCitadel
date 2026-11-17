@@ -7,11 +7,12 @@ import {
   useSettingsApprovalContinuation,
 } from "./use-settings-approval-continuation";
 
-const api = vi.hoisted(() => ({ plan: vi.fn(), approval: vi.fn(), respond: vi.fn() }));
+const api = vi.hoisted(() => ({ plan: vi.fn(), approval: vi.fn(), respond: vi.fn(), resolve: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchChangePlan: api.plan,
   fetchApprovalReplay: api.approval,
   respondToChangePlan: api.respond,
+  resolveApproval: api.resolve,
 }));
 
 function plan(): ChangePlanRecord {
@@ -102,11 +103,13 @@ describe("explicit Settings approval continuation", () => {
   function Harness({
     reviewed = plan(),
     workspaceId = "default",
+    approveGatewayAuth = false,
   }: {
     reviewed?: ChangePlanRecord;
     workspaceId?: string;
+    approveGatewayAuth?: boolean;
   }) {
-    control = useSettingsApprovalContinuation({ plan: reviewed, workspaceId, onSettled: settled });
+    control = useSettingsApprovalContinuation({ plan: reviewed, workspaceId, onSettled: settled, approveGatewayAuth });
     return null;
   }
   async function mount(reviewed = plan()) {
@@ -131,6 +134,65 @@ describe("explicit Settings approval continuation", () => {
   });
   afterEach(async () => {
     await act(async () => renderer?.unmount());
+  });
+
+  function signInReview() {
+    const base = plan();
+    const reviewed: ChangePlanRecord = {
+      ...base,
+      adapter: { adapterId: "runtime-configuration", version: 2 },
+      target: { ...base.target, resourceId: "gateway_auth_configuration" },
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "gateway_auth_configuration", mode: "token", allowLoopbackBypass: false },
+      },
+    };
+    const approved = replay();
+    Object.assign(approved.approval.payload, {
+      adapterId: reviewed.adapter.adapterId,
+      adapterVersion: reviewed.adapter.version,
+      targetResourceId: reviewed.target.resourceId,
+    });
+    const pending = structuredClone(approved);
+    pending.approval.status = "pending";
+    pending.approval.resolutionOutcome = undefined;
+    return { reviewed, pending, approved };
+  }
+
+  it("approves and applies the reviewed Gateway sign-in change in one action", async () => {
+    const { reviewed, pending, approved } = signInReview();
+    api.plan.mockResolvedValue(reviewed);
+    api.approval.mockResolvedValueOnce(pending).mockResolvedValueOnce(approved);
+    api.respond.mockResolvedValue({
+      ...reviewed,
+      status: "completed",
+      phase: "terminal",
+      revision: reviewed.revision + 1,
+      requiredAction: undefined,
+    });
+    await act(async () => {
+      renderer = create(<Harness reviewed={reviewed} approveGatewayAuth />);
+    });
+    expect(api.resolve).not.toHaveBeenCalled();
+    expect(await resume()).toBe(true);
+    expect(api.resolve).toHaveBeenCalledExactlyOnceWith("approval-budget", "approve");
+    expect(api.respond).toHaveBeenCalledExactlyOnceWith(
+      reviewed.planId,
+      { workspaceId: "default" },
+      { expectedRevision: reviewed.revision, actionId: "action-budget", actionNonce: "nonce-budget", values: {} },
+    );
+  });
+
+  it("withholds approval and application if the sign-in plan changes during review", async () => {
+    const { reviewed, pending } = signInReview();
+    api.plan.mockResolvedValueOnce(reviewed).mockResolvedValueOnce({ ...reviewed, revision: reviewed.revision + 1 });
+    api.approval.mockResolvedValueOnce(pending);
+    await act(async () => {
+      renderer = create(<Harness reviewed={reviewed} approveGatewayAuth />);
+    });
+    expect(await resume()).toBe(false);
+    expect(api.resolve).not.toHaveBeenCalled();
+    expect(api.respond).not.toHaveBeenCalled();
   });
 
   it("does not mutate on mount and uses the exact twice-checked action and canonical approval", async () => {

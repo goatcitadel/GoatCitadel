@@ -70,11 +70,7 @@ import type {
 export type { ChatChangePlanRecord, ChatProjectImportResult } from "@goatcitadel/contracts";
 export type { ChangePlanRecord } from "@goatcitadel/contracts";
 
-import {
-  buildGatewayUrl,
-  readGatewayAuthHeaders,
-  request,
-} from "./client-core.js";
+import { buildGatewayUrl, readGatewayAuthHeaders, request } from "./client-core.js";
 import { normalizeChatSurface, originSurfaceInit, type ChatRequestSurfaceOptions } from "./chat-request-surface.js";
 import { uploadHashHeaders } from "./upload-hash.js";
 import type { OpenAICodexDevicePollResponse, OpenAICodexDeviceStartResponse } from "./platform.js";
@@ -128,6 +124,7 @@ export {
   answerChatUserInputPrompt,
   submitChatSecureConfiguration,
   approveChatTool,
+  approveChatToolTemporarily,
   denyChatTool,
   selectChatBranchTurn,
   createChatSpecialistCandidate,

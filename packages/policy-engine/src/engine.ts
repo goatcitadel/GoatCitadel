@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { changeRequestApprovalPreview } from "./change-request-approval-preview.js";
 import { knowledgeApprovalPreview } from "./knowledge-approval-preview.js";
+import { browserApprovalPreview } from "./browser-approval-preview.js";
 import { admitNativeRuntimeWithPolicy, type NativeRuntimePolicyAdmissionInput } from "./native-runtime-admission.js";
 import { NATIVE_INSTALLATION_POLICY, snapshotNativeInstallationPolicyRequest } from "./native-installation-policy.js";
 import { isDeepStrictEqual } from "node:util";
@@ -37,6 +38,8 @@ import {
   isManagedProjectFileTool,
   projectManagedFileToolArgs,
   projectManagedFileToolResult,
+  redactStructuredSecrets,
+  redactSecretText,
   resolveWebSearchEngineCandidates,
   splitUtf8HeadTail,
   SWITCHABLE_TOOL_GROUP_IDS,
@@ -68,7 +71,7 @@ import {
   type IngestionSourceType,
 } from "./ingestion-source-type.js";
 import { resolveEffectivePolicy, withHeldToolGroups } from "./policy-resolver.js";
-import { parseBrowserInteractionSteps } from "./browser-tools.js";
+import { parseBrowserInteractionSteps, readBrowserStorageOrigin } from "./browser-tools.js";
 import { pinFirecrawlEndpoint, type FirecrawlOperatorEndpoint } from "./firecrawl-endpoint.js";
 import {
   isOfficialResearchSearchInvocation,
@@ -340,6 +343,8 @@ const MINT_DUPLICATE_SCAN_LIMIT = 100_000;
 const WRITE_ROOT_GRANT_INAPPLICABLE = "write-root grant does not apply to this request";
 
 export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
+  /** An operator-configured, expiring replacement for the blanket MCP deny in one fixture Chat. */
+  matchesLocalMcpFixture?: (request: ToolAccessEvaluateRequest, serverId: string) => Promise<boolean>;
   /** Additional Gateway restrictions, evaluated on both fresh and approved execution paths. */
   resolveExecutionRestriction?: (
     request: ToolInvokeRequest,
@@ -405,6 +410,8 @@ export interface ToolPolicyEvaluateOptions {
 }
 
 export interface ToolPolicyInvokeOptions extends ToolPolicyEvaluateOptions {
+  /** Display-only annotation supplied by the MCP runtime owner for approval review. */
+  mcpReadOnlyHint?: true;
   beforeExecute?: (boundary?: ToolProcessSpawnBoundary) => void | Promise<void>;
   externalSideEffect?: {
     markStarted(): void | Promise<void>;
@@ -565,14 +572,16 @@ export class ToolPolicyEngine {
     return (await this.storage.toolGrants.listActive(scope, scopeRef)).slice(0, limit);
   }
 
-  public createGrant(input: ToolGrantCreateInput): Promise<ToolGrantRecord> {
+  public createGrant(input: ToolGrantCreateInput, ttlMs?: number): Promise<ToolGrantRecord> {
     let validated: ToolGrantCreateInput;
     try {
       validated = validateWriteRootsGrantInput(input, this.config.sandbox);
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
-    return this.storage.toolGrants.create(validated);
+    return ttlMs === undefined
+      ? this.storage.toolGrants.create(validated)
+      : this.storage.toolGrants.createTtlForDuration(validated, ttlMs);
   }
 
   /** The engine-authored outside-root write record of an approval, if it has one. */
@@ -833,6 +842,9 @@ export class ToolPolicyEngine {
   ): Promise<ToolInvokeResult> {
     // approvedByApprovalId is engine-owned: only executeApprovedAction sets it, never a caller.
     const request = withoutEngineOwnedApproval(callerRequest);
+    if (request.toolName === "browser.storage.get" && !readBrowserStorageOrigin(request.args.origin)) {
+      return this.blockRestrictedExecution(request, "browser.storage.get requires one explicit HTTP or HTTPS origin.");
+    }
     const identity = this.resolveInvocationPolicy(request, options);
     if (identity.binding && request.externalRuntime !== true) {
       throw new ToolExecutionPreconditionError("Mapped remote tools require the external runtime owner");
@@ -949,7 +961,7 @@ export class ToolPolicyEngine {
           riskLevel: evaluation.riskLevel,
           payload: request.args,
           preview: {
-            ...this.buildApprovalPreview(request),
+            ...this.buildApprovalPreview(request, identity, options.mcpReadOnlyHint),
             ...(evaluation.outsideRootWrite ? { outsideRootWrite: evaluation.outsideRootWrite } : {}),
             // Display only: tells the operator this read leaves every trusted root, so it is not mistaken
             // for an ordinary workspace read.
@@ -1509,6 +1521,7 @@ export class ToolPolicyEngine {
   ): Promise<AccessEvaluation> {
     const {
       mappedTarget,
+      binding,
       toolDef,
       capabilityPolicy,
       evaluationRequest: request,
@@ -1516,6 +1529,7 @@ export class ToolPolicyEngine {
     } = nativeInstallation
       ? {
           mappedTarget: undefined,
+          binding: undefined,
           toolDef: NATIVE_INSTALLATION_POLICY,
           capabilityPolicy: deriveToolCapabilityPolicy(NATIVE_INSTALLATION_POLICY.name, NATIVE_INSTALLATION_POLICY),
           evaluationRequest: input,
@@ -1526,8 +1540,18 @@ export class ToolPolicyEngine {
     const riskLevel = toolDef?.riskLevel ?? "caution";
     const shellRisk = this.evaluateShellRisk(request);
     const argumentRisk = this.evaluateArgumentRisk(request);
+    const config = this.policyConfig();
+    const fixtureAllowed =
+      binding?.policyToolName === "mcp.invoke" &&
+      mappedTarget?.policyToolName === "mcp.invoke" &&
+      config.tools.deny.includes("mcp.invoke") &&
+      (await this.runtimeHooks.matchesLocalMcpFixture?.(request, mappedTarget.serverId)) === true;
+    // The temporary rule replaces only the global blanket rule for this
+    // bound request. Normal deny matching still applies to every other rule.
     const policy = resolveEffectivePolicy(
-      this.policyConfig(),
+      fixtureAllowed
+        ? { ...config, tools: { ...config.tools, deny: config.tools.deny.filter((name) => name !== "mcp.invoke") } }
+        : config,
       request.agentId,
       request.policyContext?.permissionProfile,
       request.policyContext?.localOperatorOverride,
@@ -1667,7 +1691,7 @@ export class ToolPolicyEngine {
 
     const inProfile = toolNames.some((name) => matchesAnyToolPattern(policy.effectiveTools, name));
     const hasAllowGrant = grantDecision?.decision === "allow" && !grantDecision.constraintsError;
-    if (!inProfile && !hasAllowGrant) {
+    if (!inProfile && !hasAllowGrant && !fixtureAllowed) {
       return withWard(withPolicy(deny(riskLevel, "policy_disallow", "tool not available in resolved policy")));
     }
 
@@ -1770,7 +1794,7 @@ export class ToolPolicyEngine {
     }
     // Code Mode always needs an explicit operator decision: no grant, MCP relief, profile or bypass mode clears it.
     const codeModeRequestRequiresApproval = request.toolName === CODE_MODE_REQUEST_TOOL_NAME;
-    if (codeModeRequestRequiresApproval) {
+    if (codeModeRequestRequiresApproval || fixtureAllowed) {
       requiresApproval = true;
     }
 
@@ -2487,7 +2511,11 @@ export class ToolPolicyEngine {
     return policy?.readAccessMode ?? this.config.sandbox.readAccessMode ?? "roots_only";
   }
 
-  private buildApprovalPreview(request: ToolInvokeRequest): Record<string, unknown> {
+  private buildApprovalPreview(
+    request: ToolInvokeRequest,
+    identity: ReturnType<ToolPolicyEngine["resolveInvocationPolicy"]>,
+    mcpReadOnlyHint?: true,
+  ): Record<string, unknown> {
     const knowledge = knowledgeApprovalPreview(request);
     if (knowledge) return knowledge;
     const changeRequest = changeRequestApprovalPreview(request);
@@ -2497,6 +2525,51 @@ export class ToolPolicyEngine {
       sessionId: request.sessionId,
       taskId: request.taskId,
     };
+    const redact = (value: string) => redactSecretText(value, { env: process.env }).value;
+    const browser = browserApprovalPreview(request.toolName, request.args);
+    if (browser) return { ...preview, ...browser };
+
+    const mcp = identity.mappedTarget;
+    if (mcp && "serverId" in mcp) {
+      const args = identity.evaluationRequest.args ?? {};
+      const projected = redactStructuredSecrets(args, { env: process.env }).value;
+      const argumentPreview = JSON.stringify(projected, null, 2);
+      if (Buffer.byteLength(argumentPreview, "utf8") > 16_384) return preview;
+      return {
+        ...preview,
+        target: `Server ${mcp.serverId} · tool ${mcp.nativeToolName}`,
+        reviewKind: "mcp.operation",
+        ...(mcpReadOnlyHint ? { mcpReadOnlyHint } : {}),
+        requestArguments: argumentPreview === "{}" ? "No arguments" : argumentPreview,
+        summary: "Send these arguments to the selected MCP server. Credential fields are hidden.",
+      };
+    }
+
+    if (request.toolName === "git.add") {
+      const paths = readGitAddPaths(request.args.paths);
+      preview.paths = (paths.length ? paths : ["."]).map(redact);
+    }
+    if (request.toolName === "git.commit" && typeof request.args.message === "string" && request.args.message.trim()) {
+      preview.input = redact(request.args.message.trim());
+      preview.summary = "Commit the changes currently staged in this repository.";
+    }
+    if (
+      ["git.branch.create", "git.branch.switch", "git.worktree.create"].includes(request.toolName) &&
+      typeof request.args.branch === "string" &&
+      request.args.branch.trim()
+    ) {
+      preview.branchTarget = redact(request.args.branch.trim());
+    }
+    if (request.toolName === "schedule.manage") return { ...preview, ...scheduleApprovalPreview(request.args, redact) };
+    if (request.toolName === "notify.request") {
+      const { eventType, title, message } = request.args;
+      if (typeof eventType === "string" && typeof title === "string" && typeof message === "string") {
+        preview.title = redact(title);
+        preview.input = redact(message);
+        preview.summary = `Notification event: ${redact(eventType)}. Active notification rules may deliver it externally.`;
+      }
+      return preview;
+    }
 
     if (request.toolName === "tool_artifact.read") {
       preview.target = `Stored tool artifact ${String(request.args.artifactId)}; character offset ${String(request.args.offset ?? 0)}; up to ${String(request.args.maxChars ?? 8000)} characters`;
@@ -3211,6 +3284,38 @@ function buildToolApprovalLinkage(
 
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function scheduleApprovalPreview(
+  args: Record<string, unknown>,
+  redact: (value: string) => string,
+): Record<string, unknown> | undefined {
+  const op = readNonEmptyString(args.op);
+  if (op === "list") return { target: "Scheduled jobs owned by this caller", summary: "List these scheduled jobs." };
+  if (op === "cancel") {
+    const jobId = readNonEmptyString(args.jobId);
+    return jobId ? { target: `Schedule ${redact(jobId)}`, summary: "Cancel this scheduled job." } : undefined;
+  }
+  const schedule = readNonEmptyString(args.schedule);
+  const prompt = readNonEmptyString(args.prompt);
+  if (op !== "create" || !schedule || !prompt) return undefined;
+  const name = readNonEmptyString(args.name);
+  const endAt = readNonEmptyString(args.endAt);
+  const value = args.deliveryChannel;
+  const delivery =
+    value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  const channelKey = readNonEmptyString(delivery?.channelKey);
+  const target = readNonEmptyString(delivery?.target);
+  return {
+    summary: "Create a recurring assistant turn.",
+    scheduleSummary: redact(schedule),
+    input: redact(prompt),
+    ...(name ? { title: redact(name) } : {}),
+    ...(endAt ? { endTimeSummary: redact(endAt) } : {}),
+    ...(channelKey
+      ? { deliverySummary: redact(channelKey), ...(target ? { deliveryTarget: redact(target) } : {}) }
+      : {}),
+  };
 }
 
 function readApprovalMode(value: unknown): ToolApprovalMode | undefined {
