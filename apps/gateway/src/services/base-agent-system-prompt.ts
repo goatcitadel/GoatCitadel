@@ -27,6 +27,7 @@ import {
   type ChatWebMode,
 } from "@goatcitadel/contracts";
 import { PLUGIN_HOLDS_UNREADABLE_REMEDY } from "./plugin-tool-group-holds-words.js";
+import { CAPABILITY_GUIDE_OVERVIEW } from "./capability-operating-guide.js";
 
 export interface BaseAgentRuntimeInfo {
   /** Human-formatted date, e.g. "Saturday, June 21, 2026". Caller formats it. */
@@ -376,6 +377,7 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
   }
   const stablePrefix = [
     IDENTITY_SECTION,
+    `## Operating guide\n${CAPABILITY_GUIDE_OVERVIEW}`,
     TOOL_DOCTRINE_SECTION,
     SAFETY_SECTION,
     OUTPUT_BAR_SECTION,
@@ -406,6 +408,11 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
 
   const toolsUnavailableReason = input.toolsUnavailableReason;
   const toolsCallable = toolsUnavailableReason === undefined;
+  if (toolsCallable && toolset.toolNames.includes("capabilities.explain")) {
+    tailSections.push(
+      "## Explain your capabilities\nFor questions about what you can do, setup, approvals, or blockers, call capabilities.explain with the user's task or capability question. It also retrieves relevant operating-guide sections. Distinguish product support from current conversation readiness; report unknown or partial checks honestly. A connected service is not permission for an action. Do not treat an empty or truncated result as proof a capability is unsupported. Never activate capabilities or change settings merely to answer a question.",
+    );
+  }
   if (toolsUnavailableReason) {
     tailSections.push(buildToolsUnavailableSection(toolsUnavailableReason, input.webMode));
   } else {

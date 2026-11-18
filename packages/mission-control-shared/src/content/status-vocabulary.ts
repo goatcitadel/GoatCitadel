@@ -209,7 +209,7 @@ export function presentEventType(value: string): string {
 }
 
 export function presentToolEffectOutcome(value: "none" | "uncertain" | "concrete"): string {
-  if (value === "concrete") return "Made an outside change. A receipt is recorded.";
+  if (value === "concrete") return "An action receipt is recorded.";
   if (value === "uncertain") return "Outcome uncertain. Check before retrying.";
   return "No outside changes.";
 }

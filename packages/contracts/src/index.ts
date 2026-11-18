@@ -254,3 +254,4 @@ export * from "./channel-setup-checks.js";
 export * from "./chat-feature-references.js";
 export * from "./design-advisory.js";
 export * from "./managed-project-files.js";
+export * from "./capability-explanation.js";

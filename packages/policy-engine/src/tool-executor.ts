@@ -166,6 +166,8 @@ export interface ToolExecutorRuntimeHooks {
   ) => Promise<boolean>;
   /** Read-only, server-scoped callable metadata. Discovery never grants invocation authority. */
   searchCapabilities?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
+  /** Read-only scoped capability/setup explanations. Never grants invocation authority. */
+  explainCapabilities?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
   /** Read-only exact-byte skill content; Gateway revalidates callable state and tree integrity. */
   readSkill?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
   /** Gateway-owned, session-scoped reads of persisted tool output. */
@@ -533,6 +535,20 @@ export async function executeTool(
       }
       if (!runtimeHooks.searchCapabilities) throw new Error("Capability discovery is unavailable in this runtime.");
       return finalizeToolResult(await runtimeHooks.searchCapabilities(request));
+    }
+    case "capabilities.explain": {
+      const { query, limit } = request.args;
+      if (
+        Object.keys(request.args).some((key) => key !== "query" && key !== "limit") ||
+        typeof query !== "string" ||
+        !query.trim() ||
+        query.length > 512 ||
+        (limit !== undefined && (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 5))
+      ) {
+        throw new Error("Capability explanation requires a bounded query and optional limit from 1 to 5.");
+      }
+      if (!runtimeHooks.explainCapabilities) throw new Error("Capability explanation is unavailable in this runtime.");
+      return finalizeToolResult(await runtimeHooks.explainCapabilities(request));
     }
     case "skills.read": {
       const { skillId, relativePath } = request.args;

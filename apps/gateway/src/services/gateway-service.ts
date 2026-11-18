@@ -125,6 +125,7 @@ import {
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 import { WorkspaceTurnSkills } from "./workspace-turn-skills.js";
 import { ChatCapabilityDiscoveryService } from "./chat-capability-discovery-service.js";
+import { CapabilityExplanationService } from "./capability-explanation-service.js";
 import {
   resolveChatFeatureAdmission,
   renderAdmittedSkillInstructions,
@@ -1157,6 +1158,7 @@ export class GatewayService {
   private readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
   private readonly chatAutoActions: ChatAutoActionPolicy;
   private readonly chatCapabilityDiscovery: ChatCapabilityDiscoveryService;
+  private readonly capabilityExplanation: CapabilityExplanationService;
   private readonly workspacePathBridgeRuntime: WorkspacePathBridgeRuntime;
   private readonly chatWorkspaceSnapshotService: ChatWorkspaceSnapshotService;
   private readonly delegatedWorkResultService: DelegatedWorkResultService;
@@ -1527,6 +1529,7 @@ export class GatewayService {
       getChatSessionStatus: (sessionId) => this.chatSessionStatusService.getModelProjection(sessionId),
       readToolArtifact: (request) => chatToolArtifactService.readChatToolArtifactForTool(this, request),
       searchCapabilities: (request) => this.chatCapabilityDiscovery.discover(request),
+      explainCapabilities: async (request) => ({ ...(await this.capabilityExplanation.explain(request)) }),
       readSkill: (request) => this.chatCapabilityDiscovery.readSkill(request),
       assertOptionalUserInputAvailable: async () => {
         if (!(await this.isFeatureEnabled("chatAsyncClarificationV1Enabled")))
@@ -2761,6 +2764,31 @@ export class GatewayService {
           message: "Static MCP discovery requires current authority and a valid catalog.",
           context: { serverId, reasonCode },
         }),
+    });
+    this.capabilityExplanation = new CapabilityExplanationService({
+      requireSession: (sessionId) => this.requireChatSession(sessionId),
+      listCatalog: (scope, workspaceId) => this.workspaceTurnSkills.listCatalog(scope, workspaceId),
+      listConnectors: async (workspaceId) => {
+        const connectors = this.routeServices.capabilityConnectors;
+        if (!connectors) throw new Error("Capability connector observations are unavailable.");
+        return await connectors.list(workspaceId);
+      },
+      inspectToolAccess: (request) => this.inspectToolAccess(request),
+      getSessionPrefs: (sessionId) => this.getChatSessionPrefs(sessionId),
+      getCodeModeReadiness: () => this.capabilitySystemService.getCodeModeReadiness(),
+      getTurnProfile: async (turnId) => (await this.storage.chatTurnCapabilityProfiles.findByTurn(turnId)) ?? undefined,
+      getSearchBackend: async () => {
+        const probe = this.applyRuntimeBrowserBackendDefaults<ToolInvokeRequest>({
+          toolName: "browser.search",
+          args: { query: "capability probe" },
+          agentId: "assistant",
+          sessionId: "capability-probe",
+        });
+        return {
+          backend: probe.args.backend === "firecrawl" ? "firecrawl" : "native",
+          fallbackToNative: probe.args.firecrawlFallbackToNative === true,
+        };
+      },
     });
     this.chatCapabilityDiscovery = new ChatCapabilityDiscoveryService({
       requireEnabled: () => this.requireFeatureEnabled("boundedToolExposureV1Enabled"),
