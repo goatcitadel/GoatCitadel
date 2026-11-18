@@ -293,6 +293,7 @@ export interface EvolutionManagedSourceRouteService {
   }): Promise<ChangePlanRecord>;
 }
 export interface GatewayRouteServices {
+  scripts?: import("./scripts-service.js").ScriptsService;
   a2a: A2ARouteService;
   agents: AgentsRouteService;
   assembly: AssemblyRouteService;

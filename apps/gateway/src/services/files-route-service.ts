@@ -439,7 +439,9 @@ function detectMimeType(filePath: string): string {
   if (ext === ".md") {
     return "text/markdown";
   }
-  if (ext === ".txt" || ext === ".log") {
+  if (
+    [".txt", ".log", ".py", ".ps1", ".sh", ".bash", ".zsh", ".bat", ".cmd", ".rb", ".pl", ".lua", ".sql"].includes(ext)
+  ) {
     return "text/plain";
   }
   if (ext === ".svg") {

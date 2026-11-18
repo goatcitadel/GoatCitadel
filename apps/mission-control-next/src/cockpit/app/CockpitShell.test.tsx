@@ -60,6 +60,7 @@ vi.mock("../areas/library/LibraryArea", () => ({
 vi.mock("../areas/capabilities/CapabilitiesArea", () => ({
   CapabilitiesArea: () => <p>Capabilities content</p>,
 }));
+vi.mock("../areas/scripts/ScriptsArea", () => ({ ScriptsArea: () => <p>Scripts content</p> }));
 import { useGatewayUnavailable } from "./gateway-unavailable-context";
 // No other test here visits Chat, so a stub keeps the failure test off the network.
 const chatArea = vi.hoisted(() => ({ failure: null as Error | null, effects: 0, composer: false }));
@@ -296,6 +297,7 @@ describe("CockpitShell", () => {
       "Work",
       "Capabilities",
       "Library",
+      "Scripts",
       "System",
     ]);
     expect(nav!.querySelector('[aria-current="page"]')?.textContent).toContain("Inbox");

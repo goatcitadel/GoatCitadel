@@ -29,6 +29,7 @@ import {
   WorkArea,
   CapabilitiesArea,
   LibraryArea,
+  ScriptsArea,
   SystemArea,
   Gallery,
   ChatProjects,
@@ -267,6 +268,8 @@ function CockpitShellContent({
                         <InboxArea />
                       ) : area === "library" ? (
                         <LibraryArea />
+                      ) : area === "scripts" ? (
+                        <ScriptsArea key={accessRevision} />
                       ) : area === "system" ? (
                         <SystemArea />
                       ) : area === "work" ? (

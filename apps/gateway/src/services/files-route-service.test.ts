@@ -16,6 +16,18 @@ const originalEnv = {
 describe("files route service limits", () => {
   const tempRoots: string[] = [];
 
+  it("returns script extensions as text for owner-backed previews", async () => {
+    const { createFilesRoutePort } = await import("./files-route-service.js");
+    const rootDir = await createTempWorkspace(tempRoots);
+    for (const extension of ["py", "ps1", "sh", "bash", "zsh", "bat", "cmd", "rb", "pl", "lua", "sql"]) {
+      const filename = `script.${extension}`;
+      const content = "# Script preview regression\n";
+      await fs.writeFile(path.join(rootDir, "workspace", filename), content, "utf8");
+      const file = await createPort(createFilesRoutePort, rootDir).downloadWorkspaceFile(filename);
+      expect(file).toMatchObject({ contentType: "text/plain", isText: true, content });
+    }
+  }, 30_000);
+
   afterEach(async () => {
     for (const [key, value] of Object.entries(originalEnv)) {
       if (value === undefined) {

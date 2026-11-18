@@ -5,6 +5,7 @@ import type {
   ChatMessagingChannelStatus,
   ChatTurnLifecycleStatus,
   ChangePlanStatus,
+  CodeModeRunStatus,
   DurableRunStatus,
   TaskStatus,
 } from "@goatcitadel/contracts";
@@ -160,6 +161,13 @@ export function presentRunStatus(
   options: { waitingOnOperator?: boolean } = {},
 ): StatusPresentation {
   return value === "waiting" && options.waitingOnOperator ? status("Waiting on you", "waiting") : runStatuses[value];
+}
+
+export function presentCodeModeRunStatus(value: CodeModeRunStatus): StatusPresentation {
+  if (value === "approval_pending") return status("Waiting on you", "waiting");
+  if (value === "rejected") return status("Denied", "neutral");
+  if (value === "expired") return status("Expired", "neutral");
+  return runStatuses[value];
 }
 
 /** A run that can no longer change on its own: Done, Failed, Cancelled, or Failed and needing recovery. */

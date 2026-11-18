@@ -13,6 +13,7 @@ import {
   Inbox,
   LayoutGrid,
   Library,
+  FileCode,
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
@@ -109,6 +110,7 @@ const AREA_ICONS = {
   work: LayoutGrid,
   capabilities: Blocks,
   library: Library,
+  scripts: FileCode,
   system: Activity,
 } as const;
 

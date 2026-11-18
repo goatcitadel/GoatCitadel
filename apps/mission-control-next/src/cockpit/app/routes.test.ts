@@ -138,11 +138,13 @@ describe("cockpit routes", () => {
       ["Work", "w"],
       ["Capabilities", "a"],
       ["Library", "l"],
+      ["Scripts", "p"],
       ["System", "s"],
     ]);
   });
 
   it("maps the Capabilities area and its tab sub-routes", () => {
+    expect(parseCockpitLocation("/scripts")).toEqual({ area: "scripts", rest: [] });
     expect(parseCockpitLocation("/capabilities")).toEqual({ area: "capabilities", rest: [] });
     expect(parseCockpitLocation("/capabilities/connectors")).toEqual({ area: "capabilities", rest: ["connectors"] });
   });
