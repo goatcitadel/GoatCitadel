@@ -112,7 +112,7 @@ describe("mobile push approval-already-resolved classification on live PostgreSQ
       const scope = await createScope("fresh");
       try {
         const migrated = await runPostgresMigrations(scope.migrations, POSTGRES_MIGRATIONS);
-        assert.equal(migrated.latestVersion, 233);
+        assert.equal(migrated.latestVersion, POSTGRES_MIGRATIONS.at(-1)?.version);
         await seedDelivery(scope.pool, "delivery-1");
         await assertConverged(scope.pool);
       } finally {
@@ -139,8 +139,13 @@ describe("mobile push approval-already-resolved classification on live PostgreSQ
 
         // The full registry runs the canonical schema-shape gate after the upgrade.
         const migrated = await runPostgresMigrations(scope.migrations, POSTGRES_MIGRATIONS);
-        assert.deepEqual(migrated.appliedVersions, [MIGRATION_VERSION, 226, 227, 228, 229, 230, 231, 232, 233]);
-        assert.equal(migrated.latestVersion, 233);
+        assert.deepEqual(
+          migrated.appliedVersions,
+          POSTGRES_MIGRATIONS.filter((migration) => migration.version >= MIGRATION_VERSION).map(
+            (migration) => migration.version,
+          ),
+        );
+        assert.equal(migrated.latestVersion, POSTGRES_MIGRATIONS.at(-1)?.version);
         const kept = await scope.pool.query<{ last_classification: string }>(
           "SELECT last_classification FROM mobile_push_deliveries WHERE delivery_id = 'delivery-1'",
         );

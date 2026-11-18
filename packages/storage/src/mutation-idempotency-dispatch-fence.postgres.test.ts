@@ -54,9 +54,9 @@ test(
       const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
       assert.deepEqual(
         migrated.appliedVersions,
-        [212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233],
+        POSTGRES_MIGRATIONS.filter((migration) => migration.version >= 212).map((migration) => migration.version),
       );
-      assert.equal(migrated.latestVersion, 233);
+      assert.equal(migrated.latestVersion, POSTGRES_MIGRATIONS.at(-1)?.version);
 
       const cronRows = await admin.query<{ job_id: string; enabled: string; revision: string }>(
         `SELECT job_id, enabled::text AS enabled, revision::text AS revision FROM ${schema}.cron_jobs ORDER BY job_id`,
@@ -150,9 +150,9 @@ test(
       const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
       assert.deepEqual(
         migrated.appliedVersions,
-        [216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233],
+        POSTGRES_MIGRATIONS.filter((migration) => migration.version >= 216).map((migration) => migration.version),
       );
-      assert.equal(migrated.latestVersion, 233);
+      assert.equal(migrated.latestVersion, POSTGRES_MIGRATIONS.at(-1)?.version);
 
       const column = await admin.query<{ data_type: string; is_nullable: string }>(
         `SELECT data_type, is_nullable FROM information_schema.columns

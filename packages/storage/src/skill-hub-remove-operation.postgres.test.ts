@@ -138,7 +138,7 @@ describe("Skill Hub remove operation kind on live PostgreSQL", () => {
       const scope = await createScope("fresh");
       try {
         const migrated = await runPostgresMigrations(scope.migrations, POSTGRES_MIGRATIONS);
-        assert.equal(migrated.latestVersion, MIGRATION_VERSION);
+        assert.equal(migrated.latestVersion, POSTGRES_MIGRATIONS.at(-1)?.version);
         await assertConverged(scope.pool);
       } finally {
         await scope.teardown();
@@ -201,8 +201,13 @@ describe("Skill Hub remove operation kind on live PostgreSQL", () => {
 
         // The full registry runs the canonical schema-shape gate after the upgrade.
         const migrated = await runPostgresMigrations(scope.migrations, POSTGRES_MIGRATIONS);
-        assert.deepEqual(migrated.appliedVersions, [MIGRATION_VERSION]);
-        assert.equal(migrated.latestVersion, MIGRATION_VERSION);
+        assert.deepEqual(
+          migrated.appliedVersions,
+          POSTGRES_MIGRATIONS.filter((migration) => migration.version >= MIGRATION_VERSION).map(
+            (migration) => migration.version,
+          ),
+        );
+        assert.equal(migrated.latestVersion, POSTGRES_MIGRATIONS.at(-1)?.version);
         const kept = await scope.pool.query<{ operation_kind: string }>(
           "SELECT operation_kind FROM skill_hub_operation_intents WHERE operation_id = 'operation-revoke'",
         );
@@ -234,8 +239,13 @@ describe("Skill Hub remove operation kind on live PostgreSQL", () => {
 
         // The full registry runs the canonical schema-shape gate after the upgrade.
         const migrated = await runPostgresMigrations(scope.migrations, POSTGRES_MIGRATIONS);
-        assert.deepEqual(migrated.appliedVersions, [MIGRATION_VERSION]);
-        assert.equal(migrated.latestVersion, MIGRATION_VERSION);
+        assert.deepEqual(
+          migrated.appliedVersions,
+          POSTGRES_MIGRATIONS.filter((migration) => migration.version >= MIGRATION_VERSION).map(
+            (migration) => migration.version,
+          ),
+        );
+        assert.equal(migrated.latestVersion, POSTGRES_MIGRATIONS.at(-1)?.version);
         const kept = await scope.pool.query<{ operation_kind: string }>(
           "SELECT operation_kind FROM skill_hub_operation_intents WHERE operation_id = 'operation-revoke'",
         );
