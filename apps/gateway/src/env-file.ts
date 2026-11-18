@@ -105,6 +105,12 @@ export function restoreLocalEnvFileSnapshot(snapshot: LocalEnvFileSnapshot): voi
 }
 
 let loaded = false;
+const localEnvOrigins = new Map<string, string>();
+
+/** Whether the current process received this key from the same local credential file. */
+export function wasLoadedFromLocalEnv(key: string, file: string | undefined): boolean {
+  return file !== undefined && localEnvOrigins.get(key) === file;
+}
 
 export function loadLocalEnvFile(options?: { forceReload?: boolean }): EnvFileLoadResult {
   if (loaded && !options?.forceReload) {
@@ -134,6 +140,7 @@ export function loadLocalEnvFile(options?: { forceReload?: boolean }): EnvFileLo
       continue;
     }
     process.env[key] = value;
+    localEnvOrigins.set(key, envPath);
     applied.push(key);
   }
 

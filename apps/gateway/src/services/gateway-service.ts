@@ -573,7 +573,7 @@ import {
 } from "./orchestration-worktree-service.js";
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import { DiscordRuntimeService } from "./discord-runtime-service.js";
-import { resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner } from "./gateway/auth-credential-planner.js";
+import * as authCredentials from "./gateway/auth-credential-planner.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import {
   SharedHostAdmissionClosedError,
@@ -10891,9 +10891,7 @@ export class GatewayService {
   public async updateSettings(input: settingsAuthService.UpdateSettingsInput): Promise<RuntimeSettings> {
     const deps = {
       ...createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
-      // Candidate construction runs under the generation write fence, so it
-      // must use the already-submitted CAS revision rather than the public read
-      // path (which correctly rejects mixed-generation reads at that point).
+      // The write fence requires the submitted CAS revision during candidate construction.
       readSettingsRevision: () => input.expectedRevision ?? this.configGenerationService.getRevision(),
     };
     const previousRuntime: settingsAuthService.SettingsConfigCandidate = {
@@ -10922,6 +10920,8 @@ export class GatewayService {
           payload: await this.buildUnifiedConfigPayloadForRuntime(candidate.config, candidate.llm, candidate.features),
         };
       },
+      prepareStartupCredential: (next, previous) =>
+        next.input.auth ? authCredentials.prepareGatewayTokenForRestart(next.config, previous.config) : undefined,
       captureRuntimeOwnerRecoveryIntent: async (candidate) => ({
         version: 1,
         ...(candidate.input.mesh
@@ -11168,7 +11168,7 @@ export class GatewayService {
     generateWhenMissing?: boolean;
     persistToEnv?: boolean;
   }) {
-    return resolveGatewayInstallTokenFromPlanner({
+    return authCredentials.resolveGatewayInstallToken({
       runtimeConfig: this.config,
       env: process.env,
       explicitToken: input?.token,

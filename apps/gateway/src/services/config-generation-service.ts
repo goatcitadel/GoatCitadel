@@ -54,6 +54,8 @@ export interface ConfigGenerationCommitInput<T> {
   expectedRevision?: number;
   requireExpectedRevision?: boolean;
   buildCandidate(): ConfigGenerationCandidate<T> | Promise<ConfigGenerationCandidate<T>>;
+  /** Prepare a credential write under the revision fence. Its write returns a rollback callback. */
+  prepareStartupCredential?(candidate: T, previous: T): { beforePublish: boolean; write(): () => void } | undefined;
   captureRuntimeOwnerRecoveryIntent?(
     candidate: T,
   ): ConfigGenerationRuntimeOwnerRecoveryIntent | Promise<ConfigGenerationRuntimeOwnerRecoveryIntent>;
@@ -388,6 +390,7 @@ export class ConfigGenerationService {
   }
 
   private async commitUnderLock<T>(input: ConfigGenerationCommitInput<T>): Promise<ConfigGenerationCommitResult> {
+    const { expectedRevision, previousRuntime, prepareStartupCredential } = input;
     if (this.transactionState !== "idle") {
       throw new ConflictError({
         code: "STATE_CONFLICT",
@@ -399,21 +402,18 @@ export class ConfigGenerationService {
       });
     }
     const currentRevision = this.getRevision();
-    if (input.requireExpectedRevision && input.expectedRevision === undefined) {
+    if (input.requireExpectedRevision && expectedRevision === undefined) {
       throw new ValidationError({ message: "expectedRevision is required for settings mutations." });
     }
-    if (
-      input.expectedRevision !== undefined &&
-      (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1)
-    ) {
+    if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1)) {
       throw new ValidationError({ message: "expectedRevision must be a positive safe integer." });
     }
-    if (input.expectedRevision !== undefined && input.expectedRevision !== currentRevision) {
+    if (expectedRevision !== undefined && expectedRevision !== currentRevision) {
       throw new ConflictError({
         code: "STATE_CONFLICT",
         message: "Settings changed after this client loaded them.",
         details: {
-          expectedRevision: input.expectedRevision,
+          expectedRevision,
           currentRevision,
         },
       });
@@ -425,6 +425,7 @@ export class ConfigGenerationService {
     const nextPayload = withNextGeneration(candidate.payload, previousPayload, currentRevision + 1);
     assertValidCompleteUnifiedConfig(nextPayload, "staged settings generation");
     assertGenerationDigest(nextPayload, "staged settings generation");
+    const startupCredential = prepareStartupCredential?.(candidate.runtime, previousRuntime);
 
     await fs.mkdir(this.stagingDir, { recursive: true });
     const stagedCanonicalPath = path.join(this.configDir, `.goatcitadel-${nextPayload.generation!.generationId}.tmp`);
@@ -433,22 +434,31 @@ export class ConfigGenerationService {
     await this.retainLastGood(previousPayload);
     await this.writeTransactionMarker("pending", nextPayload);
 
+    let restoreStartupCredential: (() => void) | undefined;
     try {
       await this.hooks.beforePublish?.(nextPayload);
-      await replaceFileAtomically(stagedCanonicalPath, this.activePath);
+      if (startupCredential?.beforePublish) restoreStartupCredential = startupCredential.write();
+      await fs.rename(stagedCanonicalPath, this.activePath);
+      this.activePayload = nextPayload;
+      await syncDirectoryBestEffort(this.configDir);
+      await this.hooks.afterPublish?.(nextPayload);
     } catch (error) {
       await removePathBestEffort(stagedCanonicalPath);
       await removePathBestEffort(stagedMirrorDir);
-      await this.removeTransactionMarkerBestEffort();
+      // Once the rename succeeds, preserve the token and pending marker so
+      // startup can recover the canonical generation before accepting requests.
+      if (this.activePayload === nextPayload) throw error;
+      try {
+        restoreStartupCredential?.();
+      } finally {
+        await this.removeTransactionMarkerBestEffort();
+      }
       throw error;
     }
 
-    this.activePayload = nextPayload;
-    await this.hooks.afterPublish?.(nextPayload);
-
     // The committed marker is the irreversible decision to finish this
-    // generation. It must be durable before any owner side effect occurs so a
-    // hard crash can only roll back a generation that no owner has observed.
+    // generation. Runtime owner apply waits for this decision. Startup
+    // credentials are staged above so published config can always boot.
     let runtimeOwnerRecoveryIntent: ConfigGenerationRuntimeOwnerRecoveryIntent | undefined;
     try {
       runtimeOwnerRecoveryIntent = await input.captureRuntimeOwnerRecoveryIntent?.(candidate.runtime);
@@ -459,6 +469,7 @@ export class ConfigGenerationService {
         await this.publishCanonical(rollbackPayload);
         this.activePayload = rollbackPayload;
         await this.writeTransactionMarker("committed", rollbackPayload);
+        restoreStartupCredential?.();
         await this.retainLastGood(rollbackPayload);
         await this.tryPublishMirrors(rollbackPayload);
         await this.removeTransactionMarker();
@@ -473,6 +484,9 @@ export class ConfigGenerationService {
     await this.hooks.afterCommitMarker?.(nextPayload);
     try {
       await input.apply(candidate.runtime);
+      // A rotation can keep using its existing durable token until both the
+      // forward decision and runtime owner apply have succeeded.
+      if (startupCredential && !startupCredential.beforePublish) startupCredential.write();
     } catch (applyError) {
       const rollbackPayload = withNextGeneration(previousPayload, nextPayload, currentRevision + 2);
       try {
@@ -492,12 +506,17 @@ export class ConfigGenerationService {
       }
 
       let restoreError: unknown;
-      if (!(applyError instanceof RuntimeOwnerApplyAlreadyRestoredError)) {
-        try {
-          await input.restore(input.previousRuntime);
-        } catch (error) {
-          restoreError = error;
+      try {
+        restoreStartupCredential?.();
+      } catch (error) {
+        restoreError = error;
+      }
+      try {
+        if (!(applyError instanceof RuntimeOwnerApplyAlreadyRestoredError)) {
+          await input.restore(previousRuntime);
         }
+      } catch (error) {
+        restoreError = restoreError === undefined ? error : new AggregateError([restoreError, error]);
       }
       if (restoreError !== undefined) {
         await this.tryPublishMirrors(rollbackPayload);
