@@ -156,6 +156,7 @@ export async function stopVerificationStack(stack) {
 
 export async function waitForHttp(url, label, timeoutMs = 180000, handle = null) {
   const deadline = Date.now() + timeoutMs;
+  let lastStatus;
   while (Date.now() < deadline) {
     if (handle?.spawnError) {
       await handle.logsFlushed?.catch(() => undefined);
@@ -172,12 +173,22 @@ export async function waitForHttp(url, label, timeoutMs = 180000, handle = null)
       if (response.ok) {
         return;
       }
-    } catch {
-      // keep waiting
+      lastStatus = response.status;
+    } catch (error) {
+      const code = error?.cause?.code ?? error?.code;
+      if (code === "EACCES" || code === "EPERM") {
+        throw new Error(
+          `${label} probe was denied (${code}); the verification environment must permit loopback connections: ${url}`,
+          { cause: error },
+        );
+      }
+      // Connection refusal during startup is retryable; a denied probe is not.
     }
     await delay(1500);
   }
-  throw new Error(`${label} did not become ready in time: ${url}`);
+  throw new Error(
+    `${label} did not become ready in time: ${url}${lastStatus ? ` (last HTTP status: ${lastStatus})` : ""}`,
+  );
 }
 
 export async function startProcess(context, name, commandArgs, extraEnv, options = {}) {

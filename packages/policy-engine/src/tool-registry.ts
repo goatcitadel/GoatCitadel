@@ -140,6 +140,28 @@ const ARTIFACT_DESTINATION_ARG_SCHEMA = {
 
 const BUILTIN_TOOLS: ToolDefinition[] = [
   {
+    name: "capabilities.explain",
+    category: "knowledge",
+    riskLevel: "safe",
+    requiresApproval: false,
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: false,
+    description:
+      "Explain what GoatCitadel supports, what this conversation can use, what needs setup or approval, and what is blocked or unknown. Returns current read-only observations and relevant operating-guide sections; grants no permissions.",
+    pack: "core",
+    recommendedContexts: ["chat"],
+    argSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", minLength: 1, maxLength: 512 },
+        limit: { type: "integer", minimum: 1, maximum: 5 },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "capabilities.search",
     category: "knowledge",
     riskLevel: "safe",

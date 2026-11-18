@@ -7232,6 +7232,8 @@ export class ChatTurnAgentRunner {
       delegatedWorkResultEligible,
       codeModeRequestEligible,
     });
+    // Explanation is read-only and independent of bounded discovery; all normal policy and profile gates still apply.
+    if (!quickWebProfile) essentialToolNames.push("capabilities.explain");
     if (boundedExposure) {
       essentialToolNames.push("capabilities.search", "skills.read");
       const essentials = new Set(essentialToolNames);

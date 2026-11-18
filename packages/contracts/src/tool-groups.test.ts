@@ -31,13 +31,14 @@ describe("tool group map contract", () => {
         seen.set(toolName, group.id);
       }
     }
-    expect(seen.size).toBe(110);
+    expect(seen.size).toBe(111);
   });
 
   it("keeps mcp.invoke and the session tools in Core", () => {
     const core = toolsIn("core");
     expect(core).toContain("mcp.invoke");
     expect(core).toContain("session.status");
+    expect(core).toContain("capabilities.explain");
     expect(core).toContain("session.search");
     expect(core).toContain("session.history");
     expect(toolGroupForTool("mcp.invoke")?.id).toBe("core");

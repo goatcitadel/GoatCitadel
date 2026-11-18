@@ -124,7 +124,7 @@ import {
 } from "./capability-scope-resolver.js";
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 import { WorkspaceTurnSkills } from "./workspace-turn-skills.js";
-import { ChatCapabilityDiscoveryService } from "./chat-capability-discovery-service.js";
+import { createCapabilityKnowledge } from "./capability-knowledge-runtime.js";
 import {
   resolveChatFeatureAdmission,
   renderAdmittedSkillInstructions,
@@ -1156,7 +1156,7 @@ export class GatewayService {
   private readonly mcpRequesterAdmissionConfiguration?: McpRequesterAdmissionConfiguration;
   private readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
   private readonly chatAutoActions: ChatAutoActionPolicy;
-  private readonly chatCapabilityDiscovery: ChatCapabilityDiscoveryService;
+  private readonly capabilityKnowledge: ReturnType<typeof createCapabilityKnowledge>;
   private readonly workspacePathBridgeRuntime: WorkspacePathBridgeRuntime;
   private readonly chatWorkspaceSnapshotService: ChatWorkspaceSnapshotService;
   private readonly delegatedWorkResultService: DelegatedWorkResultService;
@@ -1526,8 +1526,9 @@ export class GatewayService {
       runBrowserErrand: (request) => this.browserErrandService.run(request),
       getChatSessionStatus: (sessionId) => this.chatSessionStatusService.getModelProjection(sessionId),
       readToolArtifact: (request) => chatToolArtifactService.readChatToolArtifactForTool(this, request),
-      searchCapabilities: (request) => this.chatCapabilityDiscovery.discover(request),
-      readSkill: (request) => this.chatCapabilityDiscovery.readSkill(request),
+      searchCapabilities: (request) => this.capabilityKnowledge.discovery.discover(request),
+      explainCapabilities: async (request) => ({ ...(await this.capabilityKnowledge.explanation.explain(request)) }),
+      readSkill: (request) => this.capabilityKnowledge.discovery.readSkill(request),
       assertOptionalUserInputAvailable: async () => {
         if (!(await this.isFeatureEnabled("chatAsyncClarificationV1Enabled")))
           throw new Error("Optional clarification is disabled.");
@@ -2762,12 +2763,13 @@ export class GatewayService {
           context: { serverId, reasonCode },
         }),
     });
-    this.chatCapabilityDiscovery = new ChatCapabilityDiscoveryService({
-      requireEnabled: () => this.requireFeatureEnabled("boundedToolExposureV1Enabled"),
-      requireSession: (sessionId) => this.requireChatSession(sessionId),
-      listCatalog: (scope, workspaceId) => this.workspaceTurnSkills.listCatalog(scope, workspaceId),
-      listSkills: (workspaceId) => this.workspaceTurnSkills.listSkills(workspaceId),
-      listLifecycle: () => this.storage.skillLifecycle.list(),
+    this.capabilityKnowledge = createCapabilityKnowledge({
+      runtime: this,
+      skills: this.workspaceTurnSkills,
+      connectors: () => this.routeServices.capabilityConnectors,
+      codeMode: this.capabilitySystemService,
+      profiles: this.storage.chatTurnCapabilityProfiles,
+      lifecycle: this.storage.skillLifecycle,
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
       assertChatToolDispatchAllowed: (request) => this.chatTurnControl.assertToolDispatchAllowed(request),
@@ -9560,9 +9562,6 @@ export class GatewayService {
   private applyRuntimeBrowserBackendDefaults<TRequest extends ToolInvokeRequest | ToolAccessEvaluateRequest>(
     request: TRequest,
   ): TRequest {
-    if (!request.args || typeof request.args !== "object") {
-      return request;
-    }
     return applyRuntimeBrowserBackendDefaults(
       request,
       this.config.assistant.web,

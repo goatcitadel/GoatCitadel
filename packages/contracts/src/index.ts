@@ -255,3 +255,4 @@ export * from "./chat-feature-references.js";
 export * from "./design-advisory.js";
 export * from "./managed-project-files.js";
 export * from "./scripts.js";
+export * from "./capability-explanation.js";

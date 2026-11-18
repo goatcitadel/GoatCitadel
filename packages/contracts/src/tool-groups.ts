@@ -36,6 +36,7 @@ export const TOOL_GROUPS: readonly ToolGroupDefinition[] = [
     switchable: false,
     toolNames: [
       "capabilities.search",
+      "capabilities.explain",
       "skills.read",
       "tool_artifact.read",
       "change.request",

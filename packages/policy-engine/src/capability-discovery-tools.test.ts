@@ -25,7 +25,7 @@ const request = (toolName: string, args: Record<string, unknown>): ToolInvokeReq
 
 describe("governed discovery/read tools", () => {
   it("registers trusted built-in read-only descriptors with no effect potential", () => {
-    for (const name of ["capabilities.search", "skills.read"]) {
+    for (const name of ["capabilities.search", "capabilities.explain", "skills.read"]) {
       const definition = createDefaultToolRegistry().get(name)!;
       expect(definition).toMatchObject({
         readOnly: true,
@@ -72,5 +72,21 @@ describe("governed discovery/read tools", () => {
       executeTool({ ...req, args: { ...req.args, activate: true } }, config, {} as AsyncStorage, { readSkill }),
     ).rejects.toThrow(/bounded/);
     expect(readSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("validates explanation reads and dispatches them without granting permissions", async () => {
+    const req = request("capabilities.explain", { query: "Can you send email?" });
+    const explainCapabilities = vi.fn(async () => ({ informationalOnly: true, permissionsGranted: false }));
+    await expect(executeTool(req, config, {} as AsyncStorage)).rejects.toThrow(/unavailable/);
+    expect(await executeTool(req, config, {} as AsyncStorage, { explainCapabilities })).toMatchObject({
+      permissionsGranted: false,
+    });
+    expect(explainCapabilities).toHaveBeenCalledWith(req);
+    for (const args of [{ query: "email", workspaceId: "other" }, { query: "email", limit: 6 }, { query: " " }]) {
+      await expect(executeTool({ ...req, args }, config, {} as AsyncStorage, { explainCapabilities })).rejects.toThrow(
+        /bounded/,
+      );
+    }
+    expect(explainCapabilities).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { clampInt, redactSecretText, type ApprovalRequest, type ToolInvokeRequest } from "@goatcitadel/contracts";
 import { browserApprovalPreview } from "./browser-approval-preview.js";
+import { capabilityExplanationApprovalPreview } from "./capability-explanation-approval-preview.js";
 
 const LOOKUP_LIMITS = new Map<string, { fallback: number; max: number }>([
   ["memory.search", { fallback: 12, max: 100 }],
@@ -14,6 +15,7 @@ function trimmedText(value: unknown): string | undefined {
 }
 
 function lookupApprovalPreview(toolName: string, args: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (toolName === "capabilities.explain") return capabilityExplanationApprovalPreview(args);
   if (toolName === "session.history") {
     const messageId = trimmedText(args.messageId);
     const sequence = clampInt(args.sequence, 0, 0, Number.MAX_SAFE_INTEGER);
@@ -88,7 +90,11 @@ function knowledgeScopeSummary(request: ToolInvokeRequest, boundary: string): st
 
 /** Allowlisted review projection only: never copy executable args or metadata wholesale. */
 export function knowledgeApprovalPreview(request: ToolInvokeRequest): Record<string, unknown> | undefined {
-  if (LOOKUP_LIMITS.has(request.toolName) || request.toolName === "session.history") {
+  if (
+    LOOKUP_LIMITS.has(request.toolName) ||
+    request.toolName === "session.history" ||
+    request.toolName === "capabilities.explain"
+  ) {
     const lookup = lookupApprovalPreview(request.toolName, request.args);
     return lookup ? { ...lookup, sessionId: request.sessionId, taskId: request.taskId } : undefined;
   }

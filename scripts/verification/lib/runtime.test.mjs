@@ -152,6 +152,38 @@ test("verification dev UI invalidates Vite dependency prebundles while preview s
   assert.deepEqual(previewCommand.slice(2), ["preview", "--host", "127.0.0.1", "--port", "4173", "--strictPort"]);
 });
 
+for (const code of ["EACCES", "EPERM"]) {
+  test(`verification HTTP readiness fails fast for permission-denied ${code} probes`, async (t) => {
+    const cause = Object.assign(new Error("permission denied"), { code });
+    const failure = new TypeError("fetch failed", { cause });
+    const probe = t.mock.method(globalThis, "fetch", async () => {
+      throw failure;
+    });
+    await assert.rejects(waitForHttp("http://127.0.0.1:12345/health", "Gateway health", 2_000), (error) => {
+      assert.match(error.message, new RegExp(`${code}.*loopback`, "u"));
+      assert.equal(error.cause, failure);
+      return true;
+    });
+    assert.equal(probe.mock.callCount(), 1);
+  });
+}
+
+test("verification HTTP readiness includes the last HTTP status when a service stays degraded", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => new Response('{"status":"degraded"}', { status: 503 }));
+  await assert.rejects(waitForHttp("http://127.0.0.1:12345/health", "Gateway health", 100), /last HTTP status: 503/u);
+});
+
+test("verification HTTP readiness still retries connection refusal during startup", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    if (++calls === 1)
+      throw new TypeError("fetch failed", { cause: Object.assign(new Error("starting"), { code: "ECONNREFUSED" }) });
+    return new Response(null, { status: 204 });
+  });
+  await waitForHttp("http://127.0.0.1:12345/health", "Gateway health", 5_000);
+  assert.equal(calls, 2);
+});
+
 for (const variant of ["omitted", "null", "live-child"]) {
   test(`verification HTTP readiness accepts an in-process server with ${variant} handle`, async () => {
     let requests = 0;
