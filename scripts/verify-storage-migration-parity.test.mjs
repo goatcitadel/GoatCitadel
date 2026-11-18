@@ -1015,10 +1015,11 @@ test("current registries and checked-in manifest cover every migration exactly",
   // manifest so an accidental registry-plus-manifest edit cannot self-certify.
   assert.equal(sqlite.migrations.length, 281);
   assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 281]);
-  assert.equal(postgres.migrations.length, 233);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 233]);
+  assert.equal(postgres.migrations.length, 234);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 234]);
   assert.equal(sqlite.migrations.at(-1)?.name, "skill_hub_remove_operation_kind");
-  assert.equal(postgres.migrations.at(-1)?.name, "skill_hub_remove_operation_kind");
+  assert.equal(postgres.migrations.at(-1)?.name, "commitment_and_routed_context_schema_convergence");
+  assert.equal(postgres.migrations.find((record) => record.version === 233)?.name, "skill_hub_remove_operation_kind");
   assert.equal(sqlite.migrations.find((record) => record.version === 280)?.name, "managed_project_file_revisions");
   assert.equal(sqlite.migrations.find((record) => record.version === 279)?.name, "chat_session_approval_modes");
   assert.equal(sqlite.migrations.find((record) => record.version === 278)?.name, "chat_artifact_render_receipts");

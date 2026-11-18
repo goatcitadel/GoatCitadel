@@ -1981,9 +1981,9 @@
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 233,
+      "expectedCount": 234,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 233,
+      "expectedLastVersion": 234,
       "migrations": [
         {
           "version": 1,
@@ -3392,6 +3392,13 @@
           "name": "skill_hub_remove_operation_kind",
           "definitionSha256": "bf77735a30ac3ddf5bcab82b37a1a5ab0d9ec917fcad60b459a271ad65bf6ace",
           "runtimeIntegritySha256": "e96e1d832500daef2d69ae95ef6072d79e9f6540eeccb57e83168afb21dfe30d"
+        },
+        {
+          "version": 234,
+          "name": "commitment_and_routed_context_schema_convergence",
+          "definitionSha256": "0a0815631e369091ef3b6f955c98a7424f8519ffdf0b0ead3a1929421cf4cee4",
+          "sqlPayloadSha256": "5325628b9e3c182e9e86e7d8d2e56ab8385fbfb0eff108a4f8f4d740056ded5a",
+          "runtimeIntegritySha256": "4788dec7bb53fe6b8d95e614e5b8763e4d703efd9dd156bb7998b398148b4291"
         }
       ]
     }

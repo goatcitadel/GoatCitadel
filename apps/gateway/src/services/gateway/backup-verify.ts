@@ -496,11 +496,17 @@ function buildBackupVerifyContractCoverage(
     manifest.contractCoverage?.minimumSet.databasePaths ?? [],
     payloadVerifiedPaths,
   );
+  // Postgres stores transcript and audit events in the database, so its full
+  // dump covers those sections when no separate files are declared. Keep the
+  // dump as explicit coverage evidence: missing or hash-invalid bytes must fail.
+  const postgresDatabasePaths = database.expectedPaths.filter((item) => item === "database/postgres.dump");
+  const transcriptPaths = manifest.contractCoverage?.minimumSet.transcriptPaths ?? [];
+  const auditPaths = manifest.contractCoverage?.minimumSet.auditPaths ?? [];
   const transcripts = buildContractSection(
-    manifest.contractCoverage?.minimumSet.transcriptPaths ?? [],
+    transcriptPaths.length > 0 ? transcriptPaths : postgresDatabasePaths,
     payloadVerifiedPaths,
   );
-  const audit = buildContractSection(manifest.contractCoverage?.minimumSet.auditPaths ?? [], payloadVerifiedPaths);
+  const audit = buildContractSection(auditPaths.length > 0 ? auditPaths : postgresDatabasePaths, payloadVerifiedPaths);
   const config = buildContractSection(manifest.contractCoverage?.minimumSet.configPaths ?? [], payloadVerifiedPaths);
 
   appendContractReasons(reasons, "database", database);

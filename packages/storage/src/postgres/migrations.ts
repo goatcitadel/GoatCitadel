@@ -15394,6 +15394,37 @@ $approval_file_schema_convergence$;
     sql: SKILL_HUB_REMOVE_OPERATION_POSTGRES_SQL,
     integritySha256: "e96e1d832500daef2d69ae95ef6072d79e9f6540eeccb57e83168afb21dfe30d",
   },
+  {
+    // Bring the original v204/v206 definitions into line with the canonical bootstrap.
+    version: 234,
+    name: "commitment_and_routed_context_schema_convergence",
+    sql: `
+DO $commitment_context_schema_convergence$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_attribute
+    WHERE attrelid = 'agent_commitments'::pg_catalog.regclass AND attname = 'revision'
+      AND attnum > 0 AND NOT attisdropped AND atttypid = 'pg_catalog.int4'::pg_catalog.regtype
+  ) THEN
+    ALTER TABLE agent_commitments ALTER COLUMN revision TYPE BIGINT;
+  END IF;
+
+  IF pg_catalog.to_regclass('idx_chat_routed_context_snapshots_admission_id_unique') IS NULL
+    AND EXISTS (
+      SELECT 1 FROM pg_catalog.pg_constraint
+      WHERE conrelid = 'chat_routed_context_snapshots'::pg_catalog.regclass
+        AND conname = 'chat_routed_context_snapshots_admission_id_key' AND contype = 'u'
+    )
+  THEN
+    ALTER TABLE chat_routed_context_snapshots
+      RENAME CONSTRAINT chat_routed_context_snapshots_admission_id_key
+      TO idx_chat_routed_context_snapshots_admission_id_unique;
+  END IF;
+END
+$commitment_context_schema_convergence$;
+    `,
+    integritySha256: "4788dec7bb53fe6b8d95e614e5b8763e4d703efd9dd156bb7998b398148b4291",
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

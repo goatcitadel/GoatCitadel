@@ -18,6 +18,67 @@ afterEach(async () => {
 });
 
 describe("verifyBackupAtPath", () => {
+  it("uses the declared Postgres dump for database-backed transcript and audit coverage", async () => {
+    const backupPath = await createDatabaseBackedCoverageFixture("postgres");
+    const result = await verifyBackupAtPath(backupPath);
+
+    expect(result).toMatchObject({ verified: true, contractVerified: true, filesVerified: 2, issues: [] });
+    expect(result.contractCoverage.reasons).toEqual([]);
+    for (const section of ["transcripts", "audit"] as const) {
+      expect(result.contractCoverage.minimumSet[section]).toEqual({
+        expectedPaths: ["database/postgres.dump"],
+        verifiedPaths: ["database/postgres.dump"],
+        missingPaths: [],
+        verified: true,
+      });
+    }
+  });
+
+  it.each(["missing", "corrupt", "undeclared"] as const)(
+    "rejects %s Postgres dumps as transcript and audit coverage",
+    async (mode) => {
+      const backupPath = await createDatabaseBackedCoverageFixture("postgres");
+      if (mode === "missing") {
+        await rm(path.join(backupPath, "payload", "database", "postgres.dump"));
+      } else if (mode === "corrupt") {
+        await writeFile(path.join(backupPath, "payload", "database", "postgres.dump"), "damaged");
+      } else {
+        const manifestPath = path.join(backupPath, "manifest.json");
+        const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+        manifest.contractCoverage.minimumSet.databasePaths = [];
+        await writeFile(manifestPath, JSON.stringify(manifest));
+      }
+
+      const result = await verifyBackupAtPath(backupPath);
+      expect(result.contractVerified).toBe(false);
+      expect(result.contractCoverage.minimumSet.transcripts.verified).toBe(false);
+      expect(result.contractCoverage.minimumSet.audit.verified).toBe(false);
+    },
+  );
+
+  it("still requires explicitly declared external audit files for Postgres backups", async () => {
+    const backupPath = await createDatabaseBackedCoverageFixture("postgres");
+    const manifestPath = path.join(backupPath, "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    manifest.contractCoverage.minimumSet.auditPaths = ["data/audit/missing.jsonl"];
+    await writeFile(manifestPath, JSON.stringify(manifest));
+
+    const result = await verifyBackupAtPath(backupPath);
+    expect(result.contractVerified).toBe(false);
+    expect(result.contractCoverage.reasons).toContain("minimum_set_audit_incomplete");
+  });
+
+  it("does not treat SQLite databases as file-backed transcript or audit coverage", async () => {
+    const backupPath = await createDatabaseBackedCoverageFixture("valid");
+    const result = await verifyBackupAtPath(backupPath);
+
+    expect(result.verified).toBe(true);
+    expect(result.contractVerified).toBe(false);
+    expect(result.contractCoverage.reasons).toEqual(
+      expect.arrayContaining(["minimum_set_transcripts_missing", "minimum_set_audit_missing"]),
+    );
+  });
+
   it("verifies a valid backup directory", async () => {
     const backupPath = await createBackupFixture("valid");
     const result = await verifyBackupAtPath(backupPath);
@@ -235,6 +296,23 @@ async function createBackupFixture(
   }
 
   await writeFile(path.join(backupPath, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return backupPath;
+}
+
+async function createDatabaseBackedCoverageFixture(mode: "postgres" | "valid"): Promise<string> {
+  const backupPath = await createBackupFixture(mode);
+  const manifestPath = path.join(backupPath, "manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  const minimumSet = manifest.contractCoverage.minimumSet;
+  for (const filePath of [...minimumSet.transcriptPaths, ...minimumSet.auditPaths]) {
+    await rm(path.join(backupPath, "payload", filePath));
+  }
+  manifest.files = manifest.files.filter(
+    (file: { path: string }) => ![...minimumSet.transcriptPaths, ...minimumSet.auditPaths].includes(file.path),
+  );
+  minimumSet.transcriptPaths = [];
+  minimumSet.auditPaths = [];
+  await writeFile(manifestPath, JSON.stringify(manifest));
   return backupPath;
 }
 
