@@ -25,9 +25,19 @@ public sealed class ActivationServiceTests
     [DataRow("route=https%3A%2F%2Fexample.com")]
     [DataRow("route=%2F%2Fevil.example%2Finbox")]
     [DataRow("action=unsupported")]
+    [DataRow("route=%2Fchat&route")]
+    [DataRow("route=%2Fchat&route=https%3A%2F%2Fexample.com")]
     public void NotificationActivationIgnoresUnsafeOrMissingRoutes(string arguments)
     {
         Assert.AreEqual(ActivationDelivery.None, ActivationRequestResolver.ResolveNotificationArguments(arguments));
+    }
+
+    [TestMethod]
+    public void NotificationActivationUsesTheLastRouteParameter()
+    {
+        Assert.AreEqual(
+            ActivationDelivery.ForRoute("/inbox"),
+            ActivationRequestResolver.ResolveNotificationArguments("route=%2Fchat&%52OUTE=%2Finbox&action=open"));
     }
 
     [DataTestMethod]

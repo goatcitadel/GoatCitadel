@@ -23,15 +23,12 @@ internal static class ActivationRequestResolver
 
     internal static ActivationDelivery ResolveNotificationArguments(string arguments)
     {
-        string? route = null;
-        var pairs = arguments.Split('&', StringSplitOptions.RemoveEmptyEntries).Select(pair => pair.Split('=', 2));
-        foreach (var parts in pairs)
-        {
-            if (string.Equals(Uri.UnescapeDataString(parts[0]), "route", StringComparison.OrdinalIgnoreCase))
-            {
-                route = parts.Length == 2 ? Uri.UnescapeDataString(parts[1]) : null;
-            }
-        }
+        // Validate the last route parameter even when it is missing a value.
+        var route = arguments.Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(pair => pair.Split('=', 2))
+            .Where(parts => string.Equals(Uri.UnescapeDataString(parts[0]), "route", StringComparison.OrdinalIgnoreCase))
+            .Select(parts => parts.Length == 2 ? Uri.UnescapeDataString(parts[1]) : null)
+            .LastOrDefault();
 
         return route is not null && NavigationPolicy.IsAllowedLocalRoute(route)
             ? ActivationDelivery.ForRoute(route)
