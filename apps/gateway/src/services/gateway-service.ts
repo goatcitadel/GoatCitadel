@@ -575,7 +575,7 @@ import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import { DiscordRuntimeService } from "./discord-runtime-service.js";
 import {
   resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner,
-  stageGatewayTokenForRestart,
+  prepareGatewayTokenForRestart,
 } from "./gateway/auth-credential-planner.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import {
@@ -10925,8 +10925,8 @@ export class GatewayService {
           payload: await this.buildUnifiedConfigPayloadForRuntime(candidate.config, candidate.llm, candidate.features),
         };
       },
-      stageStartupCredential: (candidate) =>
-        candidate.input.auth ? stageGatewayTokenForRestart(candidate.config) : undefined,
+      prepareStartupCredential: (candidate, previous) =>
+        candidate.input.auth ? prepareGatewayTokenForRestart(candidate.config, previous.config) : undefined,
       captureRuntimeOwnerRecoveryIntent: async (candidate) => ({
         version: 1,
         ...(candidate.input.mesh

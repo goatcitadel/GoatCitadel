@@ -54,8 +54,8 @@ export interface ConfigGenerationCommitInput<T> {
   expectedRevision?: number;
   requireExpectedRevision?: boolean;
   buildCandidate(): ConfigGenerationCandidate<T> | Promise<ConfigGenerationCandidate<T>>;
-  /** Stage a startup prerequisite under the revision fence. Return its in-memory compensation. */
-  stageStartupCredential?(candidate: T): (() => void) | undefined;
+  /** Prepare a credential write under the revision fence. Its write returns a rollback callback. */
+  prepareStartupCredential?(candidate: T, previous: T): { beforePublish: boolean; write(): () => void } | undefined;
   captureRuntimeOwnerRecoveryIntent?(
     candidate: T,
   ): ConfigGenerationRuntimeOwnerRecoveryIntent | Promise<ConfigGenerationRuntimeOwnerRecoveryIntent>;
@@ -427,6 +427,7 @@ export class ConfigGenerationService {
     const nextPayload = withNextGeneration(candidate.payload, previousPayload, currentRevision + 1);
     assertValidCompleteUnifiedConfig(nextPayload, "staged settings generation");
     assertGenerationDigest(nextPayload, "staged settings generation");
+    const startupCredential = input.prepareStartupCredential?.(candidate.runtime, input.previousRuntime);
 
     await fs.mkdir(this.stagingDir, { recursive: true });
     const stagedCanonicalPath = path.join(this.configDir, `.goatcitadel-${nextPayload.generation!.generationId}.tmp`);
@@ -438,7 +439,7 @@ export class ConfigGenerationService {
     let restoreStartupCredential: (() => void) | undefined;
     try {
       await this.hooks.beforePublish?.(nextPayload);
-      restoreStartupCredential = input.stageStartupCredential?.(candidate.runtime);
+      if (startupCredential?.beforePublish) restoreStartupCredential = startupCredential.write();
       await replaceFileAtomically(stagedCanonicalPath, this.activePath);
     } catch (error) {
       await removePathBestEffort(stagedCanonicalPath);
@@ -482,6 +483,9 @@ export class ConfigGenerationService {
     await this.hooks.afterCommitMarker?.(nextPayload);
     try {
       await input.apply(candidate.runtime);
+      // A rotation can keep using its existing durable token until both the
+      // forward decision and runtime owner apply have succeeded.
+      if (startupCredential && !startupCredential.beforePublish) startupCredential.write();
     } catch (applyError) {
       const rollbackPayload = withNextGeneration(previousPayload, nextPayload, currentRevision + 2);
       try {

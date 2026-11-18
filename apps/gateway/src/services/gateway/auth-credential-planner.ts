@@ -51,10 +51,10 @@ const ENV_BASIC_USERNAME_KEY = "GOATCITADEL_AUTH_BASIC_USERNAME";
 const ENV_BASIC_PASSWORD_KEY = "GOATCITADEL_AUTH_BASIC_PASSWORD";
 
 /**
- * Make the selected token available to startup before publishing Token mode.
+ * Prepare the token write before changing the active settings.
  * The token stays in the existing credential file owner and out of config generations.
  */
-export function stageGatewayTokenForRestart(config: GatewayRuntimeConfig): (() => void) | undefined {
+export function prepareGatewayTokenForRestart(config: GatewayRuntimeConfig, previousConfig: GatewayRuntimeConfig) {
   if (config.assistant.auth.mode !== "token") return undefined;
   const token = config.assistant.auth.token.value?.trim();
   if (!token || !evaluateAuthTokenSafety(token).ok || token.length > 4096 || /[\r\n]/u.test(token)) {
@@ -87,6 +87,27 @@ export function stageGatewayTokenForRestart(config: GatewayRuntimeConfig): (() =
   }
   if (previous.present && previous.value === token) return undefined;
 
+  // A usable token can keep boot working until a rotation is ready to commit.
+  // First-time setup must write its credential before publishing Token mode.
+  const canBootWithPreviousToken =
+    previousConfig.assistant.auth.mode === "token" && evaluateAuthTokenSafety(previous.value).ok;
+  return {
+    beforePublish: !canBootWithPreviousToken,
+    write: () => writeGatewayTokenForRestart(token, options, previous, processTokenFromFile, previousProcessToken),
+  };
+}
+
+function writeGatewayTokenForRestart(
+  token: string,
+  options: { rootDir: string },
+  previous: ReturnType<typeof readLocalEnvVar>,
+  processTokenFromFile: boolean,
+  previousProcessToken: string | undefined,
+): () => void {
+  const current = readLocalEnvVar(ENV_TOKEN_KEY, options);
+  if (current.path !== previous.path || current.present !== previous.present || current.value !== previous.value) {
+    throw new ValidationError({ message: "The saved Gateway token changed while applying Settings. Try again." });
+  }
   try {
     const snapshot = captureLocalEnvFileSnapshot(options);
     if (!upsertLocalEnvVar(ENV_TOKEN_KEY, token, options).updated) throw new Error("Missing local credential file");
@@ -96,7 +117,7 @@ export function stageGatewayTokenForRestart(config: GatewayRuntimeConfig): (() =
     }
   } catch {
     throw new ValidationError({
-      message: "The Gateway token could not be saved for restart. Token mode was not published.",
+      message: "The Gateway token could not be saved for restart.",
     });
   }
   if (processTokenFromFile) process.env[ENV_TOKEN_KEY] = token;

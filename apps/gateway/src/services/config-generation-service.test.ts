@@ -31,9 +31,12 @@ describe("ConfigGenerationService", () => {
         expectedRevision: 1,
         previousRuntime: "balanced",
         buildCandidate: () => ({ payload: withBudgetMode(payload, "saver"), runtime: "saver" }),
-        stageStartupCredential: () => {
-          throw error;
-        },
+        prepareStartupCredential: () => ({
+          beforePublish: true,
+          write: () => {
+            throw error;
+          },
+        }),
         apply,
         restore,
       }),
@@ -43,6 +46,33 @@ describe("ConfigGenerationService", () => {
     expect(service.getRevision()).toBe(1);
     expect(apply).not.toHaveBeenCalled();
     expect(restore).not.toHaveBeenCalled();
+  });
+
+  it("keeps a rotation off disk if the Gateway crashes before the commit decision", async () => {
+    const { root, payload } = await createConfigRoot();
+    const crash = new Error("simulated process death before the commit decision");
+    const service = new ConfigGenerationService(root, undefined, {
+      afterPublish: () => {
+        throw crash;
+      },
+    });
+    const write = vi.fn(() => () => undefined);
+    const apply = vi.fn();
+    await expect(
+      service.commit({
+        expectedRevision: 1,
+        previousRuntime: "balanced",
+        buildCandidate: () => ({ payload: withBudgetMode(payload, "saver"), runtime: "saver" }),
+        prepareStartupCredential: () => ({ beforePublish: false, write }),
+        apply,
+        restore: vi.fn(),
+      }),
+    ).rejects.toBe(crash);
+
+    await recoverLastGoodConfigGeneration(root);
+    expect((await readActive(root)).budgets.mode).toBe("balanced");
+    expect(write).not.toHaveBeenCalled();
+    expect(apply).not.toHaveBeenCalled();
   });
 
   it("serializes concurrent mutations and rejects the stale revision without applying it", async () => {
