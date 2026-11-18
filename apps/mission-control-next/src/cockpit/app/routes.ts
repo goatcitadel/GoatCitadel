@@ -1,4 +1,13 @@
-export type CockpitArea = "chat" | "inbox" | "work" | "capabilities" | "library" | "system" | "settings" | "gallery";
+export type CockpitArea =
+  | "chat"
+  | "inbox"
+  | "work"
+  | "capabilities"
+  | "library"
+  | "scripts"
+  | "system"
+  | "settings"
+  | "gallery";
 
 export const COCKPIT_AREAS = [
   { area: "chat", label: "Chat", path: "/chat", shortcut: "c" },
@@ -6,6 +15,7 @@ export const COCKPIT_AREAS = [
   { area: "work", label: "Work", path: "/work", shortcut: "w" },
   { area: "capabilities", label: "Capabilities", path: "/capabilities", shortcut: "a" },
   { area: "library", label: "Library", path: "/library", shortcut: "l" },
+  { area: "scripts", label: "Scripts", path: "/scripts", shortcut: "p" },
   { area: "system", label: "System", path: "/system", shortcut: "s" },
 ] as const satisfies readonly { area: CockpitArea; label: string; path: string; shortcut: string }[];
 
@@ -21,6 +31,7 @@ const AREA_BY_SEGMENT: Readonly<Record<string, CockpitArea>> = {
   work: "work",
   capabilities: "capabilities",
   library: "library",
+  scripts: "scripts",
   system: "system",
   ops: "system",
   settings: "settings",

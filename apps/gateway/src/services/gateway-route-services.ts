@@ -293,6 +293,7 @@ export interface EvolutionManagedSourceRouteService {
   }): Promise<ChangePlanRecord>;
 }
 export interface GatewayRouteServices {
+  scripts?: import("./scripts-service.js").ScriptsService;
   a2a: A2ARouteService;
   agents: AgentsRouteService;
   assembly: AssemblyRouteService;
@@ -431,6 +432,7 @@ export interface GatewayRouteServices {
 }
 
 export interface GatewayRouteServiceDependencies {
+  scripts: NonNullable<GatewayRouteServices["scripts"]>;
   a2a: A2ARouteServiceDependencies;
   agents: AgentsRoutePort;
   assembly: AssemblyRoutePort;
@@ -515,6 +517,7 @@ export interface GatewayRouteServiceDependencies {
 
 export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies): GatewayRouteServices {
   return {
+    scripts: deps.scripts,
     a2a: new A2ARouteService(deps.a2a),
     agents: createAgentsRouteService(deps.agents),
     assembly: createAssemblyRouteService(deps.assembly),

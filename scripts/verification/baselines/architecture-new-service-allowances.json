@@ -2845,6 +2845,14 @@
       "maxDependencyMemberAccesses": 4,
       "reason": "Resolves the stored channel binding and retains the direct-local-Chat approval mode precondition before channel send.",
       "evidence": "Repository counters measure 0 host callbacks and 4 dependency accesses. The channel desk send tests cover channel routing, and gateway/chat-auto-binding.test.ts covers the Auto binding."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/scripts-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 7,
+      "reason": "Lists workspace-scoped Scripts inventory and uses storage to read retention, update it with a version check, and append audit evidence in the same transaction.",
+      "evidence": "Repository counters measure 0 host callbacks and 7 dependency accesses. Scripts service and route tests cover workspace scoping, stale updates, and retention audit evidence."
     }
   ]
 }

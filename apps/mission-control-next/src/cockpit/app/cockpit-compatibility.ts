@@ -283,6 +283,7 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
       (parts.length === 3 && ["tasks", "runs"].includes(section!)))
   )
     return native();
+  if (area === "scripts" && parts.length === 1) return native();
   if (area === "library") {
     // Notes are UUID-owned records. Keep malformed resource suffixes unavailable.
     if (

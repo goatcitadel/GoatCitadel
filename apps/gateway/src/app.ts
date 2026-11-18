@@ -71,6 +71,7 @@ import { capabilitySkillsRoutes } from "./routes/capability-skills.js";
 import { webSearchSettingsRoutes } from "./routes/web-search-settings.js";
 import { chatRoutes } from "./routes/chat.js";
 import { registerChangePlanRoutes } from "./routes/change-plans.js";
+import { scriptsRoutes } from "./routes/scripts.js";
 import { promptPackRoutes } from "./routes/prompt-packs.js";
 import { modelComparisonRoutes } from "./routes/model-comparisons.js";
 import { adminRoutes } from "./routes/admin.js";
@@ -437,6 +438,7 @@ export async function buildApp(options: GatewayPluginOptions = {}) {
     await app.register(dashboardRoutes);
     await app.register(capabilitiesRoutes);
     await app.register(filesRoutes);
+    await app.register(scriptsRoutes);
     await app.register(llmRoutes);
     await app.register(turnsRoutes);
     await app.register(localAiRoutes);

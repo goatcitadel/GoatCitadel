@@ -15,6 +15,17 @@ function createRepo(): { db: DatabaseClient; repo: SystemSettingsRepository } {
 }
 
 describe("SystemSettingsRepository", () => {
+  it("reads only requested settings in bounded parameterized batches", () => {
+    const { repo } = createRepo();
+    repo.set("wanted", { retention: "temporary" });
+    repo.set("foreign", { private: true });
+    assert.deepEqual(repo.getMany([]), []);
+    assert.deepEqual(
+      repo.getMany(["wanted", "wanted", ...Array.from({ length: 220 }, (_, index) => `missing-${index}`)]),
+      [repo.get("wanted")],
+    );
+    assert.throws(() => repo.getMany(Array.from({ length: 5001 }, () => "wanted")));
+  });
   it("compare-and-set rejects stale values, revisions, keys and competing initial creation", () => {
     const { db, repo } = createRepo();
     try {
