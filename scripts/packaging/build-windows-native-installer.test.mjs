@@ -147,7 +147,7 @@ test("installer stages and validates the complete bundle before stopping the wor
   );
   assert.match(
     iss,
-    /procedure PrepareStagedGoatCitadelPayload[\s\S]*?ExtractTemporaryFile\('bundle\.zip'\);[\s\S]*?tar\.exe[\s\S]*?StageAdjacentReleaseEvidence\(StageRoot\);[\s\S]*?ValidateGoatCitadelPayload\(StageRoot, False\);/,
+    /procedure PrepareStagedGoatCitadelPayload[\s\S]*?ExtractTemporaryFile\('bundle\.zip'\);[\s\S]*?ValidateGoatCitadelPayload\(StageRoot, False\);[\s\S]*?StageAdjacentReleaseEvidence\(StageRoot\);/,
   );
   assert.match(
     iss,
@@ -272,7 +272,7 @@ test("installer consumes only the exact adjacent release-evidence files", () => 
   );
   assert.match(
     iss,
-    /procedure PrepareStagedGoatCitadelPayload[\s\S]*?tar\.exe[\s\S]*?StageAdjacentReleaseEvidence\(StageRoot\);[\s\S]*?ValidateGoatCitadelPayload/,
+    /procedure PrepareStagedGoatCitadelPayload[\s\S]*?ValidateGoatCitadelPayload\(StageRoot, False\);[\s\S]*?StageAdjacentReleaseEvidence\(StageRoot\);/,
   );
   assert.doesNotMatch(iss, /release-evidence\\\*/);
   assert.doesNotMatch(iss, /release-evidence\\(?:release-assets|proof-bundle)/);

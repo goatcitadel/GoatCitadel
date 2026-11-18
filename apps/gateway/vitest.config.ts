@@ -33,6 +33,14 @@ export default defineConfig({
         replacement: path.resolve(configDir, "../../packages/contracts/src/index.ts"),
       },
       {
+        find: "@goatcitadel/session-control-client/http",
+        replacement: path.resolve(configDir, "../../packages/session-control-client/src/http-internal.ts"),
+      },
+      {
+        find: "@goatcitadel/session-control-client",
+        replacement: path.resolve(configDir, "../../packages/session-control-client/src/index.ts"),
+      },
+      {
         find: "@goatcitadel/skills",
         replacement: path.resolve(configDir, "../../packages/skills/src/index.ts"),
       },

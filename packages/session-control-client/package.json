@@ -1,0 +1,30 @@
+{
+  "name": "@goatcitadel/session-control-client",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "goatcitadelOwner": "runtime",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./http": {
+      "types": "./dist/http-internal.d.ts",
+      "default": "./dist/http-internal.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@goatcitadel/contracts": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json"
+  }
+}

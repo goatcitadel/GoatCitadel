@@ -3,7 +3,7 @@ import { createHash, createPrivateKey, randomBytes as nodeRandomBytes, sign as n
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { SessionControlAuthorize } from "@goatcitadel/mission-control-shared/api/session-control";
+import type { SessionControlAuthorize } from "@goatcitadel/session-control-client";
 import { buildCompanionSigningPayload } from "./companion-auth-helpers.js";
 
 /**

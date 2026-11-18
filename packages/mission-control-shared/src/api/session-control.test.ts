@@ -22,6 +22,56 @@ const NEW_SECRET_HASH = "b".repeat(64);
 const BASE_URL = "http://127.0.0.1:8787";
 const CLIENT_INSTANCE = "cli-instance-01";
 
+describe("control read deadlines", () => {
+  it("bounds both a stalled fetch and a stalled response body", async () => {
+    for (const stallBody of [false, true]) {
+      let requestSignal: AbortSignal | null | undefined;
+      const client = createSessionControlClient({
+        baseUrl: BASE_URL,
+        authorize: () => ({}),
+        controlReadTimeoutMs: 20,
+        fetch: (async (_url, init) => {
+          requestSignal = init?.signal;
+          if (!stallBody) return new Promise<Response>(() => {});
+          return { ok: true, status: 200, text: () => new Promise<string>(() => {}) } as Response;
+        }) as typeof fetch,
+      });
+      await expect(client.getControl("session")).rejects.toMatchObject({ kind: "network" });
+      expect(requestSignal?.aborted).toBe(true);
+    }
+  });
+
+  it("propagates caller cancellation and skips a pre-cancelled fetch", async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Promise<Response>(() => {}));
+    const client = createSessionControlClient({ baseUrl: BASE_URL, authorize: () => ({}), fetch: fetchImpl });
+    const pending = client.getControl("session", { signal: controller.signal, timeoutMs: 1000 });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ kind: "network" });
+    fetchImpl.mockClear();
+    await expect(client.getControl("session", { signal: controller.signal })).rejects.toMatchObject({
+      kind: "network",
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("keeps the live event stream unbounded and retains its caller signal", async () => {
+    const controller = new AbortController();
+    const response = new Response(null);
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => response);
+    const client = createSessionControlClient({
+      baseUrl: BASE_URL,
+      authorize: () => ({}),
+      fetch: fetchImpl,
+      controlReadTimeoutMs: 1,
+    });
+    expect(await client.openEventStream("session", { signal: controller.signal })).toBe(response);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(fetchImpl.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+    expect(controller.signal.aborted).toBe(false);
+  });
+});
+
 interface RecordedCall {
   readonly url: string;
   readonly init: RequestInit;

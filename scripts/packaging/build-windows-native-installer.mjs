@@ -231,7 +231,9 @@ Name: "voice"; Description: "Local voice runtime for transcribing voice messages
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "Shortcuts:"; Flags: unchecked
 
 [Files]
-Source: "{#MyBundleZip}"; DestDir: "{tmp}"; DestName: "bundle.zip"; Flags: dontcopy
+; The ZIP is already compressed. Store it directly to avoid a second decompression
+; pass before validated extraction can start.
+Source: "{#MyBundleZip}"; DestDir: "{tmp}"; DestName: "bundle.zip"; Flags: dontcopy nocompression
 Source: "{#MyPayloadValidator}"; DestDir: "{tmp}"; DestName: "validate-windows-bundle.ps1"; Flags: dontcopy
 ; Final release identity cannot be embedded in the signed installer without a
 ; digest cycle. Verified distribution ZIPs place this fixed, data-only
@@ -265,6 +267,69 @@ var
   StagedPayloadPrepared: Boolean;
   InstallPromotionStarted: Boolean;
   InstallCommitted: Boolean;
+  PayloadProgressPage: TOutputProgressWizardPage;
+  PayloadProgressText: String;
+  ArchiveProgressPage: TOutputMarqueeProgressWizardPage;
+
+procedure EnsurePayloadProgressPage();
+begin
+  if PayloadProgressPage = nil then
+    PayloadProgressPage := CreateOutputProgressPage('Installing GoatCitadel', 'Preparing and checking your local app');
+end;
+
+procedure PayloadOperationOutput(const S: String; const Error, FirstLine: Boolean);
+var
+  Detail, Phase, Counts: String;
+  Separator, Completed, Total: Integer;
+begin
+  if Error then
+  begin
+    Log('GoatCitadel progress output: ' + S);
+    Exit;
+  end;
+  if Pos('GOATCITADEL_PROGRESS ', S) = 1 then
+  begin
+    Detail := Copy(S, Length('GOATCITADEL_PROGRESS ') + 1, MaxInt);
+    Separator := Pos(' ', Detail);
+    Phase := Copy(Detail, 1, Separator - 1);
+    Counts := Copy(Detail, Separator + 1, MaxInt);
+    Separator := Pos('/', Counts);
+    Completed := StrToIntDef(Copy(Counts, 1, Separator - 1), -1);
+    Total := StrToIntDef(Copy(Counts, Separator + 1, MaxInt), 0);
+    if (Completed >= 0) and (Total > 0) and (Completed <= Total) then
+    begin
+      if Phase = 'Extracting-and-hashing' then Phase := 'Extracting and checking'
+      else if Phase = 'Manifest' then Phase := 'Checking the package'
+      else if Phase = 'Inventory' then Phase := 'Checking the file list'
+      else if Phase = 'Hashing' then Phase := 'Checking file contents'
+      else if Phase = 'Verified' then Phase := 'Files verified';
+      PayloadProgressPage.SetText(PayloadProgressText, Phase + ': ' + Counts + ' files');
+      PayloadProgressPage.SetProgress(Completed, Total);
+    end;
+    Log(S);
+  end
+  else
+    Log(S);
+end;
+
+procedure RunPayloadOperation(FileName, Parameters, WorkingDir, StatusText: String);
+var
+  ResultCode: Integer;
+begin
+  EnsurePayloadProgressPage();
+  PayloadProgressText := StatusText;
+  PayloadProgressPage.SetText(StatusText, 'Starting...');
+  PayloadProgressPage.SetProgress(0, 0);
+  PayloadProgressPage.Show();
+  try
+    if not ExecAndLogOutput(FileName, Parameters, WorkingDir, SW_HIDE, ewWaitUntilTerminated, ResultCode, @PayloadOperationOutput) then
+      RaiseException('Failed to start ' + FileName + ' while ' + StatusText);
+    if ResultCode <> 0 then
+      RaiseException(FileName + ' exited with code ' + IntToStr(ResultCode) + ' while ' + StatusText);
+  finally
+    PayloadProgressPage.Hide();
+  end;
+end;
 
 procedure RegisterExtraCloseApplicationsResources;
 begin
@@ -568,12 +633,16 @@ begin
     AddQuotes(ExpandConstant('{tmp}\\validate-windows-bundle.ps1')) +
     ' -StageRoot ' + AddQuotes(PayloadRoot) +
     ' -Target ' + AddQuotes('{#MyBundleTarget}') +
-    ' -Version ' + AddQuotes('{#MyAppVersion}');
+    ' -Version ' + AddQuotes('{#MyAppVersion}') + ' -ProgressOutput';
   if InstalledRoot then
   begin
     Parameters := Parameters + ' -InstalledRoot';
+  end
+  else
+  begin
+    Parameters := Parameters + ' -ArchivePath ' + AddQuotes(ExpandConstant('{tmp}\\bundle.zip'));
   end;
-  RunOrFail(
+  RunPayloadOperation(
     'powershell.exe',
     Parameters,
     PayloadRoot,
@@ -629,7 +698,6 @@ end;
 procedure PrepareStagedGoatCitadelPayload();
 var
   StageRoot: String;
-  Parameters: String;
 begin
   StageCreatedByCurrentSetup := False;
   AssertInstallDestinationSafe();
@@ -640,17 +708,21 @@ begin
   end;
   WriteTransactionMarker(StageRoot);
   StageCreatedByCurrentSetup := True;
-  ExtractTemporaryFile('bundle.zip');
-  ExtractTemporaryFile('validate-windows-bundle.ps1');
-  Parameters := '-xf ' + AddQuotes(ExpandConstant('{tmp}\\bundle.zip')) + ' -C ' + AddQuotes(StageRoot);
-  RunOrFail(
-    ExpandConstant('{sys}\\tar.exe'),
-    Parameters,
-    '',
-    'Expanding the GoatCitadel bundle into transaction staging...'
-  );
-  StageAdjacentReleaseEvidence(StageRoot);
+  EnsurePayloadProgressPage();
+  ArchiveProgressPage := CreateOutputMarqueeProgressPage('Installing GoatCitadel', 'Unpacking the installer archive');
+  ArchiveProgressPage.SetText('Preparing the payload for extraction...', 'This may take a moment.');
+  ArchiveProgressPage.Show();
+  ArchiveProgressPage.Animate();
+  try
+    ExtractTemporaryFile('bundle.zip');
+    ExtractTemporaryFile('validate-windows-bundle.ps1');
+  finally
+    ArchiveProgressPage.Hide();
+  end;
+  // The trusted validator checks archive paths before writing, and hashes each
+  // payload stream while extracting. Installed-copy validation still rereads every file.
   ValidateGoatCitadelPayload(StageRoot, False);
+  StageAdjacentReleaseEvidence(StageRoot);
   StagedPayloadPrepared := True;
 end;
 

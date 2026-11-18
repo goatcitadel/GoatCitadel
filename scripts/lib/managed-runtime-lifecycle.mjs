@@ -47,9 +47,14 @@ export function readManagedStateFile(filePath, maxBytes = DEFAULT_MAX_FILE_BYTES
   }
 }
 
-export function atomicCompareAndPublishJson({ filePath, value, expectedFingerprint }) {
+export function atomicCompareAndPublishJson({
+  filePath,
+  value,
+  expectedFingerprint,
+  maxBytes = DEFAULT_MAX_FILE_BYTES,
+}) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const current = readManagedStateFile(filePath);
+  const current = readManagedStateFile(filePath, maxBytes);
   if (current.fingerprint !== expectedFingerprint) {
     return { published: false, reason: "compare_conflict", currentFingerprint: current.fingerprint };
   }
@@ -65,12 +70,12 @@ export function atomicCompareAndPublishJson({ filePath, value, expectedFingerpri
     fs.closeSync(tempHandle);
     tempHandle = undefined;
 
-    const beforeRename = readManagedStateFile(filePath);
+    const beforeRename = readManagedStateFile(filePath, maxBytes);
     if (beforeRename.fingerprint !== expectedFingerprint) {
       return { published: false, reason: "compare_conflict", currentFingerprint: beforeRename.fingerprint };
     }
     fs.renameSync(tempPath, filePath);
-    const published = readManagedStateFile(filePath);
+    const published = readManagedStateFile(filePath, maxBytes);
     if (published.fingerprint !== nextFingerprint) {
       return { published: false, reason: "post_publish_conflict", currentFingerprint: published.fingerprint };
     }

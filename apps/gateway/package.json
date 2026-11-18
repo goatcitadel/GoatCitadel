@@ -19,9 +19,9 @@
     "@goatcitadel/gateway-core": "workspace:*",
     "@goatcitadel/memory-core": "workspace:*",
     "@goatcitadel/mesh-core": "workspace:*",
-    "@goatcitadel/mission-control-shared": "workspace:*",
     "@goatcitadel/orchestration": "workspace:*",
     "@goatcitadel/policy-engine": "workspace:*",
+    "@goatcitadel/session-control-client": "workspace:*",
     "@goatcitadel/skills": "workspace:*",
     "@goatcitadel/storage": "workspace:*",
     "@grpc/grpc-js": "1.14.5",
@@ -47,6 +47,7 @@
     "zod": "4.6.6"
   },
   "devDependencies": {
+    "@goatcitadel/mission-control-shared": "workspace:*",
     "@types/adm-zip": "0.5.7",
     "@types/pg": "8.20.0",
     "@types/shell-quote": "1.7.5"
@@ -78,7 +79,7 @@
     "tools": "tsx src/tui/tools-cli.ts",
     "voice:runtime": "tsx src/voice-runtime-cli.ts",
     "admin": "tsx src/admin-cli.ts",
-    "session-control": "tsx src/session-control-cli.ts",
+    "session-control": "pnpm --filter @goatcitadel/session-control-client build && tsx src/session-control-cli.ts",
     "config:sync": "tsx src/config-sync.ts",
     "lint": "node ../../scripts/run-with-worktree-output-lock.mjs --label=lint:gateway -- pnpm exec tsc -b tsconfig.json"
   }

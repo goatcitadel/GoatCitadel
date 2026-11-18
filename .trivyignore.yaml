@@ -1,0 +1,13 @@
+vulnerabilities:
+  - id: CVE-2026-112366
+    paths:
+      - pnpm-lock.yaml
+    purls:
+      - pkg:npm/picomatch@4.0.7
+    expired_at: 2026-12-17
+    statement: >-
+      Snyk revoked SNYK-JS-PICOMATCH-21248802 as not a vulnerability:
+      https://security.snyk.io/vuln/SNYK-JS-PICOMATCH-21248802
+      Upstream also disputes the advisory:
+      https://github.com/micromatch/picomatch/issues/234
+      Recheck the upstream/CNA disposition before this dated exception expires.

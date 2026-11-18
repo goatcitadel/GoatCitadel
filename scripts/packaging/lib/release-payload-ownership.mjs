@@ -117,7 +117,12 @@ export function pruneReleaseResidue(rootDir, removeDirectory) {
         queue.push(absolutePath);
         continue;
       }
-      if (stats.isFile() && prunedExtensions.has(path.extname(entry))) {
+      const relative = path.relative(resolvedRoot, absolutePath).split(path.sep).join("/");
+      const firstPartyTest =
+        /(?:^|\/)node_modules\/@goatcitadel\/[^/]+\/(?:src|dist)\/.*\.(?:test|spec)\.(?:[cm]?js|[cm]?ts|d\.[cm]?ts)$/u.test(
+          relative,
+        );
+      if (stats.isFile() && (prunedExtensions.has(path.extname(entry)) || firstPartyTest)) {
         fs.rmSync(absolutePath, { force: true });
       }
     }

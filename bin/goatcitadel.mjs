@@ -32,6 +32,7 @@ import {
 import { resolveUiTarget } from "../scripts/lib/ui-target.mjs";
 import {
   initializeInstalledRuntimeSettings,
+  installedRuntimeAllowedOrigins,
   readInstalledRuntimeSettings,
 } from "../scripts/lib/installed-runtime-settings.mjs";
 
@@ -1893,6 +1894,12 @@ function startPackagedGateway(nodeExecutable, gatewayUrl, expectedFingerprint) {
       GOATCITADEL_ROOT_DIR: packagedRuntimeRoot,
       GATEWAY_HOST: "127.0.0.1",
       GATEWAY_PORT: port,
+      GOATCITADEL_ALLOWED_ORIGINS: installedRuntimeAllowedOrigins(
+        baseDir,
+        runtimeProcessEnv.GOATCITADEL_ALLOWED_ORIGINS,
+        runtimeProcessEnv,
+        packagedGatewayDir,
+      ),
       [GATEWAY_STARTUP_FAILURE_ENV]: startupFailurePath,
     },
     stdoutPath: path.join(runtimeLogDir, "gateway.stdout.log"),

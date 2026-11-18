@@ -4,11 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import {
-  createSessionControlClient,
-  type SessionControlClient,
-} from "@goatcitadel/mission-control-shared/api/session-control";
-import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { createSessionControlClient, type SessionControlClient } from "@goatcitadel/session-control-client";
+import { isApiRequestError } from "@goatcitadel/session-control-client/http";
 import type { SessionControlDetailResponse } from "@goatcitadel/contracts";
 import {
   controlTokenFingerprint,

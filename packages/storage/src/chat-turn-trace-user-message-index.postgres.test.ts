@@ -66,7 +66,7 @@ test("real PostgreSQL upgraded installs get an index identical to a fresh instal
     const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
     assert.deepEqual(
       migrated.appliedVersions,
-      [219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233],
+      POSTGRES_MIGRATIONS.filter((migration) => migration.version >= 219).map((migration) => migration.version),
     );
     assert.deepEqual(await userMessageIndexDefinitions(admin, schema), freshDefinitions);
 

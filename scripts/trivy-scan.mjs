@@ -38,6 +38,8 @@ if (version.status !== 0) {
     "fs",
     "--scanners",
     "vuln,secret,misconfig",
+    "--ignorefile",
+    ".trivyignore.yaml",
     "--skip-dirs",
     skipDirs.join(","),
     "--timeout",

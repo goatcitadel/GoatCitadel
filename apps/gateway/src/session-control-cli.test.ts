@@ -3,11 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
-import type {
-  SessionControlClient,
-  SessionControlDetailResponse,
-} from "@goatcitadel/mission-control-shared/api/session-control";
+import { ApiRequestError } from "@goatcitadel/session-control-client/http";
+import type { SessionControlClient } from "@goatcitadel/session-control-client";
+import type { SessionControlDetailResponse } from "@goatcitadel/contracts";
 
 import { runSessionControlCli, secretDirLocationWarning, type SessionControlCliDeps } from "./session-control-cli.js";
 import {

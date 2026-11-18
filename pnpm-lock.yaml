@@ -147,15 +147,15 @@ importers:
       '@goatcitadel/mesh-core':
         specifier: workspace:*
         version: link:../../packages/mesh-core
-      '@goatcitadel/mission-control-shared':
-        specifier: workspace:*
-        version: link:../../packages/mission-control-shared
       '@goatcitadel/orchestration':
         specifier: workspace:*
         version: link:../../packages/orchestration
       '@goatcitadel/policy-engine':
         specifier: workspace:*
         version: link:../../packages/policy-engine
+      '@goatcitadel/session-control-client':
+        specifier: workspace:*
+        version: link:../../packages/session-control-client
       '@goatcitadel/skills':
         specifier: workspace:*
         version: link:../../packages/skills
@@ -226,6 +226,9 @@ importers:
         specifier: 4.6.6
         version: 4.6.6
     devDependencies:
+      '@goatcitadel/mission-control-shared':
+        specifier: workspace:*
+        version: link:../../packages/mission-control-shared
       '@types/adm-zip':
         specifier: 0.5.7
         version: 0.5.7
@@ -489,6 +492,9 @@ importers:
       '@goatcitadel/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@goatcitadel/session-control-client':
+        specifier: workspace:*
+        version: link:../session-control-client
       '@modelcontextprotocol/sdk':
         specifier: 1.32.0
         version: 1.32.0(zod@4.6.6)
@@ -682,6 +688,12 @@ importers:
       unpdf:
         specifier: 1.6.2
         version: 1.6.2
+
+  packages/session-control-client:
+    dependencies:
+      '@goatcitadel/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
   packages/skills:
     dependencies:
