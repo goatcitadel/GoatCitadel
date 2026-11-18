@@ -875,6 +875,8 @@ describe("Skill panel removal", () => {
     await press(buttonIn(body(), "Remove skill"));
     expect(dialog()?.textContent).toContain("Remove this skill?");
     expect(dialog()?.textContent).toContain(DESCRIPTION);
+    // The deferred dialog shell renders its description before its controls load.
+    await vi.waitFor(() => expect(buttonIn(dialog(), "Keep it")).toBeDefined());
     await press(buttonIn(dialog(), "Keep it"));
 
     expect(dialog()).toBeUndefined();
