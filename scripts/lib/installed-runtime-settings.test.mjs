@@ -18,12 +18,12 @@ test("managed install ports persist independently and reject invalid collisions"
   const file = path.join(root, "runtime", "launcher-settings.json");
   fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, gatewayPort: 8788, uiPort: 5175 }));
   assert.deepEqual(readInstalledRuntimeSettings(root), { gatewayPort: 8788, uiPort: 5175 });
-  assert.equal(installedRuntimeAllowedOrigins(root), "http://127.0.0.1:5175");
-  assert.equal(installedRuntimeAllowedOrigins(root, "https://operator.example"), "https://operator.example");
+  assert.equal(installedRuntimeAllowedOrigins(root, undefined, {}), "http://127.0.0.1:5175");
+  assert.equal(installedRuntimeAllowedOrigins(root, "https://operator.example", {}), "https://operator.example");
   fs.mkdirSync(path.join(root, "runtime-root"));
   fs.writeFileSync(path.join(root, "runtime-root", ".env"), 'GOATCITADEL_ALLOWED_ORIGINS="https://profile.example"\n');
-  assert.equal(installedRuntimeAllowedOrigins(root), "https://profile.example");
-  assert.equal(installedRuntimeAllowedOrigins(root, "https://operator.example"), "https://operator.example");
+  assert.equal(installedRuntimeAllowedOrigins(root, undefined, {}), "https://profile.example");
+  assert.equal(installedRuntimeAllowedOrigins(root, "https://operator.example", {}), "https://operator.example");
   for (const invalid of [
     { schemaVersion: 1, gatewayPort: 5175, uiPort: 5175 },
     { schemaVersion: 1, gatewayPort: "8788", uiPort: 5175 },
@@ -119,6 +119,16 @@ test("first-launch port selection leaves existing profiles and their configured 
 });
 
 test("fresh installs reserve a database port and materialize matching canonical and split config", async (t) => {
+  const inherited = new Map(
+    ["GOATCITADEL_BUNDLED_POSTGRES_PORT", "GOATCITADEL_LOCAL_ENV_FILE"].map((key) => [key, process.env[key]]),
+  );
+  for (const key of inherited.keys()) delete process.env[key];
+  t.after(() => {
+    for (const [key, value] of inherited) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-database-port-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const listener = createServer();
