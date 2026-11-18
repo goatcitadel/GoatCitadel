@@ -440,10 +440,16 @@ export class ConfigGenerationService {
     try {
       await this.hooks.beforePublish?.(nextPayload);
       if (startupCredential?.beforePublish) restoreStartupCredential = startupCredential.write();
-      await replaceFileAtomically(stagedCanonicalPath, this.activePath);
+      await fs.rename(stagedCanonicalPath, this.activePath);
+      this.activePayload = nextPayload;
+      await syncDirectoryBestEffort(this.configDir);
+      await this.hooks.afterPublish?.(nextPayload);
     } catch (error) {
       await removePathBestEffort(stagedCanonicalPath);
       await removePathBestEffort(stagedMirrorDir);
+      // Once the rename succeeds, preserve the token and pending marker so
+      // startup can recover the canonical generation before accepting requests.
+      if (this.activePayload === nextPayload) throw error;
       try {
         restoreStartupCredential?.();
       } finally {
@@ -451,9 +457,6 @@ export class ConfigGenerationService {
       }
       throw error;
     }
-
-    this.activePayload = nextPayload;
-    await this.hooks.afterPublish?.(nextPayload);
 
     // The committed marker is the irreversible decision to finish this
     // generation. Runtime owner apply waits for this decision. Startup

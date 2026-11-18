@@ -108,14 +108,17 @@ function writeGatewayTokenForRestart(
   if (current.path !== previous.path || current.present !== previous.present || current.value !== previous.value) {
     throw new ValidationError({ message: "The saved Gateway token changed while applying Settings. Try again." });
   }
+  let snapshot: ReturnType<typeof captureLocalEnvFileSnapshot> | undefined;
+  let written = false;
   try {
-    const snapshot = captureLocalEnvFileSnapshot(options);
-    if (!upsertLocalEnvVar(ENV_TOKEN_KEY, token, options).updated) throw new Error("Missing local credential file");
+    snapshot = captureLocalEnvFileSnapshot(options);
+    written = upsertLocalEnvVar(ENV_TOKEN_KEY, token, options).updated;
+    if (!written) throw new Error("Missing local credential file");
     if (readLocalEnvVar(ENV_TOKEN_KEY, options).value !== token) {
-      restoreLocalEnvFileSnapshot(snapshot);
       throw new Error("Token did not round-trip through the local credential file");
     }
   } catch {
+    if (written && snapshot) restoreLocalEnvFileSnapshot(snapshot);
     throw new ValidationError({
       message: "The Gateway token could not be saved for restart.",
     });

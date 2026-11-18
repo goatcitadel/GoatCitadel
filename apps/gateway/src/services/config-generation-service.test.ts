@@ -75,6 +75,32 @@ describe("ConfigGenerationService", () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
+  it("retains the startup credential and pending marker after a failure following canonical publication", async () => {
+    const { root, payload } = await createConfigRoot();
+    const failure = new Error("injected failure after the canonical rename");
+    const service = new ConfigGenerationService(root, undefined, {
+      afterPublish: () => {
+        throw failure;
+      },
+    });
+    const restoreToken = vi.fn();
+    await expect(
+      service.commit({
+        expectedRevision: 1,
+        previousRuntime: "balanced",
+        buildCandidate: () => ({ payload: withBudgetMode(payload, "saver"), runtime: "saver" }),
+        prepareStartupCredential: () => ({ beforePublish: true, write: () => restoreToken }),
+        apply: vi.fn(),
+        restore: vi.fn(),
+      }),
+    ).rejects.toBe(failure);
+
+    expect((await readActive(root)).budgets.mode).toBe("saver");
+    expect(restoreToken).not.toHaveBeenCalled();
+    await recoverLastGoodConfigGeneration(root);
+    expect((await readActive(root)).budgets.mode).toBe("balanced");
+  });
+
   it("serializes concurrent mutations and rejects the stale revision without applying it", async () => {
     const { root, payload } = await createConfigRoot();
     const service = new ConfigGenerationService(root);
