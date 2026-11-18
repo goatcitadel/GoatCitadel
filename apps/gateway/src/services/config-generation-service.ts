@@ -390,6 +390,7 @@ export class ConfigGenerationService {
   }
 
   private async commitUnderLock<T>(input: ConfigGenerationCommitInput<T>): Promise<ConfigGenerationCommitResult> {
+    const { expectedRevision, previousRuntime, prepareStartupCredential } = input;
     if (this.transactionState !== "idle") {
       throw new ConflictError({
         code: "STATE_CONFLICT",
@@ -401,21 +402,18 @@ export class ConfigGenerationService {
       });
     }
     const currentRevision = this.getRevision();
-    if (input.requireExpectedRevision && input.expectedRevision === undefined) {
+    if (input.requireExpectedRevision && expectedRevision === undefined) {
       throw new ValidationError({ message: "expectedRevision is required for settings mutations." });
     }
-    if (
-      input.expectedRevision !== undefined &&
-      (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1)
-    ) {
+    if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1)) {
       throw new ValidationError({ message: "expectedRevision must be a positive safe integer." });
     }
-    if (input.expectedRevision !== undefined && input.expectedRevision !== currentRevision) {
+    if (expectedRevision !== undefined && expectedRevision !== currentRevision) {
       throw new ConflictError({
         code: "STATE_CONFLICT",
         message: "Settings changed after this client loaded them.",
         details: {
-          expectedRevision: input.expectedRevision,
+          expectedRevision,
           currentRevision,
         },
       });
@@ -427,7 +425,7 @@ export class ConfigGenerationService {
     const nextPayload = withNextGeneration(candidate.payload, previousPayload, currentRevision + 1);
     assertValidCompleteUnifiedConfig(nextPayload, "staged settings generation");
     assertGenerationDigest(nextPayload, "staged settings generation");
-    const startupCredential = input.prepareStartupCredential?.(candidate.runtime, input.previousRuntime);
+    const startupCredential = prepareStartupCredential?.(candidate.runtime, previousRuntime);
 
     await fs.mkdir(this.stagingDir, { recursive: true });
     const stagedCanonicalPath = path.join(this.configDir, `.goatcitadel-${nextPayload.generation!.generationId}.tmp`);
@@ -515,7 +513,7 @@ export class ConfigGenerationService {
       }
       try {
         if (!(applyError instanceof RuntimeOwnerApplyAlreadyRestoredError)) {
-          await input.restore(input.previousRuntime);
+          await input.restore(previousRuntime);
         }
       } catch (error) {
         restoreError = restoreError === undefined ? error : new AggregateError([restoreError, error]);

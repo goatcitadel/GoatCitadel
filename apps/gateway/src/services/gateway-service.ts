@@ -10891,8 +10891,7 @@ export class GatewayService {
   public async updateSettings(input: settingsAuthService.UpdateSettingsInput): Promise<RuntimeSettings> {
     const deps = {
       ...createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
-      // Candidate construction uses the submitted CAS revision under the write fence.
-      // Public settings reads reject mixed-generation state.
+      // The write fence requires the submitted CAS revision during candidate construction.
       readSettingsRevision: () => input.expectedRevision ?? this.configGenerationService.getRevision(),
     };
     const previousRuntime: settingsAuthService.SettingsConfigCandidate = {
