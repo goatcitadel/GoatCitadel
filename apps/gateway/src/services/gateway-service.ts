@@ -573,7 +573,10 @@ import {
 } from "./orchestration-worktree-service.js";
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import { DiscordRuntimeService } from "./discord-runtime-service.js";
-import { resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner } from "./gateway/auth-credential-planner.js";
+import {
+  resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner,
+  stageGatewayTokenForRestart,
+} from "./gateway/auth-credential-planner.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import {
   SharedHostAdmissionClosedError,
@@ -10922,6 +10925,8 @@ export class GatewayService {
           payload: await this.buildUnifiedConfigPayloadForRuntime(candidate.config, candidate.llm, candidate.features),
         };
       },
+      stageStartupCredential: (candidate) =>
+        candidate.input.auth ? stageGatewayTokenForRestart(candidate.config) : undefined,
       captureRuntimeOwnerRecoveryIntent: async (candidate) => ({
         version: 1,
         ...(candidate.input.mesh

@@ -54,6 +54,8 @@ export interface ConfigGenerationCommitInput<T> {
   expectedRevision?: number;
   requireExpectedRevision?: boolean;
   buildCandidate(): ConfigGenerationCandidate<T> | Promise<ConfigGenerationCandidate<T>>;
+  /** Stage a startup prerequisite under the revision fence. Return its in-memory compensation. */
+  stageStartupCredential?(candidate: T): (() => void) | undefined;
   captureRuntimeOwnerRecoveryIntent?(
     candidate: T,
   ): ConfigGenerationRuntimeOwnerRecoveryIntent | Promise<ConfigGenerationRuntimeOwnerRecoveryIntent>;
@@ -433,13 +435,19 @@ export class ConfigGenerationService {
     await this.retainLastGood(previousPayload);
     await this.writeTransactionMarker("pending", nextPayload);
 
+    let restoreStartupCredential: (() => void) | undefined;
     try {
       await this.hooks.beforePublish?.(nextPayload);
+      restoreStartupCredential = input.stageStartupCredential?.(candidate.runtime);
       await replaceFileAtomically(stagedCanonicalPath, this.activePath);
     } catch (error) {
       await removePathBestEffort(stagedCanonicalPath);
       await removePathBestEffort(stagedMirrorDir);
-      await this.removeTransactionMarkerBestEffort();
+      try {
+        restoreStartupCredential?.();
+      } finally {
+        await this.removeTransactionMarkerBestEffort();
+      }
       throw error;
     }
 
@@ -447,8 +455,8 @@ export class ConfigGenerationService {
     await this.hooks.afterPublish?.(nextPayload);
 
     // The committed marker is the irreversible decision to finish this
-    // generation. It must be durable before any owner side effect occurs so a
-    // hard crash can only roll back a generation that no owner has observed.
+    // generation. Runtime owner apply waits for this decision. Startup
+    // credentials are staged above so published config can always boot.
     let runtimeOwnerRecoveryIntent: ConfigGenerationRuntimeOwnerRecoveryIntent | undefined;
     try {
       runtimeOwnerRecoveryIntent = await input.captureRuntimeOwnerRecoveryIntent?.(candidate.runtime);
@@ -459,6 +467,7 @@ export class ConfigGenerationService {
         await this.publishCanonical(rollbackPayload);
         this.activePayload = rollbackPayload;
         await this.writeTransactionMarker("committed", rollbackPayload);
+        restoreStartupCredential?.();
         await this.retainLastGood(rollbackPayload);
         await this.tryPublishMirrors(rollbackPayload);
         await this.removeTransactionMarker();
@@ -492,12 +501,17 @@ export class ConfigGenerationService {
       }
 
       let restoreError: unknown;
-      if (!(applyError instanceof RuntimeOwnerApplyAlreadyRestoredError)) {
-        try {
+      try {
+        restoreStartupCredential?.();
+      } catch (error) {
+        restoreError = error;
+      }
+      try {
+        if (!(applyError instanceof RuntimeOwnerApplyAlreadyRestoredError)) {
           await input.restore(input.previousRuntime);
-        } catch (error) {
-          restoreError = error;
         }
+      } catch (error) {
+        restoreError = restoreError === undefined ? error : new AggregateError([restoreError, error]);
       }
       if (restoreError !== undefined) {
         await this.tryPublishMirrors(rollbackPayload);

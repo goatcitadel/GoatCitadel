@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { ValidationError } from "@goatcitadel/contracts";
 import type {
   AuthMode,
   GatewayAuthCredentialPlan,
@@ -8,7 +9,16 @@ import type {
   GatewayInstallTokenResolution,
 } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../../config.js";
-import { detectEnvFilePath, upsertLocalEnvVar } from "../../env-file.js";
+import {
+  captureLocalEnvFileSnapshot,
+  deleteLocalEnvVar,
+  detectEnvFilePath,
+  readLocalEnvVar,
+  restoreLocalEnvFileSnapshot,
+  upsertLocalEnvVar,
+  wasLoadedFromLocalEnv,
+} from "../../env-file.js";
+import { evaluateAuthTokenSafety } from "../../startup-guard.js";
 
 type AssistantConfigAuthSnapshot = {
   mode?: AuthMode;
@@ -39,6 +49,72 @@ const ENV_MODE_KEY = "GOATCITADEL_AUTH_MODE";
 const ENV_TOKEN_KEY = "GOATCITADEL_AUTH_TOKEN";
 const ENV_BASIC_USERNAME_KEY = "GOATCITADEL_AUTH_BASIC_USERNAME";
 const ENV_BASIC_PASSWORD_KEY = "GOATCITADEL_AUTH_BASIC_PASSWORD";
+
+/**
+ * Make the selected token available to startup before publishing Token mode.
+ * The token stays in the existing credential file owner and out of config generations.
+ */
+export function stageGatewayTokenForRestart(config: GatewayRuntimeConfig): (() => void) | undefined {
+  if (config.assistant.auth.mode !== "token") return undefined;
+  const token = config.assistant.auth.token.value?.trim();
+  if (!token || !evaluateAuthTokenSafety(token).ok || token.length > 4096 || /[\r\n]/u.test(token)) {
+    throw new ValidationError({
+      message: "Use a strong Gateway token of at least 24 characters before saving Token mode.",
+    });
+  }
+  const options = { rootDir: config.rootDir };
+  const previous = readLocalEnvVar(ENV_TOKEN_KEY, options);
+  const fileMode = normalizeAuthMode(readLocalEnvVar(ENV_MODE_KEY, options).value);
+  const envMode = normalizeAuthMode(process.env[ENV_MODE_KEY]);
+  if ((envMode ?? fileMode) !== undefined && (envMode ?? fileMode) !== "token") {
+    throw new ValidationError({
+      message: "An environment setting overrides Gateway sign-in mode. Update it before saving Token mode.",
+    });
+  }
+  const previousProcessToken = process.env[ENV_TOKEN_KEY];
+  const processTokenFromFile =
+    previousProcessToken !== undefined &&
+    wasLoadedFromLocalEnv(ENV_TOKEN_KEY, previous.path) &&
+    previousProcessToken === previous.value;
+  if (previousProcessToken !== undefined && !processTokenFromFile) {
+    if (previousProcessToken.trim() !== token) {
+      throw new ValidationError({
+        message:
+          "A Gateway token supplied by the launch environment overrides this change. Update that credential in its owner.",
+      });
+    }
+    return undefined;
+  }
+  if (previous.present && previous.value === token) return undefined;
+
+  try {
+    const snapshot = captureLocalEnvFileSnapshot(options);
+    if (!upsertLocalEnvVar(ENV_TOKEN_KEY, token, options).updated) throw new Error("Missing local credential file");
+    if (readLocalEnvVar(ENV_TOKEN_KEY, options).value !== token) {
+      restoreLocalEnvFileSnapshot(snapshot);
+      throw new Error("Token did not round-trip through the local credential file");
+    }
+  } catch {
+    throw new ValidationError({
+      message: "The Gateway token could not be saved for restart. Token mode was not published.",
+    });
+  }
+  if (processTokenFromFile) process.env[ENV_TOKEN_KEY] = token;
+
+  return () => {
+    const current = readLocalEnvVar(ENV_TOKEN_KEY, options);
+    if (current.path !== previous.path || current.value !== token) {
+      throw new Error("The Gateway token changed before settings rollback.");
+    }
+    const restored = previous.present
+      ? upsertLocalEnvVar(ENV_TOKEN_KEY, previous.value ?? "", options)
+      : deleteLocalEnvVar(ENV_TOKEN_KEY, options);
+    if (!restored.updated) throw new Error("The Gateway token could not be restored after settings rollback.");
+    if (processTokenFromFile && process.env[ENV_TOKEN_KEY] === token) {
+      process.env[ENV_TOKEN_KEY] = previousProcessToken;
+    }
+  };
+}
 
 export async function readAssistantAuthConfigSnapshot(rootDir: string): Promise<AssistantConfigAuthSnapshot> {
   return readAssistantAuthConfigSnapshotSync(rootDir);

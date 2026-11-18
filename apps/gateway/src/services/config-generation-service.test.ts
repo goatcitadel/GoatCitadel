@@ -19,6 +19,32 @@ afterEach(async () => {
 });
 
 describe("ConfigGenerationService", () => {
+  it("keeps the active generation when the startup credential cannot be staged", async () => {
+    const { root, payload, activeRaw } = await createConfigRoot();
+    const service = new ConfigGenerationService(root);
+    const apply = vi.fn();
+    const restore = vi.fn();
+    const error = new ValidationError({ message: "Credential file is unavailable." });
+
+    await expect(
+      service.commit({
+        expectedRevision: 1,
+        previousRuntime: "balanced",
+        buildCandidate: () => ({ payload: withBudgetMode(payload, "saver"), runtime: "saver" }),
+        stageStartupCredential: () => {
+          throw error;
+        },
+        apply,
+        restore,
+      }),
+    ).rejects.toBe(error);
+
+    expect(await fs.readFile(activePath(root), "utf8")).toBe(activeRaw);
+    expect(service.getRevision()).toBe(1);
+    expect(apply).not.toHaveBeenCalled();
+    expect(restore).not.toHaveBeenCalled();
+  });
+
   it("serializes concurrent mutations and rejects the stale revision without applying it", async () => {
     const { root, payload } = await createConfigRoot();
     const service = new ConfigGenerationService(root);
