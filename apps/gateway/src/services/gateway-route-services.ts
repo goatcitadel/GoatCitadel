@@ -432,6 +432,7 @@ export interface GatewayRouteServices {
 }
 
 export interface GatewayRouteServiceDependencies {
+  scripts: NonNullable<GatewayRouteServices["scripts"]>;
   a2a: A2ARouteServiceDependencies;
   agents: AgentsRoutePort;
   assembly: AssemblyRoutePort;
@@ -516,6 +517,7 @@ export interface GatewayRouteServiceDependencies {
 
 export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies): GatewayRouteServices {
   return {
+    scripts: deps.scripts,
     a2a: new A2ARouteService(deps.a2a),
     agents: createAgentsRouteService(deps.agents),
     assembly: createAssemblyRouteService(deps.assembly),
