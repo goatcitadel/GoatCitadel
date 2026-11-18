@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
 import { buildApp } from "../app.js";
 import { readLocalEnvVar } from "../env-file.js";
+import { SecretStoreService } from "./secret-store-service.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -16,6 +17,7 @@ it("keeps Token mode and the approved credential usable after a Gateway restart"
   const configDir = path.join(root, "config");
   const examples = fileURLToPath(new URL("../../../../config/", import.meta.url));
   const token = randomBytes(32).toString("hex");
+  const temporarySecrets = new Map<string, string>();
   let app: Awaited<ReturnType<typeof buildApp>> | undefined;
   try {
     await fs.mkdir(configDir);
@@ -27,11 +29,19 @@ it("keeps Token mode and the approved credential usable after a Gateway restart"
     await fs.copyFile(path.join(examples, "llm-model-metadata.json"), path.join(configDir, "llm-model-metadata.json"));
     vi.stubEnv("GOATCITADEL_ROOT_DIR", root);
     vi.stubEnv("GOATCITADEL_DATABASE_DRIVER", "sqlite");
-    vi.stubEnv("GOATCITADEL_LOCAL_ENV_FILE", undefined);
+    vi.stubEnv("GOATCITADEL_LOCAL_ENV_FILE", path.join(root, ".env"));
     vi.stubEnv("GOATCITADEL_AUTH_MODE", undefined);
     vi.stubEnv("GOATCITADEL_AUTH_TOKEN", undefined);
     vi.stubEnv("GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS", undefined);
     vi.stubEnv("GOATCITADEL_FEATURE_EVOLUTION_CONTROL_PLANE_V1_ENABLED", "true");
+    // Exercise the Change Plan custody flow without requiring an OS vault.
+    vi.spyOn(SecretStoreService.prototype, "setSecret").mockImplementation((account, secret) => {
+      temporarySecrets.set(account, secret);
+    });
+    vi.spyOn(SecretStoreService.prototype, "getSecret").mockImplementation((account) => temporarySecrets.get(account));
+    vi.spyOn(SecretStoreService.prototype, "deleteSecret").mockImplementation((account) => {
+      temporarySecrets.delete(account);
+    });
     app = await buildApp();
     const before = await app.inject({ method: "GET", url: "/api/v1/settings" });
     expect(before.statusCode).toBe(200);
@@ -42,7 +52,7 @@ it("keeps Token mode and the approved credential usable after a Gateway restart"
       headers: { "idempotency-key": randomUUID() },
       payload: { expectedRevision: before.json().revision, mode: "token", token, allowLoopbackBypass: false },
     });
-    expect(save.statusCode).toBe(200);
+    expect(save.statusCode, save.body.replaceAll(token, "[redacted]")).toBe(200);
     const receipt = save.json().changePlanReceipt;
     expect(save.body.includes(token)).toBe(false);
     if (receipt) {
@@ -123,6 +133,7 @@ it("keeps Token mode and the approved credential usable after a Gateway restart"
     expect(stdout).toContain("Token sign-in verified after Gateway restart");
   } finally {
     await app?.close();
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
   }
