@@ -11,10 +11,17 @@ import {
   presentEventType,
   presentRiskLevel,
   presentRunStatus,
+  presentCodeModeRunStatus,
   presentToolEffectOutcome,
 } from "./status-vocabulary";
 
 describe("status vocabulary", () => {
+  it("presents Code Mode approval and terminal states without confusing them with durable-run states", () => {
+    expect(presentCodeModeRunStatus("approval_pending")).toEqual({ label: "Waiting on you", tone: "waiting" });
+    expect(presentCodeModeRunStatus("rejected")).toEqual({ label: "Denied", tone: "neutral" });
+    expect(presentCodeModeRunStatus("expired")).toEqual({ label: "Expired", tone: "neutral" });
+    expect(presentCodeModeRunStatus("completed")).toEqual({ label: "Done", tone: "done" });
+  });
   it("distinguishes a run waiting on the operator from another wait", () => {
     expect(presentRunStatus("waiting")).toEqual({ label: "Waiting", tone: "neutral" });
     expect(presentRunStatus("waiting", { waitingOnOperator: true })).toEqual({

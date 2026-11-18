@@ -145,6 +145,8 @@ describe("MobileTabBar", () => {
     );
     expect(sheetLabels.indexOf("Capabilities")).toBeGreaterThan(-1);
     expect(sheetLabels.indexOf("Capabilities")).toBeLessThan(sheetLabels.indexOf("System"));
+    expect(sheetLabels.indexOf("Scripts")).toBeGreaterThan(sheetLabels.indexOf("Capabilities"));
+    expect(sheetLabels.indexOf("Scripts")).toBeLessThan(sheetLabels.indexOf("System"));
     // GL-15: the quick toggle offers the two theme choices that are not already saved.
     expect(button("Use light theme")).not.toBeNull();
     expect(button("Match system theme")).not.toBeNull();

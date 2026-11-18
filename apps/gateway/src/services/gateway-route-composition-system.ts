@@ -1,7 +1,9 @@
+import path from "node:path";
 import { createCostsRoutePort } from "./costs-route-service.js";
 import { createDaemonRouteService } from "./daemon-route-service.js";
 import { createPersonalOpsRouteService } from "./personal-ops-route-service.js";
 import { PersonalOpsService } from "./personal-ops-service.js";
+import { ScriptsService } from "./scripts-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import type {
@@ -25,6 +27,7 @@ export function composeSystemRouteDependencies(
   | "inbox"
   | "media"
   | "personalOps"
+  | "scripts"
   | "settings"
   | "tasks"
   | "voice"
@@ -97,6 +100,7 @@ export function composeSystemRouteDependencies(
       updatePersonality: (id, input) => personalityCatalogService.updatePersonality(id, input),
       updateSettings: (input) => gateway.updateSettings(input),
     },
+    scripts: new ScriptsService(storage, path.resolve(gateway.config.rootDir, gateway.config.assistant.workspaceDir)),
     tasks: taskLifecycleService,
     voice: mediaVoiceService,
     workspaces: createWorkspacesRoutePortForGateway(gateway),

@@ -80,6 +80,25 @@ export class SystemSettingsRepository {
     };
   }
 
+  /** Bounded batches avoid one database round trip per inventory reference. */
+  public getMany(keys: string[]): SystemSettingRecord[] {
+    if (keys.length > 5000) throw new ValidationError({ field: "keys", message: "Too many settings requested." });
+    const unique = [...new Set(keys)];
+    const records: SystemSettingRecord[] = [];
+    for (let index = 0; index < unique.length; index += 200) {
+      const batch = unique.slice(index, index + 200);
+      const rows = this.db
+        .prepare(
+          `SELECT setting_key, value_json, updated_at FROM system_settings WHERE setting_key IN (${batch.map(() => "?").join(",")})`,
+        )
+        .all<SystemSettingRow>(...batch);
+      records.push(
+        ...rows.map((row) => ({ key: row.setting_key, value: parseValue(row.value_json), updatedAt: row.updated_at })),
+      );
+    }
+    return records;
+  }
+
   public set<T>(
     key: string,
     value: T,
