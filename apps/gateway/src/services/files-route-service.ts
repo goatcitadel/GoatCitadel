@@ -51,10 +51,13 @@ export interface FileDownloadResult {
   contentType: string;
   isText: boolean;
   content: string | Buffer;
+  truncated?: boolean;
 }
 
 export interface FileDownloadOptions {
   maxBytes?: number;
+  /** Return up to maxBytes instead of rejecting oversized files. */
+  readPrefix?: boolean;
 }
 
 export interface FileTemplateRecord {
@@ -305,7 +308,10 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
         throw new ValidationError({ message: `Path is a directory: ${normalized}` });
       }
       const maxBytes = options?.maxBytes ?? MAX_INLINE_FILE_DOWNLOAD_BYTES;
-      if (stat.size > maxBytes) {
+      if (options?.readPrefix && !stat.isFile()) {
+        throw new ValidationError({ message: `Path is not a regular file: ${normalized}` });
+      }
+      if (!options?.readPrefix && stat.size > maxBytes) {
         throw new PayloadTooLargeError("File is too large to read inline", {
           limitBytes: maxBytes,
           receivedBytes: stat.size,
@@ -315,7 +321,15 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
 
       const contentType = detectMimeType(fullPath);
       const isText = isTextContentType(contentType);
-      const content = isText ? await fs.readFile(fullPath, "utf8") : await fs.readFile(fullPath);
+      const prefix = options?.readPrefix ? await readFilePrefix(fullPath, maxBytes) : undefined;
+      let content: string | Buffer;
+      if (prefix) {
+        content = isText
+          ? new TextDecoder("utf-8", { ignoreBOM: true }).decode(prefix.bytes, { stream: prefix.truncated })
+          : prefix.bytes;
+      } else {
+        content = isText ? await fs.readFile(fullPath, "utf8") : await fs.readFile(fullPath);
+      }
 
       return {
         relativePath: normalized,
@@ -325,6 +339,7 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
         contentType,
         isText,
         content,
+        ...(prefix ? { truncated: prefix.truncated } : {}),
       };
     },
     listFileTemplates: (): FileTemplateRecord[] => {
@@ -372,6 +387,23 @@ export function createFilesRoutePort(deps: FilesRoutePortDependencies): FilesRou
 
 export function createFilesRouteService(port: FilesRoutePort): FilesRouteService {
   return createRouteService(port, filesRouteMethods);
+}
+
+async function readFilePrefix(fullPath: string, maxBytes: number) {
+  // Read one extra byte to distinguish an exact fit from a truncated preview.
+  const buffer = Buffer.alloc(maxBytes + 1);
+  const file = await fs.open(fullPath, "r");
+  try {
+    let offset = 0;
+    while (offset < buffer.length) {
+      const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, offset);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    return { bytes: buffer.subarray(0, Math.min(offset, maxBytes)), truncated: offset > maxBytes };
+  } finally {
+    await file.close();
+  }
 }
 
 function normalizeRelativePath(inputPath: string): string {

@@ -25,7 +25,9 @@ function fixture() {
     },
     chatTools: { getChatToolArtifactContent: vi.fn(async () => ({ content: "tool source" })) },
     capabilities: { getCodeModeRunArtifactPreview: vi.fn(async () => ({ content: "verified source" })) },
-    files: { downloadWorkspaceFile: vi.fn(async () => ({ isText: true, content: "workspace source" })) },
+    files: {
+      downloadWorkspaceFile: vi.fn(async () => ({ isText: true, content: "workspace source", truncated: true })),
+    },
   };
   const app = Fastify();
   apps.push(app);
@@ -91,8 +93,8 @@ it("dispatches previews through scoped file, tool and hash-verifying Code Mode r
     workspaceId: "one",
   });
   item.kind = "workspace";
-  expect((await preview()).json().content).toBe("workspace source");
-  expect(services.files.downloadWorkspaceFile).toHaveBeenCalledWith("run.ts", { maxBytes: 65536 });
+  expect((await preview()).json()).toEqual({ content: "workspace source", truncated: true });
+  expect(services.files.downloadWorkspaceFile).toHaveBeenCalledWith("run.ts", { maxBytes: 65536, readPrefix: true });
   Object.assign(item, { kind: "managed", sessionId: undefined });
   expect((await preview()).statusCode).toBe(409);
 });

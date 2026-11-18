@@ -5,6 +5,7 @@ import { resolveAuthenticatedOperatorAdmissionContext } from "./session-control-
 import { markMutationCommitted } from "../plugins/idempotency.js";
 import { redactSecretText } from "@goatcitadel/contracts";
 
+const SCRIPT_PREVIEW_LIMIT = 64 * 1024;
 const scope = z.object({ workspaceId: z.string().trim().min(1).max(256) });
 const retention = scope
   .extend({
@@ -70,9 +71,9 @@ export const scriptsRoutes: FastifyPluginAsync = async (app) => {
           path: item.path,
           revisionId: item.revision,
         });
-        truncated = file.bytes.length > 65536;
+        truncated = file.bytes.length > SCRIPT_PREVIEW_LIMIT;
         try {
-          content = new TextDecoder("utf-8", { fatal: true }).decode(file.bytes.subarray(0, 65536), {
+          content = new TextDecoder("utf-8", { fatal: true }).decode(file.bytes.subarray(0, SCRIPT_PREVIEW_LIMIT), {
             stream: truncated,
           });
         } catch {
@@ -80,21 +81,25 @@ export const scriptsRoutes: FastifyPluginAsync = async (app) => {
           truncated = false;
         }
       } else if (item.kind === "workspace" && item.path) {
-        const file = await app.services.files.downloadWorkspaceFile(item.path, { maxBytes: 65536 });
+        const file = await app.services.files.downloadWorkspaceFile(item.path, {
+          maxBytes: SCRIPT_PREVIEW_LIMIT,
+          readPrefix: true,
+        });
         if (!file.isText)
           return reply.send({
             content:
               "This file needs its native application. Open its source conversation to use the original download.",
           });
         content = String(file.content);
+        truncated = file.truncated ?? false;
       } else
         return reply.code(409).send({
           error:
             "Preview is unavailable here. Open the source or project to inspect this item with its existing access controls.",
         });
       return reply.header("Cache-Control", "no-store").send({
-        content: redactSecretText(content.slice(0, 65536)).value,
-        truncated: truncated || content.length > 65536,
+        content: redactSecretText(content.slice(0, SCRIPT_PREVIEW_LIMIT)).value,
+        truncated: truncated || content.length > SCRIPT_PREVIEW_LIMIT,
       });
     } catch (error) {
       return sendRouteError(reply, error, request.log);
