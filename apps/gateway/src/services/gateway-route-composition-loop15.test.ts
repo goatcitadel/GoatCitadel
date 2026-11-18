@@ -146,7 +146,7 @@ function createGateway() {
   return {
     config: {
       rootDir: "F:/code/personal-ai",
-      assistant: { deploymentProfile: "local_dev" },
+      assistant: { deploymentProfile: "local_dev", workspaceDir: "workspace" },
     },
     storage: {
       approvalInbox: { list: fn(() => []) },
