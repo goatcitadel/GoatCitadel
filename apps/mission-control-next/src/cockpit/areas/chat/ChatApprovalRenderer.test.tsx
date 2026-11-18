@@ -284,8 +284,14 @@ it("pauses the danger confirmation dialog opened before the connection dropped (
     await Promise.all([...bodyLoads]);
   });
   await vi.waitFor(() => expect(button("Review danger approval")).toBeDefined());
+  // Load the dialog shell before testing the connection change inside the confirmation.
+  const { preloadCockpitDialogRuntime } = await import("../../ui/Dialog");
+  await preloadCockpitDialogRuntime();
   await act(async () => button("Review danger approval").click());
-  await vi.waitFor(() => expect(button("Approve once")).toBeDefined());
+  await act(async () => {
+    await vi.dynamicImportSettled();
+  });
+  expect(button("Approve once")).toBeDefined();
   expect(button("Approve once").disabled).toBe(false);
   await act(async () => renderDirect({ connectionLost: true }));
   expect(document.querySelector('[role="dialog"]')).not.toBeNull();
