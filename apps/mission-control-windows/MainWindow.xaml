@@ -48,12 +48,16 @@
                     <ProgressBar x:Name="ProgressBar" IsIndeterminate="True" AutomationProperties.Name="Starting local runtime" />
                     <Button Click="CheckUpdatesButton_Click" Content="Check for updates" />
                     <Expander Header="Runtime details" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
-                    <TextBlock
-                        x:Name="RuntimeMeta"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        FontSize="13"
-                        Text="Gateway and Mission Control will stay warm while the desktop app is open."
-                        TextWrapping="Wrap" />
+                        <StackPanel Spacing="12">
+                            <TextBlock
+                                x:Name="RuntimeMeta"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                FontSize="13"
+                                Text="Gateway and Mission Control will stay warm while the desktop app is open."
+                                TextWrapping="Wrap" />
+                            <Button x:Name="ProfileRecoveryButton" Visibility="Collapsed"
+                                Click="ProfileRecoveryButton_Click" Content="Reset and restore…" />
+                        </StackPanel>
                     </Expander>
 
                     <Grid x:Name="RecoveryActions" Visibility="Collapsed" ColumnSpacing="8" RowSpacing="8">

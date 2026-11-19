@@ -13,6 +13,7 @@ public sealed class TrayActions
     public required Action StopRuntime { get; init; }
     public required Action OpenLogs { get; init; }
     public required Action OpenInstallFolder { get; init; }
+    public Action? ProfileRecovery { get; init; }
     public required Action Quit { get; init; }
 }
 
@@ -38,6 +39,7 @@ public sealed class TrayService : IDisposable
         _menuActions[1007] = actions.OpenInstallFolder;
         _menuActions[1008] = actions.Quit;
         _menuActions[1009] = actions.CheckForUpdates;
+        if (actions.ProfileRecovery is not null) _menuActions[1010] = actions.ProfileRecovery;
 
         _contextMenu = BuildContextMenu();
         _ownedTrayIcon = LoadTrayIcon();
@@ -106,19 +108,27 @@ public sealed class TrayService : IDisposable
         menu.Items.Add(new ToolStripSeparator());
         AddMenuItem(menu, "Open Logs", 1006);
         AddMenuItem(menu, "Open Install Folder", 1007);
+        if (_menuActions.ContainsKey(1010))
+        {
+            var troubleshooting = new ToolStripMenuItem("Troubleshooting");
+            AddMenuItem(troubleshooting.DropDownItems, "Reset and restore…", 1010);
+            menu.Items.Add(troubleshooting);
+        }
         menu.Items.Add(new ToolStripSeparator());
         AddMenuItem(menu, "Quit", 1008);
         return menu;
     }
 
-    private void AddMenuItem(ContextMenuStrip menu, string label, int id)
+    private void AddMenuItem(ContextMenuStrip menu, string label, int id) => AddMenuItem(menu.Items, label, id);
+
+    private void AddMenuItem(ToolStripItemCollection items, string label, int id)
     {
         var item = new ToolStripMenuItem(label)
         {
             Tag = id,
         };
         item.Click += OnMenuItemClick;
-        menu.Items.Add(item);
+        items.Add(item);
     }
 
     private void OnMenuItemClick(object? sender, EventArgs args)

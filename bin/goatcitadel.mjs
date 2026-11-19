@@ -31,10 +31,22 @@ import {
 } from "../scripts/lib/gateway-startup-failure.mjs";
 import { resolveUiTarget } from "../scripts/lib/ui-target.mjs";
 import {
+  initializeFreshDatabasePort,
   initializeInstalledRuntimeSettings,
   installedRuntimeAllowedOrigins,
   readInstalledRuntimeSettings,
 } from "../scripts/lib/installed-runtime-settings.mjs";
+import {
+  desktopCredentialResource,
+  directoryExists,
+  installedProfileRecovery,
+  readDesktopProfileId,
+} from "../scripts/lib/installed-profile-recovery.mjs";
+import {
+  inspectLocalProfileStorage,
+  retireProfileCredentials,
+  stopProfilePostgres,
+} from "../scripts/lib/installed-profile-windows.mjs";
 
 const defaultRepoUrl = process.env.GOATCITADEL_REPO_URL || "https://github.com/goatcitadel/GoatCitadel.git";
 const preferredBaseDir = resolvePreferredBaseDir();
@@ -162,7 +174,12 @@ async function main() {
   }
 
   if (command === "stop") {
-    await printRuntimeCommandResult(() => stopGoatCitadelRuntime(), rest);
+    await printRuntimeCommandResult(() => withInstalledProfileLock(stopGoatCitadelRuntime), rest);
+    return;
+  }
+
+  if (command === "desktop-profile") {
+    await runInstalledProfileAction(rest);
     return;
   }
 
@@ -591,6 +608,16 @@ function doctor(extraArgs = []) {
 }
 
 async function launchGoatCitadel(extraArgs = []) {
+  return withInstalledProfileLock(async () => {
+    if (ownsWindowsInstalledProfile()) {
+      const recovery = installedProfileRecovery(baseDir);
+      if (recovery.recoverIfInterrupted()) pruneProfileBackups(recovery);
+    }
+    await launchGoatCitadelUnlocked(extraArgs);
+  });
+}
+
+async function launchGoatCitadelUnlocked(extraArgs) {
   const launchOptions = parseLaunchOptions(extraArgs);
 
   const result = await withJsonCleanStdout(launchOptions.json, async () => {
@@ -606,6 +633,10 @@ async function launchGoatCitadel(extraArgs = []) {
       !process.env.GOATCITADEL_MISSION_CONTROL_URL?.trim()
     ) {
       await initializeInstalledRuntimeSettings(baseDir);
+      if (ownsWindowsInstalledProfile() && readDesktopProfileId(packagedRuntimeRoot)) {
+        const reservation = await initializeFreshDatabasePort(baseDir);
+        if (reservation) await new Promise((resolve) => reservation.close(resolve));
+      }
     }
     const endpoints = resolveLauncherRuntimeEndpoints();
 
@@ -683,6 +714,91 @@ function isPackagedInstall() {
     fs.existsSync(packagedUiDistDir) &&
     fs.existsSync(packagedUiServerEntry)
   );
+}
+
+function ownsWindowsInstalledProfile() {
+  return process.platform === "win32" && path.relative(baseDir, appDir) === "app" && isPackagedInstall();
+}
+
+function withInstalledProfileLock(operation) {
+  if (!ownsWindowsInstalledProfile()) return operation();
+  // Seed, stop, and switch under the same lock so a second launcher can't
+  // create or start a profile between the shutdown and the directory moves.
+  return withManagedLifecycleLock({
+    lockPath: path.join(runtimeStateDir, "locks", "desktop-profile.lifecycle.lock"),
+    service: "desktop-profile",
+    timeoutMs: MANAGED_LIFECYCLE_LOCK_TIMEOUT_MS,
+  }, operation);
+}
+
+async function runInstalledProfileAction(args) {
+  if (!ownsWindowsInstalledProfile() || process.env.GOATCITADEL_DESKTOP_HOST !== "1") {
+    throw new Error("Reset and restore is available from the installed Windows app.");
+  }
+  const [action, value, confirmation] = args;
+  const list = action === "list" && args.length === 1;
+  const reset = action === "reset" && args.length === 2 && value === "--confirmed";
+  const restore = action === "restore" && args.length === 3 && confirmation === "--confirmed";
+  if (!list && !reset && !restore) throw new Error("Confirm the profile change in Reset and restore.");
+
+  directoryExists(runtimeStateDir);
+  directoryExists(path.join(runtimeStateDir, "locks"));
+  await withInstalledProfileLock(async () => {
+    const recovery = installedProfileRecovery(baseDir);
+    const history = recovery.list();
+    if (list) {
+      let unavailableReason;
+      try {
+        checkProfileSwitchAvailable();
+        inspectLocalProfileStorage(packagedRuntimeRoot);
+      } catch (error) {
+        unavailableReason = error.message;
+      }
+      writeJsonResult({ ...history, unavailableReason });
+      return;
+    }
+
+    checkProfileSwitchAvailable();
+    const selected = restore ? history.backups.find(({ id }) => id === value) : null;
+    if (restore && !selected) throw new Error("That backup is no longer available. Reopen Reset and restore to try again.");
+    const postgres = inspectLocalProfileStorage(packagedRuntimeRoot);
+    if (selected) {
+      inspectLocalProfileStorage(packagedRuntimeRoot, path.join(baseDir, "profile-recovery", "backups", selected.id, "profile"));
+    }
+    const stopped = await stopGoatCitadelRuntime();
+    const refusals = stopped.notStopped.filter((item) => item.pidState !== "stale" || item.endpointResponded);
+    if (refusals.length || stopped.status !== "stopped") {
+      throw new Error("Could not stop this install's runtime. Check Runtime Status in the Windows tray and try again.");
+    }
+    stopProfilePostgres(postgres);
+    const outgoing = recovery.switchProfile(selected?.id ?? null);
+    const cleanupPending = !pruneProfileBackups(recovery);
+    writeJsonResult({ outgoing, cleanupPending });
+  });
+}
+
+function checkProfileSwitchAvailable() {
+  const endpoints = resolveLauncherRuntimeEndpoints();
+  if ([endpoints.gateway, endpoints.ui].some((endpoint) => endpoint.attachmentMode !== "managed")
+    || process.env.GOATCITADEL_LOCAL_ENV_FILE?.trim()) {
+    throw new Error("Disconnect the external runtime or environment file before resetting this install.");
+  }
+  if (fs.existsSync(path.join(baseDir, "profile-recovery", "pending.json"))) {
+    throw new Error("Retry startup to finish the previous profile change first.");
+  }
+  if (fs.existsSync(path.join(packagedRuntimeRoot, ".daily-profile-pending-review"))) {
+    throw new Error("Finish reviewing this install's profile migration before resetting or restoring.");
+  }
+}
+
+function pruneProfileBackups(recovery) {
+  try {
+    recovery.prune(retireProfileCredentials);
+    return true;
+  } catch {
+    console.error("An expired profile backup needs cleanup. Cleanup will retry after the next profile change.");
+    return false;
+  }
 }
 
 function ensureLaunchRuntimeDirectories() {
@@ -1892,6 +2008,7 @@ function startPackagedGateway(nodeExecutable, gatewayUrl, expectedFingerprint) {
         ])].join(","),
       }
     : {};
+  const profileId = ownsWindowsInstalledProfile() ? readDesktopProfileId(packagedRuntimeRoot) : undefined;
   startManagedDetachedProcess({
     pidPath: gatewayPidPath,
     service: "gateway",
@@ -1904,6 +2021,7 @@ function startPackagedGateway(nodeExecutable, gatewayUrl, expectedFingerprint) {
       ...managedUiOrigins,
       GOATCITADEL_APP_DIR: appDir,
       GOATCITADEL_ROOT_DIR: packagedRuntimeRoot,
+      GOATCITADEL_WINDOWS_PROFILE_RESOURCE: profileId ? desktopCredentialResource(baseDir, profileId) : "",
       GATEWAY_HOST: "127.0.0.1",
       GATEWAY_PORT: port,
       GOATCITADEL_ALLOWED_ORIGINS: installedRuntimeAllowedOrigins(
