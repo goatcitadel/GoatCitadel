@@ -103,7 +103,7 @@ export function readCursor(value: unknown, scope: string): string | undefined {
     const cursor = object(JSON.parse(decodeBase64Url(value, 8192).toString("utf8")));
     if (cursor.scope === scope && typeof cursor.token === "string" && cursor.token.length <= 4096) return cursor.token;
   } catch {
-    /* Malformed and mismatched continuations have the same refusal. */
+    /* Intentionally fall through so malformed and mismatched continuations have the same refusal. */
   }
   throw new Error("blocked: This page token belongs to another Google account or query. Start the query again.");
 }
