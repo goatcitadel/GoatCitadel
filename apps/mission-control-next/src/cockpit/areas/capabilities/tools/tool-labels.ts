@@ -9,6 +9,7 @@
  */
 export const TOOL_LABELS: Readonly<Record<string, string>> = {
   // Core
+  "capabilities.explain": "Explain capabilities and setup",
   "capabilities.search": "Find tools and skills",
   "skills.read": "Read a skill's instructions",
   "tool_artifact.read": "Read saved tool output",

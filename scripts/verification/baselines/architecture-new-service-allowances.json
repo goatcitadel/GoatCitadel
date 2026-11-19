@@ -2845,6 +2845,30 @@
       "maxDependencyMemberAccesses": 4,
       "reason": "Resolves the stored channel binding and retains the direct-local-Chat approval mode precondition before channel send.",
       "evidence": "Repository counters measure 0 host callbacks and 4 dependency accesses. The channel desk send tests cover channel routing, and gateway/chat-auto-binding.test.ts covers the Auto binding."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/scripts-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 7,
+      "reason": "Lists workspace-scoped Scripts inventory and uses storage to read retention, update it with a version check, and append audit evidence in the same transaction.",
+      "evidence": "Repository counters measure 0 host callbacks and 7 dependency accesses. Scripts service and route tests cover workspace scoping, stale updates, and retention audit evidence."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/capability-explanation-service.ts",
+      "maxHostCallbacks": 11,
+      "maxDependencyMemberAccesses": 11,
+      "reason": "Read-only capability explanations use scoped catalog, policy, connector and turn-profile observations. This new owner does not activate capabilities or change settings; original owner ceilings stay unchanged.",
+      "evidence": "Capability explanation tests cover workspace isolation, bounded/redacted output, policy, setup, profile gates and partial observations. Repository counters measure 11 host callbacks and 11 dependency member accesses."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/capability-knowledge-runtime.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 11,
+      "reason": "Composes read-only capability explanation and existing discovery from narrow ports, preserving discovery gating and live config reads while keeping Gateway below its original line-count ceiling.",
+      "evidence": "Capability knowledge runtime and discovery tests exercise bound runtime methods, workspace catalogs and feature gates. Repository counters measure 0 host callbacks and 11 dependency member accesses."
     }
   ]
 }

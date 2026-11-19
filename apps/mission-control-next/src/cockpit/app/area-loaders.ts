@@ -16,6 +16,9 @@ export const SystemArea = preloadable(async () => ({
   default: (await import("../areas/system/SystemArea")).SystemArea,
 }));
 export const Gallery = preloadable(async () => ({ default: (await import("./Gallery")).Gallery }));
+export const ScriptsArea = preloadable(async () => ({
+  default: (await import("../areas/scripts/ScriptsArea")).ScriptsArea,
+}));
 
 export const ChatProjects = preloadable(async () => ({
   default: (await import("../areas/chat/ChatProjects")).ChatProjects,
@@ -26,6 +29,7 @@ const LOADERS = {
   work: WorkArea,
   capabilities: CapabilitiesArea,
   library: LibraryArea,
+  scripts: ScriptsArea,
   system: SystemArea,
   settings: SettingsArea,
   gallery: Gallery,

@@ -124,8 +124,7 @@ import {
 } from "./capability-scope-resolver.js";
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 import { WorkspaceTurnSkills } from "./workspace-turn-skills.js";
-import { ChatCapabilityDiscoveryService } from "./chat-capability-discovery-service.js";
-import { CapabilityExplanationService } from "./capability-explanation-service.js";
+import { createCapabilityKnowledge } from "./capability-knowledge-runtime.js";
 import {
   resolveChatFeatureAdmission,
   renderAdmittedSkillInstructions,
@@ -574,7 +573,7 @@ import {
 } from "./orchestration-worktree-service.js";
 import { OperatorSummaryCache } from "./gateway/operator-summary-cache.js";
 import { DiscordRuntimeService } from "./discord-runtime-service.js";
-import { resolveGatewayInstallToken as resolveGatewayInstallTokenFromPlanner } from "./gateway/auth-credential-planner.js";
+import * as authCredentials from "./gateway/auth-credential-planner.js";
 import type { GatewayRouteServices } from "./gateway-route-services.js";
 import {
   SharedHostAdmissionClosedError,
@@ -1157,8 +1156,7 @@ export class GatewayService {
   private readonly mcpRequesterAdmissionConfiguration?: McpRequesterAdmissionConfiguration;
   private readonly toolInvocationCoordinator: ToolInvocationCoordinatorService;
   private readonly chatAutoActions: ChatAutoActionPolicy;
-  private readonly chatCapabilityDiscovery: ChatCapabilityDiscoveryService;
-  private readonly capabilityExplanation: CapabilityExplanationService;
+  private readonly capabilityKnowledge: ReturnType<typeof createCapabilityKnowledge>;
   private readonly workspacePathBridgeRuntime: WorkspacePathBridgeRuntime;
   private readonly chatWorkspaceSnapshotService: ChatWorkspaceSnapshotService;
   private readonly delegatedWorkResultService: DelegatedWorkResultService;
@@ -1528,9 +1526,9 @@ export class GatewayService {
       runBrowserErrand: (request) => this.browserErrandService.run(request),
       getChatSessionStatus: (sessionId) => this.chatSessionStatusService.getModelProjection(sessionId),
       readToolArtifact: (request) => chatToolArtifactService.readChatToolArtifactForTool(this, request),
-      searchCapabilities: (request) => this.chatCapabilityDiscovery.discover(request),
-      explainCapabilities: async (request) => ({ ...(await this.capabilityExplanation.explain(request)) }),
-      readSkill: (request) => this.chatCapabilityDiscovery.readSkill(request),
+      searchCapabilities: (request) => this.capabilityKnowledge.discovery.discover(request),
+      explainCapabilities: async (request) => ({ ...(await this.capabilityKnowledge.explanation.explain(request)) }),
+      readSkill: (request) => this.capabilityKnowledge.discovery.readSkill(request),
       assertOptionalUserInputAvailable: async () => {
         if (!(await this.isFeatureEnabled("chatAsyncClarificationV1Enabled")))
           throw new Error("Optional clarification is disabled.");
@@ -2765,37 +2763,13 @@ export class GatewayService {
           context: { serverId, reasonCode },
         }),
     });
-    this.capabilityExplanation = new CapabilityExplanationService({
-      requireSession: (sessionId) => this.requireChatSession(sessionId),
-      listCatalog: (scope, workspaceId) => this.workspaceTurnSkills.listCatalog(scope, workspaceId),
-      listConnectors: async (workspaceId) => {
-        const connectors = this.routeServices.capabilityConnectors;
-        if (!connectors) throw new Error("Capability connector observations are unavailable.");
-        return await connectors.list(workspaceId);
-      },
-      inspectToolAccess: (request) => this.inspectToolAccess(request),
-      getSessionPrefs: (sessionId) => this.getChatSessionPrefs(sessionId),
-      getCodeModeReadiness: () => this.capabilitySystemService.getCodeModeReadiness(),
-      getTurnProfile: async (turnId) => (await this.storage.chatTurnCapabilityProfiles.findByTurn(turnId)) ?? undefined,
-      getSearchBackend: async () => {
-        const probe = this.applyRuntimeBrowserBackendDefaults<ToolInvokeRequest>({
-          toolName: "browser.search",
-          args: { query: "capability probe" },
-          agentId: "assistant",
-          sessionId: "capability-probe",
-        });
-        return {
-          backend: probe.args.backend === "firecrawl" ? "firecrawl" : "native",
-          fallbackToNative: probe.args.firecrawlFallbackToNative === true,
-        };
-      },
-    });
-    this.chatCapabilityDiscovery = new ChatCapabilityDiscoveryService({
-      requireEnabled: () => this.requireFeatureEnabled("boundedToolExposureV1Enabled"),
-      requireSession: (sessionId) => this.requireChatSession(sessionId),
-      listCatalog: (scope, workspaceId) => this.workspaceTurnSkills.listCatalog(scope, workspaceId),
-      listSkills: (workspaceId) => this.workspaceTurnSkills.listSkills(workspaceId),
-      listLifecycle: () => this.storage.skillLifecycle.list(),
+    this.capabilityKnowledge = createCapabilityKnowledge({
+      runtime: this,
+      skills: this.workspaceTurnSkills,
+      connectors: () => this.routeServices.capabilityConnectors,
+      codeMode: this.capabilitySystemService,
+      profiles: this.storage.chatTurnCapabilityProfiles,
+      lifecycle: this.storage.skillLifecycle,
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
       assertChatToolDispatchAllowed: (request) => this.chatTurnControl.assertToolDispatchAllowed(request),
@@ -9588,9 +9562,6 @@ export class GatewayService {
   private applyRuntimeBrowserBackendDefaults<TRequest extends ToolInvokeRequest | ToolAccessEvaluateRequest>(
     request: TRequest,
   ): TRequest {
-    if (!request.args || typeof request.args !== "object") {
-      return request;
-    }
     return applyRuntimeBrowserBackendDefaults(
       request,
       this.config.assistant.web,
@@ -10919,9 +10890,7 @@ export class GatewayService {
   public async updateSettings(input: settingsAuthService.UpdateSettingsInput): Promise<RuntimeSettings> {
     const deps = {
       ...createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
-      // Candidate construction runs under the generation write fence, so it
-      // must use the already-submitted CAS revision rather than the public read
-      // path (which correctly rejects mixed-generation reads at that point).
+      // The write fence requires the submitted CAS revision during candidate construction.
       readSettingsRevision: () => input.expectedRevision ?? this.configGenerationService.getRevision(),
     };
     const previousRuntime: settingsAuthService.SettingsConfigCandidate = {
@@ -10950,6 +10919,8 @@ export class GatewayService {
           payload: await this.buildUnifiedConfigPayloadForRuntime(candidate.config, candidate.llm, candidate.features),
         };
       },
+      prepareStartupCredential: (next, previous) =>
+        next.input.auth ? authCredentials.prepareGatewayTokenForRestart(next.config, previous.config) : undefined,
       captureRuntimeOwnerRecoveryIntent: async (candidate) => ({
         version: 1,
         ...(candidate.input.mesh
@@ -11196,7 +11167,7 @@ export class GatewayService {
     generateWhenMissing?: boolean;
     persistToEnv?: boolean;
   }) {
-    return resolveGatewayInstallTokenFromPlanner({
+    return authCredentials.resolveGatewayInstallToken({
       runtimeConfig: this.config,
       env: process.env,
       explicitToken: input?.token,

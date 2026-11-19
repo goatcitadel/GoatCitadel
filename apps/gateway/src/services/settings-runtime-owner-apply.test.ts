@@ -1,9 +1,11 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PUBLIC_WEB_ADDRESS_NOT_HTTPS } from "@goatcitadel/contracts";
+import { readLocalEnvVar } from "../env-file.js";
 import { GatewayService } from "./gateway-service.js";
 import { LlmService } from "./llm-service.js";
 import { buildSettingsCandidate, type SettingsConfigCandidate } from "./settings-auth-service.js";
@@ -28,6 +30,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await Promise.all(tempRoots.splice(0).map((root) => fsPromises.rm(root, { recursive: true, force: true })));
 });
 
@@ -566,20 +569,22 @@ describe("Gateway settings owner transaction", () => {
     expect(resumeParkedRuns).not.toHaveBeenCalled();
   });
 
-  it("routes compatibility auth writes through positive revision CAS without persisting credential bytes", async () => {
-    const { runtime, generation } = await buildAutonomySettingsGatewayHarness();
+  it("routes compatibility auth writes through revision CAS and keeps credential bytes out of config", async () => {
+    const { runtime, generation, root } = await buildAutonomySettingsGatewayHarness();
+    isolateGatewayAuthEnvironment(root);
+    const token = randomBytes(32).toString("hex");
 
     const updated = await GatewayService.prototype.updateAuthSettings.call(runtime as GatewayService, {
       expectedRevision: 1,
       mode: "token",
-      token: "gateway-compat-secret",
+      token,
       allowLoopbackBypass: false,
     });
 
     expect(updated).toMatchObject({ mode: "token", tokenConfigured: true });
-    expect(runtime.config.assistant.auth.token.value).toBe("gateway-compat-secret");
+    expect(runtime.config.assistant.auth.token.value === token).toBe(true);
     expect(generation.getRevision()).toBe(2);
-    expect(JSON.stringify(generation.getActivePayload())).not.toContain("gateway-compat-secret");
+    expect(JSON.stringify(generation.getActivePayload()).includes(token)).toBe(false);
 
     await expect(
       GatewayService.prototype.updateAuthSettings.call(runtime as GatewayService, {
@@ -591,7 +596,8 @@ describe("Gateway settings owner transaction", () => {
       name: "ConflictError",
       details: { expectedRevision: 1, currentRevision: 2 },
     });
-    expect(runtime.config.assistant.auth.token.value).toBe("gateway-compat-secret");
+    expect(runtime.config.assistant.auth.token.value === token).toBe(true);
+    expect(readLocalEnvVar("GOATCITADEL_AUTH_TOKEN", { rootDir: root }).value === token).toBe(true);
     expect(JSON.stringify(generation.getActivePayload())).not.toContain("stale-compat-secret");
 
     await expect(
@@ -611,27 +617,38 @@ describe("Gateway settings owner transaction", () => {
         },
       },
     });
+    isolateGatewayAuthEnvironment(root);
+    const token = randomBytes(32).toString("hex");
 
     await expect(
       GatewayService.prototype.updateAuthSettings.call(runtime as GatewayService, {
         expectedRevision: 1,
         mode: "token",
-        token: "never-persist-auth-secret",
+        token,
       }),
     ).rejects.toThrow("simulated auth compatibility process death");
 
-    expect(runtime.config.assistant.auth.token.value).not.toBe("never-persist-auth-secret");
+    expect(runtime.config.assistant.auth.token.value === token).toBe(false);
+    expect(readLocalEnvVar("GOATCITADEL_AUTH_TOKEN", { rootDir: root }).value === token).toBe(true);
     expect(generation.getHealthSnapshot()).toMatchObject({ revision: 2, transactionState: "committed" });
-    expect(await fsPromises.readFile(path.join(root, "config", "goatcitadel.json"), "utf8")).not.toContain(
-      "never-persist-auth-secret",
+    expect((await fsPromises.readFile(path.join(root, "config", "goatcitadel.json"), "utf8")).includes(token)).toBe(
+      false,
     );
     expect(
-      await fsPromises.readFile(path.join(root, "config", ".generations", "transaction.json"), "utf8"),
-    ).not.toContain("never-persist-auth-secret");
+      (await fsPromises.readFile(path.join(root, "config", ".generations", "transaction.json"), "utf8")).includes(
+        token,
+      ),
+    ).toBe(false);
     await expect(recoverLastGoodConfigGeneration(root)).resolves.toMatchObject({ recovered: false, revision: 2 });
     expect(new ConfigGenerationService(root).isRuntimeOwnerReconciliationPending()).toBe(true);
   });
 });
+
+function isolateGatewayAuthEnvironment(root: string): void {
+  vi.stubEnv("GOATCITADEL_LOCAL_ENV_FILE", path.join(root, ".env"));
+  vi.stubEnv("GOATCITADEL_AUTH_MODE", undefined);
+  vi.stubEnv("GOATCITADEL_AUTH_TOKEN", undefined);
+}
 
 async function buildAutonomySettingsGatewayHarness(
   options: { failFeatureApply?: boolean; generationHooks?: ConfigGenerationServiceHooks } = {},

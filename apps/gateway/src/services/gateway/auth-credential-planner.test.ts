@@ -1,11 +1,14 @@
+import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { afterEach, beforeEach, vi, describe, expect, it } from "vitest";
 import type { GatewayRuntimeConfig } from "../../config.js";
+import { readLocalEnvVar } from "../../env-file.js";
 import {
   buildGatewayAuthCredentialPlan,
   createGatewayAuthCredentialPlan,
+  prepareGatewayTokenForRestart,
   readAssistantAuthConfigSnapshotSync,
   resolveGatewayInstallToken,
   trimCredentialToUndefined,
@@ -28,6 +31,33 @@ afterEach(async () => {
 });
 
 describe("auth credential planner", () => {
+  it("defers rotation while the previous credential can still boot the Gateway", async () => {
+    const oldToken = randomBytes(32).toString("hex");
+    const newToken = randomBytes(32).toString("hex");
+    const root = await createTempRoot({}, [`GOATCITADEL_AUTH_TOKEN=${oldToken}`]);
+    vi.stubEnv("GOATCITADEL_AUTH_MODE", undefined);
+    vi.stubEnv("GOATCITADEL_AUTH_TOKEN", undefined);
+    const oldConfig = createRuntimeConfig(root, {
+      mode: "token",
+      allowLoopbackBypass: false,
+      token: { value: oldToken, queryParam: "access_token" },
+      basic: {},
+    });
+    const candidate = structuredClone(oldConfig);
+    candidate.assistant.auth.token.value = newToken;
+    const credential = prepareGatewayTokenForRestart(candidate, oldConfig);
+    expect(credential?.beforePublish).toBe(false);
+    expect(readLocalEnvVar("GOATCITADEL_AUTH_TOKEN", { rootDir: root }).value === oldToken).toBe(true);
+    credential?.write();
+    expect(readLocalEnvVar("GOATCITADEL_AUTH_TOKEN", { rootDir: root }).value === newToken).toBe(true);
+
+    const brokenCandidate = structuredClone(candidate);
+    brokenCandidate.assistant.auth.token.value = newToken + String.raw`\n`;
+    const brokenCredential = prepareGatewayTokenForRestart(brokenCandidate, candidate);
+    expect(() => brokenCredential?.write()).toThrow("The Gateway token could not be saved for restart.");
+    expect(readLocalEnvVar("GOATCITADEL_AUTH_TOKEN", { rootDir: root }).value === newToken).toBe(true);
+  });
+
   it("prefers env credentials and reports inline override warnings", async () => {
     const root = await createTempRoot({
       auth: {

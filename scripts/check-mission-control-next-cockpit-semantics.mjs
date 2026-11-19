@@ -49,7 +49,8 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 // 895: the capability packs page went (-14): PortablePacksSettings had eight live regions, PortablePackSetup four and
 //   PackPlanControls two. Plugins replace it.
 // 896: the task detail's deliverable form announces its one outcome (recorded, or why it was not), in one element.
-export const LIVE_REGION_BUDGET = 896;
+// 899: Scripts adds one consolidated load/save/error outcome and on-demand preview and source-run outcomes.
+export const LIVE_REGION_BUDGET = 899;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

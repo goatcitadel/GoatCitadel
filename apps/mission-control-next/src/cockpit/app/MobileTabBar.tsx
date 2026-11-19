@@ -6,6 +6,7 @@ import {
   Inbox,
   LayoutGrid,
   Library,
+  FileCode,
   MessageSquare,
   MoreHorizontal,
   Search,
@@ -122,7 +123,9 @@ export function MobileTabBar({
             aria-label="More areas and settings"
             aria-expanded={moreOpen}
             aria-current={
-              current === "capabilities" || current === "system" || current === "settings" ? "page" : undefined
+              current === "capabilities" || current === "scripts" || current === "system" || current === "settings"
+                ? "page"
+                : undefined
             }
             aria-describedby={attention ? "cockpit-more-attention" : undefined}
             onClick={() => {
@@ -187,6 +190,16 @@ export function MobileTabBar({
           >
             <Blocks aria-hidden="true" className="size-4" />
             Capabilities
+          </button>
+          <button
+            type="button"
+            onPointerEnter={() => preload("scripts")}
+            onFocus={() => preload("scripts")}
+            onClick={() => openArea("/scripts")}
+            className="flex min-h-11 items-center gap-3 rounded-md px-3 text-left text-fg hover:bg-sunken"
+          >
+            <FileCode aria-hidden="true" className="size-4" />
+            Scripts
           </button>
           <button
             type="button"

@@ -16,6 +16,41 @@ const originalEnv = {
 describe("files route service limits", () => {
   const tempRoots: string[] = [];
 
+  it("returns script extensions as text for owner-backed previews", async () => {
+    const { createFilesRoutePort } = await import("./files-route-service.js");
+    const rootDir = await createTempWorkspace(tempRoots);
+    for (const extension of ["py", "ps1", "sh", "bash", "zsh", "bat", "cmd", "rb", "pl", "lua", "sql"]) {
+      const filename = `script.${extension}`;
+      const content = "# Script preview regression\n";
+      await fs.writeFile(path.join(rootDir, "workspace", filename), content, "utf8");
+      const file = await createPort(createFilesRoutePort, rootDir).downloadWorkspaceFile(filename);
+      expect(file).toMatchObject({ contentType: "text/plain", isText: true, content });
+    }
+  }, 30_000);
+
+  it("reads a bounded script preview without splitting UTF-8 or relaxing the download limit", async () => {
+    const { createFilesRoutePort } = await import("./files-route-service.js");
+    const rootDir = await createTempWorkspace(tempRoots);
+    const port = createPort(createFilesRoutePort, rootDir);
+    const maxBytes = 64 * 1024;
+    const prefix = "#".repeat(maxBytes - 1);
+    const filename = path.join(rootDir, "workspace", "script.py");
+    await fs.writeFile(filename, `${prefix}é\n`);
+
+    await expect(port.downloadWorkspaceFile("script.py", { maxBytes, readPrefix: true })).resolves.toMatchObject({
+      content: prefix,
+      truncated: true,
+    });
+    await expect(port.downloadWorkspaceFile("script.py", { maxBytes })).rejects.toMatchObject({ httpStatus: 413 });
+
+    const exact = `${prefix}\n`;
+    await fs.writeFile(filename, exact);
+    await expect(port.downloadWorkspaceFile("script.py", { maxBytes, readPrefix: true })).resolves.toMatchObject({
+      content: exact,
+      truncated: false,
+    });
+  }, 30_000);
+
   afterEach(async () => {
     for (const [key, value] of Object.entries(originalEnv)) {
       if (value === undefined) {
