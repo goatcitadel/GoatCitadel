@@ -1,3 +1,4 @@
+import { practiceLocation } from "../../features/tutorial/practice-location";
 import { SHELL_HISTORY_POSITION } from "../../app/shell-transition";
 
 /*
@@ -365,7 +366,7 @@ function stampShownEntry(): Entry {
 
 /** The location render-time readers use: the shown page while a held move is restored, else the live URL. */
 export function readCockpitLocation(): CockpitLocation {
-  return frozen ?? window.location;
+  return practiceLocation() ?? frozen ?? window.location;
 }
 
 /** The number for a new entry pushed after the shown one. */

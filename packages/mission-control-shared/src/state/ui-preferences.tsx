@@ -1,3 +1,4 @@
+import { isPracticeGateway } from "../api/gateway-transport.js";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { UiEffectsMode } from "./effects-mode";
 import type { OperatorAttentionSoundMode } from "./operator-attention";
@@ -40,7 +41,7 @@ interface UiPreferencesValue {
   setActiveCitadelId: (citadelId: string) => void;
   activeWorkspaceId: string;
   setActiveWorkspaceId: (workspaceId: string) => void;
-  setActiveScope: (scope: { citadelId: string; workspaceId: string }) => void;
+  setActiveScope: (scope: { citadelId: string; workspaceId: string }, options?: { tabOnly?: boolean }) => void;
   /** The painted theme with `system` resolved, so `theme === "dark"` consumers (Classic included) keep working. */
   theme: UiResolvedTheme;
   /** The saved choice, including `system`. */
@@ -150,14 +151,16 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
     [advanceScopeIntent],
   );
   const setActiveScope = useCallback(
-    (scope: { citadelId: string; workspaceId: string }) => {
+    (scope: { citadelId: string; workspaceId: string }, options?: { tabOnly?: boolean }) => {
       const normalizedCitadelId = normalizeCitadelId(scope.citadelId);
       const normalizedWorkspaceId = normalizeWorkspaceId(scope.workspaceId);
       advanceScopeIntent({ citadelId: normalizedCitadelId, workspaceId: normalizedWorkspaceId });
       setActiveCitadelIdState(normalizedCitadelId);
       setActiveWorkspaceIdState(normalizedWorkspaceId);
-      writeStorage(CITADEL_KEY, normalizedCitadelId);
-      writeStorage(WORKSPACE_KEY, normalizedWorkspaceId);
+      if (!options?.tabOnly) {
+        writeStorage(CITADEL_KEY, normalizedCitadelId);
+        writeStorage(WORKSPACE_KEY, normalizedWorkspaceId);
+      }
     },
     [advanceScopeIntent],
   );
@@ -332,6 +335,7 @@ function readStatusCenterExpandedFromStorage(): boolean {
 }
 
 function writeStorage(key: string, value: string): boolean {
+  if (isPracticeGateway()) return true;
   if (typeof window === "undefined") {
     return false;
   }
@@ -356,6 +360,7 @@ function readStorage(key: string): string | null {
 }
 
 function readWorkspaceIdFromStorage(): string {
+  if (isPracticeGateway()) return "default";
   if (typeof window === "undefined") {
     return "default";
   }
@@ -363,6 +368,7 @@ function readWorkspaceIdFromStorage(): string {
 }
 
 function readCitadelIdFromStorage(): string {
+  if (isPracticeGateway()) return "personal";
   if (typeof window === "undefined") {
     return "personal";
   }

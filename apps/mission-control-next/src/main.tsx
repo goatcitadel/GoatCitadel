@@ -1,3 +1,4 @@
+import { practiceMarker, takeTutorialHandoff } from "./features/tutorial/handoff";
 import { retireMissionControlServiceWorkers } from "./service-worker-cleanup";
 import { resolveShellPreference } from "./shell-preference";
 import { resetDevBrowserStorage } from "./dev-reset";
@@ -44,7 +45,23 @@ const storage = (() => {
 const shell = resolveShellPreference({ search: globalThis.location?.search ?? "", storage });
 document.documentElement.dataset.shell = shell;
 
-if (shell === "cockpit") {
+if (new URLSearchParams(location.search).has(practiceMarker)) {
+  const handoff = takeTutorialHandoff();
+  if (!handoff) {
+    location.replace("/chat?shell=cockpit");
+  } else {
+    // Only bundled assets may load here. Shared application requests use the practice transport.
+    const restriction = document.createElement("meta");
+    restriction.httpEquiv = "Content-Security-Policy";
+    restriction.content = "connect-src 'none'; form-action 'none'; object-src 'none'";
+    document.head.append(restriction);
+    void import("./features/tutorial/practice-entry")
+      .then(({ mountTutorial }) => mountTutorial(root, handoff))
+      .catch(() => {
+        location.replace("/chat?shell=cockpit&tutorialEnded=unavailable");
+      });
+  }
+} else if (shell === "cockpit") {
   void import("./cockpit-entry").then(({ mountCockpit }) => mountCockpit(root));
 } else {
   void import("./classic-entry").then(({ mountClassic }) => mountClassic(root));
