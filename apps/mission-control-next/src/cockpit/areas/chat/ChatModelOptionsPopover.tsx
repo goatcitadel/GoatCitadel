@@ -54,7 +54,7 @@ export function ChatModelOptionsPopover({
   ownsFocus,
   canRestore,
   isCurrent,
-  onOutside,
+  skipReturnFocus,
   props,
   reasoningEfforts,
 }: {
@@ -66,17 +66,22 @@ export function ChatModelOptionsPopover({
   ownsFocus: () => boolean;
   canRestore: () => boolean;
   isCurrent: () => boolean;
-  onOutside: () => void;
+  skipReturnFocus: () => void;
   props: Controls;
   reasoningEfforts?: ChatCompletionReasoningEffort[];
 }) {
   // A pick is collected here and sent as one change when the popover closes, so arrowing through a select applies
   // nothing on the way and one deliberate choice makes one change.
   const [draft, setDraft] = useState<ModelDraft>({});
-  // Escape is the cancel key: it closes the popover without sending what was picked.
+  const [dismissedForNavigation, setDismissedForNavigation] = useState(false);
+  // Escape and departure to Settings close without sending what was picked.
   const cancelled = useRef(false);
   useEffect(() => {
-    if (open) setDraft({});
+    if (open) {
+      cancelled.current = false;
+      setDraft({});
+      setDismissedForNavigation(false);
+    }
   }, [open]);
   const shownProviderId = draft.providerId ?? props.selectedProviderId;
   const shownModel = draft.model ?? props.selectedModel;
@@ -212,7 +217,13 @@ export function ChatModelOptionsPopover({
       <button
         type="button"
         aria-label={`${props.activePersonality?.name ?? "Personality"} · Open personality settings`}
-        onClick={props.onOpenPersonalitiesSettings}
+        onClick={() => {
+          cancelled.current = true;
+          setDismissedForNavigation(true);
+          skipReturnFocus();
+          onOpenChange(false);
+          props.onOpenPersonalitiesSettings?.();
+        }}
         disabled={!props.onOpenPersonalitiesSettings}
         className="rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-line-strong max-sm:min-h-11"
       >
@@ -236,16 +247,15 @@ export function ChatModelOptionsPopover({
     }),
     [trigger],
   );
+  // The route can hide the Chat anchor before the popover's exit animation finishes.
+  if (dismissedForNavigation) return null;
+
   return (
     <Root
       open={open}
       onOpenChange={(next) => {
-        // Done, Escape and a click outside send the collected choice; a close the page asked for (the Chat changed
-        // underneath) sends nothing.
+        // Done and outside interactions send the collected choice unless this opening was cancelled.
         if (!next && isCurrent() && !cancelled.current) commitDraft();
-        if (!next) {
-          cancelled.current = false;
-        }
         onOpenChange(next);
       }}
     >
@@ -290,7 +300,7 @@ export function ChatModelOptionsPopover({
           onOpenAutoFocus={(event) => {
             if (!ownsFocus()) event.preventDefault();
           }}
-          onInteractOutside={() => onOutside()}
+          onInteractOutside={() => skipReturnFocus()}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             if (canRestore() && trigger.current?.isConnected) trigger.current.focus({ preventScroll: true });

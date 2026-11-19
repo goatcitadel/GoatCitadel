@@ -31,8 +31,18 @@ public static class DesktopStartupCopy
 
     public static string LaunchFailureMessage(DesktopRuntimeStatus? status, string launcherError)
     {
-        return string.IsNullOrWhiteSpace(status?.StartupFailure?.Summary)
-            ? launcherError
-            : RecoveryMessage(status!);
+        if (!string.IsNullOrWhiteSpace(status?.StartupFailure?.Summary))
+        {
+            return RecoveryMessage(status);
+        }
+
+        const int maxSummaryLength = 320;
+        var firstLine = launcherError.Trim().Split(new[] { '\r', '\n' }, 2)[0].TrimEnd();
+        if (firstLine.Length > maxSummaryLength)
+        {
+            firstLine = firstLine[..maxSummaryLength].TrimEnd() + "…";
+        }
+
+        return firstLine == launcherError ? firstLine : $"{firstLine} Open Logs for details.";
     }
 }

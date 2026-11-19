@@ -137,7 +137,7 @@ export function ChatModelOptionsButton({
             )
           }
           isCurrent={options.isCurrent}
-          onOutside={() => {
+          skipReturnFocus={() => {
             if (options.intent.current) options.intent.current.restore = false;
           }}
           canRestore={() =>
