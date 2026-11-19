@@ -109,7 +109,7 @@ public sealed partial class MainWindow
     {
         ShowAndFocus();
         if (_updates is null) { ShowToast("Update checks are available in an installed Windows app."); return; }
-        if (_updateDialog is not null) return;
+        if (_updateDialog is not null || _profileRecoveryOpen) return;
         var channel = new ComboBox { Header = "Update channel", ItemsSource = new[] { "stable", "preview" },
             SelectedItem = _updates.Status.Channel, HorizontalAlignment = HorizontalAlignment.Stretch };
         channel.SelectionChanged += (_, _) => _ = HandleUpdateActionAsync("channel", channel.SelectedItem as string);
