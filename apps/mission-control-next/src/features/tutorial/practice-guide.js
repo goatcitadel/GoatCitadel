@@ -1,3 +1,6 @@
+/* global AbortController, Element, HTMLTextAreaElement, InputEvent, MutationObserver, cancelAnimationFrame,
+          clearTimeout, document, innerHeight, innerWidth, matchMedia, requestAnimationFrame, setTimeout, window */
+
 export function mountTutorialGuide(practice, navigateTo, leave) {
   const lifetime = new AbortController();
   const dock = document.createElement("header");
@@ -324,7 +327,9 @@ export function mountTutorialGuide(practice, navigateTo, leave) {
           blurBehind: 0,
         });
         void Promise.allSettled([wave.ready, wave.covered, wave.finished, wave.updateCallbackDone]);
-      } catch {}
+      } catch {
+        // The spotlight and tour card still work without the transition.
+      }
     });
   }
 

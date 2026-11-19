@@ -1,3 +1,6 @@
+/* global Event, EventTarget, Headers, MessageEvent, ReadableStream, Request, Response, TextEncoder, URL,
+          clearTimeout, crypto, setTimeout, window */
+
 export function createPracticeSession(origin = window.location.origin) {
   let disposed = false;
   let refreshTimer;

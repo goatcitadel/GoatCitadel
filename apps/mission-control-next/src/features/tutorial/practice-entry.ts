@@ -15,12 +15,12 @@ export async function mountTutorial(root: HTMLElement, scope: TutorialHandoff): 
   setPracticeLocation("/chat?sessionId=" + encodeURIComponent(session.sessionId) + "&shell=cockpit");
   document.documentElement.dataset.shell = "cockpit";
   let disposed = false;
-  let removeGuide: (() => void) | undefined;
+  const guide: { remove?: () => void } = {};
   function dispose() {
     if (disposed) return;
     disposed = true;
     session.dispose();
-    removeGuide?.();
+    guide.remove?.();
     unmountApplicationRoot(root);
     clearPracticeStorage();
   }
@@ -38,5 +38,5 @@ export async function mountTutorial(root: HTMLElement, scope: TutorialHandoff): 
   const { mountCockpit } = await import("../../cockpit-entry");
   if (disposed) return;
   mountCockpit(root);
-  removeGuide = mountTutorialGuide(session, setPracticeLocation, leave);
+  guide.remove = mountTutorialGuide(session, setPracticeLocation, leave);
 }
