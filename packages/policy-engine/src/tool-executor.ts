@@ -22,9 +22,12 @@ import {
   isOpenCodeJsonInvocation,
   parseOpenCodeRunOutput,
   splitUtf8HeadTail,
+  isNativeGoogleTool,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
+import type { GoogleFilePort } from "./tool-executor/google-workspace-common.js";
+import type { PreparedGoogleMail } from "./tool-executor/google-mail-compose.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
 import { assertToolWritePath, toolReadableWriteRoots, withExecutionWriteAdmission } from "./sandbox/tool-write-gate.js";
 import { resolveExecutionWriteAdmission } from "./tool-executor/outside-root-write-admission.js";
@@ -196,7 +199,18 @@ export interface ToolExecutorRuntimeHooks {
    * capability switch and granted scope, refreshes before expiry, and returns an access token.
    * Absent means no native Google sign-in, so those tools stay unavailable.
    */
-  resolveGoogleWorkspaceAccessToken?: (input: { connectionId: string; toolName: string }) => Promise<string>;
+  resolveGoogleWorkspaceAccessToken?: (input: {
+    connectionId: string;
+    toolName: string;
+    signInId?: string;
+    args?: Record<string, unknown>;
+  }) => Promise<string>;
+  captureGoogleWorkspaceSource?: (
+    request: ToolInvokeRequest,
+    source: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>>;
+  resolveGoogleWorkspacePreparedMail?: (request: ToolInvokeRequest) => Promise<PreparedGoogleMail | undefined>;
+  createGoogleWorkspaceFilePort?: (request: ToolInvokeRequest) => GoogleFilePort;
   /**
    * Reads the key a channel connection saved in secure storage, so a real send uses the key and never the
    * reference kept in the connection config. It is told which connection the send is for and reads only a key saved
@@ -638,6 +652,7 @@ export async function executeTool(
     case "smtp.send":
     case "calendar.list":
     case "calendar.create_event":
+    case "calendar.respond_event":
     case "discord.send":
     case "discord.react":
     case "discord.unsend":
@@ -668,6 +683,16 @@ export async function executeTool(
         ),
       );
     default:
+      if (isNativeGoogleTool(request.toolName))
+        return finalizeToolResult(
+          await executeCommsTool(
+            request,
+            config,
+            storage,
+            await resolveExecutionGrantAllowedHosts(request, storage),
+            runtimeHooks,
+          ),
+        );
       throw new Error(`Unsupported tool executor: ${request.toolName}`);
   }
 }

@@ -21,7 +21,8 @@ export interface ChatTimerRecord {
   dueAt: string;
   timezone: string;
   message: string;
-  notificationRuleId?: string;
+  /** Omitted uses matching rules. Null delivers only in Chat. */
+  notificationRuleId?: string | null;
   cancelOnNextReply: boolean;
   status: ChatTimerStatus;
   createdBy: string;
@@ -42,7 +43,8 @@ export interface CreateChatTimerInput {
   dueAt: string;
   timezone: string;
   message: string;
-  notificationRuleId?: string;
+  /** Omitted uses matching rules. Null delivers only in Chat. */
+  notificationRuleId?: string | null;
   cancelOnNextReply?: boolean;
 }
 

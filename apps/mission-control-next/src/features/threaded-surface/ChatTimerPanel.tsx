@@ -19,30 +19,40 @@ export function ChatTimerPanel({ panel }: { panel: PanelState }) {
         <DialogHeader>
           <DialogTitle>Set a Chat timer</DialogTitle>
           <DialogDescription id="chat-timer-description">
-            This durable reminder appends a system notice and never invokes a provider or model.
+            {panel.delayMs
+              ? `This timer starts when you select Create timer. The reminder will appear only in this Chat.`
+              : "The reminder appears in this Chat. Choose a notification rule to control delivery elsewhere."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="mc-next-chat-timer__form">
-          <label>
-            <span>Due date and time</span>
-            <input
-              type="datetime-local"
-              value={panel.dueAt}
-              onChange={(event) => panel.onDueAtChange(event.currentTarget.value)}
-              required
-            />
-          </label>
-          <label>
-            <span>Timezone</span>
-            <input
-              type="text"
-              value={panel.timezone}
-              onChange={(event) => panel.onTimezoneChange(event.currentTarget.value)}
-              placeholder="America/Los_Angeles"
-              required
-            />
-          </label>
+          {panel.delayMs ? (
+            <p className="mc-next-chat-timer__wide">
+              <strong>Duration</strong> · {formatTimerDelay(panel.delayMs)}
+            </p>
+          ) : (
+            <>
+              <label>
+                <span>Due date and time</span>
+                <input
+                  type="datetime-local"
+                  value={panel.dueAt}
+                  onChange={(event) => panel.onDueAtChange(event.currentTarget.value)}
+                  required
+                />
+              </label>
+              <label>
+                <span>Timezone</span>
+                <input
+                  type="text"
+                  value={panel.timezone}
+                  onChange={(event) => panel.onTimezoneChange(event.currentTarget.value)}
+                  placeholder="America/Los_Angeles"
+                  required
+                />
+              </label>
+            </>
+          )}
           <label className="mc-next-chat-timer__wide">
             <span>Reminder message</span>
             <Textarea
@@ -53,20 +63,22 @@ export function ChatTimerPanel({ panel }: { panel: PanelState }) {
               required
             />
           </label>
-          <label className="mc-next-chat-timer__wide">
-            <span>Notification rule</span>
-            <select
-              value={panel.notificationRuleId}
-              onChange={(event) => panel.onNotificationRuleChange(event.currentTarget.value)}
-            >
-              <option value="">All matching timer rules</option>
-              {panel.rules.map((rule) => (
-                <option key={rule.ruleId} value={rule.ruleId}>
-                  {rule.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          {!panel.delayMs && (
+            <label className="mc-next-chat-timer__wide">
+              <span>Notification rule</span>
+              <select
+                value={panel.notificationRuleId}
+                onChange={(event) => panel.onNotificationRuleChange(event.currentTarget.value)}
+              >
+                <option value="">All matching timer rules</option>
+                {panel.rules.map((rule) => (
+                  <option key={rule.ruleId} value={rule.ruleId}>
+                    {rule.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="mc-next-chat-timer__check mc-next-chat-timer__wide">
             <input
               type="checkbox"
@@ -107,7 +119,7 @@ export function ChatTimerPanel({ panel }: { panel: PanelState }) {
 
         <DialogFooter>
           <Button type="button" variant="outline" onClick={panel.onClose} disabled={panel.busy}>
-            Close
+            {panel.delayMs ? "Cancel" : "Close"}
           </Button>
           <Button
             type="button"
@@ -120,4 +132,14 @@ export function ChatTimerPanel({ panel }: { panel: PanelState }) {
       </DialogContent>
     </Dialog>
   );
+}
+
+function formatTimerDelay(delayMs: number): string {
+  const [amount, unit] =
+    delayMs % 3_600_000 === 0
+      ? [delayMs / 3_600_000, "hour"]
+      : delayMs % 60_000 === 0
+        ? [delayMs / 60_000, "minute"]
+        : [delayMs / 1_000, "second"];
+  return `${amount} ${unit}${amount === 1 ? "" : "s"}`;
 }

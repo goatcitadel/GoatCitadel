@@ -160,6 +160,7 @@ export interface MissionControlActiveSessionSurfaceProps {
     busy: boolean;
     error: string | null;
     dueAt: string;
+    delayMs?: number;
     timezone: string;
     message: string;
     notificationRuleId: string;

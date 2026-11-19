@@ -1881,6 +1881,17 @@ function describeEndpointReadinessFailure(endpoint, outcome) {
 function startPackagedGateway(nodeExecutable, gatewayUrl, expectedFingerprint) {
   const port = String(new URL(gatewayUrl).port || "8787");
   const startupFailurePath = prepareGatewayStartupFailureRecord();
+  const ui = resolveLauncherRuntimeEndpoints().ui;
+  // Admit only the selected managed UI, including a fresh install's alternate port.
+  // Explicit external UI overrides retain the operator's existing origin policy.
+  const managedUiOrigins = ui.attachmentMode === "managed"
+    ? {
+        GOATCITADEL_ALLOWED_ORIGINS: [...new Set([
+          ...(runtimeProcessEnv.GOATCITADEL_ALLOWED_ORIGINS ?? "").split(",").map((origin) => origin.trim()).filter(Boolean),
+          new URL(ui.url).origin,
+        ])].join(","),
+      }
+    : {};
   startManagedDetachedProcess({
     pidPath: gatewayPidPath,
     service: "gateway",
@@ -1890,13 +1901,14 @@ function startPackagedGateway(nodeExecutable, gatewayUrl, expectedFingerprint) {
     cwd: packagedGatewayDir,
     env: {
       ...runtimeProcessEnv,
+      ...managedUiOrigins,
       GOATCITADEL_APP_DIR: appDir,
       GOATCITADEL_ROOT_DIR: packagedRuntimeRoot,
       GATEWAY_HOST: "127.0.0.1",
       GATEWAY_PORT: port,
       GOATCITADEL_ALLOWED_ORIGINS: installedRuntimeAllowedOrigins(
         baseDir,
-        runtimeProcessEnv.GOATCITADEL_ALLOWED_ORIGINS,
+        managedUiOrigins.GOATCITADEL_ALLOWED_ORIGINS ?? runtimeProcessEnv.GOATCITADEL_ALLOWED_ORIGINS,
         runtimeProcessEnv,
         packagedGatewayDir,
       ),

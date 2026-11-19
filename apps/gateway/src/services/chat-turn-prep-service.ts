@@ -1120,17 +1120,28 @@ export async function prepareAgentChatTurn(
       ? await host.buildDefaultChatPersonalityOverlay()
       : undefined;
   // The runner offers code_mode.request by the same rule; the prompt and attachment hints must not name it otherwise.
+  const actorSource =
+    input.authActorSource ??
+    (input as ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext }).policyContext?.authActorSource;
+  let codeModeNeedsOperatorSignIn = false;
   const codeModeRequestEligible = await loadCodeModeRequestEligibility(
     buildCodeModeRequestTurnShape({
       mode: effectiveMode,
       parentDelegationStepId: userMessage.parentDelegationStepId ?? input.parentDelegationStepId,
       permissionProfileId: input.permissionProfileId,
       serverOnlyPosture: systemHeartbeatPosture,
-      authActorSource: input.authActorSource,
-      // Autonomous enqueue passes its policy context on the request, past this signature's type.
-      policyContext: (input as ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext }).policyContext,
+      authActorSource: actorSource,
     }),
-    host.getCodeModeReadiness ? () => host.getCodeModeReadiness!() : undefined,
+    host.getCodeModeReadiness
+      ? async () => {
+          const readiness = await host.getCodeModeReadiness!();
+          codeModeNeedsOperatorSignIn =
+            actorSource === "none" &&
+            readiness.sandboxSupported &&
+            (readiness.reason === "code_mode_off" || readiness.reason === "sandbox_off");
+          return readiness;
+        }
+      : undefined,
   );
   let baseAgentInstruction: ChatCompletionRequest["messages"][number]["content"] | undefined;
   if (baseSystemPromptEnabled) {
@@ -1193,6 +1204,11 @@ export async function prepareAgentChatTurn(
           missingRequiredProjectBinding,
         }),
         webMode: normalized.webMode ?? prefs.webMode,
+        chatTimersEnabled:
+          !systemHeartbeatPosture &&
+          !userMessage.parentDelegationStepId &&
+          !input.parentDelegationStepId &&
+          (await isFeatureEnabled("chatTimersV1Enabled")),
         ...(memoryDigest ? { memoryDigest } : {}),
       }),
     );
@@ -1212,6 +1228,9 @@ export async function prepareAgentChatTurn(
     personalityOverlay,
     sideChatSystemInstruction,
     buildPlanningModeSystemInstruction(prefs.planningMode),
+    codeModeNeedsOperatorSignIn
+      ? "If the user asks to run code in Code Mode, explain that Code Mode is off and this Chat has no authenticated operator who can approve turning it on. The operator can configure authentication in Settings and sign in, then ask again. Offer to draft the code in Chat if useful. Do not change the authentication or tool policy on their behalf."
+      : undefined,
     sustainedExecutionProfile === "sustained_local_coding"
       ? "This is a sustained coding task. Inspect the target files and actual failures, make focused changes, run requested tests after the last edit, and independently check results when asked. After the final command, use fs.stat or a file read to confirm each required file still exists. Keep constraints and the next repair step in view. State only outcomes supported by tool evidence. A shell working directory alone does not prove that writes were confined to it."
       : undefined,

@@ -18,7 +18,17 @@ export interface ToolReferenceRootGrant {
   access: "read_only";
 }
 
+/** Server-recorded scope for an expiring Google read allowance created from a Chat approval. */
+export interface GoogleReadGrantScope {
+  workspaceId: string;
+  sessionId: string;
+  connectionId: string;
+  signInId: string;
+  calendarId?: string;
+}
+
 export interface ToolGrantConstraints {
+  googleRead?: GoogleReadGrantScope;
   allowedHosts?: string[];
   allowedPaths?: string[];
   referenceRoots?: ToolReferenceRootGrant[];
@@ -83,6 +93,8 @@ export interface ToolAccessEvaluateRequest {
   taskId?: string;
   runId?: string;
   args?: Record<string, unknown>;
+  /** Internal. Bound by the Gateway from the currently connected Google sign-in. */
+  googleReadSignInId?: string;
   trustLevel?: ToolExecutionTrustLevel;
   sourceAttribution?: ContextSourceAttribution[];
   permissionProfileId?: string;

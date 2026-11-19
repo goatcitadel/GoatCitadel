@@ -6,6 +6,7 @@ import {
   isDurableRunTerminal,
   readDurableChatTurnExecutionPayloadAuthority,
   hasCurrentCronCreatorAuthority,
+  type ApprovalRequest,
   type ChatTurnFeatureReferences,
   type CronAgentTurnConfig,
   type CronRunExecutionToken,
@@ -31,6 +32,10 @@ export interface ScheduledChatAuthorityHost {
   listToolNames(): string[];
   isFeatureEnabled(flag: string): Promise<boolean>;
 }
+
+type ScheduledChatDispatchHost = ScheduledChatAuthorityHost & {
+  storage: ScheduledChatAuthorityHost["storage"] & Pick<AsyncStorage, "durableRuns" | "sessionMutationAdmissions">;
+};
 
 export function buildCronChatAdmissionIdentity(token: CronRunExecutionToken): CanonicalCronChatAdmissionIdentity {
   const cronRunId = token.runId.trim(),
@@ -166,7 +171,7 @@ export async function assertScheduledOccurrenceCurrent(
   const request = admission.admittedRequest as typeof admission.admittedRequest & { policyContext?: unknown };
   if (canonicalJsonString(request.policyContext) !== canonicalJsonString(expectedPolicy))
     fail("Scheduled creator or restricted policy changed after admission.");
-  return { run, identity, config };
+  return { run, identity, config, policyContext: expectedPolicy };
 }
 
 export function assertScheduledConfigMatches(config: CronAgentTurnConfig, admitted: CronAgentTurnConfig): void {
@@ -177,9 +182,7 @@ export function assertScheduledConfigMatches(config: CronAgentTurnConfig, admitt
 
 /** Only the durable owner can supply the actor/request checked at dispatch. */
 export async function assertScheduledChatDispatchCurrent(
-  host: ScheduledChatAuthorityHost & {
-    storage: ScheduledChatAuthorityHost["storage"] & Pick<AsyncStorage, "durableRuns" | "sessionMutationAdmissions">;
-  },
+  host: ScheduledChatDispatchHost,
   input: Pick<
     ChatTurnAgentRunnerInput,
     "featureAdmission" | "policyRunId" | "canonicalWriteFence" | "sessionId" | "turnId" | "workspaceId"
@@ -190,63 +193,108 @@ export async function assertScheduledChatDispatchCurrent(
   const runId = input.policyRunId;
   if (!runId || !input.canonicalWriteFence) fail("Scheduled dispatch requires a durable write fence.");
   await input.canonicalWriteFence(async () => {
-    const run = await host.storage.durableRuns.getRun(runId);
-    const payload = readDurableChatTurnExecutionPayloadAuthority({
-      workflowKey: run.workflowKey,
-      durableRunId: runId,
-      payload: run.payload,
-    });
-    if (
-      !payload ||
-      isDurableRunTerminal(run.status) ||
-      payload.sessionId !== input.sessionId ||
-      payload.turnId !== input.turnId ||
-      payload.workspaceId !== input.workspaceId ||
-      payload.featureReferenceSha256 !== expected.referenceSha256
-    )
-      fail("Scheduled durable payload no longer owns this dispatch.");
-    const identity = {
-      admissionId: payload.admissionId,
-      sessionIncarnationId: payload.sessionIncarnationId,
-      workspaceId: payload.workspaceId,
-      sessionId: payload.sessionId,
-      turnId: payload.turnId,
-      aggregateRevision: payload.admissionAggregateRevision,
-      controllerGeneration: payload.admissionControllerGeneration,
-      materialSha256: payload.admissionMaterialSha256,
-    };
-    const [binding, admitted, features] = await Promise.all([
-      host.storage.sessionMutationAdmissions.findDurableRunBinding(identity),
-      host.storage.sessionMutationAdmissions.get(identity.admissionId),
-      host.storage.sessionMutationAdmissions.findFeatureReferences(identity),
-    ]);
-    if (
-      binding?.durableRunId !== runId ||
-      !admitted ||
-      admitted.status === "cancelled" ||
-      admitted.actorKind !== "system" ||
-      admitted.actorId !== payload.requestActor.actorId ||
-      !features ||
-      features.referenceSha256 !== expected.referenceSha256 ||
-      canonicalJsonString(features.references) !== canonicalJsonString(expected.references) ||
-      createHash("sha256").update(canonicalJsonString(features.references)).digest("hex") !== expected.referenceSha256
-    )
-      fail("Scheduled dispatch feature binding is stale.");
-    const current = await assertScheduledOccurrenceCurrent(host, {
-      reference: expected.references.scheduledOccurrence!,
-      admission: {
-        identity,
-        admittedRequest: payload.request as ActiveTurnAdmission["admittedRequest"],
-        requestActor: payload.requestActor as ActiveTurnAdmission["requestActor"],
-      },
-    });
-    if (
-      current.identity.durableRunId !== runId ||
-      canonicalJsonString(payload.cronAdmission) !== canonicalJsonString(current.identity)
-    ) {
-      fail("Scheduled dispatch has conflicting cron authority.");
-    }
+    await readScheduledChatDispatchAuthority(host, runId, input);
   });
+}
+
+/** The approval worker reuses its recorded Chat owner instead of selecting a synthetic profile by ID. */
+export async function resolveScheduledApprovalReplayPolicy(
+  host: ScheduledChatDispatchHost,
+  approval: ApprovalRequest,
+  request: Record<string, unknown>,
+) {
+  const { runId, sessionId, turnId, workspaceId, toolName, permissionProfileId } = approval.linkage ?? {};
+  if (
+    approval.status !== "approved" ||
+    approval.linkage?.actionType !== "tool.invoke" ||
+    !runId ||
+    !sessionId ||
+    !turnId ||
+    !workspaceId ||
+    !toolName ||
+    approval.kind !== toolName ||
+    request.toolName !== toolName ||
+    request.runId !== runId ||
+    request.sessionId !== sessionId ||
+    request.turnId !== turnId ||
+    request.workspaceId !== workspaceId
+  )
+    fail("Scheduled tool approval has no matching durable Chat owner.");
+
+  const { policyContext } = await readScheduledChatDispatchAuthority(host, runId, { sessionId, turnId, workspaceId });
+  if (permissionProfileId !== policyContext.permissionProfileId) {
+    fail("Scheduled tool approval does not match its admitted permission profile.");
+  }
+  return { ...policyContext, runId, surface: "chat" as const };
+}
+
+async function readScheduledChatDispatchAuthority(
+  host: ScheduledChatDispatchHost,
+  runId: string,
+  input: Pick<ChatTurnAgentRunnerInput, "featureAdmission" | "sessionId" | "turnId" | "workspaceId">,
+) {
+  const expected = input.featureAdmission;
+  const run = await host.storage.durableRuns.getRun(runId);
+  const payload = readDurableChatTurnExecutionPayloadAuthority({
+    workflowKey: run.workflowKey,
+    durableRunId: runId,
+    payload: run.payload,
+  });
+  if (
+    !payload ||
+    isDurableRunTerminal(run.status) ||
+    payload.sessionId !== input.sessionId ||
+    payload.turnId !== input.turnId ||
+    payload.workspaceId !== input.workspaceId ||
+    (expected && payload.featureReferenceSha256 !== expected.referenceSha256)
+  )
+    fail("Scheduled durable payload no longer owns this dispatch.");
+
+  const identity = {
+    admissionId: payload.admissionId,
+    sessionIncarnationId: payload.sessionIncarnationId,
+    workspaceId: payload.workspaceId,
+    sessionId: payload.sessionId,
+    turnId: payload.turnId,
+    aggregateRevision: payload.admissionAggregateRevision,
+    controllerGeneration: payload.admissionControllerGeneration,
+    materialSha256: payload.admissionMaterialSha256,
+  };
+  const [binding, admitted, features] = await Promise.all([
+    host.storage.sessionMutationAdmissions.findDurableRunBinding(identity),
+    host.storage.sessionMutationAdmissions.get(identity.admissionId),
+    host.storage.sessionMutationAdmissions.findFeatureReferences(identity),
+  ]);
+  const reference = features?.references.scheduledOccurrence;
+  if (
+    binding?.durableRunId !== runId ||
+    !admitted ||
+    admitted.status === "cancelled" ||
+    admitted.actorKind !== "system" ||
+    admitted.actorId !== payload.requestActor.actorId ||
+    !features ||
+    !reference ||
+    features.referenceSha256 !== payload.featureReferenceSha256 ||
+    (expected && canonicalJsonString(features.references) !== canonicalJsonString(expected.references)) ||
+    createHash("sha256").update(canonicalJsonString(features.references)).digest("hex") !==
+      payload.featureReferenceSha256
+  )
+    fail("Scheduled dispatch feature binding is stale.");
+
+  const current = await assertScheduledOccurrenceCurrent(host, {
+    reference,
+    admission: {
+      identity,
+      admittedRequest: payload.request as ActiveTurnAdmission["admittedRequest"],
+      requestActor: payload.requestActor as ActiveTurnAdmission["requestActor"],
+    },
+  });
+  if (
+    current.identity.durableRunId !== runId ||
+    canonicalJsonString(payload.cronAdmission) !== canonicalJsonString(current.identity)
+  )
+    fail("Scheduled dispatch has conflicting cron authority.");
+  return current;
 }
 
 function fail(message: string): never {

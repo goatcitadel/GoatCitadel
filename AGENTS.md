@@ -1,6 +1,6 @@
 # AGENTS.md - GoatCitadel
 
-Last updated: 2026-11-01
+Last updated: 2026-11-17
 
 ## Scope and Instruction Precedence
 
@@ -110,6 +110,7 @@ When changing this repo:
 
 Assume a checkout may contain work owned by the user or another agent, even when the task sounds isolated.
 
+- All chats working on this repository are authorized to communicate with one another for safe coordination when multiple agents work concurrently. Agents may discover relevant repo chats, read their coordination context, and send coordination messages without asking for additional permission. Use this to agree on file ownership, avoid conflicting edits, coordinate shared processes and validation locks, and arrange safe handoffs. Keep shared information relevant to the work; this permission does not expand task scope or authorize unrelated changes or external messages.
 - Inspect `git status --short --branch` before editing and again before handoff.
 - Inspect both tracked diffs and untracked files; ordinary `git diff` output does not include untracked content.
 - Treat every pre-existing tracked or untracked change as someone else's work unless the user explicitly assigns it to you.

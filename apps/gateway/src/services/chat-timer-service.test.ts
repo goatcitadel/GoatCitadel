@@ -26,6 +26,56 @@ function harness(ownerId = "worker-a", dispatch = vi.fn(async () => dispatchResu
 }
 
 describe("ChatTimerService", () => {
+  it("persists Chat-only delivery and never invokes notification rules", async () => {
+    const { storage, service, dispatch } = harness();
+    const timer = await service.create(
+      "session-1",
+      {
+        dueAt: new Date(Date.now() + 15_000).toISOString(),
+        timezone: "UTC",
+        message: "Only in Chat",
+        notificationRuleId: null,
+      },
+      "operator",
+    );
+    expect(timer.notificationRuleId).toBeNull();
+    const persisted = storage.chatTimers.create({
+      timerId: "chat-only-due",
+      sessionId: timer.sessionId,
+      workspaceId: timer.workspaceId,
+      dueAt: "2020-01-01T00:00:00.000Z",
+      timezone: timer.timezone,
+      message: timer.message,
+      notificationRuleId: timer.notificationRuleId,
+      cancelOnNextReply: false,
+      createdBy: "operator",
+    });
+    expect(persisted.notificationRuleId).toBeNull();
+    expect(await service.runDue()).toMatchObject({ fired: 1, failed: 0 });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(storage.chatMessages.get("timer-notice-chat-only-due")?.content).toBe("Only in Chat");
+  });
+
+  it("delivers a short synthetic timer once, without firing before its due time", async () => {
+    const { storage, service, dispatch } = harness();
+    const timer = await service.create(
+      "session-1",
+      { dueAt: new Date(Date.now() + 6_000).toISOString(), timezone: "UTC", message: "Synthetic timer proof" },
+      "synthetic-operator",
+    );
+    expect((await service.runDue()).claimed).toBe(0);
+    expect(dispatch).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 6_100));
+    expect(await service.runDue()).toEqual({ claimed: 1, fired: 1, failed: 0 });
+    expect(storage.chatMessages.get(`timer-notice-${timer.timerId}`)?.content).toBe("Synthetic timer proof");
+    expect((await service.list("session-1"))[0]).toMatchObject({
+      status: "fired",
+      notificationDeliveryStatus: "no_targets",
+    });
+    expect((await service.runDue()).claimed).toBe(0);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  }, 60_000);
+
   it("validates bounds and rejects a notification rule from another workspace", async () => {
     const { storage, service } = harness();
     await expect(

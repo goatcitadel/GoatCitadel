@@ -7,7 +7,9 @@ import {
   CHAT_EVOLUTION_COMMANDS,
   CHAT_EVOLUTION_HELD_ROWS,
   buildChatEvolutionProofMatrix,
+  runChatEvolutionLane,
 } from "./chat-evolution-lane.mjs";
+import { runSelfConfigurationLane } from "./self-configuration-lane.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 
@@ -60,3 +62,43 @@ test("chat evolution lane is wired into the package command and verification run
   assert.match(runner, /runChatEvolutionLane/u);
   assert.match(scenarios, /runChatEvolutionLaneImpl/u);
 });
+
+for (const failedCommand of [undefined, "chat-evolution.gateway-control-plane", "self-configuration.policy-owner-tests"]) {
+  test(`Chat evolution foundation preserves holds and command failures: ${failedCommand ?? "all pass"}`, async () => {
+    const results = new Map();
+    const matrices = [];
+    const deps = {
+      path,
+      repoRoot,
+      pnpmCommand: () => "pnpm",
+      collectVerificationSecretEnvKeys: async () => [],
+      clampString: (value) => value,
+      emptyArtifacts: (value = {}) => value,
+      relativeToRun: (_context, value) => value,
+      writeJson: async (_file, value) => matrices.push(value),
+      runCommand: async (_command, _args, options) => ({
+        code: options.logName === failedCommand ? 1 : 0,
+        stderr: "command diagnostic",
+        stdoutPath: "stdout.log",
+        stderrPath: "stderr.log",
+        durationMs: 1,
+      }),
+      runScenario: async (_context, scenario, run) => {
+        // Artifact redaction has its own tests; this harness exercises orchestration and acceptance decisions.
+        if (!scenario.id.endsWith(".artifact-redaction")) results.set(scenario.id, await run());
+      },
+    };
+    const context = { artifactRoot: "proof" };
+    await runChatEvolutionLane(context, {}, deps);
+    assert.equal(results.get("chat-evolution.acceptance-boundary").status,
+      failedCommand?.startsWith("chat-evolution.") ? "failed" : "passed");
+    assert.equal(results.get("self-configuration.acceptance-boundary").status,
+      failedCommand?.startsWith("self-configuration.") ? "failed" : "passed");
+    if (failedCommand) assert.equal(results.get(failedCommand).status, "failed");
+    assert.ok(matrices.every((matrix) => matrix.result === "foundation_only"));
+    assert.ok(matrices.every((matrix) => matrix.heldRows.every((row) => row.status === "held")));
+    // Standalone self-configuration retains its broader, degraded acceptance boundary.
+    await runSelfConfigurationLane(context, {}, deps);
+    assert.equal(results.get("self-configuration.acceptance-boundary").status, "degraded");
+  });
+}

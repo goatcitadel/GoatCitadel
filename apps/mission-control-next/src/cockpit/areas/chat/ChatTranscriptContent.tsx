@@ -6,6 +6,7 @@ import {
   getChatTurnRecoveryActionSummary,
   isChatTurnTerminalStatus,
   type ChatCapabilityUpgradeSuggestion,
+  type ChatThreadSystemNoticeRecord,
   type ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
 import { NativeMessageRenderer as AssistantMessageRenderer } from "./NativeMessageRenderer";
@@ -335,6 +336,20 @@ export function ChatTranscriptEmpty({ context }: { context?: TranscriptFooterCon
       </p>
     );
   return <ChatConversationStarters props={props} />;
+}
+
+export function ChatSystemNotice({ notice }: { notice: ChatThreadSystemNoticeRecord }) {
+  const label = notice.kind === "timer_due" ? "Timer due" : "Heartbeat";
+  return (
+    <section aria-label={label} className="mx-auto w-full max-w-4xl px-4 py-2">
+      <div className="rounded-lg border border-line-subtle bg-raised px-3 py-2">
+        <p className="text-xs text-fg-muted">
+          <strong className="text-fg">{label}</strong> · <ActorTimestamp timestamp={notice.message.timestamp} />
+        </p>
+        <p className="mt-1 whitespace-pre-wrap wrap-anywhere text-sm text-fg">{notice.message.content}</p>
+      </div>
+    </section>
+  );
 }
 
 export function ChatTranscriptFooter({ context }: { context?: TranscriptFooterContext }) {

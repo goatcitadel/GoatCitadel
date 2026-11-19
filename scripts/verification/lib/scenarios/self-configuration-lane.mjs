@@ -285,11 +285,11 @@ export function buildSelfConfigurationProofMatrix(commandOutcomes = []) {
       exitCode: outcome.exitCode,
     })),
     claimBoundary:
-      "A successful hermetic command set proves the bounded source owners only. Held rows keep this run degraded and cannot be satisfied by mocks, saved-file checks, or model assertions.",
+      "A successful hermetic command set proves the bounded source owners only. Held rows keep full parity acceptance degraded and cannot be satisfied by mocks, saved-file checks, or model assertions.",
   };
 }
 
-export async function runSelfConfigurationLane(context, _options = {}, deps) {
+export async function runSelfConfigurationLane(context, options = {}, deps) {
   const {
     clampString,
     emptyArtifacts,
@@ -350,7 +350,12 @@ export async function runSelfConfigurationLane(context, _options = {}, deps) {
       const outPath = path.join(context.artifactRoot, "diagnostics", "self-configuration-proof-matrix.json");
       await writeJson(outPath, proof);
       return {
-        status: "degraded",
+        // Chat evolution gates only these foundations; standalone parity still requires the held live rows.
+        status: options.acceptanceScope === "hermetic-foundation"
+          ? (SELF_CONFIGURATION_COMMANDS.every((command) =>
+              commandOutcomes.some((outcome) => outcome.scenarioId === command.id && outcome.exitCode === 0),
+            ) ? "passed" : "failed")
+          : "degraded",
         notes: [
           "Live provider, packaged restart, and browser secure-input evidence are held, so this run proves foundations rather than shipped parity.",
         ],

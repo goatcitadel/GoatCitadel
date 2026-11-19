@@ -292,11 +292,7 @@ export function InboxApprovalDetail({
                 </details>
               ))}
             </section>
-          ) : (
-            <p className="text-fg-muted">
-              A structured preview is not available, so this approval can&apos;t be decided here.
-            </p>
-          )}
+          ) : null}
           {approval.rollbackNote ? <p className="text-fg-secondary">Recovery: {approval.rollbackNote}</p> : null}
           {specialist ? (
             <>
@@ -316,26 +312,30 @@ export function InboxApprovalDetail({
               )}
             </>
           ) : null}
-          {evidence || specialist ? (
-            <InboxApprovalActions
-              // This detail states the expiry above, so the decision summary leaves it out.
-              expiryShownNearby
-              summaryShownNearby={Boolean(memoryPreview)}
-              stickyDecisions
-              specialistEvidence={specialistEvidence}
-              item={item}
-              approval={approval}
-              workspaceId={installWide ? null : workspaceId}
-              // The operator asked for a skill change themselves, so it approves in one click, as on the Skills tab.
-              reviewedInPlace={installWide && approval.kind === "skill.lifecycle"}
-              focusAction={focusAction}
-              checking={checking || (specialist && specialistQuery.isFetching)}
-              onResolved={(message) => rereadSettled(message, true)}
-              onInvalidated={(message) =>
-                rereadSettled(message ?? "The approval changed. Review the refreshed record before deciding.", false)
-              }
-            />
+          {approval.kind === "code_mode.request" && approval.linkage?.turnId ? (
+            <p className="text-fg-muted">Open this request in Chat to review Code Mode readiness and approve it.</p>
           ) : null}
+          <InboxApprovalActions
+            // This detail states the expiry above, so the decision summary leaves it out.
+            expiryShownNearby
+            summaryShownNearby={Boolean(memoryPreview)}
+            stickyDecisions
+            specialistEvidence={specialistEvidence}
+            item={item}
+            approval={approval}
+            workspaceId={installWide ? null : workspaceId}
+            sessionId={approval.linkage?.turnId ? approval.linkage.sessionId : undefined}
+            onTemporaryGrantResolved={(message) => rereadSettled(message, true)}
+            withholdApprove={approval.kind === "code_mode.request" && Boolean(approval.linkage?.turnId)}
+            // The operator asked for a skill change themselves, so it approves in one click, as on the Skills tab.
+            reviewedInPlace={installWide && approval.kind === "skill.lifecycle"}
+            focusAction={focusAction}
+            checking={checking || (specialist && specialistQuery.isFetching)}
+            onResolved={(message) => rereadSettled(message, true)}
+            onInvalidated={(message) =>
+              rereadSettled(message ?? "The approval changed. Review the refreshed record before deciding.", false)
+            }
+          />
         </>
       ) : null}
     </section>

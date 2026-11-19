@@ -8,10 +8,16 @@ import type {
   ApprovalRequest,
   PendingApprovalAction,
   PermissionProfileRecord,
+  ToolGrantRecord,
   ToolInvokeRequest,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { buildScrubbedSpawnEnv, HEARTBEAT_READ_ONLY_ALLOW, HEARTBEAT_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
+import {
+  buildScrubbedSpawnEnv,
+  HEARTBEAT_READ_ONLY_ALLOW,
+  HEARTBEAT_RESTRICTED_PROFILE,
+  SCHEDULED_RESTRICTED_PROFILE,
+} from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
 import { boundAuditResultStrings, ToolPolicyEngine } from "./engine.js";
 import { ToolRegistry } from "./tool-registry.js";
@@ -162,6 +168,34 @@ const EXAMPLE_HOST = host("example", "com");
 const API_EXAMPLE_HOST = host("api", "example", "com");
 const BLOCKED_EXAMPLE_HOST = host("blocked", "example");
 
+describe("native Google review boundaries", () => {
+  it.each([
+    "gmail.get_message",
+    "gmail.get_thread",
+    "gmail.send_draft",
+    "gmail.reply",
+    "gmail.download_attachment",
+    "calendar.free_busy",
+    "calendar.update_event",
+  ])("keeps %s approval-gated even in bypass mode", async (toolName) => {
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: { ...policyConfig.tools, approvalMode: "bypass" },
+        sandbox: { ...policyConfig.sandbox, networkAllowlist: ["gmail.googleapis.com", "www.googleapis.com"] },
+      },
+      createStorageStub(),
+    );
+    const evaluation = await engine.evaluateAccess({
+      toolName,
+      args: { connectionId: "g" },
+      agentId: "assistant",
+      sessionId: "s",
+    });
+    expect(evaluation.requiresApproval).toBe(true);
+  });
+});
+
 describe("stored tool artifact reads", () => {
   const request: ToolInvokeRequest = {
     toolName: "tool_artifact.read",
@@ -263,7 +297,7 @@ describe("ToolPolicyEngine permission profile upper bound", () => {
     for (const toolName of HEARTBEAT_READ_ONLY_ALLOW) {
       const result = await engine.invoke({
         toolName,
-        args: {},
+        args: toolName === "gmail.read" ? { connectionId: "heartbeat-google-connection" } : {},
         agentId: "heartbeat",
         sessionId: "session-heartbeat",
         dryRun: true,
@@ -1331,7 +1365,7 @@ describe("ToolPolicyEngine invocation coverage", () => {
 
   it("keeps Gmail send and Calendar create as danger tools that ask for approval on every call", async () => {
     const registry = new ToolRegistry();
-    for (const toolName of ["gmail.send", "calendar.create_event"]) {
+    for (const toolName of ["gmail.send", "calendar.create_event", "calendar.respond_event"]) {
       expect(registry.get(toolName)).toMatchObject({ riskLevel: "danger", requiresApproval: true });
     }
     const resolveGoogleWorkspaceAccessToken = vi.fn(async () => "google-token");
@@ -1357,8 +1391,78 @@ describe("ToolPolicyEngine invocation coverage", () => {
 
     expect(send.outcome).toBe("approval_required");
     expect(create.outcome).toBe("approval_required");
+    const respond = await engine.invoke({
+      toolName: "calendar.respond_event",
+      args: { connectionId: "google", eventId: "invite", eventEtag: '"v1"', responseStatus: "accepted" },
+      agentId: "assistant",
+      sessionId: "session-google-writes",
+    });
+    expect(respond.outcome).toBe("approval_required");
     // A Google sign-in never substitutes for the approval: no token is resolved before a decision.
     expect(resolveGoogleWorkspaceAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("requires approval again when a scheduled Calendar read leaves its allowance or the allowance expires", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+    const request = {
+      toolName: "calendar.list",
+      args: { connectionId: "google", calendarId: "primary" },
+      agentId: "assistant",
+      sessionId: "scheduled-chat",
+      workspaceId: "default",
+      googleReadSignInId: "signed-in-user",
+      policyContext: {
+        permissionProfileId: SCHEDULED_RESTRICTED_PROFILE.profileId,
+        permissionProfile: SCHEDULED_RESTRICTED_PROFILE,
+      },
+    };
+    const grant: ToolGrantRecord = {
+      grantId: "calendar-grant",
+      toolPattern: request.toolName,
+      decision: "allow",
+      scope: "session",
+      scopeRef: request.sessionId,
+      grantType: "ttl",
+      createdBy: "operator",
+      createdAt: "2026-11-17T00:00:00Z",
+      expiresAt: "2099-01-01T00:00:00Z",
+      constraints: {
+        googleRead: {
+          workspaceId: request.workspaceId,
+          sessionId: request.sessionId,
+          connectionId: request.args.connectionId,
+          signInId: request.googleReadSignInId,
+          calendarId: request.args.calendarId,
+        },
+      },
+    };
+    let grants = [grant];
+    vi.mocked(storage.toolGrants.list).mockImplementation(async (scope, scopeRef) =>
+      scope === "session" && scopeRef === grant.scopeRef ? grants : [],
+    );
+    await expect(engine.evaluateAccess(request)).resolves.toMatchObject({
+      allowed: true,
+      requiresApproval: false,
+      matchedGrantId: grant.grantId,
+    });
+    for (const changed of [
+      { workspaceId: "different-workspace" },
+      { sessionId: "delegated-chat" },
+      { args: { ...request.args, connectionId: "other-google" } },
+      { args: { ...request.args, calendarId: "shared" } },
+      { googleReadSignInId: "reconnected" },
+    ]) {
+      await expect(engine.evaluateAccess({ ...request, ...changed })).resolves.toMatchObject({
+        allowed: true,
+        requiresApproval: true,
+        matchedGrantId: undefined,
+      });
+    }
+    grants = [{ ...grant, expiresAt: "2000-01-01T00:00:00Z" }];
+    await expect(engine.evaluateAccess(request)).resolves.toMatchObject({ requiresApproval: true });
+    grants = [grant, { ...grant, grantId: "deny", decision: "deny", constraints: undefined }];
+    await expect(engine.evaluateAccess(request)).resolves.toMatchObject({ allowed: false, matchedGrantId: "deny" });
   });
 
   it("blocks an invoke whose resolved Citadel has a matching deny Ward (enforcement on the invoke path)", async () => {

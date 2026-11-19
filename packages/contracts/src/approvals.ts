@@ -131,21 +131,31 @@ export interface ApprovalListResponse {
   nextCursor?: string;
 }
 
-export const CHAT_TOOL_GRANT_DURATIONS = ["15m", "1h", "8h"] as const;
+const STANDARD_CHAT_TOOL_GRANT_DURATIONS = ["15m", "1h", "8h"] as const;
+export const CHAT_TOOL_GRANT_DURATIONS = [...STANDARD_CHAT_TOOL_GRANT_DURATIONS, "24h", "7d"] as const;
 export type ChatToolGrantDuration = (typeof CHAT_TOOL_GRANT_DURATIONS)[number];
 
 export const CHAT_TOOL_GRANT_DURATION_MS: Record<ChatToolGrantDuration, number> = {
   "15m": 15 * 60_000,
   "1h": 60 * 60_000,
   "8h": 8 * 60 * 60_000,
+  "24h": 24 * 60 * 60_000,
+  "7d": 7 * 24 * 60 * 60_000,
 };
+
+export function isGoogleWorkspaceReadTool(toolName: string): toolName is "gmail.read" | "calendar.list" {
+  return toolName === "gmail.read" || toolName === "calendar.list";
+}
 
 /** Tools whose ordinary approval prompts may be covered by a grant for this Chat. */
 export function canOfferChatToolGrant(approval: ApprovalRequest, sessionId: string, workspaceId: string): boolean {
+  const googleRead = isGoogleWorkspaceReadTool(approval.kind);
   return (
     approval.status === "pending" &&
     (approval.riskLevel === "safe" || approval.riskLevel === "caution") &&
-    ["memory.search", "memory.read", "docs.search"].includes(approval.kind) &&
+    (googleRead
+      ? approval.preview.googleReadSignInBound === true
+      : ["memory.search", "memory.read", "docs.search"].includes(approval.kind)) &&
     approval.preview?.reviewKind === "knowledge.operation" &&
     approval.preview.toolName === approval.kind &&
     !approval.mcpElicitation &&
@@ -155,6 +165,10 @@ export function canOfferChatToolGrant(approval: ApprovalRequest, sessionId: stri
     approval.linkage.workspaceId === workspaceId &&
     Boolean(approval.linkage.turnId)
   );
+}
+
+export function chatToolGrantDurationsFor(toolName: string): readonly ChatToolGrantDuration[] {
+  return isGoogleWorkspaceReadTool(toolName) ? CHAT_TOOL_GRANT_DURATIONS : STANDARD_CHAT_TOOL_GRANT_DURATIONS;
 }
 
 /**

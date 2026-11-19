@@ -193,7 +193,7 @@ const createChatTimerSchema = z
     dueAt: z.string().datetime({ offset: true }),
     timezone: z.string().trim().min(1).max(128),
     message: z.string().trim().min(1).max(4_000),
-    notificationRuleId: z.string().trim().min(1).max(256).optional(),
+    notificationRuleId: z.string().trim().min(1).max(256).nullable().optional(),
     cancelOnNextReply: z.boolean().optional(),
   })
   .strict();

@@ -1,3 +1,13 @@
+import type {
+  ChatThreadLoadOptions,
+  ChatMessageRouteRuntimeHost,
+  ChatUserInputPromptResponder,
+} from "./chat-message-route-runtime-types.js";
+export type {
+  ChatThreadLoadOptions,
+  ChatMessageRouteRuntimeHost,
+  ChatUserInputPromptResponder,
+} from "./chat-message-route-runtime-types.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -10,7 +20,6 @@ import type {
   ChatUserInputPromptResponse,
   ContextManifestDetail,
   DurableRunRecord,
-  RealtimeEvent,
 } from "@goatcitadel/contracts";
 import {
   canonicalJsonString,
@@ -22,14 +31,11 @@ import {
 import type {
   DurableChatRuntimeConfigurationReceipt,
   DurableChatUserInputAdmissionIdentity,
-  DurableChatUserInputResponderAuthSource,
   ReserveDurableChatSecureConfigurationOutcome,
-  AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import { buildChatThreadResponse, resolveNewestLeafTurnId } from "./chat-thread-utils.js";
 import { hydrateChatTurnTraces } from "./chat-turn-trace-hydration.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
-import type { DurableRunService } from "./durable-run-service.js";
 import { parseDurableChatTurnPayload } from "./durable-execution-service.js";
 import {
   CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY,
@@ -44,79 +50,13 @@ import {
 } from "./chat-durable-runtime-authority.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
 import { projectChatMessageForPublic, projectChatTurnTraceForPublic } from "./chat-secret-projection.js";
+import { projectHistoricalGoogleReadApproval } from "./chat-tool-result-projection.js";
 import {
   buildWorkspaceFileDownloadHref,
   getExecutedWorkspaceFileWriteReceipt,
   mergeWorkspaceFileDownloadContent,
 } from "./chat-turn-agent-runner/artifact-write-helpers.js";
 import { MAX_INLINE_FILE_DOWNLOAD_BYTES } from "./files-route-service.js";
-
-export interface ChatThreadLoadOptions {
-  includeDecisionTrace?: boolean;
-  /** Internal only: keeps retained system runs out of Chat branch hydration. */
-  isConversationTrace?: (trace: ChatTurnTraceRecord) => boolean;
-}
-
-export interface ChatMessageRouteRuntimeHost {
-  chatAsyncClarificationV1Enabled?: () => boolean | Promise<boolean>;
-  readonly config?: {
-    rootDir: string;
-    assistant: { workspaceDir: string };
-  };
-  readonly storage: Storage;
-  readonly durableRunService: Pick<DurableRunService, "getDurableRun" | "requestRunProcessing">;
-  getSession(sessionId: string): unknown | Promise<unknown>;
-  loadChatTurnSessionState(sessionId: string, options?: ChatThreadLoadOptions): Promise<ChatTurnSessionState>;
-  publishRealtime(
-    eventType: string,
-    source: string,
-    payload: Record<string, unknown>,
-    options?: Pick<RealtimeEvent, "eventClass" | "eventAuthority" | "links" | "correlationId">,
-  ): Promise<unknown>;
-  recordDevDiagnostic(input: {
-    level: "info" | "warn" | "error";
-    category: string;
-    event: string;
-    message: string;
-    sessionId?: string;
-    turnId?: string;
-    context?: Record<string, unknown>;
-  }): void;
-  configureRuntimeTarget?(input: {
-    targetId: string;
-    secret: string;
-    requestId: string;
-    workspaceId: string;
-    sessionId: string;
-    turnId: string;
-    actorId: string;
-    expiresAt: string;
-    operatorId?: string;
-    authActorSource?: ChatUserInputPromptResponder["authActorSource"];
-    runId?: string;
-    taskId?: string;
-    permissionProfileId?: string;
-    localOperatorOverrideId?: string;
-    approvedAction?: {
-      approvalId: string;
-      toolRunId: string;
-      promptId: string;
-    };
-  }): Promise<{
-    targetId: string;
-    provider: string;
-    revision: string;
-    scopeRef: string;
-  }>;
-  getRuntimeConfigurationScopeRef?(targetId: string): string;
-  finalizeRuntimeConfiguration?(requestId: string): void | Promise<void>;
-  rollbackRuntimeConfiguration?(requestId: string): Promise<void>;
-}
-
-export interface ChatUserInputPromptResponder {
-  actorId: string;
-  authActorSource: DurableChatUserInputResponderAuthSource;
-}
 
 export async function getChatThread(
   runtime: ChatMessageRouteRuntimeHost,
@@ -611,31 +551,47 @@ async function projectExactLiveAppend(
   if (candidates.length !== 1 || !trace || !runId) return undefined;
   const { run, payload } = await readDurableChatRun(runtime, runId);
   if (
-    run.runId !== runId || !matchesActiveAppendRun(trace, run) || !payload ||
-    payload.sessionId !== sessionId || payload.turnId !== trace.turnId ||
+    run.runId !== runId ||
+    !matchesActiveAppendRun(trace, run) ||
+    !payload ||
+    payload.sessionId !== sessionId ||
+    payload.turnId !== trace.turnId ||
     payload.userMessageId !== trace.userMessageId ||
     payload.assistantMessageId !== trace.assistantMessageId ||
-    payload.branchKind !== "append" || payload.parentTurnId !== parentTurnId ||
-    payload.sourceTurnId !== undefined || payload.threadEventType !== "chat_thread_turn_appended" ||
+    payload.branchKind !== "append" ||
+    payload.parentTurnId !== parentTurnId ||
+    payload.sourceTurnId !== undefined ||
+    payload.threadEventType !== "chat_thread_turn_appended" ||
     payload.requestActor.actorKind === "system"
-  ) return undefined;
+  )
+    return undefined;
   const session = await runtime.storage.chatSessionMeta.get(sessionId);
   if (session?.sessionId !== sessionId || session.workspaceId !== payload.workspaceId) return undefined;
   const admissions = runtime.storage.sessionMutationAdmissions;
   const admission = await admissions.get(payload.admissionId);
   if (
-    !admission || admission.status !== "active" || admission.admissionKind !== "turn_write" ||
-    admission.operation !== "chat_turn" || admission.admissionId !== payload.admissionId ||
-    admission.workspaceId !== payload.workspaceId || admission.sessionId !== sessionId ||
-    admission.sessionIncarnationId !== payload.sessionIncarnationId || admission.turnId !== trace.turnId ||
+    !admission ||
+    admission.status !== "active" ||
+    admission.admissionKind !== "turn_write" ||
+    admission.operation !== "chat_turn" ||
+    admission.admissionId !== payload.admissionId ||
+    admission.workspaceId !== payload.workspaceId ||
+    admission.sessionId !== sessionId ||
+    admission.sessionIncarnationId !== payload.sessionIncarnationId ||
+    admission.turnId !== trace.turnId ||
     admission.aggregateRevision !== payload.admissionAggregateRevision ||
     admission.controllerGeneration !== payload.admissionControllerGeneration ||
     admission.materialSha256 !== payload.admissionMaterialSha256 ||
-    admission.actorKind !== payload.requestActor.actorKind || admission.actorId !== payload.requestActor.actorId
-  ) return undefined;
+    admission.actorKind !== payload.requestActor.actorKind ||
+    admission.actorId !== payload.requestActor.actorId
+  )
+    return undefined;
   const binding = await admissions.findDurableRunBinding({
-    admissionId: admission.admissionId, sessionIncarnationId: admission.sessionIncarnationId,
-    workspaceId: admission.workspaceId, sessionId, turnId: trace.turnId,
+    admissionId: admission.admissionId,
+    sessionIncarnationId: admission.sessionIncarnationId,
+    workspaceId: admission.workspaceId,
+    sessionId,
+    turnId: trace.turnId,
   });
   if (!binding || binding.durableRunId !== runId) return undefined;
   const userMessage = await readCanonicalChatMessage(runtime, trace.userMessageId);
@@ -662,11 +618,16 @@ async function buildChatThreadFromState(
     ).filter((turnId): turnId is string => Boolean(turnId)),
   );
   const liveAppend = liveAppendOptions
-    ? await projectExactLiveAppend(runtime, sessionId, state, heartbeatTurnIds, liveAppendOptions.includeDecisionTrace === true)
-        .catch((error: unknown) => {
-          if (error instanceof NotFoundError || error instanceof ConflictError) return undefined;
-          throw error;
-        })
+    ? await projectExactLiveAppend(
+        runtime,
+        sessionId,
+        state,
+        heartbeatTurnIds,
+        liveAppendOptions.includeDecisionTrace === true,
+      ).catch((error: unknown) => {
+        if (error instanceof NotFoundError || error instanceof ConflictError) return undefined;
+        throw error;
+      })
     : undefined;
   const liveTurnId = liveAppend?.trace.turnId;
   const renderableTraces = state.traces.filter(
@@ -700,10 +661,20 @@ async function buildChatThreadFromState(
       const assistantMessage = projectChatMessageForPublic(
         trace.assistantMessageId ? state.messagesById.get(trace.assistantMessageId) : undefined,
       );
+      const reconciledAssistantMessage = await projectHistoricalGoogleReadApproval(
+        runtime.storage,
+        assistantMessage,
+        trace,
+      );
       return {
         trace: projectChatTurnTraceForPublic(trace),
-        userMessage: trace.turnId === liveTurnId ? liveAppend?.userMessage : state.messagesById.get(trace.userMessageId),
-        assistantMessage: await projectAssistantWorkspaceFileDownloads(assistantMessage, trace, workspaceFileRootDir),
+        userMessage:
+          trace.turnId === liveTurnId ? liveAppend?.userMessage : state.messagesById.get(trace.userMessageId),
+        assistantMessage: await projectAssistantWorkspaceFileDownloads(
+          reconciledAssistantMessage,
+          trace,
+          workspaceFileRootDir,
+        ),
         generatedArtifacts: (generatedArtifactsByTurnId.get(trace.turnId) ?? []).map(
           chatGeneratedArtifactService.buildGeneratedArtifactReference,
         ),

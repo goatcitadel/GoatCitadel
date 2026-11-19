@@ -91,16 +91,26 @@ it("denies in one neutral click, because denying is the safe choice", async () =
   await vi.waitFor(() => expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "reject"));
 });
 
-it("offers a timed allowance inline next to Approve once and submits the chosen preset for this Chat", async () => {
+it.each([
+  { tool: "memory.search", preset: "8h", trigger: "Allow this tool in this Chat", longer: [] },
+  { tool: "calendar.list", preset: "7d", trigger: "Approve for a duration", longer: ["24 hours", "7 days"] },
+])("shows and submits the timed allowance for $tool", async ({ tool, preset, trigger, longer }) => {
+  const calendar = tool === "calendar.list";
   const record: ApprovalRequest = {
     ...approval,
-    kind: "memory.search",
+    kind: tool,
     riskLevel: "safe",
-    payload: { query: "notes" },
-    preview: { reviewKind: "knowledge.operation", toolName: "memory.search", query: "notes", target: "Memory" },
+    payload: calendar ? { connectionId: "test-google" } : { query: "notes" },
+    preview: {
+      reviewKind: "knowledge.operation",
+      toolName: tool,
+      ...(calendar
+        ? { target: "Google Calendar events", source: "Google connection: test-google", googleReadSignInBound: true }
+        : { query: "notes", target: "Memory" }),
+    },
     linkage: {
       actionType: "tool.invoke",
-      toolName: "memory.search",
+      toolName: tool,
       sessionId: "chat-1",
       workspaceId: "default",
       turnId: "turn-1",
@@ -135,15 +145,15 @@ it("offers a timed allowance inline next to Approve once and submits the chosen 
       ),
     );
   await render("chat-2");
-  expect(button("Allow this tool in this Chat")).toBeUndefined();
+  expect(button(trigger)).toBeUndefined();
   await render("chat-1");
   expect(button("Approve once")).toBeDefined();
-  await act(async () => button("Allow this tool in this Chat").click());
+  await act(async () => button(trigger).click());
   expect(container.querySelector('[role="dialog"]')).toBeNull();
   const duration = container.querySelector("select")!;
-  expect(Array.from(duration.options, (option) => option.text)).toEqual(["15 minutes", "1 hour", "8 hours"]);
+  expect(Array.from(duration.options, (option) => option.text)).toEqual(["15 minutes", "1 hour", "8 hours", ...longer]);
   await act(async () => {
-    duration.value = "8h";
+    duration.value = preset;
     duration.dispatchEvent(new Event("change", { bubbles: true }));
   });
   expect(api.approveChatToolTemporarily).not.toHaveBeenCalled();
@@ -154,7 +164,7 @@ it("offers a timed allowance inline next to Approve once and submits the chosen 
       expect.objectContaining({ scopeRef: "chat-1" }),
     ),
   );
-  expect(api.approveChatToolTemporarily).toHaveBeenCalledExactlyOnceWith("chat-1", record.approvalId, "8h");
+  expect(api.approveChatToolTemporarily).toHaveBeenCalledExactlyOnceWith("chat-1", record.approvalId, preset);
   expect(api.resolveApproval).not.toHaveBeenCalled();
 });
 

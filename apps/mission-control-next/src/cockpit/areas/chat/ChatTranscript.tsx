@@ -1,7 +1,17 @@
-import { Turn, ChatTranscriptEmpty, ChatTranscriptFooter, type TranscriptFooterContext } from "./ChatTranscriptContent";
+import {
+  partitionSystemNotices,
+  useTranscriptAnnouncement,
+  type ChatTranscriptProps,
+} from "./use-transcript-announcement";
+import {
+  Turn,
+  ChatSystemNotice,
+  ChatTranscriptEmpty,
+  ChatTranscriptFooter,
+  type TranscriptFooterContext,
+} from "./ChatTranscriptContent";
 import { turnReadsDraft, useTurnActions } from "./use-turn-actions";
 import { selectTurnCapabilitySuggestions } from "./turn-capability-suggestions";
-import type { ChannelConversationContext } from "./channel-conversation";
 import { useChannelReading } from "./use-channel-conversation";
 import { ChatInspectorLoadFailure } from "./ChatInspectorLoadFailure";
 import {
@@ -18,10 +28,6 @@ import { isBackgroundChatUserInputPrompt, type ChatThreadTurnRecord } from "@goa
 import { useChatStreamingPreviewSnapshot } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 import { HistoricalConversationView } from "../../../features/threaded-surface/ThreadHistoricalConversation";
 import { useScrollToBottom } from "@goatcitadel/mission-control-shared/components/chat/useScrollToBottom";
-import type {
-  MissionThreadedActiveSessionSurfaceProps,
-  MissionThreadedRenderSurfaceInput,
-} from "@goatcitadel/threaded-surface-core";
 import { ChatTranscriptNavigation } from "./ChatTranscriptNavigation";
 import "../../../features/threaded-surface/styles/code-highlight.css";
 import "../../styles/chat-display.css";
@@ -41,19 +47,7 @@ export function ChatTranscript({
   onOpenArtifact,
   onReviewPlan,
   onNewConversation,
-}: {
-  props: MissionThreadedActiveSessionSurfaceProps;
-  /** Set when the open conversation is held through a channel; callers keep the object stable. */
-  channel?: ChannelConversationContext;
-  gatewayUnavailable?: boolean;
-  receipt?: MissionThreadedRenderSurfaceInput["changePlanReceipt"];
-  onInspectTurn?: (turnId: string) => void;
-  onInspectRun?: (turnId: string) => void;
-  onOpenArtifact?: (turnId: string, artifactId?: string) => void;
-  onReviewPlan?: MissionThreadedRenderSurfaceInput["onReviewChangePlan"];
-  /** Opens a fresh conversation; a failed turn offers it when the conversation is too long for the model. */
-  onNewConversation?: () => void;
-}) {
+}: ChatTranscriptProps) {
   const preview = useChatStreamingPreviewSnapshot(props.selectedSessionId);
   const turns = props.thread?.turns;
   const scopeKey = useMemo(
@@ -61,44 +55,36 @@ export function ChatTranscript({
     [props.workspaceId, props.selectedSessionId],
   );
   const visibleTurns = useMemo(() => turns?.filter((turn) => turn.branch.isSelectedPath) ?? [], [turns]);
+  const systemNotices = props.thread?.sessionId === props.selectedSessionId ? props.thread?.systemNotices : undefined;
+  const { noticesBeforeTurn, trailingNotices } = useMemo(() => {
+    return partitionSystemNotices(systemNotices, visibleTurns);
+  }, [systemNotices, visibleTurns]);
   const pendingTurnId = preview?.turnId ?? props.activeStreamingTurnId;
   const hasPreviewTurn = visibleTurns.some((turn) => turn.turnId === pendingTurnId);
   const latestTurn = visibleTurns.at(-1);
   const newChannelMessages = useChannelReading(channel, visibleTurns, props);
-  const lifecycle = useRef({ session: props.selectedSessionId, running: false, reviewing: false });
-  const [announcement, setAnnouncement] = useState("");
-  const decisionWaiting = Boolean(
-    props.pendingApproval || (props.pendingUserInput && !isBackgroundChatUserInputPrompt(props.pendingUserInput)),
+  const announcement = useTranscriptAnnouncement(
+    props.selectedSessionId,
+    props.hasActiveStream,
+    latestTurn?.trace.reflection?.answerReview?.outcome,
+    latestTurn?.trace.status,
+    Boolean(
+      props.pendingApproval || (props.pendingUserInput && !isBackgroundChatUserInputPrompt(props.pendingUserInput)),
+    ),
   );
-  // Review answer's call runs after the answer has streamed; announce it once, when it starts.
-  const reviewing = props.hasActiveStream && latestTurn?.trace.reflection?.answerReview?.outcome === "running";
-  useEffect(() => {
-    const previous = lifecycle.current;
-    if (previous.session !== props.selectedSessionId) setAnnouncement("");
-    else if (props.hasActiveStream && !previous.running) setAnnouncement("Response started.");
-    else if (reviewing && !previous.reviewing) setAnnouncement("Reviewing the answer.");
-    else if (!props.hasActiveStream && previous.running)
-      setAnnouncement(
-        latestTurn?.trace.status === "cancelled"
-          ? "Response stopped."
-          : latestTurn?.trace.status === "failed"
-            ? "Response failed. Review the conversation details."
-            : decisionWaiting
-              ? "Response ended. A decision is waiting for you."
-              : "Response ended.",
-      );
-    lifecycle.current = { session: props.selectedSessionId, running: props.hasActiveStream, reviewing };
-  }, [props.selectedSessionId, props.hasActiveStream, latestTurn?.trace.status, decisionWaiting, reviewing]);
   const previewHasText = Boolean(preview?.visibleText);
   const conversationMessageIds = useMemo(
-    () =>
-      visibleTurns.flatMap((turn) => [
+    () => [
+      ...visibleTurns.flatMap((turn) => [
+        ...(noticesBeforeTurn.get(turn.turnId)?.map((notice) => notice.noticeId) ?? []),
         `${turn.turnId}:user`,
         ...(turn.assistantMessage || (preview?.turnId === turn.turnId && previewHasText)
           ? [`${turn.turnId}:assistant`]
           : []),
       ]),
-    [visibleTurns, preview?.turnId, previewHasText],
+      ...trailingNotices.map((notice) => notice.noticeId),
+    ],
+    [noticesBeforeTurn, trailingNotices, visibleTurns, preview?.turnId, previewHasText],
   );
   // Reuse the shared Chat follow/read owner for growth within one virtualized
   // turn. Virtuoso's item-count follow alone misses later streamed batches.
@@ -118,7 +104,7 @@ export function ChatTranscript({
       latestTurnId: pendingTurnId ?? latestTurn?.turnId ?? null,
       latestTraceStatus: latestTurn?.trace.status ?? null,
       latestTurnToolRunCount: latestTurn?.toolRuns.length ?? 0,
-      noticeCount: props.notices?.length ?? 0,
+      noticeCount: (props.notices?.length ?? 0) + (systemNotices?.length ?? 0),
       queuedCount: props.queuedCount ?? 0,
       streamStatus: props.streamStatus,
       streamingPreviewSignal: preview ? `${preview.turnId}:${preview.visibleText.length}` : null,
@@ -317,22 +303,27 @@ export function ChatTranscript({
   // Only a stopped latest turn can offer Continue, which follows the live draft and send state.
   const continueTurnId = latestTurn?.trace.status === "cancelled" ? latestTurn.turnId : undefined;
   const renderTurn = (turn: ChatThreadTurnRecord, position: number) => (
-    <Turn
-      turn={turn}
-      position={position}
-      isLatest={turn.turnId === latestTurn?.turnId}
-      previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
-      streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
-      actions={turnActions}
-      capabilitySuggestions={selectTurnCapabilitySuggestions(props, turn.turnId, turn.turnId === latestTurn?.turnId)}
-      draftEmpty={turnReadsDraft(turn) ? !props.draft.trim() : true}
-      continueActions={turn.turnId === continueTurnId ? props : undefined}
-      channel={channel}
-      newMessageCount={newChannelMessages?.turnId === turn.turnId ? newChannelMessages.count : undefined}
-      onInspectTurn={onInspectTurn}
-      onOpenArtifact={onOpenArtifact}
-      onNewConversation={offerNewConversation}
-    />
+    <>
+      {noticesBeforeTurn.get(turn.turnId)?.map((notice) => (
+        <ChatSystemNotice key={notice.noticeId} notice={notice} />
+      ))}
+      <Turn
+        turn={turn}
+        position={position}
+        isLatest={turn.turnId === latestTurn?.turnId}
+        previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
+        streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
+        actions={turnActions}
+        capabilitySuggestions={selectTurnCapabilitySuggestions(props, turn.turnId, turn.turnId === latestTurn?.turnId)}
+        draftEmpty={turnReadsDraft(turn) ? !props.draft.trim() : true}
+        continueActions={turn.turnId === continueTurnId ? props : undefined}
+        channel={channel}
+        newMessageCount={newChannelMessages?.turnId === turn.turnId ? newChannelMessages.count : undefined}
+        onInspectTurn={onInspectTurn}
+        onOpenArtifact={onOpenArtifact}
+        onNewConversation={offerNewConversation}
+      />
+    </>
   );
   const footerContext: TranscriptFooterContext = {
     ...(virtualized ? {} : { renderedTurns: fallbackTurns }),
@@ -399,10 +390,15 @@ export function ChatTranscript({
                 {fallbackTurns.map((turn, index) => (
                   <div key={turn.turnId}>{renderTurn(turn, fallbackOffset + index + 1)}</div>
                 ))}
-                {!visibleTurns.length ? <ChatTranscriptEmpty context={footerContext} /> : null}
+                {!visibleTurns.length && !trailingNotices.length ? (
+                  <ChatTranscriptEmpty context={footerContext} />
+                ) : null}
               </>
             )}
           </div>
+          {trailingNotices.map((notice) => (
+            <ChatSystemNotice key={notice.noticeId} notice={notice} />
+          ))}
           {!virtualized && visibleTurns.length > 100 ? (
             virtualizationFailure ? (
               <p role="alert" className="p-3 text-sm text-fg-muted">

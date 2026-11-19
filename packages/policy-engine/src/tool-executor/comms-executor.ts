@@ -17,6 +17,8 @@ import {
   describeRetiredChannel,
   sanitizeChannelOutboundMessage,
   summarizeGmailMessage,
+  isNativeGoogleTool,
+  nativeGoogleAction,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "../sandbox/network-guard.js";
@@ -29,6 +31,10 @@ import {
   markCommsProviderSent,
 } from "./channel-delivery-part-execution.js";
 import { CommsPreBoundaryProviderError } from "./comms-provider-errors.js";
+import { executeGoogleMailAction } from "./google-mail-runtime.js";
+import { executeGoogleCalendarAction } from "./google-calendar-runtime.js";
+import { prepareGoogleMail, type PreparedGoogleMail } from "./google-mail-compose.js";
+import type { GoogleFilePort, GoogleHttpOptions, GoogleRuntimePort } from "./google-workspace-common.js";
 import { smtpSend } from "./smtp-mail-executor.js";
 import {
   GOOGLE_CHAT_MESSAGE_NAME_PATTERN,
@@ -88,7 +94,18 @@ interface ApprovalActionSecretRuntime {
   deleteApprovalActionTokenSecret?: (secretRef: string) => void;
   isApprovalActionConnectorReady?: (connectionId: string) => Promise<boolean>;
   beforeExternalSideEffect?: () => void | Promise<void>;
-  resolveGoogleWorkspaceAccessToken?: (input: { connectionId: string; toolName: string }) => Promise<string>;
+  resolveGoogleWorkspaceAccessToken?: (input: {
+    connectionId: string;
+    toolName: string;
+    signInId?: string;
+    args?: Record<string, unknown>;
+  }) => Promise<string>;
+  captureGoogleWorkspaceSource?: (
+    request: ToolInvokeRequest,
+    source: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>>;
+  resolveGoogleWorkspacePreparedMail?: (request: ToolInvokeRequest) => Promise<PreparedGoogleMail | undefined>;
+  createGoogleWorkspaceFilePort?: (request: ToolInvokeRequest) => GoogleFilePort;
   /**
    * Reads the key a channel connection saved in secure storage, for that connection only; undefined when nothing is
    * stored for it or the reference was saved for another connection.
@@ -141,6 +158,13 @@ async function executeCommsToolWithBoundaryTracking(
   assertNoRawRemoteApprovalBearer(args);
   const connectionId = required(args.connectionId, "connectionId");
   const connection = await storage.integrationConnections.get(connectionId);
+  if (
+    isNativeGoogleTool(toolName) &&
+    connection.workspaceId !== undefined &&
+    connection.workspaceId !== request.workspaceId
+  ) {
+    throw new Error("blocked: This Google connection belongs to another workspace.");
+  }
   const scopedKey =
     (toolName === "channel.send" || toolName === "channel.unsend") && connection.key === "ntfy"
       ? "ntfy"
@@ -173,14 +197,94 @@ async function executeCommsToolWithBoundaryTracking(
   let protectedApprovalTokenRef: string | undefined;
   try {
     assertIntegrationConnectionAvailable(connection);
+    if (isNativeGoogleTool(toolName)) {
+      const accessToken = await resolveGoogleWorkspaceToken(
+        approvalActionSecrets,
+        connectionId,
+        toolName,
+        request.googleReadSignInId,
+        toolName === "calendar.respond_event" ? { calendarId: args.calendarId } : undefined,
+      );
+      const files = approvalActionSecrets.createGoogleWorkspaceFilePort?.(request);
+      const port: GoogleRuntimePort = {
+        identity: JSON.stringify([request.workspaceId, request.sessionId, connectionId, request.googleReadSignInId]),
+        operationIdentity: JSON.stringify([
+          request.workspaceId,
+          request.sessionId,
+          request.turnId,
+          request.toolRunId,
+          request.approvedByApprovalId,
+        ]),
+        http: (url, options) =>
+          googleWorkspaceHttp(url, accessToken, options, config.sandbox.networkAllowlist, grantAllowlist, toolName),
+        ...(files
+          ? {
+              files: {
+                read: files.read,
+                write: async (input) => {
+                  await markCommsMutationRequestStarted();
+                  return files.write(input);
+                },
+              },
+            }
+          : {}),
+        captureSource: approvalActionSecrets.captureGoogleWorkspaceSource
+          ? (source) => approvalActionSecrets.captureGoogleWorkspaceSource!(request, source)
+          : undefined,
+        assertCapability: async (requiredTool) => {
+          await resolveGoogleWorkspaceToken(
+            approvalActionSecrets,
+            connectionId,
+            requiredTool,
+            request.googleReadSignInId,
+          );
+        },
+      };
+      let prepared = await approvalActionSecrets.resolveGoogleWorkspacePreparedMail?.(request);
+      // Compatibility for narrow trusted test/operator hosts. Shipped Gateway invocations always carry an immutable review.
+      if (toolName === "gmail.send" && !prepared && !approvalActionSecrets.resolveGoogleWorkspacePreparedMail)
+        prepared = (await prepareGoogleMail(toolName, args, files, undefined, new Date().toISOString())).prepared;
+      const result = toolName.startsWith("gmail.")
+        ? await executeGoogleMailAction(toolName, args, port, prepared)
+        : await executeGoogleCalendarAction(toolName, args, port);
+      providerMessageId =
+        typeof result.providerMessageId === "string"
+          ? result.providerMessageId
+          : toolName === "gmail.read"
+            ? "gmail-read"
+            : toolName === "calendar.list"
+              ? "calendar-list"
+              : toolName;
+      await markCommsProviderSent(storage, receipt, providerMessageId);
+      return {
+        ...queued,
+        status: "sent",
+        deliveryStatus: "sent",
+        providerMessageId,
+        ...result,
+        ...(["gmail.get_message", "gmail.get_draft"].includes(toolName) && request.toolRunId
+          ? { sourceToolRunId: request.toolRunId }
+          : {}),
+      };
+    }
     if (toolName === "gmail.read") {
-      const accessToken = await resolveGoogleWorkspaceToken(approvalActionSecrets, connectionId, toolName);
+      const accessToken = await resolveGoogleWorkspaceToken(
+        approvalActionSecrets,
+        connectionId,
+        toolName,
+        request.googleReadSignInId,
+      );
       const read = await gmailRead(accessToken, args, config.sandbox.networkAllowlist, grantAllowlist);
       await markCommsProviderSent(storage, receipt, "gmail-read");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "gmail-read", ...read };
     }
     if (toolName === "calendar.list") {
-      const accessToken = await resolveGoogleWorkspaceToken(approvalActionSecrets, connectionId, toolName);
+      const accessToken = await resolveGoogleWorkspaceToken(
+        approvalActionSecrets,
+        connectionId,
+        toolName,
+        request.googleReadSignInId,
+      );
       const records = await calendarList(accessToken, args, config.sandbox.networkAllowlist, grantAllowlist);
       await markCommsProviderSent(storage, receipt, "calendar-list");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "calendar-list", records };
@@ -421,11 +525,11 @@ function deleteApprovalActionTokenBestEffort(runtime: ApprovalActionSecretRuntim
 }
 
 function isReadOnlyCommsTool(toolName: string): boolean {
-  return toolName === "gmail.read" || toolName === "calendar.list";
+  return toolName === "gmail.read" || toolName === "calendar.list" || nativeGoogleAction(toolName)?.readOnly === true;
 }
 
 function isGoogleWorkspaceWriteTool(toolName: string): boolean {
-  return toolName === "gmail.send" || toolName === "calendar.create_event";
+  return toolName === "gmail.send" || toolName === "calendar.create_event" || toolName === "calendar.respond_event";
 }
 
 /** The Gateway's Google sign-in owns tokens; a pasted access token in connection config is never read. */
@@ -433,11 +537,20 @@ async function resolveGoogleWorkspaceToken(
   runtime: ApprovalActionSecretRuntime,
   connectionId: string,
   toolName: string,
+  signInId?: string,
+  args?: Record<string, unknown>,
 ): Promise<string> {
   if (!runtime.resolveGoogleWorkspaceAccessToken) {
     throw new Error(`blocked: ${toolName} requires Google sign-in, which is not available in this runtime.`);
   }
-  const token = (await runtime.resolveGoogleWorkspaceAccessToken({ connectionId, toolName })).trim();
+  const token = (
+    await runtime.resolveGoogleWorkspaceAccessToken({
+      connectionId,
+      toolName,
+      ...(signInId ? { signInId } : {}),
+      ...(args ? { args } : {}),
+    })
+  ).trim();
   if (!token) {
     throw new Error(`blocked: Google sign-in returned no access token for ${toolName}.`);
   }
@@ -602,6 +715,9 @@ async function executeCommsProviderTool(
   }
   if (toolName === "calendar.create_event") {
     return calendarCreate(required(googleAccessToken, "Google access token"), args, allowlist, grantAllowlist);
+  }
+  if (toolName === "calendar.respond_event") {
+    return calendarRespond(required(googleAccessToken, "Google access token"), args, allowlist, grantAllowlist);
   }
   if (toolName.endsWith(".react") || toolName === "channel.react") {
     return commsReact(toolName, connectionKey, connectionConfig, args, allowlist, target, grantAllowlist);
@@ -3665,6 +3781,66 @@ async function gmailRead(
   };
 }
 
+/** Explicit read semantics matter: Google's free/busy endpoint uses POST without changing remote state. */
+async function googleWorkspaceHttp(
+  url: string,
+  accessToken: string,
+  options: GoogleHttpOptions = {},
+  allowlist: string[],
+  grantAllowlist?: string[],
+  operation = "Google Workspace request",
+): Promise<Record<string, unknown>> {
+  const method = options.method ?? "GET";
+  const readOnly = options.readOnly ?? method === "GET";
+  const result = await fetchAllowlisted(
+    url,
+    {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...options.headers,
+      },
+      ...(options.body ? { body: JSON.stringify(options.body) } : {}),
+    },
+    allowlist,
+    undefined,
+    grantAllowlist,
+    { crossesExternalSideEffect: !readOnly },
+  );
+  if (options.missingAsEmpty && result.response.status === 404) {
+    await result.response.body?.cancel();
+    return {};
+  }
+  if (!result.response.ok) {
+    await result.response.body?.cancel();
+    throw new Error(`${operation} failed (${result.response.status})`);
+  }
+  if (result.response.status === 204) return {};
+  const reader = result.response.body?.getReader();
+  if (!reader) throw new Error("Google Workspace returned no confirmation body.");
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > 40 * 1024 * 1024) {
+        await reader.cancel();
+        throw new Error("Google Workspace response exceeded the byte limit.");
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new Error("Google Workspace returned an invalid confirmation.");
+  return parsed as Record<string, unknown>;
+}
+
 async function googleGetJson(
   url: URL,
   accessToken: string,
@@ -3743,6 +3919,64 @@ async function calendarList(
   url.searchParams.set("maxResults", String(clampInt(args.maxResults, 10, 1, 100)));
   const body = await googleGetJson(url, accessToken, "calendar.list", allowlist, grantAllowlist);
   return Array.isArray(body.items) ? body.items : [];
+}
+
+async function calendarRespond(
+  accessToken: string,
+  args: Record<string, unknown>,
+  allowlist: string[],
+  grantAllowlist?: string[],
+): Promise<string> {
+  // `self` identifies this calendar's owner, so shared/secondary calendars must not be used to RSVP as someone else.
+  if ((asString(args.calendarId) ?? "primary") !== "primary") {
+    throw new Error("blocked: RSVP supports only your primary Google Calendar.");
+  }
+  const eventId = required(args.eventId, "eventId");
+  const eventEtag = required(args.eventEtag, "eventEtag");
+  const responseStatus = required(args.responseStatus, "responseStatus");
+  if (!["accepted", "declined", "tentative"].includes(responseStatus)) {
+    throw new Error("blocked: RSVP must be accepted, declined or tentative.");
+  }
+  const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`);
+  const event = await googleGetJson(url, accessToken, "calendar.respond_event", allowlist, grantAllowlist);
+  if (event.etag !== eventEtag || event.status === "cancelled") {
+    throw new Error("blocked: This invitation changed. Read the calendar again and review a fresh RSVP approval.");
+  }
+  const self = (Array.isArray(event.attendees) ? event.attendees : [])
+    .map(record)
+    .filter((attendee) => attendee.self === true);
+  if (self.length !== 1 || !asString(self[0]!.email)) {
+    throw new Error("blocked: This invitation does not identify you as an attendee. No RSVP was submitted.");
+  }
+  url.searchParams.set("sendUpdates", "all");
+  const { response } = await fetchAllowlisted(
+    url.toString(),
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}`, "If-Match": eventEtag },
+      // Calendar's partial-attendee update preserves all other guests and event fields.
+      body: JSON.stringify({ attendeesOmitted: true, attendees: [{ email: self[0]!.email, responseStatus }] }),
+    },
+    allowlist,
+    undefined,
+    grantAllowlist,
+  );
+  const body = await response.text();
+  if (!response.ok) throw new Error(`calendar.respond_event failed (${response.status})`);
+  const updated = parseJsonRecord(body);
+  if (
+    updated.id !== eventId ||
+    !(
+      Array.isArray(updated.attendees) &&
+      updated.attendees.some((attendee: unknown) => {
+        const value = record(attendee);
+        return value.self === true && value.email === self[0]!.email && value.responseStatus === responseStatus;
+      })
+    )
+  ) {
+    throw new Error("calendar.respond_event returned no confirmed RSVP; check the calendar before trying again");
+  }
+  return eventId;
 }
 
 async function calendarCreate(

@@ -2,7 +2,12 @@ import path from "node:path";
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
 import { getExecutedWorkspaceFileWriteReceipt } from "./chat-turn-agent-runner/artifact-write-helpers.js";
 
-const ARTIFACT_TOOL_NAMES = new Set(["artifacts.create", "documents.create", "presentations.create"]);
+const ARTIFACT_TOOL_NAMES = new Set([
+  "artifacts.create",
+  "documents.create",
+  "presentations.create",
+  "gmail.download_attachment",
+]);
 const ARTIFACT_PATH_KEYS = ["path", "fallbackPath"] as const;
 
 /** Forward-slash path of a file inside the workspace root; undefined for anything else. */

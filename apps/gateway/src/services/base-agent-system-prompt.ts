@@ -90,6 +90,8 @@ export interface BuildBaseAgentSystemPromptInput {
   memoryDigest?: string;
   /** The turn's web mode. `deep` adds the Deep research contract to the volatile tail. */
   webMode?: ChatWebMode;
+  /** Live native Chat timer availability. This dialog is independent of model tool autonomy. */
+  chatTimersEnabled?: boolean;
   /**
    * Set when this turn sends the provider no tools, naming why. The catalog and skills are then left out,
    * because naming tools the turn cannot call makes models write the calls as text. Unset: tools are callable.
@@ -179,7 +181,9 @@ function buildWriteAndRunPolicySection(toolset: BaseAgentPromptToolset): string 
     .join(" and ");
   const lines = [
     "## Writing and running code",
-    `This workspace's tool policy turns off ${off}, so you cannot create or change code files or run scripts in this turn. If the user asks for that, say so plainly first. Do not save code through document tools, and do not treat a test, lint or build tool as running their code: those only run the project's own package scripts.`,
+    toolset.toolNames.includes("code_mode.request")
+      ? `This workspace's tool policy turns off ${off}. Direct workspace file changes and shell commands are blocked where listed. The governed code_mode.request remains available for approved computation; it does not grant workspace writes or permission to bypass denied tools. Do not claim all code execution is unavailable. Do not save code through document tools or use test, lint or build tools to bypass these restrictions.`
+      : `This workspace's tool policy turns off ${off}, so you cannot create or change code files or run scripts in this turn. If the user asks for that, say so plainly first. Do not save code through document tools, and do not treat a test, lint or build tool as running their code: those only run the project's own package scripts.`,
   ];
   if (writesDenied && switchedOff.has("fs.write")) {
     lines.push(`To allow file writes, ${switchedOffRemedy("fs.write", held, unreadable)}`);
@@ -290,6 +294,7 @@ const TOOL_DOCTRINE_SECTION = [
   "- If a needed tool, skill, or integration is missing, say what can be staged, requested, or approved in this conversation. Do not tell the operator to paste/apply work in Code Mode or move to another mode.",
   "- If Brave or Parallel search is missing or has a rejected credential, call runtime.configure for the exact target. Never ask the operator to paste a credential into Chat; the Gateway will present a separate secure keychain form, verify it, and resume this turn.",
   "- When the operator asks to change GoatCitadel configuration, providers, channels, capabilities, repairs, or updates, call change.request with only an allowlisted typed intent. It creates an inspectable Change Plan and never confirms or applies the change; never include credentials, paths, patches, commands, or arbitrary setting keys.",
+  "- For a Google account, first clarify whether the operator means Gmail/Google Calendar or Google Chat messaging. Gmail and Google Calendar use the connector in Capabilities, not channel_connection or provider_connection. Offer [Set up Gmail and Google Calendar](/capabilities/connectors/advanced?shell=cockpit&addIntegration=automation.gmail#integration-connections) and guide the operator through its secure setup. Never invent a google or gmail channel kind; Google Chat messaging uses google-chat and does not connect a personal Gmail/Calendar account. Never ask for OAuth credentials in Chat.",
   "- Move deliberately toward the goal, then stop calling tools once you have what you need to answer.",
 ].join("\n");
 
@@ -421,6 +426,12 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
   }
   const writeAndRunSection = toolsCallable ? buildWriteAndRunPolicySection(toolset) : undefined;
   if (writeAndRunSection) tailSections.push(writeAndRunSection);
+  if (input.chatTimersEnabled === true) {
+    tailSections.push(
+      "## Chat reminders\nFor a one-off timer or reminder, use the built-in Chat timer rather than writing or running a script or creating a recurring agent schedule. In Mission Control, ask the operator to send /timer in this Chat, enter the due date/time, timezone and reminder message, then select Create timer. This opens a local confirmation dialog; it works even when model tools are off. The Gateway must be running to deliver the reminder; overdue timers are processed when it resumes. The notice appears in this Chat; delivery elsewhere depends on notification rules. Do not promise an external message or alarm without delivery evidence. Do not claim a timer was created until its saved result confirms it. Code Mode runs are bounded computations, not persistent background timers." +
+        " If a timer request also asks for an external or separate action, keep both parts in view. State the timer duration and message you can prepare in this Chat and ask only for any missing decision, such as whether the reminder should stay here or who should receive it. Never treat a request to remind the operator about someone else as permission to contact them.",
+    );
+  }
   if (toolsCallable && toolset.toolNames.includes("code_mode.request")) {
     tailSections.push(CODE_MODE_REQUEST_PROMPT_SECTION);
   }

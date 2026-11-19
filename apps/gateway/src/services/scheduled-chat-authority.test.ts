@@ -4,6 +4,7 @@ import {
   canonicalJsonString,
   buildCronCreatorAuthority,
   SCHEDULED_RESTRICTED_PROFILE,
+  type ApprovalRequest,
   type CronRunRecord,
   type PermissionProfileRecord,
 } from "@goatcitadel/contracts";
@@ -12,6 +13,7 @@ import {
   assertScheduledOccurrenceCurrent,
   buildCronChatAdmissionIdentity,
   buildScheduledOccurrenceReference,
+  resolveScheduledApprovalReplayPolicy,
   type ScheduledChatAuthorityHost,
 } from "./scheduled-chat-authority.js";
 import { buildAutonomousTurnContext } from "./gateway/autonomous-turn-policy.js";
@@ -213,7 +215,7 @@ describe("current scheduled Chat authority", () => {
     await expect(resolveChatFeatureAdmission(host, input)).rejects.toThrow();
   });
 
-  it("revalidates persisted payload and current creator under the canonical fence on each dispatch", async () => {
+  it("revalidates the persisted owner and current creator for dispatch and approved replay", async () => {
     const f = fixture();
     const references = { version: "chat.turn.feature-references.v1" as const, scheduledOccurrence: f.reference };
     const features = { references, referenceSha256: hash(references) };
@@ -268,8 +270,44 @@ describe("current scheduled Chat authority", () => {
       canonicalWriteFence,
     };
     await assertScheduledChatDispatchCurrent(host, input);
+    const request = {
+      toolName: "calendar.list",
+      runId: f.identity.durableRunId,
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      workspaceId: input.workspaceId,
+    };
+    const permissionProfileId = `scheduled-intersection:${f.identity.cronRunId}`;
+    const approval: ApprovalRequest = {
+      approvalId: "scheduled-calendar-approval",
+      kind: request.toolName,
+      riskLevel: "safe",
+      status: "approved",
+      payload: {},
+      preview: {},
+      linkage: { ...request, permissionProfileId, actionType: "tool.invoke" },
+      createdAt: f.run.createdAt,
+      explanationStatus: "not_requested",
+    };
+    await expect(resolveScheduledApprovalReplayPolicy(host, approval, request)).resolves.toMatchObject({
+      permissionProfileId,
+      runId: request.runId,
+      sessionId: request.sessionId,
+      workspaceId: request.workspaceId,
+    });
+    await expect(
+      resolveScheduledApprovalReplayPolicy(host, approval, { ...request, turnId: "another-turn" }),
+    ).rejects.toThrow("no matching durable Chat owner");
+    await expect(
+      resolveScheduledApprovalReplayPolicy(
+        host,
+        { ...approval, linkage: { ...approval.linkage, permissionProfileId: "scheduled-intersection:another" } },
+        request,
+      ),
+    ).rejects.toThrow("does not match its admitted permission profile");
     f.creator.deny = [...f.creator.deny, "fs.read"];
     await expect(assertScheduledChatDispatchCurrent(host, input)).rejects.toThrow("policy changed");
+    await expect(resolveScheduledApprovalReplayPolicy(host, approval, request)).rejects.toThrow("policy changed");
     expect(canonicalWriteFence).toHaveBeenCalledTimes(2);
     await expect(
       assertScheduledChatDispatchCurrent(host, { ...input, canonicalWriteFence: undefined }),

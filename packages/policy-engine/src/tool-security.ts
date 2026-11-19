@@ -2,6 +2,7 @@ import {
   projectManagedFileToolArgs,
   projectManagedFileToolResult,
   redactStructuredSecrets,
+  nativeGoogleAction,
 } from "@goatcitadel/contracts";
 import type {
   EgressDecision,
@@ -72,13 +73,16 @@ export function deriveToolCapabilityPolicy(
     toolName === "fs.delete" ||
     toolName === "artifacts.create" ||
     toolName === "documents.create" ||
-    toolName === "presentations.create";
+    toolName === "presentations.create" ||
+    toolName === "gmail.download_attachment";
   const mutatesRemoteState =
+    (nativeGoogleAction(toolName)?.readOnly === false && toolName !== "gmail.download_attachment") ||
     isMeshInvocation ||
     isNetworkWrite ||
     startsWith("gmail.send") ||
     startsWith("smtp.send") ||
     startsWith("calendar.create_event") ||
+    startsWith("calendar.respond_event") ||
     startsWith("channel.") ||
     startsWith("slack.") ||
     startsWith("discord.") ||

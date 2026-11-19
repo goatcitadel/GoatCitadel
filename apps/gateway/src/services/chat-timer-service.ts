@@ -74,7 +74,7 @@ export class ChatTimerService {
       dueAt: normalized.dueAt,
       timezone: normalized.timezone,
       message: normalized.message,
-      ...(normalized.notificationRuleId ? { notificationRuleId: normalized.notificationRuleId } : {}),
+      notificationRuleId: normalized.notificationRuleId,
       cancelOnNextReply: normalized.cancelOnNextReply ?? false,
       createdBy: createdBy.trim() || "operator",
     });
@@ -143,31 +143,31 @@ export class ChatTimerService {
     };
     await this.deps.storage.chatMessages.upsert(notice, now);
 
+    const event = {
+      eventId,
+      eventType: "timer.due" as const,
+      sessionId: timer.sessionId,
+      title: "Chat timer due",
+      message: timer.message,
+      source: "chat.timer" as const,
+    };
+    const retainEvent = () =>
+      this.deps.storage.notificationRouting.createEvent({ ...event, workspaceId: timer.workspaceId, createdAt: now });
     const deliveryStatus: ChatTimerDeliveryStatus = await (async () => {
+      if (timer.notificationRuleId === null) {
+        await retainEvent();
+        return "no_targets";
+      }
       try {
         const result = await this.deps.dispatchNotificationEvent(timer.workspaceId, {
-          eventId,
-          eventType: "timer.due",
-          sessionId: timer.sessionId,
-          title: "Chat timer due",
-          message: timer.message,
-          source: "chat.timer",
+          ...event,
           ...(timer.notificationRuleId ? { ruleId: timer.notificationRuleId } : {}),
         });
         return result.status;
       } catch {
         // Preserve the canonical attention event even when the delivery worker
         // fails before it can settle a target. createEvent is idempotent by id.
-        await this.deps.storage.notificationRouting.createEvent({
-          eventId,
-          workspaceId: timer.workspaceId,
-          eventType: "timer.due",
-          sessionId: timer.sessionId,
-          title: "Chat timer due",
-          message: timer.message,
-          source: "chat.timer",
-          createdAt: now,
-        });
+        await retainEvent();
         return "failed";
       }
     })();
@@ -241,7 +241,7 @@ function validateCreateInput(
     dueAt: new Date(dueMs).toISOString(),
     timezone,
     message,
-    ...(input.notificationRuleId?.trim() ? { notificationRuleId: input.notificationRuleId.trim() } : {}),
+    notificationRuleId: input.notificationRuleId === null ? null : input.notificationRuleId?.trim() || undefined,
     cancelOnNextReply: input.cancelOnNextReply === true,
   };
 }

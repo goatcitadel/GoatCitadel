@@ -35,6 +35,8 @@ const ENV_KEYS = [
   "GOATCITADEL_DATABASE_DRIVER",
   "GOATCITADEL_RATE_LIMIT_ENABLED",
   "GOATCITADEL_ROOT_DIR",
+  "GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED",
+  "GOATCITADEL_CODE_MODE_BEST_EFFORT_SANDBOX_ENABLED",
 ] as const;
 const originalEnv = new Map<string, string | undefined>(ENV_KEYS.map((key) => [key, process.env[key]]));
 const tempRoots: string[] = [];
@@ -59,12 +61,16 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
     }
   });
 
-  async function startGateway(): Promise<GatewayService> {
+  async function startGateway(options?: { enableWindowsCodeMode: true }): Promise<GatewayService> {
     const root = createIsolatedConfigRoot();
     process.env.NODE_ENV = "test";
     process.env.GOATCITADEL_DATABASE_DRIVER = "sqlite";
     process.env.GOATCITADEL_RATE_LIMIT_ENABLED = "false";
     process.env.GOATCITADEL_ROOT_DIR = root;
+    if (options?.enableWindowsCodeMode) {
+      process.env.GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED = "true";
+      process.env.GOATCITADEL_CODE_MODE_BEST_EFFORT_SANDBOX_ENABLED = "true";
+    }
     gateway = new GatewayService(await loadGatewayConfig(root));
     await gateway.initCritical();
     settleFixtureWaits(gateway);
@@ -257,6 +263,19 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
     const resolved = await live.storage.approvals.get(turn.approvalId);
     expect(resolved).toMatchObject({ kind: "code_mode.request", status: "approved", resolvedBy: "operator" });
     expect(await wakeEffect(live, turn.approvalId, turn.turnId)).toMatchObject({ targetKind: "chat_turn" });
+    await expectApprovedTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
+  });
+
+  it.skipIf(process.platform !== "win32")("executes an approved request in the real Windows runner", async () => {
+    const live = await startGateway({ enableWindowsCodeMode: true });
+    expect(await capabilitySystem(live).getCodeModeReadiness()).toMatchObject({ canRun: true });
+    const turn = await requestInWaitingTurn(live, "windows-live");
+    expect((await live.storage.approvals.get(turn.approvalId)).status).toBe("pending");
+    await live.resolveApproval(turn.approvalId, { decision: "approve", resolvedBy: "operator" });
+    expect(await settledToolRun(live, turn.turnId, turn.toolRunId)).toMatchObject({
+      status: "executed",
+      result: { status: "completed", result: { pages: 3, path: "saturday-plan.pdf" } },
+    });
     await expectApprovedTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
   });
 

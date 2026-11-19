@@ -6,13 +6,14 @@ import {
   fetchChatTimers,
   fetchNotificationRules,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { toDateTimeLocalValue, zonedDateTimeToIso } from "./chat-timer-form";
+import { toDateTimeLocalValue, zonedDateTimeToIso, type ChatTimerDraft } from "./chat-timer-form";
 
 interface ChatTimerPanelState {
   open: boolean;
   busy: boolean;
   error: string | null;
   dueAt: string;
+  delayMs?: number;
   timezone: string;
   message: string;
   notificationRuleId: string;
@@ -119,21 +120,25 @@ export function useChatTimerPanel(input: {
     }
   }, [enabled, isCurrent, matchesOwner, selectedSessionId, setPanel, workspaceId]);
 
-  const open = useCallback(() => {
-    if (!enabled || !selectedSessionId || !isCurrent()) return;
-    editorGeneration.current += 1;
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-    setPanel((current) => ({
-      ...current,
-      open: true,
-      error: null,
-      dueAt: toDateTimeLocalValue(new Date(Date.now() + 10 * 60_000)),
-      timezone,
-      message: "",
-      notificationRuleId: "",
-      cancelOnNextReply: false,
-    }));
-  }, [enabled, isCurrent, selectedSessionId, setPanel]);
+  const open = useCallback(
+    (draft?: ChatTimerDraft) => {
+      if (!enabled || !selectedSessionId || !isCurrent()) return;
+      editorGeneration.current += 1;
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      setPanel((current) => ({
+        ...current,
+        open: true,
+        error: null,
+        dueAt: toDateTimeLocalValue(new Date(Date.now() + 10 * 60_000)),
+        delayMs: draft?.delayMs,
+        timezone,
+        message: draft?.message ?? "",
+        notificationRuleId: "",
+        cancelOnNextReply: false,
+      }));
+    },
+    [enabled, isCurrent, selectedSessionId, setPanel],
+  );
 
   const beginMutation = useCallback(() => {
     if (!enabled || !selectedSessionId || !isCurrent() || pendingScopes.current.has(scope)) return undefined;
@@ -157,12 +162,15 @@ export function useChatTimerPanel(input: {
       const timezone = panel.timezone.trim(),
         message = panel.message.trim(),
         notificationRuleId = panel.notificationRuleId.trim();
-      const dueAt = zonedDateTimeToIso(panel.dueAt, timezone);
+      const dueAt = panel.delayMs
+        ? new Date(Date.now() + panel.delayMs).toISOString()
+        : zonedDateTimeToIso(panel.dueAt, timezone);
+      const deliveryRule = panel.delayMs ? null : notificationRuleId || undefined;
       const result = await createChatTimer(selectedSessionId, {
         dueAt,
         timezone,
         message,
-        ...(notificationRuleId ? { notificationRuleId } : {}),
+        ...(deliveryRule !== undefined ? { notificationRuleId: deliveryRule } : {}),
         cancelOnNextReply: panel.cancelOnNextReply,
       });
       if (!operation.current()) return;
@@ -172,7 +180,7 @@ export function useChatTimerPanel(input: {
         result.item.timezone !== timezone ||
         result.item.message !== message ||
         result.item.cancelOnNextReply !== panel.cancelOnNextReply ||
-        (result.item.notificationRuleId ?? "") !== notificationRuleId
+        result.item.notificationRuleId !== deliveryRule
       ) {
         throw new Error("The Gateway did not confirm the reviewed timer. Refresh session timers before trying again.");
       }

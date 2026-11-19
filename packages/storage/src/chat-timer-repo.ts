@@ -6,6 +6,9 @@ import {
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 
+// Keep a nonmatching rule ID on disk so an older runtime will still avoid routing these timers.
+const CHAT_ONLY_RULE = "chat-only:no-notification-rule";
+
 interface ChatTimerRow {
   timer_id: string;
   workspace_id: string;
@@ -38,7 +41,7 @@ export interface CreateChatTimerRecordInput {
   dueAt: string;
   timezone: string;
   message: string;
-  notificationRuleId?: string;
+  notificationRuleId?: string | null;
   cancelOnNextReply: boolean;
   createdBy: string;
 }
@@ -72,7 +75,7 @@ export class ChatTimerRepository {
       )
       .run({
         ...input,
-        notificationRuleId: input.notificationRuleId ?? null,
+        notificationRuleId: input.notificationRuleId === null ? CHAT_ONLY_RULE : (input.notificationRuleId ?? null),
         cancelOnNextReply: input.cancelOnNextReply ? 1 : 0,
         now,
       });
@@ -256,7 +259,9 @@ function mapTimer(row: ChatTimerRow): ChatTimerRecord {
     dueAt: row.due_at,
     timezone: row.timezone,
     message: row.message,
-    ...(row.notification_rule_id ? { notificationRuleId: row.notification_rule_id } : {}),
+    ...(row.notification_rule_id
+      ? { notificationRuleId: row.notification_rule_id === CHAT_ONLY_RULE ? null : row.notification_rule_id }
+      : {}),
     cancelOnNextReply: Number(row.cancel_on_next_reply) === 1,
     status: row.status,
     createdBy: row.created_by,

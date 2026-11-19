@@ -1071,7 +1071,10 @@ export class LlmService {
   }
 
   /** @internal Plan-scoped OAuth custody. Public provider projections never expose the account name. */
-  public getOpenAICodexOAuthCredentialStatus(credentialAccount: string, sameAccountOnly = false): OpenAICodexOAuthStatus {
+  public getOpenAICodexOAuthCredentialStatus(
+    credentialAccount: string,
+    sameAccountOnly = false,
+  ): OpenAICodexOAuthStatus {
     return this.openAICodexOAuth.getStatus(credentialAccount, sameAccountOnly);
   }
 
@@ -2166,7 +2169,9 @@ export class LlmService {
     try {
       const provider = this.providers.get(providerId);
       const baseUrl = provider?.baseUrl;
-      const proxy = baseUrl ? selectActiveProviderProxy(new URL(baseUrl).hostname, provider?.request?.proxy) : undefined;
+      const proxy = baseUrl
+        ? selectActiveProviderProxy(new URL(baseUrl).hostname, provider?.request?.proxy)
+        : undefined;
       await this.authorizeDispatchWard(attribution, providerId, baseUrl, readProxyOrigin(proxy));
       return true;
     } catch (error) {
@@ -5945,10 +5950,10 @@ function mapOpenAiResponsesTools(tools: ChatCompletionRequest["tools"]): ChatCom
     return tools;
   }
   return tools.map((tool) => {
-    if (!isRecord(tool) || tool.type !== "function" || typeof tool.name === "string") {
+    if (!isRecord(tool) || tool.type !== "function") {
       return tool;
     }
-    const fn = isRecord(tool.function) ? tool.function : undefined;
+    const fn = typeof tool.name === "string" ? tool : isRecord(tool.function) ? tool.function : undefined;
     if (!fn) {
       return tool;
     }
@@ -5957,6 +5962,9 @@ function mapOpenAiResponsesTools(tools: ChatCompletionRequest["tools"]): ChatCom
       ...fn,
     };
     delete mapped.function;
+    // Registry/MCP schemas use general JSON Schema, not the strict-mode subset.
+    // Keep best-effort generation explicit; Gateway validation still owns execution.
+    if (mapped.strict === undefined) mapped.strict = false;
     return mapped;
   });
 }

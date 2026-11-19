@@ -68,7 +68,7 @@ describe("ChatTimerPanel", () => {
         }}
       />,
     );
-    expect(text(renderer)).toContain("never invokes a provider or model");
+    expect(text(renderer)).toContain("Choose a notification rule to control delivery elsewhere.");
     expect(text(renderer)).toContain("Cancel only after my next message commits successfully");
     const dueAt = new Date("2026-07-29T00:30:00.000Z");
     const timezone = "America/Los_Angeles";

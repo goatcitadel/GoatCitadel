@@ -248,6 +248,39 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(tail).not.toContain("tool policy file");
   });
 
+  it("distinguishes blocked workspace writes from an offered governed code request", () => {
+    const tail = buildBaseAgentSystemPrompt(
+      input({
+        toolset: {
+          toolNames: ["fs.read", "code_mode.request"],
+          policyDeniedToolNames: ["fs.write", "shell.exec"],
+        },
+      }),
+    ).volatileTail;
+    expect(tail).not.toContain("cannot create or change code files or run scripts in this turn");
+    expect(tail).toContain("Direct workspace file changes and shell commands are blocked");
+    expect(tail).toContain("code_mode.request remains available");
+    expect(tail).toContain("does not grant workspace writes");
+  });
+
+  it("finds the enabled native reminder dialog even when model tools are off", () => {
+    const tail = buildBaseAgentSystemPrompt(
+      input({ chatTimersEnabled: true, toolsUnavailableReason: "manual_autonomy" }),
+    ).volatileTail;
+    expect(tail).toContain("/timer");
+    expect(tail).toContain("Create timer");
+    expect(tail).toContain("Gateway must be running");
+    expect(tail).toContain("notification rules");
+    expect(tail).toContain("Do not claim a timer was created");
+    expect(tail).not.toContain("code_mode.request remains available");
+  });
+
+  it("does not offer the timer command when timers are disabled or their state is unknown", () => {
+    for (const chatTimersEnabled of [false, undefined]) {
+      expect(buildBaseAgentSystemPrompt(input({ chatTimersEnabled })).volatileTail).not.toContain("/timer");
+    }
+  });
+
   it("offers code_mode.request only when it is in the toolset", () => {
     const withTool = buildBaseAgentSystemPrompt(
       input({ toolset: { toolNames: ["fs.read", "code_mode.request"], skills: [] } }),

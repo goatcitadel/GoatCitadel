@@ -139,6 +139,25 @@ afterEach(() => {
 });
 
 describe("Inbox approval detail", () => {
+  it.each([
+    { kind: "calendar.list", preview: { toolName: "calendar.list" } },
+    {
+      kind: "change.request",
+      preview: { reviewKind: "change.request", requestSummary: [{ label: "Goal", value: "Change settings" }] },
+    },
+  ])("mounts the decision controls for $kind without a compact preview", async ({ kind, preview }) => {
+    api.fetchApproval.mockResolvedValue({ ...approval, kind, preview, linkage: { workspaceId: "default" } });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <InboxApprovalDetail item={item} workspaceId="default" />
+        </QueryClientProvider>,
+      ),
+    );
+    await settleUntil(() => Boolean(decisionControls()));
+    expect(decisionControls().disabled).toBe(false);
+  });
+
   it("explains the recorded commands individually and avoids classifying a shortened command", async () => {
     const longCommand = "echo " + "sample ".repeat(24) + "end marker";
     api.fetchApproval.mockResolvedValue({

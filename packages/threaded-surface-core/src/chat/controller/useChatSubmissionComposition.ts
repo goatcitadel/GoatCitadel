@@ -2,6 +2,7 @@ import type { ChatAttachmentRecord, ChatMode } from "@goatcitadel/contracts";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
+import { parseChatTimerDraft, type ChatTimerDraft } from "../chat-timer-form";
 import { resolveOutboundSurfaceMode } from "../../pure-helpers";
 import { isLocalChatStatusCommand, isLocalChatTimerCommand } from "../chat-page-pure-helpers";
 import { resolveExecutionRoutePrefs } from "../mission-threaded-controller-helpers";
@@ -159,6 +160,15 @@ export function useChatSubmissionComposition({
     abortActiveChatStream,
   });
   const composerSendHandlerRef = useRef<() => Promise<void>>(orchestration.handleSend);
+  const { ensureSession } = session.sessionControls;
+  const firstTimerRef = useRef<{ sessionId?: string; draft: ChatTimerDraft } | null>(null);
+
+  useEffect(() => {
+    const timer = firstTimerRef.current;
+    if (!timer?.sessionId || !selection.selectedSessionId) return;
+    firstTimerRef.current = null;
+    if (timer.sessionId === selection.selectedSessionId) openChatTimerPanel(timer.draft);
+  }, [openChatTimerPanel, selection.selectedSessionId]);
 
   const handleComposerSend = useCallback(() => {
     // Fail closed: an external controller owns this session's mutation authority.
@@ -175,22 +185,47 @@ export function useChatSubmissionComposition({
       void refresh();
       return Promise.resolve();
     }
-    if (session.chatTimersEnabled && selection.selectedSessionId && isLocalChatTimerCommand(draft)) {
-      setDraft("");
-      openChatTimerPanel();
-      return Promise.resolve();
+    if (session.chatTimersEnabled) {
+      const timerDraft =
+        !sending && !pendingAttachments.length && !orchestration.editingTurnId ? parseChatTimerDraft(draft) : undefined;
+      if (selection.selectedSessionId && (timerDraft || isLocalChatTimerCommand(draft))) {
+        setDraft("");
+        openChatTimerPanel(timerDraft);
+        return Promise.resolve();
+      }
+      if (timerDraft && !selection.selectedSessionId) {
+        if (firstTimerRef.current) return Promise.resolve();
+        const incoming = { draft: timerDraft, sessionId: undefined as string | undefined };
+        firstTimerRef.current = incoming;
+        return ensureSession((created) => {
+          incoming.sessionId = created.sessionId;
+          setDraft((current) => (current === draft ? "" : current));
+        }).then(
+          () => undefined,
+          (error: unknown) => {
+            if (firstTimerRef.current === incoming) firstTimerRef.current = null;
+            if (error instanceof DOMException && error.name === "AbortError") return;
+            setUiError(error instanceof Error ? error.message : "Could not open a Chat for this timer.");
+          },
+        );
+      }
     }
     return composerSendHandlerRef.current();
   }, [
     session.chatTimersEnabled,
     draft,
+    ensureSession,
     openChatTimerPanel,
+    orchestration.editingTurnId,
+    pendingAttachments.length,
     refresh,
+    sending,
     selection.selectedSessionId,
     session.sessionStatusEnabled,
     coordination.pushLocalNoticeRef,
     coordination.sessionControlSendLockedRef,
     setDraft,
+    setUiError,
   ]);
 
   useEffect(() => {

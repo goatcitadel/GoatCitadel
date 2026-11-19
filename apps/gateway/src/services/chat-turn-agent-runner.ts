@@ -31,6 +31,8 @@ import {
   isSettledToolRunContinuationEvidence,
   buildPersistedToolContinuationCallId,
   buildPersistedToolContinuationResult,
+  readGoogleReadApprovalSummary,
+  reconcileGoogleReadApprovalReply,
   serializeToolResultForModel,
 } from "./chat-tool-result-projection.js";
 import { projectArtifactPathsInAnswer, projectArtifactToolResultForModel } from "./chat-artifact-result-projection.js";
@@ -152,10 +154,13 @@ import {
 } from "./chat-tool-families.js";
 import {
   buildCodeModeRequestTurnShape,
+  explainCodeModeSignIn,
   isRestrictedAutonomousPermissionProfile,
+  isCodeModeRequestTurnShapeEligible,
   loadCodeModeRequestEligibility,
   type CodeModeRequestTurnFields,
 } from "./code-mode-request-eligibility.js";
+import { formatRecordedCodeModeResult, readStandaloneCodeModeSource } from "./code-mode-request-resume.js";
 import {
   buildAnswerRecoveryNudge,
   buildDegradedAnswerFooter,
@@ -326,7 +331,7 @@ import {
   estimateFirstProviderRequestInputTokens,
   shouldCapturePromptContextBudgetReceipt,
 } from "./chat-agent-prompt-budget-receipt.js";
-import { resolveSustainedLocalCodingProfile } from "./chat-turn-execution-profile.js";
+import { hasExplicitWebRestriction, resolveSustainedLocalCodingProfile } from "./chat-turn-execution-profile.js";
 import {
   advanceCodingWindow,
   applyCodingToolReceipts,
@@ -1287,6 +1292,7 @@ export class ChatTurnAgentRunner {
     meshTools: readonly MeshChatToolSchema[] = [],
     discoveredToolNames: readonly string[] = [],
   ): Promise<ResolvedChatTurnToolSchema> {
+    input = applyTurnWebRestriction(input);
     // This marker only narrows execution. Staging separately verifies the exact
     // server-authored seed, completed source, actor, and reviewed draft hash.
     if (input.content.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
@@ -1991,6 +1997,7 @@ export class ChatTurnAgentRunner {
   }
 
   public async *runStream(input: ChatTurnAgentRunnerInput): AsyncGenerator<ChatStreamChunkDraft> {
+    input = applyTurnWebRestriction(input);
     const wrapperAbortController = new AbortController();
     const innerSignal = input.signal
       ? AbortSignal.any([input.signal, wrapperAbortController.signal])
@@ -2355,6 +2362,42 @@ export class ChatTurnAgentRunner {
       trace,
     };
 
+    const codeModeTurn = buildCodeModeRequestTurnShape(input);
+    const standaloneCodeSource =
+      normalizationProfile === "live" && isCodeModeRequestTurnShapeEligible(codeModeTurn)
+        ? readStandaloneCodeModeSource(executionIntentContent)
+        : undefined;
+    const recordedCodeRuns = standaloneCodeSource ? await listProjectedToolRuns() : [];
+    const recordedCodeResult = standaloneCodeSource
+      ? formatRecordedCodeModeResult(standaloneCodeSource, recordedCodeRuns)
+      : undefined;
+    const directReply =
+      recordedCodeResult ??
+      (await explainCodeModeSignIn(codeModeTurn, executionIntentContent, this.deps.getCodeModeReadiness));
+    if (directReply) {
+      throwIfChatTurnCancelled(input);
+      const completed = await this.patchTurnTrace(input, input.turnId, {
+        status: "completed",
+        completion: { status: "complete", repaired: false, providerCallCount: 0 },
+        finishedAt: new Date().toISOString(),
+      });
+      const messageId = input.outputMessageId ?? `assistant-${input.turnId}`;
+      yield {
+        type: "message_done",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        messageId,
+        content: directReply,
+      };
+      yield {
+        type: "trace_update",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        trace: recordedCodeResult ? { ...completed, toolRuns: recordedCodeRuns } : completed,
+      };
+      yield { type: "done", sessionId: input.sessionId, turnId: input.turnId, messageId };
+      return;
+    }
     const conversationMessages = projectHistoryMessagesForModel(input.historyMessages);
     // Plan first runs nothing: no delegation is offered or started for it, the model just writes the plan.
     const confirmedDelegation = planFirstNoTools ? undefined : await this.deps.resolveConfirmedDelegation?.(input);
@@ -2614,7 +2657,10 @@ export class ChatTurnAgentRunner {
             .reduce((count, run) => count + toolRunBudgetCostForToolCall(run.toolName, run.args ?? {}), 0)
         : 0);
     const workspaceFileRootDir = this.deps.workspaceFileRootDir;
+    const googleReadApprovalSummaries = new Set<string>();
     for (const persistedRun of persistedSettledToolRuns) {
+      const approvalSummary = await readGoogleReadApprovalSummary(storage, persistedRun, input.workspaceId);
+      if (approvalSummary) googleReadApprovalSummaries.add(approvalSummary);
       const toolCallId = buildPersistedToolContinuationCallId(persistedRun);
       let persistedContinuationResult = projectArtifactToolResultForModel(
         persistedRun.toolName,
@@ -2668,6 +2714,16 @@ export class ChatTurnAgentRunner {
         }
       }
     }
+    if (googleReadApprovalSummaries.size > 0) {
+      conversationMessages.push({
+        role: "system",
+        content: [
+          "These saved approval and grant results are authoritative for the resumed reads in this turn.",
+          ...googleReadApprovalSummaries,
+          "Use the tool results to answer the user. Do not say these reads ran without approval or still need approval. The runtime adds the saved approval and grant confirmation to your reply.",
+        ].join("\n"),
+      });
+    }
     if (codingState && recoveredCodingState) {
       conversationMessages.push({
         role: "system",
@@ -2686,7 +2742,14 @@ export class ChatTurnAgentRunner {
     const hasPersistedExecutedSearchEvidence = persistedSettledToolRuns.some(
       (run) => run.toolName === "browser.search" && run.status === "executed" && run.result !== undefined,
     );
-    let assistantContent = "";
+    // An outcome-only request with one settled read needs no model to restate its saved receipt.
+    const reportGoogleReadReceiptOnly =
+      input.mode === "chat" &&
+      !delegatedResultContract &&
+      allPersistedToolRuns.length === 1 &&
+      googleReadApprovalSummaries.size === 1 &&
+      /\breport only whether the read succeeded and what grant was created\b/iu.test(input.content);
+    let assistantContent = reportGoogleReadReceiptOnly ? [...googleReadApprovalSummaries][0]! : "";
     let toolUseClosed = false;
     let assistantModel = input.model;
     let routingState: ChatTurnTraceRecord["routing"] = {
@@ -6714,6 +6777,9 @@ export class ChatTurnAgentRunner {
           "retry_narrower",
         );
       }
+    }
+    if (finalStatus === "completed" && !delegatedResultContract && googleReadApprovalSummaries.size > 0) {
+      assistantContent = reconcileGoogleReadApprovalReply(assistantContent, googleReadApprovalSummaries);
     }
     const finalizedCompletion = finalizeTurnCompletionState({
       completion: completionState,
@@ -10877,8 +10943,18 @@ function detectTimeIntent(content: string): boolean {
   );
 }
 
+function applyTurnWebRestriction(input: ChatTurnAgentRunnerInput): ChatTurnAgentRunnerInput {
+  if (!hasExplicitWebRestriction(input.capabilityProfileContent ?? input.content)) return input;
+  return {
+    ...input,
+    webMode: "off",
+    normalizationProfile: input.normalizationProfile === "quick_web" ? "live" : input.normalizationProfile,
+    executionProfile: input.executionProfile === "quick_web" ? "standard" : input.executionProfile,
+  };
+}
+
 function detectLiveDataIntent(content: string): boolean {
-  if (isExplicitLocalMcpTask(content)) return false;
+  if (isExplicitLocalMcpTask(content) || hasExplicitWebRestriction(content)) return false;
   return hasLiveDataIntent(content);
 }
 
@@ -10894,7 +10970,7 @@ function detectDirectUrlIntent(content: string): boolean {
 }
 
 function detectWebLookupIntent(content: string, historyMessages: ChatCompletionRequest["messages"]): boolean {
-  if (isExplicitLocalMcpTask(content)) return false;
+  if (isExplicitLocalMcpTask(content) || hasExplicitWebRestriction(content)) return false;
   return (
     detectLiveDataIntent(content) ||
     hasExternalResearchIntent(content) ||

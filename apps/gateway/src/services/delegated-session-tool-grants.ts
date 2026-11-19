@@ -31,6 +31,8 @@ export function buildDelegatedSessionToolGrantCopies(input: {
       // Folder grants for writes outside the write roots belong to the session
       // the operator approved; a delegated child never inherits them.
       .filter((grant) => grant.constraints?.writeRoots === undefined)
+      // Google read allowances belong to the exact Chat that was reviewed.
+      .filter((grant) => grant.constraints?.googleRead === undefined)
       .filter(
         (grant) =>
           grant.decision !== "allow" ||
