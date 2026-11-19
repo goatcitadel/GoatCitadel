@@ -1438,12 +1438,14 @@ async function fetchAllowlisted(
       ) {
         break;
       }
+      await response.body?.cancel().catch(() => undefined);
       await waitForHttpRetry(response, attempt, signal);
     }
     if (!(response.status >= 300 && response.status < 400)) {
       return { response, finalUrl: current };
     }
     const location = response.headers.get("location");
+    await response.body?.cancel().catch(() => undefined);
     if (!location) {
       throw new Error(`Redirect missing location for ${redactUrlForError(current)}`);
     }

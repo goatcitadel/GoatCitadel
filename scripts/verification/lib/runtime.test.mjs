@@ -15,6 +15,7 @@ import {
   buildVerificationProcessLogName,
   buildVerificationUiCommand,
   buildVerificationWorkspaceRefreshCommands,
+  requestJson,
   startProcess,
   stopProcess,
   stopVerificationStack,
@@ -78,6 +79,37 @@ test("verification cleanup observes a signalled child and flushes both diagnosti
     await stopProcess(handle);
     await fs.rm(artifactRoot, { recursive: true, force: true });
   }
+});
+
+test("verification diagnostics keep draining the child when one log cannot be opened", async () => {
+  const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-runtime-"));
+  await fs.mkdir(path.join(artifactRoot, "diagnostics", "fixture.stdout.log"), { recursive: true });
+  const handle = await startProcess({ artifactRoot }, "fixture", [
+    process.execPath,
+    "-e",
+    'process.stdout.write("x".repeat(1024 * 1024)); process.stderr.write("remaining diagnostic")',
+  ]);
+  try {
+    const [code] = await once(handle.child, "exit");
+    await handle.logsFlushed;
+    assert.equal(code, 0);
+    assert.equal(await fs.readFile(handle.stderrPath, "utf8"), "remaining diagnostic");
+  } finally {
+    await stopProcess(handle);
+    await fs.rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test("verification JSON requests preserve primitive bodies and omit undefined", async (t) => {
+  const bodies = [];
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    bodies.push(init.body);
+    return new Response(null, { status: 204 });
+  });
+  for (const body of [false, 0, "", null, undefined]) {
+    await requestJson("http://127.0.0.1", "/fixture", { method: "POST", body });
+  }
+  assert.deepEqual(bodies, ["false", "0", '""', "null", undefined]);
 });
 
 test("verification process environments remove inherited secrets while allowing explicit fixtures", () => {

@@ -3,7 +3,8 @@ import path from "node:path";
 import os from "node:os";
 import net from "node:net";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
+import { finished } from "node:stream/promises";
 import { spawnSync } from "node:child_process";
 import { resolveUiTarget } from "../../lib/ui-target.mjs";
 import {
@@ -198,10 +199,11 @@ export async function waitForHttp(url, label, timeoutMs = 180000, handle = null)
 
 export async function startProcess(context, name, commandArgs, extraEnv, options = {}) {
   const [command, ...args] = commandArgs;
-  const stdoutPath = path.join(context.artifactRoot, "diagnostics", `${name}.stdout.log`);
-  const stderrPath = path.join(context.artifactRoot, "diagnostics", `${name}.stderr.log`);
-  const stdoutChunks = [];
-  const stderrChunks = [];
+  const diagnosticsDir = path.join(context.artifactRoot, "diagnostics");
+  const stdoutPath = path.join(diagnosticsDir, `${name}.stdout.log`);
+  const stderrPath = path.join(diagnosticsDir, `${name}.stderr.log`);
+  // Attempt both log files independently even if the directory could not be created.
+  await fs.mkdir(diagnosticsDir, { recursive: true }).catch(() => undefined);
   const child = spawnVerificationProcess(command, args, {
     cwd: options.cwd ?? repoRoot,
     env: buildVerificationProcessEnv(process.env, extraEnv, options.omitEnv),
@@ -221,34 +223,38 @@ export async function startProcess(context, name, commandArgs, extraEnv, options
   child.once("error", (error) => {
     handle.spawnError = error;
   });
-  child.stdout?.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
-  child.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-  handle.logsFlushed = new Promise((resolve) => {
-    let drainTimer;
-    child.once("exit", () => {
-      // Descendants can inherit the pipes and otherwise hold them open after exit.
-      drainTimer = setTimeout(() => {
-        child.stdout?.destroy();
-        child.stderr?.destroy();
-      }, 2000);
-      drainTimer.unref();
-    });
-    const writeOutput = async (outputPath, chunks) => {
-      await writeText(outputPath, Buffer.concat(chunks).toString("utf8")).catch((error) => {
-        console.warn(`[verification] could not write ${outputPath}: ${error?.message ?? error}`);
-      });
-    };
-    // Close follows pipe drainage, including when spawn failed.
-    child.once("close", () => {
-      clearTimeout(drainTimer);
-      void Promise.allSettled([writeOutput(stdoutPath, stdoutChunks), writeOutput(stderrPath, stderrChunks)]).then(
-        () => {
-          resolve();
-        },
-      );
-    });
+  let drainTimer;
+  child.once("exit", () => {
+    // Descendants can inherit the pipes and otherwise hold them open after exit.
+    drainTimer = setTimeout(() => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }, 2000);
+    drainTimer.unref();
   });
+  child.once("close", () => clearTimeout(drainTimer));
+  handle.logsFlushed = Promise.all([
+    writeProcessDiagnostics(child, child.stdout, stdoutPath),
+    writeProcessDiagnostics(child, child.stderr, stderrPath),
+  ]).then(() => undefined);
   return handle;
+}
+
+function writeProcessDiagnostics(child, source, outputPath) {
+  const log = createWriteStream(outputPath);
+  const completion = finished(log, { cleanup: true }).catch((error) => {
+    // Keep draining the child and writing the other log if this destination fails.
+    source?.unpipe(log);
+    source?.resume();
+    console.warn(`[verification] could not write ${outputPath}: ${error?.message ?? error}`);
+  });
+  source?.once("error", (error) => log.destroy(error));
+  source?.pipe(log);
+  child.once("close", () => {
+    // Cover failed spawns and deliberately destroyed inherited pipes as well as EOF.
+    if (!log.destroyed && !log.writableEnded) log.end();
+  });
+  return completion;
 }
 
 /** The verification stack's own Gateway variables; startProcess merges them over the inherited env. */
@@ -400,7 +406,7 @@ export async function requestJson(gatewayUrl, route, init = {}) {
       ...(method !== "GET" ? { "Idempotency-Key": randomUUID() } : {}),
       ...(init.headers ?? {}),
     },
-    body: init.body ? JSON.stringify(init.body) : undefined,
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
   const text = await response.text();
   let body = null;

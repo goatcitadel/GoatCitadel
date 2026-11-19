@@ -346,6 +346,14 @@ After the 2026-11-01 default-branch pushes (head `c9c2b87a8`) the AI view report
 | `packages/mission-control-shared/src/components/chat/chat-display-helpers.ts` — `summarizeDelegationSteps` ignores `cancelled` | Accepted. Cancelled steps are counted and settled; the counts line adds "Cancelled N" only when there are any, so existing renders do not change. Skipped steps stay unsettled as before. |
 | `packages/policy-engine/src/errand-browser/computer-actions.ts` — chord strings such as `Ctrl+Enter` reach `keyboard.down()` | Accepted. Chord strings are split into keys before validation, the 8-key limit applies to the split keys, and a trailing `+` stays the plus key. |
 
+### 2026-11-19 Windows argument forwarding follow-up
+
+The AI suggestion about substring assertions in `tool-executor-loop30-branch.test.ts` was reviewed
+on `ec4b1a8e3`. The Windows-only test in `tool-executor.test.ts` already launches the installed
+`pnpm` wrapper through `cmd.exe` and asserts the exact arguments received by a Node fixture. It
+covers empty arguments, spaces, embedded quotes, trailing backslashes, percent signs, and shell
+metacharacters. The test passed on Windows, so a second batch fixture would duplicate that coverage.
+
 ### There is no way to dismiss an AI finding
 
 Unlike Standard findings, which carry a per-row **Dismiss** button, the AI findings surface offers

@@ -5579,6 +5579,48 @@ describe("executeTool", () => {
     }
   });
 
+  it("releases retry and redirect responses before requesting the next URL", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const retryCancelled = vi.fn();
+    const redirectCancelled = vi.fn();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(new ReadableStream({ cancel: retryCancelled }), {
+          status: 503,
+          headers: { "retry-after": "0" },
+        }),
+      )
+      .mockImplementationOnce(async () => {
+        expect(retryCancelled).toHaveBeenCalledOnce();
+        return new Response(new ReadableStream({ cancel: redirectCancelled }), {
+          status: 302,
+          headers: { location: "/next" },
+        });
+      })
+      .mockImplementationOnce(async () => {
+        expect(redirectCancelled).toHaveBeenCalledOnce();
+        return new Response("final");
+      });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const result = await executeTool(
+        {
+          toolName: "http.get",
+          args: { url: "https://example.com/start" },
+          agentId: "agent",
+          sessionId: "sess-http-release",
+        },
+        policyConfig,
+        storageStub,
+      );
+      expect(result.body).toBe("final");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("redacts URLs in redirect errors before they can reach tool transcripts", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const originalFetch = globalThis.fetch;
