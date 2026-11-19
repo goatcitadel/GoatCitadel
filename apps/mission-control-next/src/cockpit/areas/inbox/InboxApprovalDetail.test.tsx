@@ -51,6 +51,11 @@ vi.mock("./specialist-approval-evidence", async (importOriginal) => ({
 const notFound = () => new ApiRequestError("API error 404", { kind: "http", method: "GET", path: "/x", status: 404 });
 // Records the props each render of the decision bar receives, so a test can check the scope and review step.
 const actions = vi.hoisted(() => ({ props: vi.fn() }));
+const practice = vi.hoisted(() => ({ active: false }));
+vi.mock("@goatcitadel/mission-control-shared/api/gateway-transport", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/gateway-transport")>()),
+  isPracticeGateway: () => practice.active,
+}));
 vi.mock("./InboxApprovalActions", () => ({
   InboxApprovalActions: (props: {
     checking?: boolean;
@@ -121,6 +126,7 @@ async function settleUntil(done: () => boolean) {
 }
 
 beforeEach(() => {
+  practice.active = false;
   api.fetchApproval.mockReset();
   api.fetchApprovals.mockReset();
   api.fetchOperatorInbox.mockReset();
@@ -139,6 +145,35 @@ afterEach(() => {
 });
 
 describe("Inbox approval detail", () => {
+  it.each([true, false])("supplies the Chat allowance context only in practice (%s)", async (active) => {
+    practice.active = active;
+    api.fetchApproval.mockResolvedValue({
+      ...approval,
+      kind: "docs.search",
+      preview: { reviewKind: "knowledge.operation", toolName: "docs.search", target: "Workspace", query: "offsite" },
+      linkage: {
+        workspaceId: "default",
+        sessionId: "chat-a",
+        turnId: "turn-a",
+        actionType: "tool.invoke",
+        toolName: "docs.search",
+      },
+    });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <InboxApprovalDetail item={item} workspaceId="default" />
+        </QueryClientProvider>,
+      ),
+    );
+    await settleUntil(() => Boolean(decisionControls()));
+    expect(actions.props).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        sessionId: active ? "chat-a" : undefined,
+        onTemporaryGrantResolved: active ? expect.any(Function) : undefined,
+      }),
+    );
+  });
   it("explains the recorded commands individually and avoids classifying a shortened command", async () => {
     const longCommand = "echo " + "sample ".repeat(24) + "end marker";
     api.fetchApproval.mockResolvedValue({
