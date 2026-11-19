@@ -491,6 +491,21 @@ describe("executeTool", () => {
     expect(String(result.stdout ?? "")).toContain("ok");
   });
 
+  it("preserves single- and double-quoted empty command arguments", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const result = await executeTool(
+      {
+        toolName: "shell.exec",
+        args: { command: `node -e "console.log(JSON.stringify(process.argv.slice(1)))" '' label ""` },
+        agentId: "agent",
+        sessionId: "sess-empty-args",
+      },
+      policyConfig,
+      storageStub,
+    );
+    expect(JSON.parse(String(result.stdout))).toEqual(["", "label", ""]);
+  });
+
   it("reads a targeted file range", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const filePath = path.join(testWorkspaceRoot, "sample.ts");

@@ -12,6 +12,11 @@ import {
   ValidationError,
 } from "@goatcitadel/contracts";
 import type { MeshRuntimeArtifactSnapshot } from "@goatcitadel/storage";
+import {
+  discardGatewayTokenRotation,
+  recoverGatewayTokenRotation,
+  type GatewayTokenRotationReceipt,
+} from "./gateway-token-rotation.js";
 
 const ACTIVE_CONFIG_FILENAME = "goatcitadel.json";
 const GENERATIONS_DIRNAME = ".generations";
@@ -55,7 +60,16 @@ export interface ConfigGenerationCommitInput<T> {
   requireExpectedRevision?: boolean;
   buildCandidate(): ConfigGenerationCandidate<T> | Promise<ConfigGenerationCandidate<T>>;
   /** Prepare a credential write under the revision fence. Its write returns a rollback callback. */
-  prepareStartupCredential?(candidate: T, previous: T): { beforePublish: boolean; write(): () => void } | undefined;
+  prepareStartupCredential?(
+    candidate: T,
+    previous: T,
+  ):
+    | {
+        beforePublish: boolean;
+        write(): () => void;
+        stageRotation?(generationId: string): GatewayTokenRotationReceipt;
+      }
+    | undefined;
   captureRuntimeOwnerRecoveryIntent?(
     candidate: T,
   ): ConfigGenerationRuntimeOwnerRecoveryIntent | Promise<ConfigGenerationRuntimeOwnerRecoveryIntent>;
@@ -130,6 +144,7 @@ interface ConfigGenerationTransactionMarker {
   generationId: string;
   digest: string;
   updatedAt: string;
+  gatewayTokenRotation?: GatewayTokenRotationReceipt;
   runtimeOwnerRecoveryIntent?: ConfigGenerationRuntimeOwnerRecoveryIntent;
   rollbackRuntimeOwnerRecoveryIntent?: ConfigGenerationRuntimeOwnerRecoveryIntent;
 }
@@ -457,17 +472,22 @@ export class ConfigGenerationService {
     }
 
     // The committed marker is the irreversible decision to finish this
-    // generation. Runtime owner apply waits for this decision. Startup
-    // credentials are staged above so published config can always boot.
+    // generation. First-time credentials were published above so this config
+    // can boot. Stage rotations before the decision so startup can replay them.
     let runtimeOwnerRecoveryIntent: ConfigGenerationRuntimeOwnerRecoveryIntent | undefined;
+    let gatewayTokenRotation: GatewayTokenRotationReceipt | undefined;
+    const generationId = nextPayload.generation!.generationId;
+    const rootDir = path.dirname(this.configDir);
     try {
       runtimeOwnerRecoveryIntent = await input.captureRuntimeOwnerRecoveryIntent?.(candidate.runtime);
-      await this.writeTransactionMarker("committed", nextPayload, { runtimeOwnerRecoveryIntent });
+      gatewayTokenRotation = startupCredential?.stageRotation?.(generationId);
+      await this.writeTransactionMarker("committed", nextPayload, { runtimeOwnerRecoveryIntent, gatewayTokenRotation });
     } catch (decisionError) {
       const rollbackPayload = withNextGeneration(previousPayload, nextPayload, currentRevision + 2);
       try {
         await this.publishCanonical(rollbackPayload);
         this.activePayload = rollbackPayload;
+        if (startupCredential?.stageRotation) discardGatewayTokenRotation(rootDir, generationId);
         await this.writeTransactionMarker("committed", rollbackPayload);
         restoreStartupCredential?.();
         await this.retainLastGood(rollbackPayload);
@@ -486,7 +506,9 @@ export class ConfigGenerationService {
       await input.apply(candidate.runtime);
       // A rotation can keep using its existing durable token until both the
       // forward decision and runtime owner apply have succeeded.
-      if (startupCredential && !startupCredential.beforePublish) startupCredential.write();
+      if (startupCredential && !startupCredential.beforePublish) {
+        startupCredential.write();
+      }
     } catch (applyError) {
       const rollbackPayload = withNextGeneration(previousPayload, nextPayload, currentRevision + 2);
       try {
@@ -496,6 +518,7 @@ export class ConfigGenerationService {
         // state with candidate owners and no recovery receipt.
         await this.publishCanonical(rollbackPayload);
         this.activePayload = rollbackPayload;
+        if (startupCredential?.stageRotation) discardGatewayTokenRotation(rootDir, generationId);
         await this.writeTransactionMarker("committed", rollbackPayload, {
           ...(runtimeOwnerRecoveryIntent ? { rollbackRuntimeOwnerRecoveryIntent: runtimeOwnerRecoveryIntent } : {}),
         });
@@ -538,6 +561,7 @@ export class ConfigGenerationService {
       throw new ConfigGenerationApplyError(applyError, rollbackPayload.generation!.revision);
     }
 
+    if (gatewayTokenRotation) recoverGatewayTokenRotation(rootDir, generationId, gatewayTokenRotation);
     await this.hooks.afterOwnerApply?.(nextPayload);
     await this.retainLastGood(nextPayload);
     await this.tryPublishMirrors(nextPayload, stagedMirrorDir);
@@ -605,7 +629,7 @@ export class ConfigGenerationService {
     payload: CompleteUnifiedConfigPayload,
     intents: Pick<
       ConfigGenerationTransactionMarker,
-      "runtimeOwnerRecoveryIntent" | "rollbackRuntimeOwnerRecoveryIntent"
+      "runtimeOwnerRecoveryIntent" | "rollbackRuntimeOwnerRecoveryIntent" | "gatewayTokenRotation"
     > = {},
   ): Promise<void> {
     const generation = payload.generation;
@@ -622,6 +646,7 @@ export class ConfigGenerationService {
       generationId: generation.generationId,
       digest: generation.digest,
       updatedAt: new Date().toISOString(),
+      ...(intents.gatewayTokenRotation ? { gatewayTokenRotation: intents.gatewayTokenRotation } : {}),
       ...(intents.runtimeOwnerRecoveryIntent
         ? { runtimeOwnerRecoveryIntent: structuredClone(intents.runtimeOwnerRecoveryIntent) }
         : {}),
@@ -811,6 +836,7 @@ async function recoverLastGoodConfigGenerationInternal(rootDir: string): Promise
     if (marker.state === "pending") {
       const lastGood = await readValidatedLastGood(lastGoodPath, activeError ?? new Error("Unconfirmed generation"));
       await publishRecoveryPayload(configDir, activePath, lastGood);
+      discardGatewayTokenRotation(rootDir, marker.generationId);
       await removeFileDurably(transactionPath);
       return {
         recovered: true,
@@ -823,6 +849,8 @@ async function recoverLastGoodConfigGenerationInternal(rootDir: string): Promise
     // retain the marker until Gateway startup has idempotently reconciled every
     // runtime owner. A second crash therefore repeats forward recovery instead
     // of losing the decision between config recovery and owner initialization.
+    if (marker.gatewayTokenRotation)
+      recoverGatewayTokenRotation(rootDir, marker.generationId, marker.gatewayTokenRotation);
     await retainRecoveryLastGood(generationsDir, lastGoodPath, active);
     return {
       recovered: false,
@@ -846,6 +874,7 @@ async function recoverLastGoodConfigGenerationInternal(rootDir: string): Promise
         );
         await publishRecoveryPayload(configDir, activePath, authoritative);
       }
+      discardGatewayTokenRotation(rootDir, marker.generationId);
       await writeRecoveryTransactionMarker(generationsDir, transactionPath, authoritative, {
         rollbackRuntimeOwnerRecoveryIntent:
           marker.rollbackRuntimeOwnerRecoveryIntent ?? marker.runtimeOwnerRecoveryIntent,
@@ -870,6 +899,7 @@ async function recoverLastGoodConfigGenerationInternal(rootDir: string): Promise
     );
   }
   await publishRecoveryPayload(configDir, activePath, recoveryPayload);
+  if (marker) discardGatewayTokenRotation(rootDir, marker.generationId);
   if (marker?.state === "committed") {
     await writeRecoveryTransactionMarker(generationsDir, transactionPath, recoveryPayload, {
       rollbackRuntimeOwnerRecoveryIntent:
@@ -1063,6 +1093,13 @@ function assertTransactionMarker(value: unknown, source: string): asserts value 
   }
   if (value.runtimeOwnerRecoveryIntent !== undefined) {
     assertRuntimeOwnerRecoveryIntent(value.runtimeOwnerRecoveryIntent, source);
+  }
+  if (value.gatewayTokenRotation !== undefined) {
+    if (!isRecord(value.gatewayTokenRotation) || value.state !== "committed") {
+      throw new ValidationError({ message: `Invalid Gateway token rotation receipt: ${source}` });
+    }
+    assertProviderSecretVerification(value.gatewayTokenRotation.previous, source);
+    assertProviderSecretVerification(value.gatewayTokenRotation.replacement, source);
   }
   if (value.rollbackRuntimeOwnerRecoveryIntent !== undefined) {
     assertRuntimeOwnerRecoveryIntent(value.rollbackRuntimeOwnerRecoveryIntent, source);

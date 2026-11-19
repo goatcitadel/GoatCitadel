@@ -55,6 +55,8 @@ tmp-*.log
 # inside the image, so a leaked or pulled image would expose them.
 .env
 .env.*
+**/*.gateway-token-*.pending
+**/.*.gateway-token-*.pending.*.tmp
 *.env
 **/.env
 **/.env.*

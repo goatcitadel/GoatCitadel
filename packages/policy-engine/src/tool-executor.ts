@@ -1544,7 +1544,7 @@ function parseExecFileCommand(command: string): { file: string; args: string[] }
   }
 
   const tokens: string[] = [];
-  let current = "";
+  let current: string | undefined;
   let inSingle = false;
   let inDouble = false;
   let escaping = false;
@@ -1552,7 +1552,7 @@ function parseExecFileCommand(command: string): { file: string; args: string[] }
   for (let index = 0; index < input.length; index += 1) {
     const char = input[index] ?? "";
     if (escaping) {
-      current += char;
+      current = (current ?? "") + char;
       escaping = false;
       continue;
     }
@@ -1560,38 +1560,40 @@ function parseExecFileCommand(command: string): { file: string; args: string[] }
       const next = input[index + 1] ?? "";
       const escapable = next === '"' || next === "'" || next === "\\" || /\s/.test(next);
       if (!escapable) {
-        current += char;
+        current = (current ?? "") + char;
         continue;
       }
       escaping = true;
       continue;
     }
     if (char === "'" && !inDouble) {
+      current ??= "";
       inSingle = !inSingle;
       continue;
     }
     if (char === '"' && !inSingle) {
+      current ??= "";
       inDouble = !inDouble;
       continue;
     }
     if (!inSingle && !inDouble && /\s/.test(char)) {
-      if (current.length > 0) {
+      if (current !== undefined) {
         tokens.push(current);
-        current = "";
+        current = undefined;
       }
       continue;
     }
-    current += char;
+    current = (current ?? "") + char;
   }
 
   if (escaping || inSingle || inDouble) {
     throw new Error("shell.exec command has unmatched quotes or escape sequence");
   }
-  if (current.length > 0) {
+  if (current !== undefined) {
     tokens.push(current);
   }
-  const file = tokens[0] as string;
-  const args = tokens.slice(1);
+  const [file, ...args] = tokens;
+  if (!file) throw new Error("shell.exec requires a non-empty executable name");
   return { file, args };
 }
 
@@ -1768,20 +1770,21 @@ function isPathWithinAnyGrantRoot(candidate: string, roots: string[]): boolean {
     if (root.trim() === "*") {
       return true;
     }
-    return normalizePathVariantsForGrantMatch(root).some(
-      (resolvedRoot) => resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}/`),
-    );
+    return normalizePathVariantsForGrantMatch(root).some((resolvedRoot) => {
+      const prefix = resolvedRoot.endsWith(path.sep) ? resolvedRoot : resolvedRoot + path.sep;
+      return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(prefix);
+    });
   });
 }
 
 function normalizePathForGrantMatch(candidate: string): string {
-  return path.resolve(candidate).replace(/\\/g, "/").toLowerCase();
+  return path.resolve(candidate);
 }
 
 function normalizePathVariantsForGrantMatch(candidate: string): string[] {
   const resolvedCandidate = normalizePathForGrantMatch(candidate);
   try {
-    const realCandidate = fsSync.realpathSync(path.resolve(candidate)).replace(/\\/g, "/").toLowerCase();
+    const realCandidate = fsSync.realpathSync.native(resolvedCandidate);
     return realCandidate === resolvedCandidate ? [resolvedCandidate] : [resolvedCandidate, realCandidate];
   } catch {
     return [resolvedCandidate];

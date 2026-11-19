@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { once } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 
 import {
@@ -9,10 +13,48 @@ import {
   buildVerificationProcessLogName,
   buildVerificationUiCommand,
   buildVerificationWorkspaceRefreshCommands,
+  startProcess,
+  stopProcess,
   stopVerificationStack,
   waitForHttp,
   withVerificationUiOrigin,
 } from "./runtime.mjs";
+
+test("verification readiness times out when a server accepts a connection without sending headers", async () => {
+  const server = createServer(() => {});
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    await assert.rejects(
+      waitForHttp(`http://127.0.0.1:${server.address().port}/health`, "Stalled fixture", 150),
+      /did not become ready in time/u,
+    );
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("verification cleanup observes a signalled child and flushes both diagnostics", async () => {
+  const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-runtime-"));
+  const handle = await startProcess({ artifactRoot }, "fixture", [
+    process.execPath,
+    "-e",
+    'process.stderr.write("diagnostic"); process.stdout.write("ready"); setInterval(() => {}, 1000)',
+  ]);
+  try {
+    await once(handle.child.stdout, "data");
+    const exited = once(handle.child, "exit");
+    handle.child.kill("SIGTERM");
+    await exited;
+    await stopProcess(handle);
+    assert.equal(await fs.readFile(handle.stdoutPath, "utf8"), "ready");
+    assert.equal(await fs.readFile(handle.stderrPath, "utf8"), "diagnostic");
+  } finally {
+    await stopProcess(handle);
+    await fs.rm(artifactRoot, { recursive: true, force: true });
+  }
+});
 
 test("verification process environments remove inherited secrets while allowing explicit fixtures", () => {
   const env = buildVerificationProcessEnv(

@@ -114,7 +114,10 @@ export class ScriptInventoryRepository {
       if (write.tool_name === "project.files.save") {
         const managed = items.find(
           (item) =>
-            item.kind === "managed" && item.revision === result?.revisionId && item.projectId === result?.projectId,
+            item.kind === "managed" &&
+            item.sessionId === undefined &&
+            item.revision === result?.revisionId &&
+            item.projectId === result?.projectId,
         );
         if (managed) {
           managed.sessionId = write.session_id;
@@ -135,15 +138,22 @@ export class ScriptInventoryRepository {
         createdAt: write.finished_at,
       });
     }
-    for (const run of new CodeModeRunRepository(this.db).listFiltered({ workspaceId, limit: 1000 })) {
+    const runs = new CodeModeRunRepository(this.db).listFiltered({ workspaceId, limit: 1000 });
+    const sessionIds = [...new Set(runs.flatMap((run) => (run.sessionId ? [run.sessionId] : [])))];
+    const workspaceSessions = new Set<string>();
+    const batchSize = 200;
+    for (let offset = 0; offset < sessionIds.length; offset += batchSize) {
+      const batch = sessionIds.slice(offset, offset + batchSize);
+      const sessions = this.db
+        .prepare(
+          `SELECT session_id FROM chat_session_meta WHERE workspace_id = ? AND session_id IN (${batch.map(() => "?").join(", ")})`,
+        )
+        .all<{ session_id: string }>(workspaceId, ...batch);
+      for (const session of sessions) workspaceSessions.add(session.session_id);
+    }
+    for (const run of runs) {
       if (run.workspaceId !== workspaceId) continue;
-      if (
-        run.sessionId &&
-        !this.db
-          .prepare("SELECT session_id FROM chat_session_meta WHERE session_id = ? AND workspace_id = ?")
-          .get(run.sessionId, workspaceId)
-      )
-        continue;
+      if (run.sessionId && !workspaceSessions.has(run.sessionId)) continue;
       // The run's code artifact is immutable evidence; retention is separate operator metadata.
       add({
         kind: "code",

@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConflictError, ValidationError } from "@goatcitadel/contracts";
+import { readLocalEnvVar } from "../env-file.js";
+import { stageGatewayTokenRotation } from "./gateway-token-rotation.js";
 import {
   ConfigGenerationApplyError,
   ConfigGenerationCommitDecisionError,
@@ -15,10 +17,53 @@ import {
 const roots: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
 describe("ConfigGenerationService", () => {
+  it("recovers a committed Gateway token rotation before applying runtime owners", async () => {
+    const { root, payload } = await createConfigRoot();
+    const envPath = path.join(root, ".env");
+    const previousToken = "previous-rotation-test-credential";
+    const replacement = "replacement-rotation-test-credential";
+    vi.stubEnv("GOATCITADEL_LOCAL_ENV_FILE", envPath);
+    vi.stubEnv("GOATCITADEL_AUTH_TOKEN", undefined);
+    await fs.writeFile(envPath, `GOATCITADEL_AUTH_TOKEN=${previousToken}\nOTHER_SETTING=keep\n`);
+    const crash = new Error("process stopped after the commit decision");
+    const service = new ConfigGenerationService(root, undefined, {
+      afterCommitMarker: () => {
+        throw crash;
+      },
+    });
+    const write = vi.fn(() => () => undefined);
+    await expect(
+      service.commit({
+        expectedRevision: 1,
+        previousRuntime: "balanced",
+        buildCandidate: () => ({ payload: withBudgetMode(payload, "saver"), runtime: "saver" }),
+        prepareStartupCredential: () => ({
+          beforePublish: false,
+          stageRotation: (id) => stageGatewayTokenRotation(root, id, previousToken, replacement),
+          write,
+        }),
+        apply: vi.fn(),
+        restore: vi.fn(),
+      }),
+    ).rejects.toBe(crash);
+    expect(write).not.toHaveBeenCalled();
+    expect(readLocalEnvVar("GOATCITADEL_AUTH_TOKEN").value).toBe(previousToken);
+    const marker = await fs.readFile(path.join(root, "config", ".generations", "transaction.json"), "utf8");
+    expect(marker).not.toContain(replacement);
+    expect(marker).not.toContain(previousToken);
+    await recoverLastGoodConfigGeneration(root);
+    await recoverLastGoodConfigGeneration(root);
+    expect(readLocalEnvVar("GOATCITADEL_AUTH_TOKEN").value).toBe(replacement);
+    expect(process.env.GOATCITADEL_AUTH_TOKEN).toBe(replacement);
+    expect(readLocalEnvVar("OTHER_SETTING").value).toBe("keep");
+    expect((await fs.readdir(root)).filter((name) => name.endsWith(".pending"))).toEqual([]);
+  });
+
   it("keeps the active generation when the startup credential cannot be staged", async () => {
     const { root, payload, activeRaw } = await createConfigRoot();
     const service = new ConfigGenerationService(root);

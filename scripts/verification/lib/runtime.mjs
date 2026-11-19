@@ -162,14 +162,16 @@ export async function waitForHttp(url, label, timeoutMs = 180000, handle = null)
       await handle.logsFlushed?.catch(() => undefined);
       throw handle.spawnError;
     }
-    if (handle?.child && (handle.child.exitCode !== null || handle.child.signalCode != null)) {
+    if (handle?.child && hasExited(handle.child)) {
       await handle.logsFlushed?.catch(() => undefined);
       const stdoutPath = handle.stdoutPath ? ` stdout: ${handle.stdoutPath}` : "";
       const stderrPath = handle.stderrPath ? ` stderr: ${handle.stderrPath}` : "";
       throw new Error(`${label} process exited before becoming ready.${stdoutPath}${stderrPath}`);
     }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(remaining) });
       if (response.ok) {
         return;
       }
@@ -184,7 +186,8 @@ export async function waitForHttp(url, label, timeoutMs = 180000, handle = null)
       }
       // Connection refusal during startup is retryable; a denied probe is not.
     }
-    await delay(1500);
+    const retryDelay = Math.min(1500, deadline - Date.now());
+    if (retryDelay > 0) await delay(retryDelay);
   }
   throw new Error(
     `${label} did not become ready in time: ${url}${lastStatus ? ` (last HTTP status: ${lastStatus})` : ""}`,
@@ -219,24 +222,29 @@ export async function startProcess(context, name, commandArgs, extraEnv, options
   child.stdout?.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
   child.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
   handle.logsFlushed = new Promise((resolve) => {
-    let settled = false;
-    const flush = async () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      try {
-        await writeText(stdoutPath, Buffer.concat(stdoutChunks).toString("utf8"));
-        await writeText(stderrPath, Buffer.concat(stderrChunks).toString("utf8"));
-      } finally {
-        resolve();
-      }
+    let drainTimer;
+    child.once("exit", () => {
+      // Descendants can inherit the pipes and otherwise hold them open after exit.
+      drainTimer = setTimeout(() => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }, 2000);
+      drainTimer.unref();
+    });
+    const writeOutput = async (outputPath, chunks) => {
+      await writeText(outputPath, Buffer.concat(chunks).toString("utf8")).catch((error) => {
+        console.warn(`[verification] could not write ${outputPath}: ${error?.message ?? error}`);
+      });
     };
-    // Settle on the first of exit/close/error: a spawn failure never emits 'exit', so keying
-    // only on 'exit' would leave this promise pending forever.
-    child.once("exit", flush);
-    child.once("close", flush);
-    child.once("error", flush);
+    // Close follows pipe drainage, including when spawn failed.
+    child.once("close", () => {
+      clearTimeout(drainTimer);
+      void Promise.allSettled([writeOutput(stdoutPath, stdoutChunks), writeOutput(stderrPath, stderrChunks)]).then(
+        () => {
+          resolve();
+        },
+      );
+    });
   });
   return handle;
 }
@@ -319,7 +327,7 @@ export async function stopProcess(handle) {
   if (!handle?.child) {
     return;
   }
-  if (handle.child.exitCode !== null) {
+  if (hasExited(handle.child) || handle.spawnError) {
     await handle.logsFlushed?.catch(() => undefined);
     handle.child.stdout?.destroy();
     handle.child.stderr?.destroy();
@@ -344,7 +352,7 @@ export async function stopProcess(handle) {
       () => true,
       () => false,
     );
-    if (!exited && handle.child.exitCode === null) {
+    if (!exited && !hasExited(handle.child)) {
       try {
         handle.child.kill("SIGKILL");
       } catch {
@@ -700,9 +708,13 @@ async function removeRuntimeRootWithRetry(runtimeRoot, attempts = 6) {
   }
 }
 
+function hasExited(child) {
+  return child.exitCode != null || child.signalCode != null;
+}
+
 function waitForExit(child, timeoutMs) {
   return new Promise((resolve, reject) => {
-    if (child.exitCode !== null) {
+    if (hasExited(child)) {
       resolve();
       return;
     }

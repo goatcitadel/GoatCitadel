@@ -47,15 +47,16 @@ describe("auth credential planner", () => {
     candidate.assistant.auth.token.value = newToken;
     const credential = prepareGatewayTokenForRestart(candidate, oldConfig);
     expect(credential?.beforePublish).toBe(false);
+    expect(credential?.stageRotation).toBeTypeOf("function");
     expect(readLocalEnvVar("GOATCITADEL_AUTH_TOKEN", { rootDir: root }).value === oldToken).toBe(true);
     credential?.write();
     expect(readLocalEnvVar("GOATCITADEL_AUTH_TOKEN", { rootDir: root }).value === newToken).toBe(true);
 
-    const brokenCandidate = structuredClone(candidate);
-    brokenCandidate.assistant.auth.token.value = newToken + String.raw`\n`;
-    const brokenCredential = prepareGatewayTokenForRestart(brokenCandidate, candidate);
-    expect(() => brokenCredential?.write()).toThrow("The Gateway token could not be saved for restart.");
-    expect(readLocalEnvVar("GOATCITADEL_AUTH_TOKEN", { rootDir: root }).value === newToken).toBe(true);
+    const escapedCandidate = structuredClone(candidate);
+    const escapedToken = newToken + String.raw`\n`;
+    escapedCandidate.assistant.auth.token.value = escapedToken;
+    prepareGatewayTokenForRestart(escapedCandidate, candidate)?.write();
+    expect(readLocalEnvVar("GOATCITADEL_AUTH_TOKEN", { rootDir: root }).value === escapedToken).toBe(true);
   });
 
   it("prefers env credentials and reports inline override warnings", async () => {
