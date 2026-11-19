@@ -6701,6 +6701,29 @@ describe("executeTool", () => {
       expect(result.stderrTruncated).toBeUndefined();
     }, 15_000);
 
+    it("keeps the actual final lines when both process streams exceed the capture cap", async () => {
+      mocked.isBrowserToolName.mockReturnValue(false);
+      const fixture = [
+        "for (const [stream, label] of [[process.stdout, 'stdout'], [process.stderr, 'stderr']]) {",
+        "stream.write(label + ' started\\n' + 'x'.repeat(1100000) + '\\n' + label + ' finished 🍂\\n')",
+        "}",
+      ].join(" ");
+      const result = await executeTool(
+        {
+          toolName: "shell.exec",
+          args: { command: `node -e "${fixture}"` },
+          agentId: "agent",
+          sessionId: "sess-capture-cap",
+        },
+        policyConfig,
+        storageStub,
+      );
+      expect(result.stdoutTruncated).toBe(true);
+      expect(result.stderrTruncated).toBe(true);
+      expect(String(result.stdout)).toMatch(/stdout started[\s\S]*truncated[\s\S]*stdout finished 🍂/u);
+      expect(String(result.stderr)).toMatch(/stderr started[\s\S]*truncated[\s\S]*stderr finished 🍂/u);
+    });
+
     it("leaves small output unmodified without truncation flags", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
       const result = await executeTool(

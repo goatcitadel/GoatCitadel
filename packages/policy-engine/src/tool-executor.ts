@@ -22,6 +22,7 @@ import {
   isOpenCodeJsonInvocation,
   parseOpenCodeRunOutput,
   splitUtf8HeadTail,
+  truncateUtf8Bytes,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
@@ -54,6 +55,7 @@ import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { detectShellScriptSyntax, formatShellScriptSyntaxError } from "./sandbox/shell-command-syntax.js";
 import { resolveShellExecTimeout } from "./tool-executor/shell-timeout.js";
 import { captureBackgroundProcessIdentity } from "./tool-executor/background-process-identity.js";
+import { ShellOutputCapture, type CapturedShellOutput } from "./tool-executor/shell-output-capture.js";
 import {
   killBackgroundProcess,
   registerBackgroundProcess,
@@ -316,15 +318,28 @@ function scrubSensitiveOutput(text: string): string {
  * over the FULL captured window before this cut so a secret straddling either
  * boundary is already masked.
  */
-function boundShellStream(scrubbedText: string): { text: string; truncated: boolean } {
-  const split = splitUtf8HeadTail(scrubbedText, shellOutputKeepHeadBytes, shellOutputKeepTailBytes);
-  if (!split.truncated) {
-    return { text: scrubbedText, truncated: false };
-  }
+function boundShellStream(scrubbedText: string, capture?: CapturedShellOutput): { text: string; truncated: boolean } {
+  const headTail = capture?.omittedBytes
+    ? boundCapturedShellWindow(capture)
+    : splitUtf8HeadTail(scrubbedText, shellOutputKeepHeadBytes, shellOutputKeepTailBytes);
+  const { head, tail, omittedBytes } = headTail;
+  if (omittedBytes === 0) return { text: scrubbedText, truncated: false };
   return {
-    text: `${split.head}\n…[shell output truncated: ${split.omittedBytes} bytes omitted]…\n${split.tail}`,
+    text: `${head}\n…[shell output truncated: ${omittedBytes} bytes omitted]…\n${tail}`,
     truncated: true,
   };
+}
+
+function boundCapturedShellWindow(capture: CapturedShellOutput): CapturedShellOutput {
+  const head = truncateUtf8Bytes(capture.head, shellOutputKeepHeadBytes, "keepStart");
+  const tail = truncateUtf8Bytes(capture.tail, shellOutputKeepTailBytes, "keepEnd");
+  const omittedBytes =
+    capture.omittedBytes + Buffer.byteLength(capture.head + capture.tail) - Buffer.byteLength(head + tail);
+  return { head, tail, omittedBytes };
+}
+
+function scrubCapturedShellOutput(output: CapturedShellOutput): CapturedShellOutput {
+  return { ...output, head: scrubSensitiveOutput(output.head), tail: scrubSensitiveOutput(output.tail) };
 }
 
 function resolveToolActorId(request: ToolInvokeRequest): string {
@@ -863,12 +878,13 @@ async function shellExec(
     buildModelSpawnEnv(config),
     timeoutMs,
   );
-  const redactedStdout = scrubSensitiveOutput(outcome.stdout);
+  const redactedStdout = scrubCapturedShellOutput(outcome.stdout);
+  const redactedStderr = scrubCapturedShellOutput(outcome.stderr);
   const externalAgent = isOpenCodeJsonInvocation(parsed.file, parsed.args)
-    ? parseOpenCodeRunOutput(redactedStdout)
+    ? parseOpenCodeRunOutput(redactedStdout.head + redactedStdout.tail)
     : undefined;
-  const stdout = boundShellStream(redactedStdout);
-  const stderr = boundShellStream(scrubSensitiveOutput(outcome.stderr));
+  const stdout = boundShellStream(redactedStdout.head, redactedStdout);
+  const stderr = boundShellStream(redactedStderr.head, redactedStderr);
   return {
     command,
     cwd,
@@ -888,8 +904,8 @@ async function shellExec(
 
 interface ShellExecOutcome {
   pid?: number;
-  stdout: string;
-  stderr: string;
+  stdout: CapturedShellOutput;
+  stderr: CapturedShellOutput;
   exitCode: number;
 }
 
@@ -897,8 +913,8 @@ interface ShellExecOutcome {
  * Runs a resolved shell command via a manual spawn so the whole process TREE can
  * be killed on timeout or abort. On non-Windows we spawn detached to obtain a
  * killable process group; on Windows the tree is reaped with `taskkill /T`.
- * Output is capped at {@link SHELL_EXEC_MAX_BUFFER_BYTES} per stream, matching
- * the previous execFile maxBuffer behavior.
+ * Capture is capped at {@link SHELL_EXEC_MAX_BUFFER_BYTES} per stream while
+ * preserving the end of each stream and continuing to drain the child.
  */
 function runShellExecToCompletion(
   executable: { file: string; args: string[] },
@@ -919,37 +935,14 @@ function runShellExecToCompletion(
       detached: posixProcessGroup,
     });
 
-    let stdout = "";
-    let stderr = "";
-    let stdoutCapped = false;
-    let stderrCapped = false;
+    const stdout = new ShellOutputCapture(SHELL_EXEC_MAX_BUFFER_BYTES);
+    const stderr = new ShellOutputCapture(SHELL_EXEC_MAX_BUFFER_BYTES);
     let settled = false;
     let timedOut = false;
     let aborted = false;
 
-    const collect = (chunk: Buffer, isStdout: boolean) => {
-      if (isStdout) {
-        if (stdoutCapped) {
-          return;
-        }
-        stdout += chunk.toString("utf8");
-        if (Buffer.byteLength(stdout, "utf8") >= SHELL_EXEC_MAX_BUFFER_BYTES) {
-          stdout = stdout.slice(0, SHELL_EXEC_MAX_BUFFER_BYTES);
-          stdoutCapped = true;
-        }
-        return;
-      }
-      if (stderrCapped) {
-        return;
-      }
-      stderr += chunk.toString("utf8");
-      if (Buffer.byteLength(stderr, "utf8") >= SHELL_EXEC_MAX_BUFFER_BYTES) {
-        stderr = stderr.slice(0, SHELL_EXEC_MAX_BUFFER_BYTES);
-        stderrCapped = true;
-      }
-    };
-    child.stdout?.on("data", (chunk: Buffer) => collect(chunk, true));
-    child.stderr?.on("data", (chunk: Buffer) => collect(chunk, false));
+    child.stdout?.on("data", (chunk: Buffer) => stdout.append(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => stderr.append(chunk));
 
     const killTree = (label: string) => {
       terminateShellProcessTree(child, label, posixProcessGroup, { command: executable.file, cwd });
@@ -980,10 +973,15 @@ function runShellExecToCompletion(
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
+      const capturedStderr = stderr.finish();
+      if (extraStderr) {
+        const part = capturedStderr.omittedBytes > 0 ? "tail" : "head";
+        capturedStderr[part] += capturedStderr[part] ? `\n${extraStderr}` : extraStderr;
+      }
       resolve({
         ...(typeof child.pid === "number" ? { pid: child.pid } : {}),
-        stdout,
-        stderr: extraStderr ? (stderr ? `${stderr}\n${extraStderr}` : extraStderr) : stderr,
+        stdout: stdout.finish(),
+        stderr: capturedStderr,
         exitCode,
       });
     };

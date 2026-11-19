@@ -4,6 +4,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ReadableStream } from "node:stream/web";
 import { test } from "node:test";
 
 import {
@@ -33,6 +34,28 @@ test("verification readiness times out when a server accepts a connection withou
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("verification readiness releases both healthy and unhealthy probe responses", async (t) => {
+  const bodies = [];
+  t.mock.method(globalThis, "fetch", async () => {
+    const status = bodies.length === 0 ? 503 : 200;
+    bodies.push({ status, cancelled: false });
+    const probe = bodies.at(-1);
+    return new Response(
+      new ReadableStream({
+        cancel: () => {
+          probe.cancelled = true;
+        },
+      }),
+      { status },
+    );
+  });
+  await waitForHttp("http://127.0.0.1:12345/health", "Probe fixture", 2_500);
+  assert.deepEqual(bodies, [
+    { status: 503, cancelled: true },
+    { status: 200, cancelled: true },
+  ]);
 });
 
 test("verification cleanup observes a signalled child and flushes both diagnostics", async () => {

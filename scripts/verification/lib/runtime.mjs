@@ -15,7 +15,7 @@ import {
 import { repoRoot, sanitizeFilePart, spawnVerificationProcess, writeText } from "./shared.mjs";
 
 let gatewayWorkspaceBuildEnsured = false;
-const uiBuildKeys = new Set();
+const uiBuildKeys = new Map();
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
 
 export async function prepareVerificationRuntime(runId) {
@@ -172,6 +172,7 @@ export async function waitForHttp(url, label, timeoutMs = 180000, handle = null)
     if (remaining <= 0) break;
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(remaining) });
+      await response.body?.cancel().catch(() => undefined);
       if (response.ok) {
         return;
       }
@@ -544,13 +545,14 @@ export async function ensureGatewayWorkspaceBuild(context, options = {}) {
 
 async function ensureVerificationUiBuild(context, packageName, uiEnv, options = {}) {
   const buildKey = JSON.stringify({
-    packageName,
-    gatewayUrl: uiEnv.VITE_GATEWAY_URL,
-    visualRegressionMode: uiEnv.VITE_GOATCITADEL_VISUAL_REGRESSION_MODE,
+    overrides: Object.entries(uiEnv).sort(([a], [b]) => a.localeCompare(b)),
+    omitEnv: [...(options.omitEnv ?? [])].sort(),
   });
-  if (uiBuildKeys.has(buildKey)) {
+  if (uiBuildKeys.get(packageName) === buildKey) {
     return;
   }
+  // A failed build may have already overwritten the older build's assets.
+  uiBuildKeys.delete(packageName);
 
   const logLines = [
     "verification startup builds the UI before preview mode so visual proof does not run against Vite HMR/watch state.",
@@ -581,7 +583,7 @@ async function ensureVerificationUiBuild(context, packageName, uiEnv, options = 
     throw new Error(`Failed to build verification UI ${packageName}. See ${buildLogPath}`);
   }
 
-  uiBuildKeys.add(buildKey);
+  uiBuildKeys.set(packageName, buildKey);
 }
 
 function runPnpmSync(args, omitEnv = []) {
@@ -683,28 +685,17 @@ function isPortFree(port) {
 }
 
 async function removeRuntimeRootWithRetry(runtimeRoot, attempts = 6) {
-  let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       await fs.rm(runtimeRoot, { recursive: true, force: true });
       return;
     } catch (error) {
-      lastError = error;
       const isTransientCleanupLock = error?.code === "EBUSY" || error?.code === "EPERM" || error?.code === "EACCES";
       if (!isTransientCleanupLock || attempt === attempts - 1) {
-        if (isTransientCleanupLock) {
-          console.warn(
-            `[verify] unable to remove verification runtime root after ${attempts} attempts; leaving ${runtimeRoot} in place (${error.code}).`,
-          );
-          return;
-        }
         throw error;
       }
       await delay(1000 * (attempt + 1));
     }
-  }
-  if (lastError) {
-    throw lastError;
   }
 }
 
