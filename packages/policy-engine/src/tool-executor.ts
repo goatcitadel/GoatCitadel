@@ -922,6 +922,8 @@ function runShellExecToCompletion(
   signal: AbortSignal | undefined,
   env: Record<string, string>,
   timeoutMs: number,
+  captureBytes = SHELL_EXEC_MAX_BUFFER_BYTES,
+  stopOnOverflow = false,
 ): Promise<ShellExecOutcome> {
   return new Promise<ShellExecOutcome>((resolve) => {
     const posixProcessGroup = process.platform !== "win32";
@@ -936,18 +938,25 @@ function runShellExecToCompletion(
       detached: posixProcessGroup,
     });
 
-    const stdout = new ShellOutputCapture(SHELL_EXEC_MAX_BUFFER_BYTES);
-    const stderr = new ShellOutputCapture(SHELL_EXEC_MAX_BUFFER_BYTES);
+    const stdout = new ShellOutputCapture(captureBytes);
+    const stderr = new ShellOutputCapture(captureBytes);
     let settled = false;
     let timedOut = false;
     let aborted = false;
 
-    child.stdout?.on("data", (chunk: Buffer) => stdout.append(chunk));
-    child.stderr?.on("data", (chunk: Buffer) => stderr.append(chunk));
-
     const killTree = (label: string) => {
       terminateShellProcessTree(child, label, posixProcessGroup, { command: executable.file, cwd });
     };
+    let overflow: string | undefined;
+    const collect = (output: ShellOutputCapture, chunk: Buffer, stream: string) => {
+      output.append(chunk);
+      if (stopOnOverflow && !overflow && output.exceededLimit) {
+        overflow = `${stream} maxBuffer length exceeded`;
+        killTree("package script output limit");
+      }
+    };
+    child.stdout?.on("data", (chunk: Buffer) => collect(stdout, chunk, "stdout"));
+    child.stderr?.on("data", (chunk: Buffer) => collect(stderr, chunk, "stderr"));
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -997,6 +1006,10 @@ function runShellExecToCompletion(
       }
       if (aborted) {
         finish(-1, "shell.exec aborted; process tree killed.");
+        return;
+      }
+      if (overflow) {
+        finish(-1, overflow);
         return;
       }
       if (typeof code === "number") {
@@ -1273,16 +1286,24 @@ async function runRestricted(
   const cmdArgs = manager === "pnpm" ? [...(filter ? ["--filter", filter] : []), "run", kind] : ["run", kind];
   const command = resolveRestrictedCommand(manager, cmdArgs);
   await assertBeforeProcessSpawn(runtimeHooks, request, toolName, cwd);
-  const { stdout, stderr } = await execFileAsync(command.file, command.args, {
-    timeout: 120000,
-    windowsHide: true,
-    windowsVerbatimArguments: command.windowsVerbatimArguments,
-    maxBuffer: 8 * 1024 * 1024,
+  const outcome = await runShellExecToCompletion(
+    command,
     cwd,
-    env: buildModelSpawnEnv(config),
-  });
-  const boundedStdout = boundShellStream(scrubSensitiveOutput(stdout));
-  const boundedStderr = boundShellStream(scrubSensitiveOutput(stderr));
+    request.signal,
+    buildModelSpawnEnv(config),
+    120000,
+    8 * 1024 * 1024,
+    true,
+  );
+  const stdout = scrubCapturedShellOutput(outcome.stdout);
+  const stderr = scrubCapturedShellOutput(outcome.stderr);
+  const boundedStdout = boundShellStream(stdout.head, stdout);
+  const boundedStderr = boundShellStream(stderr.head, stderr);
+  if (outcome.exitCode !== 0) {
+    throw new Error(
+      `Command failed with exit code ${outcome.exitCode}${boundedStderr.text ? `: ${boundedStderr.text}` : ""}`,
+    );
+  }
   return {
     manager,
     kind,
@@ -1552,7 +1573,7 @@ function parseExecFileCommand(command: string): { file: string; args: string[] }
       escaping = false;
       continue;
     }
-    if (char === "\\") {
+    if (char === "\\" && !inSingle) {
       const next = input[index + 1] ?? "";
       const escapable = next === '"' || next === "'" || next === "\\" || /\s/.test(next);
       if (!escapable) {

@@ -507,6 +507,22 @@ describe("executeTool", () => {
     expect(JSON.parse(String(result.stdout))).toEqual(["", "label", ""]);
   });
 
+  it("preserves backslashes within a single-quoted command argument", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const literal = String.raw`C:\temp\\literal\"quote`;
+    const result = await executeTool(
+      {
+        toolName: "shell.exec",
+        args: { command: `node -e "console.log(JSON.stringify(process.argv[1]))" '${literal}'` },
+        agentId: "agent",
+        sessionId: "sess-single-quoted-literal",
+      },
+      policyConfig,
+      storageStub,
+    );
+    expect(JSON.parse(String(result.stdout))).toBe(literal);
+  });
+
   it("reads a targeted file range", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const filePath = path.join(testWorkspaceRoot, "sample.ts");
@@ -1290,6 +1306,42 @@ describe("executeTool", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual(values);
   });
+
+  it("terminates a running restricted package script when its request is cancelled", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const cwd = path.join(testWorkspaceRoot, "restricted-package-cancel");
+    await fs.mkdir(cwd, { recursive: true });
+    await fs.writeFile(path.join(cwd, "package.json"), JSON.stringify({ scripts: { lint: "node fixture.cjs" } }));
+    await fs.writeFile(
+      path.join(cwd, "fixture.cjs"),
+      'require("node:fs").writeFileSync("started", "ready"); setInterval(() => {}, 1000);',
+    );
+    const controller = new AbortController();
+    const outcome = executeTool(
+      {
+        toolName: "lint.run",
+        args: { cwd, manager: "pnpm" },
+        agentId: "agent",
+        sessionId: "sess-restricted-package-cancel",
+        signal: controller.signal,
+      },
+      policyConfig,
+      storageStub,
+    ).catch((error: unknown) => error);
+    try {
+      await vi.waitFor(
+        async () => {
+          expect(await fs.readFile(path.join(cwd, "started"), "utf8")).toBe("ready");
+        },
+        { timeout: 8_000, interval: 50 },
+      );
+      controller.abort();
+      expect(await outcome).toMatchObject({ message: expect.stringContaining("aborted; process tree killed") });
+    } finally {
+      controller.abort();
+      await outcome;
+    }
+  }, 15_000);
 
   it("runs pnpm-backed restricted tools as package scripts", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);

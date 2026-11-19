@@ -5,6 +5,7 @@ import net from "node:net";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
 import { finished } from "node:stream/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { spawnSync } from "node:child_process";
 import { resolveUiTarget } from "../../lib/ui-target.mjs";
 import {
@@ -158,39 +159,56 @@ export async function stopVerificationStack(stack) {
 
 export async function waitForHttp(url, label, timeoutMs = 180000, handle = null) {
   const deadline = Date.now() + timeoutMs;
+  const child = handle?.child;
+  const processAbort = new AbortController();
+  const abortProbe = () => processAbort.abort();
+  child?.once?.("exit", abortProbe);
+  child?.once?.("error", abortProbe);
   let lastStatus;
-  while (Date.now() < deadline) {
-    if (handle?.spawnError) {
-      await handle.logsFlushed?.catch(() => undefined);
-      throw handle.spawnError;
-    }
-    if (handle?.child && hasExited(handle.child)) {
-      await handle.logsFlushed?.catch(() => undefined);
-      const stdoutPath = handle.stdoutPath ? ` stdout: ${handle.stdoutPath}` : "";
-      const stderrPath = handle.stderrPath ? ` stderr: ${handle.stderrPath}` : "";
-      throw new Error(`${label} process exited before becoming ready.${stdoutPath}${stderrPath}`);
-    }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(remaining) });
-      await response.body?.cancel().catch(() => undefined);
-      if (response.ok) {
-        return;
+  try {
+    while (true) {
+      if (handle?.spawnError) {
+        await handle.logsFlushed?.catch(() => undefined);
+        throw handle.spawnError;
       }
-      lastStatus = response.status;
-    } catch (error) {
-      const code = error?.cause?.code ?? error?.code;
-      if (code === "EACCES" || code === "EPERM") {
-        throw new Error(
-          `${label} probe was denied (${code}); the verification environment must permit loopback connections: ${url}`,
-          { cause: error },
-        );
+      if (handle?.child && hasExited(handle.child)) {
+        await handle.logsFlushed?.catch(() => undefined);
+        const stdoutPath = handle.stdoutPath ? ` stdout: ${handle.stdoutPath}` : "";
+        const stderrPath = handle.stderrPath ? ` stderr: ${handle.stderrPath}` : "";
+        throw new Error(`${label} process exited before becoming ready.${stdoutPath}${stderrPath}`);
       }
-      // Connection refusal during startup is retryable; a denied probe is not.
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      try {
+        const signal = AbortSignal.any([AbortSignal.timeout(remaining), processAbort.signal]);
+        const response = await fetch(url, { signal });
+        await response.body?.cancel().catch(() => undefined);
+        if (processAbort.signal.aborted) continue;
+        if (response.ok) {
+          return;
+        }
+        lastStatus = response.status;
+      } catch (error) {
+        if (processAbort.signal.aborted) continue;
+        const code = error?.cause?.code ?? error?.code;
+        if (code === "EACCES" || code === "EPERM") {
+          throw new Error(
+            `${label} probe was denied (${code}); the verification environment must permit loopback connections: ${url}`,
+            { cause: error },
+          );
+        }
+        // Connection refusal during startup is retryable; a denied probe is not.
+      }
+      const retryDelay = Math.min(1500, deadline - Date.now());
+      if (retryDelay > 0) {
+        await sleep(retryDelay, undefined, { signal: processAbort.signal }).catch((error) => {
+          if (!processAbort.signal.aborted) throw error;
+        });
+      }
     }
-    const retryDelay = Math.min(1500, deadline - Date.now());
-    if (retryDelay > 0) await delay(retryDelay);
+  } finally {
+    child?.off?.("exit", abortProbe);
+    child?.off?.("error", abortProbe);
   }
   throw new Error(
     `${label} did not become ready in time: ${url}${lastStatus ? ` (last HTTP status: ${lastStatus})` : ""}`,

@@ -38,6 +38,29 @@ test("verification readiness times out when a server accepts a connection withou
   }
 });
 
+test("verification readiness interrupts a stalled request when its child exits", { timeout: 4_000 }, async () => {
+  const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-runtime-"));
+  const handle = await startProcess({ artifactRoot }, "fixture", [
+    process.execPath,
+    "-e",
+    'process.stderr.write("diagnostic"); setInterval(() => {}, 1000)',
+  ]);
+  const server = createServer(() => handle.child.kill("SIGTERM"));
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    await assert.rejects(
+      waitForHttp(`http://127.0.0.1:${server.address().port}/health`, "Exited fixture", 15_000, handle),
+      /Exited fixture process exited before becoming ready/u,
+    );
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    await stopProcess(handle);
+    await fs.rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
 test("verification readiness releases both healthy and unhealthy probe responses", async (t) => {
   const bodies = [];
   t.mock.method(globalThis, "fetch", async () => {

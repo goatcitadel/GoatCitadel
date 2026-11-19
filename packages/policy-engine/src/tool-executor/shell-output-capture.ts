@@ -16,7 +16,13 @@ export class ShellOutputCapture {
 
   public append(chunk: Buffer): void {
     if (chunk.length === 0) return;
-    const buffer = (this.buffer ??= Buffer.allocUnsafe(this.maxBytes));
+    const required = Math.min(this.totalBytes + chunk.length, this.maxBytes);
+    if (!this.buffer || required > this.buffer.length) {
+      const buffer = Buffer.allocUnsafe(Math.min(this.maxBytes, Math.max(required, (this.buffer?.length ?? 0) * 2)));
+      this.buffer?.copy(buffer, 0, 0, this.totalBytes);
+      this.buffer = buffer;
+    }
+    const buffer = this.buffer;
     const initialBytes = Math.min(chunk.length, Math.max(0, this.maxBytes - this.totalBytes));
     if (initialBytes > 0) chunk.copy(buffer, this.totalBytes, 0, initialBytes);
     this.totalBytes += initialBytes;
@@ -31,6 +37,10 @@ export class ShellOutputCapture {
     chunk.copy(buffer, this.headBytes + start, chunkStart, chunkStart + first);
     chunk.copy(buffer, this.headBytes, chunkStart + first);
     this.totalBytes += remaining;
+  }
+
+  public get exceededLimit(): boolean {
+    return this.totalBytes > this.maxBytes;
   }
 
   public finish(): CapturedShellOutput {
