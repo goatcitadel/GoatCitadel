@@ -559,17 +559,17 @@ export function createPracticeSession(origin = window.location.origin) {
         },
       });
     }
-    if (
-      route === "/api/v1/chat/sessions/" + sessionId + "/agent-send/stream" &&
-      method === "POST" &&
-      sample.active &&
-      !sample.sent
-    ) {
+    const sendRoute = "/api/v1/chat/sessions/" + sessionId + "/agent-send";
+    if ((route === sendRoute || route === sendRoute + "/stream") && method === "POST" && sample.active) {
       const body = await readBody();
       if (disposed || sample.sent) return json({ error: "The practice message was already sent." }, 409);
       if (typeof body?.content !== "string" || body.content.trim() !== prompt)
         return json({ error: "Use the example message to continue the tutorial." }, 422);
       update({ sent: true });
+      if (route === sendRoute) {
+        const { userMessage, assistantMessage, trace } = conversation().turns[0];
+        return json({ sessionId, turnId, userMessage, assistantMessage, trace, transport: "llm", model: session.model });
+      }
       return stream([
         { type: "message_start", messageId: assistantMessageId, branchKind: "continuation" },
         { type: "delta", messageId: assistantMessageId, delta: waitingReply },

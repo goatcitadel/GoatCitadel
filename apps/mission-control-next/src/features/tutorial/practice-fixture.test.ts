@@ -7,11 +7,19 @@ const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.strin
 describe("first-run tutorial fixture", () => {
   it.each(["approve", "reject"] as const)("settles %s once and clears the session", async (decision) => {
     const practice = createPracticeSession("http://127.0.0.1:8787");
-    const send = base + "/chat/sessions/" + practice.sessionId + "/agent-send/stream";
+    const send = base + "/chat/sessions/" + practice.sessionId + "/agent-send";
+    const endpoint = decision === "approve" ? send + "/stream" : send;
     const resolve = base + "/approvals/" + practice.approvalId + "/resolve";
-    expect((await practice.transport.fetch(send, json({ content: "My private message" }))).status).toBe(422);
-    expect((await practice.transport.fetch(send, json({ content: practice.prompt }))).ok).toBe(true);
-    expect((await practice.transport.fetch(send, json({ content: practice.prompt }))).ok).toBe(false);
+    expect((await practice.transport.fetch(endpoint, json({ content: "My private message" }))).status).toBe(422);
+    const response = await practice.transport.fetch(endpoint, json({ content: practice.prompt }));
+    expect(response.ok).toBe(true);
+    if (decision === "reject") {
+      expect(await response.json()).toMatchObject({
+        userMessage: { content: practice.prompt },
+        trace: { pendingApprovalSummary: { approvalId: practice.approvalId } },
+      });
+    }
+    expect((await practice.transport.fetch(send + "/stream", json({ content: practice.prompt }))).status).toBe(409);
     expect((await practice.transport.fetch(base + "/chat/tool-grants", json({ duration: "8h" }))).ok).toBe(false);
     expect(practice.sample.decision).toBeNull();
     expect((await practice.transport.fetch(resolve, json({ decision }))).ok).toBe(true);
