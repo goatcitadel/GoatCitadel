@@ -155,11 +155,11 @@ describe("policy engine loop13 branch tails", () => {
   it("quotes Windows package-manager commands and leaves non-package managers untouched", async () => {
     const win = resolveRestrictedCommand("pnpm", ["--filter", "@scope/pkg name", "run", "test"], "win32");
     expect(win.file.toLowerCase()).toMatch(/cmd\.exe$/);
-    expect(win.args.join(" ")).toContain('"@scope/pkg name"');
+    expect(win.args.join(" ")).toContain('^"@scope/pkg^ name^"');
 
     const npm = resolveExecutableCommand("npm", ["run", "build&check", "C:\\temp tail\\"], "win32");
-    expect(npm.args.join(" ")).toContain('"build^&check"');
-    expect(npm.args.join(" ")).toContain('"C:\\temp tail\\\\"');
+    expect(npm.args.join(" ")).toContain('^"build^&check^"');
+    expect(npm.args.join(" ")).toContain('^"C:\\temp^ tail\\\\^"');
 
     expect(resolveExecutableCommand("git", ["status"], "win32")).toEqual({ file: "git", args: ["status"] });
     expect(resolveExecutableCommand("pnpm", ["test"], "linux")).toEqual({ file: "pnpm", args: ["test"] });

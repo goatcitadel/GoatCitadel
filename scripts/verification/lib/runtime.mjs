@@ -40,43 +40,44 @@ export async function startVerificationStack(context, options = {}) {
   });
   const uiTarget = resolveUiTarget(repoRoot, process.env);
   const runtimeRoot = options.runtimeRoot ?? (await prepareVerificationRuntime(context.runId));
-  const gatewayPort = await resolveAvailablePort(Number(options.gatewayPort ?? 0));
-  const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
-  // Chosen before the Gateway starts so its origin policy can name the UI (see withVerificationUiOrigin).
-  const uiPort = options.includeUi !== false ? await resolveUiPort(options.uiPort, gatewayPort) : undefined;
-  const uiUrl = uiPort ? `http://127.0.0.1:${uiPort}` : undefined;
-  const gatewayEnv = buildVerificationGatewayEnv({
-    runtimeRoot,
-    gatewayPort,
-    uiUrl,
-    gatewayEnv: options.gatewayEnv,
-    gatewayEnvOmit: options.gatewayEnvOmit,
-  });
-
-  const gateway =
-    options.gatewayMode === "built"
-      ? await startProcess(
-          context,
-          buildVerificationProcessLogName("gateway", options.processLogPrefix),
-          [
-            process.execPath,
-            options.builtGatewayEntryFile ?? path.join(repoRoot, "apps", "gateway", "dist", "main.js"),
-          ],
-          gatewayEnv,
-          { omitEnv: options.gatewayEnvOmit },
-        )
-      : await startProcess(
-          context,
-          buildVerificationProcessLogName("gateway", options.processLogPrefix),
-          buildVerificationGatewayCommand(),
-          gatewayEnv,
-          {
-            omitEnv: options.gatewayEnvOmit,
-            cwd: path.join(repoRoot, "apps", "gateway"),
-          },
-        );
+  let gateway;
   let ui;
   try {
+    const gatewayPort = await resolveAvailablePort(Number(options.gatewayPort ?? 0));
+    const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
+    // Chosen before the Gateway starts so its origin policy can name the UI (see withVerificationUiOrigin).
+    const uiPort = options.includeUi !== false ? await resolveUiPort(options.uiPort, gatewayPort) : undefined;
+    const uiUrl = uiPort ? `http://127.0.0.1:${uiPort}` : undefined;
+    const gatewayEnv = buildVerificationGatewayEnv({
+      runtimeRoot,
+      gatewayPort,
+      uiUrl,
+      gatewayEnv: options.gatewayEnv,
+      gatewayEnvOmit: options.gatewayEnvOmit,
+    });
+
+    gateway =
+      options.gatewayMode === "built"
+        ? await startProcess(
+            context,
+            buildVerificationProcessLogName("gateway", options.processLogPrefix),
+            [
+              process.execPath,
+              options.builtGatewayEntryFile ?? path.join(repoRoot, "apps", "gateway", "dist", "main.js"),
+            ],
+            gatewayEnv,
+            { omitEnv: options.gatewayEnvOmit },
+          )
+        : await startProcess(
+            context,
+            buildVerificationProcessLogName("gateway", options.processLogPrefix),
+            buildVerificationGatewayCommand(),
+            gatewayEnv,
+            {
+              omitEnv: options.gatewayEnvOmit,
+              cwd: path.join(repoRoot, "apps", "gateway"),
+            },
+          );
     await waitForHttp(`${gatewayUrl}/health`, "Gateway health", 180000, gateway);
     if (uiUrl) {
       const uiEnv = {
@@ -329,10 +330,7 @@ export async function stopProcess(handle) {
     return;
   }
   if (hasExited(handle.child) || handle.spawnError) {
-    await handle.logsFlushed?.catch(() => undefined);
-    handle.child.stdout?.destroy();
-    handle.child.stderr?.destroy();
-    return;
+    return finishProcessCleanup(handle, true);
   }
   if (process.platform === "win32") {
     const treeKill = spawnSync(
@@ -364,24 +362,33 @@ export async function stopProcess(handle) {
         () => false,
       );
     }
-    if (!exited) {
-      handle.child.stdout?.destroy();
-      handle.child.stderr?.destroy();
+    return finishProcessCleanup(handle, exited);
+  }
+  handle.child.kill("SIGTERM");
+  let exited = await waitForExit(handle.child, 8000).then(
+    () => true,
+    () => false,
+  );
+  if (!exited && !hasExited(handle.child)) {
+    handle.child.kill("SIGKILL");
+    exited = await waitForExit(handle.child, 4000).then(
+      () => true,
+      () => false,
+    );
+  }
+  await finishProcessCleanup(handle, exited);
+}
+
+async function finishProcessCleanup(handle, exited) {
+  try {
+    if (!exited && !hasExited(handle.child)) {
       throw new Error(`Verification process ${handle.child.pid} did not stop within the cleanup deadline`);
     }
     await handle.logsFlushed?.catch(() => undefined);
+  } finally {
     handle.child.stdout?.destroy();
     handle.child.stderr?.destroy();
-    return;
   }
-  handle.child.kill("SIGTERM");
-  await waitForExit(handle.child, 8000).catch(async () => {
-    handle.child.kill("SIGKILL");
-    await waitForExit(handle.child, 4000).catch(() => undefined);
-  });
-  await handle.logsFlushed?.catch(() => undefined);
-  handle.child.stdout?.destroy();
-  handle.child.stderr?.destroy();
 }
 
 export async function requestJson(gatewayUrl, route, init = {}) {

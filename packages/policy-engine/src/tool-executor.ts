@@ -917,7 +917,7 @@ interface ShellExecOutcome {
  * preserving the end of each stream and continuing to drain the child.
  */
 function runShellExecToCompletion(
-  executable: { file: string; args: string[] },
+  executable: ResolvedExecutableCommand,
   cwd: string | undefined,
   signal: AbortSignal | undefined,
   env: Record<string, string>,
@@ -932,6 +932,7 @@ function runShellExecToCompletion(
       // otherwise wait for piped input even when their prompt is in argv.
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      windowsVerbatimArguments: executable.windowsVerbatimArguments,
       detached: posixProcessGroup,
     });
 
@@ -1034,6 +1035,7 @@ async function shellExecBackground(
       detached: process.platform !== "win32",
       stdio: "ignore",
       windowsHide: true,
+      windowsVerbatimArguments: executable.windowsVerbatimArguments,
     });
     child.once("error", reject);
     const pid = child.pid;
@@ -1274,6 +1276,7 @@ async function runRestricted(
   const { stdout, stderr } = await execFileAsync(command.file, command.args, {
     timeout: 120000,
     windowsHide: true,
+    windowsVerbatimArguments: command.windowsVerbatimArguments,
     maxBuffer: 8 * 1024 * 1024,
     cwd,
     env: buildModelSpawnEnv(config),
@@ -1326,11 +1329,17 @@ function buildModelSpawnEnv(config?: ToolPolicyConfig): Record<string, string> {
   });
 }
 
+interface ResolvedExecutableCommand {
+  file: string;
+  args: string[];
+  windowsVerbatimArguments?: true;
+}
+
 export function resolveRestrictedCommand(
   manager: "pnpm" | "npm",
   cmdArgs: string[],
   platform: NodeJS.Platform = process.platform,
-): { file: string; args: string[] } {
+): ResolvedExecutableCommand {
   return resolveExecutableCommand(manager, cmdArgs, platform);
 }
 
@@ -1338,35 +1347,26 @@ export function resolveExecutableCommand(
   file: string,
   args: string[],
   platform: NodeJS.Platform = process.platform,
-): { file: string; args: string[] } {
+): ResolvedExecutableCommand {
   if (platform !== "win32" || (file !== "pnpm" && file !== "npm")) {
     return { file, args };
   }
   return {
     file: process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe",
-    args: ["/d", "/s", "/c", [file, ...args].map(quoteForCmd).join(" ")],
+    args: ["/d", "/s", "/v:off", "/c", `"${[file, ...args.map(quoteForCmd)].join(" ")}"`],
+    windowsVerbatimArguments: true,
   };
 }
 
-function quoteForCmd(value: string): string {
-  if (value.length === 0) {
-    return '""';
-  }
-  let needsQuotes = false;
-  for (const char of value) {
-    if (char === " " || char === "\t" || char === "\n" || char === "\r" || char === '"') {
-      needsQuotes = true;
-      break;
-    }
-    if (char === "&" || char === "(" || char === ")" || char === "^" || char === "<" || char === ">" || char === "|") {
-      needsQuotes = true;
-      break;
-    }
-  }
-  if (!needsQuotes) {
-    return value;
-  }
+const CMD_META_CHARACTERS = new Set('\t ()[]%!^"`<>&|;,*?');
 
+function quoteForCmd(value: string): string {
+  if (/[\r\n]/u.test(value) || value.includes("\u0000"))
+    throw new Error("Windows package-manager arguments cannot contain line breaks or null bytes");
+  if (/^[a-zA-Z0-9_@./:\\=+-]+$/u.test(value)) return value;
+
+  // Encode the argv for the forwarded Node process first, then escape the
+  // entire encoded value for cmd's outer parse, including its quote characters.
   let escaped = '"';
   let pendingBackslashes = 0;
   for (const char of value) {
@@ -1384,17 +1384,13 @@ function quoteForCmd(value: string): string {
       escaped += "\\".repeat(pendingBackslashes);
       pendingBackslashes = 0;
     }
-    if (char === "&" || char === "(" || char === ")" || char === "^" || char === "<" || char === ">" || char === "|") {
-      escaped += `^${char}`;
-      continue;
-    }
     escaped += char;
   }
   if (pendingBackslashes > 0) {
     escaped += "\\".repeat(pendingBackslashes * 2);
   }
   escaped += '"';
-  return escaped;
+  return Array.from(escaped, (char) => (CMD_META_CHARACTERS.has(char) ? `^${char}` : char)).join("");
 }
 
 function finalizeToolResult(result: Record<string, unknown>): Record<string, unknown> {

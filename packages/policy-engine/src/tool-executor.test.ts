@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
@@ -1240,7 +1241,8 @@ describe("executeTool", () => {
 
     expect(resolved).toEqual({
       file: process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe",
-      args: ["/d", "/s", "/c", "pnpm --filter workspace/pkg run test"],
+      args: ["/d", "/s", "/v:off", "/c", '"pnpm --filter workspace/pkg run test"'],
+      windowsVerbatimArguments: true,
     });
   });
 
@@ -1249,7 +1251,8 @@ describe("executeTool", () => {
 
     expect(resolved).toEqual({
       file: process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe",
-      args: ["/d", "/s", "/c", "pnpm exec vitest run"],
+      args: ["/d", "/s", "/v:off", "/c", '"pnpm exec vitest run"'],
+      windowsVerbatimArguments: true,
     });
   });
 
@@ -1258,7 +1261,8 @@ describe("executeTool", () => {
 
     expect(resolved).toEqual({
       file: process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe",
-      args: ["/d", "/s", "/c", 'npm run test:unit -- "path with spaces"'],
+      args: ["/d", "/s", "/v:off", "/c", '"npm run test:unit -- ^"path^ with^ spaces^""'],
+      windowsVerbatimArguments: true,
     });
   });
 
@@ -1269,6 +1273,22 @@ describe("executeTool", () => {
       file: "npm",
       args: ["run", "lint"],
     });
+  });
+
+  it.runIf(process.platform === "win32")("round-trips literal Windows package-manager arguments", async () => {
+    const cwd = path.join(testWorkspaceRoot, "package-manager-argv");
+    await fs.mkdir(cwd, { recursive: true });
+    const echo = path.join(cwd, "argv.cjs");
+    await fs.writeFile(echo, "console.log(JSON.stringify(process.argv.slice(2)));\n");
+    const values = ["a&b", 'two "words"', "50% off", "^mark", "", "end \\", "a|b", "a<b", "a>b"];
+    const resolved = resolveExecutableCommand("pnpm", ["exec", process.execPath, echo, ...values]);
+    const result = spawnSync(resolved.file, resolved.args, {
+      cwd,
+      encoding: "utf8",
+      windowsVerbatimArguments: resolved.windowsVerbatimArguments,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(values);
   });
 
   it("runs pnpm-backed restricted tools as package scripts", async () => {

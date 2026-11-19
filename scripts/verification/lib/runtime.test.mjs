@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ReadableStream } from "node:stream/web";
+import { setImmediate } from "node:timers";
 import { test } from "node:test";
 
 import {
@@ -294,28 +295,24 @@ test("verification HTTP readiness still rejects owned-child failures before any 
     const address = server.address();
     assert(address && typeof address === "object");
     const url = `http://127.0.0.1:${address.port}/health`;
-    let logsFlushed = false;
-    await assert.rejects(
-      waitForHttp(url, "Exited fixture", 2_000, {
-        child: { exitCode: 7 },
-        logsFlushed: Promise.resolve().then(() => {
-          logsFlushed = true;
+    for (const [label, child] of [
+      ["Exited fixture", { exitCode: 7 }],
+      ["Signalled fixture", { exitCode: null, signalCode: "SIGTERM" }],
+    ]) {
+      const { promise: logsFlushed, resolve: releaseLogs } = Promise.withResolvers();
+      let settled = false;
+      const rejection = assert.rejects(
+        waitForHttp(url, label, 2_000, { child, logsFlushed }).finally(() => {
+          settled = true;
         }),
-      }),
-      /Exited fixture process exited before becoming ready/u,
-    );
-    assert.equal(logsFlushed, true);
-    logsFlushed = false;
-    await assert.rejects(
-      waitForHttp(url, "Signalled fixture", 2_000, {
-        child: { exitCode: null, signalCode: "SIGTERM" },
-        logsFlushed: Promise.resolve().then(() => {
-          logsFlushed = true;
-        }),
-      }),
-      /Signalled fixture process exited before becoming ready/u,
-    );
-    assert.equal(logsFlushed, true);
+        new RegExp(`${label} process exited before becoming ready`, "u"),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      const settledBeforeLogs = settled;
+      releaseLogs();
+      await rejection;
+      assert.equal(settledBeforeLogs, false);
+    }
     const spawnError = Object.assign(new Error("Synthetic fixture spawn failure"), { code: "ENOENT" });
     await assert.rejects(
       waitForHttp(url, "Unstarted fixture", 2_000, {
