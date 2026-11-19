@@ -276,7 +276,7 @@ export function mountTutorialGuide(practice, navigateTo, leave) {
     if (!rect) {
       focusRing.hidden = true;
       const x = Math.max(10, (viewport.width - card.offsetWidth) / 2);
-      setGeometry(card, { left: x, top: Math.max(56, (viewport.height - card.offsetHeight) / 2) });
+      setGeometry(card, { left: x, top: Math.max(48, (viewport.height - card.offsetHeight) / 2) });
       return;
     }
     const edge = 5;

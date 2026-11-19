@@ -33,7 +33,7 @@ export async function mountTutorial(root: HTMLElement, scope: TutorialHandoff): 
   };
   window.addEventListener("pagehide", dispose, { once: true });
   window.addEventListener("pageshow", (event) => {
-    if (event.persisted && disposed) leave("");
+    if (event.persisted && disposed) leave("exited");
   });
   const { mountCockpit } = await import("../../cockpit-entry");
   if (disposed) return;

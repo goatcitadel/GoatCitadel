@@ -154,7 +154,7 @@ export function useFirstRunSetup(workspaceId: string | undefined) {
       if (!live.current.mounted || live.current.generation !== generation || getGatewayApiBaseUrl() !== installation)
         return;
       client.setQueryData(["system", "onboarding"], fresh);
-      if (projectFirstRunState(fresh).modelReady) setStep("tutorial");
+      if (projectFirstRunState(fresh).modelReady) setStep(fresh.completed ? "safety" : "tutorial");
       else setNotice("Model readiness changed. Connect and confirm the current default before continuing.");
     } catch (error) {
       if (live.current.mounted && live.current.generation === generation) setNotice(describeApiError(error).summary);

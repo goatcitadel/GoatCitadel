@@ -39,11 +39,13 @@ export function takeTutorialHandoff(): TutorialHandoff | undefined {
   }
 }
 
-export function recordTutorialReturn(scope: TutorialHandoff): void {
+export function recordTutorialReturn(scope: TutorialHandoff): boolean {
   try {
     sessionStorage.setItem(returnKey, JSON.stringify(scope));
+    return true;
   } catch {
     // The regular Cockpit still opens with its saved scope.
+    return false;
   }
 }
 
@@ -55,10 +57,12 @@ export function readTutorialReturn(): TutorialHandoff | undefined {
   }
 }
 
-export function clearTutorialReturn(): void {
+export function clearTutorialReturn(): boolean {
   try {
     sessionStorage.removeItem(returnKey);
+    return true;
   } catch {
     // Session storage can become unavailable before the transition finishes.
+    return false;
   }
 }

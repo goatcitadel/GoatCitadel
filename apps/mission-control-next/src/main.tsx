@@ -1,4 +1,4 @@
-import { practiceMarker, takeTutorialHandoff } from "./features/tutorial/handoff";
+import { practiceMarker, recordTutorialReturn, takeTutorialHandoff } from "./features/tutorial/handoff";
 import { retireMissionControlServiceWorkers } from "./service-worker-cleanup";
 import { resolveShellPreference } from "./shell-preference";
 import { resetDevBrowserStorage } from "./dev-reset";
@@ -58,6 +58,7 @@ if (new URLSearchParams(location.search).has(practiceMarker)) {
     void import("./features/tutorial/practice-entry")
       .then(({ mountTutorial }) => mountTutorial(root, handoff))
       .catch(() => {
+        recordTutorialReturn(handoff);
         location.replace("/chat?shell=cockpit&tutorialEnded=unavailable");
       });
   }

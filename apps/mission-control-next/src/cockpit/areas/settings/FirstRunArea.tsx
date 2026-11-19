@@ -42,6 +42,10 @@ export function FirstRunArea() {
   };
   const setup = useFirstRunSetup(activeWorkspaceId);
   const { query, state, progress, step, approval, completion } = setup;
+  const showTutorialChoice =
+    state &&
+    !state.completed &&
+    (step === "tutorial" || (step === "safety" && progress?.modelReady && tutorial === undefined));
   const leave = useDraftLeave();
   const go = (path: string) => leave.request(() => navigate(path));
   const finish = async () => {
@@ -130,7 +134,7 @@ export function FirstRunArea() {
                 onContinue={() => void setup.continueModel()}
               />
             ) : null}
-            {step === "tutorial" && !state.completed ? (
+            {showTutorialChoice ? (
               <section aria-labelledby="first-run-tour-title" className="space-y-3">
                 <h2 id="first-run-tour-title" className="text-lg font-semibold text-fg">
                   Take a quick tour?
@@ -160,7 +164,7 @@ export function FirstRunArea() {
                 </div>
               </section>
             ) : null}
-            {step === "safety" ? (
+            {step === "safety" && !showTutorialChoice ? (
               <div className="space-y-4">
                 <h2 className="text-lg font-semibold text-fg">Choose your safety settings</h2>
                 <p className="text-sm text-fg-secondary">
@@ -233,16 +237,12 @@ export function FirstRunArea() {
               {setup.finishPrerequisite}
             </p>
           ) : null}
-          {retryTour ? (
-            <p role="status" className="text-sm text-status-waiting">
-              The tutorial could not start. <Button onClick={startTutorial}>Try again</Button>
+          {retryTour || setup.notice || completion.notice ? (
+            <p role="status" className={retryTour ? "text-sm text-status-waiting" : "text-sm text-fg-secondary"}>
+              {retryTour ? "The tutorial could not start." : (completion.notice ?? setup.notice)}
             </p>
           ) : null}
-          {setup.notice || completion.notice ? (
-            <p role="status" className="text-sm text-fg-secondary">
-              {completion.notice ?? setup.notice}
-            </p>
-          ) : null}
+          {retryTour ? <Button onClick={startTutorial}>Try again</Button> : null}
           {completion.attempt?.phase === "unknown" ? (
             <p role="alert" className="text-sm text-status-waiting">
               {completion.attempt.message}
