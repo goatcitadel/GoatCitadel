@@ -31,11 +31,14 @@ import {
   remoteWorkerAssignmentCanonicalSha256,
   HEARTBEAT_PERMISSION_PROFILE_ID,
   HEARTBEAT_RESTRICTED_PROFILE,
+  CHAT_TOOL_GRANT_DURATION_MS,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
   OUTSIDE_ROOT_WRITE_GRANT_DURATIONS,
   OUTSIDE_ROOT_WRITE_GRANT_MINT_WINDOW_MS,
   isOutsideRootWriteGrantDuration,
   isOutsideRootWriteTool,
   isManagedProjectFileTool,
+  isGoogleWorkspaceReadTool,
   projectManagedFileToolArgs,
   projectManagedFileToolResult,
   redactStructuredSecrets,
@@ -341,6 +344,7 @@ const HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE =
 const MINT_DUPLICATE_SCAN_LIMIT = 100_000;
 /** A folder (writeRoots) grant that does not admit this request is skipped, never a hard block. */
 const WRITE_ROOT_GRANT_INAPPLICABLE = "write-root grant does not apply to this request";
+const GOOGLE_READ_GRANT_INAPPLICABLE = "Google read grant does not apply to this request";
 
 export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
   /** An operator-configured, expiring replacement for the blanket MCP deny in one fixture Chat. */
@@ -575,6 +579,24 @@ export class ToolPolicyEngine {
   public createGrant(input: ToolGrantCreateInput, ttlMs?: number): Promise<ToolGrantRecord> {
     let validated: ToolGrantCreateInput;
     try {
+      const googleRead = input.constraints?.googleRead;
+      if (
+        googleRead !== undefined &&
+        (!googleRead ||
+          input.scope !== "session" ||
+          input.scopeRef !== googleRead.sessionId ||
+          input.decision !== "allow" ||
+          !isGoogleWorkspaceReadTool(input.toolPattern) ||
+          ttlMs === undefined ||
+          !Object.values(CHAT_TOOL_GRANT_DURATION_MS).includes(ttlMs) ||
+          !googleRead.workspaceId ||
+          !googleRead.sessionId ||
+          !googleRead.connectionId ||
+          !googleRead.signInId ||
+          (input.toolPattern === "calendar.list" && !googleRead.calendarId))
+      ) {
+        throw new Error("Google read allowances need an exact Chat, sign-in and expiry.");
+      }
       validated = validateWriteRootsGrantInput(input, this.config.sandbox);
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
@@ -844,6 +866,9 @@ export class ToolPolicyEngine {
     const request = withoutEngineOwnedApproval(callerRequest);
     if (request.toolName === "browser.storage.get" && !readBrowserStorageOrigin(request.args.origin)) {
       return this.blockRestrictedExecution(request, "browser.storage.get requires one explicit HTTP or HTTPS origin.");
+    }
+    if (isGoogleWorkspaceReadTool(request.toolName) && !readNonEmptyString(request.args.connectionId)) {
+      return this.blockRestrictedExecution(request, "A saved Google connection is required for this read.");
     }
     const identity = this.resolveInvocationPolicy(request, options);
     if (identity.binding && request.externalRuntime !== true) {
@@ -1691,7 +1716,7 @@ export class ToolPolicyEngine {
 
     const inProfile = toolNames.some((name) => matchesAnyToolPattern(policy.effectiveTools, name));
     const hasAllowGrant = grantDecision?.decision === "allow" && !grantDecision.constraintsError;
-    if (!inProfile && !hasAllowGrant && !fixtureAllowed) {
+    if (!inProfile && (!hasAllowGrant || grantDecision?.grant.constraints?.googleRead) && !fixtureAllowed) {
       return withWard(withPolicy(deny(riskLevel, "policy_disallow", "tool not available in resolved policy")));
     }
 
@@ -1797,6 +1822,14 @@ export class ToolPolicyEngine {
     if (codeModeRequestRequiresApproval || fixtureAllowed) {
       requiresApproval = true;
     }
+    const scheduledGoogleRead =
+      isGoogleWorkspaceReadTool(request.toolName) &&
+      (policy.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
+        policy.permissionProfileId?.startsWith("scheduled-intersection:") === true);
+    const monitoringGrant = scheduledGoogleRead
+      ? allowGrants?.find((grant) => grant.constraints?.googleRead)
+      : undefined;
+    if (scheduledGoogleRead && !monitoringGrant) requiresApproval = true;
 
     const accessReason = this.buildAccessReason({
       policy,
@@ -1819,6 +1852,10 @@ export class ToolPolicyEngine {
     if (codeModeRequestRequiresApproval) {
       accessReason.reasonCodes.push("code_mode_request_requires_approval");
       accessReason.policyReason = "running code needs the operator's approval";
+    }
+    if (scheduledGoogleRead && !monitoringGrant) {
+      accessReason.reasonCodes.push("scheduled_google_read_requires_approval");
+      accessReason.policyReason = "Scheduled Google reads need an approval or an active allowance for this Chat.";
     }
     if (outsideRootWriteRequiresApproval) {
       accessReason.reasonCodes.push("outside_root_write_requires_approval");
@@ -1848,14 +1885,16 @@ export class ToolPolicyEngine {
       });
     }
 
-    const effectiveAllowGrant = officialSearchRequest
-      ? officialSearchConsentGrant
-      : outsideRootWrite.status === "admitted" && outsideRootWrite.grant
-        ? outsideRootWrite.grant
-        : grantDecision?.decision === "allow"
-          ? ((await this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants)) ??
-            grantDecision.grant)
-          : undefined;
+    const effectiveAllowGrant =
+      monitoringGrant ??
+      (officialSearchRequest
+        ? officialSearchConsentGrant
+        : outsideRootWrite.status === "admitted" && outsideRootWrite.grant
+          ? outsideRootWrite.grant
+          : grantDecision?.decision === "allow"
+            ? ((await this.resolveEffectiveAllowGrant(request, policy, grantDecision.grant, allowGrants)) ??
+              grantDecision.grant)
+            : undefined);
 
     return withWard({
       allowed: true,
@@ -2089,7 +2128,8 @@ export class ToolPolicyEngine {
       }
       if (
         constraintsError === HOST_CONSTRAINED_BROWSER_SEARCH_GRANT_INAPPLICABLE ||
-        constraintsError === WRITE_ROOT_GRANT_INAPPLICABLE
+        constraintsError === WRITE_ROOT_GRANT_INAPPLICABLE ||
+        constraintsError === GOOGLE_READ_GRANT_INAPPLICABLE
       ) {
         continue;
       }
@@ -2124,6 +2164,27 @@ export class ToolPolicyEngine {
     const constraints = grant.constraints;
     if (!constraints) {
       return undefined;
+    }
+    if (constraints.googleRead !== undefined) {
+      const scope = constraints.googleRead;
+      if (
+        !scope ||
+        !isGoogleWorkspaceReadTool(request.toolName) ||
+        request.toolName !== grant.toolPattern ||
+        grant.grantType !== "ttl" ||
+        grant.scope !== "session" ||
+        grant.scopeRef !== request.sessionId ||
+        scope.sessionId !== request.sessionId ||
+        scope.workspaceId !== request.workspaceId ||
+        !scope.connectionId ||
+        scope.connectionId !== request.args?.connectionId ||
+        !scope.signInId ||
+        scope.signInId !== request.googleReadSignInId ||
+        (request.toolName === "calendar.list" &&
+          scope.calendarId !== (readNonEmptyString(request.args?.calendarId) ?? "primary"))
+      ) {
+        return GOOGLE_READ_GRANT_INAPPLICABLE;
+      }
     }
     if (
       isManagedProjectFileTool(request.toolName) &&
@@ -2517,7 +2578,11 @@ export class ToolPolicyEngine {
     mcpReadOnlyHint?: true,
   ): Record<string, unknown> {
     const knowledge = knowledgeApprovalPreview(request);
-    if (knowledge) return knowledge;
+    if (knowledge) {
+      return isGoogleWorkspaceReadTool(request.toolName) && request.googleReadSignInId
+        ? { ...knowledge, googleReadSignInBound: true }
+        : knowledge;
+    }
     const changeRequest = changeRequestApprovalPreview(request);
     if (changeRequest) return changeRequest;
     const preview: Record<string, unknown> = {
@@ -3845,6 +3910,7 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
   return {
     toolName,
     args,
+    googleReadSignInId: readNonEmptyString(value.googleReadSignInId),
     agentId,
     sessionId,
     turnId: typeof value.turnId === "string" && value.turnId.trim() ? value.turnId : undefined,

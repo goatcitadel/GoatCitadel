@@ -88,7 +88,11 @@ interface ApprovalActionSecretRuntime {
   deleteApprovalActionTokenSecret?: (secretRef: string) => void;
   isApprovalActionConnectorReady?: (connectionId: string) => Promise<boolean>;
   beforeExternalSideEffect?: () => void | Promise<void>;
-  resolveGoogleWorkspaceAccessToken?: (input: { connectionId: string; toolName: string }) => Promise<string>;
+  resolveGoogleWorkspaceAccessToken?: (input: {
+    connectionId: string;
+    toolName: string;
+    signInId?: string;
+  }) => Promise<string>;
   /**
    * Reads the key a channel connection saved in secure storage, for that connection only; undefined when nothing is
    * stored for it or the reference was saved for another connection.
@@ -141,6 +145,13 @@ async function executeCommsToolWithBoundaryTracking(
   assertNoRawRemoteApprovalBearer(args);
   const connectionId = required(args.connectionId, "connectionId");
   const connection = await storage.integrationConnections.get(connectionId);
+  if (
+    isReadOnlyCommsTool(toolName) &&
+    connection.workspaceId !== undefined &&
+    connection.workspaceId !== request.workspaceId
+  ) {
+    throw new Error("blocked: This Google connection belongs to another workspace.");
+  }
   const scopedKey =
     (toolName === "channel.send" || toolName === "channel.unsend") && connection.key === "ntfy"
       ? "ntfy"
@@ -174,13 +185,23 @@ async function executeCommsToolWithBoundaryTracking(
   try {
     assertIntegrationConnectionAvailable(connection);
     if (toolName === "gmail.read") {
-      const accessToken = await resolveGoogleWorkspaceToken(approvalActionSecrets, connectionId, toolName);
+      const accessToken = await resolveGoogleWorkspaceToken(
+        approvalActionSecrets,
+        connectionId,
+        toolName,
+        request.googleReadSignInId,
+      );
       const read = await gmailRead(accessToken, args, config.sandbox.networkAllowlist, grantAllowlist);
       await markCommsProviderSent(storage, receipt, "gmail-read");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "gmail-read", ...read };
     }
     if (toolName === "calendar.list") {
-      const accessToken = await resolveGoogleWorkspaceToken(approvalActionSecrets, connectionId, toolName);
+      const accessToken = await resolveGoogleWorkspaceToken(
+        approvalActionSecrets,
+        connectionId,
+        toolName,
+        request.googleReadSignInId,
+      );
       const records = await calendarList(accessToken, args, config.sandbox.networkAllowlist, grantAllowlist);
       await markCommsProviderSent(storage, receipt, "calendar-list");
       return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "calendar-list", records };
@@ -433,11 +454,18 @@ async function resolveGoogleWorkspaceToken(
   runtime: ApprovalActionSecretRuntime,
   connectionId: string,
   toolName: string,
+  signInId?: string,
 ): Promise<string> {
   if (!runtime.resolveGoogleWorkspaceAccessToken) {
     throw new Error(`blocked: ${toolName} requires Google sign-in, which is not available in this runtime.`);
   }
-  const token = (await runtime.resolveGoogleWorkspaceAccessToken({ connectionId, toolName })).trim();
+  const token = (
+    await runtime.resolveGoogleWorkspaceAccessToken({
+      connectionId,
+      toolName,
+      ...(signInId ? { signInId } : {}),
+    })
+  ).trim();
   if (!token) {
     throw new Error(`blocked: Google sign-in returned no access token for ${toolName}.`);
   }

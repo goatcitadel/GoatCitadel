@@ -16,6 +16,18 @@ function trimmedText(value: unknown): string | undefined {
 
 function lookupApprovalPreview(toolName: string, args: Record<string, unknown>): Record<string, unknown> | undefined {
   if (toolName === "capabilities.explain") return capabilityExplanationApprovalPreview(args);
+  if (toolName === "time.now") {
+    return {
+      reviewKind: "knowledge.operation",
+      toolName,
+      target: "GoatCitadel runtime clock",
+      input: "Current local time and UTC",
+      summary: "Read the current time for this conversation.",
+    };
+  }
+  if (toolName === "gmail.read" || toolName === "calendar.list") {
+    return googleWorkspaceLookupPreview(toolName, args);
+  }
   if (toolName === "session.history") {
     const messageId = trimmedText(args.messageId);
     const sequence = clampInt(args.sequence, 0, 0, Number.MAX_SAFE_INTEGER);
@@ -60,7 +72,42 @@ function lookupApprovalPreview(toolName: string, args: Record<string, unknown>):
   };
 }
 
-/** Rebuild the display preview for lookup or browser approvals saved without their action details. */
+/** Project only the selectors sent by the Gmail and Calendar read executors. */
+function googleWorkspaceLookupPreview(
+  toolName: "gmail.read" | "calendar.list",
+  args: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const connectionId = trimmedText(args.connectionId);
+  if (!connectionId || connectionId.length > 160) return undefined;
+  const redact = (value: string) => redactSecretText(value, { env: process.env }).value;
+  const connection = `Google connection: ${redact(connectionId)}`;
+  const gmail = toolName === "gmail.read";
+  // Match the provider-facing limits rather than displaying values the executor clamps.
+  const limit = clampInt(args.maxResults, 10, 1, gmail ? 25 : 100);
+  const query = gmail ? trimmedText(args.query)?.slice(0, 512) : undefined;
+  const calendar = gmail
+    ? []
+    : [
+        `Calendar: ${trimmedText(args.calendarId) ?? "primary"}`,
+        `From: ${trimmedText(args.fromIso) ?? "No lower bound"}`,
+        `Until: ${trimmedText(args.toIso) ?? "No upper bound"}`,
+      ];
+  const source = [connection, ...calendar.map(redact)].join("\n");
+  if (source.length > 1_200) return undefined;
+  return {
+    reviewKind: "knowledge.operation",
+    toolName,
+    target: gmail ? "Gmail messages" : "Google Calendar events",
+    source,
+    ...(query ? { query: redact(query) } : {}),
+    optionsSummary: `Maximum results: ${limit}`,
+    summary: gmail
+      ? `${query ? "Search Gmail" : "List recent Gmail messages"} and return sender, subject, date and a short snippet.`
+      : "List events from the selected Google Calendar within the recorded time window.",
+  };
+}
+
+/** Rebuild the display preview for supported tool approvals saved without their action details. */
 export function withLegacyToolApprovalPreview(approval: ApprovalRequest): ApprovalRequest {
   const { kind, linkage, payload, preview } = approval;
   if (
@@ -93,7 +140,10 @@ export function knowledgeApprovalPreview(request: ToolInvokeRequest): Record<str
   if (
     LOOKUP_LIMITS.has(request.toolName) ||
     request.toolName === "session.history" ||
-    request.toolName === "capabilities.explain"
+    request.toolName === "capabilities.explain" ||
+    request.toolName === "time.now" ||
+    request.toolName === "gmail.read" ||
+    request.toolName === "calendar.list"
   ) {
     const lookup = lookupApprovalPreview(request.toolName, request.args);
     return lookup ? { ...lookup, sessionId: request.sessionId, taskId: request.taskId } : undefined;

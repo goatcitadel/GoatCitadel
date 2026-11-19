@@ -328,6 +328,7 @@ function ApprovalDecisionReview({
     offerTemporaryGrant,
     Boolean(attempt),
     (duration) => void decide("approve", duration),
+    approval.kind,
   );
   if (scopeChanged)
     return (

@@ -139,6 +139,24 @@ afterEach(() => {
 });
 
 describe("Inbox approval detail", () => {
+  it("mounts the Calendar decision controls without a compact preview", async () => {
+    api.fetchApproval.mockResolvedValue({
+      ...approval,
+      kind: "calendar.list",
+      preview: { toolName: "calendar.list" },
+      linkage: { workspaceId: "default" },
+    });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <InboxApprovalDetail item={item} workspaceId="default" />
+        </QueryClientProvider>,
+      ),
+    );
+    await settleUntil(() => Boolean(decisionControls()));
+    expect(decisionControls().disabled).toBe(false);
+  });
+
   it("explains the recorded commands individually and avoids classifying a shortened command", async () => {
     const longCommand = "echo " + "sample ".repeat(24) + "end marker";
     api.fetchApproval.mockResolvedValue({

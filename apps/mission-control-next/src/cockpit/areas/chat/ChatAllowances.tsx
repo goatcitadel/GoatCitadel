@@ -179,11 +179,14 @@ function ChatAllowanceList(chat: ChatScope) {
         <ul aria-label="Active Chat allowances" className="mt-2 divide-y divide-line-subtle">
           {active.map((grant) => {
             const tool = presentApprovalAction(grant.toolPattern);
+            const googleRead = grant.constraints?.googleRead;
             const targets = [
               ...(grant.constraints?.allowedHosts ?? []),
               ...(grant.constraints?.allowedPaths ?? []),
               ...(grant.constraints?.writeRoots ?? []),
               ...(grant.constraints?.referenceRoots?.map((root) => root.label) ?? []),
+              ...(googleRead ? [`Google connection ${googleRead.connectionId}`] : []),
+              ...(googleRead?.calendarId ? [`Calendar ${googleRead.calendarId}`] : []),
             ];
             return (
               <li key={grant.grantId} className="space-y-1 py-2">

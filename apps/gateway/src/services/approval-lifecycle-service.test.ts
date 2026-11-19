@@ -4438,6 +4438,66 @@ function createInMemoryApprovalEffectsStore(effectRows: ApprovalEffectRecord[]) 
 }
 
 describe("resolveChatToolApproval temporary tool allowance", () => {
+  it.each([true, false])(
+    "records the 24-hour Calendar grant result before the approved turn can resume (mint succeeds: %s)",
+    async (mintSucceeds) => {
+      const toolName = "calendar.list";
+      const host = createApprovalHarness({
+        approvalKind: toolName,
+        chatToolName: toolName,
+        approvalPayload: { connectionId: "calendar-connection" },
+        pendingAction: {
+          approvalId: "approval-1",
+          actionType: "tool.invoke",
+          createdAt: "2026-04-11T00:00:00.000Z",
+          resolutionStatus: "pending",
+          request: {
+            toolName,
+            workspaceId: "workspace-1",
+            sessionId: "session-1",
+            turnId: "turn-1",
+            googleReadSignInId: "sign-in-private",
+            args: { connectionId: "calendar-connection", calendarId: "primary" },
+          },
+        },
+      });
+      const approval = host.storage.approvals.get("approval-1");
+      Object.assign(approval, {
+        riskLevel: "safe",
+        preview: { reviewKind: "knowledge.operation", toolName, googleReadSignInBound: true },
+        linkage: { ...approval.linkage, turnId: "turn-1", toolName, actionType: "tool.invoke" },
+      });
+      host.resolveApproval.mockImplementation((approvalId, input, context) =>
+        resolveApproval(host, approvalId, input, context),
+      );
+      const expiresAt = "2026-04-12T00:00:00.000Z";
+      host.policyEngine.createGrant.mockImplementation(async (input) => {
+        if (!mintSucceeds) throw new Error("Grant write failed");
+        return { ...input, grantId: "grant-1", expiresAt };
+      });
+
+      const result = await resolveChatToolApproval(host, "session-1", "approval-1", "approve", {
+        allowScope: "session",
+        temporaryGrantDuration: "24h",
+      });
+
+      expect(host.storage.approvalEvents.append).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: "resolved",
+          payload: expect.objectContaining({
+            outcome: "approved",
+            chatReadAllowance: mintSucceeds
+              ? { duration: "24h", status: "granted", expiresAt }
+              : { duration: "24h", status: "failed" },
+          }),
+        }),
+      );
+      expect(host.policyEngine.createGrant).toHaveBeenCalledBefore(host.enqueueApprovalResolutionEffects);
+      expect(result.grant?.grantId).toBe(mintSucceeds ? "grant-1" : undefined);
+      expect(Boolean(result.grantError)).toBe(!mintSucceeds);
+    },
+  );
+
   function setup() {
     const toolName = "memory.search";
     const host = createApprovalHarness({ approvalKind: toolName, chatToolName: toolName });

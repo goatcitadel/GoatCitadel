@@ -436,6 +436,8 @@ export interface ToolPolicyConfig {
 export interface ToolInvokeRequest {
   toolName: string;
   args: Record<string, unknown>;
+  /** Internal. Binds a Google read to the sign-in resolved by the Gateway. */
+  googleReadSignInId?: string;
   agentId: string;
   sessionId: string;
   /** Server-authored active turn binding. Direct/client tool routes must never accept it. */

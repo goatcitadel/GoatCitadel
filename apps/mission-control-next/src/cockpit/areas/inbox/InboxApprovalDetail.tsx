@@ -9,7 +9,7 @@ import { ApprovalSettlement } from "./ApprovalSettlement";
 import { RiskBadge } from "../../ui/RiskBadge";
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { OperatorInboxItem } from "@goatcitadel/contracts";
+import { isGoogleWorkspaceReadTool, type OperatorInboxItem } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { buildApprovalReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-generic-evidence";
@@ -81,6 +81,7 @@ export function InboxApprovalDetail({
   const lastVersion = lastVersionNote(view);
   // Pending decisions and settled follow-on evidence are separate native views of the owner record.
   const approval = view.record?.status === "pending" ? view.record : undefined;
+  const googleRead = Boolean(approval && isGoogleWorkspaceReadTool(approval.kind));
   const settled = view.record && view.record.status !== "pending" ? view.record : undefined;
   const evidence = approval ? buildApprovalEvidenceModel(approval.preview) : null;
   const memoryPreview =
@@ -292,7 +293,7 @@ export function InboxApprovalDetail({
                 </details>
               ))}
             </section>
-          ) : (
+          ) : googleRead ? null : (
             <p className="text-fg-muted">
               A structured preview is not available, so this approval can&apos;t be decided here.
             </p>
@@ -316,7 +317,7 @@ export function InboxApprovalDetail({
               )}
             </>
           ) : null}
-          {evidence || specialist ? (
+          {evidence || specialist || googleRead ? (
             <InboxApprovalActions
               // This detail states the expiry above, so the decision summary leaves it out.
               expiryShownNearby
@@ -326,6 +327,8 @@ export function InboxApprovalDetail({
               item={item}
               approval={approval}
               workspaceId={installWide ? null : workspaceId}
+              sessionId={googleRead && approval.linkage?.turnId ? approval.linkage.sessionId : undefined}
+              onTemporaryGrantResolved={(message) => rereadSettled(message, true)}
               // The operator asked for a skill change themselves, so it approves in one click, as on the Skills tab.
               reviewedInPlace={installWide && approval.kind === "skill.lifecycle"}
               focusAction={focusAction}

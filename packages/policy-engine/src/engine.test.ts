@@ -8,10 +8,16 @@ import type {
   ApprovalRequest,
   PendingApprovalAction,
   PermissionProfileRecord,
+  ToolGrantRecord,
   ToolInvokeRequest,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { buildScrubbedSpawnEnv, HEARTBEAT_READ_ONLY_ALLOW, HEARTBEAT_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
+import {
+  buildScrubbedSpawnEnv,
+  HEARTBEAT_READ_ONLY_ALLOW,
+  HEARTBEAT_RESTRICTED_PROFILE,
+  SCHEDULED_RESTRICTED_PROFILE,
+} from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
 import { boundAuditResultStrings, ToolPolicyEngine } from "./engine.js";
 import { ToolRegistry } from "./tool-registry.js";
@@ -263,7 +269,7 @@ describe("ToolPolicyEngine permission profile upper bound", () => {
     for (const toolName of HEARTBEAT_READ_ONLY_ALLOW) {
       const result = await engine.invoke({
         toolName,
-        args: {},
+        args: toolName === "gmail.read" ? { connectionId: "heartbeat-google-connection" } : {},
         agentId: "heartbeat",
         sessionId: "session-heartbeat",
         dryRun: true,
@@ -1359,6 +1365,69 @@ describe("ToolPolicyEngine invocation coverage", () => {
     expect(create.outcome).toBe("approval_required");
     // A Google sign-in never substitutes for the approval: no token is resolved before a decision.
     expect(resolveGoogleWorkspaceAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("requires approval again when a scheduled Calendar read leaves its allowance or the allowance expires", async () => {
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(policyConfig, storage);
+    const request = {
+      toolName: "calendar.list",
+      args: { connectionId: "google", calendarId: "primary" },
+      agentId: "assistant",
+      sessionId: "scheduled-chat",
+      workspaceId: "default",
+      googleReadSignInId: "signed-in-user",
+      policyContext: {
+        permissionProfileId: SCHEDULED_RESTRICTED_PROFILE.profileId,
+        permissionProfile: SCHEDULED_RESTRICTED_PROFILE,
+      },
+    };
+    const grant: ToolGrantRecord = {
+      grantId: "calendar-grant",
+      toolPattern: request.toolName,
+      decision: "allow",
+      scope: "session",
+      scopeRef: request.sessionId,
+      grantType: "ttl",
+      createdBy: "operator",
+      createdAt: "2026-11-17T00:00:00Z",
+      expiresAt: "2099-01-01T00:00:00Z",
+      constraints: {
+        googleRead: {
+          workspaceId: request.workspaceId,
+          sessionId: request.sessionId,
+          connectionId: request.args.connectionId,
+          signInId: request.googleReadSignInId,
+          calendarId: request.args.calendarId,
+        },
+      },
+    };
+    let grants = [grant];
+    vi.mocked(storage.toolGrants.list).mockImplementation(async (scope, scopeRef) =>
+      scope === "session" && scopeRef === grant.scopeRef ? grants : [],
+    );
+    await expect(engine.evaluateAccess(request)).resolves.toMatchObject({
+      allowed: true,
+      requiresApproval: false,
+      matchedGrantId: grant.grantId,
+    });
+    for (const changed of [
+      { workspaceId: "different-workspace" },
+      { sessionId: "delegated-chat" },
+      { args: { ...request.args, connectionId: "other-google" } },
+      { args: { ...request.args, calendarId: "shared" } },
+      { googleReadSignInId: "reconnected" },
+    ]) {
+      await expect(engine.evaluateAccess({ ...request, ...changed })).resolves.toMatchObject({
+        allowed: true,
+        requiresApproval: true,
+        matchedGrantId: undefined,
+      });
+    }
+    grants = [{ ...grant, expiresAt: "2000-01-01T00:00:00Z" }];
+    await expect(engine.evaluateAccess(request)).resolves.toMatchObject({ requiresApproval: true });
+    grants = [grant, { ...grant, grantId: "deny", decision: "deny", constraints: undefined }];
+    await expect(engine.evaluateAccess(request)).resolves.toMatchObject({ allowed: false, matchedGrantId: "deny" });
   });
 
   it("blocks an invoke whose resolved Citadel has a matching deny Ward (enforcement on the invoke path)", async () => {

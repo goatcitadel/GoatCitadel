@@ -1,6 +1,12 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import type { ChatToolRunRecord } from "@goatcitadel/contracts";
-import { getExecutedWorkspaceFileWriteReceipt } from "./chat-turn-agent-runner/artifact-write-helpers.js";
+import type { ChatMessageRecord, ChatToolRunRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
+import {
+  buildWorkspaceFileDownloadHref,
+  getExecutedWorkspaceFileWriteReceipt,
+  mergeWorkspaceFileDownloadContent,
+} from "./chat-turn-agent-runner/artifact-write-helpers.js";
+import { MAX_INLINE_FILE_DOWNLOAD_BYTES } from "./files-route-service.js";
 
 const ARTIFACT_TOOL_NAMES = new Set(["artifacts.create", "documents.create", "presentations.create"]);
 const ARTIFACT_PATH_KEYS = ["path", "fallbackPath"] as const;
@@ -136,4 +142,62 @@ function escapeRegExp(value: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export async function projectAssistantWorkspaceFileDownloads(
+  assistantMessage: ChatMessageRecord | undefined,
+  trace: ChatTurnTraceRecord,
+  workspaceFileRootDir: string | undefined,
+): Promise<ChatMessageRecord | undefined> {
+  if (!assistantMessage || !workspaceFileRootDir) {
+    return assistantMessage;
+  }
+  let content = assistantMessage.content;
+  for (const toolRun of trace.toolRuns) {
+    if (toolRun.sessionId !== trace.sessionId || toolRun.turnId !== trace.turnId) {
+      continue;
+    }
+    const receipt = getExecutedWorkspaceFileWriteReceipt(toolRun);
+    if (!receipt) {
+      continue;
+    }
+    const verifiedPath = await resolveLiveWorkspaceDownloadPath(receipt.artifactPath, workspaceFileRootDir);
+    if (!verifiedPath) {
+      continue;
+    }
+    content = mergeWorkspaceFileDownloadContent(
+      content,
+      toolRun,
+      buildWorkspaceFileDownloadHref(verifiedPath, workspaceFileRootDir),
+    );
+  }
+  return content === assistantMessage.content ? assistantMessage : { ...assistantMessage, content };
+}
+
+async function resolveLiveWorkspaceDownloadPath(
+  artifactPath: string,
+  workspaceFileRootDir: string,
+): Promise<string | undefined> {
+  if (!path.isAbsolute(artifactPath)) {
+    return undefined;
+  }
+  try {
+    const [realWorkspaceRoot, realArtifactPath] = await Promise.all([
+      fs.realpath(workspaceFileRootDir),
+      fs.realpath(artifactPath),
+    ]);
+    const relativePath = path.relative(realWorkspaceRoot, realArtifactPath);
+    if (
+      !relativePath ||
+      path.isAbsolute(relativePath) ||
+      relativePath === ".." ||
+      relativePath.startsWith(`..${path.sep}`)
+    ) {
+      return undefined;
+    }
+    const stat = await fs.stat(realArtifactPath);
+    return stat.isFile() && stat.size > 0 && stat.size <= MAX_INLINE_FILE_DOWNLOAD_BYTES ? realArtifactPath : undefined;
+  } catch {
+    return undefined;
+  }
 }

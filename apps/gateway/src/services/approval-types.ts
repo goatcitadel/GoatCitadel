@@ -3,6 +3,7 @@ import type {
   ApprovalReplayEvent,
   ApprovalRequest,
   ApprovalNativeRuntimeReview,
+  ChatToolGrantDuration,
   PendingApprovalAction,
   RemoteActionTokenRecord,
 } from "@goatcitadel/contracts";
@@ -21,7 +22,13 @@ export interface ApprovalResolutionContext {
     tokenId: string;
     connectorId: string;
   };
+  /** Server-owned work committed with the winning approval, before its wake is queued. */
+  commitChatReadAllowance?: () => Promise<ChatReadAllowanceReceipt>;
 }
+
+export type ChatReadAllowanceReceipt =
+  | { duration: ChatToolGrantDuration; status: "granted"; expiresAt: string }
+  | { duration: ChatToolGrantDuration; status: "failed" };
 
 export interface ApprovalReplayResult {
   approval: ApprovalRequest;

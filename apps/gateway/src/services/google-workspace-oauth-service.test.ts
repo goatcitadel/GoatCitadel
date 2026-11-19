@@ -131,6 +131,47 @@ async function connect(
 }
 
 describe("Google Workspace sign-in", { timeout: 60_000 }, () => {
+  it("repairs a Calendar read with legacy date fields and binds it to the only eligible sign-in", async () => {
+    const ctx = setup();
+    const connection = await googleConnection({ calendarRead: true });
+    await connect(ctx, connection.connectionId, ["calendar.read"], { scope: CALENDAR_READONLY });
+    const request = {
+      toolName: "calendar.list",
+      agentId: "assistant",
+      sessionId: "chat-test",
+      turnId: "turn-test",
+      workspaceId: "default",
+      args: { timeMin: "2026-11-17T20:00:00-08:00", timeMax: "2026-11-17T21:00:00-08:00", maxResults: 2 },
+    };
+    const repaired = await ctx.service.normalizeReadRequest(request);
+    expect(repaired.args).toEqual({
+      connectionId: connection.connectionId,
+      fromIso: request.args.timeMin,
+      toIso: request.args.timeMax,
+      maxResults: 2,
+    });
+    expect(repaired.googleReadSignInId).toEqual(expect.any(String));
+    await expect(
+      ctx.service.normalizeReadRequest({
+        ...request,
+        args: { ...request.args, fromIso: request.args.timeMax },
+      }),
+    ).rejects.toThrow(/fromIso/);
+
+    await connect(ctx, connection.connectionId, ["calendar.read"], { scope: CALENDAR_READONLY });
+    await expect(
+      ctx.service.resolveToolAccessToken({
+        toolName: request.toolName,
+        connectionId: connection.connectionId,
+        signInId: repaired.googleReadSignInId,
+      }),
+    ).rejects.toThrow(/Google sign-in changed/);
+
+    const otherAccount = await googleConnection({ calendarRead: true });
+    await connect(ctx, otherAccount.connectionId, ["calendar.read"], { scope: CALENDAR_READONLY });
+    await expect(ctx.service.normalizeReadRequest(request)).rejects.toThrow(/More than one Google account/);
+  });
+
   it("asks Google for exactly the reviewed scopes, with PKCE S256 and a loopback redirect, and keeps the client secret in the keychain", async () => {
     const ctx = setup();
     const connection = await googleConnection();
