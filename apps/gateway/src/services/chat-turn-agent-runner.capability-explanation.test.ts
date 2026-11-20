@@ -6,7 +6,12 @@ import { ChatTurnAgentRunner, type ChatTurnAgentRunnerDeps } from "./chat-turn-a
 import { createMockStorage } from "./chat-turn-agent-runner-test-fixtures.js";
 
 describe("Chat capability explanation exposure", () => {
-  it.each(["auto", "deep"] as const)("honors a no-browse instruction with Web %s", async (webMode) => {
+  it.each([
+    ["auto", "do not browse the web, change settings, or run code"],
+    ["deep", "do not browse the web, change settings, or run code"],
+    ["auto", "without browsing or taking any other action"],
+    ["deep", "without browsing or taking any other action"],
+  ] as const)("honors a no-browse instruction with Web %s (%s)", async (webMode, restriction) => {
     const registry = createDefaultToolRegistry();
     const invokeTool = vi.fn(async () => {
       throw new Error("Unexpected tool dispatch");
@@ -31,8 +36,7 @@ describe("Chat capability explanation exposure", () => {
       inspectToolAccess: async () =>
         ({ allowed: true, requiresApproval: false, reasonCodes: [] }) as ToolAccessEvaluateResponse,
     });
-    const content =
-      "Use capabilities.explain to tell me what you can currently do with web search. Only inspect capability status; do not browse the web, change settings, or run code.";
+    const content = `Use capabilities.explain to tell me what you can currently do with web search. Only inspect capability status, ${restriction}.`;
     await runner.run({
       sessionId: "capability-session",
       turnId: randomUUID(),

@@ -1,9 +1,11 @@
 import {
   ConflictError,
+  parseCapabilityExplanationArgs,
   type CapabilityCatalogEntry,
   type CapabilityConnectorsResponse,
   type CapabilityConnectorItem,
   type CapabilityExplanationItem,
+  type CapabilityExplanationCoverage,
   type CapabilityExplanationResponse,
   type ChatSessionPrefsRecord,
   type ChatSessionRecord,
@@ -103,23 +105,58 @@ function text(value: string, max = 256): string {
     .slice(0, max);
 }
 
+function rankCandidates(query: string, entries: CapabilityCatalogEntry[], connectors: CapabilityConnectorItem[]) {
+  const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])]
+    .filter((term) => !STOP.has(term))
+    .slice(0, 32);
+  const statusQuery = terms.length > 0 && terms.every((term) => STATUS_TERMS.has(term));
+  const blockerQuery =
+    statusQuery && terms.some((term) => ["blocked", "disabled", "unavailable", "off", "setup"].includes(term));
+  const overview =
+    statusQuery || terms.length === 0 || /^(capabilities|capability|everything|overview)$/i.test(terms.join(" "));
+  const score = (title: string, summary: string): number =>
+    overview
+      ? 1
+      : terms.reduce(
+          (sum, term) =>
+            sum +
+            (title.slice(0, 1024).toLowerCase().includes(term) ? 4 : 0) +
+            (summary.slice(0, 2048).toLowerCase().includes(term) ? 1 : 0),
+          0,
+        );
+  return [
+    ...entries.map((entry) => ({
+      id: entry.capabilityId,
+      entry,
+      connector: undefined,
+      score: score(entry.title, entry.summary) + (blockerQuery && !entry.callable ? 8 : 0),
+    })),
+    ...connectors.map((connector) => ({
+      id: connector.id,
+      entry: undefined,
+      connector,
+      score:
+        score(connector.name, connector.description) +
+        (blockerQuery && (connector.state !== "connected" || !connector.chat.available || connector.hiddenInWorkspace)
+          ? 8
+          : 0),
+    })),
+  ]
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+}
+
 export class CapabilityExplanationService {
   public constructor(private readonly host: CapabilityExplanationHost) {}
 
   public async explain(request: ToolInvokeRequest): Promise<CapabilityExplanationResponse> {
-    const { query, limit = 5 } = request.args;
-    if (
-      Object.keys(request.args).some((key) => key !== "query" && key !== "limit") ||
-      typeof query !== "string" ||
-      !query.trim() ||
-      query.length > 512 ||
-      typeof limit !== "number" ||
-      !Number.isSafeInteger(limit) ||
-      limit < 1 ||
-      limit > 5
-    ) {
-      throw new Error("Capability explanation requires a bounded query and optional limit from 1 to 5.");
+    const parsed = parseCapabilityExplanationArgs(request.args);
+    if (!parsed) {
+      throw new Error(
+        "Capability explanation requires a bounded query, up to two additional topics, and a limit from 1 to 5.",
+      );
     }
+    const { topics, limit } = parsed;
     const session = await this.host.requireSession(request.sessionId);
     const workspaceId = session.workspaceId;
     if (
@@ -165,63 +202,35 @@ export class CapabilityExplanationService {
       throw new ConflictError({ message: "Capability profile scope does not match the conversation." });
     if (connectors?.issues.length)
       issues.push("Some connector checks are unavailable; affected connections are unknown.");
-    const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])]
-      .filter((term) => !STOP.has(term))
-      .slice(0, 32);
-    const statusQuery = terms.length > 0 && terms.every((term) => STATUS_TERMS.has(term));
-    const blockerQuery =
-      statusQuery && terms.some((term) => ["blocked", "disabled", "unavailable", "off", "setup"].includes(term));
-    const overview =
-      statusQuery || terms.length === 0 || /^(capabilities|capability|everything|overview)$/i.test(terms.join(" "));
-    const score = (title: string, summary: string): number =>
-      overview
-        ? 1
-        : terms.reduce(
-            (sum, term) =>
-              sum +
-              (title.slice(0, 1024).toLowerCase().includes(term) ? 4 : 0) +
-              (summary.slice(0, 2048).toLowerCase().includes(term) ? 1 : 0),
-            0,
-          );
     const entries = (catalog ?? []).slice(0, 2000).filter((entry) => entry.kind === "tool" || entry.kind === "skill");
-    const candidates = [
-      ...entries.map((entry) => ({
-        entry,
-        connector: undefined,
-        score: score(entry.title, entry.summary) + (blockerQuery && !entry.callable ? 8 : 0),
-      })),
-      ...(connectors?.items ?? []).slice(0, 500).map((connector) => ({
-        entry: undefined,
-        connector,
-        score:
-          score(connector.name, connector.description) +
-          (blockerQuery && (connector.state !== "connected" || !connector.chat.available || connector.hiddenInWorkspace)
-            ? 8
-            : 0),
-      })),
-    ]
-      .filter((item) => item.score > 0)
-      .sort(
-        (a, b) =>
-          b.score - a.score ||
-          (a.entry?.capabilityId ?? a.connector!.id).localeCompare(b.entry?.capabilityId ?? b.connector!.id),
-      );
-    const capabilities: CapabilityExplanationItem[] = [];
-    for (const candidate of candidates.slice(0, limit)) {
-      if (candidate.connector) capabilities.push(this.explainConnector(candidate.connector, connectors!));
-      else
-        capabilities.push(
-          await this.explainEntry(
-            candidate.entry!,
+    const connectorItems = (connectors?.items ?? []).slice(0, 500);
+    const ranked = topics.map((query) => rankCandidates(query, entries, connectorItems));
+    const selected = ranked.map((candidates) => candidates.slice(0, limit));
+    const inspected = new Map<string, CapabilityExplanationItem>();
+    for (const candidate of selected.flat()) {
+      if (inspected.has(candidate.id)) continue;
+      const explanation = candidate.connector
+        ? this.explainConnector(candidate.connector, connectors!)
+        : await this.explainEntry(
+            candidate.entry,
             request,
             workspaceId,
             profileRead ? prefs : undefined,
             profile,
             connectors,
             issues,
-          ),
-        );
+          );
+      inspected.set(candidate.id, explanation);
     }
+    const incompleteEvidence =
+      issues.length > 0 || (catalog?.length ?? 0) > 2000 || (connectors?.items.length ?? 0) > 500;
+    const coverageFor = (count: number): CapabilityExplanationCoverage => {
+      if (!catalog && !connectors) return "unavailable";
+      if (incompleteEvidence || count > limit) return "partial";
+      return count === 0 ? "no_match" : "complete";
+    };
+    const topicCoverage = ranked.map((candidates) => coverageFor(candidates.length));
+    const coverage = topicCoverage.every((state) => state === topicCoverage[0]) ? topicCoverage[0]! : "partial";
     return {
       version: "capability-explanation.v1",
       informationalOnly: true,
@@ -229,19 +238,18 @@ export class CapabilityExplanationService {
       workspaceId,
       sessionId: session.sessionId,
       observedAt: this.host.now?.() ?? new Date().toISOString(),
-      coverage:
-        !catalog && !connectors
-          ? "unavailable"
-          : issues.length ||
-              candidates.length > limit ||
-              (catalog?.length ?? 0) > 2000 ||
-              (connectors?.items.length ?? 0) > 500
-            ? "partial"
-            : candidates.length === 0
-              ? "no_match"
-              : "complete",
-      capabilities,
-      guide: getCapabilityGuide(query),
+      coverage,
+      capabilities: [...inspected.values()],
+      ...(topics.length > 1
+        ? {
+            topics: topics.map((query, index) => ({
+              query: text(query, 512),
+              coverage: topicCoverage[index]!,
+              capabilityIds: selected[index]!.map((candidate) => inspected.get(candidate.id)!.capabilityId),
+            })),
+          }
+        : {}),
+      guide: getCapabilityGuide(topics.join(" ")),
       issues: [...new Set(issues)].slice(0, 8),
       caveat: CAVEAT,
     };

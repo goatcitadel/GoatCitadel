@@ -1,5 +1,6 @@
 /* eslint-disable max-lines */
 import {
+  CAPABILITY_EXPLANATION_LIMITS,
   CHANGE_PLAN_RUNTIME_FEATURE_FLAGS,
   CURATED_FS_MUTATION_TOOLS,
   GLOBAL_TOOL_ACCESS_POSTURES,
@@ -148,14 +149,25 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     deterministic: true,
     codeModeAllowed: false,
     description:
-      "Explain what GoatCitadel supports, what this conversation can use, what needs setup or approval, and what is blocked or unknown. Returns current read-only observations and relevant operating-guide sections; grants no permissions.",
+      "Explain what GoatCitadel supports, what this conversation can use, and what needs setup or approval. For several distinct capability topics, use query for the first and additionalTopics for the rest in one read-only inspection. Returns separate coverage per topic and grants no permissions.",
     pack: "core",
     recommendedContexts: ["chat"],
     argSchema: {
       type: "object",
       properties: {
-        query: { type: "string", minLength: 1, maxLength: 512 },
-        limit: { type: "integer", minimum: 1, maximum: 5 },
+        query: { type: "string", minLength: 1, maxLength: CAPABILITY_EXPLANATION_LIMITS.queryLength },
+        additionalTopics: {
+          type: "array",
+          description: "Other distinct capability topics to inspect with the first query.",
+          maxItems: CAPABILITY_EXPLANATION_LIMITS.additionalTopics,
+          items: { type: "string", minLength: 1, maxLength: CAPABILITY_EXPLANATION_LIMITS.topicLength },
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum matches per topic.",
+          minimum: 1,
+          maximum: CAPABILITY_EXPLANATION_LIMITS.resultsPerTopic,
+        },
       },
       required: ["query"],
       additionalProperties: false,

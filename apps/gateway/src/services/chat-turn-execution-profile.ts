@@ -23,7 +23,7 @@ const DIRECT_URL_RE = /https?:\/\/\S+/i;
 const TIME_QUERY_RE = /\b(?:time|timezone|time\s+zone|date|calendar)\b/i;
 
 const WEB_RESTRICTION_RE =
-  /\b(?:do\s+not|don['’]t|never|without|avoid|no)\s+(?:(?:browse|browsing|search|searching|look\s+up|looking\s+up)\s+(?:(?:on|using)\s+)?(?:the\s+)?(?:web|internet|online)\b|(?:web|internet|online)\s+(?:search(?:es|ing)?|browsing|lookups?)\b|(?:use|using)\s+(?:the\s+)?(?:web|internet|browser|web\s+tools)\b|brows(?:e|ing)(?=\s*[,.;!?]|\s*$))/iu;
+  /\b(?:do\s+not|don['’]t|never|without|avoid|no)\s+(?:(?:browse|browsing|search|searching|look\s+up|looking\s+up)\s+(?:(?:on|using)\s+)?(?:the\s+)?(?:web|internet|online)\b|(?:web|internet|online)\s+(?:search(?:es|ing)?|browsing|lookups?)\b|(?:use|using)\s+(?:the\s+)?(?:web|internet|browser|web\s+tools)\b|brows(?:e|ing)(?=\s*[,.;!?]|\s*$|\s+(?:or|and)\b))/iu;
 
 export function hasExplicitWebRestriction(content: string): boolean {
   // Quoted instructions and code may be the subject of the request.
