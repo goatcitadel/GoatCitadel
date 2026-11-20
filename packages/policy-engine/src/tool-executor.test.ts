@@ -117,6 +117,7 @@ describe("executeTool", () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     delete process.env.LINE_CHANNEL_ACCESS_TOKEN;
     delete process.env.MATTERMOST_BOT_TOKEN;
     delete process.env.NEXTCLOUD_TALK_TOKEN;
@@ -2648,7 +2649,7 @@ describe("executeTool", () => {
 
   it("sends Telegram URL image attachments through sendPhoto with a caption", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.TELEGRAM_BOT_TOKEN = "tg-token";
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tg-token");
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -2726,7 +2727,7 @@ describe("executeTool", () => {
 
   it("reports a Telegram mutation redirect as unknown after send without contacting hop two", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.TELEGRAM_BOT_TOKEN = "tg-token";
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tg-token");
     const contactedUrls: string[] = [];
     const fetchMock = vi.fn(async (url: string | URL | Request) => {
       contactedUrls.push(String(url));
@@ -2785,7 +2786,7 @@ describe("executeTool", () => {
 
   it("sends Telegram replies with reply parameters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.TELEGRAM_BOT_TOKEN = "tg-token";
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tg-token");
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -4866,7 +4867,7 @@ describe("executeTool", () => {
 
   it("unsends Telegram bot messages", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.TELEGRAM_BOT_TOKEN = "tg-token";
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tg-token");
     const fetchMock = vi.fn(
       async () =>
         new Response(JSON.stringify({ ok: true, result: true }), {
@@ -4933,7 +4934,7 @@ describe("executeTool", () => {
 
   it("adds Telegram reactions through the bot API", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.TELEGRAM_BOT_TOKEN = "tg-token";
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "tg-token");
     const fetchMock = vi.fn(
       async () =>
         new Response(JSON.stringify({ ok: true, result: true }), {

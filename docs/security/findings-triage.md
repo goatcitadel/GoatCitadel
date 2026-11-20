@@ -362,6 +362,13 @@ Both receive their response from `fetchAllowlistedOnce`, which wraps
 That reader defaults to 2 MiB and cancels the stream when the limit is exceeded.
 A second limit in the executor would duplicate that guard.
 
+### 2026-11-20 executor follow-up
+
+| Reported | Disposition and evidence |
+|---|---|
+| Shell output can retain a credential fragment across the capture limit | The stream collector drops the incomplete lines on both sides of a capture gap in `shell-output-capture.ts`. For intact captures, credential scrubbing runs before the smaller display cut. The collector test covers a long line crossing the gap. |
+| An unconstrained matched read grant can still be limited by other applicable read grants | The physical executor retains applicable path constraints before evaluating the read posture. The suggested early fallback to `full_disk` would expand the reads permitted by the physical executor. Keep the current boundary until the policy owner explicitly decides the precedence of overlapping grants. |
+
 ### There is no way to dismiss an AI finding
 
 Unlike Standard findings, which carry a per-row **Dismiss** button, the AI findings surface offers
