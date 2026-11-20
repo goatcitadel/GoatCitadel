@@ -134,7 +134,12 @@ export function useCitadelVaultEditor(citadelId: string) {
       if (!current()) return;
       const after = await withFreshReads(() => getCitadelVaultSnapshot(citadelId));
       if (!current()) return;
-      if (typeof value !== "string" || !hasVaultSnapshot(after, citadelId) || !sameVaultReview(before, after))
+      if (
+        typeof value !== "string" ||
+        !hasVaultSnapshot(after, citadelId) ||
+        after.keys.cryptoAvailability === "release_hold" ||
+        !sameVaultReview(before, after)
+      )
         throw new Error("Changed metadata");
       setRevealed({ [secretId]: value });
     } catch (error) {

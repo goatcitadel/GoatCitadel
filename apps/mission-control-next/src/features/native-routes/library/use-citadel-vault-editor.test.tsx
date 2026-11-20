@@ -325,6 +325,19 @@ it("withholds a reveal changed during transport and clears revealed values after
   await act(async () => control.refresh());
   expect(control.revealed).toEqual({});
 });
+it("withholds a reveal when a release hold takes effect during transport", async () => {
+  owner = stored();
+  await mount();
+  await act(async () => control.inspect("secret"));
+  api.reveal.mockImplementationOnce(async () => {
+    owner = { ...owner, keys: { ...owner.keys, cryptoAvailability: "release_hold" } };
+    return "synthetic-opened-value";
+  });
+  await act(async () => control.reveal("secret"));
+  expect(api.reveal).toHaveBeenCalledExactlyOnceWith("citadel", "secret");
+  expect(control.revealed).toEqual({});
+  expect(control.revealErrors.secret).toBeTruthy();
+});
 it("withholds a reveal when fresh metadata differs despite an older pending read", async () => {
   owner = stored();
   await mount();
