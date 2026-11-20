@@ -87,11 +87,10 @@ public sealed partial class MainWindow
 
     private async Task ShowProfileRecoveryAsync()
     {
-        if (_profileInstallRoot is null || _profileRecoveryOpen || _updateDialog is not null || _cleanedUp) return;
-        ShowAndFocus();
-        _profileRecoveryOpen = true;
+        if (!TryBeginProfileRecovery()) return;
         try
         {
+            ShowAndFocus();
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             var reply = await _launcherService.RunAsync(new[] { "desktop-profile", "list" }, timeout.Token);
             var history = JsonSerializer.Deserialize<ProfileBackupHistory>(reply, ProfileRecoveryJson)
@@ -127,12 +126,19 @@ public sealed partial class MainWindow
         }
         catch (Exception error) when (IsProfileRecoveryError(error))
         {
-            if (!_cleanedUp) ShowToast("Couldn't open Reset and restore. " + ProfileErrorMessage(error));
+            ShowProfileRecoveryToast("Couldn't open Reset and restore. " + ProfileErrorMessage(error));
         }
         finally
         {
             _profileRecoveryOpen = false;
         }
+    }
+
+    private bool TryBeginProfileRecovery()
+    {
+        if (_profileInstallRoot is null || _profileRecoveryOpen || _updateDialog is not null || _cleanedUp) return false;
+        _profileRecoveryOpen = true;
+        return true;
     }
 
     private async Task ConfirmProfileChangeAsync(ProfileBackup? backup)
@@ -197,6 +203,12 @@ public sealed partial class MainWindow
         }
         if (_cleanedUp) return;
         await LaunchRuntimeAsync();
+        ShowProfileRecoveryToast(message);
+    }
+
+    private void ShowProfileRecoveryToast(string message)
+    {
+        // The window can close while a launcher command yields to the dispatcher.
         if (!_cleanedUp) ShowToast(message);
     }
 
