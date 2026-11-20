@@ -1455,6 +1455,7 @@ async function fetchAllowlisted(
     }
     let response: Response;
     for (let attempt = 0; ; attempt += 1) {
+      signal?.throwIfAborted();
       response = await fetchAllowlistedOnce(current, {
         allowlist,
         init: {
@@ -1498,11 +1499,9 @@ async function fetchAllowlisted(
 }
 
 async function waitForHttpRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
   if (delayMs <= 0) {
     return;
-  }
-  if (signal?.aborted) {
-    throw signal.reason instanceof Error ? signal.reason : new Error("request aborted");
   }
   await new Promise<void>((resolve, reject) => {
     const onAbort = () => {

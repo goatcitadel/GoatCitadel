@@ -267,7 +267,6 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
   it("runs due scheduler collaborators and skips work while closing", async () => {
     const maybeRunIdleCurator = vi.fn(async () => undefined);
     const drainInboundChannelEvents = vi.fn(async () => undefined);
-    const runDueTaskCronJobs = vi.fn(async () => undefined);
     const runCommitmentSweep = vi.fn(async () => undefined);
     const runHeartbeatSweep = vi.fn(async () => undefined);
     const runDueEvaluation = vi.fn(async () => undefined);
@@ -277,7 +276,6 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
       closing: true,
       curatorService: { maybeRunIdleCurator },
       inboundChannelEventService: { drain: drainInboundChannelEvents },
-      cronAutomationService: { runDueTaskCronJobs },
       runCommitmentSweep,
       runHeartbeatSweep,
       memoryLifecycleService: { runDueEvaluation },
@@ -293,12 +291,42 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
 
     expect(maybeRunIdleCurator).toHaveBeenCalledTimes(1);
     expect(drainInboundChannelEvents).toHaveBeenCalledTimes(1);
-    expect(runDueTaskCronJobs).toHaveBeenCalledTimes(1);
     expect(runCommitmentSweep).toHaveBeenCalledTimes(1);
     expect(runHeartbeatSweep).toHaveBeenCalledTimes(1);
     expect(runDueEvaluation).toHaveBeenCalledTimes(1);
     expect(refreshEngineeringLearnings).toHaveBeenCalledTimes(1);
     expect(drainDueChannelDeliveries).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the cron sweep at five seconds, avoiding overlapping sweeps and stopping on close", async () => {
+    vi.useFakeTimers();
+    let finishSweep!: () => void;
+    const runDueTaskCronJobs = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSweep = resolve;
+        }),
+    );
+    const gateway = createGatewayHarness({ cronAutomationService: { runDueTaskCronJobs } });
+    (gateway as any).startCronScheduler();
+    try {
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(runDueTaskCronJobs).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runDueTaskCronJobs).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(runDueTaskCronJobs).toHaveBeenCalledTimes(1);
+      finishSweep();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(runDueTaskCronJobs).toHaveBeenCalledTimes(2);
+      finishSweep();
+      gateway.closing = true;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(runDueTaskCronJobs).toHaveBeenCalledTimes(2);
+    } finally {
+      (gateway as any).cronScheduler.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("schedules normal append-turn memory maintenance and skips delegated children", async () => {

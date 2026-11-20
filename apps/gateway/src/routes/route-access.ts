@@ -61,6 +61,7 @@ const TRACKED_ROUTE_PREFIXES = ["/api/v1"] as const;
 const DEFAULT_API_ROUTE_ACCESS_CLASS: RouteAccessClass = "operator";
 
 const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessClass }> = [
+  { prefix: "/api/v1/scripts", accessClass: "operator" },
   { prefix: "/api/v1/auth/device-requests", accessClass: "public" },
   { prefix: "/api/v1/auth/companion/session/refresh", accessClass: "public" },
   { prefix: "/api/v1/auth/settings", accessClass: "operator" },

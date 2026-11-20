@@ -25,6 +25,7 @@ async function main() {
   try {
     stack = await startVerificationStack(context, {
       includeUi: true,
+      uiMode: "preview",
       gatewayPort: 0,
       uiPort: 0,
       gatewayEnv: {
@@ -265,6 +266,7 @@ async function main() {
             await page.goto(`${stack.uiUrl}/settings/first-run?shell=cockpit`, { waitUntil: "domcontentloaded" });
             await page.getByRole("heading", { name: "Get started" }).waitFor({ timeout: 30_000 });
             await page.getByRole("button", { name: /Step 2.*Choose your safety settings/u }).click();
+            await page.getByRole("button", { name: "Skip tutorial", exact: true }).click();
             await page.getByRole("button", { name: "Keep current rule" }).click();
             await page.getByRole("button", { name: "Finish setup and open Chat" }).click();
             await page.waitForURL((url) => url.pathname === "/chat", { timeout: 30_000 });
@@ -404,22 +406,23 @@ async function main() {
     await runScenario(
       context,
       {
-        id: "install.ui.dev-server",
+        id: "install.ui.production-shell",
         lane: "install-smoke",
-        title: "Mission Control dev server serves the shell entrypoint",
+        title: "Mission Control serves the built shell entrypoint",
         subsystem: "ui",
       },
       async () => {
         const { response, text: html } = await fetchTextWithRetry(`${stack.uiUrl}/`);
         const hasRootMount = html.includes('id="root"');
-        const hasViteClient = html.includes("/@vite/client");
+        const entrypoint = /<script\b[^>]*\btype="module"[^>]*\bsrc="([^"]+\.js)"/u.exec(html)?.[1];
+        const shellReady = response.ok && hasRootMount && Boolean(entrypoint) && !html.includes("/@vite/client");
         return {
-          status: response.ok && hasRootMount && hasViteClient ? "passed" : "failed",
-          error: response.ok ? undefined : `Unexpected UI response from ${stack.uiUrl}/`,
+          status: shellReady ? "passed" : "failed",
+          error: shellReady ? undefined : `Expected the built Mission Control shell from ${stack.uiUrl}/`,
           metrics: {
             statusCode: response.status,
             hasRootMount,
-            hasViteClient,
+            hasBuiltEntrypoint: Boolean(entrypoint),
           },
         };
       },

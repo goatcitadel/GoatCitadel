@@ -272,7 +272,7 @@ export class GoogleWorkspaceOAuthService {
       if (readClientId(current.config) !== flow.clientId) {
         throw new ConflictError({ message: "The OAuth client ID changed during sign-in. Start Connect Google again." });
       }
-      const updated = await this.connections.update(connectionId, {
+      const updated = await this.writeConnection(connectionId, {
         expectedRevision: current.revision,
         status: "connected",
         lastError: null,
@@ -302,7 +302,7 @@ export class GoogleWorkspaceOAuthService {
       } catch (error) {
         try {
           // Restore only the revision written by this sign-in. A newer settings change takes precedence.
-          await this.connections.update(connectionId, {
+          await this.writeConnection(connectionId, {
             expectedRevision: updated.revision,
             status: current.status,
             lastError: current.lastError ?? null,
@@ -579,10 +579,14 @@ export class GoogleWorkspaceOAuthService {
     },
   ): Promise<void> {
     const current = await this.readConnection(connectionId);
-    await this.connections.update(connectionId, {
+    await this.writeConnection(connectionId, {
       expectedRevision: current.revision,
       ...patch(current),
     });
+  }
+
+  private writeConnection(connectionId: string, patch: Parameters<AsyncStorage["integrationConnections"]["update"]>[1]) {
+    return this.connections.update(connectionId, patch);
   }
 
   private assertKeychainAvailable(): void {

@@ -162,6 +162,19 @@ describe("cockpit Back and Forward gate", () => {
     await settle();
     expect(here()).toBe("/work");
   });
+  it("preserves the accepted owner link when closing an Inbox sheet clears its item from the URL", async () => {
+    register(false);
+    commitCockpitNavigation("/inbox?item=background-update");
+    deferTraversals();
+    const cleanup = registerCockpitSheetBack(vi.fn());
+
+    commitCockpitNavigation("/work/runs/background-run");
+    commitCockpitNavigation("/inbox", { replace: true });
+    await settle();
+    cleanup();
+
+    expect(here()).toBe("/work/runs/background-run?shell=cockpit");
+  });
   it("skips a lower sheet retired under the top and restores ordinary history", async () => {
     register(false);
     commitCockpitNavigation("/settings/models#local-ai");

@@ -1007,6 +1007,7 @@ const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 const BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY = "background_review_turns_since_v1";
 const BACKGROUND_REVIEW_TURN_INTERVAL = 5;
 const IMPROVEMENT_SCHEDULER_INTERVAL_MS = 60_000;
+const CRON_SCHEDULER_INTERVAL_MS = 5_000;
 const CHAT_TIMER_SCHEDULER_INTERVAL_MS = 1_000;
 const maintenanceSchedulerDisabled =
   process.env.GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER?.trim().toLowerCase() === "true";
@@ -1231,6 +1232,7 @@ export class GatewayService {
   public readonly operatorSummaryCache = new OperatorSummaryCache(15_000);
   public readonly onboardingMarkerPath: string;
   private maintenanceScheduler?: BackgroundIntervalHandle;
+  private cronScheduler?: BackgroundIntervalHandle;
   private chatTimerScheduler?: BackgroundIntervalHandle;
   private orchestrationWorktreeReapScheduler?: BackgroundIntervalHandle;
   private mobilePushDeliveryScheduler?: BackgroundIntervalHandle;
@@ -4467,6 +4469,7 @@ export class GatewayService {
     this.startProactiveScheduler();
     if (!maintenanceSchedulerDisabled) {
       this.startMaintenanceScheduler();
+      this.startCronScheduler();
       this.startChatTimerScheduler();
       this.startOrchestrationWorktreeReapScheduler();
       // Production-dark by default: without an operator-provisioned Expo push
@@ -5430,6 +5433,22 @@ export class GatewayService {
     });
   }
 
+  private startCronScheduler(): void {
+    if (this.cronScheduler) return;
+    this.cronScheduler = startBackgroundInterval({
+      label: "cron scheduler",
+      intervalMs: CRON_SCHEDULER_INTERVAL_MS,
+      task: async () => {
+        await this.tryRunWithSharedHostWork("cron", "cron-due-sweep", () =>
+          this.cronAutomationService.runDueTaskCronJobs(),
+        );
+      },
+      isClosing: () => this.closing,
+      registerInflight: (task) => this.registerBackgroundTask(task),
+      onError: (error) => log.error("cron scheduler tick failed", error),
+    });
+  }
+
   private async runMaintenanceSchedulerTick(): Promise<void> {
     if (this.closing) {
       return;
@@ -5454,13 +5473,6 @@ export class GatewayService {
       {
         label: "inbound channel events",
         run: () => this.inboundChannelEventService.drain(),
-      },
-      {
-        label: "cron automation",
-        run: () =>
-          this.tryRunWithSharedHostWork("cron", "cron-due-sweep", () =>
-            this.cronAutomationService.runDueTaskCronJobs(),
-          ),
       },
       {
         label: "commitment sweep",
@@ -12241,6 +12253,8 @@ export class GatewayService {
   private stopIntervalSchedulers(): void {
     this.maintenanceScheduler?.stop();
     this.maintenanceScheduler = undefined;
+    this.cronScheduler?.stop();
+    this.cronScheduler = undefined;
     this.chatTimerScheduler?.stop();
     this.chatTimerScheduler = undefined;
     this.orchestrationWorktreeReapScheduler?.stop();

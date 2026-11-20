@@ -132,7 +132,7 @@ export async function runCockpitWorkspacesProof({ context, browser, stack, citad
           window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit");
           window.localStorage.setItem("goatcitadel.ui.theme.v1", value);
         }, theme);
-        await installMissionControlNextBrowserState(browserContext, "default", citadelId);
+        await installMissionControlNextBrowserState(browserContext, "default", citadelId, { showTechnicalDetails: true });
         await browserContext.addInitScript(() => {
           window.__workspaceLifecycleClickCounts = { archive: { pointerdown: 0, click: 0 }, restore: { pointerdown: 0, click: 0 } };
           for (const type of ["pointerdown", "click"]) document.addEventListener(type, event => {
@@ -247,10 +247,12 @@ export async function runCockpitWorkspacesProof({ context, browser, stack, citad
           await panel.getByRole("button", { name: `${action === "archive" ? "Archive" : "Restore"} workspace ${updatedName}`, exact: true }).click();
           const dialog = page.getByRole("dialog", { name: `${action === "archive" ? "Archive" : "Restore"} workspace?`, exact: true });
           await dialog.getByRole("button", { name: `Confirm ${action} workspace`, exact: true }).waitFor({ state: "visible" });
-          for (const value of [record.workspaceId, String(record.revision), citadelId]) {
-            assert.equal(await dialog.locator("dd").filter({ hasText: new RegExp(`^${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }).count(), 1,
-              "Lifecycle review omitted exact owner evidence.");
+          const technicalDetails = dialog.locator("details").filter({ hasText: "Technical details" });
+          await technicalDetails.getByText("Technical details", { exact: true }).click();
+          for (const value of [`Record ${record.workspaceId}`, `Version ${record.revision}`, `Citadel ${citadelId}`]) {
+            await technicalDetails.getByText(value, { exact: true }).waitFor({ state: "visible" });
           }
+          await technicalDetails.getByText("Technical details", { exact: true }).click();
           for (const control of [dialog, dialog.getByRole("button", { name: `Confirm ${action} workspace`, exact: true }), dialog.getByRole("button", { name: "Cancel", exact: true })]) {
             const box = await control.boundingBox();
             assert.ok(box && box.width > 0 && box.height > 0 && box.x >= -1 && box.y >= -1

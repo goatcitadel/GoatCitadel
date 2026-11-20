@@ -115,7 +115,7 @@ export async function runCockpitCitadelDirectoryProof({ context, browser, stack,
         const presenceClientId=randomUUID(),presenceObserverKey="__syntheticCitadelPresenceObserver";
         await browserContext.addInitScript(citadelPresenceInit,{clientId:presenceClientId,observerKey:presenceObserverKey,limit:256,gatewayOrigin:new URL(stack.gatewayUrl).origin});
         await browserContext.addInitScript(value => { window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit"); window.localStorage.setItem("goatcitadel.ui.theme.v1", value); }, theme);
-        await installMissionControlNextBrowserState(browserContext, "default", citadelId);
+        await installMissionControlNextBrowserState(browserContext, "default", citadelId, { showTechnicalDetails: true });
         page = await browserContext.newPage();
         page.on("request", request => {
           if (request.isNavigationRequest() && request.frame() === page.mainFrame()) documentNavigations += 1;
@@ -180,7 +180,11 @@ export async function runCockpitCitadelDirectoryProof({ context, browser, stack,
           const verb = action === "archive" ? "Archive" : "Restore";
           await panel.getByRole("button", { name: `${verb} Citadel ${record.name}`, exact: true }).click();
           const dialog = page.getByRole("dialog", { name: `${verb} Citadel?`, exact: true }); await dialog.waitFor();
-          await dialog.getByText(record.citadelId, { exact: true }).waitFor(); await dialog.getByText(record.revision, { exact: true }).waitFor();
+          const technicalDetails = dialog.locator("details").filter({ hasText: "Technical details" });
+          await technicalDetails.getByText("Technical details", { exact: true }).click();
+          await technicalDetails.getByText(`Record ${record.citadelId}`, { exact: true }).waitFor();
+          await technicalDetails.getByText(`Version ${record.revision}`, { exact: true }).waitFor();
+          await technicalDetails.getByText("Technical details", { exact: true }).click();
           for (const control of [dialog, dialog.getByRole("button", { name: `Confirm ${action} Citadel`, exact: true })]) {
             const box = await control.boundingBox(); assert.ok(box && box.x >= -1 && box.y >= -1 && box.x + box.width <= viewport.width + 1 && box.y + box.height <= viewport.height + 1);
           }

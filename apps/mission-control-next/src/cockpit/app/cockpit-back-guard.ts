@@ -97,7 +97,9 @@ export function registerCockpitSheetBack(close: () => void): () => void {
 /** Complete an already-reviewed navigation from the real page entry, not a sheet duplicate. */
 export function afterCockpitSheetsClose(after: () => void): boolean {
   if (sheetRestore) {
-    sheetRestore.after = after;
+    // A route-backed sheet can request URL cleanup after its close renders.
+    // Preserve the accepted destination across that asynchronous cleanup.
+    sheetRestore.after ??= after;
     return true;
   }
   const current = sheetEntries.get(sheetId() ?? "");
@@ -112,9 +114,6 @@ export function afterCockpitSheetsClose(after: () => void): boolean {
     entry.close = undefined;
     close?.();
   }
-  // Closing a route-backed sheet can request its own cleanup URL. The
-  // already-reviewed destination remains the final navigation for this action.
-  sheetRestore.after = after;
   window.history.go(target.position! - current.position);
   return true;
 }

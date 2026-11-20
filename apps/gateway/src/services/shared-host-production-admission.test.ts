@@ -120,7 +120,8 @@ describe("shared-host production admission wiring", () => {
     expect(maintenanceStart).toBeGreaterThanOrEqual(0);
     expect(maintenanceEnd).toBeGreaterThan(maintenanceStart);
     const maintenanceSource = gatewaySource.slice(maintenanceStart, maintenanceEnd);
-    expect(maintenanceSource).toContain("cronAutomationService.runDueTaskCronJobs()");
+    expect(maintenanceSource).not.toContain("cronAutomationService.runDueTaskCronJobs()");
+    expect(gatewaySource.match(/this\.cronAutomationService\.runDueTaskCronJobs\(\)/gu)).toHaveLength(1);
     for (const legacyDispatcher of [
       "runWeeklyImprovementSchedulerIfDue",
       "runPrivateBetaBackupSchedulerIfDue",
