@@ -109,6 +109,38 @@ test("database preflight requires the active database storage to be local", (t) 
   assert.deepEqual(inspectLocalProfileStorage(active, active, {}), [path.join(active, "data", "postgres")]);
 });
 
+test("SQLite preflight rejects external data paths and linked database files", (t) => {
+  const { install, active } = fixture(t);
+  const config = "config/assistant.config.json";
+  const database = { driver: "sqlite" };
+  write(active, config, JSON.stringify({ database, dataDir: "../unrelated" }));
+  assert.throws(() => inspectLocalProfileStorage(active, active, {}), /SQLite storage inside this install/u);
+  assert.throws(() => inspectLocalProfileStorage(active, active, { GOATCITADEL_DATABASE_DRIVER: "typo" }), /SQLite storage inside this install/u);
+
+  write(active, config, JSON.stringify({ database, dataDir: "sqlite-store" }));
+  write(active, "sqlite-store/index.db", "fixture");
+  assert.doesNotThrow(() => inspectLocalProfileStorage(active, active, {}));
+  fs.linkSync(path.join(active, "sqlite-store/index.db"), path.join(install, "linked-database.db"));
+  assert.throws(() => inspectLocalProfileStorage(active, active, {}), /regular SQLite files/u);
+});
+
+test("SQLite preflight rejects a junction to data outside the selected backup", (t) => {
+  const { install, active } = fixture(t);
+  const stored = path.join(install, "selected-backup");
+  const outside = path.join(install, "unrelated");
+  write(outside, "index.db", "external database");
+  write(stored, "config/goatcitadel.json", JSON.stringify({ assistant: { dataDir: "sqlite-store" } }));
+  write(stored, ".env", "GOATCITADEL_DATABASE_DRIVER=sqlite\n");
+  try {
+    fs.symlinkSync(outside, path.join(stored, "sqlite-store"), "junction");
+  } catch (error) {
+    if (error.code !== "EPERM" && error.code !== "EACCES") throw error;
+    t.skip("This environment cannot create a junction.");
+    return;
+  }
+  assert.throws(() => inspectLocalProfileStorage(active, stored, {}), /regular folders/u);
+});
+
 test("a junction cannot redirect the backup folder", (t) => {
   const { install, recoveryRoot, recovery } = fixture(t);
   const outside = path.join(install, "unrelated");

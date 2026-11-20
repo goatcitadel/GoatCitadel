@@ -11,35 +11,50 @@ export function inspectLocalProfileStorage(activeRoot, storedRoot = activeRoot, 
   const canonical = directoryExists(configDir) ? readConfig(path.join(configDir, "goatcitadel.json")) : null;
   const split = directoryExists(configDir) ? readConfig(path.join(configDir, "assistant.config.json")) : null;
 
-  const directories = new Set(["data/postgres"]);
+  const postgresDirectories = new Set(["data/postgres"]);
+  const sqliteDirectories = new Set();
+  const envDriver = effectiveEnv.GOATCITADEL_DATABASE_DRIVER?.trim().toLowerCase();
   for (const assistant of [canonical?.assistant ?? {}, split ?? {}]) {
     const database = assistant.database;
     const postgres = database?.postgres;
-    const driver = effectiveEnv.GOATCITADEL_DATABASE_DRIVER?.trim().toLowerCase() || database?.driver;
+    const driver = envDriver === "sqlite" || envDriver === "postgres" ? envDriver : database?.driver;
     const mode = effectiveEnv.GOATCITADEL_POSTGRES_MODE?.trim().toLowerCase() || postgres?.mode;
     if (driver !== "sqlite" && (mode === "external" || postgres?.connectionString || postgres?.connectionStringEnv
       || effectiveEnv.GOATCITADEL_POSTGRES_CONNECTION_STRING || effectiveEnv.GOATCITADEL_POSTGRES_CONNECTION_STRING_ENV)) {
       throw new Error("Reset and restore needs a local database. This profile uses an external PostgreSQL connection.");
     }
+    if (driver === "sqlite") sqliteDirectories.add(assistant.dataDir ?? "data");
     const dataDir = database?.bundledPostgres?.dataDir;
-    if (dataDir) directories.add(dataDir);
+    if (dataDir) postgresDirectories.add(dataDir);
   }
   if (effectiveEnv.GOATCITADEL_BUNDLED_POSTGRES_DATA_DIR) {
-    directories.add(effectiveEnv.GOATCITADEL_BUNDLED_POSTGRES_DATA_DIR.trim());
+    postgresDirectories.add(effectiveEnv.GOATCITADEL_BUNDLED_POSTGRES_DATA_DIR.trim());
   }
 
-  return [...new Set([...directories].map((value) => {
-    const relative = path.relative(activeRoot, path.resolve(activeRoot, value));
-    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error("Reset and restore needs bundled PostgreSQL storage inside this install's profile.");
+  for (const value of sqliteDirectories) {
+    const directory = resolveProfileStorageDirectory(activeRoot, storedRoot, value, "SQLite", true);
+    for (const filename of ["index.db", "index.db-wal", "index.db-shm", "index.db-journal"]) {
+      const stat = fs.lstatSync(path.join(directory, filename), { throwIfNoEntry: false });
+      if (stat && (!stat.isFile() || stat.nlink !== 1)) {
+        throw new Error("Reset and restore needs regular SQLite files inside this install's profile.");
+      }
     }
-    let prefix = storedRoot;
-    for (const part of relative.split(path.sep)) {
-      prefix = path.join(prefix, part);
-      directoryExists(prefix);
-    }
-    return prefix;
-  }))];
+  }
+  return [...new Set([...postgresDirectories].map((value) =>
+    resolveProfileStorageDirectory(activeRoot, storedRoot, value, "bundled PostgreSQL")))];
+}
+
+function resolveProfileStorageDirectory(activeRoot, storedRoot, configuredPath, database, allowProfileRoot = false) {
+  const relative = path.relative(activeRoot, path.resolve(activeRoot, configuredPath));
+  if ((!relative && !allowProfileRoot) || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`Reset and restore needs ${database} storage inside this install's profile.`);
+  }
+  let directory = storedRoot;
+  for (const part of relative.split(path.sep)) {
+    directory = path.join(directory, part);
+    directoryExists(directory);
+  }
+  return directory;
 }
 
 export function stopProfilePostgres(directories) {
