@@ -14,12 +14,12 @@ describe("tool executor loop 30 command branch matrix", () => {
       "win32",
     );
     expect(resolved.file.toLowerCase()).toContain("cmd");
-    expect(resolved.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
-    expect(resolved.args[3]).toContain("pnpm");
-    expect(resolved.args[3]).toContain("@goatcitadel/policy-engine");
+    expect(resolved.args.slice(0, 4)).toEqual(["/d", "/s", "/v:off", "/c"]);
+    expect(resolved.args.at(-1)).toContain("pnpm");
+    expect(resolved.args.at(-1)).toContain("@goatcitadel/policy-engine");
 
     const quoted = resolveExecutableCommand("npm", ["run", "test:coverage", "--", "name with spaces", "a&b"], "win32");
-    expect(quoted.args[3]).toContain('"name with spaces"');
-    expect(quoted.args[3]).toContain('"a^&b"');
+    expect(quoted.args.at(-1)).toContain('^"name^ with^ spaces^"');
+    expect(quoted.args.at(-1)).toContain('^"a^&b^"');
   });
 });

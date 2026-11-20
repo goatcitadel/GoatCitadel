@@ -19,6 +19,7 @@ import { applyCockpitAppearance } from "./cockpit-appearance";
 import { CockpitNavigationProvider } from "./CockpitNavigationProvider";
 import { CockpitShell } from "./CockpitShell";
 import { useGatewayReachability } from "./use-gateway-reachability";
+import { useTutorialReturn } from "../../features/tutorial/use-tutorial-return";
 
 function GatedCockpit() {
   const { activeWorkspaceId, notifications, theme, density } = useUiPreferences();
@@ -41,6 +42,7 @@ function GatedCockpit() {
       ? visibleSession.sessionId
       : undefined;
   const ready = gatewayAccess.status === "ready";
+  useTutorialReturn(ready, accessRevision);
   useNotificationPresenceLease(ready ? (activeWorkspaceId ?? "default") : "", visibleSessionId);
   const streamState = useCockpitRealtime({
     queryClient,

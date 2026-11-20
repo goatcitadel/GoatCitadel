@@ -223,10 +223,10 @@ describe("tool executor edge coverage", () => {
       "win32",
     );
 
-    const renderedCommand = resolved.args[3] ?? "";
-    expect(renderedCommand).toContain('""');
-    expect(renderedCommand).toContain('"test^&lint"');
-    expect(renderedCommand).toContain('\\"quote\\"');
+    const renderedCommand = resolved.args.at(-1) ?? "";
+    expect(renderedCommand).toContain('^"^"');
+    expect(renderedCommand).toContain('^"test^&lint^"');
+    expect(renderedCommand).toContain('\\^"quote\\^"');
     expect(renderedCommand).toContain("\\\\");
   });
 

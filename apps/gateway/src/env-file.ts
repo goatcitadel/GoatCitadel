@@ -5,6 +5,7 @@ import { logger } from "@goatcitadel/gateway-core";
 import { repoHasConfigMarker } from "./config-files.js";
 
 const ENV_FILE_MODE = 0o600;
+const ENV_ESCAPE_VALUES = { n: "\n", r: "\r", t: "\t", '"': '"', "\\": "\\" } as const;
 
 const envFileLog = logger.child("env-file");
 
@@ -14,7 +15,11 @@ const envFileLog = logger.child("env-file");
  * Restores 0600 on the renamed target on POSIX; no-op on win32 where chmod
  * does not map to ACLs.
  */
-function writeCredentialFileAtomicSync(targetPath: string, contents: string): void {
+export function writeCredentialFileAtomicSync(
+  targetPath: string,
+  contents: string,
+  requireDirectorySync = false,
+): void {
   const dir = path.dirname(targetPath);
   const base = path.basename(targetPath);
   const tempPath = path.join(dir, `.${base}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
@@ -31,6 +36,15 @@ function writeCredentialFileAtomicSync(targetPath: string, contents: string): vo
         fs.chmodSync(targetPath, ENV_FILE_MODE);
       } catch {
         // best-effort: rename succeeded; some filesystems (e.g. exfat) ignore chmod
+      }
+      try {
+        syncCredentialDirectory(targetPath);
+      } catch (error) {
+        if (requireDirectorySync) throw error;
+        // Rename already published the file. Keep the caller's rollback available.
+        envFileLog.warn("could not sync local credential directory", {
+          code: isNodeError(error) ? error.code : undefined,
+        });
       }
     }
   } catch (error) {
@@ -49,6 +63,16 @@ function writeCredentialFileAtomicSync(targetPath: string, contents: string): vo
       // ignore cleanup error
     }
     throw error;
+  }
+}
+
+export function syncCredentialDirectory(credentialPath: string): void {
+  if (process.platform === "win32") return;
+  const directoryFd = fs.openSync(path.dirname(credentialPath), "r");
+  try {
+    fs.fsyncSync(directoryFd);
+  } finally {
+    fs.closeSync(directoryFd);
   }
 }
 
@@ -112,6 +136,11 @@ export function wasLoadedFromLocalEnv(key: string, file: string | undefined): bo
   return file !== undefined && localEnvOrigins.get(key) === file;
 }
 
+export function applyLocalEnvValue(key: string, value: string, file: string): void {
+  process.env[key] = value;
+  localEnvOrigins.set(key, file);
+}
+
 export function loadLocalEnvFile(options?: { forceReload?: boolean }): EnvFileLoadResult {
   if (loaded && !options?.forceReload) {
     return { applied: [], skipped: [] };
@@ -139,8 +168,7 @@ export function loadLocalEnvFile(options?: { forceReload?: boolean }): EnvFileLo
       skipped.push(key);
       continue;
     }
-    process.env[key] = value;
-    localEnvOrigins.set(key, envPath);
+    applyLocalEnvValue(key, value, envPath);
     applied.push(key);
   }
 
@@ -270,7 +298,8 @@ export function upsertLocalEnvVar(key: string, value: string, options?: { rootDi
   let raw: string;
   try {
     raw = fs.readFileSync(envPath, "utf8");
-  } catch {
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== "ENOENT") throw error;
     raw = "";
   }
 
@@ -389,13 +418,9 @@ function parseEnv(raw: string): Record<string, string> {
 
     let value = candidate.slice(splitIndex + 1).trim();
     if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
-      value = value
-        .slice(1, -1)
-        .replace(/\\n/g, "\n")
-        .replace(/\\r/g, "\r")
-        .replace(/\\t/g, "\t")
-        .replace(/\\"/g, '"')
-        .replace(/\\\\/g, "\\");
+      value = value.slice(1, -1).replace(/\\([nrt"\\])/gu, (_, escape: keyof typeof ENV_ESCAPE_VALUES) => {
+        return ENV_ESCAPE_VALUES[escape];
+      });
     } else if (value.startsWith("'") && value.endsWith("'") && value.length >= 2) {
       value = value.slice(1, -1);
     } else {

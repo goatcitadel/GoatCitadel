@@ -4,16 +4,12 @@ import {
   GOOGLE_WORKSPACE_CAPABILITIES,
   GOOGLE_WORKSPACE_CAPABILITY_DEFINITIONS,
   GOOGLE_WORKSPACE_CATALOG_ID,
-  HEARTBEAT_PERMISSION_PROFILE_ID,
-  NotFoundError,
   ValidationError,
-  clampInt,
   getGoogleWorkspaceCapability,
   googleWorkspaceCapabilityForTool,
   googleWorkspaceScopesFor,
   isGoogleWorkspaceCapability,
   isGoogleWorkspaceCapabilityGranted,
-  isGoogleWorkspaceReadTool,
   readEnabledGoogleWorkspaceCapabilities,
   type GoogleWorkspaceCapability,
   type GoogleWorkspaceClientSecretSource,
@@ -26,7 +22,7 @@ import {
   type ToolInvokeRequest,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
-import { z } from "zod";
+import { GOOGLE_CONNECTION_ID_PATTERN, normalizeGoogleReadRequest } from "./google-workspace-read-request.js";
 import { McpOAuthPkceStore } from "./mcp-oauth-discovery.js";
 import { SecretStoreUnavailableError, isSecretStoreUnavailableLikeError } from "./secret-store-service.js";
 import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
@@ -42,23 +38,10 @@ export const GOOGLE_OAUTH_CALLBACK_PATH = "/api/v1/integrations/google/oauth/cal
 const REFRESH_SKEW_MS = 5 * 60_000;
 const FLOW_TTL_MS = 10 * 60_000;
 const MAX_CLIENT_SECRET_CHARS = 512;
-const CONNECTION_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,160}$/;
 const REAUTH_ERRORS = new Set(["invalid_grant", "invalid_client", "unauthorized_client"]);
 const SETTINGS_PATH = "Settings › Connections › Integrations";
 // Google sends `expires_in`; when it does not, assume its documented one-hour lifetime.
 const DEFAULT_ACCESS_TOKEN_LIFETIME_MS = 60 * 60_000;
-const GOOGLE_READ_TIME = z.iso.datetime({ offset: true });
-const CALENDAR_READ_FIELDS = new Set([
-  "connectionId",
-  "calendarId",
-  "fromIso",
-  "toIso",
-  "timeMin",
-  "timeMax",
-  "maxResults",
-]);
-const GMAIL_READ_FIELDS = new Set(["connectionId", "query", "maxResults"]);
-
 /** What the OS keychain holds for one connection. Only this service reads or writes it. */
 interface GoogleWorkspaceCredential {
   version: 1;
@@ -311,7 +294,7 @@ export class GoogleWorkspaceOAuthService {
 
   /** Cleanup after the connection itself was deleted: revoke when possible and remove every keychain entry. */
   public async forgetConnection(connectionId: string): Promise<void> {
-    if (!CONNECTION_ID_PATTERN.test(connectionId) || !this.keychainAvailable()) return;
+    if (!GOOGLE_CONNECTION_ID_PATTERN.test(connectionId) || !this.keychainAvailable()) return;
     this.signOut(connectionId);
     await this.revokeAndForget(connectionId);
     this.removeSecret(clientSecretAccount(connectionId));
@@ -341,97 +324,23 @@ export class GoogleWorkspaceOAuthService {
     return deleted;
   }
 
-  /** Bind and validate the exact read before policy can save it as a pending approval. */
   public async normalizeReadRequest(request: ToolInvokeRequest): Promise<ToolInvokeRequest> {
-    if (!isGoogleWorkspaceReadTool(request.toolName)) return request;
-    const gmail = request.toolName === "gmail.read";
-    const args = { ...request.args };
-    const fields = gmail ? GMAIL_READ_FIELDS : CALENDAR_READ_FIELDS;
-    if (Object.keys(args).some((key) => !fields.has(key))) {
-      throw new ValidationError({
-        message: gmail
-          ? "Gmail searches accept connectionId, query and maxResults."
-          : "Calendar reads accept connectionId, calendarId, fromIso, toIso and maxResults.",
-      });
-    }
-    const textField = gmail ? "query" : "calendarId";
-    const textValue = args[textField];
-    if (textValue !== undefined && typeof textValue !== "string") {
-      throw new ValidationError({ message: `${textField} must be text.` });
-    }
-    if (!gmail && typeof textValue === "string" && textValue.length > 512) {
-      throw new ValidationError({ message: "The Calendar ID is too long." });
-    }
-    if (typeof textValue === "string") args[textField] = textValue.trim().slice(0, 512) || undefined;
-    if (args.maxResults !== undefined) {
-      if (typeof args.maxResults !== "number" || !Number.isFinite(args.maxResults)) {
-        throw new ValidationError({ message: "maxResults must be a number." });
-      }
-      args.maxResults = clampInt(args.maxResults, 10, 1, gmail ? 25 : 100);
-    }
-    if (!gmail) {
-      const fromIso = normalizeGoogleReadTime(args, "fromIso", "timeMin");
-      const toIso = normalizeGoogleReadTime(args, "toIso", "timeMax");
-      if (fromIso && toIso && Date.parse(fromIso) >= Date.parse(toIso)) {
-        throw new ValidationError({ message: "The Calendar end time must be after its start time." });
-      }
-      delete args.timeMin;
-      delete args.timeMax;
-      if (fromIso) args.fromIso = fromIso;
-      if (toIso) args.toIso = toIso;
-    }
-    const connectionId = args.connectionId;
-    let connections: IntegrationConnection[];
-    if (typeof connectionId === "string" && CONNECTION_ID_PATTERN.test(connectionId.trim())) {
-      const connection = await this.readConnection(connectionId.trim()).catch((error: unknown) => {
-        if (error instanceof NotFoundError) {
-          throw new ValidationError({
-            message: "That Google connection could not be found. Choose a saved connection.",
-          });
-        }
-        throw error;
-      });
-      connections = [connection];
-    } else if (
-      connectionId === undefined &&
-      request.turnId &&
-      request.policyContext?.permissionProfileId !== HEARTBEAT_PERMISSION_PROFILE_ID
-    ) {
-      const limit = 201;
-      connections = await this.connections.list("automation", limit);
-      if (connections.length === limit) {
-        throw new ValidationError({ message: "Choose a saved Google connection for this read." });
-      }
-    } else {
-      throw new ValidationError({ message: "Choose a saved Google connection for this read." });
-    }
-    const capability = gmail ? "gmail.read" : "calendar.read";
-    const eligible = connections.flatMap((connection) => {
-      if (
-        connection.catalogId !== GOOGLE_WORKSPACE_CATALOG_ID ||
-        !connection.enabled ||
-        connection.status !== "connected" ||
-        (connection.workspaceId !== undefined && connection.workspaceId !== request.workspaceId) ||
-        !readEnabledGoogleWorkspaceCapabilities(connection.config).includes(capability)
-      )
-        return [];
-      const credential = this.keychainAvailable() ? this.readCredential(connection.connectionId) : undefined;
-      return credential &&
-        !credential.requiresReauth &&
-        credential.clientId === readClientId(connection.config) &&
-        isGoogleWorkspaceCapabilityGranted(capability, credential.grantedScopes)
-        ? [{ connectionId: connection.connectionId, signInId: googleSignInId(connection, credential) }]
-        : [];
-    });
-    if (eligible.length !== 1) {
-      throw new ValidationError({
-        message: eligible.length
-          ? "More than one Google account can perform this read. Choose a saved connection."
-          : `Connect Google and enable ${gmail ? "Gmail read" : "Calendar read"} under Capabilities › Connectors.`,
-      });
-    }
-    const account = eligible[0]!;
-    return { ...request, args: { ...args, connectionId: account.connectionId }, googleReadSignInId: account.signInId };
+    return normalizeGoogleReadRequest(
+      {
+        connections: this.connections,
+        readConnection: (connectionId) => this.readConnection(connectionId),
+        readEligibleSignInId: (connection, capability) => {
+          const credential = this.keychainAvailable() ? this.readCredential(connection.connectionId) : undefined;
+          return credential &&
+            !credential.requiresReauth &&
+            credential.clientId === readClientId(connection.config) &&
+            isGoogleWorkspaceCapabilityGranted(capability, credential.grantedScopes)
+            ? googleSignInId(connection, credential)
+            : undefined;
+        },
+      },
+      request,
+    );
   }
 
   /** The tool executor's hook: an access token for the capability that `toolName` needs. */
@@ -592,7 +501,7 @@ export class GoogleWorkspaceOAuthService {
   }
 
   private async requireConnection(connectionId: string): Promise<IntegrationConnection> {
-    if (!CONNECTION_ID_PATTERN.test(connectionId)) {
+    if (!GOOGLE_CONNECTION_ID_PATTERN.test(connectionId)) {
       throw new ValidationError({ field: "connectionId", message: "Unknown integration connection." });
     }
     const connection = await this.readConnection(connectionId);
@@ -701,23 +610,6 @@ export class GoogleWorkspaceOAuthService {
 
 function googleSignInId(connection: IntegrationConnection, credential: GoogleWorkspaceCredential): string {
   return credential.signInId ?? `legacy:${connection.revision}`;
-}
-
-function normalizeGoogleReadTime(
-  args: Record<string, unknown>,
-  field: "fromIso" | "toIso",
-  alias: "timeMin" | "timeMax",
-): string | undefined {
-  const value = args[field] === undefined ? args[alias] : args[field];
-  if (value === undefined) return undefined;
-  if (
-    typeof value !== "string" ||
-    !GOOGLE_READ_TIME.safeParse(value).success ||
-    (args[alias] !== undefined && args[alias] !== value)
-  ) {
-    throw new ValidationError({ message: `Calendar ${field} must be a timestamp with a time zone.` });
-  }
-  return value;
 }
 
 function credentialAccount(connectionId: string): string {

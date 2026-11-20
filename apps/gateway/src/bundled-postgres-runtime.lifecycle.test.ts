@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -48,6 +49,7 @@ const mocks = vi.hoisted(() => {
     dockerStates: [] as string[],
     execFile: vi.fn(),
     execFileSync: vi.fn(),
+    spawn: vi.fn(),
     isBundledPostgresMode: vi.fn(),
     tcpPortAcceptsConnections: vi.fn(),
     resolveGatewayPostgresConnectionOptions: vi.fn(),
@@ -58,6 +60,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("node:child_process", () => ({
   execFile: mocks.execFile,
   execFileSync: mocks.execFileSync,
+  spawn: mocks.spawn,
 }));
 
 vi.mock("@goatcitadel/storage", () => ({
@@ -94,6 +97,8 @@ beforeEach(() => {
   mocks.dockerStates.length = 0;
   mocks.execFile.mockReset();
   mocks.execFileSync.mockReset();
+  mocks.spawn.mockReset();
+  mocks.spawn.mockImplementation(() => mockPgCtlExit(0));
   // Never touch a real local port: a real bundled database may be listening on 45432.
   mocks.tcpPortAcceptsConnections.mockReset();
   mocks.tcpPortAcceptsConnections.mockResolvedValue(false);
@@ -468,6 +473,7 @@ describe("bundled postgres runtime lifecycle", () => {
 
     await fs.writeFile(path.join(dataDir, "PG_VERSION"), "16", "utf8");
     mocks.execFileSync.mockClear();
+    mocks.spawn.mockClear();
     mocks.dbScripts.push(
       { queryOne: new Error("ECONNREFUSED") },
       { queryOne: { data_directory: dataDir } },
@@ -477,10 +483,19 @@ describe("bundled postgres runtime lifecycle", () => {
     const secondHandle = await ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "auto" }));
 
     expect(secondHandle?.strategy).toBe("native");
-    expect(mocks.execFileSync).toHaveBeenCalledWith(
+    expect(mocks.spawn).toHaveBeenCalledWith(
       expect.stringContaining(nativeExecutableName("pg_ctl")),
-      expect.arrayContaining(["start"]),
-      expect.anything(),
+      [
+        "-D",
+        dataDir,
+        "-l",
+        path.join(rootDir, "data", "logs", "goatcitadel-postgres.log"),
+        "start",
+        "-W",
+        "-o",
+        "-h 127.0.0.1 -p 45432",
+      ],
+      { detached: process.platform === "win32", stdio: "ignore", windowsHide: true },
     );
     expect(mocks.execFileSync).not.toHaveBeenCalledWith("docker", expect.arrayContaining(["run"]), expect.anything());
   });
@@ -553,12 +568,7 @@ describe("bundled postgres runtime lifecycle", () => {
     const rootDir = await makeTempDir();
     const binDir = await writeFakePostgresInstall(path.join(await makeTempDir(), "bin"));
     mocks.dbScripts.push({ queryOne: new Error("ECONNREFUSED") }, { queryOne: new Error("ECONNREFUSED") });
-    mocks.execFileSync.mockImplementation((command: string) => {
-      if (String(command).includes("pg_ctl")) {
-        throw new Error("pg_ctl refused to start");
-      }
-      return "";
-    });
+    mocks.spawn.mockImplementation(() => mockPgCtlExit(1));
 
     await expect(ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir }))).rejects.toThrow();
     expect(mocks.execFileSync).not.toHaveBeenCalledWith("docker", expect.arrayContaining(["run"]), expect.anything());
@@ -587,10 +597,8 @@ describe("bundled postgres runtime lifecycle", () => {
     await fs.writeFile(initdb, "", "utf8");
     await fs.writeFile(pgCtl, "", "utf8");
 
+    mocks.spawn.mockImplementation(() => mockPgCtlExit(1));
     mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
-      if (command === pgCtl && args.includes("start")) {
-        throw new Error("pg_ctl start reported a stale pid file");
-      }
       if (command === pgCtl && args.includes("stop")) {
         throw new Error("already stopped");
       }
@@ -679,19 +687,10 @@ describe("bundled postgres runtime lifecycle", () => {
     const pgCtl = path.join(binDir, `pg_ctl${extension}`);
     await fs.writeFile(initdb, "", "utf8");
     await fs.writeFile(pgCtl, "", "utf8");
-    let dockerPsCalls = 0;
-    mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
-      if (command === pgCtl && args.includes("start")) {
-        throw new Error("pg_ctl native start failed");
-      }
-      if (command === "docker" && args[0] === "info") {
-        return "";
-      }
-      if (command === "docker" && args[0] === "ps") {
-        dockerPsCalls += 1;
-        return dockerPsCalls === 1 ? "" : "running";
-      }
-      return "";
+    mocks.spawn.mockImplementation(() => {
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit("error", new Error("pg_ctl native start failed")));
+      return child;
     });
     mocks.dbScripts.push(
       { queryOne: new Error("ECONNREFUSED") },
@@ -719,17 +718,7 @@ describe("bundled postgres runtime lifecycle", () => {
     const pgCtl = path.join(binDir, `pg_ctl${extension}`);
     await fs.writeFile(initdb, "", "utf8");
     await fs.writeFile(pgCtl, "", "utf8");
-    mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
-      if (command === pgCtl && args.includes("start")) {
-        const nativeError = new Error("pg_ctl start failed") as Error & { stderr: Buffer };
-        nativeError.stderr = Buffer.from("bind failed");
-        throw nativeError;
-      }
-      if (command === "docker" && args[0] === "info") {
-        throw new Error("docker unavailable");
-      }
-      return "";
-    });
+    mocks.spawn.mockImplementation(() => mockPgCtlExit(1));
     mocks.dbScripts.push({ queryOne: new Error("ECONNREFUSED") }, { queryOne: new Error("still refused") });
     await fs.mkdir(path.join(rootDir, "data", "logs"), { recursive: true });
     await fs.writeFile(
@@ -740,6 +729,7 @@ describe("bundled postgres runtime lifecycle", () => {
 
     const action = ensureBundledPostgresRuntime(buildConfig(rootDir, { binDir: "pg-bin" }));
     await expect(action).rejects.toThrow("Native bundled Postgres failed to start on 127.0.0.1:45432");
+    await expect(action).rejects.toThrow("pg_ctl start exited with code 1");
     await expect(action).rejects.toThrow("could not bind IPv4 address");
     await expect(action).rejects.toThrow("GOATCITADEL_BUNDLED_POSTGRES_PORT");
   });
@@ -794,6 +784,12 @@ async function makeTempDir(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-bundled-pg-runtime-"));
   tempDirs.push(dir);
   return dir;
+}
+
+function mockPgCtlExit(code: number): EventEmitter {
+  const child = new EventEmitter();
+  queueMicrotask(() => child.emit("exit", code, null));
+  return child;
 }
 
 function nativeExecutableName(base: string): string {

@@ -8,6 +8,8 @@ packages/*/src/**/*.js.map
 target/
 apps/*/src-tauri/gen/schemas/
 .env
+*.gateway-token-*.pending
+.*.gateway-token-*.pending.*.tmp
 *.tsbuildinfo
 config/*.json
 !config/*.example.json

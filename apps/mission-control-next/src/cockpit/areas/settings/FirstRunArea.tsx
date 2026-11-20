@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { openTutorial } from "../../../features/tutorial/handoff";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useDraftLeave } from "../../../features/native-routes/library/DraftLeaveDialog";
@@ -31,13 +33,25 @@ const DESCRIPTION = "Three steps to connect a model, choose how tools ask for ap
 /** The guided setup page at Settings › First run. Settings › Get started shows FirstRunStatus instead. */
 export function FirstRunArea() {
   const { navigate } = useCockpitRoute();
-  const { activeWorkspaceId } = useUiPreferences();
+  const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
+  const [tutorial, setTutorial] = useState<boolean>();
+  const [retryTour, setRetryTour] = useState(false);
+  const startTutorial = () => {
+    if (!openTutorial({ citadelId: activeCitadelId ?? "personal", workspaceId: activeWorkspaceId ?? "default" }))
+      setRetryTour(true);
+  };
   const setup = useFirstRunSetup(activeWorkspaceId);
   const { query, state, progress, step, approval, completion } = setup;
+  const showTutorialChoice =
+    state &&
+    !state.completed &&
+    (step === "tutorial" || (step === "safety" && progress?.modelReady && tutorial === undefined));
   const leave = useDraftLeave();
   const go = (path: string) => leave.request(() => navigate(path));
   const finish = async () => {
-    if (await setup.finish()) go("/chat");
+    if (tutorial === undefined || !(await setup.finish())) return;
+    if (tutorial) startTutorial();
+    else go("/chat");
   };
   return (
     <section aria-label="First-run setup" className={AREA_PAGE}>
@@ -83,7 +97,15 @@ export function FirstRunArea() {
                   <li key={item.id} className="min-w-0">
                     <button
                       type="button"
-                      onClick={() => leave.request(() => setup.setStep(item.id))}
+                      onClick={() =>
+                        leave.request(() =>
+                          setup.setStep(
+                            !state.completed && progress.modelReady && tutorial === undefined && item.id === "safety"
+                              ? "tutorial"
+                              : item.id,
+                          ),
+                        )
+                      }
                       aria-current={current ? "step" : undefined}
                       className="flex h-full w-full flex-col items-start justify-start rounded-md px-3 py-2 text-left hover:bg-sunken aria-[current=step]:bg-sunken"
                     >
@@ -105,14 +127,44 @@ export function FirstRunArea() {
                 state={state}
                 workspaceId={activeWorkspaceId}
                 onReload={setup.refresh}
-                onModelReady={() => setup.setStep("safety")}
+                onModelReady={() => setup.setStep(state.completed ? "safety" : "tutorial")}
                 canContinue={Boolean(
                   progress.modelReady && !query.isFetching && !setup.checking && !completion.locked && !approval.locked,
                 )}
                 onContinue={() => void setup.continueModel()}
               />
             ) : null}
-            {step === "safety" ? (
+            {showTutorialChoice ? (
+              <section aria-labelledby="first-run-tour-title" className="space-y-3">
+                <h2 id="first-run-tour-title" className="text-lg font-semibold text-fg">
+                  Take a quick tour?
+                </h2>
+                <p className="text-sm text-fg-secondary">
+                  Try a message, review a sample tool request, and find your task and its output. The practice data
+                  clears when you finish or exit.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="primary"
+                    onClick={() => {
+                      setTutorial(true);
+                      setup.setStep("safety");
+                    }}
+                  >
+                    Take the tutorial
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setTutorial(false);
+                      setup.setStep("safety");
+                    }}
+                  >
+                    Skip tutorial
+                  </Button>
+                </div>
+              </section>
+            ) : null}
+            {step === "safety" && !showTutorialChoice ? (
               <div className="space-y-4">
                 <h2 className="text-lg font-semibold text-fg">Choose your safety settings</h2>
                 <p className="text-sm text-fg-secondary">
@@ -169,10 +221,14 @@ export function FirstRunArea() {
               <Button
                 variant="primary"
                 aria-describedby="first-run-finish-prerequisite"
-                disabled={!setup.canFinish}
+                disabled={!setup.canFinish || tutorial === undefined}
                 onClick={() => void finish()}
               >
-                {completion.attempt?.phase === "pending" ? "Confirming setup…" : "Finish setup and open Chat"}
+                {completion.attempt?.phase === "pending"
+                  ? "Confirming setup…"
+                  : tutorial
+                    ? "Finish setup and start tutorial"
+                    : "Finish setup and open Chat"}
               </Button>
             ) : null}
           </div>
@@ -181,11 +237,12 @@ export function FirstRunArea() {
               {setup.finishPrerequisite}
             </p>
           ) : null}
-          {setup.notice || completion.notice ? (
-            <p role="status" className="text-sm text-fg-secondary">
-              {completion.notice ?? setup.notice}
+          {retryTour || setup.notice || completion.notice ? (
+            <p role="status" className={retryTour ? "text-sm text-status-waiting" : "text-sm text-fg-secondary"}>
+              {retryTour ? "The tutorial could not start." : (completion.notice ?? setup.notice)}
             </p>
           ) : null}
+          {retryTour ? <Button onClick={startTutorial}>Try again</Button> : null}
           {completion.attempt?.phase === "unknown" ? (
             <p role="alert" className="text-sm text-status-waiting">
               {completion.attempt.message}

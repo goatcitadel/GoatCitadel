@@ -39,6 +39,15 @@ public sealed class DesktopStartupCopyTests
     }
 
     [TestMethod]
+    public void LaunchFailureKeepsRecoveryActionsAboveDiagnosticLogOutput()
+    {
+        const string summary = "The Gateway process is running but did not become ready.";
+        Assert.AreEqual(
+            summary + " Open Logs for details.",
+            DesktopStartupCopy.LaunchFailureMessage(null, summary + "\r\nRecent gateway.stderr.log: " + new string('x', 4000)));
+    }
+
+    [TestMethod]
     public void LaunchFailureUsesTheRecordedReasonWhenThereIsOne()
     {
         var status = new DesktopRuntimeStatus { Status = "stopped", StartupFailure = new RuntimeStartupFailure { Summary = Summary, Retryable = true } };

@@ -15,7 +15,7 @@ import { useShellHandoff } from "../../app/use-shell-handoff";
 import { hasDirtySections, useBeforeUnloadGuard } from "../../features/native-routes/library/use-form-dirty";
 import { ShellSwitchFeedback } from "./use-cockpit-shell-switch";
 import { CockpitNavigationContext, type CockpitNavigationOwner } from "./cockpit-navigation-context";
-import { registerCockpitBackGuard } from "./cockpit-back-guard";
+import { readCockpitLocation, registerCockpitBackGuard } from "./cockpit-back-guard";
 import {
   cockpitHref,
   commitCockpitNavigation,
@@ -33,7 +33,8 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
   const identity = canonicalJsonString([installation, activeCitadelId, activeWorkspaceId]);
   const history = useSyncExternalStore(subscribeCockpitHistory, readCockpitHistory, () => "server");
   useLayoutEffect(() => {
-    const href = window.location.pathname + window.location.search + window.location.hash;
+    const { pathname, search, hash } = readCockpitLocation();
+    const href = pathname + search + hash;
     const resolution = resolveCockpitCompatibility(href);
     if (resolution.kind === "native" && resolution.href !== href)
       commitCockpitNavigation(resolution.href, { replace: true });
@@ -93,7 +94,8 @@ export function CockpitNavigationProvider({ children }: { children: ReactNode })
   const navigate: CockpitNavigationOwner["navigate"] = (href, options) => {
     const destination = cockpitHref(href);
     if (!destination || !isCurrent()) return;
-    const source = window.location.pathname + window.location.search + window.location.hash;
+    const { pathname, search, hash } = readCockpitLocation();
+    const source = pathname + search + hash;
     if (cockpitHref(source) === destination) return;
     if (retainsSettingsPage(source, destination)) {
       commitCockpitNavigation(destination, options, isCurrent);

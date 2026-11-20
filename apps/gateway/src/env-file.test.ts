@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { afterEach, beforeEach, vi, describe, it } from "vitest";
-import { deleteLocalEnvVar, loadLocalEnvFile, upsertLocalEnvVar } from "./env-file.js";
+import { deleteLocalEnvVar, loadLocalEnvFile, readLocalEnvVar, upsertLocalEnvVar } from "./env-file.js";
 
 const TEMP_ROOTS: string[] = [];
 
@@ -22,6 +22,24 @@ afterEach(async () => {
 });
 
 describe("loadLocalEnvFile", () => {
+  it("round-trips literal escape spellings and actual control characters", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-env-escapes-"));
+    TEMP_ROOTS.push(tempRoot);
+    vi.stubEnv("GOATCITADEL_LOCAL_ENV_FILE", path.join(tempRoot, ".env"));
+    const value = String.raw`literal\n\r\t\q\\` + '\n\r\t"';
+    assert.equal(upsertLocalEnvVar("FIXTURE_CREDENTIAL", value).updated, true);
+    assert.equal(readLocalEnvVar("FIXTURE_CREDENTIAL").value, value);
+  });
+
+  it("propagates a read error from an existing credential file", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-env-read-error-"));
+    TEMP_ROOTS.push(tempRoot);
+    const envPath = path.join(tempRoot, ".env");
+    await mkdir(envPath);
+    vi.stubEnv("GOATCITADEL_LOCAL_ENV_FILE", envPath);
+    assert.throws(() => upsertLocalEnvVar("FIXTURE_CREDENTIAL", "value"), /EISDIR|EPERM|EACCES/u);
+  });
+
   it("loads keys from .env without overriding existing shell environment", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-env-test-"));
     TEMP_ROOTS.push(tempRoot);
@@ -29,12 +47,7 @@ describe("loadLocalEnvFile", () => {
     await writeFile(path.join(tempRoot, "config", "assistant.config.json"), "{}\n", "utf8");
     await writeFile(
       path.join(tempRoot, ".env"),
-      [
-        "OPENAI_API_KEY=from-dotenv",
-        "GLM_API_KEY=\"glm value\"",
-        "MOONSHOT_API_KEY='moonshot value'",
-        "",
-      ].join("\n"),
+      ["OPENAI_API_KEY=from-dotenv", 'GLM_API_KEY="glm value"', "MOONSHOT_API_KEY='moonshot value'", ""].join("\n"),
       "utf8",
     );
 
@@ -85,15 +98,7 @@ describe("loadLocalEnvFile", () => {
     await mkdir(path.join(tempRoot, "config"), { recursive: true });
     await writeFile(path.join(tempRoot, "config", "assistant.config.json"), "{}\n", "utf8");
     const envPath = path.join(tempRoot, ".env");
-    await writeFile(
-      envPath,
-      [
-        "# test env",
-        "GOATCITADEL_AUTH_MODE=token",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+    await writeFile(envPath, ["# test env", "GOATCITADEL_AUTH_MODE=token", ""].join("\n"), "utf8");
 
     const priorRoot = process.env.GOATCITADEL_ROOT_DIR;
     try {
@@ -151,15 +156,7 @@ describe("loadLocalEnvFile", () => {
     await mkdir(path.join(tempRoot, "config"), { recursive: true });
     await writeFile(path.join(tempRoot, "config", "assistant.config.json"), "{}\n", "utf8");
     const envPath = path.join(tempRoot, ".env");
-    await writeFile(
-      envPath,
-      [
-        "OPENAI_API_KEY=\"sk-test-value\"",
-        "GLM_API_KEY=\"glm-test-value\"",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+    await writeFile(envPath, ['OPENAI_API_KEY="sk-test-value"', 'GLM_API_KEY="glm-test-value"', ""].join("\n"), "utf8");
 
     const priorRoot = process.env.GOATCITADEL_ROOT_DIR;
     try {

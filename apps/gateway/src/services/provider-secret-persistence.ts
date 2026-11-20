@@ -461,7 +461,7 @@ function assertEffectSatisfied(
   }
 }
 
-function createProviderSecretVerification(
+export function createProviderSecretVerification(
   secret: string,
 ): NonNullable<ConfigGenerationProviderSecretEffect["verification"]> {
   const salt = randomBytes(16);
@@ -485,7 +485,7 @@ function matchesPreviousState(
     : current === undefined || current === "";
 }
 
-function verifyProviderSecret(
+export function verifyProviderSecret(
   secret: string,
   verification: NonNullable<ConfigGenerationProviderSecretEffect["verification"]>,
 ): boolean {

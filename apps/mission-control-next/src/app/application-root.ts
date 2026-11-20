@@ -10,6 +10,12 @@ interface ApplicationMount {
 // React root; it never reloads the document or reinitializes module stores.
 const mounts = new WeakMap<HTMLElement, ApplicationMount>();
 
+export function unmountApplicationRoot(container: HTMLElement): void {
+  const mount = mounts.get(container);
+  mounts.delete(container);
+  mount?.root.unmount();
+}
+
 export function renderApplicationRoot(container: HTMLElement, children: ReactNode): void {
   let mount = mounts.get(container);
   if (!mount) {

@@ -83,7 +83,7 @@ describe("policy-engine branch-tail coverage", () => {
     try {
       const wrapped = resolveExecutableCommand("pnpm", ["run", "test unit"], "win32");
       expect(wrapped.file).toBe("cmd.exe");
-      expect(wrapped.args).toEqual(["/d", "/s", "/c", 'pnpm run "test unit"']);
+      expect(wrapped.args).toEqual(["/d", "/s", "/v:off", "/c", '"pnpm run ^"test^ unit^""']);
     } finally {
       if (priorComSpec === undefined) delete process.env.ComSpec;
       else process.env.ComSpec = priorComSpec;

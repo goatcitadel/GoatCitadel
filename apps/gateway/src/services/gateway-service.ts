@@ -760,10 +760,7 @@ import { createGatewayChatAutoActions, type ChatAutoActionPolicy } from "./chat-
 import { isManagedProjectFileTool } from "@goatcitadel/contracts";
 import { isChatAutoApprovalEnabled } from "./chat-approval-mode-service.js";
 import { assertChatAutoCodeModeAllowed, runChatCodeModeRequest } from "./code-mode-request-tool.js";
-import {
-  assertLocalApprovedActionOwner,
-  RemoteWorkerApprovalResumeRequiredError,
-} from "./remote-worker-approved-action-guard.js";
+import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
 import {
   prepareRemoteWorkerChatApprovalHandoff,
   shouldDeferRemoteWorkerChatApprovalWake,
@@ -816,8 +813,6 @@ import {
   executeApprovedExternalRuntimePendingAction as executeApprovedExternalRuntimePendingActionWithPort,
   isApprovedExternalRuntimePendingAction as needsExternalReplay,
   isAutoOverwrite,
-  readAuthActorSource,
-  readPermissionSurfaceValue,
   toToolInvokeRequest,
 } from "./gateway/external-runtime-approval-adapter.js";
 import {
@@ -826,6 +821,7 @@ import {
   isSystemOwnedRestrictedPermissionProfileRequest,
 } from "./gateway/tool-grant-policy.js";
 import { durableChatTurnPayloadToRecord } from "./gateway/chat-stream-codecs.js";
+import { refreshApprovedPendingToolPolicyContext } from "./gateway/pending-tool-approval-policy.js";
 import { GatewayChatStreamRuntime } from "./gateway/chat-stream-runtime.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type {
@@ -833,11 +829,7 @@ import type {
   ApprovalResolveResult,
   RemoteApprovalActionTokenIssueResult,
 } from "./approval-types.js";
-import {
-  isRecord,
-  type CompanionAccessValidationResult,
-  type CompanionSessionRecord,
-} from "./companion-auth-helpers.js";
+import { type CompanionAccessValidationResult, type CompanionSessionRecord } from "./companion-auth-helpers.js";
 import type {
   DurableChatTurnExecutionPayload,
   InspectableChatStreamChunk,
@@ -9519,69 +9511,14 @@ export class GatewayService {
     );
   }
 
-  private async refreshApprovedPendingToolPolicyContext(
-    approvalId: string,
-  ): Promise<(() => Promise<void>) | undefined> {
-    const pending = await this.storage.pendingApprovalActions.find(approvalId);
-    if (!pending || pending.actionType !== "tool.invoke" || pending.resolutionStatus !== "pending") {
-      return;
-    }
-    await assertLocalApprovedActionOwner(this.storage, approvalId, pending);
-    const request = pending.request;
-    const existing = isRecord(request.policyContext) ? request.policyContext : {};
-    const sessionId = readRecordString(request, "sessionId");
-    const workspaceId =
-      readRecordString(request, "workspaceId") ??
-      readRecordString(existing, "workspaceId") ??
-      (sessionId ? (await this.storage.chatSessionMeta.get(sessionId))?.workspaceId : undefined) ??
-      DEFAULT_WORKSPACE_ID;
-    const consentContext = isRecord(request.consentContext) ? request.consentContext : {};
-    const operatorId =
-      readRecordString(existing, "operatorId") ??
-      readRecordString(consentContext, "operatorId") ??
-      readRecordString(existing, "authActorId") ??
-      "system";
-    const permissionProfileId =
-      readRecordString(request, "permissionProfileId") ?? readRecordString(existing, "permissionProfileId");
-    const readScheduledPolicy = permissionProfileId?.startsWith("scheduled-intersection:")
-      ? async () =>
-          resolveScheduledApprovalReplayPolicy(
-            this.chatFeatureAdmissionHost(),
-            await this.storage.approvals.get(approvalId),
-            request,
-          )
-      : undefined;
-    const resolved = readScheduledPolicy
-      ? await readScheduledPolicy()
-      : await this.resolveToolPolicyContext({
-          operatorId,
-          authActorId: readRecordString(existing, "authActorId"),
-          authActorSource: readAuthActorSource(existing.authActorSource),
-          workspaceId,
-          sessionId,
-          taskId: readRecordString(request, "taskId") ?? readRecordString(existing, "taskId"),
-          runId: readRecordString(request, "runId") ?? readRecordString(existing, "runId"),
-          surface: readPermissionSurfaceValue(request.surface ?? existing.surface),
-          permissionProfileId,
-          localOperatorOverrideId:
-            readRecordString(request, "localOperatorOverrideId") ??
-            readRecordString(existing, "localOperatorOverrideId"),
-        });
-    await this.storage.pendingApprovalActions.upsertPending({
-      approvalId,
-      actionType: pending.actionType,
-      request: {
-        ...request,
-        workspaceId,
-        policyContext: resolved,
-      },
-      createdAt: pending.createdAt,
-      expiresAt: pending.expiresAt,
+  private refreshApprovedPendingToolPolicyContext(approvalId: string): Promise<(() => Promise<void>) | undefined> {
+    return refreshApprovedPendingToolPolicyContext(approvalId, {
+      storage: this.storage,
+      defaultWorkspaceId: DEFAULT_WORKSPACE_ID,
+      resolveToolPolicyContext: (input) => this.resolveToolPolicyContext(input),
+      resolveScheduledPolicy: (approval, request) =>
+        resolveScheduledApprovalReplayPolicy(this.chatFeatureAdmissionHost(), approval, request),
     });
-    if (!readScheduledPolicy) return undefined;
-    return async () => {
-      await readScheduledPolicy();
-    };
   }
 
   private async resolveToolInvokeRequestPaths(request: ToolInvokeRequest): Promise<ToolInvokeRequest> {
@@ -13162,9 +13099,4 @@ function readRealGitTopLevel(cwd: string): string {
     stdio: ["ignore", "pipe", "ignore"],
   });
   return fsSync.realpathSync(topLevel.trim());
-}
-
-function readRecordString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

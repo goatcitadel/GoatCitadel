@@ -51,6 +51,8 @@ export function isSecretStoreUnavailableLikeError(error: unknown): boolean {
 }
 
 export class SecretStoreService {
+  private readonly windowsResource = windowsSecretResource();
+
   public isAvailable(): boolean {
     if (isSecretStoreExplicitlyDisabled()) {
       return false;
@@ -139,7 +141,7 @@ export class SecretStoreService {
     if (process.platform !== "win32") return undefined;
     this.assertAvailable();
     const result = runCommand("powershell", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_CREDENTIAL_CUSTODY_READ_SCRIPT],
-      { GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE }, { timeoutMs: 10000 });
+      { GOATCITADEL_SECRET_SERVICE: this.windowsResource }, { timeoutMs: 10000 });
     const custodyId = result.stdout.trim();
     if (!/^[a-f0-9]{64}$/u.test(custodyId)) throw new SecretStoreUnavailableError("Windows credential custody was not acknowledged.");
     return custodyId;
@@ -158,7 +160,7 @@ export class SecretStoreService {
       const input = isMcpReceiptAccount(account) ? encodeMcpCredentialReceipt(secret, writeId!) : secret;
       if (!isMcpReceiptAccount(account) && writeId !== undefined) throw new Error("Credential write receipt requires a versioned slot.");
       const result = runCommand("powershell", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_CREDENTIAL_CUSTODY_WRITE_SCRIPT],
-        { GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE, GOATCITADEL_SECRET_ACCOUNT: account, GOATCITADEL_SECRET_CUSTODY: custodyId },
+        { GOATCITADEL_SECRET_SERVICE: this.windowsResource, GOATCITADEL_SECRET_ACCOUNT: account, GOATCITADEL_SECRET_CUSTODY: custodyId },
         { stdin: input, timeoutMs: 10000, allowExitCodes: [4] });
       if (result.status !== 0 || result.stdout.trim() !== "ok")
         throw new SecretStoreUnavailableError("Credential write custody changed or was not acknowledged.");
@@ -180,7 +182,7 @@ export class SecretStoreService {
     if (!isMcpReceiptAccount(account) || !/^[a-f0-9]{64}$/u.test(custodyId)) throw new Error("Invalid credential receipt binding.");
     this.assertAvailable();
     const result = runCommand("powershell", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_CREDENTIAL_RECEIPT_SCRIPT],
-      { GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE, GOATCITADEL_SECRET_ACCOUNT: account, GOATCITADEL_SECRET_CUSTODY: custodyId,
+      { GOATCITADEL_SECRET_SERVICE: this.windowsResource, GOATCITADEL_SECRET_ACCOUNT: account, GOATCITADEL_SECRET_CUSTODY: custodyId,
         GOATCITADEL_SECRET_WRITE_ID: writeId, GOATCITADEL_SECRET_RECEIPT_ACTION: action }, { timeoutMs: 10000, allowExitCodes: [4] });
     const status = result.stdout.trim();
     if (result.status === 4 && status === "custody_mismatch") return "unavailable";
@@ -196,7 +198,7 @@ export class SecretStoreService {
     if (!/^[a-f0-9]{64}$/u.test(custodyId)) throw new Error("Invalid credential custody binding.");
     this.assertAvailable();
     const result = runCommand("powershell", ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_CREDENTIAL_CUSTODY_DELETE_SCRIPT],
-      { GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE, GOATCITADEL_SECRET_ACCOUNT: account, GOATCITADEL_SECRET_CUSTODY: custodyId },
+      { GOATCITADEL_SECRET_SERVICE: this.windowsResource, GOATCITADEL_SECRET_ACCOUNT: account, GOATCITADEL_SECRET_CUSTODY: custodyId },
       { timeoutMs: 10000, allowExitCodes: [4] });
     if (result.status === 4 && result.stdout.trim() === "custody_mismatch") return false;
     if (result.status !== 0 || !["ok", "absent"].includes(result.stdout.trim()))
@@ -241,7 +243,7 @@ Write-Output "ok"
       "powershell",
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
       {
-        GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE,
+        GOATCITADEL_SECRET_SERVICE: this.windowsResource,
         GOATCITADEL_SECRET_ACCOUNT: account,
       },
       { stdin: secret, timeoutMs: WINDOWS_CREDENTIAL_TIMEOUT_MS },
@@ -264,7 +266,7 @@ try {
       "powershell",
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
       {
-        GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE,
+        GOATCITADEL_SECRET_SERVICE: this.windowsResource,
         GOATCITADEL_SECRET_ACCOUNT: account,
       },
       { allowExitCodes: [3], timeoutMs: WINDOWS_CREDENTIAL_TIMEOUT_MS },
@@ -278,7 +280,7 @@ try {
 
   private deleteWindowsCredential(account: string): void {
     const result = runCommand("powershell", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_CREDENTIAL_DELETE_SCRIPT], {
-      GOATCITADEL_SECRET_SERVICE: SECRET_SERVICE,
+      GOATCITADEL_SECRET_SERVICE: this.windowsResource,
       GOATCITADEL_SECRET_ACCOUNT: account,
     }, { timeoutMs: 10000 });
     if (!["ok", "absent"].includes(result.stdout.trim())) throw new Error("Windows credential deletion was not acknowledged.");
@@ -480,6 +482,21 @@ function minimalHelperEnv(): Record<string, string> {
     }
   }
   return env;
+}
+
+// Installed Windows profiles can switch without reading or deleting secrets
+// from the older shared vault resource. Restores reselect the same resource.
+function windowsSecretResource(): string {
+  const resource = process.platform === "win32" ? process.env.GOATCITADEL_WINDOWS_PROFILE_RESOURCE : undefined;
+  if (!resource) return SECRET_SERVICE;
+  if (
+    !/^goatcitadel\.desktop\.[a-f0-9]{64}\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(
+      resource,
+    )
+  ) {
+    throw new SecretStoreUnavailableError("The installed Windows credential profile is invalid.");
+  }
+  return resource;
 }
 
 function isSecretStoreExplicitlyDisabled(): boolean {

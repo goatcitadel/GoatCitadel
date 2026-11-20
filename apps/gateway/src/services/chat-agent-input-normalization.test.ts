@@ -31,4 +31,21 @@ describe("normalizeAgentInputFromSend", () => {
       normalizationProfile: "live",
     });
   });
+
+  it.each([undefined, "quick_web"] as const)("keeps no-browse turns out of Quick Web (%s)", (normalizationProfile) => {
+    expect(
+      normalizeAgentInputFromSend({
+        content: "Explain your web search capability without browsing the web.",
+        normalizationProfile,
+      }),
+    ).toMatchObject({ webMode: "off", normalizationProfile: "live" });
+  });
+
+  it("ignores quoted no-browse wording when the user requests a search", () => {
+    expect(
+      normalizeAgentInputFromSend({
+        content: 'Search for the phrase "do not browse the web".',
+      }),
+    ).toMatchObject({ webMode: "quick", normalizationProfile: "quick_web" });
+  });
 });

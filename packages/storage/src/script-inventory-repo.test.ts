@@ -16,6 +16,8 @@ it("uses current managed heads and immutable Code Mode artifacts without rewriti
   const db = temp.open({ dbPath: temp.path("scripts-owners") });
   const session = new ChatSessionMetaRepository(db);
   session.ensure("session", undefined, "one");
+  session.ensure("old-session", undefined, "one");
+  session.ensure("foreign-session", undefined, "other");
   const project = new ChatProjectRepository(db).create({
     name: "Fixture",
     workspacePath: "fixture",
@@ -30,13 +32,24 @@ it("uses current managed heads and immutable Code Mode artifacts without rewriti
     effectId: "save",
     contentBase64: Buffer.from("print('hello')").toString("base64"),
   });
-  new ChatToolRunRepository(db).create({
+  const tools = new ChatToolRunRepository(db);
+  tools.create({
     toolRunId: "save",
     sessionId: "session",
     turnId: "turn",
     toolName: "project.files.save",
     status: "executed",
     result: { ...file },
+    startedAt: "2026-11-18T00:00:00.000Z",
+  });
+  tools.create({
+    toolRunId: "older-save",
+    sessionId: "old-session",
+    turnId: "older-turn",
+    toolName: "project.files.save",
+    status: "executed",
+    result: { ...file },
+    startedAt: "2026-11-17T00:00:00.000Z",
   });
   const artifact = {
     artifactId: "code",
@@ -70,6 +83,7 @@ it("uses current managed heads and immutable Code Mode artifacts without rewriti
   const code = new CodeModeRunRepository(db);
   code.upsert(run);
   code.upsert({ ...run, runId: "run-with-same-source" });
+  code.upsert({ ...run, runId: "run-with-foreign-session", sessionId: "foreign-session" });
   const before = code.get("run");
   const items = new ScriptInventoryRepository(db).list("one");
   assert.equal(items.filter((item) => item.kind === "managed").length, 1);

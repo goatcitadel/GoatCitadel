@@ -1,3 +1,4 @@
+import { gatewayLocalStorage, openGatewayEvents } from "./gateway-transport.js";
 /* eslint-disable @typescript-eslint/no-unused-vars */
 export { prepareWorkflowSkillCapture, stageWorkflowSkillCapture } from "./workflow-skill-capture.js";
 export { updateProviderTransport } from "./provider-transport.js";
@@ -1241,7 +1242,7 @@ async function ensureEventStreamConnected(): Promise<void> {
     return;
   }
 
-  const source = new EventSource(streamUrl);
+  const source = openGatewayEvents(streamUrl);
   sharedEventSource = source;
   let streamLive = false;
   const markStreamLive = () => {
@@ -1511,7 +1512,7 @@ let fallbackRealtimeClientId: string | undefined;
 /** Blocked or full storage must not break the stream; callers fall back to memory. */
 function readRealtimeStorage(key: string): string | null {
   try {
-    return window.localStorage.getItem(key);
+    return gatewayLocalStorage().getItem(key);
   } catch {
     return null;
   }
@@ -1520,9 +1521,9 @@ function readRealtimeStorage(key: string): string | null {
 function writeRealtimeStorage(key: string, value: string | null): boolean {
   try {
     if (value === null) {
-      window.localStorage.removeItem(key);
+      gatewayLocalStorage().removeItem(key);
     } else {
-      window.localStorage.setItem(key, value);
+      gatewayLocalStorage().setItem(key, value);
     }
     return true;
   } catch {

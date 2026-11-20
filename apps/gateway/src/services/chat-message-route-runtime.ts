@@ -43,7 +43,7 @@ import {
 } from "./chat-durable-runtime-authority.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
 import { projectChatMessageForPublic, projectChatTurnTraceForPublic } from "./chat-secret-projection.js";
-import { projectHistoricalGoogleReadApproval } from "./chat-tool-result-projection.js";
+import { projectHistoricalGoogleReadApproval } from "./chat-google-read-approval-projection.js";
 import { projectAssistantWorkspaceFileDownloads } from "./chat-artifact-result-projection.js";
 
 export interface ChatThreadLoadOptions {

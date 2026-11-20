@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { isGoogleWorkspaceReadTool, type OperatorInboxItem } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { isPracticeGateway } from "@goatcitadel/mission-control-shared/api/gateway-transport";
 import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { buildApprovalReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-generic-evidence";
 import {
@@ -82,6 +83,8 @@ export function InboxApprovalDetail({
   // Pending decisions and settled follow-on evidence are separate native views of the owner record.
   const approval = view.record?.status === "pending" ? view.record : undefined;
   const googleRead = Boolean(approval && isGoogleWorkspaceReadTool(approval.kind));
+  const timedApprovalSessionId =
+    isPracticeGateway() || (googleRead && approval?.linkage?.turnId) ? approval?.linkage?.sessionId : undefined;
   const settled = view.record && view.record.status !== "pending" ? view.record : undefined;
   const evidence = approval ? buildApprovalEvidenceModel(approval.preview) : null;
   const memoryPreview =
@@ -327,8 +330,8 @@ export function InboxApprovalDetail({
               item={item}
               approval={approval}
               workspaceId={installWide ? null : workspaceId}
-              sessionId={googleRead && approval.linkage?.turnId ? approval.linkage.sessionId : undefined}
-              onTemporaryGrantResolved={(message) => rereadSettled(message, true)}
+              sessionId={timedApprovalSessionId}
+              onTemporaryGrantResolved={timedApprovalSessionId ? (message) => rereadSettled(message, true) : undefined}
               // The operator asked for a skill change themselves, so it approves in one click, as on the Skills tab.
               reviewedInPlace={installWide && approval.kind === "skill.lifecycle"}
               focusAction={focusAction}

@@ -3,7 +3,9 @@ import path from "node:path";
 import os from "node:os";
 import net from "node:net";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
+import { finished } from "node:stream/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import { spawnSync } from "node:child_process";
 import { resolveUiTarget } from "../../lib/ui-target.mjs";
 import {
@@ -15,7 +17,7 @@ import {
 import { repoRoot, sanitizeFilePart, spawnVerificationProcess, writeText } from "./shared.mjs";
 
 let gatewayWorkspaceBuildEnsured = false;
-const uiBuildKeys = new Set();
+const uiBuildKeys = new Map();
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
 
 export async function prepareVerificationRuntime(runId) {
@@ -40,43 +42,44 @@ export async function startVerificationStack(context, options = {}) {
   });
   const uiTarget = resolveUiTarget(repoRoot, process.env);
   const runtimeRoot = options.runtimeRoot ?? (await prepareVerificationRuntime(context.runId));
-  const gatewayPort = await resolveAvailablePort(Number(options.gatewayPort ?? 0));
-  const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
-  // Chosen before the Gateway starts so its origin policy can name the UI (see withVerificationUiOrigin).
-  const uiPort = options.includeUi !== false ? await resolveUiPort(options.uiPort, gatewayPort) : undefined;
-  const uiUrl = uiPort ? `http://127.0.0.1:${uiPort}` : undefined;
-  const gatewayEnv = buildVerificationGatewayEnv({
-    runtimeRoot,
-    gatewayPort,
-    uiUrl,
-    gatewayEnv: options.gatewayEnv,
-    gatewayEnvOmit: options.gatewayEnvOmit,
-  });
-
-  const gateway =
-    options.gatewayMode === "built"
-      ? await startProcess(
-          context,
-          buildVerificationProcessLogName("gateway", options.processLogPrefix),
-          [
-            process.execPath,
-            options.builtGatewayEntryFile ?? path.join(repoRoot, "apps", "gateway", "dist", "main.js"),
-          ],
-          gatewayEnv,
-          { omitEnv: options.gatewayEnvOmit },
-        )
-      : await startProcess(
-          context,
-          buildVerificationProcessLogName("gateway", options.processLogPrefix),
-          buildVerificationGatewayCommand(),
-          gatewayEnv,
-          {
-            omitEnv: options.gatewayEnvOmit,
-            cwd: path.join(repoRoot, "apps", "gateway"),
-          },
-        );
+  let gateway;
   let ui;
   try {
+    const gatewayPort = await resolveAvailablePort(Number(options.gatewayPort ?? 0));
+    const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
+    // Chosen before the Gateway starts so its origin policy can name the UI (see withVerificationUiOrigin).
+    const uiPort = options.includeUi !== false ? await resolveUiPort(options.uiPort, gatewayPort) : undefined;
+    const uiUrl = uiPort ? `http://127.0.0.1:${uiPort}` : undefined;
+    const gatewayEnv = buildVerificationGatewayEnv({
+      runtimeRoot,
+      gatewayPort,
+      uiUrl,
+      gatewayEnv: options.gatewayEnv,
+      gatewayEnvOmit: options.gatewayEnvOmit,
+    });
+
+    gateway =
+      options.gatewayMode === "built"
+        ? await startProcess(
+            context,
+            buildVerificationProcessLogName("gateway", options.processLogPrefix),
+            [
+              process.execPath,
+              options.builtGatewayEntryFile ?? path.join(repoRoot, "apps", "gateway", "dist", "main.js"),
+            ],
+            gatewayEnv,
+            { omitEnv: options.gatewayEnvOmit },
+          )
+        : await startProcess(
+            context,
+            buildVerificationProcessLogName("gateway", options.processLogPrefix),
+            buildVerificationGatewayCommand(),
+            gatewayEnv,
+            {
+              omitEnv: options.gatewayEnvOmit,
+              cwd: path.join(repoRoot, "apps", "gateway"),
+            },
+          );
     await waitForHttp(`${gatewayUrl}/health`, "Gateway health", 180000, gateway);
     if (uiUrl) {
       const uiEnv = {
@@ -156,35 +159,56 @@ export async function stopVerificationStack(stack) {
 
 export async function waitForHttp(url, label, timeoutMs = 180000, handle = null) {
   const deadline = Date.now() + timeoutMs;
+  const child = handle?.child;
+  const processAbort = new AbortController();
+  const abortProbe = () => processAbort.abort();
+  child?.once?.("exit", abortProbe);
+  child?.once?.("error", abortProbe);
   let lastStatus;
-  while (Date.now() < deadline) {
-    if (handle?.spawnError) {
-      await handle.logsFlushed?.catch(() => undefined);
-      throw handle.spawnError;
-    }
-    if (handle?.child && (handle.child.exitCode !== null || handle.child.signalCode != null)) {
-      await handle.logsFlushed?.catch(() => undefined);
-      const stdoutPath = handle.stdoutPath ? ` stdout: ${handle.stdoutPath}` : "";
-      const stderrPath = handle.stderrPath ? ` stderr: ${handle.stderrPath}` : "";
-      throw new Error(`${label} process exited before becoming ready.${stdoutPath}${stderrPath}`);
-    }
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return;
+  try {
+    while (true) {
+      if (handle?.spawnError) {
+        await handle.logsFlushed?.catch(() => undefined);
+        throw handle.spawnError;
       }
-      lastStatus = response.status;
-    } catch (error) {
-      const code = error?.cause?.code ?? error?.code;
-      if (code === "EACCES" || code === "EPERM") {
-        throw new Error(
-          `${label} probe was denied (${code}); the verification environment must permit loopback connections: ${url}`,
-          { cause: error },
-        );
+      if (handle?.child && hasExited(handle.child)) {
+        await handle.logsFlushed?.catch(() => undefined);
+        const stdoutPath = handle.stdoutPath ? ` stdout: ${handle.stdoutPath}` : "";
+        const stderrPath = handle.stderrPath ? ` stderr: ${handle.stderrPath}` : "";
+        throw new Error(`${label} process exited before becoming ready.${stdoutPath}${stderrPath}`);
       }
-      // Connection refusal during startup is retryable; a denied probe is not.
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      try {
+        const signal = AbortSignal.any([AbortSignal.timeout(remaining), processAbort.signal]);
+        const response = await fetch(url, { signal });
+        await response.body?.cancel().catch(() => undefined);
+        if (processAbort.signal.aborted) continue;
+        if (response.ok) {
+          return;
+        }
+        lastStatus = response.status;
+      } catch (error) {
+        if (processAbort.signal.aborted) continue;
+        const code = error?.cause?.code ?? error?.code;
+        if (code === "EACCES" || code === "EPERM") {
+          throw new Error(
+            `${label} probe was denied (${code}); the verification environment must permit loopback connections: ${url}`,
+            { cause: error },
+          );
+        }
+        // Connection refusal during startup is retryable; a denied probe is not.
+      }
+      const retryDelay = Math.min(1500, deadline - Date.now());
+      if (retryDelay > 0) {
+        await sleep(retryDelay, undefined, { signal: processAbort.signal }).catch((error) => {
+          if (!processAbort.signal.aborted) throw error;
+        });
+      }
     }
-    await delay(1500);
+  } finally {
+    child?.off?.("exit", abortProbe);
+    child?.off?.("error", abortProbe);
   }
   throw new Error(
     `${label} did not become ready in time: ${url}${lastStatus ? ` (last HTTP status: ${lastStatus})` : ""}`,
@@ -193,10 +217,11 @@ export async function waitForHttp(url, label, timeoutMs = 180000, handle = null)
 
 export async function startProcess(context, name, commandArgs, extraEnv, options = {}) {
   const [command, ...args] = commandArgs;
-  const stdoutPath = path.join(context.artifactRoot, "diagnostics", `${name}.stdout.log`);
-  const stderrPath = path.join(context.artifactRoot, "diagnostics", `${name}.stderr.log`);
-  const stdoutChunks = [];
-  const stderrChunks = [];
+  const diagnosticsDir = path.join(context.artifactRoot, "diagnostics");
+  const stdoutPath = path.join(diagnosticsDir, `${name}.stdout.log`);
+  const stderrPath = path.join(diagnosticsDir, `${name}.stderr.log`);
+  // Attempt both log files independently even if the directory could not be created.
+  await fs.mkdir(diagnosticsDir, { recursive: true }).catch(() => undefined);
   const child = spawnVerificationProcess(command, args, {
     cwd: options.cwd ?? repoRoot,
     env: buildVerificationProcessEnv(process.env, extraEnv, options.omitEnv),
@@ -216,29 +241,38 @@ export async function startProcess(context, name, commandArgs, extraEnv, options
   child.once("error", (error) => {
     handle.spawnError = error;
   });
-  child.stdout?.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
-  child.stderr?.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-  handle.logsFlushed = new Promise((resolve) => {
-    let settled = false;
-    const flush = async () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      try {
-        await writeText(stdoutPath, Buffer.concat(stdoutChunks).toString("utf8"));
-        await writeText(stderrPath, Buffer.concat(stderrChunks).toString("utf8"));
-      } finally {
-        resolve();
-      }
-    };
-    // Settle on the first of exit/close/error: a spawn failure never emits 'exit', so keying
-    // only on 'exit' would leave this promise pending forever.
-    child.once("exit", flush);
-    child.once("close", flush);
-    child.once("error", flush);
+  let drainTimer;
+  child.once("exit", () => {
+    // Descendants can inherit the pipes and otherwise hold them open after exit.
+    drainTimer = setTimeout(() => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }, 2000);
+    drainTimer.unref();
   });
+  child.once("close", () => clearTimeout(drainTimer));
+  handle.logsFlushed = Promise.all([
+    writeProcessDiagnostics(child, child.stdout, stdoutPath),
+    writeProcessDiagnostics(child, child.stderr, stderrPath),
+  ]).then(() => undefined);
   return handle;
+}
+
+function writeProcessDiagnostics(child, source, outputPath) {
+  const log = createWriteStream(outputPath);
+  const completion = finished(log, { cleanup: true }).catch((error) => {
+    // Keep draining the child and writing the other log if this destination fails.
+    source?.unpipe(log);
+    source?.resume();
+    console.warn(`[verification] could not write ${outputPath}: ${error?.message ?? error}`);
+  });
+  source?.once("error", (error) => log.destroy(error));
+  source?.pipe(log);
+  child.once("close", () => {
+    // Cover failed spawns and deliberately destroyed inherited pipes as well as EOF.
+    if (!log.destroyed && !log.writableEnded) log.end();
+  });
+  return completion;
 }
 
 /** The verification stack's own Gateway variables; startProcess merges them over the inherited env. */
@@ -319,11 +353,8 @@ export async function stopProcess(handle) {
   if (!handle?.child) {
     return;
   }
-  if (handle.child.exitCode !== null) {
-    await handle.logsFlushed?.catch(() => undefined);
-    handle.child.stdout?.destroy();
-    handle.child.stderr?.destroy();
-    return;
+  if (hasExited(handle.child) || handle.spawnError) {
+    return finishProcessCleanup(handle, true);
   }
   if (process.platform === "win32") {
     const treeKill = spawnSync(
@@ -344,7 +375,7 @@ export async function stopProcess(handle) {
       () => true,
       () => false,
     );
-    if (!exited && handle.child.exitCode === null) {
+    if (!exited && !hasExited(handle.child)) {
       try {
         handle.child.kill("SIGKILL");
       } catch {
@@ -355,24 +386,33 @@ export async function stopProcess(handle) {
         () => false,
       );
     }
-    if (!exited) {
-      handle.child.stdout?.destroy();
-      handle.child.stderr?.destroy();
+    return finishProcessCleanup(handle, exited);
+  }
+  handle.child.kill("SIGTERM");
+  let exited = await waitForExit(handle.child, 8000).then(
+    () => true,
+    () => false,
+  );
+  if (!exited && !hasExited(handle.child)) {
+    handle.child.kill("SIGKILL");
+    exited = await waitForExit(handle.child, 4000).then(
+      () => true,
+      () => false,
+    );
+  }
+  await finishProcessCleanup(handle, exited);
+}
+
+async function finishProcessCleanup(handle, exited) {
+  try {
+    if (!exited && !hasExited(handle.child)) {
       throw new Error(`Verification process ${handle.child.pid} did not stop within the cleanup deadline`);
     }
     await handle.logsFlushed?.catch(() => undefined);
+  } finally {
     handle.child.stdout?.destroy();
     handle.child.stderr?.destroy();
-    return;
   }
-  handle.child.kill("SIGTERM");
-  await waitForExit(handle.child, 8000).catch(async () => {
-    handle.child.kill("SIGKILL");
-    await waitForExit(handle.child, 4000).catch(() => undefined);
-  });
-  await handle.logsFlushed?.catch(() => undefined);
-  handle.child.stdout?.destroy();
-  handle.child.stderr?.destroy();
 }
 
 export async function requestJson(gatewayUrl, route, init = {}) {
@@ -384,7 +424,7 @@ export async function requestJson(gatewayUrl, route, init = {}) {
       ...(method !== "GET" ? { "Idempotency-Key": randomUUID() } : {}),
       ...(init.headers ?? {}),
     },
-    body: init.body ? JSON.stringify(init.body) : undefined,
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
   });
   const text = await response.text();
   let body = null;
@@ -536,13 +576,14 @@ export async function ensureGatewayWorkspaceBuild(context, options = {}) {
 
 async function ensureVerificationUiBuild(context, packageName, uiEnv, options = {}) {
   const buildKey = JSON.stringify({
-    packageName,
-    gatewayUrl: uiEnv.VITE_GATEWAY_URL,
-    visualRegressionMode: uiEnv.VITE_GOATCITADEL_VISUAL_REGRESSION_MODE,
+    overrides: Object.entries(uiEnv).sort(([a], [b]) => a.localeCompare(b)),
+    omitEnv: [...(options.omitEnv ?? [])].sort(),
   });
-  if (uiBuildKeys.has(buildKey)) {
+  if (uiBuildKeys.get(packageName) === buildKey) {
     return;
   }
+  // A failed build may have already overwritten the older build's assets.
+  uiBuildKeys.delete(packageName);
 
   const logLines = [
     "verification startup builds the UI before preview mode so visual proof does not run against Vite HMR/watch state.",
@@ -573,7 +614,7 @@ async function ensureVerificationUiBuild(context, packageName, uiEnv, options = 
     throw new Error(`Failed to build verification UI ${packageName}. See ${buildLogPath}`);
   }
 
-  uiBuildKeys.add(buildKey);
+  uiBuildKeys.set(packageName, buildKey);
 }
 
 function runPnpmSync(args, omitEnv = []) {
@@ -675,34 +716,27 @@ function isPortFree(port) {
 }
 
 async function removeRuntimeRootWithRetry(runtimeRoot, attempts = 6) {
-  let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       await fs.rm(runtimeRoot, { recursive: true, force: true });
       return;
     } catch (error) {
-      lastError = error;
       const isTransientCleanupLock = error?.code === "EBUSY" || error?.code === "EPERM" || error?.code === "EACCES";
       if (!isTransientCleanupLock || attempt === attempts - 1) {
-        if (isTransientCleanupLock) {
-          console.warn(
-            `[verify] unable to remove verification runtime root after ${attempts} attempts; leaving ${runtimeRoot} in place (${error.code}).`,
-          );
-          return;
-        }
         throw error;
       }
       await delay(1000 * (attempt + 1));
     }
   }
-  if (lastError) {
-    throw lastError;
-  }
+}
+
+function hasExited(child) {
+  return child.exitCode != null || child.signalCode != null;
 }
 
 function waitForExit(child, timeoutMs) {
   return new Promise((resolve, reject) => {
-    if (child.exitCode !== null) {
+    if (hasExited(child)) {
       resolve();
       return;
     }

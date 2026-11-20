@@ -1,3 +1,4 @@
+import { gatewayFetch } from "./gateway-transport.js";
 import {
   isStartupReadPath,
   STARTUP_READ_BATCH_PATH,
@@ -83,7 +84,7 @@ function validResult(value: unknown): value is StartupReadResponse {
 }
 async function settleDirectRead(row: PendingRead): Promise<void> {
   try {
-    row.resolve(await fetch(row.url, row.init));
+    row.resolve(await gatewayFetch(row.url, row.init));
   } catch (error) {
     row.reject(error);
   }
@@ -112,7 +113,7 @@ async function dispatch(queue: ReadQueue): Promise<void> {
       try {
         if (group.length === 1) {
           const row = group[0]!;
-          row.resolve(await fetch(row.url, row.init));
+          row.resolve(await gatewayFetch(row.url, row.init));
           return;
         }
         const first = group[0]!;
@@ -123,7 +124,7 @@ async function dispatch(queue: ReadQueue): Promise<void> {
             batch.abort(new DOMException("Every read in this batch was cancelled", "AbortError"));
         };
         for (const row of group) row.release = release;
-        const response = await fetch(batchUrl(queue.scope, group), {
+        const response = await gatewayFetch(batchUrl(queue.scope, group), {
           ...first.init,
           method: "GET",
           signal: batch.signal,
@@ -191,7 +192,7 @@ export function fetchStartupRead(
     !isStartupReadPath(path) ||
     [...headers.keys()].some((key) => !ALLOWED_HEADERS.has(key))
   )
-    return fetch(url, init);
+    return gatewayFetch(url, init);
   const item = {
     path,
     correlationId: headers.get("x-goatcitadel-correlation-id") ?? "startup-read",

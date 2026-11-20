@@ -697,7 +697,11 @@ function materializeLauncherCodeFixture(codeRoot, gatewayPort, uiPort) {
   const source = fs.readFileSync(launcherPath, "utf8");
   const fixtureLauncher = path.join(launcherDir, "goatcitadel.mjs");
   fs.writeFileSync(fixtureLauncher, source, "utf8");
-  for (const helper of ["managed-runtime-lifecycle.mjs", "managed-runtime-ownership.mjs", "ui-target.mjs", "installed-runtime-settings.mjs", "gateway-startup-failure.mjs"]) {
+  for (const helper of [
+    "managed-runtime-lifecycle.mjs", "managed-runtime-ownership.mjs", "ui-target.mjs",
+    "installed-runtime-settings.mjs", "gateway-startup-failure.mjs",
+    "installed-profile-recovery.mjs", "installed-profile-windows.mjs",
+  ]) {
     fs.copyFileSync(path.join(repoRoot, "scripts", "lib", helper), path.join(helperDir, helper));
   }
   return fixtureLauncher;

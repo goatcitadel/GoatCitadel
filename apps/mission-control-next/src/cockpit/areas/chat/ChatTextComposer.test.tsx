@@ -373,25 +373,27 @@ describe("cockpit text composer", () => {
 
   it("opens personality settings when no presence record is attached", async () => {
     const props = composerProps();
+    const openModelOptions = async () =>
+      act(async () =>
+        container.querySelector<HTMLButtonElement>('button[aria-label$="Model and reasoning options"]')!.click(),
+      );
+    const personalityButton = () =>
+      document.body.querySelector<HTMLButtonElement>('button[aria-label$="Open personality settings"]');
     await act(async () => root.render(<ChatTextComposer props={props} />));
-    await act(async () =>
-      (container.querySelector('button[aria-label$="Model and reasoning options"]') as HTMLButtonElement).click(),
-    );
+    await openModelOptions();
     await vi.waitFor(() => {
-      const button = document.body.querySelector<HTMLButtonElement>('button[aria-label$="Open personality settings"]');
-      expect(button).toBeInstanceOf(HTMLButtonElement);
-      expect(button?.disabled).toBe(false);
+      expect(personalityButton()?.disabled).toBe(false);
     });
-    const button = document.body.querySelector('button[aria-label$="Open personality settings"]') as HTMLButtonElement;
+    const button = personalityButton()!;
     expect(button.textContent?.trim()).toBe("Personality");
     await act(async () => button.click());
     expect(props.onOpenPersonalitiesSettings).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(personalityButton()).toBeNull());
     await act(async () =>
       root.render(<ChatTextComposer props={composerProps({ onOpenPersonalitiesSettings: undefined })} />),
     );
-    expect(
-      (document.body.querySelector('button[aria-label$="Open personality settings"]') as HTMLButtonElement).disabled,
-    ).toBe(true);
+    await openModelOptions();
+    await vi.waitFor(() => expect(personalityButton()?.disabled).toBe(true));
   });
 
   it("keeps attached files sendable and blocks unresolved decisions or route changes", async () => {

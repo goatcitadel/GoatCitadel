@@ -19,6 +19,7 @@ import {
   wasLoadedFromLocalEnv,
 } from "../../env-file.js";
 import { evaluateAuthTokenSafety } from "../../startup-guard.js";
+import { stageGatewayTokenRotation } from "../gateway-token-rotation.js";
 
 type AssistantConfigAuthSnapshot = {
   mode?: AuthMode;
@@ -89,10 +90,17 @@ export function prepareGatewayTokenForRestart(config: GatewayRuntimeConfig, prev
 
   // A usable token can keep boot working until a rotation is ready to commit.
   // First-time setup must write its credential before publishing Token mode.
+  const previousToken = previous.value;
   const canBootWithPreviousToken =
-    previousConfig.assistant.auth.mode === "token" && evaluateAuthTokenSafety(previous.value).ok;
+    previousConfig.assistant.auth.mode === "token" && previousToken && evaluateAuthTokenSafety(previousToken).ok;
   return {
     beforePublish: !canBootWithPreviousToken,
+    ...(canBootWithPreviousToken
+      ? {
+          stageRotation: (generationId: string) =>
+            stageGatewayTokenRotation(config.rootDir, generationId, previousToken, token),
+        }
+      : {}),
     write: () => writeGatewayTokenForRestart(token, options, previous, processTokenFromFile, previousProcessToken),
   };
 }

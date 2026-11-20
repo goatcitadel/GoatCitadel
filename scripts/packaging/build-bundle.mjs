@@ -155,6 +155,9 @@ async function main() {
     path.join(repoRoot, "scripts", "lib", "installed-runtime-settings.mjs"),
     path.join(appRoot, "scripts", "lib", "installed-runtime-settings.mjs"),
   );
+  for (const module of ["installed-profile-recovery.mjs", "installed-profile-windows.mjs"]) {
+    copyFile(path.join(repoRoot, "scripts", "lib", module), path.join(appRoot, "scripts", "lib", module));
+  }
   copyDirectory(uiTarget.distDir, missionControlDistDir);
   writeUiTargetManifest(appRoot);
   if (includeDesktopHost) {

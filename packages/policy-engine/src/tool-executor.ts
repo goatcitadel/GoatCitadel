@@ -22,6 +22,7 @@ import {
   isOpenCodeJsonInvocation,
   parseOpenCodeRunOutput,
   splitUtf8HeadTail,
+  truncateUtf8Bytes,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
@@ -54,6 +55,7 @@ import { classifyShellRisk } from "./sandbox/shell-risk-gate.js";
 import { detectShellScriptSyntax, formatShellScriptSyntaxError } from "./sandbox/shell-command-syntax.js";
 import { resolveShellExecTimeout } from "./tool-executor/shell-timeout.js";
 import { captureBackgroundProcessIdentity } from "./tool-executor/background-process-identity.js";
+import { ShellOutputCapture, type CapturedShellOutput } from "./tool-executor/shell-output-capture.js";
 import {
   killBackgroundProcess,
   registerBackgroundProcess,
@@ -320,15 +322,28 @@ function scrubSensitiveOutput(text: string): string {
  * over the FULL captured window before this cut so a secret straddling either
  * boundary is already masked.
  */
-function boundShellStream(scrubbedText: string): { text: string; truncated: boolean } {
-  const split = splitUtf8HeadTail(scrubbedText, shellOutputKeepHeadBytes, shellOutputKeepTailBytes);
-  if (!split.truncated) {
-    return { text: scrubbedText, truncated: false };
-  }
+function boundShellStream(scrubbedText: string, capture?: CapturedShellOutput): { text: string; truncated: boolean } {
+  const headTail = capture?.omittedBytes
+    ? boundCapturedShellWindow(capture)
+    : splitUtf8HeadTail(scrubbedText, shellOutputKeepHeadBytes, shellOutputKeepTailBytes);
+  const { head, tail, omittedBytes } = headTail;
+  if (omittedBytes === 0) return { text: scrubbedText, truncated: false };
   return {
-    text: `${split.head}\n…[shell output truncated: ${split.omittedBytes} bytes omitted]…\n${split.tail}`,
+    text: `${head}\n…[shell output truncated: ${omittedBytes} bytes omitted]…\n${tail}`,
     truncated: true,
   };
+}
+
+function boundCapturedShellWindow(capture: CapturedShellOutput): CapturedShellOutput {
+  const head = truncateUtf8Bytes(capture.head, shellOutputKeepHeadBytes, "keepStart");
+  const tail = truncateUtf8Bytes(capture.tail, shellOutputKeepTailBytes, "keepEnd");
+  const omittedBytes =
+    capture.omittedBytes + Buffer.byteLength(capture.head + capture.tail) - Buffer.byteLength(head + tail);
+  return { head, tail, omittedBytes };
+}
+
+function scrubCapturedShellOutput(output: CapturedShellOutput): CapturedShellOutput {
+  return { ...output, head: scrubSensitiveOutput(output.head), tail: scrubSensitiveOutput(output.tail) };
 }
 
 function resolveToolActorId(request: ToolInvokeRequest): string {
@@ -867,12 +882,13 @@ async function shellExec(
     buildModelSpawnEnv(config),
     timeoutMs,
   );
-  const redactedStdout = scrubSensitiveOutput(outcome.stdout);
+  const redactedStdout = scrubCapturedShellOutput(outcome.stdout);
+  const redactedStderr = scrubCapturedShellOutput(outcome.stderr);
   const externalAgent = isOpenCodeJsonInvocation(parsed.file, parsed.args)
-    ? parseOpenCodeRunOutput(redactedStdout)
+    ? parseOpenCodeRunOutput(redactedStdout.head + redactedStdout.tail)
     : undefined;
-  const stdout = boundShellStream(redactedStdout);
-  const stderr = boundShellStream(scrubSensitiveOutput(outcome.stderr));
+  const stdout = boundShellStream(redactedStdout.head, redactedStdout);
+  const stderr = boundShellStream(redactedStderr.head, redactedStderr);
   return {
     command,
     cwd,
@@ -892,8 +908,8 @@ async function shellExec(
 
 interface ShellExecOutcome {
   pid?: number;
-  stdout: string;
-  stderr: string;
+  stdout: CapturedShellOutput;
+  stderr: CapturedShellOutput;
   exitCode: number;
 }
 
@@ -901,15 +917,17 @@ interface ShellExecOutcome {
  * Runs a resolved shell command via a manual spawn so the whole process TREE can
  * be killed on timeout or abort. On non-Windows we spawn detached to obtain a
  * killable process group; on Windows the tree is reaped with `taskkill /T`.
- * Output is capped at {@link SHELL_EXEC_MAX_BUFFER_BYTES} per stream, matching
- * the previous execFile maxBuffer behavior.
+ * Capture is capped at {@link SHELL_EXEC_MAX_BUFFER_BYTES} per stream while
+ * preserving the end of each stream and continuing to drain the child.
  */
 function runShellExecToCompletion(
-  executable: { file: string; args: string[] },
+  executable: ResolvedExecutableCommand,
   cwd: string | undefined,
   signal: AbortSignal | undefined,
   env: Record<string, string>,
   timeoutMs: number,
+  captureBytes = SHELL_EXEC_MAX_BUFFER_BYTES,
+  stopOnOverflow = false,
 ): Promise<ShellExecOutcome> {
   return new Promise<ShellExecOutcome>((resolve) => {
     const posixProcessGroup = process.platform !== "win32";
@@ -920,44 +938,29 @@ function runShellExecToCompletion(
       // otherwise wait for piped input even when their prompt is in argv.
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      windowsVerbatimArguments: executable.windowsVerbatimArguments,
       detached: posixProcessGroup,
     });
 
-    let stdout = "";
-    let stderr = "";
-    let stdoutCapped = false;
-    let stderrCapped = false;
+    const stdout = new ShellOutputCapture(captureBytes);
+    const stderr = new ShellOutputCapture(captureBytes);
     let settled = false;
     let timedOut = false;
     let aborted = false;
 
-    const collect = (chunk: Buffer, isStdout: boolean) => {
-      if (isStdout) {
-        if (stdoutCapped) {
-          return;
-        }
-        stdout += chunk.toString("utf8");
-        if (Buffer.byteLength(stdout, "utf8") >= SHELL_EXEC_MAX_BUFFER_BYTES) {
-          stdout = stdout.slice(0, SHELL_EXEC_MAX_BUFFER_BYTES);
-          stdoutCapped = true;
-        }
-        return;
-      }
-      if (stderrCapped) {
-        return;
-      }
-      stderr += chunk.toString("utf8");
-      if (Buffer.byteLength(stderr, "utf8") >= SHELL_EXEC_MAX_BUFFER_BYTES) {
-        stderr = stderr.slice(0, SHELL_EXEC_MAX_BUFFER_BYTES);
-        stderrCapped = true;
-      }
-    };
-    child.stdout?.on("data", (chunk: Buffer) => collect(chunk, true));
-    child.stderr?.on("data", (chunk: Buffer) => collect(chunk, false));
-
     const killTree = (label: string) => {
       terminateShellProcessTree(child, label, posixProcessGroup, { command: executable.file, cwd });
     };
+    let overflow: string | undefined;
+    const collect = (output: ShellOutputCapture, chunk: Buffer, stream: string) => {
+      output.append(chunk);
+      if (stopOnOverflow && !overflow && output.exceededLimit) {
+        overflow = `${stream} maxBuffer length exceeded`;
+        killTree("package script output limit");
+      }
+    };
+    child.stdout?.on("data", (chunk: Buffer) => collect(stdout, chunk, "stdout"));
+    child.stderr?.on("data", (chunk: Buffer) => collect(stderr, chunk, "stderr"));
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -984,10 +987,15 @@ function runShellExecToCompletion(
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
+      const capturedStderr = stderr.finish();
+      if (extraStderr) {
+        const part = capturedStderr.omittedBytes > 0 ? "tail" : "head";
+        capturedStderr[part] += capturedStderr[part] ? `\n${extraStderr}` : extraStderr;
+      }
       resolve({
         ...(typeof child.pid === "number" ? { pid: child.pid } : {}),
-        stdout,
-        stderr: extraStderr ? (stderr ? `${stderr}\n${extraStderr}` : extraStderr) : stderr,
+        stdout: stdout.finish(),
+        stderr: capturedStderr,
         exitCode,
       });
     };
@@ -1002,6 +1010,10 @@ function runShellExecToCompletion(
       }
       if (aborted) {
         finish(-1, "shell.exec aborted; process tree killed.");
+        return;
+      }
+      if (overflow) {
+        finish(-1, overflow);
         return;
       }
       if (typeof code === "number") {
@@ -1040,6 +1052,7 @@ async function shellExecBackground(
       detached: process.platform !== "win32",
       stdio: "ignore",
       windowsHide: true,
+      windowsVerbatimArguments: executable.windowsVerbatimArguments,
     });
     child.once("error", reject);
     const pid = child.pid;
@@ -1277,15 +1290,24 @@ async function runRestricted(
   const cmdArgs = manager === "pnpm" ? [...(filter ? ["--filter", filter] : []), "run", kind] : ["run", kind];
   const command = resolveRestrictedCommand(manager, cmdArgs);
   await assertBeforeProcessSpawn(runtimeHooks, request, toolName, cwd);
-  const { stdout, stderr } = await execFileAsync(command.file, command.args, {
-    timeout: 120000,
-    windowsHide: true,
-    maxBuffer: 8 * 1024 * 1024,
+  const outcome = await runShellExecToCompletion(
+    command,
     cwd,
-    env: buildModelSpawnEnv(config),
-  });
-  const boundedStdout = boundShellStream(scrubSensitiveOutput(stdout));
-  const boundedStderr = boundShellStream(scrubSensitiveOutput(stderr));
+    request.signal,
+    buildModelSpawnEnv(config),
+    120000,
+    8 * 1024 * 1024,
+    true,
+  );
+  const stdout = scrubCapturedShellOutput(outcome.stdout);
+  const stderr = scrubCapturedShellOutput(outcome.stderr);
+  const boundedStdout = boundShellStream(stdout.head, stdout);
+  const boundedStderr = boundShellStream(stderr.head, stderr);
+  if (outcome.exitCode !== 0) {
+    throw new Error(
+      `Command failed with exit code ${outcome.exitCode}${boundedStderr.text ? `: ${boundedStderr.text}` : ""}`,
+    );
+  }
   return {
     manager,
     kind,
@@ -1332,11 +1354,17 @@ function buildModelSpawnEnv(config?: ToolPolicyConfig): Record<string, string> {
   });
 }
 
+interface ResolvedExecutableCommand {
+  file: string;
+  args: string[];
+  windowsVerbatimArguments?: true;
+}
+
 export function resolveRestrictedCommand(
   manager: "pnpm" | "npm",
   cmdArgs: string[],
   platform: NodeJS.Platform = process.platform,
-): { file: string; args: string[] } {
+): ResolvedExecutableCommand {
   return resolveExecutableCommand(manager, cmdArgs, platform);
 }
 
@@ -1344,35 +1372,26 @@ export function resolveExecutableCommand(
   file: string,
   args: string[],
   platform: NodeJS.Platform = process.platform,
-): { file: string; args: string[] } {
+): ResolvedExecutableCommand {
   if (platform !== "win32" || (file !== "pnpm" && file !== "npm")) {
     return { file, args };
   }
   return {
     file: process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe",
-    args: ["/d", "/s", "/c", [file, ...args].map(quoteForCmd).join(" ")],
+    args: ["/d", "/s", "/v:off", "/c", `"${[file, ...args.map(quoteForCmd)].join(" ")}"`],
+    windowsVerbatimArguments: true,
   };
 }
 
-function quoteForCmd(value: string): string {
-  if (value.length === 0) {
-    return '""';
-  }
-  let needsQuotes = false;
-  for (const char of value) {
-    if (char === " " || char === "\t" || char === "\n" || char === "\r" || char === '"') {
-      needsQuotes = true;
-      break;
-    }
-    if (char === "&" || char === "(" || char === ")" || char === "^" || char === "<" || char === ">" || char === "|") {
-      needsQuotes = true;
-      break;
-    }
-  }
-  if (!needsQuotes) {
-    return value;
-  }
+const CMD_META_CHARACTERS = new Set('\t ()[]%!^"`<>&|;,*?');
 
+function quoteForCmd(value: string): string {
+  if (/[\r\n]/u.test(value) || value.includes("\u0000"))
+    throw new Error("Windows package-manager arguments cannot contain line breaks or null bytes");
+  if (/^[a-zA-Z0-9_@./:\\=+-]+$/u.test(value)) return value;
+
+  // Encode the argv for the forwarded Node process first, then escape the
+  // entire encoded value for cmd's outer parse, including its quote characters.
   let escaped = '"';
   let pendingBackslashes = 0;
   for (const char of value) {
@@ -1390,17 +1409,13 @@ function quoteForCmd(value: string): string {
       escaped += "\\".repeat(pendingBackslashes);
       pendingBackslashes = 0;
     }
-    if (char === "&" || char === "(" || char === ")" || char === "^" || char === "<" || char === ">" || char === "|") {
-      escaped += `^${char}`;
-      continue;
-    }
     escaped += char;
   }
   if (pendingBackslashes > 0) {
     escaped += "\\".repeat(pendingBackslashes * 2);
   }
   escaped += '"';
-  return escaped;
+  return Array.from(escaped, (char) => (CMD_META_CHARACTERS.has(char) ? `^${char}` : char)).join("");
 }
 
 function finalizeToolResult(result: Record<string, unknown>): Record<string, unknown> {
@@ -1448,12 +1463,14 @@ async function fetchAllowlisted(
       ) {
         break;
       }
+      await response.body?.cancel().catch(() => undefined);
       await waitForHttpRetry(response, attempt, signal);
     }
     if (!(response.status >= 300 && response.status < 400)) {
       return { response, finalUrl: current };
     }
     const location = response.headers.get("location");
+    await response.body?.cancel().catch(() => undefined);
     if (!location) {
       throw new Error(`Redirect missing location for ${redactUrlForError(current)}`);
     }
@@ -1548,7 +1565,7 @@ function parseExecFileCommand(command: string): { file: string; args: string[] }
   }
 
   const tokens: string[] = [];
-  let current = "";
+  let current: string | undefined;
   let inSingle = false;
   let inDouble = false;
   let escaping = false;
@@ -1556,46 +1573,48 @@ function parseExecFileCommand(command: string): { file: string; args: string[] }
   for (let index = 0; index < input.length; index += 1) {
     const char = input[index] ?? "";
     if (escaping) {
-      current += char;
+      current = (current ?? "") + char;
       escaping = false;
       continue;
     }
-    if (char === "\\") {
+    if (char === "\\" && !inSingle) {
       const next = input[index + 1] ?? "";
       const escapable = next === '"' || next === "'" || next === "\\" || /\s/.test(next);
       if (!escapable) {
-        current += char;
+        current = (current ?? "") + char;
         continue;
       }
       escaping = true;
       continue;
     }
     if (char === "'" && !inDouble) {
+      current ??= "";
       inSingle = !inSingle;
       continue;
     }
     if (char === '"' && !inSingle) {
+      current ??= "";
       inDouble = !inDouble;
       continue;
     }
     if (!inSingle && !inDouble && /\s/.test(char)) {
-      if (current.length > 0) {
+      if (current !== undefined) {
         tokens.push(current);
-        current = "";
+        current = undefined;
       }
       continue;
     }
-    current += char;
+    current = (current ?? "") + char;
   }
 
   if (escaping || inSingle || inDouble) {
     throw new Error("shell.exec command has unmatched quotes or escape sequence");
   }
-  if (current.length > 0) {
+  if (current !== undefined) {
     tokens.push(current);
   }
-  const file = tokens[0] as string;
-  const args = tokens.slice(1);
+  const [file, ...args] = tokens;
+  if (!file) throw new Error("shell.exec requires a non-empty executable name");
   return { file, args };
 }
 
@@ -1772,20 +1791,21 @@ function isPathWithinAnyGrantRoot(candidate: string, roots: string[]): boolean {
     if (root.trim() === "*") {
       return true;
     }
-    return normalizePathVariantsForGrantMatch(root).some(
-      (resolvedRoot) => resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}/`),
-    );
+    return normalizePathVariantsForGrantMatch(root).some((resolvedRoot) => {
+      const prefix = resolvedRoot.endsWith(path.sep) ? resolvedRoot : resolvedRoot + path.sep;
+      return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(prefix);
+    });
   });
 }
 
 function normalizePathForGrantMatch(candidate: string): string {
-  return path.resolve(candidate).replace(/\\/g, "/").toLowerCase();
+  return path.resolve(candidate);
 }
 
 function normalizePathVariantsForGrantMatch(candidate: string): string[] {
   const resolvedCandidate = normalizePathForGrantMatch(candidate);
   try {
-    const realCandidate = fsSync.realpathSync(path.resolve(candidate)).replace(/\\/g, "/").toLowerCase();
+    const realCandidate = fsSync.realpathSync.native(resolvedCandidate);
     return realCandidate === resolvedCandidate ? [resolvedCandidate] : [resolvedCandidate, realCandidate];
   } catch {
     return [resolvedCandidate];

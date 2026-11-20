@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { once } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { ReadableStream } from "node:stream/web";
+import { setImmediate } from "node:timers";
 import { test } from "node:test";
 
 import {
@@ -9,10 +15,125 @@ import {
   buildVerificationProcessLogName,
   buildVerificationUiCommand,
   buildVerificationWorkspaceRefreshCommands,
+  requestJson,
+  startProcess,
+  stopProcess,
   stopVerificationStack,
   waitForHttp,
   withVerificationUiOrigin,
 } from "./runtime.mjs";
+
+test("verification readiness times out when a server accepts a connection without sending headers", async () => {
+  const server = createServer(() => {});
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    await assert.rejects(
+      waitForHttp(`http://127.0.0.1:${server.address().port}/health`, "Stalled fixture", 150),
+      /did not become ready in time/u,
+    );
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("verification readiness interrupts a stalled request when its child exits", { timeout: 4_000 }, async () => {
+  const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-runtime-"));
+  const handle = await startProcess({ artifactRoot }, "fixture", [
+    process.execPath,
+    "-e",
+    'process.stderr.write("diagnostic"); setInterval(() => {}, 1000)',
+  ]);
+  const server = createServer(() => handle.child.kill("SIGTERM"));
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    await assert.rejects(
+      waitForHttp(`http://127.0.0.1:${server.address().port}/health`, "Exited fixture", 15_000, handle),
+      /Exited fixture process exited before becoming ready/u,
+    );
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    await stopProcess(handle);
+    await fs.rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test("verification readiness releases both healthy and unhealthy probe responses", async (t) => {
+  const bodies = [];
+  t.mock.method(globalThis, "fetch", async () => {
+    const status = bodies.length === 0 ? 503 : 200;
+    bodies.push({ status, cancelled: false });
+    const probe = bodies.at(-1);
+    return new Response(
+      new ReadableStream({
+        cancel: () => {
+          probe.cancelled = true;
+        },
+      }),
+      { status },
+    );
+  });
+  await waitForHttp("http://127.0.0.1:12345/health", "Probe fixture", 2_500);
+  assert.deepEqual(bodies, [
+    { status: 503, cancelled: true },
+    { status: 200, cancelled: true },
+  ]);
+});
+
+test("verification cleanup observes a signalled child and flushes both diagnostics", async () => {
+  const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-runtime-"));
+  const handle = await startProcess({ artifactRoot }, "fixture", [
+    process.execPath,
+    "-e",
+    'process.stderr.write("diagnostic"); process.stdout.write("ready"); setInterval(() => {}, 1000)',
+  ]);
+  try {
+    await once(handle.child.stdout, "data");
+    const exited = once(handle.child, "exit");
+    handle.child.kill("SIGTERM");
+    await exited;
+    await stopProcess(handle);
+    assert.equal(await fs.readFile(handle.stdoutPath, "utf8"), "ready");
+    assert.equal(await fs.readFile(handle.stderrPath, "utf8"), "diagnostic");
+  } finally {
+    await stopProcess(handle);
+    await fs.rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test("verification diagnostics keep draining the child when one log cannot be opened", async () => {
+  const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-runtime-"));
+  await fs.mkdir(path.join(artifactRoot, "diagnostics", "fixture.stdout.log"), { recursive: true });
+  const handle = await startProcess({ artifactRoot }, "fixture", [
+    process.execPath,
+    "-e",
+    'process.stdout.write("x".repeat(1024 * 1024)); process.stderr.write("remaining diagnostic")',
+  ]);
+  try {
+    const [code] = await once(handle.child, "exit");
+    await handle.logsFlushed;
+    assert.equal(code, 0);
+    assert.equal(await fs.readFile(handle.stderrPath, "utf8"), "remaining diagnostic");
+  } finally {
+    await stopProcess(handle);
+    await fs.rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test("verification JSON requests preserve primitive bodies and omit undefined", async (t) => {
+  const bodies = [];
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    bodies.push(init.body);
+    return new Response(null, { status: 204 });
+  });
+  for (const body of [false, 0, "", null, undefined]) {
+    await requestJson("http://127.0.0.1", "/fixture", { method: "POST", body });
+  }
+  assert.deepEqual(bodies, ["false", "0", '""', "null", undefined]);
+});
 
 test("verification process environments remove inherited secrets while allowing explicit fixtures", () => {
   const env = buildVerificationProcessEnv(
@@ -229,28 +350,24 @@ test("verification HTTP readiness still rejects owned-child failures before any 
     const address = server.address();
     assert(address && typeof address === "object");
     const url = `http://127.0.0.1:${address.port}/health`;
-    let logsFlushed = false;
-    await assert.rejects(
-      waitForHttp(url, "Exited fixture", 2_000, {
-        child: { exitCode: 7 },
-        logsFlushed: Promise.resolve().then(() => {
-          logsFlushed = true;
+    for (const [label, child] of [
+      ["Exited fixture", { exitCode: 7 }],
+      ["Signalled fixture", { exitCode: null, signalCode: "SIGTERM" }],
+    ]) {
+      const { promise: logsFlushed, resolve: releaseLogs } = Promise.withResolvers();
+      let settled = false;
+      const rejection = assert.rejects(
+        waitForHttp(url, label, 2_000, { child, logsFlushed }).finally(() => {
+          settled = true;
         }),
-      }),
-      /Exited fixture process exited before becoming ready/u,
-    );
-    assert.equal(logsFlushed, true);
-    logsFlushed = false;
-    await assert.rejects(
-      waitForHttp(url, "Signalled fixture", 2_000, {
-        child: { exitCode: null, signalCode: "SIGTERM" },
-        logsFlushed: Promise.resolve().then(() => {
-          logsFlushed = true;
-        }),
-      }),
-      /Signalled fixture process exited before becoming ready/u,
-    );
-    assert.equal(logsFlushed, true);
+        new RegExp(`${label} process exited before becoming ready`, "u"),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      const settledBeforeLogs = settled;
+      releaseLogs();
+      await rejection;
+      assert.equal(settledBeforeLogs, false);
+    }
     const spawnError = Object.assign(new Error("Synthetic fixture spawn failure"), { code: "ENOENT" });
     await assert.rejects(
       waitForHttp(url, "Unstarted fixture", 2_000, {
