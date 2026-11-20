@@ -507,6 +507,23 @@ describe("executeTool", () => {
     expect(JSON.parse(String(result.stdout))).toEqual(["", "label", ""]);
   });
 
+  it.runIf(process.platform === "win32")("preserves quoted and unquoted UNC arguments", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const unc = String.raw`\\server\share\file.txt`;
+    const withSpaces = String.raw`\\server\shared folder\file.txt`;
+    const result = await executeTool(
+      {
+        toolName: "shell.exec",
+        args: { command: `node -e "console.log(JSON.stringify(process.argv.slice(1)))" "${withSpaces}" ${unc}` },
+        agentId: "agent",
+        sessionId: "sess-unc-args",
+      },
+      policyConfig,
+      storageStub,
+    );
+    expect(JSON.parse(String(result.stdout))).toEqual([withSpaces, unc]);
+  });
+
   it("preserves backslashes within a single-quoted command argument", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const literal = String.raw`C:\temp\\literal\"quote`;
@@ -1250,6 +1267,23 @@ describe("executeTool", () => {
     // Keep the real npm boundary: under the full Windows V8 coverage wave its
     // cold process startup can exceed 15 seconds even though the restricted
     // runner remains inside its independent 120-second production deadline.
+  }, 45_000);
+
+  it("includes stdout when a restricted script fails", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const cwd = path.join(testWorkspaceRoot, "restricted-failure");
+    await fs.mkdir(cwd, { recursive: true });
+    await fs.writeFile(
+      path.join(cwd, "package.json"),
+      JSON.stringify({ scripts: { test: "echo assertion failed && exit 7" } }),
+    );
+    await expect(
+      executeTool(
+        { toolName: "tests.run", args: { cwd, manager: "npm" }, agentId: "agent", sessionId: "sess-test-failure" },
+        policyConfig,
+        storageStub,
+      ),
+    ).rejects.toThrow(/exit code 7[\s\S]*stdout:[\s\S]*\nassertion failed[ \t]*\r?\n/u);
   }, 45_000);
 
   it("uses cmd.exe to resolve restricted package-manager commands on Windows", () => {

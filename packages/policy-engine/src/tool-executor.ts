@@ -1300,9 +1300,14 @@ async function runRestricted(
   const boundedStdout = boundShellStream(stdout.head, stdout);
   const boundedStderr = boundShellStream(stderr.head, stderr);
   if (outcome.exitCode !== 0) {
-    throw new Error(
-      `Command failed with exit code ${outcome.exitCode}${boundedStderr.text ? `: ${boundedStderr.text}` : ""}`,
-    );
+    const diagnostics = [
+      ["stderr", boundedStderr],
+      ["stdout", boundedStdout],
+    ] as const;
+    const details = diagnostics
+      .filter(([, stream]) => stream.text || stream.truncated)
+      .map(([name, stream]) => `${name}${stream.truncated ? " (truncated)" : ""}: ${stream.text}`);
+    throw new Error([`Command failed with exit code ${outcome.exitCode}`, ...details].join("\n"));
   }
   return {
     manager,
@@ -1575,6 +1580,11 @@ function parseExecFileCommand(command: string): { file: string; args: string[] }
     }
     if (char === "\\" && !inSingle) {
       const next = input[index + 1] ?? "";
+      if (process.platform === "win32" && next === "\\") {
+        current = (current ?? "") + "\\\\";
+        index += 1;
+        continue;
+      }
       const escapable = next === '"' || next === "'" || next === "\\" || /\s/.test(next);
       if (!escapable) {
         current = (current ?? "") + char;

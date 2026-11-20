@@ -223,6 +223,11 @@ function integrationConnectionParts(
     id: `integration:${connection.connectionId}`,
     ...connectionVerdict(connection, entry.catalogId === GOOGLE_WORKSPACE_CATALOG_ID ? google : undefined),
     connectionId: connection.connectionId,
+    ...(google && {
+      googleGrantedCapabilities: google.capabilities
+        .filter((item) => item.enabled && item.granted)
+        .map((item) => item.capability),
+    }),
     ...(connection.lastError ? { lastError: connection.lastError } : {}),
   };
 }

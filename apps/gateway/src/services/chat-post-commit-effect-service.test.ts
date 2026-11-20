@@ -447,6 +447,33 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
     expect(buildBackgroundReviewCounterSettingKey("workspace-1")).not.toContain("workspace-1");
   });
 
+  it("retries a trace candidate after an unexpected TypeError", async () => {
+    const storage = createStorage();
+    const runId = "effect-candidate-retry";
+    const worker = "worker-current";
+    seedEffectRun(storage, runId, "background_review", worker);
+    const proposeTraceMemoryCandidate = vi
+      .fn(async () => ({ candidateId: "trace-retry" }))
+      .mockRejectedValueOnce(new TypeError("unexpected candidate failure"));
+    const service = createService(storage, {
+      authority: authorityHarness([], { readDurableRunVersion: (id) => storage.durableRuns.getRun(id).version }).port,
+      backgroundReview: {
+        extractTurnMemoryFacts: vi.fn(async () => [
+          { kind: "constraint" as const, content: "Use this workspace preference.", confidence: 0.9 },
+        ]),
+        suggestTurnSkill: vi.fn(async () => ({ shouldAuthor: false })),
+      } as unknown as BackgroundReviewService,
+      proposeTraceMemoryCandidate,
+    });
+
+    await expect(service.execute(backgroundInput(), context(runId, worker))).rejects.toThrow(TypeError);
+    await expect(service.execute(backgroundInput(), context(runId, worker))).resolves.toMatchObject({
+      status: "evidence_recorded",
+      memoryReviewCandidateIds: ["trace-retry"],
+    });
+    expect(proposeTraceMemoryCandidate).toHaveBeenCalledTimes(2);
+  });
+
   it("records a governed rejection without leaking or directly applying the proposed fact", async () => {
     const storage = createStorage();
     seedEffectRun(storage, "effect-policy-rejection", "background_review", "worker-current");

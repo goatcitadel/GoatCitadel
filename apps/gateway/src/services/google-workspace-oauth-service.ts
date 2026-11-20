@@ -103,8 +103,8 @@ export class GoogleWorkspaceOAuthService {
   private readonly pkce: McpOAuthPkceStore;
   private readonly flows = new Map<string, PendingGoogleFlow>();
   private readonly refreshes = new Map<string, Promise<void>>();
-  /** Bumped by Disconnect: a completion that started earlier can no longer save its grant. */
-  private readonly signOuts = new Map<string, number>();
+  private readonly lifecycle = new Map<string, Promise<void>>();
+  private readonly generations = new Map<string, { operation: "connect" | "disconnect" }>();
 
   public constructor(options: GoogleWorkspaceOAuthServiceOptions) {
     const { secretStore, storage, fetchFn, now, defaultRedirectUri } = options;
@@ -150,7 +150,14 @@ export class GoogleWorkspaceOAuthService {
   }
 
   /** Builds Google's consent URL for exactly the reviewed capabilities. Nothing leaves GoatCitadel here. */
-  public async start(
+  public start(
+    connectionId: string,
+    input: GoogleWorkspaceOAuthStartInput,
+  ): Promise<GoogleWorkspaceOAuthStartResponse> {
+    return this.withLifecycle(connectionId, () => this.startFlow(connectionId, input));
+  }
+
+  private async startFlow(
     connectionId: string,
     input: GoogleWorkspaceOAuthStartInput,
   ): Promise<GoogleWorkspaceOAuthStartResponse> {
@@ -195,6 +202,7 @@ export class GoogleWorkspaceOAuthService {
     const expiresAt = this.now() + FLOW_TTL_MS;
     this.flows.set(connectionId, { state, clientId, redirectUri, capabilities, scopes, expiresAt });
     this.pkce.remember(connectionId, state, pkce.verifier);
+    this.generations.set(connectionId, { operation: "connect" });
     return {
       connectionId,
       state,
@@ -220,7 +228,7 @@ export class GoogleWorkspaceOAuthService {
     }
     // One use only: a replayed or late code can never reach Google twice.
     this.dropPendingFlow(connectionId);
-    const signOut = this.signOuts.get(connectionId) ?? 0;
+    const generation = this.generations.get(connectionId);
     if (readClientId(connection.config) !== flow.clientId) {
       throw new ConflictError({ message: "The OAuth client ID changed during sign-in. Start Connect Google again." });
     }
@@ -236,7 +244,8 @@ export class GoogleWorkspaceOAuthService {
       throw new ValidationError({ message: `Google did not issue tokens (${describeGoogleOAuthError(response)}).` });
     }
     const tokens = readTokenResponse(response);
-    if (!tokens.accessToken || !tokens.refreshToken) {
+    const { accessToken, refreshToken } = tokens;
+    if (!accessToken || !refreshToken) {
       throw new ValidationError({
         message:
           "Google returned no refresh token. Remove GoatCitadel under Third-party access in your Google Account, then connect again.",
@@ -245,59 +254,69 @@ export class GoogleWorkspaceOAuthService {
     const grantedScopes = tokens.scopes ?? flow.scopes;
     const now = this.now();
     const accountLabel = isGoogleWorkspaceCapabilityGranted("gmail.read", grantedScopes)
-      ? await this.client.readGmailAddress(tokens.accessToken)
+      ? await this.client.readGmailAddress(accessToken)
       : undefined;
-    if ((this.signOuts.get(connectionId) ?? 0) !== signOut) {
-      // Disconnect won while Google answered: keep nothing and end the grant Google just issued.
-      const { revoked } = await this.revokeGrant(connectionId, tokens.refreshToken);
-      throw new ConflictError({
-        message: `Google was disconnected before this sign-in finished, so nothing was saved${revoked ? " and Google ended the new grant" : ""}. Connect Google again if needed.`,
+    return this.withLifecycle(connectionId, async () => {
+      const latest = this.generations.get(connectionId);
+      if (latest !== generation) {
+        if (latest?.operation === "disconnect") {
+          const { revoked } = await this.revokeGrant(connectionId, refreshToken);
+          throw new ConflictError({
+            message: `Google was disconnected before this sign-in finished, so nothing was saved${revoked ? " and Google ended the new grant" : ""}. Connect Google again if needed.`,
+          });
+        }
+        // Revoking an older exchange could end a newer grant for the same Google account.
+        throw new ConflictError({ message: "A newer Google sign-in replaced this request." });
+      }
+      this.saveCredential(connectionId, {
+        version: 1,
+        signInId: randomUUID(),
+        clientId: flow.clientId,
+        accessToken,
+        refreshToken,
+        expiresAt: tokens.expiresAt(now) ?? now + DEFAULT_ACCESS_TOKEN_LIFETIME_MS,
+        grantedScopes,
+        ...(accountLabel ? { accountLabel } : {}),
+        updatedAt: now,
       });
-    }
-    this.saveCredential(connectionId, {
-      version: 1,
-      signInId: randomUUID(),
-      clientId: flow.clientId,
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      expiresAt: tokens.expiresAt(now) ?? now + DEFAULT_ACCESS_TOKEN_LIFETIME_MS,
-      grantedScopes,
-      ...(accountLabel ? { accountLabel } : {}),
-      updatedAt: now,
+      await this.updateConnection(connectionId, (current) => ({
+        status: "connected",
+        lastError: null,
+        config: {
+          ...current.config,
+          ...Object.fromEntries(
+            GOOGLE_WORKSPACE_CAPABILITY_DEFINITIONS.map((item) => [
+              item.configKey,
+              flow.capabilities.includes(item.capability) &&
+                isGoogleWorkspaceCapabilityGranted(item.capability, grantedScopes),
+            ]),
+          ),
+        },
+      }));
+      return await this.getStatus(connectionId);
     });
-    await this.updateConnection(connectionId, (current) => ({
-      status: "connected",
-      lastError: null,
-      config: {
-        ...current.config,
-        ...Object.fromEntries(
-          GOOGLE_WORKSPACE_CAPABILITY_DEFINITIONS.map((item) => [
-            item.configKey,
-            flow.capabilities.includes(item.capability) &&
-              isGoogleWorkspaceCapabilityGranted(item.capability, grantedScopes),
-          ]),
-        ),
-      },
-    }));
-    return await this.getStatus(connectionId);
   }
 
-  /** Revokes the grant at Google, then always removes the local sign-in. The client secret stays for reconnecting. */
-  public async disconnect(connectionId: string): Promise<GoogleWorkspaceOAuthDisconnectResult> {
-    await this.requireConnection(connectionId);
-    this.assertKeychainAvailable();
-    this.signOut(connectionId);
-    const { revoked, message } = await this.revokeAndForget(connectionId);
-    await this.updateConnection(connectionId, () => ({ status: "disconnected", lastError: null }));
-    return { status: await this.getStatus(connectionId), revoked, message };
+  /** Removes the local sign-in and attempts revocation. The client secret stays for reconnecting. */
+  public disconnect(connectionId: string): Promise<GoogleWorkspaceOAuthDisconnectResult> {
+    return this.withLifecycle(connectionId, async () => {
+      await this.requireConnection(connectionId);
+      this.assertKeychainAvailable();
+      this.signOut(connectionId);
+      const { revoked, message } = await this.revokeAndForget(connectionId);
+      await this.updateConnection(connectionId, () => ({ status: "disconnected", lastError: null }));
+      return { status: await this.getStatus(connectionId), revoked, message };
+    });
   }
 
   /** Cleanup after the connection itself was deleted: revoke when possible and remove every keychain entry. */
   public async forgetConnection(connectionId: string): Promise<void> {
     if (!GOOGLE_CONNECTION_ID_PATTERN.test(connectionId) || !this.keychainAvailable()) return;
-    this.signOut(connectionId);
-    await this.revokeAndForget(connectionId);
-    this.removeSecret(clientSecretAccount(connectionId));
+    await this.withLifecycle(connectionId, async () => {
+      this.signOut(connectionId);
+      await this.revokeAndForget(connectionId);
+      this.removeSecret(clientSecretAccount(connectionId));
+    });
   }
 
   /**
@@ -463,6 +482,8 @@ export class GoogleWorkspaceOAuthService {
   private async revokeAndForget(connectionId: string): Promise<{ revoked: boolean; message: string }> {
     const credential = this.readCredential(connectionId);
     if (!credential) return { revoked: false, message: "No Google sign-in was stored for this connection." };
+    // Clear the local grant before awaiting Google so an in-flight refresh cannot restore it.
+    this.removeSecret(credentialAccount(connectionId));
     let outcome: { revoked: boolean; message: string };
     try {
       const { revoked, reason } = await this.revokeGrant(connectionId, credential.refreshToken);
@@ -475,8 +496,6 @@ export class GoogleWorkspaceOAuthService {
         message: revokeFallbackMessage(error instanceof Error ? error.message : "network error"),
       };
     }
-    // The local sign-in goes regardless: the operator asked to disconnect.
-    this.removeSecret(credentialAccount(connectionId));
     return outcome;
   }
 
@@ -492,7 +511,22 @@ export class GoogleWorkspaceOAuthService {
   /** Forgets any pending Connect for this connection and fences completions that already started. */
   private signOut(connectionId: string): void {
     this.dropPendingFlow(connectionId);
-    this.signOuts.set(connectionId, (this.signOuts.get(connectionId) ?? 0) + 1);
+    this.generations.set(connectionId, { operation: "disconnect" });
+  }
+
+  /** Serializes local lifecycle commits and revocation without holding up the token exchange. */
+  private async withLifecycle<T>(connectionId: string, operation: () => Promise<T>): Promise<T> {
+    const pending = (this.lifecycle.get(connectionId) ?? Promise.resolve()).then(operation);
+    const settled = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.lifecycle.set(connectionId, settled);
+    try {
+      return await pending;
+    } finally {
+      if (this.lifecycle.get(connectionId) === settled) this.lifecycle.delete(connectionId);
+    }
   }
 
   private dropPendingFlow(connectionId: string): void {

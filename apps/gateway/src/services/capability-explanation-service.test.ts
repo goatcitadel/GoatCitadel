@@ -39,6 +39,7 @@ function fixture() {
     reason: "ready",
     group: "connected",
     auth: "google",
+    googleGrantedCapabilities: ["gmail.send"],
     runsOnThisDevice: false,
     networkHosts: [],
     chat: { available: true },
@@ -86,6 +87,25 @@ function fixture() {
 }
 
 describe("capability explanations", () => {
+  it.each([
+    ["gmail.send", "ready", "setup_needed"],
+    ["calendar.read", "setup_needed", "ready"],
+  ] as const)("uses the Google grant for %s only", async (capability, gmail, calendar) => {
+    const { service, request, entries, connector } = fixture();
+    connector.googleGrantedCapabilities = [capability];
+    entries.push({
+      ...entries[0]!,
+      capabilityId: "tool:calendar.list",
+      title: "calendar.list",
+      toolName: "calendar.list",
+      summary: "List calendar events",
+    });
+    request.args = { query: "gmail.send", additionalTopics: ["calendar.list"] };
+    const result = await service.explain(request);
+    expect(result.capabilities).toContainEqual(expect.objectContaining({ toolName: "gmail.send", state: gmail }));
+    expect(result.capabilities).toContainEqual(expect.objectContaining({ toolName: "calendar.list", state: calendar }));
+  });
+
   it("answers email capability questions with scoped evidence, without copying connector secrets", async () => {
     const { service, request, host } = fixture();
     const result = await service.explain(request);

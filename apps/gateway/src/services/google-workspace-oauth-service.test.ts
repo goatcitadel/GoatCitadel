@@ -56,6 +56,7 @@ interface GoogleFake {
   /** What the token endpoint answers next. */
   nextToken: (body: URLSearchParams) => Response | Promise<Response>;
   revokeStatus: number;
+  beforeRevoke?: () => Promise<void>;
 }
 
 function googleFake(): GoogleFake {
@@ -75,6 +76,7 @@ function googleFake(): GoogleFake {
     }
     if (url === "https://oauth2.googleapis.com/revoke") {
       fake.revokeBodies.push(new URLSearchParams(String(init?.body)));
+      await fake.beforeRevoke?.();
       return new Response(fake.revokeStatus === 200 ? "" : JSON.stringify({ error: "server_error" }), {
         status: fake.revokeStatus,
       });
@@ -420,6 +422,70 @@ describe("Google Workspace sign-in", { timeout: 60_000 }, () => {
     await expect(ctx.service.resolveAccessToken(connection.connectionId, "gmail.read")).rejects.toThrow(
       /^blocked: The OS keychain/,
     );
+  });
+
+  it("keeps a newer sign-in when an older token exchange completes last", async () => {
+    const ctx = setup();
+    const { connectionId } = await googleConnection();
+    const first = await ctx.service.start(connectionId, {
+      capabilities: ["gmail.read"],
+      clientSecret: "GOCSPX-desktop-secret",
+    });
+    const exchanged = Promise.withResolvers<void>();
+    const olderToken = Promise.withResolvers<Response>();
+    ctx.google.nextToken = (body) => {
+      if (body.get("code") === "first") {
+        exchanged.resolve();
+        return olderToken.promise;
+      }
+      return Response.json({ access_token: "new", refresh_token: "new", scope: GMAIL_READONLY });
+    };
+    const older = ctx.service.complete(connectionId, { state: first.state, code: "first" });
+    const rejected = expect(older).rejects.toThrow(/newer Google sign-in/u);
+    await exchanged.promise;
+    const second = await ctx.service.start(connectionId, { capabilities: ["gmail.read"] });
+    await ctx.service.complete(connectionId, { state: second.state, code: "second" });
+    olderToken.resolve(Response.json({ access_token: "old", refresh_token: "old", scope: GMAIL_READONLY }));
+    await rejected;
+    await ctx.service.disconnect(connectionId);
+    expect(ctx.google.revokeBodies.map((body) => body.get("token"))).toEqual(["new"]);
+  });
+
+  it("waits for revocation before starting a reconnect on the same connection", async () => {
+    const ctx = setup();
+    const { connectionId } = await googleConnection();
+    const first = await ctx.service.start(connectionId, {
+      capabilities: ["gmail.read"],
+      clientSecret: "GOCSPX-desktop-secret",
+    });
+    ctx.google.nextToken = () => Response.json({ access_token: "old", refresh_token: "old", scope: GMAIL_READONLY });
+    await ctx.service.complete(connectionId, { state: first.state, code: "first" });
+    const revoking = Promise.withResolvers<void>();
+    const finishRevocation = Promise.withResolvers<void>();
+    ctx.google.beforeRevoke = () => {
+      revoking.resolve();
+      return finishRevocation.promise;
+    };
+    const disconnected = ctx.service.disconnect(connectionId);
+    await revoking.promise;
+    const started = vi.fn();
+    const reconnect = ctx.service.start(connectionId, { capabilities: ["gmail.read"] }).then((flow) => {
+      started();
+      return flow;
+    });
+    try {
+      expect(await ctx.service.getStatus(connectionId)).toMatchObject({ connected: false });
+      expect(started).not.toHaveBeenCalled();
+    } finally {
+      finishRevocation.resolve();
+    }
+    await disconnected;
+    const second = await reconnect;
+    ctx.google.nextToken = () => Response.json({ access_token: "new", refresh_token: "new", scope: GMAIL_READONLY });
+    await expect(ctx.service.complete(connectionId, { state: second.state, code: "second" })).resolves.toMatchObject({
+      connected: true,
+    });
+    expect(ctx.google.revokeBodies.map((body) => body.get("token"))).toEqual(["old"]);
   });
 
   it("does not let a Connect that was pending or already talking to Google undo a Disconnect", async () => {

@@ -65,6 +65,8 @@ export interface CapabilityConnectorItem {
   /** Set on an app that can move or spend money, or reach bank data; its changes can't be set to run on their own. */
   movesMoney?: boolean;
   catalogId?: string;
+  /** Google capabilities enabled on this connection and covered by its saved grant. */
+  googleGrantedCapabilities?: import("./google-workspace.js").GoogleWorkspaceCapability[];
   connectionId?: string;
   chat: { available: boolean; blockedBy?: CapabilityConnectorChatBlock };
   hiddenInWorkspace: boolean;

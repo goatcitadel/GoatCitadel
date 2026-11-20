@@ -47,7 +47,7 @@ function scanUnquotedOperators(input: string): ShellScriptSyntaxFinding | undefi
       escaping = false;
       continue;
     }
-    if (char === "\\") {
+    if (char === "\\" && !inSingle) {
       escaping = next === '"' || next === "'" || next === "\\" || /\s/u.test(next);
       continue;
     }

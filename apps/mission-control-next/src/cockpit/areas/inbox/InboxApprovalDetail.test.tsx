@@ -145,6 +145,19 @@ afterEach(() => {
 });
 
 describe("Inbox approval detail", () => {
+  it("mounts deny-only decisions for a generic approval with no preview", async () => {
+    api.fetchApproval.mockResolvedValue({ ...approval, preview: undefined });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <InboxApprovalDetail item={item} workspaceId="default" />
+        </QueryClientProvider>,
+      ),
+    );
+    await settleUntil(() => Boolean(decisionControls()));
+    expect(actions.props).toHaveBeenLastCalledWith(expect.objectContaining({ withholdApprove: true }));
+  });
+
   it("mounts the Calendar decision controls without a compact preview", async () => {
     api.fetchApproval.mockResolvedValue({
       ...approval,

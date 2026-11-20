@@ -403,8 +403,7 @@ export class ChatPostCommitEffectService {
           error instanceof ConflictError ||
           error instanceof FeatureDisabledError ||
           error instanceof PolicyViolationError ||
-          error instanceof ValidationError ||
-          error instanceof TypeError
+          error instanceof ValidationError
         ) {
           rejectedCount += 1;
           continue;

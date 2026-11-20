@@ -4,6 +4,7 @@ import {
   type CapabilityCatalogEntry,
   type CapabilityConnectorsResponse,
   type CapabilityConnectorItem,
+  googleWorkspaceCapabilityForTool,
   type CapabilityExplanationItem,
   type CapabilityExplanationCoverage,
   type CapabilityExplanationResponse,
@@ -483,7 +484,7 @@ export class CapabilityExplanationService {
         return item;
       }
     }
-    const google = entry.toolName.startsWith("gmail.") || entry.toolName.startsWith("calendar.");
+    const google = googleWorkspaceCapabilityForTool(entry.toolName);
     let search = entry.toolName === "browser.search";
     if (search) {
       try {
@@ -518,7 +519,21 @@ export class CapabilityExplanationService {
           nextStep:
             "Set up its service in [Capabilities › Connectors](/capabilities/connectors?shell=cockpit); never provide credentials in Chat.",
         };
-      const states = related.map((connector) => this.explainConnector(connector, connectors));
+      const states = related.map((connector) => {
+        const state = this.explainConnector(connector, connectors);
+        if (!google || state.state !== "ready" || connector.googleGrantedCapabilities?.includes(google)) {
+          return state;
+        }
+        return {
+          ...state,
+          state: connector.googleGrantedCapabilities ? ("setup_needed" as const) : ("unknown" as const),
+          reason: connector.googleGrantedCapabilities
+            ? "This connection does not have the required Google capability enabled and granted."
+            : "The required Google permission could not be checked.",
+          nextStep:
+            "Review the Google connection in [Capabilities › Connectors](/capabilities/connectors?shell=cockpit).",
+        };
+      });
       if (!states.some((state) => state.state === "ready")) {
         const state =
           states.find((candidate) => candidate.state === "unknown") ??
