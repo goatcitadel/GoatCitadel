@@ -3,12 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { getEventListeners } from "node:events";
-import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomInt, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { cleanupRecoveredBackgroundProcess } from "./tool-executor/background-process-identity.js";
 import { resetGoogleChatAccessTokenCache } from "./tool-executor/google-chat-service-account.js";
+
+vi.mock("node:crypto", { spy: true });
 
 const mocked = vi.hoisted(() => ({
   isBrowserToolName: vi.fn<(name: string) => boolean>(),
@@ -118,6 +120,7 @@ describe("executeTool", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    vi.mocked(randomInt).mockReset();
     killAllBackgroundProcesses();
     await removeTestWorkspace(testWorkspaceRoot);
   });
@@ -386,8 +389,19 @@ describe("executeTool", () => {
 
     const serialized = JSON.stringify(result);
     const items = result.items as Array<{ isAnchor: boolean; message: { content: string; contentTruncated?: true } }>;
-    expect(items.some((entry) => entry.isAnchor)).toBe(true);
-    expect(Number(result.byteLength)).toBeLessThanOrEqual(64 * 1024);
+    const anchors = items.filter((entry) => entry.isAnchor);
+    expect(anchors).toHaveLength(1);
+    expect(anchors[0]).toMatchObject({ sequence: 4, message: { messageId: "m4" } });
+    expect(result.anchor).toMatchObject({
+      workspaceId: "workspace-search",
+      sessionId: "sess-search",
+      messageId: "m4",
+      sequence: 4,
+      state: "found",
+    });
+    const measuredBytes = Buffer.byteLength(JSON.stringify(items), "utf8");
+    expect(result.byteLength).toBe(measuredBytes);
+    expect(measuredBytes).toBeLessThanOrEqual(64 * 1024);
     expect(result.truncated).toBe(true);
     expect(result.hasOlder).toBe(true);
     expect(result.hasNewer).toBe(true);
@@ -4299,6 +4313,9 @@ describe("executeTool", () => {
       );
       vi.stubGlobal("fetch", fetchMock);
       const storage = chinaStorage("qqbot", { ...qqConfig, appId: "executor-app-4" });
+      vi.mocked(randomInt)
+        .mockImplementationOnce(() => 101)
+        .mockImplementationOnce(() => 205);
       for (const sessionId of ["sess-qq-seq-a", "sess-qq-seq-b"]) {
         await executeTool(
           {
@@ -4314,8 +4331,7 @@ describe("executeTool", () => {
       const seqs = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)
         .filter(([url]) => String(url).includes("/messages"))
         .map(([, init]) => (JSON.parse(String(init.body)) as { msg_seq: number }).msg_seq);
-      expect(seqs).toHaveLength(2);
-      expect(seqs[0]).not.toBe(seqs[1]);
+      expect(seqs).toEqual([101, 205]);
 
       fetchMock.mockClear();
       const sixth = await executeTool(
@@ -4377,6 +4393,9 @@ describe("executeTool", () => {
       );
       vi.stubGlobal("fetch", fetchMock);
       const storage = chinaStorage("qqbot", { ...qqConfig, appId: "executor-app-3" });
+      vi.mocked(randomInt)
+        .mockImplementationOnce(() => 101)
+        .mockImplementationOnce(() => 205);
       for (const [partIndex, message] of ["first", "second"].entries()) {
         await executeTool(
           {
@@ -4400,9 +4419,8 @@ describe("executeTool", () => {
         .map(([, init]) => JSON.parse(String(init.body)) as { msg_seq: number });
       expect(sends).toHaveLength(2);
       const [first, second] = sends;
-      expect(first).toEqual({ content: "first", msg_type: 0, msg_id: "evt-9", msg_seq: expect.any(Number) });
-      expect(second).toEqual({ content: "second", msg_type: 0, msg_id: "evt-9", msg_seq: expect.any(Number) });
-      expect(second?.msg_seq).not.toBe(first?.msg_seq);
+      expect(first).toEqual({ content: "first", msg_type: 0, msg_id: "evt-9", msg_seq: 101 });
+      expect(second).toEqual({ content: "second", msg_type: 0, msg_id: "evt-9", msg_seq: 206 });
     });
 
     it("qqbot uses the sandbox host and rejects attachments instead of dropping them", async () => {
@@ -6667,21 +6685,21 @@ describe("executeTool", () => {
 
   it("hard-kills a shell.exec command tree that exceeds the timeout", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    // A child that holds an interval open forever; only a tree kill (taskkill /T
-    // on Windows or a process-group SIGKILL on POSIX) stops it.
-    const longLived = `"${process.execPath}" -e "setInterval(() => {}, 1000)"`;
-    setShellExecTimeoutMsForTesting(300);
-    let result: Record<string, unknown>;
+    const fixture = await writeProcessTreeFixture(testWorkspaceRoot);
+    setShellExecTimeoutMsForTesting(3_000);
+    const pending = executeTool(toolRequest("shell.exec", { command: fixture.command }), policyConfig, storageStub);
     try {
-      result = await executeTool(toolRequest("shell.exec", { command: longLived }), policyConfig, storageStub);
+      const childPid = await fixture.waitForChild();
+      expect(isPidAlive(childPid)).toBe(true);
+      const result = await pending;
+      expect(result).toMatchObject({ exitCode: -1 });
+      expect(String(result.stderr ?? "")).toMatch(/timed out/i);
+      await expectPidDead(result.pid);
+      await expectPidDead(childPid);
     } finally {
       setShellExecTimeoutMsForTesting();
+      await pending;
     }
-
-    expect(result).toMatchObject({ exitCode: -1 });
-    expect(String(result.stderr ?? "")).toMatch(/timed out/i);
-    // The spawned process must be gone after the executor returns.
-    await expectPidDead(result.pid);
   }, 15_000);
 
   it("removes the background abort listener when the child closes", async () => {
@@ -6744,45 +6762,46 @@ describe("executeTool", () => {
   it("kills a background shell process tree when its abort signal fires", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const controller = new AbortController();
-    const result = (await executeTool(
-      {
-        toolName: "shell.exec_background",
-        args: { command: `"${process.execPath}" -e "setInterval(() => {}, 1000)"` },
-        agentId: "agent",
-        sessionId: "sess-bg-abort",
-        signal: controller.signal,
-      },
-      policyConfig,
-      storageStub,
-    )) as { pid: number };
-
-    expect(isPidAlive(result.pid)).toBe(true);
-    controller.abort();
-    await expectPidDead(result.pid);
+    const fixture = await writeProcessTreeFixture(testWorkspaceRoot);
+    try {
+      const result = await executeTool(
+        { ...toolRequest("shell.exec_background", { command: fixture.command }), signal: controller.signal },
+        policyConfig,
+        storageStub,
+      );
+      const childPid = await fixture.waitForChild();
+      expect(isPidAlive(result.pid as number)).toBe(true);
+      expect(isPidAlive(childPid)).toBe(true);
+      controller.abort();
+      await expectPidDead(result.pid);
+      await expectPidDead(childPid);
+    } finally {
+      controller.abort();
+    }
   }, 15_000);
 
   it("kills a shell.exec command tree when its abort signal fires", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const controller = new AbortController();
+    const fixture = await writeProcessTreeFixture(testWorkspaceRoot);
     const pending = executeTool(
-      {
-        toolName: "shell.exec",
-        args: { command: `"${process.execPath}" -e "setInterval(() => {}, 1000)"` },
-        agentId: "agent",
-        sessionId: "sess-exec-abort",
-        signal: controller.signal,
-      },
+      { ...toolRequest("shell.exec", { command: fixture.command }), signal: controller.signal },
       policyConfig,
       storageStub,
     );
-    // Give the child a moment to spawn, then abort.
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    controller.abort();
-    const result = await pending;
-
-    expect(result).toMatchObject({ exitCode: -1 });
-    expect(String(result.stderr ?? "")).toMatch(/abort/i);
-    await expectPidDead(result.pid);
+    try {
+      const childPid = await fixture.waitForChild();
+      expect(isPidAlive(childPid)).toBe(true);
+      controller.abort();
+      const result = await pending;
+      expect(result).toMatchObject({ exitCode: -1 });
+      expect(String(result.stderr ?? "")).toMatch(/abort/i);
+      await expectPidDead(result.pid);
+      await expectPidDead(childPid);
+    } finally {
+      controller.abort();
+      await pending;
+    }
   }, 15_000);
 
   describe("spawn env scrubbing", () => {
@@ -6949,6 +6968,34 @@ describe("executeTool", () => {
     }, 15_000);
   });
 });
+
+async function writeProcessTreeFixture(root: string) {
+  await fs.mkdir(root, { recursive: true });
+  const script = path.join(root, "process-tree.cjs");
+  const ready = path.join(root, "child.pid");
+  // A bounded lifetime lets a broken test release its children even when the executor fails to kill them.
+  await fs.writeFile(
+    script,
+    `
+      const { spawn } = require("node:child_process");
+      const { writeFileSync } = require("node:fs");
+      const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 10000)"], { stdio: "ignore", windowsHide: true });
+      child.once("spawn", () => writeFileSync(process.argv[2], String(child.pid)));
+    `,
+  );
+  return {
+    command: `"${process.execPath}" "${script}" "${ready}"`,
+    waitForChild: () =>
+      vi.waitFor(
+        async () => {
+          const pid = Number(await fs.readFile(ready, "utf8"));
+          expect(Number.isInteger(pid) && pid > 0).toBe(true);
+          return pid;
+        },
+        { timeout: 5_000 },
+      ),
+  };
+}
 
 function isPidAlive(pid: number | undefined): boolean {
   if (typeof pid !== "number") {
