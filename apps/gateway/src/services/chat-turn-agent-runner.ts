@@ -326,7 +326,7 @@ import {
   estimateFirstProviderRequestInputTokens,
   shouldCapturePromptContextBudgetReceipt,
 } from "./chat-agent-prompt-budget-receipt.js";
-import { resolveSustainedLocalCodingProfile } from "./chat-turn-execution-profile.js";
+import { hasExplicitWebRestriction, resolveSustainedLocalCodingProfile } from "./chat-turn-execution-profile.js";
 import {
   advanceCodingWindow,
   applyCodingToolReceipts,
@@ -1287,6 +1287,7 @@ export class ChatTurnAgentRunner {
     meshTools: readonly MeshChatToolSchema[] = [],
     discoveredToolNames: readonly string[] = [],
   ): Promise<ResolvedChatTurnToolSchema> {
+    input = applyTurnWebRestriction(input);
     // This marker only narrows execution. Staging separately verifies the exact
     // server-authored seed, completed source, actor, and reviewed draft hash.
     if (input.content.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
@@ -1991,6 +1992,7 @@ export class ChatTurnAgentRunner {
   }
 
   public async *runStream(input: ChatTurnAgentRunnerInput): AsyncGenerator<ChatStreamChunkDraft> {
+    input = applyTurnWebRestriction(input);
     const wrapperAbortController = new AbortController();
     const innerSignal = input.signal
       ? AbortSignal.any([input.signal, wrapperAbortController.signal])
@@ -10877,8 +10879,18 @@ function detectTimeIntent(content: string): boolean {
   );
 }
 
+function applyTurnWebRestriction(input: ChatTurnAgentRunnerInput): ChatTurnAgentRunnerInput {
+  if (!hasExplicitWebRestriction(input.capabilityProfileContent ?? input.content)) return input;
+  return {
+    ...input,
+    webMode: "off",
+    normalizationProfile: input.normalizationProfile === "quick_web" ? "live" : input.normalizationProfile,
+    executionProfile: input.executionProfile === "quick_web" ? "standard" : input.executionProfile,
+  };
+}
+
 function detectLiveDataIntent(content: string): boolean {
-  if (isExplicitLocalMcpTask(content)) return false;
+  if (isExplicitLocalMcpTask(content) || hasExplicitWebRestriction(content)) return false;
   return hasLiveDataIntent(content);
 }
 
@@ -10894,7 +10906,7 @@ function detectDirectUrlIntent(content: string): boolean {
 }
 
 function detectWebLookupIntent(content: string, historyMessages: ChatCompletionRequest["messages"]): boolean {
-  if (isExplicitLocalMcpTask(content)) return false;
+  if (isExplicitLocalMcpTask(content) || hasExplicitWebRestriction(content)) return false;
   return (
     detectLiveDataIntent(content) ||
     hasExternalResearchIntent(content) ||

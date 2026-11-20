@@ -22,6 +22,14 @@ const MUTATION_OR_APPROVAL_RE =
 const DIRECT_URL_RE = /https?:\/\/\S+/i;
 const TIME_QUERY_RE = /\b(?:time|timezone|time\s+zone|date|calendar)\b/i;
 
+const WEB_RESTRICTION_RE =
+  /\b(?:do\s+not|don['’]t|never|without|avoid|no)\s+(?:(?:browse|browsing|search|searching|look\s+up|looking\s+up)\s+(?:(?:on|using)\s+)?(?:the\s+)?(?:web|internet|online)\b|(?:web|internet|online)\s+(?:search(?:es|ing)?|browsing|lookups?)\b|(?:use|using)\s+(?:the\s+)?(?:web|internet|browser|web\s+tools)\b|brows(?:e|ing)(?=\s*[,.;!?]|\s*$))/iu;
+
+export function hasExplicitWebRestriction(content: string): boolean {
+  // Quoted instructions and code may be the subject of the request.
+  return WEB_RESTRICTION_RE.test(content.replace(/```[\s\S]*?```|`[^`\n]*`|"[^"\n]*"|“[^”\n]*”/gu, " "));
+}
+
 export function resolveChatTurnExecutionProfile(input: ResolveChatTurnExecutionProfileInput): ChatTurnExecutionProfile {
   if (resolveChatNormalizationProfile(input) === "quick_web") {
     return "quick_web";
@@ -31,6 +39,9 @@ export function resolveChatTurnExecutionProfile(input: ResolveChatTurnExecutionP
 
 export function resolveChatNormalizationProfile(input: ResolveChatTurnExecutionProfileInput): ChatNormalizationProfile {
   const explicitProfile = input.request.normalizationProfile;
+  if (explicitProfile === "quick_web" && hasExplicitWebRestriction(input.content ?? input.request.content)) {
+    return "live";
+  }
   if (explicitProfile) {
     return explicitProfile;
   }
@@ -56,7 +67,7 @@ export function shouldUseQuickWebProfile(input: ResolveChatTurnExecutionProfileI
   ) {
     return false;
   }
-  if (request.webMode === "off" || request.webMode === "deep") {
+  if (request.webMode === "off" || request.webMode === "deep" || hasExplicitWebRestriction(content)) {
     return false;
   }
   if (request.memoryMode === "on" || request.useMemory === true) {

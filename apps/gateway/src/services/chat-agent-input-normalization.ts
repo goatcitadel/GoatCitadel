@@ -6,7 +6,7 @@ import type {
   ChatThinkingLevel,
   ChatWebMode,
 } from "@goatcitadel/contracts";
-import { resolveChatNormalizationProfile } from "./chat-turn-execution-profile.js";
+import { hasExplicitWebRestriction, resolveChatNormalizationProfile } from "./chat-turn-execution-profile.js";
 
 export interface NormalizedAgentInputFromSend {
   readonly mode: ChatMode;
@@ -33,7 +33,7 @@ export function normalizeAgentInputFromSend(request: ChatSendMessageRequest): No
   }
   return {
     mode: request.mode ?? "chat",
-    webMode: request.webMode ?? "auto",
+    webMode: hasExplicitWebRestriction(request.content) ? "off" : (request.webMode ?? "auto"),
     memoryMode: request.memoryMode ?? (request.useMemory === false ? "off" : "auto"),
     thinkingLevel: request.thinkingLevel ?? "standard",
     speedMode: request.speedMode ?? "standard",
