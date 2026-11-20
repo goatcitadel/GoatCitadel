@@ -268,18 +268,12 @@ export class GoogleWorkspaceOAuthService {
         // Revoking an older exchange could end a newer grant for the same Google account.
         throw new ConflictError({ message: "A newer Google sign-in replaced this request." });
       }
-      this.saveCredential(connectionId, {
-        version: 1,
-        signInId: randomUUID(),
-        clientId: flow.clientId,
-        accessToken,
-        refreshToken,
-        expiresAt: tokens.expiresAt(now) ?? now + DEFAULT_ACCESS_TOKEN_LIFETIME_MS,
-        grantedScopes,
-        ...(accountLabel ? { accountLabel } : {}),
-        updatedAt: now,
-      });
-      await this.updateConnection(connectionId, (current) => ({
+      const current = await this.requireConnection(connectionId);
+      if (readClientId(current.config) !== flow.clientId) {
+        throw new ConflictError({ message: "The OAuth client ID changed during sign-in. Start Connect Google again." });
+      }
+      await this.connections.update(connectionId, {
+        expectedRevision: current.revision,
         status: "connected",
         lastError: null,
         config: {
@@ -292,7 +286,18 @@ export class GoogleWorkspaceOAuthService {
             ]),
           ),
         },
-      }));
+      });
+      this.saveCredential(connectionId, {
+        version: 1,
+        signInId: randomUUID(),
+        clientId: flow.clientId,
+        accessToken,
+        refreshToken,
+        expiresAt: tokens.expiresAt(now) ?? now + DEFAULT_ACCESS_TOKEN_LIFETIME_MS,
+        grantedScopes,
+        ...(accountLabel ? { accountLabel } : {}),
+        updatedAt: now,
+      });
       return await this.getStatus(connectionId);
     });
   }

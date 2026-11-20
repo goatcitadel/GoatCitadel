@@ -424,6 +424,28 @@ describe("Google Workspace sign-in", { timeout: 60_000 }, () => {
     );
   });
 
+  it("leaves the connection disconnected when its client ID changes during exchange", async () => {
+    const ctx = setup();
+    const { connectionId } = await googleConnection();
+    const flow = await ctx.service.start(connectionId, {
+      capabilities: ["gmail.read"],
+      clientSecret: "GOCSPX-desktop-secret",
+    });
+    ctx.google.nextToken = async () => {
+      const connection = await storage.integrationConnections.get(connectionId);
+      await storage.integrationConnections.update(connectionId, {
+        config: { ...connection.config, clientId: "9999999999-other.apps.googleusercontent.com" },
+      });
+      return Response.json({ access_token: "access", refresh_token: "refresh", scope: GMAIL_READONLY });
+    };
+
+    await expect(ctx.service.complete(connectionId, { state: flow.state, code: "first" })).rejects.toThrow(
+      /OAuth client ID changed/u,
+    );
+    expect(await storage.integrationConnections.get(connectionId)).toMatchObject({ status: "disconnected" });
+    expect(await ctx.service.getStatus(connectionId)).toMatchObject({ connected: false, requiresReauth: false });
+  });
+
   it("keeps a newer sign-in when an older token exchange completes last", async () => {
     const ctx = setup();
     const { connectionId } = await googleConnection();

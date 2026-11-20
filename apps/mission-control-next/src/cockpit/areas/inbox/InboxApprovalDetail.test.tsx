@@ -145,6 +145,27 @@ afterEach(() => {
 });
 
 describe("Inbox approval detail", () => {
+  it("hides a decision notice when the selected approval changes", async () => {
+    const render = async (selected: OperatorInboxItem) =>
+      act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <InboxApprovalDetail item={selected} workspaceId="default" />
+          </QueryClientProvider>,
+        ),
+      );
+    await render(item);
+    const action = () =>
+      [...container.querySelectorAll("button")].find((button) => button.textContent === "Record decision");
+    await settleUntil(() => Boolean(action()));
+    await act(async () => action()!.click());
+    expect(container.textContent).toContain("Approved decision recorded.");
+    api.fetchApproval.mockResolvedValue({ ...approval, approvalId: "approval-b" });
+    await render({ ...item, id: "approval:approval-b", source: { ...item.source, approvalId: "approval-b" } });
+    await settleUntil(() => Boolean(action()));
+    expect(container.textContent).not.toContain("Approved decision recorded.");
+  });
+
   it("mounts deny-only decisions for a generic approval with no preview", async () => {
     api.fetchApproval.mockResolvedValue({ ...approval, preview: undefined });
     await act(async () =>

@@ -113,6 +113,7 @@ export function setShellExecTimeoutMsForTesting(ms: number = SHELL_EXEC_DEFAULT_
 }
 
 const MAX_HTTP_REDIRECTS = 5;
+const HTTP_REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const MAX_HTTP_RETRIES = 2;
 const MAX_HTTP_RETRY_DELAY_MS = 50;
 const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 502, 503, 504]);
@@ -1058,12 +1059,14 @@ async function shellExecBackground(
         killBackgroundProcess(pid);
       }
     };
-    if (request.signal) {
-      if (request.signal.aborted) {
-        onAbort();
-      } else {
-        request.signal.addEventListener("abort", onAbort, { once: true });
-      }
+    const signal = request.signal;
+    if (signal?.aborted) {
+      onAbort();
+    } else if (signal) {
+      const removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+      signal.addEventListener("abort", onAbort, { once: true });
+      child.once("close", removeAbortListener);
+      child.once("error", removeAbortListener);
     }
     child.unref();
     setTimeout(() => {
@@ -1467,7 +1470,7 @@ async function fetchAllowlisted(
       await response.body?.cancel().catch(() => undefined);
       await waitForHttpRetry(response, attempt, signal);
     }
-    if (!(response.status >= 300 && response.status < 400)) {
+    if (!HTTP_REDIRECT_STATUSES.has(response.status)) {
       return { response, finalUrl: current };
     }
     const location = response.headers.get("location");

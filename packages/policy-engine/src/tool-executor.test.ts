@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { getEventListeners } from "node:events";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
@@ -5665,6 +5666,19 @@ describe("executeTool", () => {
     }
   });
 
+  it("returns a 304 response without following a redirect", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 304 }));
+    try {
+      await expect(
+        executeTool(toolRequest("http.get", { url: "https://example.com/start" }), policyConfig, storageStub),
+      ).resolves.toMatchObject({ status: 304, body: "" });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("releases retry and redirect responses before requesting the next URL", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const retryCancelled = vi.fn();
@@ -6631,6 +6645,17 @@ describe("executeTool", () => {
     // The spawned process must be gone after the executor returns.
     await expectPidDead(extractPid(result));
   }, 15_000);
+
+  it("removes the background abort listener when the child closes", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const { signal } = new AbortController();
+    await executeTool(
+      { ...toolRequest("shell.exec_background", { command: "node --version" }), signal },
+      policyConfig,
+      storageStub,
+    );
+    await vi.waitFor(() => expect(getEventListeners(signal, "abort")).toHaveLength(0));
+  });
 
   it("registers a shell.exec_background pid and kills it via killBackgroundProcess", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);

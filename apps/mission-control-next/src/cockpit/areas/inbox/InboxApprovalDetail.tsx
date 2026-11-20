@@ -47,12 +47,6 @@ export function InboxApprovalDetail({
   onDecision?: (message: string, settled: boolean) => void;
 }) {
   const access = useProjectAccess(workspaceId);
-  const [decisionNotice, setDecisionNotice] = useState("");
-  const noticeRef = useRef<HTMLParagraphElement>(null);
-  const pageOwnsFocus = Boolean(onDecision);
-  useEffect(() => {
-    if (decisionNotice && !pageOwnsFocus) noticeRef.current?.focus();
-  }, [decisionNotice, pageOwnsFocus]);
   const queryClient = useQueryClient();
   const approvalId = item.source.approvalId;
   // An approval of no workspace (a skill change) is read and decided without one; the Inbox's workspace stays the
@@ -60,6 +54,14 @@ export function InboxApprovalDetail({
   const installWide = item.source.installWide === true;
   // The same key as Chat's blocker card, so moving between them is a cache hit (IN-11).
   const queryKey = inboxApprovalRecordKey(workspaceId, installWide, approvalId!, access.identity);
+  const decisionScope = JSON.stringify(queryKey);
+  const [notice, setNotice] = useState<{ scope: string; message: string }>();
+  const decisionNotice = notice?.scope === decisionScope ? notice.message : undefined;
+  const noticeRef = useRef<HTMLParagraphElement>(null);
+  const pageOwnsFocus = Boolean(onDecision);
+  useEffect(() => {
+    if (decisionNotice && !pageOwnsFocus) noticeRef.current?.focus();
+  }, [decisionNotice, pageOwnsFocus]);
   const query = useQuery({
     queryKey,
     queryFn: ({ signal }) => readInboxApproval(approvalId!, { workspaceId, installWide, signal }),
@@ -69,7 +71,7 @@ export function InboxApprovalDetail({
   // Re-read the owner after a decision or stale review; the settled receipt remains reachable
   // through LinkedApproval after the pending projection removes this selection.
   const rereadSettled = (notice: string, settled: boolean) => {
-    setDecisionNotice(notice);
+    setNotice({ scope: decisionScope, message: notice });
     onDecision?.(notice, settled);
     void queryClient.resetQueries({ queryKey, exact: true });
     void queryClient.invalidateQueries({ queryKey: queryKeys.inbox(workspaceId) });
@@ -123,7 +125,7 @@ export function InboxApprovalDetail({
         <Button
           size="sm"
           onClick={() => {
-            setDecisionNotice("");
+            setNotice(undefined);
             void query.refetch();
           }}
           disabled={query.isFetching || !approvalId}
