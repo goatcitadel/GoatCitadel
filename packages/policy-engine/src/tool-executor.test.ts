@@ -5666,6 +5666,43 @@ describe("executeTool", () => {
     }
   });
 
+  it("returns the original response when Retry-After exceeds the retry budget", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("Try again later", { status: 429, headers: { "retry-after": "60" } }));
+    try {
+      await expect(
+        executeTool(toolRequest("http.get", { url: "https://example.com/start" }), policyConfig, storageStub),
+      ).resolves.toMatchObject({ status: 429, body: "Try again later" });
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("removes the HTTP abort listener after the retry delay elapses", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const { signal } = new AbortController();
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("Unavailable", { status: 503 }))
+      .mockResolvedValueOnce(new Response("Ready"));
+    try {
+      await expect(
+        executeTool(
+          { ...toolRequest("http.get", { url: "https://example.com/start" }), signal },
+          policyConfig,
+          storageStub,
+        ),
+      ).resolves.toMatchObject({ status: 200, body: "Ready" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(getEventListeners(signal, "abort")).toHaveLength(0);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("returns a 304 response without following a redirect", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 304 }));

@@ -354,6 +354,14 @@ on `ec4b1a8e3`. The Windows-only test in `tool-executor.test.ts` already launche
 covers empty arguments, spaces, embedded quotes, trailing backslashes, percent signs, and shell
 metacharacters. The test passed on Windows, so a second batch fixture would duplicate that coverage.
 
+### 2026-11-20 HTTP response size finding
+
+GitHub flagged the response reads in `http.get` and `http.post` as unbounded.
+Both receive their response from `fetchAllowlistedOnce`, which wraps
+`Response.text()` with the shared reader in `packages/policy-engine/src/sandbox/network-guard.ts`.
+That reader defaults to 2 MiB and cancels the stream when the limit is exceeded.
+A second limit in the executor would duplicate that guard.
+
 ### There is no way to dismiss an AI finding
 
 Unlike Standard findings, which carry a per-row **Dismiss** button, the AI findings surface offers

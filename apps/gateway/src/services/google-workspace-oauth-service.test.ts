@@ -424,6 +424,34 @@ describe("Google Workspace sign-in", { timeout: 60_000 }, () => {
     );
   });
 
+  it("restores the previous connection settings when credential persistence fails", async () => {
+    const ctx = setup();
+    const { connectionId } = await googleConnection();
+    const first = await ctx.service.start(connectionId, {
+      capabilities: ["gmail.read"],
+      clientSecret: "GOCSPX-desktop-secret",
+    });
+    ctx.google.nextToken = () =>
+      Response.json({ access_token: "old-access", refresh_token: "old-refresh", scope: GMAIL_READONLY });
+    await ctx.service.complete(connectionId, { state: first.state, code: "first" });
+    const before = await storage.integrationConnections.get(connectionId);
+
+    const second = await ctx.service.start(connectionId, { capabilities: ["calendar.read"] });
+    ctx.google.nextToken = () =>
+      Response.json({ access_token: "new-access", refresh_token: "new-refresh", scope: CALENDAR_READONLY });
+    const failure = new Error("keychain write failed");
+    vi.spyOn(ctx.secrets, "setSecret").mockImplementationOnce(() => {
+      throw failure;
+    });
+
+    await expect(ctx.service.complete(connectionId, { state: second.state, code: "second" })).rejects.toBe(failure);
+    expect(await storage.integrationConnections.get(connectionId)).toMatchObject({
+      status: before.status,
+      config: before.config,
+    });
+    await expect(ctx.service.resolveAccessToken(connectionId, "gmail.read")).resolves.toBe("old-access");
+  });
+
   it("leaves the connection disconnected when its client ID changes during exchange", async () => {
     const ctx = setup();
     const { connectionId } = await googleConnection();

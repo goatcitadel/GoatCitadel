@@ -1467,8 +1467,13 @@ async function fetchAllowlisted(
       ) {
         break;
       }
+      const delayMs =
+        coerceRetryAfterMs(response.headers.get("retry-after"), { maxMs: MAX_HTTP_RETRY_DELAY_MS + 1 }) ??
+        25 * (attempt + 1);
+      // Leave the response readable when the server asks for more time than this tool can wait.
+      if (delayMs > MAX_HTTP_RETRY_DELAY_MS) break;
       await response.body?.cancel().catch(() => undefined);
-      await waitForHttpRetry(response, attempt, signal);
+      await waitForHttpRetry(delayMs, signal);
     }
     if (!HTTP_REDIRECT_STATUSES.has(response.status)) {
       return { response, finalUrl: current };
@@ -1489,9 +1494,7 @@ async function fetchAllowlisted(
   throw new Error(`Too many redirects for ${redactUrlForError(url)}`);
 }
 
-async function waitForHttpRetry(response: Response, attempt: number, signal?: AbortSignal): Promise<void> {
-  const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
-  const delayMs = Math.min(retryAfterMs ?? 25 * (attempt + 1), MAX_HTTP_RETRY_DELAY_MS);
+async function waitForHttpRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
   if (delayMs <= 0) {
     return;
   }
@@ -1499,20 +1502,17 @@ async function waitForHttpRetry(response: Response, attempt: number, signal?: Ab
     throw signal.reason instanceof Error ? signal.reason : new Error("request aborted");
   }
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, delayMs);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(signal.reason instanceof Error ? signal.reason : new Error("request aborted"));
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("request aborted"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
-}
-
-function parseRetryAfterMs(value: string | null): number | undefined {
-  return coerceRetryAfterMs(value, { maxMs: MAX_HTTP_RETRY_DELAY_MS });
 }
 
 function composeAbortSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {

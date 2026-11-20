@@ -272,7 +272,7 @@ export class GoogleWorkspaceOAuthService {
       if (readClientId(current.config) !== flow.clientId) {
         throw new ConflictError({ message: "The OAuth client ID changed during sign-in. Start Connect Google again." });
       }
-      await this.connections.update(connectionId, {
+      const updated = await this.connections.update(connectionId, {
         expectedRevision: current.revision,
         status: "connected",
         lastError: null,
@@ -287,17 +287,34 @@ export class GoogleWorkspaceOAuthService {
           ),
         },
       });
-      this.saveCredential(connectionId, {
-        version: 1,
-        signInId: randomUUID(),
-        clientId: flow.clientId,
-        accessToken,
-        refreshToken,
-        expiresAt: tokens.expiresAt(now) ?? now + DEFAULT_ACCESS_TOKEN_LIFETIME_MS,
-        grantedScopes,
-        ...(accountLabel ? { accountLabel } : {}),
-        updatedAt: now,
-      });
+      try {
+        this.saveCredential(connectionId, {
+          version: 1,
+          signInId: randomUUID(),
+          clientId: flow.clientId,
+          accessToken,
+          refreshToken,
+          expiresAt: tokens.expiresAt(now) ?? now + DEFAULT_ACCESS_TOKEN_LIFETIME_MS,
+          grantedScopes,
+          ...(accountLabel ? { accountLabel } : {}),
+          updatedAt: now,
+        });
+      } catch (error) {
+        try {
+          // Restore only the revision written by this sign-in. A newer settings change takes precedence.
+          await this.connections.update(connectionId, {
+            expectedRevision: updated.revision,
+            status: current.status,
+            lastError: current.lastError ?? null,
+            config: current.config,
+          });
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], "Google sign-in could not be saved or rolled back.", {
+            cause: rollbackError,
+          });
+        }
+        throw error;
+      }
       return await this.getStatus(connectionId);
     });
   }
