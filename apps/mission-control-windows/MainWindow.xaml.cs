@@ -815,14 +815,21 @@ public sealed partial class MainWindow : Window
         if (!_runtimeLifecycle.IsCurrent(observation)) return;
         _startupDiagnostics?.RecordPhase("runtime-failed", error);
         _deferredRoutes.MarkUnavailable();
-        // The launcher's own error is a raw exit message. When the Gateway recorded why it could not
-        // start, the status carries that reason; read it once and fall back to the launcher error.
-        var status = await TryReadStartupFailureStatusAsync(observation);
+        // The runtime can recover after the launch command has already failed.
+        var status = await TryReadLaunchRecoveryStatusAsync(observation);
         if (!_runtimeLifecycle.IsCurrent(observation)) return;
+        if (status is { IsReady: true })
+        {
+            await ShowReadyRuntimeAsync(status, observation);
+            return;
+        }
+
+        _lastRuntime = status;
         RenderRecovery(DesktopStartupCopy.LaunchFailureMessage(status, error.Message));
+        StartRuntimeStatusPolling();
     }
 
-    private async Task<DesktopRuntimeStatus?> TryReadStartupFailureStatusAsync(DesktopRuntimeObservation observation)
+    private async Task<DesktopRuntimeStatus?> TryReadLaunchRecoveryStatusAsync(DesktopRuntimeObservation observation)
     {
         try
         {
@@ -835,7 +842,7 @@ public sealed partial class MainWindow : Window
                 or UnauthorizedAccessException
                 or OperationCanceledException)
         {
-            // The status read only adds the recorded reason; without it the launcher error is shown.
+            // The recovery panel can still show the launch failure and poll again.
             return null;
         }
     }

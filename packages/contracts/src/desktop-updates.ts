@@ -30,7 +30,7 @@ export interface DesktopUpdateStatus {
   downloadedPath: string | null;
   message: string;
 }
-export type DesktopUpdateAction = "status" | "check" | "download" | "reveal" | "notes" | "snooze" | "channel";
+export type DesktopUpdateAction = "status" | "check" | "download" | "install" | "reveal" | "notes" | "snooze" | "channel";
 export interface DesktopUpdateRequest {
   type: "goatcitadel.updates.request";
   requestId: string;

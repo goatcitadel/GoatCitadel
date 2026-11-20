@@ -71,6 +71,21 @@ describe.each([
       "download",
       expect.objectContaining({ releaseTag: "preview-2-1" }),
     );
+    bridge.status = { ...available, phase: "downloaded", downloadedPath: "setup.exe", downloadedBytes: 100 };
+    await act(async () => renderer.update(<Panel />));
+    const action = (name: string) =>
+      renderer.root.findAllByType("button").find((candidate) => candidate.children.includes(name));
+    expect(action("Download")).toBeUndefined();
+    expect(JSON.stringify(renderer.toJSON())).toContain("Unsigned preview");
+    expect(bridge.requestDesktopUpdate).toHaveBeenCalledTimes(1);
+    await act(async () => action("Update and restart")!.props.onClick());
+    await act(async () => action("Show installer")!.props.onClick());
+    expect(bridge.requestDesktopUpdate).toHaveBeenNthCalledWith(
+      2,
+      "install",
+      expect.objectContaining({ releaseTag: "preview-2-1" }),
+    );
+    expect(bridge.requestDesktopUpdate).toHaveBeenNthCalledWith(3, "reveal", expect.anything());
     await act(async () => {
       renderer.unmount();
     });
