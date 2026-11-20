@@ -86,7 +86,9 @@ it("keeps metadata refresh and reviewed deletion available while store and revea
     },
   ];
   await mount();
-  expect(text(renderer!.root)).toContain("Storing and revealing secrets are disabled in this release.");
+  const holdNotice = renderer!.root.findByProps({ "data-tone": "warning" });
+  expect(text(holdNotice)).toContain("Storing and revealing secrets are disabled in this release.");
+  expect(holdNotice.props.role).toBeUndefined();
   expect(button("Store secret").props.disabled).toBe(true);
   expect(button("Refresh Vault metadata").props.disabled).toBe(false);
   await act(async () => button("Refresh Vault metadata").props.onClick());

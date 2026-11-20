@@ -22,7 +22,11 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
     [search, setSearch] = useState(""),
     [limit, setLimit] = useState(50);
   const filtered = editor.items.filter((item) => item.secretName.toLowerCase().includes(search.toLowerCase()));
-  const holdNotice = vault.cryptoHeld ? <Callout tone="warning">{VAULT_CRYPTO_HOLD_MESSAGE}</Callout> : null;
+  const holdNotice = vault.cryptoHeld ? (
+    <Callout tone="warning" announce={false}>
+      {VAULT_CRYPTO_HOLD_MESSAGE}
+    </Callout>
+  ) : null;
   const currentReview = editor.reviewRequired ? (
     <section aria-label="Current Vault review" className="space-y-2 rounded-md border border-status-waiting p-3">
       <p className="text-sm text-fg-secondary">

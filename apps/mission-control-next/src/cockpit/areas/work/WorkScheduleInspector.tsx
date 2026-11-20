@@ -29,7 +29,7 @@ const SCHEDULE_DISMISS: Readonly<Record<ScheduleAction, string>> = {
   cancel: "Keep schedule",
 };
 const NO_AGENT_RUN_WARNING =
-  "This command runs with the Gateway’s operating system permissions without asking for approval on each run.";
+  "This command runs with GoatCitadel’s operating system permissions without asking for approval each time.";
 
 interface WorkScheduleInspectorProps {
   selected: CronJobRecordResponse;

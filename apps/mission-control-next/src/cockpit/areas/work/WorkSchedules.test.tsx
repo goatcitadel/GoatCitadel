@@ -404,7 +404,7 @@ describe("Work schedules", () => {
     await render();
     await review();
     const warning =
-      "This command runs with the Gateway’s operating system permissions without asking for approval on each run.";
+      "This command runs with GoatCitadel’s operating system permissions without asking for approval each time.";
     const describedBy = (label: string) => {
       const id = [...container.querySelectorAll("button")]
         .find((button) => button.textContent?.trim() === label)
