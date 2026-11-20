@@ -23,6 +23,7 @@ describe("native Inbox owner evidence", () => {
       changed.searchParams.set(key, value);
       assert.throws(() => assertNativeInboxOwner(question, changed.pathname + changed.search, "isolated"));
     }
+    assert.throws(() => assertNativeInboxOwner(question, questionHref.replace("/chat", "/inbox"), "isolated"));
     assert.throws(() => assertNativeInboxOwner(question, "//external.invalid" + questionHref, "isolated"));
     assert.throws(() => assertNativeInboxOwner(question, "/\\external.invalid" + questionHref, "isolated"));
     assert.throws(() => assertNativeInboxOwner({ ...question, source: { ...question.source, workspaceId: "other" } }, questionHref, "isolated"));

@@ -10,7 +10,7 @@ import {
 import { WorkScheduleEditor } from "./WorkScheduleEditor";
 import { scheduleCadence, scheduleTimezoneSummary } from "./schedule-cadence";
 import { presentScheduleAction } from "./work-vocabulary";
-import type { Dispatch, SetStateAction } from "react";
+import { useId, type Dispatch, type SetStateAction } from "react";
 import type { CronJobRecordResponse } from "@goatcitadel/mission-control-shared/api/types";
 import type { ScheduleAction } from "../../../features/native-routes/ops/schedule-operation";
 import type { useScheduleOperations } from "../../../features/native-routes/ops/use-schedule-operations";
@@ -28,6 +28,8 @@ const SCHEDULE_DISMISS: Readonly<Record<ScheduleAction, string>> = {
   resume: "Don't resume",
   cancel: "Keep schedule",
 };
+const NO_AGENT_RUN_WARNING =
+  "This command runs with GoatCitadel’s operating system permissions without asking for approval each time.";
 
 interface WorkScheduleInspectorProps {
   selected: CronJobRecordResponse;
@@ -69,6 +71,14 @@ export function WorkScheduleInspector({
   selectedRecoveryHref,
   activeWorkspaceId,
 }: WorkScheduleInspectorProps) {
+  const warningId = useId();
+  const noAgentJob = selected.action === "no_agent";
+  const reviewNoAgentRun = reviewSnapshot?.action === "no_agent" && (pending === "run" || pending === "resume");
+  const runWarning = (
+    <p id={warningId} className="text-sm text-status-waiting">
+      {NO_AGENT_RUN_WARNING}
+    </p>
+  );
   return (
     <div className="grid gap-3 border-t border-line-subtle pt-4 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
       {detail.isFetching ? (
@@ -145,9 +155,10 @@ export function WorkScheduleInspector({
               : pending === "resume"
                 ? "Resume enables future recurring occurrences."
                 : pending === "run"
-                  ? "Run now starts the saved action immediately. Policy and approvals still apply."
+                  ? "Run now starts the saved action immediately."
                   : "Delete permanently removes the schedule and stops future occurrences."}
           </p>
+          {reviewNoAgentRun ? runWarning : null}
           <p className="text-sm text-fg">
             {pending === "cancel"
               ? `Delete “${reviewSnapshot?.name}”? Future runs stop and it can't be restored.`
@@ -164,6 +175,7 @@ export function WorkScheduleInspector({
             <Button
               variant={pending === "cancel" ? "danger" : "primary"}
               disabled={busy || actionLocked || reviewChanged}
+              aria-describedby={reviewNoAgentRun ? warningId : undefined}
               onClick={() => void applyAction()}
             >
               {SCHEDULE_CONFIRM[pending]}
@@ -191,16 +203,24 @@ export function WorkScheduleInspector({
           </div>
         </Dialog>
       ) : (
-        <WorkScheduleActionButtons
-          enabled={selected.enabled}
-          disabled={busy || actionLocked}
-          onReview={(action) => {
-            operations.invalidate();
-            reviewAction(action);
-          }}
-        />
+        <>
+          {noAgentJob ? runWarning : null}
+          <WorkScheduleActionButtons
+            enabled={selected.enabled}
+            disabled={busy || actionLocked}
+            warningId={noAgentJob ? warningId : undefined}
+            onReview={(action) => {
+              operations.invalidate();
+              reviewAction(action);
+            }}
+          />
+        </>
       )}
-      <NativeOwnerLink href={selectedRecoveryHref} scope={[activeWorkspaceId ?? "default", selected.jobId]}>
+      <NativeOwnerLink
+        href={selectedRecoveryHref}
+        scope={[activeWorkspaceId ?? "default", selected.jobId]}
+        className="underline"
+      >
         Inspect current schedule record
       </NativeOwnerLink>
     </div>

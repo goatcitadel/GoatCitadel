@@ -4,15 +4,17 @@ Date: 2026-11-19
 Reviewed commit: `56f81fafd` (`main`, "Fix Calendar read approvals and grant reuse in Chat (#809)")
 Out of scope: the signed (Authenticode) Windows installer, tag protection, the protected `release` environment, and every other public-trust signing control.
 
+Evidence corrections were recorded on 2026-11-20. The run outcomes below apply to the reviewed revisions. [Current release-candidate checklist](../1_0_RELEASE_EVIDENCE.md#release-candidate-acceptance)
+
 ## 1. Verdict
 
-GoatCitadel is not ready to call itself 1.0 yet. The runtime itself is close: 22 of the 24 release-proof lanes pass on `main`, including durable recovery, runtime truth, backup round trip, mesh readiness, Windows hostile-sandbox proof, desktop and A2A. No open security finding is marked as a must-fix before 1.0.
+GoatCitadel still needs release-candidate acceptance. On scheduled revision `acd0709e4`, 21 of 23 release-proof matrix jobs passed, plus the separate Trivy job, for 22 of 24 jobs overall. The passing jobs included durable recovery, runtime truth, backup round trip, mesh readiness, Windows hostile-sandbox proof, desktop and A2A. The checked security triage document listed no open item marked as a must-fix before 1.0. [Scheduled release-proof run](https://github.com/goatcitadel/GoatCitadel/actions/runs/44565653532)
 
 The gaps fall into five groups:
 
 1. **CI is red.** Two release-proof lanes and the UX budgets nightly have failed on `main` for several days.
 2. **The gates don't protect `main`.** Almost no 1.0 gate runs on pull requests, so regressions land unnoticed.
-3. **The release scope describes the wrong shell.** It covers the Classic routes only. The default Cockpit shell has no release status, and much of it has no visual proof.
+3. **The formal release scope omits Cockpit-specific routes.** The status table describes Classic, and the default Cockpit shell already has partial surface and visual regression coverage.
 4. **Some screens claim more than production does.** Citadel Vault and Ward "Require approval" are the clear cases; a few connector entries and labels are smaller ones.
 5. **Version and release bookkeeping is inconsistent.** Package version, changelog, README, tags and the docs checker disagree.
 
@@ -28,9 +30,9 @@ None of these needs new architecture. Most items are small. The two larger ones 
 
 ## 3. What is already in good shape
 
-These areas need no 1.0 work beyond keeping them green.
+These were passing hosted checks and source observations at the reviewed revisions.
 
-- **Release-proof lanes passing on `main`:** operator proof, durable recovery, runtime truth, surface regression, catalog parity, backup round trip, API compatibility, memory truth, realtime truth, UI parity, agentic governance and proof, mesh readiness, Code Mode sandbox, Windows hostile sandbox, desktop and A2A.
+- **Release-proof lanes passing on `acd0709e4`:** operator proof, durable recovery, runtime truth, surface regression, catalog parity, backup round trip, API compatibility, memory truth, realtime truth, UI parity, agentic governance and proof, mesh readiness, Code Mode sandbox, Windows hostile sandbox, desktop and A2A.
 - **PR checks** (Verification Fast, CodeQL, Code Quality, Trivy, Code Mode canary) are green on the last six `main` commits.
 - **Provider secrets:**
   - A key is never stored in plain text without an explicit choice. The env-file option requires that choice or `GOATCITADEL_ALLOW_ENV_SECRET_FALLBACK=1`; otherwise the save fails (`apps/gateway/src/services/provider-secret-persistence.ts:329-346`, `:540-558`).
@@ -39,7 +41,7 @@ These areas need no 1.0 work beyond keeping them green.
   - The default auth mode is `none`.
   - In that mode the Gateway refuses to start on a non-loopback address, with non-loopback or tailnet origins, or with any deployment profile except `local_dev` (`apps/gateway/src/deployment-profile-guard.ts:46-78`).
   - Docker uses token auth (`docker-compose.yaml:61`, `:74`).
-- **Security triage:** `docs/security/findings-triage.md` lists no open item marked as a must-fix before 1.0.
+- **Security triage:** `docs/security/findings-triage.md` lists no open item marked as a must-fix before 1.0. The GitHub security finding queues were outside the review.
 - **No raw-JSON primary surfaces.** Every pretty-printed JSON block found sits inside a collapsed "Technical details" or `<details>` disclosure.
 - **No leftover placeholder text.** There are no "coming soon", "not implemented", TODO or FIXME strings in `apps/mission-control-next/src`, `packages/mission-control-shared/src` or `packages/threaded-surface-core/src`.
 - **Experimental labels are present and honest** on Journey, Improvement, Personalities, the Claude CLI tool bridge and plugin import.
@@ -58,25 +60,25 @@ The last green nightly ran on 2026-11-16. The last three scheduled runs failed (
 - `PATCH /api/v1/scripts/retention`
 - `GET /api/v1/scripts/:id/preview`
 
-These came in with #806 (`apps/gateway/src/routes/scripts.ts:23`, `:32`, `:43`) and are absent from `apps/gateway/src/routes/route-access.ts`. There is no security exposure: unclassified routes fall back to the `operator` class, which is enforced (`route-access.ts:556-559`), and `scripts.ts:19-22` also requires a direct local connection. Only the classification is missing.
+These came in with #806 (`apps/gateway/src/routes/scripts.ts:23`, `:32`, `:43`) and are absent from `apps/gateway/src/routes/route-access.ts`. The reviewed request path falls back to the enforced `operator` access class (`route-access.ts:556-559`) and the Scripts route also checks for a direct local connection (`scripts.ts:19-22`). The matrix failed on missing explicit classifications.
 
 - **Fix:** add the three routes to `route-access.ts` and its test.
 
 **`verify:visual:regression`.** One scenario fails: `cockpit-chat.mobile-dark` differs by 0.0662, over the 0.04 threshold. Every other route and theme passes.
 
-- **Fix:** look at the diff images in the run artifact (`verification-release-proof-visual-regression-artifacts`). If the change is intended (likely candidates are #810's tutorial and the recent Chat fixes), rebaseline that one capture through `verify:visual:rebaseline` in a PR to `main`. If it isn't, fix the regression.
+- **Fix:** inspect the diff images in `verification-release-proof-visual-regression-artifacts` before deciding whether the change warrants a rebaseline or a product or harness fix. The tutorial in #810 landed after `acd0709e4`, so it cannot explain this capture.
 
-The preview branch `preview-0.9.2-beta.2` also fails `verify:architecture:metrics`. That lane passes on `main` through the fast lane, so this is a branch-only issue to keep in mind when cutting a release from a branch.
+The preview tag `preview-0.9.2-beta.2` also failed `verify:architecture:metrics` at `627c83d8a`. The reviewed main revision had passing architecture metrics through Verification Fast.
 
 ### 4.2 UX budgets nightly has been red for four nights
 
 It last passed on 2026-11-15 at `ae2e5959b` and has failed since 2026-11-16 at `084af7787`.
 
-- **Root cause:** after the test clicks "Open in Work" from the Inbox, the expected request `GET /api/v1/observe/runs/<id>/trace` never fires, and `page.waitForResponse` times out after 30 seconds (`scripts/verification/lib/scenarios/ux-budget-inbox-waits.mjs:202`).
-- **Knock-on error:** a later "outputs are locked by verification:ux-budgets" message only means the crashed step left its lock behind.
-- **Likely culprits:** the Work and navigation changes in that range (#767, #772, #777, #788). Either "Open in Work" no longer opens the run's trace, which is a product regression, or the test waits for the wrong request.
+- The job log shows a 30-second `page.waitForResponse` timeout after "Open in Work" while waiting for `GET /api/v1/observe/runs/<id>/trace` (`ux-budget-inbox-waits.mjs:202`). The timeout alone leaves the handoff cause undetermined. A later output-lock error was also logged. [UX budgets job](https://github.com/goatcitadel/GoatCitadel/actions/runs/44572111734/job/135729712743)
+- The run artifact records two further failures. `ux-budgets.cockpit-inbox-question.desktop` and `ux-budgets.cockpit-inbox-question.mobile` wait on an "Open in Inbox" link, while the current question owner opens in Chat.
+- `ux-budgets.cockpit.work-schedules` reports a serious axe `link-in-text-block` violation. [UX budgets artifact](https://github.com/goatcitadel/GoatCitadel/actions/runs/44572111734/artifacts/14554913225)
 
-This lane isn't on the contract's gate list, but it is the only performance budget, and a broken Inbox-to-Work handoff is something users would notice.
+The nightly reports performance, interaction and accessibility regressions. Reproduce the Inbox-to-Work interaction before attributing its timeout to the product or test.
 
 ### 4.3 The 1.0 gates don't run on pull requests
 
@@ -84,7 +86,7 @@ Nearly every gate lane runs only in `.github/workflows/verification-1-0-release-
 
 - **Never run on a PR:** `auth:matrix`, `visual:regression`, `durable:recovery`, `runtime:truth`, `operator:proof`, `surface:regression`, `catalog:parity`, `backup:roundtrip`, `ui:parity`, `memory:truth`, `realtime:truth`, `mesh:readiness`, `agentic:governance`, `agentic:proof` and `api:compat`.
 - **The exceptions:** `verify:architecture:metrics` runs on PRs inside Verification Fast (`.github/workflows/verification-fast.yml:71`), and the Code Mode sandbox lanes run in `code-mode-sandbox-canary.yml`.
-- **Not run anywhere:** `verify:chat-evolution`, although it is a gate at `docs/1_0_CONTRACT.md:178`.
+- **Absent from the reviewed main workflow:** `verify:chat-evolution` was a contract gate but had no job on main at the reviewed revision. The same lane passed on preview tag `preview-0.9.2-beta.2` at `627c83d8a`. That foundation proof still held the real provider, browser secure input, Windows restart and rollback, and signed promotion rows. [Preview Chat Evolution job](https://github.com/goatcitadel/GoatCitadel/actions/runs/44678921380/job/136097346051)
 
 This breaks the contract's own gate at `docs/1_0_CONTRACT.md:194` ("repo-visible PR workflows exist for the blocking release-gate lanes"). It is also how #806 reached `main` with auth-matrix red.
 
@@ -93,12 +95,12 @@ This breaks the contract's own gate at `docs/1_0_CONTRACT.md:194` ("repo-visible
 - Run the cheap, deterministic lanes on every PR. `auth:matrix` takes about 40 seconds, and `api:compat` and `surface:regression` are similar.
 - Run `visual:regression` on PRs that touch `apps/mission-control-next/**`, `packages/mission-control-shared/**`, `packages/threaded-surface-core/**` or the visual baselines.
 - Keep the long stack lanes nightly.
-- Add `verify:chat-evolution` to a workflow.
+- Add the deterministic `verify:chat-evolution` foundation gate to main release proof and retain the separate live acceptance rows.
 - Mark the PR-run lanes as required checks in branch protection. That step is outside the repo.
 
 ### 4.4 The release scope doesn't cover the default Cockpit shell
 
-Cockpit is the default shell, but `docs/1_0_RELEASE_SURFACE_SCOPE.md` (last updated 2026-08-14), `apps/mission-control-next/src/app/route-release-scope.ts` and `scripts/verification/lib/release-surface-manifest.mjs` list only Classic routes (`/chat`, `/projects`, `/library/*`, `/ops/*`, `/settings/*`). The contract (`:30`, `:64`) says every visible surface must meet the 1.0 bar.
+Cockpit is the default shell. At the reviewed revision, the scope table and the route release-status registry represented Classic paths. The release-surface manifest already included the default Cockpit boot and a subset of Cockpit routes from its visual manifest. The contract says every visible surface must meet the 1.0 bar.
 
 Cockpit main navigation (`apps/mission-control-next/src/cockpit/app/routes.ts:13-24`) is Chat, Inbox, Work, Capabilities, Library, Scripts, System, plus Settings. These Cockpit pages have no ship or experimental status in the scope:
 
@@ -112,16 +114,16 @@ Cockpit main navigation (`apps/mission-control-next/src/cockpit/app/routes.ts:13
 | Settings | Cockpit's General, Models, Safety, Citadel, Access, Advanced and first-run tabs |
 | First run | the optional tutorial (#810; `cockpit/app/CockpitApp.tsx:22`, `:45`; `areas/settings/FirstRunArea.tsx:39`) |
 
-Visual proof is only partial. `scripts/verification/lib/cockpit-visual-manifest.mjs:35-110` captures some Cockpit pages. It doesn't capture any Capabilities tab, `/scripts`, `/work/archive`, `/work/automation`, `/work/kanban`, `/system/sessions`, `/system/browser-sessions`, `/system/runtime/workers`, or the Library Knowledge, Communications, Journey, Curator and Citadel pages.
+The Cockpit visual manifest already exercises Chat, Inbox, Work Board, History and Schedules, several Library and System views, six Settings pages and first run. Its gaps include Capabilities tabs, Scripts, Work Archive, Automation and Kanban, System Sessions, Browser sessions and Workers, and Library Knowledge, Communications, Journey, Curator and Citadel.
 
 The contract also omits Scripts: its navigation lists at `docs/1_0_CONTRACT.md:32` and `:36` still read `Chat / Inbox / Work / Capabilities / Library / System / Settings`.
 
-Some routes in the scope doc changed in Cockpit. `/settings/integrations`, `/settings/channels`, `/ops/boards` and `/projects` are listed as standalone ship routes, but Cockpit redirects them: connectors go to Capabilities, boards to `/system/dashboards`, and `/projects` to Chat (`cockpit-compatibility.ts:70-87`). Classic still serves the originals.
+Some Classic paths have Cockpit destinations of their own. Cockpit opens integrations in Capabilities, channels in Chat Messaging, boards in `/system/dashboards`, and projects in `/chat/projects`. Classic still serves the originals. [Cockpit route adapter](../../apps/mission-control-next/src/cockpit/app/cockpit-compatibility.ts)
 
 **Suggested fix:**
 
-- Add the Cockpit pages to the scope table and `route-release-scope.ts`, each with ship, experimental or hide.
-- Bring the release-surface manifest and the Cockpit visual manifest up to that list, then rebaseline once.
+- Record Cockpit release status against its current route owners and preserve Classic rollback coverage.
+- Add deterministic behavior checks for missing launch paths. Keep existing visual scenarios and review intentional baseline changes individually.
 - Update the navigation lists in the contract.
 
 This is the largest single piece of work in the review, mostly because of the visual baselines.
@@ -214,7 +216,7 @@ The contract (`docs/1_0_CONTRACT.md:85-86`) says the Chat composer doesn't offer
   - It calls the Tauri host "rollback code during the Windows migration" (`:49`).
   - Its route count (49: 44 ship, 5 experimental) does match `route-release-scope.ts`, but see 4.4.
 - `docs/1_0_RELEASE_SURFACE_SCOPE.md` was last updated 2026-08-14.
-- `scripts/validate-governance-docs.mjs` checks only required headings in the evidence doc (`:54-59`) and a freshness date on the contract (`:408-415`). It doesn't check the dates or navigation wording of the evidence and scope docs.
+- At the reviewed revision, the governance checker pinned the evidence date to 2026-06-01. It checked the contract's freshness floor and the Classic route status counts. It omitted a freshness check for the scope doc and a Cockpit status comparison.
 - **Contract line 107** says provider secrets "may persist in local env or config files when secure-store persistence is unavailable or disabled". The code is stricter: that only happens by opt-in. The line could say so.
 
 ### 5.6 No whole-database upgrade test from an older release
@@ -235,7 +237,7 @@ The contract (`docs/1_0_CONTRACT.md:85-86`) says the Chat composer doesn't offer
 - `code-mode-seatbelt-macos` last ran on 2026-09-22.
 - Only the `verify:desktop` lane inside release proof is green.
 
-Even with signing out of scope, an unsigned installer build plus the install, upgrade and uninstall smoke should run green on the release SHA. The evidence doc (`:56`, `:188`) treats that unsigned smoke as what closes Windows packaging correctness.
+Windows acceptance requires the unsigned x64 and arm64 installers built from the exact release-candidate SHA. On each architecture, save clean install and first-launch evidence, run an unattended upgrade from a supported beta with representative data and settings preserved, and exercise uninstall. Record the source and candidate versions, installer digests, outcome and any retained-data behavior.
 
 ### 5.9 Live checks still owed
 
@@ -246,7 +248,7 @@ From recent work, these were merged but never checked in a running app:
 - the per-channel messaging tests, the Google Desktop-app sign-in, vendor MCP, Firecrawl self-hosted settings and the "Review answer" flow in Chat
 - the sidebar health line now reads "Core checks passing" in the baselines where it used to read "1 check needs review"; the cause was never established
 
-A short hands-on pass through install, first run, one provider, one channel and one approval on the release candidate would cover most of this.
+On the installed candidate, complete first run, send a real provider turn and inspect its model and result, deliver and receive a real message through a supported test channel, and resolve a governed approval while checking the resulting effect or denial. Record outcomes and held rows separately in the release-candidate evidence.
 
 ## 6. Nice to have
 
@@ -282,7 +284,7 @@ A short hands-on pass through install, first run, one provider, one channel and 
 1. **Get `main` green** (small, one PR each):
    - classify the `/api/v1/scripts` routes
    - resolve the Chat mobile-dark visual diff
-   - fix or retarget the Inbox → Work UX budgets step
+   - reproduce the Inbox → Work timeout and close the two Inbox question locator failures and Work Schedules accessibility failure
 2. **Stop it happening again:** run `auth:matrix`, `api:compat` and `surface:regression` on every PR, and `visual:regression` on UI PRs. Add `verify:chat-evolution` to a workflow and add a full-app route classification unit test.
 3. **Make the #651 decision**, then either wire the keys or fix the Vault and Ward copy and the contract.
 4. **Bring Cockpit into the release scope:**
@@ -292,19 +294,18 @@ A short hands-on pass through install, first run, one provider, one channel and 
    - handle the five dead connector entries and the "Explore workspace" entry
 5. **Fix the copy and docs:** cron copy and warning, the evidence doc, the scope doc, the contract's navigation and Council/Snapshot text, and the freshness checks.
 6. **Add an upgrade test** from a 0.9.x database (SQLite and Postgres) and a Postgres backup round trip.
-7. **Release candidate:**
-   - bump the version and changelog
-   - run release proof on the exact SHA
-   - build the unsigned installer and run its smoke
-   - do a hands-on pass through install, first run, one provider, one channel and one approval
+7. **Release-candidate acceptance:**
+   - settle the version and changelog, then run release proof on the exact candidate SHA
+   - run clean install, first launch, unattended beta upgrade with data preserved, and uninstall using the candidate's unsigned x64 and arm64 installers
+   - capture installed-candidate proof of one real provider turn, one real channel and one governed approval, including its resulting effect or denial
 
 ## Appendix A. CI evidence
 
 | Workflow | Branch | Latest result | Notes |
 |---|---|---|---|
-| Verification 1.0 Release Proof | `main` (schedule) | failure, run 44565653532 on `acd0709e4` | auth-matrix and visual-regression red; earlier failures 44345171140, 44129215961 |
-| Verification 1.0 Release Proof | `preview-0.9.2-beta.2` | failure, run 44678921380 | auth-matrix, architecture-metrics, visual-regression red |
-| Verification UX Budgets Nightly | `main` | failure (4 nights) | Inbox → Work trace request timeout |
+| Verification 1.0 Release Proof | `main` (schedule) | [44565653532](https://github.com/goatcitadel/GoatCitadel/actions/runs/44565653532) failed on `acd0709e4` | 21 of 23 matrix jobs and Trivy passed. Auth-matrix and visual-regression failed. Earlier failure runs were 44345171140 and 44129215961. |
+| Verification 1.0 Release Proof | `preview-0.9.2-beta.2` | [44678921380](https://github.com/goatcitadel/GoatCitadel/actions/runs/44678921380) failed on `627c83d8a` | Auth-matrix, architecture-metrics and visual-regression failed. Chat Evolution foundation job passed. |
+| Verification UX Budgets Nightly | `main` | [44572111734](https://github.com/goatcitadel/GoatCitadel/actions/runs/44572111734) failed | Inbox → Work trace wait timed out. The artifact also records two Inbox question locator failures and a Work Schedules accessibility failure. |
 | Verification Fast | `main` | success on the last six commits | a failure on `7935d1e5f` was not repeated |
 | CodeQL, Code Quality, Trivy, Code Mode canary | `main` | success | |
 | desktop-preview | — | disabled | |

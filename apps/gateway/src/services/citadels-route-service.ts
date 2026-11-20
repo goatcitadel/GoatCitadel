@@ -29,6 +29,7 @@ import type {
   CitadelTemplate,
   CitadelTemplateSnapshot,
   CitadelUpdateInput,
+  CitadelVaultCryptoAvailability,
   CitadelVaultMutation,
   CitadelVaultSnapshot,
   CitadelVaultSecretMetadata,
@@ -122,6 +123,7 @@ export class CitadelsRouteService {
     private readonly citadels: CitadelsRoutePort,
     private readonly masonInterpret?: MasonInterpret,
     private readonly vaultKey?: VaultKeyProvider,
+    private readonly vaultCryptoAvailability?: CitadelVaultCryptoAvailability,
   ) {}
 
   public async listRecords(view: CitadelLifecycleStatus | "all" = "active", limit = 200): Promise<CitadelRecord[]> {
@@ -160,12 +162,16 @@ export class CitadelsRouteService {
     return await this.citadels.getAccessSnapshot(citadelId);
   }
 
-  public async upsertCharter(input: CitadelCharterInput & { expectedRevision: string }): Promise<CitadelStructureSnapshot> {
+  public async upsertCharter(
+    input: CitadelCharterInput & { expectedRevision: string },
+  ): Promise<CitadelStructureSnapshot> {
     const { citadelId, expectedRevision, ...charter } = input;
     return await this.citadels.mutateStructure({ citadelId, expectedRevision, change: { type: "charter", charter } });
   }
 
-  public async createChamber(input: CitadelChamberInput & { expectedRevision: string }): Promise<CitadelStructureSnapshot> {
+  public async createChamber(
+    input: CitadelChamberInput & { expectedRevision: string },
+  ): Promise<CitadelStructureSnapshot> {
     const { citadelId, expectedRevision, ...chamber } = input;
     return await this.citadels.mutateStructure({ citadelId, expectedRevision, change: { type: "chamber", chamber } });
   }
@@ -178,15 +184,23 @@ export class CitadelsRouteService {
     return CITADEL_TEMPLATES.map(snapshotTemplate);
   }
 
-  public async createFromTemplate(citadelId: string, templateId: string, expectedRevision: string, expectedTemplateRevision: string): Promise<CitadelStructureSnapshot | undefined> {
+  public async createFromTemplate(
+    citadelId: string,
+    templateId: string,
+    expectedRevision: string,
+    expectedTemplateRevision: string,
+  ): Promise<CitadelStructureSnapshot | undefined> {
     const template = findCitadelTemplate(templateId);
     if (!template) {
       return undefined;
     }
     const reviewed = snapshotTemplate(template);
     if (reviewed.revision !== expectedTemplateRevision) {
-      throw new ConflictError({ code: "WRITE_CONFLICT", message: "This template changed. Review its current contents before applying it.",
-        details: { reason: "CITADEL_TEMPLATE_REVISION_CONFLICT" } });
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: "This template changed. Review its current contents before applying it.",
+        details: { reason: "CITADEL_TEMPLATE_REVISION_CONFLICT" },
+      });
     }
     return await this.citadels.mutateStructure(createCitadelTemplateMutation(citadelId, expectedRevision, reviewed));
   }
@@ -203,12 +217,21 @@ export class CitadelsRouteService {
     return validateCitadelBlueprint(value);
   }
 
-  public async createFromBlueprint(citadelId: string, value: unknown, expectedRevision: string): Promise<CitadelImportResult> {
+  public async createFromBlueprint(
+    citadelId: string,
+    value: unknown,
+    expectedRevision: string,
+  ): Promise<CitadelImportResult> {
     const validation = validateCitadelBlueprint(value);
     if (!validation.ok) {
       return { ok: false, errors: validation.errors };
     }
-    return { ok: true, citadel: await this.citadels.mutateStructure(createCitadelBlueprintMutation(citadelId, expectedRevision, value as CitadelBlueprint)) };
+    return {
+      ok: true,
+      citadel: await this.citadels.mutateStructure(
+        createCitadelBlueprintMutation(citadelId, expectedRevision, value as CitadelBlueprint),
+      ),
+    };
   }
 
   public async getGatehouse(citadelId: string): Promise<(CitadelGatehouseSummary & { wardCount: number }) | undefined> {
@@ -238,20 +261,26 @@ export class CitadelsRouteService {
   }
 
   public async getVaultSnapshot(citadelId: string): Promise<CitadelVaultSnapshot> {
-    return await this.citadels.getVaultSnapshot(citadelId);
+    return this.withVaultCryptoAvailability(await this.citadels.getVaultSnapshot(citadelId));
   }
 
   /** Seal a plaintext under the Citadel's master key and persist it. Fails closed if no key. */
-  public async storeVaultSecret(citadelId: string, secretName: string, plaintext: string, expectedRevision: string): Promise<VaultStoreResult> {
+  public async storeVaultSecret(
+    citadelId: string,
+    secretName: string,
+    plaintext: string,
+    expectedRevision: string,
+  ): Promise<VaultStoreResult> {
     const key = this.vaultKey?.(citadelId);
     if (!key) {
       return { ok: false, reason: "unavailable" };
     }
     const snapshot = await this.citadels.mutateVault({
-      citadelId, expectedRevision,
+      citadelId,
+      expectedRevision,
       change: { type: "store", secretName, sealedValue: sealValue(plaintext, key) },
     });
-    return { ok: true, snapshot };
+    return { ok: true, snapshot: this.withVaultCryptoAvailability(snapshot) };
   }
 
   /** Open a stored secret with the Citadel's master key. Fails closed if no key or undecryptable. */
@@ -272,8 +301,22 @@ export class CitadelsRouteService {
     }
   }
 
-  public async deleteVaultSecret(citadelId: string, secretId: string, expectedRevision: string): Promise<CitadelVaultSnapshot> {
-    return await this.citadels.mutateVault({ citadelId, expectedRevision, change: { type: "delete", secretId } });
+  public async deleteVaultSecret(
+    citadelId: string,
+    secretId: string,
+    expectedRevision: string,
+  ): Promise<CitadelVaultSnapshot> {
+    const snapshot = await this.citadels.mutateVault({
+      citadelId,
+      expectedRevision,
+      change: { type: "delete", secretId },
+    });
+    return this.withVaultCryptoAvailability(snapshot);
+  }
+
+  private withVaultCryptoAvailability(snapshot: CitadelVaultSnapshot): CitadelVaultSnapshot {
+    if (!this.vaultCryptoAvailability) return snapshot;
+    return { ...snapshot, keys: { ...snapshot.keys, cryptoAvailability: this.vaultCryptoAvailability } };
   }
 
   /** The Council is the set of existing agents assigned to this Citadel (by id). */
@@ -281,26 +324,54 @@ export class CitadelsRouteService {
     return await this.citadels.listCouncilAssignments(citadelId);
   }
 
-  public async assignAgent(input: CitadelCouncilAssignmentInput & { expectedRevision: string }): Promise<CitadelAccessSnapshot> {
+  public async assignAgent(
+    input: CitadelCouncilAssignmentInput & { expectedRevision: string },
+  ): Promise<CitadelAccessSnapshot> {
     const { citadelId, expectedRevision, ...assignment } = input;
-    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "assign_agent", assignment } });
+    return await this.citadels.mutateAccess({
+      citadelId,
+      expectedRevision,
+      change: { type: "assign_agent", assignment },
+    });
   }
 
-  public async unassignAgent(citadelId: string, agentId: string, expectedRevision: string): Promise<CitadelAccessSnapshot> {
-    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "unassign_agent", agentId } });
+  public async unassignAgent(
+    citadelId: string,
+    agentId: string,
+    expectedRevision: string,
+  ): Promise<CitadelAccessSnapshot> {
+    return await this.citadels.mutateAccess({
+      citadelId,
+      expectedRevision,
+      change: { type: "unassign_agent", agentId },
+    });
   }
 
   public async listPassages(sourceCitadelId: string): Promise<CitadelPassage[]> {
     return await this.citadels.listPassages(sourceCitadelId);
   }
 
-  public async createPassage(input: CitadelPassageInput & { expectedRevision: string }): Promise<CitadelAccessSnapshot> {
+  public async createPassage(
+    input: CitadelPassageInput & { expectedRevision: string },
+  ): Promise<CitadelAccessSnapshot> {
     const { sourceCitadelId: citadelId, expectedRevision, ...passage } = input;
-    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "create_passage", passage } });
+    return await this.citadels.mutateAccess({
+      citadelId,
+      expectedRevision,
+      change: { type: "create_passage", passage },
+    });
   }
 
-  public async removePassage(citadelId: string, passageId: string, expectedRevision: string): Promise<CitadelAccessSnapshot> {
-    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "remove_passage", passageId } });
+  public async removePassage(
+    citadelId: string,
+    passageId: string,
+    expectedRevision: string,
+  ): Promise<CitadelAccessSnapshot> {
+    return await this.citadels.mutateAccess({
+      citadelId,
+      expectedRevision,
+      change: { type: "remove_passage", passageId },
+    });
   }
 
   public async listMembers(citadelId: string): Promise<CitadelMember[]> {
@@ -312,8 +383,16 @@ export class CitadelsRouteService {
     return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "upsert_member", member } });
   }
 
-  public async removeMember(citadelId: string, subjectId: string, expectedRevision: string): Promise<CitadelAccessSnapshot> {
-    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "remove_member", subjectId } });
+  public async removeMember(
+    citadelId: string,
+    subjectId: string,
+    expectedRevision: string,
+  ): Promise<CitadelAccessSnapshot> {
+    return await this.citadels.mutateAccess({
+      citadelId,
+      expectedRevision,
+      change: { type: "remove_member", subjectId },
+    });
   }
 
   // --- The Mason: deterministic setup surface (§9/§10). Stages, never activates. ---
@@ -410,7 +489,9 @@ export class CitadelsRouteService {
     }
     const blueprint = value as CitadelBlueprint;
     const review = generateBlueprintReviewSummary(blueprint);
-    const citadel = await this.citadels.mutateStructure(createCitadelBlueprintMutation(citadelId, expectedRevision, blueprint));
+    const citadel = await this.citadels.mutateStructure(
+      createCitadelBlueprintMutation(citadelId, expectedRevision, blueprint),
+    );
     return { ok: true, citadel, review };
   }
 
@@ -429,22 +510,44 @@ export class CitadelsRouteService {
     return await this.citadels.listIntegrationGrants(citadelId);
   }
 
-  public async addIntegration(input: CitadelIntegrationGrantInput & { expectedRevision: string }): Promise<CitadelAccessSnapshot> {
+  public async addIntegration(
+    input: CitadelIntegrationGrantInput & { expectedRevision: string },
+  ): Promise<CitadelAccessSnapshot> {
     const { citadelId, expectedRevision, ...integration } = input;
-    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "add_integration", integration } });
+    return await this.citadels.mutateAccess({
+      citadelId,
+      expectedRevision,
+      change: { type: "add_integration", integration },
+    });
   }
 
-  public async removeIntegration(citadelId: string, grantId: string, expectedRevision: string): Promise<CitadelAccessSnapshot> {
-    return await this.citadels.mutateAccess({ citadelId, expectedRevision, change: { type: "remove_integration", grantId } });
+  public async removeIntegration(
+    citadelId: string,
+    grantId: string,
+    expectedRevision: string,
+  ): Promise<CitadelAccessSnapshot> {
+    return await this.citadels.mutateAccess({
+      citadelId,
+      expectedRevision,
+      change: { type: "remove_integration", grantId },
+    });
   }
 }
 
 function snapshotTemplate(template: CitadelTemplate): CitadelTemplateSnapshot {
   // Review and apply the same effective settings, including otherwise implicit defaults.
-  const resolved: CitadelTemplate = { ...template, riskPosture: template.riskPosture ?? "balanced",
+  const resolved: CitadelTemplate = {
+    ...template,
+    riskPosture: template.riskPosture ?? "balanced",
     modelPolicyDefault: template.modelPolicyDefault ?? "hybrid_guarded",
-    chambers: template.chambers.map((chamber) => ({ ...chamber, sensitivity: chamber.sensitivity ?? "private", sealed: chamber.sealed ?? false })),
+    chambers: template.chambers.map((chamber) => ({
+      ...chamber,
+      sensitivity: chamber.sensitivity ?? "private",
+      sealed: chamber.sealed ?? false,
+    })),
   };
-  const revision = createHash("sha256").update(JSON.stringify({ schemaVersion: "citadel.template.v1", template: resolved })).digest("hex");
+  const revision = createHash("sha256")
+    .update(JSON.stringify({ schemaVersion: "citadel.template.v1", template: resolved }))
+    .digest("hex");
   return { ...resolved, revision };
 }

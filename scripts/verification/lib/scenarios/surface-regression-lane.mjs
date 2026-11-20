@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { resolveReleaseSurfaceHref } from "../release-surface-manifest.mjs";
 import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 import { startDeterministicLlmStub } from "./deterministic-llm-stub.mjs";
@@ -69,7 +70,7 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
       gatewayMode: "built",
       uiMode: "preview",
       processLogPrefix: options.processLogPrefix,
-      gatewayEnvOmit: options.secretEnvKeys,
+      gatewayEnvOmit: [...(options.secretEnvKeys ?? []), "GOATCITADEL_VERIFY_VAULT_KEY_BASE64"],
       uiEnvOmit: options.secretEnvKeys,
       gatewayEnv: {
         GOATCITADEL_AUTH_MODE: "token",
@@ -143,6 +144,7 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
                 });
               }
               await performVerificationInteraction(page, route.interaction, verificationTarget.packageName);
+              const behaviorEvidence = await assertReleaseSurfaceBehavior(page, route.slug, fixture);
               const inspectorGeometry =
                 verificationTarget.isNext && route.slug === "ops-boards"
                   ? await assertOpsBoardInspectorGeometry(page)
@@ -162,7 +164,11 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
                 logCursor: browserLogCursor,
               });
               let degradedStateEvidence = null;
-              if (verificationTarget.isNext && route.releaseStatus === "experimental") {
+              if (
+                verificationTarget.isNext &&
+                route.releaseStatus === "experimental" &&
+                route.slug !== "library-citadel-vault"
+              ) {
                 const degradedLogCursor = browserLog.mark();
                 degradedStateEvidence = await assertExperimentalSurfaceDegradedState(page, {
                   gatewayUrl: stack.gatewayUrl,
@@ -196,6 +202,7 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
                   navigationRecoveryReason: navigationEvidence.recoveryReason,
                   navigationRecoveryDisposition: navigationEvidence.recoveryDisposition,
                   ...(inspectorGeometry ?? {}),
+                  ...behaviorEvidence,
                   ...(degradedStateEvidence ?? {}),
                   ...(nativeScrollEvidence
                     ? {
@@ -342,6 +349,99 @@ export async function runSurfaceRegressionLane(context, options = {}, deps) {
       await stub?.close();
     }
   }
+}
+
+async function assertReleaseSurfaceBehavior(page, slug, fixture) {
+  switch (slug) {
+    case "cockpit-capabilities-skills": {
+      const views = page.getByRole("tablist", { name: "Skills view" });
+      await views.getByRole("tab", { name: "Discover", exact: true }).click();
+      await page.waitForURL((url) => url.searchParams.get("view") === "discover");
+      await views.getByRole("tab", { name: "Discover", selected: true }).waitFor({ state: "visible" });
+      await views.getByRole("tab", { name: "Installed", exact: true }).click();
+      await views.getByRole("tab", { name: "Installed", selected: true }).waitFor({ state: "visible" });
+      return { skillsViews: ["discover", "installed"] };
+    }
+    case "cockpit-capabilities-plugins": {
+      await page.getByRole("button", { name: "Install from Git", exact: true }).click();
+      const repository = page.getByRole("textbox", { name: "Git repository address", exact: true });
+      await repository.waitFor({ state: "visible" });
+      assert.equal(new URL(page.url()).searchParams.get("item"), "plugin-source:git");
+      await page.keyboard.press("Escape");
+      await repository.waitFor({ state: "hidden" });
+      return { pluginGitFormOpenedAndClosed: true };
+    }
+    case "cockpit-capabilities-connectors": {
+      await page.getByRole("link", { name: "Advanced setup", exact: true }).click();
+      await page.waitForURL((url) => url.pathname === "/capabilities/connectors/advanced");
+      await page.getByRole("link", { name: "Back to Connectors", exact: true }).click();
+      await page.waitForURL((url) => url.pathname === "/capabilities/connectors");
+      return { connectorAdvancedLink: true };
+    }
+    case "cockpit-capabilities-connectors-advanced": {
+      const webSearch = page.getByRole("tab", { name: "Web & Search", exact: true });
+      await webSearch.click();
+      await page.waitForURL((url) => url.hash === "#web-search");
+      await page.getByRole("tab", { name: "Web & Search", selected: true }).waitFor({ state: "visible" });
+      await page.getByRole("checkbox", { name: "Use Firecrawl", exact: true }).waitFor({ state: "visible" });
+      return { connectorWebSearchSection: true };
+    }
+    case "cockpit-capabilities-tools": {
+      const tools = page.getByRole("heading", { name: "All tools", exact: true });
+      await tools.waitFor({ state: "visible" });
+      await page.getByRole("textbox", { name: "Tools search", exact: true }).fill("no matching verification tool");
+      await page.getByRole("heading", { name: "Nothing matches", exact: true }).waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "Clear search", exact: true }).click();
+      await tools.waitFor({ state: "visible" });
+      return { toolsFilterAndReset: true };
+    }
+    case "cockpit-scripts":
+      await assertScriptsInventory(page, fixture);
+      return { scriptInventory: "seeded-source-preview-and-retention-filter" };
+    case "library-citadel-vault": {
+      const main = page.locator("main");
+      await main
+        .getByText("Storing and revealing secrets are disabled in this release.", { exact: true })
+        .waitFor({ state: "visible" });
+      await main.getByRole("heading", { name: "Stored secrets", exact: true }).waitFor({ state: "visible" });
+      const store = main.getByRole("button", { name: "Store secret", exact: true });
+      await store.waitFor({ state: "visible" });
+      assert.equal(await store.isDisabled(), true, "a held Vault must disable storing secrets");
+      return { vaultCryptoAvailability: "release_hold" };
+    }
+    default:
+      return {};
+  }
+}
+
+async function assertScriptsInventory(page, fixture) {
+  assert.ok(fixture?.sessionId, "Scripts inventory proof needs the seeded Chat conversation");
+  const scripts = page.getByRole("region", { name: "Scripts", exact: true });
+  const matchingSource = page
+    .getByRole("link", { name: "Open source conversation", exact: true })
+    .and(page.locator(`a[href*="sessionId=${encodeURIComponent(fixture.sessionId)}"]`));
+  const item = scripts.getByRole("listitem").filter({ has: matchingSource, hasText: "Chat artifact" });
+  await item.waitFor({ state: "visible" });
+  const sourceLink = item.getByRole("link", { name: "Open source conversation", exact: true });
+  const sourceHref = new URL(await sourceLink.getAttribute("href"), page.url());
+  assert.equal(sourceHref.pathname, "/chat");
+  assert.equal(sourceHref.searchParams.get("sessionId"), fixture.sessionId);
+  assert.equal(sourceHref.searchParams.get("workspaceId"), fixture.workspaceId);
+  const retention = scripts.getByRole("combobox", { name: "Retention", exact: true });
+  await retention.selectOption("temporary");
+  await item.waitFor({ state: "hidden" });
+  await retention.selectOption("permanent");
+  const heading = item.getByRole("heading");
+  const title = (await heading.innerText()).trim();
+  await item.getByRole("button", { name: "Preview", exact: true }).click();
+  const preview = page.getByRole("dialog", { name: title, exact: true });
+  await preview
+    .getByText("Read-only preview. Scripts are never executed here.", { exact: true })
+    .waitFor({ state: "visible" });
+  const previewText = (await preview.locator("pre").innerText()).trim();
+  assert.notEqual(previewText, "", "the seeded artifact preview should contain text");
+  await page.keyboard.press("Escape");
+  await preview.waitFor({ state: "hidden" });
 }
 
 export async function assertExperimentalSurfaceLabel(page, routeSlug) {

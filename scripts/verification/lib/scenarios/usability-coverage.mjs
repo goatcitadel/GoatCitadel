@@ -74,8 +74,8 @@ const DEFAULT_SETTINGS_TEST_REFS = Object.freeze([
 
 export const EXPECTED_USABILITY_SURFACE_COUNTS = Object.freeze({
   routes: 49,
-  shipped: 44,
-  experimental: 5,
+  shipped: 43,
+  experimental: 6,
   redirects: 20,
   directCompatibility: 3,
 });

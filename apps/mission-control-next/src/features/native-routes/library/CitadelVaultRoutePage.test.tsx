@@ -169,6 +169,24 @@ describe("CitadelVaultRoutePage", () => {
     expect(markup).toContain("Vault");
   });
 
+  it("shows the release hold while keeping saved names inspectable in Classic", async () => {
+    const owner = vaultSnapshot();
+    apiMocks.getCitadelVaultSnapshot.mockResolvedValue({
+      ...owner,
+      keys: { ...owner.keys, cryptoAvailability: "release_hold" },
+    });
+    const renderer = await mountVault();
+    expect(treeString(renderer)).toContain("Storing and revealing secrets are disabled in this release.");
+    expect(buttonByLabel(renderer, "Store secret").props.disabled).toBe(true);
+    await act(async () => buttonByLabel(renderer, "Refresh Vault metadata").props.onClick());
+    expect(apiMocks.getCitadelVaultSnapshot).toHaveBeenCalledTimes(2);
+    await act(async () => buttonByLabel(renderer, "stripe").props.onClick());
+    expect(buttonByLabel(renderer, "Reveal").props.disabled).toBe(true);
+    expect(buttonByLabel(renderer, "Delete secret").props.disabled).toBe(false);
+    expect(apiMocks.revealCitadelVaultSecret).not.toHaveBeenCalled();
+    await act(async () => renderer.unmount());
+  });
+
   it("retains a conflicted draft and requires explicit metadata review before retry", async () => {
     const renderer = await mountVault();
     await openDraft(renderer);
@@ -274,7 +292,12 @@ describe("CitadelVaultRoutePage", () => {
     expect(inputByPlaceholder(renderer, "sk-live-…").props.value).toBe("synthetic-draft");
     expect(apiMocks.storeCitadelVaultSecret).toHaveBeenCalledTimes(1);
     if (status === 409) expect(buttonByLabel(renderer, "Seal & store").props.disabled).toBe(true);
-    else expect(treeString(renderer)).toContain("Vault unavailable");
+    else {
+      const shown = treeString(renderer);
+      expect(shown).toContain("Vault unavailable. Refresh its metadata to check the current state.");
+      expect(shown).not.toContain("keychain could not provide a key");
+      expect(shown).not.toContain("disabled in this release");
+    }
     await act(async () => renderer.unmount());
   });
 

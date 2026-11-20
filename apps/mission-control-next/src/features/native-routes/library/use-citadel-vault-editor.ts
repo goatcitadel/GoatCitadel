@@ -12,6 +12,7 @@ import { describeVaultError, useCitadelVaultReview } from "./useCitadelVaultRevi
 import { hasVaultSnapshot, sameVaultReview } from "./citadel-vault-binding";
 
 const EMPTY_SECRET = { name: "", value: "" };
+export const VAULT_CRYPTO_HOLD_MESSAGE = "Storing and revealing secrets are disabled in this release.";
 /** Shares only app-session input; plaintext never enters review or admission registries. */
 export function useCitadelVaultEditor(citadelId: string) {
   const vault = useCitadelVaultReview(citadelId);
@@ -39,7 +40,7 @@ export function useCitadelVaultEditor(citadelId: string) {
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const [revealErrors, setRevealErrors] = useState<Record<string, string>>({});
   const reviewRequired = vault.reviewRequired || secretDraft.hasRemoteChanges;
-  const canStore = vault.ready && !reviewRequired && !pendingStore;
+  const canStore = !vault.cryptoHeld && vault.ready && !reviewRequired && !pendingStore;
   const items = vault.snapshot?.items ?? [];
   const selectedSecret = items.find((item) => item.secretId === selectedSecretId);
   const clearReveals = useCallback(() => {
@@ -60,7 +61,7 @@ export function useCitadelVaultEditor(citadelId: string) {
   }, [vault.key, clearReveals]);
 
   const save = async (submitted: typeof EMPTY_SECRET, revision: string) => {
-    if (renderedGeneration !== actionGeneration.current) return false;
+    if (vault.cryptoHeld || renderedGeneration !== actionGeneration.current) return false;
     const captured = { ...submitted },
       generation = renderedGeneration;
     let draftClean = false;
@@ -113,6 +114,7 @@ export function useCitadelVaultEditor(citadelId: string) {
     if (saved) setSelectedSecretId(null);
   };
   const reveal = async (secretId: string) => {
+    if (vault.cryptoHeld) return;
     const generation = ++revealGeneration.current;
     setRevealed({});
     setRevealErrors({});
@@ -122,6 +124,7 @@ export function useCitadelVaultEditor(citadelId: string) {
       if (!current()) return;
       if (
         !hasVaultSnapshot(before, citadelId) ||
+        before.keys.cryptoAvailability === "release_hold" ||
         !before.items.some((item) => item.secretId === secretId) ||
         !vault.snapshot ||
         !sameVaultReview(before, vault.snapshot)
@@ -131,7 +134,12 @@ export function useCitadelVaultEditor(citadelId: string) {
       if (!current()) return;
       const after = await withFreshReads(() => getCitadelVaultSnapshot(citadelId));
       if (!current()) return;
-      if (typeof value !== "string" || !hasVaultSnapshot(after, citadelId) || !sameVaultReview(before, after))
+      if (
+        typeof value !== "string" ||
+        !hasVaultSnapshot(after, citadelId) ||
+        after.keys.cryptoAvailability === "release_hold" ||
+        !sameVaultReview(before, after)
+      )
         throw new Error("Changed metadata");
       setRevealed({ [secretId]: value });
     } catch (error) {

@@ -452,6 +452,46 @@ describe("Google Workspace sign-in", { timeout: 60_000 }, () => {
     await expect(ctx.service.resolveAccessToken(connectionId, "gmail.read")).resolves.toBe("old-access");
   });
 
+  it("preserves a newer connection revision when credential persistence fails", async () => {
+    const ctx = setup();
+    const { connectionId } = await googleConnection();
+    const flow = await ctx.service.start(connectionId, {
+      capabilities: ["gmail.read"],
+      clientSecret: "GOCSPX-desktop-secret",
+    });
+    ctx.google.nextToken = () =>
+      Response.json({ access_token: "new-access", refresh_token: "new-refresh", scope: GMAIL_READONLY });
+    const failure = new Error("keychain write failed");
+    vi.spyOn(ctx.secrets, "setSecret").mockImplementationOnce(() => {
+      throw failure;
+    });
+    const connections = syncStorage.integrationConnections;
+    const update = connections.update.bind(connections);
+    const newerClientId = "newer-desktop.apps.googleusercontent.com";
+    const updateSpy = vi.spyOn(connections, "update").mockImplementationOnce((id, input) => {
+      const updated = update(id, input);
+      update(id, {
+        expectedRevision: updated.revision,
+        status: "disconnected",
+        config: { ...updated.config, clientId: newerClientId, gmailRead: false },
+      });
+      return updated;
+    });
+
+    try {
+      await expect(ctx.service.complete(connectionId, { state: flow.state, code: "callback" })).rejects.toMatchObject({
+        name: "AggregateError",
+        errors: [failure, expect.any(Error)],
+      });
+    } finally {
+      updateSpy.mockRestore();
+    }
+    expect(await storage.integrationConnections.get(connectionId)).toMatchObject({
+      status: "disconnected",
+      config: { clientId: newerClientId, gmailRead: false },
+    });
+  });
+
   it("leaves the connection disconnected when its client ID changes during exchange", async () => {
     const ctx = setup();
     const { connectionId } = await googleConnection();

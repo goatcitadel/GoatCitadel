@@ -148,7 +148,18 @@ export async function runCockpitSettingsTabsProof({ context, browser, stack, cit
         await selectCockpitSettingsPage(page, { label: "Citadel", href: "/settings/citadel" });
         const tabs = page.getByRole("tablist", { name: "Citadel sections", exact: true });
         await tabs.waitFor();
-        assert.deepEqual(await tabs.getByRole("tab").allTextContents(), ["Citadel overview", "Workspaces", "Guided setup · Mason", "Rules · Wards", "Agents · Council", "Secrets · Vault", "Export/import · Blueprint"]);
+        assert.deepEqual(await tabs.getByRole("tab").allTextContents(), [
+          "Citadel overview",
+          "Workspaces",
+          "Guided setup · Mason",
+          "Rules · Wards",
+          "Agents · Council",
+          "Secrets · Vault · Experimental",
+          "Export/import · Blueprint",
+        ]);
+        await tabs.getByRole("tab", { name: "Secrets · Vault · Experimental", exact: true }).click();
+        await page.waitForURL(url => url.pathname === "/settings/citadel" && url.hash === "#citadel-vault");
+        await page.getByRole("region", { name: "Citadel Vault", exact: true }).waitFor();
         const last = tabs.getByRole("tab", { name: "Export/import · Blueprint", exact: true });
         await assertCitadelLastTabIdentity(last);
         const first = tabs.getByRole("tab", { name: "Citadel overview", exact: true });

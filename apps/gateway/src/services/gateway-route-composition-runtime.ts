@@ -73,6 +73,7 @@ export function composeRuntimeAdminRouteDependencies(
   | "citadels"
   | "masonInterpret"
   | "vaultKey"
+  | "vaultCryptoAvailability"
   | "cron"
   | "dashboard"
   | "daemon"
@@ -263,6 +264,7 @@ export function composeRuntimeAdminRouteDependencies(
         return "";
       }
     },
+    vaultCryptoAvailability: devVerificationVaultKey ? "available" : "release_hold",
     vaultKey: (): Buffer | undefined => {
       // The deterministic key is accepted only while the private dev-verification
       // surface is enabled. It keeps exact usability proof hermetic without

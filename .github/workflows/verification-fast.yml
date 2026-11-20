@@ -64,6 +64,7 @@ jobs:
       - name: Verify workflow and PowerShell syntax
         run: pnpm verify:workflows
 
+      # fast.smoke boots the full Gateway and requires classification for every tracked API route.
       - name: Run fast verification checks
         env:
           GOATCITADEL_STORAGE_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || (github.ref == 'refs/heads/main' && github.event.before) || '' }}

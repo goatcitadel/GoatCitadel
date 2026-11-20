@@ -229,6 +229,39 @@ describe("cockpit Back and Forward gate", () => {
     await settle();
     expect(here()).toBe("/work");
   });
+  it("keeps the Work destination when a closing Inbox sheet clears its selection", async () => {
+    const owner = register(false);
+    commitCockpitNavigation("/inbox?item=completed_background_run%3Awatcher");
+    const inbox = here();
+    deferTraversals();
+    const cleanup = registerCockpitSheetBack(() => {
+      queueMicrotask(() => commitCockpitNavigation("/inbox", { replace: true }));
+    });
+
+    commitCockpitNavigation("/work/runs/child-run");
+    await settle();
+    cleanup();
+    expect(here()).toBe("/work/runs/child-run?shell=cockpit");
+    window.history.back();
+    await settle();
+    expect(here()).toBe(inbox);
+    expect(owner.review).not.toHaveBeenCalled();
+  });
+  it("keeps the latest accepted destination when another navigation arrives during sheet restore", async () => {
+    register(false);
+    commitCockpitNavigation("/inbox?item=background-update");
+    deferTraversals();
+    const cleanup = registerCockpitSheetBack(() => {
+      queueMicrotask(() => commitCockpitNavigation("/inbox", { replace: true }));
+    });
+
+    commitCockpitNavigation("/work/runs/background-run");
+    commitCockpitNavigation("/settings/advanced");
+    await settle();
+    cleanup();
+
+    expect(here()).toBe("/settings/advanced?shell=cockpit");
+  });
   it("removes orphan sheet entries retained by a document reload before opening another sheet", async () => {
     register(false);
     commitCockpitNavigation("/settings/models#local-ai");

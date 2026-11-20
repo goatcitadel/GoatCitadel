@@ -32,7 +32,7 @@ export function scheduleSettingsInput(
         );
       if (!preservedConfig || canonicalJsonString(preservedConfig) !== canonicalJsonString(parsed))
         throw new Error(
-          "This native editor preserves existing no_agent/agent_turn configuration. Changed configuration must be made where that action is managed; no request has been sent.",
+          "Restore the saved action configuration before retrying. This editor preserves existing No agent and Agent turn configuration.",
         );
     } else {
       const config = parsed as Record<string, unknown>;
@@ -79,9 +79,9 @@ export function ScheduleAdvancedFields({
     <details className="border-t border-line-subtle pt-3">
       <summary className="cursor-pointer text-sm font-medium text-accent">Advanced job settings</summary>
       <p className="mt-2 text-sm text-fg-secondary">
-        Optional. Never put credentials here. Path, capability and approval rules still apply. Task and the other basic
-        actions take no action configuration. Watchdog takes a watchdog object with checkId, severityThreshold and
-        notifyHomeChannel; existing no_agent/agent_turn configuration is kept when unchanged.
+        These fields are optional. Keep credentials out of them. Watchdog uses an object with checkId, severityThreshold
+        and notifyHomeChannel. This editor preserves the saved configuration for No agent and Agent turn actions. Leave
+        action configuration empty for basic actions.
       </p>
       <div className="mt-3 grid gap-3">
         {(Object.keys(labels) as (keyof typeof labels)[]).map((key) => (

@@ -1,11 +1,12 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import { afterEach, expect, it, vi } from "vitest";
+import { installRouteAccessTracking, listMissingTrackedRouteAccessClasses } from "./route-access.js";
 import { scriptsRoutes } from "./scripts.js";
 const apps: ReturnType<typeof Fastify>[] = [];
 afterEach(async () => {
   for (const app of apps.splice(0)) await app.close();
 });
-function fixture() {
+function fixture(authSource: FastifyRequest["authActorSource"] = "loopback") {
   const item = {
     id: "a".repeat(64),
     workspaceId: "one",
@@ -31,14 +32,55 @@ function fixture() {
   };
   const app = Fastify();
   apps.push(app);
+  installRouteAccessTracking(app);
+  app.decorate("requireOperatorAuth", async () => {});
   app.decorate("services", services as never);
   app.addHook("onRequest", async (request) => {
     request.authActorId = "operator";
-    request.authActorSource = "loopback";
+    request.authActorSource = authSource;
   });
   app.register(scriptsRoutes);
   return { app, services, item };
 }
+it("explicitly classifies all Scripts routes and preserves their rate limits", async () => {
+  const { app } = fixture();
+  const rateLimits: Record<string, unknown> = {};
+  app.addHook("onRoute", ({ method, url, config }) => {
+    if (method !== "HEAD") rateLimits[`${method} ${url}`] = config?.rateLimit;
+  });
+  await app.ready();
+  const routes = app.routeAccessManifest.filter((entry) => entry.method !== "HEAD");
+  expect(routes).toEqual(
+    [
+      ["GET", "/api/v1/scripts"],
+      ["PATCH", "/api/v1/scripts/retention"],
+      ["GET", "/api/v1/scripts/:id/preview"],
+    ].map(([method, url]) => ({
+      method,
+      url,
+      accessClass: "operator",
+      classificationSource: "explicit",
+      tracked: true,
+    })),
+  );
+  expect(listMissingTrackedRouteAccessClasses(app)).toEqual([]);
+  expect(rateLimits).toEqual({
+    "GET /api/v1/scripts": { max: 120 },
+    "PATCH /api/v1/scripts/retention": { max: 60 },
+    "GET /api/v1/scripts/:id/preview": { max: 120 },
+  });
+});
+it.each(["token", "basic"] as const)("admits a direct local %s operator", async (source) => {
+  const { app } = fixture(source);
+  const response = await app.inject({ url: "/api/v1/scripts?workspaceId=one" });
+  expect(response.statusCode).toBe(200);
+});
+it.each(["none", "device", "companion"] as const)("denies local requests with auth source %s", async (source) => {
+  const { app, services } = fixture(source);
+  const response = await app.inject({ url: "/api/v1/scripts?workspaceId=one" });
+  expect(response.statusCode).toBe(403);
+  expect(services.scripts.list).not.toHaveBeenCalled();
+});
 it("requires a direct local operator, validates scope, and never reads foreign artifact content", async () => {
   const { app, services, item } = fixture();
   const remote = await app.inject({ url: "/api/v1/scripts?workspaceId=one", remoteAddress: "192.0.2.1" });

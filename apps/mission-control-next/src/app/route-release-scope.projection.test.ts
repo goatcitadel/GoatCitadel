@@ -75,6 +75,7 @@ const HIDDEN_RAW_KEYS = new Set<string>([
 const EXPERIMENTAL_RAW_KEYS = new Set<string>([
   "library/journey",
   "library/curator",
+  "library/citadel-vault",
   "ops/improvement",
   "ops/kanban",
   "settings/personalities",
@@ -175,7 +176,7 @@ describe("compact release metadata and full facade parity", () => {
     },
   );
 
-  it("retains default destinations and the one experimental rail exception", () => {
+  it("retains default destinations and the discoverable experimental routes", () => {
     for (const [route, key] of [
       [{ area: "library" }, "library/agents"],
       [{ area: "ops" }, "ops/activity"],
@@ -188,9 +189,10 @@ describe("compact release metadata and full facade parity", () => {
     const discoverable = routeModel.ROUTE_RELEASE_SCOPE.filter((scope) =>
       routeModel.isPrimaryRailRoute(routeFor(scope)),
     ).map(routeModel.getRouteReleaseKey);
+    const visibleExperimentalKeys = new Set(["settings/personalities", "library/citadel-vault"]);
     expect(discoverable).toEqual(
       EXPECTED_RAW_KEYS.filter(
-        (key) => !HIDDEN_RAW_KEYS.has(key) && (!EXPERIMENTAL_RAW_KEYS.has(key) || key === "settings/personalities"),
+        (key) => !HIDDEN_RAW_KEYS.has(key) && (!EXPERIMENTAL_RAW_KEYS.has(key) || visibleExperimentalKeys.has(key)),
       ),
     );
     expect(routeModel.isExperimentalRoute({ area: "settings", section: "personalities" })).toBe(true);

@@ -1,6 +1,10 @@
 import { useId, useState } from "react";
-import { useCitadelVaultEditor } from "../../../features/native-routes/library/use-citadel-vault-editor";
+import {
+  useCitadelVaultEditor,
+  VAULT_CRYPTO_HOLD_MESSAGE,
+} from "../../../features/native-routes/library/use-citadel-vault-editor";
 import { Button } from "../../ui/Button";
+import { Callout } from "../../ui/Callout";
 import { Sheet } from "../../ui/Sheet";
 import { Dialog } from "../../ui/Dialog";
 import { UnsavedChangesDialog } from "../../ui/UnsavedChangesDialog";
@@ -18,6 +22,11 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
     [search, setSearch] = useState(""),
     [limit, setLimit] = useState(50);
   const filtered = editor.items.filter((item) => item.secretName.toLowerCase().includes(search.toLowerCase()));
+  const holdNotice = vault.cryptoHeld ? (
+    <Callout tone="warning" announce={false}>
+      {VAULT_CRYPTO_HOLD_MESSAGE}
+    </Callout>
+  ) : null;
   const currentReview = editor.reviewRequired ? (
     <section aria-label="Current Vault review" className="space-y-2 rounded-md border border-status-waiting p-3">
       <p className="text-sm text-fg-secondary">
@@ -50,19 +59,19 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
       <header className="space-y-1">
         <h3 className="text-md font-semibold text-fg">{CITADEL_PAGE_LABELS["citadel-vault"]}</h3>
         <p className="text-sm text-fg-secondary">
-          Secrets for {vault.snapshot?.record?.name ?? "the selected Citadel"}. GoatCitadel seals values with a Citadel
-          key held in the OS keychain. Names and update times are listed here.
-        </p>
-        <p className="text-xs text-fg-muted">
-          Secret input stays in this app session until saved or discarded. This does not configure a provider or grant a
-          tool access to the secret.
+          Review stored secret names and update times for {vault.snapshot?.record?.name ?? "the selected Citadel"}.
         </p>
       </header>
+      {holdNotice}
       <div className="flex flex-wrap gap-2">
         <Button size="sm" disabled={vault.loading || editor.busy} onClick={() => void editor.refresh()}>
           Refresh Vault metadata
         </Button>
-        <Button size="sm" disabled={!vault.snapshot || vault.locked || vault.loading} onClick={editor.openForm}>
+        <Button
+          size="sm"
+          disabled={vault.cryptoHeld || !vault.snapshot || vault.locked || vault.loading}
+          onClick={editor.openForm}
+        >
           Store secret{editor.secretDraft.isDirty ? " · Unsaved" : ""}
         </Button>
       </div>
@@ -134,6 +143,7 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
         title="Store a secret"
       >
         <div className="space-y-3">
+          {holdNotice}
           {currentReview}
           {vault.error ? (
             <p role="alert" className="text-sm text-status-failed">
@@ -156,8 +166,8 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
             onChange={(event) => editor.setDraft((value) => ({ ...value, value: event.target.value }))}
           />
           <p className="text-xs text-fg-muted">
-            The value is sent only to the Vault when you seal and store. Replacing an existing name requires
-            confirmation.
+            Secret input stays in this app session until you seal and store it or discard it. Replacing an existing name
+            requires confirmation. Provider and tool access require separate configuration.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -181,10 +191,12 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
       >
         {selectedSecret ? (
           <div className="space-y-3">
-            <p className="text-sm text-fg-secondary">
-              Explicit reveals show the current value temporarily. It hides after 30 seconds, on refresh, or when this
-              inspection closes.
-            </p>
+            {holdNotice ?? (
+              <p className="text-sm text-fg-secondary">
+                Explicit reveals show the current value temporarily. It hides after 30 seconds, on refresh, or when this
+                inspection closes.
+              </p>
+            )}
             <dl className="space-y-1 text-xs text-fg-muted">
               <dt>Created</dt>
               <dd>
@@ -202,7 +214,7 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
             </TechnicalDetails>
             <div className="flex flex-wrap gap-2">
               <Button
-                disabled={vault.loading}
+                disabled={vault.loading || (vault.cryptoHeld && editor.revealed[selectedSecret.secretId] === undefined)}
                 onClick={() =>
                   editor.revealed[selectedSecret.secretId] === undefined
                     ? void editor.reveal(selectedSecret.secretId)
@@ -233,7 +245,11 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
       <Dialog
         open={editor.pendingStore !== null}
         title="Replace secret?"
-        description={`Replace "${editor.pendingStore?.draft.name.trim()}" with the value you entered? The previous value cannot be recovered.`}
+        description={
+          vault.cryptoHeld
+            ? VAULT_CRYPTO_HOLD_MESSAGE
+            : `Replace "${editor.pendingStore?.draft.name.trim()}" with the value you entered? The previous value cannot be recovered.`
+        }
         onOpenChange={(open) => {
           if (!open && !editor.busy) editor.cancelStore();
         }}
@@ -241,6 +257,7 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
         <div className="flex flex-wrap gap-2">
           <Button
             variant="danger"
+            disabled={vault.cryptoHeld}
             loading={editor.busy}
             onClick={() => {
               if (editor.pendingStore) void editor.save(editor.pendingStore.draft, editor.pendingStore.revision);
@@ -272,8 +289,7 @@ export function CitadelVaultSettings({ citadelId }: { citadelId: string }) {
       </Dialog>
       <UnsavedChangesDialog {...editor.leave.dialogProps} />
       <p className="text-xs text-fg-muted">
-        Per-Chamber keys and key rotation are not available here. Keychain unavailability blocks sealing and reveal; no
-        plaintext fallback is used.
+        Values stay sealed at rest. Per-Chamber keys and key rotation are unavailable.
       </p>
     </section>
   );

@@ -30,6 +30,9 @@ jobs:
           - laneScript: verify:runtime:truth
             artifactSlug: runtime-truth
             runner: ubuntu-24.04
+          - laneScript: verify:chat-evolution
+            artifactSlug: chat-evolution
+            runner: ubuntu-24.04
           - laneScript: verify:auth:matrix
             artifactSlug: auth-matrix
             runner: ubuntu-24.04

@@ -125,6 +125,9 @@ export type CitadelVaultStoredKeyMetadata = Pick<
   "kekVersion" | "kekRotatedAt" | "scopes" | "legacySecretCount" | "rotation"
 >;
 
+/** Gateway availability for storing and revealing secrets. Individual operations can still fail. */
+export type CitadelVaultCryptoAvailability = "release_hold" | "available";
+
 /** Reviews metadata and lifecycle only. No secret value or value-derived digest is returned. */
 export interface CitadelVaultSnapshot {
   citadelId: string;
@@ -132,7 +135,10 @@ export interface CitadelVaultSnapshot {
   record?: CitadelRecord;
   items: CitadelVaultSecretMetadata[];
   keys: CitadelVaultStoredKeyMetadata &
-    Partial<Pick<CitadelVaultKeyMetadata, "custody" | "keychainAvailable" | "kekState" | "legacyUnreadableCount">>;
+    Partial<Pick<CitadelVaultKeyMetadata, "custody" | "keychainAvailable" | "kekState" | "legacyUnreadableCount">> & {
+      /** Omitted by older Gateways and storage-only snapshots. */
+      cryptoAvailability?: CitadelVaultCryptoAvailability;
+    };
 }
 
 export type CitadelVaultChange =

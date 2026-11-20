@@ -585,7 +585,10 @@ export class GoogleWorkspaceOAuthService {
     });
   }
 
-  private writeConnection(connectionId: string, patch: Parameters<AsyncStorage["integrationConnections"]["update"]>[1]) {
+  private writeConnection(
+    connectionId: string,
+    patch: Parameters<AsyncStorage["integrationConnections"]["update"]>[1],
+  ) {
     return this.connections.update(connectionId, patch);
   }
 

@@ -84,7 +84,7 @@ test("every self-configuration command excludes configured secret environment ke
   assert.equal(storage.env, undefined);
 });
 
-test("self-configuration lane is wired as a degraded reviewed lane and package command", () => {
+test("self-configuration lane is wired as a reviewed lane and package command", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
   const runner = fs.readFileSync(path.join(repoRoot, "scripts", "verification", "run.mjs"), "utf8");
   const scenarios = fs.readFileSync(path.join(repoRoot, "scripts", "verification", "lib", "scenarios.mjs"), "utf8");
@@ -100,7 +100,6 @@ test("self-configuration lane is wired as a degraded reviewed lane and package c
   assert.match(runner, /"self-configuration"/u);
   assert.match(runner, /runSelfConfigurationLane\(context/u);
   assert.match(scenarios, /runSelfConfigurationLaneImpl/u);
-  assert.match(lane, /status: "degraded"/u);
   assert.match(lane, /runtime-configuration-approval-binding\.test\.ts/u);
   assert.match(lane, /evolution-control-plane-service\.test\.ts/u);
   assert.match(lane, /chat-change-plan-compatibility-service\.test\.ts/u);

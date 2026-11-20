@@ -5,16 +5,15 @@ import { NativeCard, NativeGrid, NativePageFrame } from "../NativeRoutePageLayou
 import { EmptyState, NativeButton, NoticeBanner } from "../primitives";
 import { DetailInspector } from "../../../components/DetailInspector";
 
-import { routeKicker } from "@next/app/route-model";
+import { getRouteReleaseScope, routeKicker } from "@next/app/route-model";
 import type { NativeRoutePagesProps } from "../types";
-import { useCitadelVaultEditor } from "./use-citadel-vault-editor";
+import { useCitadelVaultEditor, VAULT_CRYPTO_HOLD_MESSAGE } from "./use-citadel-vault-editor";
 import { CitadelVaultReview } from "./CitadelVaultReview";
 import "./citadel-confirmation.css";
 
 /**
- * The Vault (spec §13 MVP). Secrets are sealed with AES-256-GCM under a per-Citadel
- * master key held in the OS keychain; the plaintext is never persisted. The list
- * shows names only — revealing a value is an explicit, per-secret action.
+ * The Vault lists stored metadata. Revealing a value requires Gateway crypto
+ * availability and an explicit per-secret action.
  */
 export function CitadelVaultRoutePage({
   route,
@@ -49,6 +48,7 @@ export function CitadelVaultRoutePage({
     remove,
     reveal,
   } = editor;
+  const holdNotice = vault.cryptoHeld ? <NoticeBanner tone="info" message={VAULT_CRYPTO_HOLD_MESSAGE} /> : null;
   const currentReview = reviewRequired ? (
     <CitadelVaultReview
       snapshot={vault.snapshot}
@@ -64,18 +64,23 @@ export function CitadelVaultRoutePage({
       area="library"
       kicker={routeKicker(route)}
       title="Vault"
-      description={`Secrets for ${activeCitadelName}, sealed at rest under a per-Citadel key in your OS keychain. Names are listed; values are revealed only on request.`}
+      description={`Review stored secret names and update times for ${activeCitadelName}.`}
+      releaseStatus={getRouteReleaseScope(route).status}
       loading={vault.loading && !vault.snapshot && !reviewRequired}
       error={!vault.snapshot && !reviewRequired ? vault.error : null}
       onRetry={() => void editor.refresh()}
     >
+      {holdNotice}
       {!formOpen ? currentReview : null}
       {vault.error && !formOpen ? <NoticeBanner tone="error" message={vault.error} /> : null}
       {vault.snapshot?.record?.lifecycleStatus === "archived" ? (
         <NoticeBanner tone="warning" message="Restore this Citadel before changing its Vault." />
       ) : null}
       <div className="mc-next-settings-button-row">
-        <NativeButton disabled={busy || !vault.snapshot} onClick={editor.openForm}>
+        <NativeButton disabled={vault.loading || busy} onClick={() => void editor.refresh()}>
+          Refresh Vault metadata
+        </NativeButton>
+        <NativeButton disabled={vault.cryptoHeld || busy || !vault.snapshot} onClick={editor.openForm}>
           Store secret{secretDraft.isDirty ? " · Unsaved" : ""}
         </NativeButton>
       </div>
@@ -110,6 +115,7 @@ export function CitadelVaultRoutePage({
           subtitle={secretDraft.isDirty ? "Unsaved changes" : undefined}
           onClose={closeDetails}
         >
+          {holdNotice}
           {currentReview}
           {vault.error ? <NoticeBanner tone="error" message={vault.error} /> : null}
           <label className="mc-next-mason-field" htmlFor={nameId}>
@@ -148,11 +154,12 @@ export function CitadelVaultRoutePage({
       <DetailInspector
         open={Boolean(selectedSecret)}
         title={selectedSecret?.secretName ?? "Secret"}
-        subtitle="Vault value · hides after 30 seconds or closing"
+        subtitle={vault.cryptoHeld ? undefined : "Vault value · hides after 30 seconds or closing"}
         onClose={closeDetails}
       >
         {selectedSecret ? (
           <>
+            {holdNotice}
             <dl className="mc-next-native-facts">
               {Object.entries(selectedSecret).map(([key, value]) => (
                 <div key={key}>
@@ -163,6 +170,7 @@ export function CitadelVaultRoutePage({
             </dl>
             <div className="mc-next-settings-button-row">
               <NativeButton
+                disabled={vault.cryptoHeld && revealed[selectedSecret.secretId] === undefined}
                 onClick={() =>
                   revealed[selectedSecret.secretId] === undefined
                     ? void reveal(selectedSecret.secretId)
@@ -218,7 +226,12 @@ export function CitadelVaultRoutePage({
         danger
         pending={busy}
         title="Replace secret?"
-        message={`Replace "${pendingStore?.draft.name.trim()}" with the value you entered? The previous value cannot be recovered.`}
+        message={
+          vault.cryptoHeld
+            ? VAULT_CRYPTO_HOLD_MESSAGE
+            : `Replace "${pendingStore?.draft.name.trim()}" with the value you entered? The previous value cannot be recovered.`
+        }
+        confirmDisabled={vault.cryptoHeld}
         confirmLabel="Replace secret"
         onCancel={editor.cancelStore}
         onConfirm={() => {
@@ -227,8 +240,7 @@ export function CitadelVaultRoutePage({
       />
       <p className="mc-next-citadel-footnote">
         <Lock size={12} aria-hidden="true" />
-        AES-256-GCM, sealed under a per-Citadel key in your OS keychain. Per-Chamber keys and rotation are the deferred
-        follow-on.
+        Values stay sealed at rest. Per-Chamber keys and key rotation are unavailable.
       </p>
     </NativePageFrame>
   );
