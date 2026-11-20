@@ -888,12 +888,13 @@ describe("tool executor edge coverage", () => {
           headers: { location: "https://example.com/second-mutate" },
         });
       }
+      // Use the default retry delay so both abort cases reach the retry wait.
       if (mode === "abort-retry") {
-        return new Response("retry", { status: 503, headers: { "retry-after": "1" } });
+        return new Response("retry", { status: 503 });
       }
       if (mode === "abort-event") {
         setTimeout(() => eventAbortController?.abort(new Error("event abort")), 0);
-        return new Response("retry", { status: 503, headers: { "retry-after": "1" } });
+        return new Response("retry", { status: 503 });
       }
       return new Response("ok", { status: 200, headers: { "content-type": "text/plain" } });
     });
@@ -978,6 +979,7 @@ describe("tool executor edge coverage", () => {
       storageStub(),
     );
     await expect(aborted).rejects.toThrow(/stop retry/i);
+    expect(calls).toBe(1);
 
     mode = "abort-event";
     calls = 0;
@@ -988,6 +990,7 @@ describe("tool executor edge coverage", () => {
         storageStub(),
       ),
     ).rejects.toThrow(/event abort/i);
+    expect(calls).toBe(1);
   });
 
   it("rejects shell script syntax in both shell tools before spawning anything", async () => {

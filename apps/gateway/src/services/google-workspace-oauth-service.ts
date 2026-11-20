@@ -19,6 +19,7 @@ import {
   type GoogleWorkspaceOAuthStartResponse,
   type GoogleWorkspaceOAuthStatus,
   type IntegrationConnection,
+  type IntegrationConnectionUpdateInput,
   type ToolInvokeRequest,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
@@ -272,8 +273,7 @@ export class GoogleWorkspaceOAuthService {
       if (readClientId(current.config) !== flow.clientId) {
         throw new ConflictError({ message: "The OAuth client ID changed during sign-in. Start Connect Google again." });
       }
-      const updated = await this.connections.update(connectionId, {
-        expectedRevision: current.revision,
+      const updated = await this.updateConnection(current, {
         status: "connected",
         lastError: null,
         config: {
@@ -302,8 +302,7 @@ export class GoogleWorkspaceOAuthService {
       } catch (error) {
         try {
           // Restore only the revision written by this sign-in. A newer settings change takes precedence.
-          await this.connections.update(connectionId, {
-            expectedRevision: updated.revision,
+          await this.updateConnection(updated, {
             status: current.status,
             lastError: current.lastError ?? null,
             config: current.config,
@@ -326,7 +325,8 @@ export class GoogleWorkspaceOAuthService {
       this.assertKeychainAvailable();
       this.signOut(connectionId);
       const { revoked, message } = await this.revokeAndForget(connectionId);
-      await this.updateConnection(connectionId, () => ({ status: "disconnected", lastError: null }));
+      const current = await this.readConnection(connectionId);
+      await this.updateConnection(current, { status: "disconnected", lastError: null });
       return { status: await this.getStatus(connectionId), revoked, message };
     });
   }
@@ -570,18 +570,13 @@ export class GoogleWorkspaceOAuthService {
     return connection;
   }
 
-  private async updateConnection(
-    connectionId: string,
-    patch: (current: IntegrationConnection) => {
-      status: IntegrationConnection["status"];
-      lastError: null;
-      config?: Record<string, unknown>;
-    },
-  ): Promise<void> {
-    const current = await this.readConnection(connectionId);
-    await this.connections.update(connectionId, {
+  private updateConnection(
+    current: IntegrationConnection,
+    patch: Pick<IntegrationConnectionUpdateInput, "status" | "lastError" | "config">,
+  ): Promise<IntegrationConnection> {
+    return this.connections.update(current.connectionId, {
+      ...patch,
       expectedRevision: current.revision,
-      ...patch(current),
     });
   }
 
