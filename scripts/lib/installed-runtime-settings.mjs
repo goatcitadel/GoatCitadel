@@ -94,7 +94,7 @@ export async function initializeInstalledRuntimeSettings(installRoot) {
 // Only unconfigured profiles participate. Existing databases, credentials and operator
 // choices are never migrated. The canonical config is published first: if interrupted,
 // Gateway's normal config sync repairs the split projection from that durable owner.
-async function initializeFreshDatabasePort(installRoot) {
+export async function initializeFreshDatabasePort(installRoot) {
   const configDir = path.join(installRoot, "runtime-root", "config");
   const canonicalPath = path.join(configDir, "goatcitadel.json");
   const assistantPath = path.join(configDir, "assistant.config.json");

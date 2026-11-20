@@ -23,6 +23,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   spawnSyncMock.mockReset();
   if (originalPlatform) {
     Object.defineProperty(process, "platform", originalPlatform);
@@ -35,6 +36,23 @@ afterEach(() => {
 });
 
 describe("SecretStoreService", () => {
+  it("keeps Windows reads and custody checks inside the selected desktop profile", () => {
+    setPlatform("win32");
+    const profile = `goatcitadel.desktop.${"a".repeat(64)}.11111111-2222-4333-8444-555555555555`;
+    vi.stubEnv("GOATCITADEL_WINDOWS_PROFILE_RESOURCE", profile);
+    const service = new SecretStoreService();
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0 } as never)
+      .mockReturnValueOnce({ status: 3, stdout: "", stderr: "" } as never)
+      .mockReturnValueOnce({ status: 0, stdout: "b".repeat(64), stderr: "" } as never);
+
+    expect(service.getProviderApiKey("openai")).toBeUndefined();
+    expect(service.getCredentialCustodyId()).toBe("b".repeat(64));
+    for (const [, , options] of spawnSyncMock.mock.calls.slice(1)) {
+      expect(options?.env?.GOATCITADEL_SECRET_SERVICE).toBe(profile);
+    }
+  });
+
   it("keeps the completed-write receipt with its value in the original keychain slot", () => {
     setPlatform("win32");
     const id = "11111111-2222-4333-8444-555555555555", secret = "  private-receipt-value  ";

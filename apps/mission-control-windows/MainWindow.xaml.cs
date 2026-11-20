@@ -52,6 +52,8 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
 
         _launcherService = new LauncherService();
+        _profileInstallRoot = ResolveProfileInstallRoot();
+        ProfileRecoveryButton.Visibility = _profileInstallRoot is null ? Visibility.Collapsed : Visibility.Visible;
         _startupDiagnostics = DesktopStartupDiagnostics.TryCreate(_launcherService);
         _runtimeStatusService = new RuntimeStatusService(_launcherService);
         _eventStreamService = new EventStreamService(_runtimeStatusService);
@@ -110,6 +112,11 @@ public sealed partial class MainWindow : Window
         _appWindow.Title = "GoatCitadel Mission Control";
         _appWindow.Closing += (_, args) =>
         {
+            if (_profileRecoveryChanging)
+            {
+                args.Cancel = true;
+                return;
+            }
             if (_allowClose || !_trayAvailable)
             {
                 return;
@@ -155,6 +162,8 @@ public sealed partial class MainWindow : Window
             StopRuntime = () => DispatcherQueue.TryEnqueue(() => _ = StopRuntimeAsync()),
             OpenLogs = () => DispatcherQueue.TryEnqueue(OpenLogs),
             OpenInstallFolder = () => DispatcherQueue.TryEnqueue(OpenInstallFolder),
+            ProfileRecovery = _profileInstallRoot is null ? null
+                : () => DispatcherQueue.TryEnqueue(() => _ = ShowProfileRecoveryAsync()),
             Quit = () => DispatcherQueue.TryEnqueue(Quit),
         });
         _trayAvailable = true;
@@ -184,24 +193,26 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var configuredUserDataFolder = Environment.GetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER");
-            var userDataFolder = string.IsNullOrWhiteSpace(configuredUserDataFolder)
-                ? Path.Join(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "GoatCitadel",
-                    "WebView2")
-                : Path.GetFullPath(configuredUserDataFolder);
+            var view = MissionWebView;
+            var userDataFolder = ResolveWebViewDataFolder(out var isScoped);
             Directory.CreateDirectory(userDataFolder);
+            if (!string.IsNullOrWhiteSpace(_configuredWebViewDataFolder))
+                Environment.SetEnvironmentVariable("WEBVIEW2_USER_DATA_FOLDER", userDataFolder);
             // Elevated WebView2 hosts ignore environment overrides. Supply the selected
             // profile through the supported API without enabling any debug switches.
             var environment = await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateWithOptionsAsync(
                 null, userDataFolder, null);
-            await MissionWebView.EnsureCoreWebView2Async(environment, null);
+            if (isScoped && !string.Equals(Path.TrimEndingDirectorySeparator(environment.UserDataFolder),
+                Path.TrimEndingDirectorySeparator(userDataFolder), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("WebView2 selected a different storage folder for this profile.");
+            await view.EnsureCoreWebView2Async(environment, null);
             if (_cleanedUp) return;
+            _webViewDataFolder = userDataFolder;
             _startupDiagnostics?.RecordPhase("webview-initialized", browserVersion: environment.BrowserVersionString);
-            MissionWebView.CoreWebView2.WebMessageReceived += MissionWebView_WebMessageReceived;
-            MissionWebView.CoreWebView2.NavigationStarting += (_, args) =>
+            view.CoreWebView2.WebMessageReceived += MissionWebView_WebMessageReceived;
+            view.CoreWebView2.NavigationStarting += (_, args) =>
             {
+                if (!ReferenceEquals(view, MissionWebView)) { args.Cancel = true; return; }
                 _webViewNavigationSucceeded = false;
                 _startupDiagnostics?.RecordPhase("navigating");
                 if (!NavigationPolicy.TryValidateBrowserTarget(args.Uri, out var ignoredUri, out var error))
@@ -210,20 +221,21 @@ public sealed partial class MainWindow : Window
                     ShowToast(error);
                 }
             };
-            MissionWebView.CoreWebView2.NavigationCompleted += (_, args) =>
+            view.CoreWebView2.NavigationCompleted += (_, args) =>
             {
+                if (!ReferenceEquals(view, MissionWebView)) return;
                 _webViewNavigationSucceeded = args.IsSuccess;
                 RecordWebViewNavigation();
             };
-            MissionWebView.CoreWebView2.DocumentTitleChanged += (_, _) =>
+            view.CoreWebView2.DocumentTitleChanged += (_, _) =>
             {
-                if (_webViewNavigationSucceeded) RecordWebViewNavigation();
+                if (ReferenceEquals(view, MissionWebView) && _webViewNavigationSucceeded) RecordWebViewNavigation();
             };
-            MissionWebView.CoreWebView2.NewWindowRequested += (_, args) =>
+            view.CoreWebView2.NewWindowRequested += (_, args) =>
             {
                 // Never let window.open / target=_blank spawn an off-allowlist popup WebView.
                 args.Handled = true;
-                TryAction(() => OpenTargetService.OpenBrowserPopup(args.Uri));
+                if (ReferenceEquals(view, MissionWebView)) TryAction(() => OpenTargetService.OpenBrowserPopup(args.Uri));
             };
             _webViewReady = true;
         }
@@ -316,7 +328,7 @@ public sealed partial class MainWindow : Window
 
     private async Task LaunchRuntimeAsync()
     {
-        if (_cleanedUp) return;
+        if (_cleanedUp || _profileRecoveryChanging) return;
         var observation = _runtimeLifecycle.BeginTransition();
         _webViewInitializationTask ??= InitializeWebViewAsync(observation);
         _deferredRoutes.MarkUnavailable();
@@ -490,7 +502,7 @@ public sealed partial class MainWindow : Window
 
     private async Task<bool> StopRuntimeAsync()
     {
-        if (_cleanedUp) return false;
+        if (_cleanedUp || _profileRecoveryChanging) return false;
         var observation = _runtimeLifecycle.BeginStop();
         _deferredRoutes.MarkUnavailable();
         StopRuntimeStatusPolling();
@@ -540,6 +552,13 @@ public sealed partial class MainWindow : Window
 
     private async Task EnsureWebViewReadyAsync(DesktopRuntimeObservation observation)
     {
+        if (_webViewInitializationTask is not null) await _webViewInitializationTask;
+        if (!_runtimeLifecycle.IsCurrent(observation)) return;
+        if (_webViewDataFolder is not null && !string.Equals(
+            _webViewDataFolder, ResolveWebViewDataFolder(out _), StringComparison.OrdinalIgnoreCase))
+        {
+            ReplaceWebView();
+        }
         _webViewInitializationTask ??= InitializeWebViewAsync(observation);
         await _webViewInitializationTask;
         if (!_webViewReady) _webViewInitializationTask = null;
@@ -725,6 +744,7 @@ public sealed partial class MainWindow : Window
 
     private void Quit()
     {
+        if (_profileRecoveryChanging) return;
         _allowClose = true;
         CleanupForExit();
         Close();
