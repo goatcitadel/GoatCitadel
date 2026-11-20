@@ -2,6 +2,7 @@
 import { observeActiveCronAgentRun, reconcileCompletedCronChannelDelivery } from "./cron-channel-reconciliation.js";
 import { requireClaimedCommitmentOccurrence } from "../scheduled-cron-storage-guards.js";
 import { createHash, randomUUID } from "node:crypto";
+import { ScheduledChatProviderRouteError } from "../chat-feature-admission-service.js";
 import {
   canReadCitadel,
   isCronRunTerminalStatus,
@@ -854,17 +855,26 @@ export class CronAutomationService {
     ) {
       throw new Error(`Cron run ${current.runId} lost execution ownership before child launch.`);
     }
-    const admittedSummary = await runAgentTurnCronJob({
-      job,
-      workspaceId,
-      normalizedJobId: current.jobId,
-      runId: current.runId,
-      cronRun: token,
-      runHandler: this.deps.runHandlers.agentTurn,
-      attachDeterministicChild: async (executionToken, linkage, attachedAt) =>
-        await this.deps.storage.cronRuns.attachDeterministicChild(executionToken, linkage, attachedAt),
-      publishRealtime: this.deps.publishRealtime,
-    });
+    let admittedSummary;
+    try {
+      admittedSummary = await runAgentTurnCronJob({
+        job,
+        workspaceId,
+        normalizedJobId: current.jobId,
+        runId: current.runId,
+        cronRun: token,
+        runHandler: this.deps.runHandlers.agentTurn,
+        attachDeterministicChild: async (executionToken, linkage, attachedAt) =>
+          await this.deps.storage.cronRuns.attachDeterministicChild(executionToken, linkage, attachedAt),
+        publishRealtime: this.deps.publishRealtime,
+      });
+    } catch (error) {
+      if (!(error instanceof ScheduledChatProviderRouteError)) throw error;
+      await this.settleCanonicalAgentTurnCronRun(current, "failed", {
+        failureMessage: error.message,
+      });
+      throw error;
+    }
     if (admittedSummary.mode === "inbox") {
       return await this.settleCanonicalAgentTurnCronRun(current, "completed", { outcome: admittedSummary });
     }
@@ -1091,8 +1101,8 @@ export class CronAutomationService {
       action: current.action,
       runId: current.runId,
       canonicalStatus: status,
-      childDurableRunId: current.childDurableRunId,
-      deliveryRunId: current.deliveryRunId,
+      ...(current.childDurableRunId ? { childDurableRunId: current.childDurableRunId } : {}),
+      ...(current.deliveryRunId ? { deliveryRunId: current.deliveryRunId } : {}),
     };
     const evidenceEnvelopeId = await this.recordCronRunEvidence(
       job,

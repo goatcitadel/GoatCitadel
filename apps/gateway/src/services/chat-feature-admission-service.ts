@@ -89,6 +89,15 @@ export interface ChatFeatureAdmissionHost {
   }): Promise<import("@goatcitadel/contracts").ChatRemotePlacement | undefined>;
 }
 
+/** Raised before a scheduled occurrence creates a durable Chat child. */
+export class ScheduledChatProviderRouteError extends ConflictError {
+  constructor() {
+    super({
+      message: "Scheduled Chat could not verify its provider and model. Check the provider settings before scheduling again.",
+    });
+  }
+}
+
 export async function resolveChatFeatureAdmission(
   host: ChatFeatureAdmissionHost,
   input: Parameters<NonNullable<ChatTurnPrepHost["resolveChatFeatureAdmission"]>>[0],
@@ -277,6 +286,7 @@ export async function resolveChatFeatureAdmission(
         : undefined;
     const fingerprint = primary ? host.routeFingerprint(primary) : undefined;
     if (primary && fingerprint) references.providerRoute = { primary, fingerprint };
+    else if (input.scheduledOccurrence) throw new ScheduledChatProviderRouteError();
     else if (!routeIndependentOnly)
       throw new ConflictError({
         message: primary

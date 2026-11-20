@@ -606,6 +606,11 @@ scope, and submits the native resume action after the exact approval effect
 completes. Activation history binds the operator's approval to the candidate,
 version and observed outcome. The independent verifier requires the native launch
 receipt referenced by the permission review as well as the workflow receipts.
+On profile-free Chat, the adapter reads the skill selection through the
+durable run's exact admission binding using the isolated SQLite repositories
+in read-only mode. It explicitly selects the reviewed skill in the reuse
+session and checks the version, instruction artifact hash, and rendered
+instruction hash against that admission.
 The campaign and fixture share an evidence reader that verifies all raw snapshots
 against the existing phase bundles before referencing those bundles. It preserves
 repeated polls and concurrent completion order, requires exact binding and hashes,
@@ -778,13 +783,14 @@ launch profiles still do not launch scheduled-delivery campaigns automatically.
 
 The separate `agent-comparison-goat-delivery-conformance.mjs` command exercises a
 fresh built Gateway with synthetic model and Telegram transports and a task-owned
-runtime restart. It accepts an absolute checkout and a new absolute output
-directory. It uses no real provider credentials or external message destination.
+runtime restart before the reminder is due and another after delivery. It
+accepts an absolute checkout and a new absolute output directory. It uses no
+real provider credentials or external message destination.
 The latest controlled working-build run passed all four scheduled-delivery checks
 with one simulated Telegram acknowledgement. The queue's per-part journal binds
 the approval and provider receipt, and delivery evidence remains stable for 30
 seconds after closing and reopening Gateway over the same persisted state. The
-supervisor process stays alive during this particular restart. These controlled
+supervisor process stays alive across both Gateway restarts. These controlled
 results do not establish live delivery or a clean-pinned cross-product comparison.
 See the [handoff and reconnect evidence](COMPARISON_IMPLEMENTATION_STATUS.md#queued-approval-handoff-and-reconnect-proof).
 

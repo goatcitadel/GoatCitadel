@@ -33,8 +33,9 @@ export async function executeGoatComparisonSkillWorkflow({
   signal,
   onApprovalReady,
   onReview,
+  readAdmittedSkills,
   fetchImpl = fetch,
-  pollMs = 1000,
+  pollMs = 2500,
 }) {
   requireValue(
     typeof onReview === "function" && typeof onApprovalReady === "function",
@@ -149,8 +150,22 @@ export async function executeGoatComparisonSkillWorkflow({
     "source-profile",
     `/chat/sessions/${source.sessionId}/turns/${sourceTurn.turnId}/capability-profile?workspaceId=${scope.workspaceId}`,
   );
+  const readSelection = async (envelope, result, turn) => {
+    if (envelope.state !== "legacy_missing" || !readAdmittedSkills) return envelope;
+    const receipt = await readAdmittedSkills({
+      runId: id(turn.trace.durable?.runId),
+      sessionId: result.sessionId,
+      turnId: turn.turnId,
+      workspaceId: scope.workspaceId,
+    });
+    await save("admitted-skill-receipt", { body: receipt });
+    return { state: "available", profile: { identity: receipt, selection: receipt.selection } };
+  };
+  const initialSelection = await readSelection(initialProfile, source, sourceTurn);
   requireValue(
-    initialProfile.state === "available" && (initialProfile.profile?.selection.activatedSkills ?? []).length === 0,
+    initialSelection.state === "available" &&
+      initialSelection.profile?.selection &&
+      (initialSelection.profile.selection.activatedSkills ?? []).length === 0,
     "The source workflow must begin without an activated skill.",
   );
   const prepared = await api("capture-prepare", `/chat/sessions/${source.sessionId}/skill-captures/prepare`, {
@@ -419,14 +434,22 @@ export async function executeGoatComparisonSkillWorkflow({
   );
 
   phase = "reuse";
-  const reused = await send(task.phases[2].prompt, scope);
+  const skillName =
+    initialProfile.state === "legacy_missing"
+      ? /^name:\s*["']?([a-z0-9-]+)["']?\s*$/mu.exec(instructions.content)?.[1]
+      : undefined;
+  requireValue(initialProfile.state !== "legacy_missing" || skillName, "The reviewed skill has no selectable name.");
+  const reusePrompt = skillName
+    ? `@skill ${skillName}-${sha256(candidateId).slice(0, 12)} ${task.phases[2].prompt}`
+    : task.phases[2].prompt;
+  const reused = await send(reusePrompt, scope);
   const reuseTurn = nativeTurn(reused);
   const envelope = await api(
     "reuse-profile",
     `/chat/sessions/${reused.sessionId}/turns/${reuseTurn.turnId}/capability-profile?workspaceId=${scope.workspaceId}`,
   );
   const loaded = projectGoatComparisonSkillReuse({
-    envelope,
+    envelope: await readSelection(envelope, reused, reuseTurn),
     candidateId,
     versionId,
     instructionsSha256,

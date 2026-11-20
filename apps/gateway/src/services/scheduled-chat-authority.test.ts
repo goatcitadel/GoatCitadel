@@ -196,6 +196,9 @@ describe("current scheduled Chat authority", () => {
       scheduledOccurrence: f.reference,
       route: { effectiveProviderId: "fixture", effectiveModel: "fixture" } as never,
     };
+    await expect(resolveChatFeatureAdmission({ ...host, routeFingerprint: () => undefined }, input))
+      .rejects.toThrow("Scheduled Chat could not verify its provider and model");
+    expect(bindFeatureReferences).not.toHaveBeenCalled();
     await expect(resolveChatFeatureAdmission(host, input)).resolves.toEqual(features);
     expect(bindFeatureReferences).toHaveBeenCalledTimes(1);
     expect(bindFeatureReferences).toHaveBeenCalledWith(
