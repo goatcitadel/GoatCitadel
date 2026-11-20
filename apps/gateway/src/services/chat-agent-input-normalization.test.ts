@@ -48,4 +48,20 @@ describe("normalizeAgentInputFromSend", () => {
       }),
     ).toMatchObject({ webMode: "quick", normalizationProfile: "quick_web" });
   });
+
+  it("keeps web tools off for a coordinated no-browse instruction", () => {
+    expect(
+      normalizeAgentInputFromSend({
+        content: "Without browsing or taking any other action, explain whether web search is available.",
+        webMode: "deep",
+        normalizationProfile: "quick_web",
+      }),
+    ).toMatchObject({ webMode: "off", normalizationProfile: "live" });
+  });
+
+  it("keeps web search available when only browsing local files is excluded", () => {
+    expect(
+      normalizeAgentInputFromSend({ content: "Without browsing local files, search the web for sourdough recipes." }),
+    ).toMatchObject({ webMode: "quick", normalizationProfile: "quick_web" });
+  });
 });

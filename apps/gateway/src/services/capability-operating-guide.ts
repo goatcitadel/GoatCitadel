@@ -7,13 +7,14 @@ export const CAPABILITY_GUIDE_OVERVIEW = [
   "Describe supported workflows conditionally until current evidence confirms availability. No catalog, guide, or explanation grants permission or proves a task completed.",
 ].join(" ");
 
-const SECTIONS: Array<CapabilityGuideSection & { terms: string[] }> = [
+// Write canonical built-in tool names in backticks so the registry check can validate them.
+export const CAPABILITY_GUIDE_SECTIONS: ReadonlyArray<CapabilityGuideSection & { terms: string[] }> = [
   {
     id: "research",
     title: "Research and web",
     terms: ["research", "web", "search", "browse", "internet"],
     workflow:
-      "Find relevant sources, open and compare them, then synthesize with links. Use Deep research when a question needs broader investigation.",
+      "Use `browser.search` to find relevant sources when web access is available, open and compare them, then synthesize with links. Use Deep research when a question needs broader investigation.",
     limitations:
       "Web providers may need secure setup. Search snippets alone do not prove a claim; page fetching and interactive browsing are different capabilities.",
   },
@@ -22,7 +23,7 @@ const SECTIONS: Array<CapabilityGuideSection & { terms: string[] }> = [
     title: "Files and artifacts",
     terms: ["file", "files", "document", "pdf", "slide", "artifact", "write", "read"],
     workflow:
-      "Inspect the supplied files, choose the available document or artifact tools, create the result, then read back or inspect the saved output.",
+      "Inspect the supplied files, choose an available tool such as `artifacts.create`, then read back or inspect the saved output.",
     limitations:
       "Allowed folders, write policy, formats, and approvals still apply. An artifact is complete only when tool evidence confirms its creation.",
   },
@@ -49,7 +50,7 @@ const SECTIONS: Array<CapabilityGuideSection & { terms: string[] }> = [
     title: "Connected services",
     terms: ["email", "gmail", "calendar", "connect", "connector", "integration", "sign", "messaging", "send"],
     workflow:
-      "Check the relevant connection and Chat availability, guide secure sign-in or setup when needed, then use the permitted service tool and check its result. Review requested external effects before sending.",
+      "Check the relevant connection and Chat availability, guide secure sign-in or setup when needed, then use the permitted service tool such as `calendar.list` and check its result. Review requested external effects before sending.",
     limitations:
       "A saved connection is not proof of current sign-in, account scopes, or permission for a specific action. Gmail/Calendar connectors and Google Chat messaging are separate. Never request credentials in Chat.",
   },
@@ -82,7 +83,7 @@ export function getCapabilityGuide(query: string): {
   return {
     version: "capability-guide.v1",
     overview: CAPABILITY_GUIDE_OVERVIEW,
-    sections: SECTIONS.filter((section) => terms.some((term) => section.terms.includes(term)))
+    sections: CAPABILITY_GUIDE_SECTIONS.filter((section) => terms.some((term) => section.terms.includes(term)))
       .slice(0, 3)
       .map(({ id, title, workflow, limitations }) => ({ id, title, workflow, limitations })),
   };

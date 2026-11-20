@@ -217,6 +217,32 @@ describe("capability explanations", () => {
     expect(host.listCatalog.mock.calls).toHaveLength(calls);
   });
 
+  it("reserves results for each topic in a single scoped inspection and reports mixed coverage", async () => {
+    const { service, request, host } = fixture();
+    request.args = { query: "gmail email", additionalTopics: ["fs.read", "unmatchedzzzz"], limit: 1 };
+    const result = await service.explain(request);
+    expect(result.coverage).toBe("partial");
+    expect(result.capabilities.map((entry) => entry.capabilityId)).toEqual(["tool:gmail.send", "tool:fs.read"]);
+    expect(result.topics).toEqual([
+      { query: "gmail email", coverage: "partial", capabilityIds: ["tool:gmail.send"] },
+      { query: "fs.read", coverage: "complete", capabilityIds: ["tool:fs.read"] },
+      { query: "unmatchedzzzz", coverage: "no_match", capabilityIds: [] },
+    ]);
+    expect(result.permissionsGranted).toBe(false);
+    expect(host.listCatalog).toHaveBeenCalledTimes(1);
+    expect(host.listConnectors).toHaveBeenCalledTimes(1);
+    expect(host.inspectToolAccess).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses the same observation when a capability matches several topics", async () => {
+    const { service, request, host } = fixture();
+    request.args = { query: "gmail.send", additionalTopics: ["gmail email"], limit: 1 };
+    const result = await service.explain(request);
+    expect(result.capabilities.map((entry) => entry.capabilityId)).toEqual(["tool:gmail.send"]);
+    expect(result.topics?.map((topic) => topic.capabilityIds)).toEqual([["tool:gmail.send"], ["tool:gmail.send"]]);
+    expect(host.inspectToolAccess).toHaveBeenCalledTimes(1);
+  });
+
   it("does not claim readiness when the turn profile cannot be read", async () => {
     const { service, request, host } = fixture();
     request.turnId = "turn";

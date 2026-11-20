@@ -75,14 +75,19 @@ describe("governed discovery/read tools", () => {
   });
 
   it("validates explanation reads and dispatches them without granting permissions", async () => {
-    const req = request("capabilities.explain", { query: "Can you send email?" });
+    const req = request("capabilities.explain", { query: "Can you send email?", additionalTopics: ["Calendar reads"] });
     const explainCapabilities = vi.fn(async () => ({ informationalOnly: true, permissionsGranted: false }));
     await expect(executeTool(req, config, {} as AsyncStorage)).rejects.toThrow(/unavailable/);
     expect(await executeTool(req, config, {} as AsyncStorage, { explainCapabilities })).toMatchObject({
       permissionsGranted: false,
     });
     expect(explainCapabilities).toHaveBeenCalledWith(req);
-    for (const args of [{ query: "email", workspaceId: "other" }, { query: "email", limit: 6 }, { query: " " }]) {
+    for (const args of [
+      { query: "email", workspaceId: "other" },
+      { query: "email", limit: 6 },
+      { query: " " },
+      { query: "email", additionalTopics: ["one", 2] },
+    ]) {
       await expect(executeTool({ ...req, args }, config, {} as AsyncStorage, { explainCapabilities })).rejects.toThrow(
         /bounded/,
       );

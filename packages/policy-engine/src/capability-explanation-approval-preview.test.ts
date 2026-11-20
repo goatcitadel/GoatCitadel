@@ -36,17 +36,33 @@ describe("capability explanation approval preview", () => {
     });
   });
 
+  it("lists every topic and the per-topic limit in one approval preview", () => {
+    expect(
+      knowledgeApprovalPreview(request({ query: "Calendar", additionalTopics: ["Code Mode", "Memory"], limit: 2 })),
+    ).toMatchObject({
+      query: "1. Calendar\n2. Code Mode\n3. Memory",
+      optionsSummary: "Maximum results per topic: 2",
+      summary: expect.stringContaining("Does not activate"),
+    });
+  });
+
   it.each([
     { query: "" },
     { query: "x".repeat(513) },
     { query: "email", limit: 6 },
     { query: "email", workspaceId: "other" },
+    { query: "email", additionalTopics: ["one", "two", "three"] },
+    { query: "email", additionalTopics: [" "] },
+    { query: "email", additionalTopics: ["x".repeat(257)] },
+    { query: "email", additionalTopics: [{ workspaceId: "other" }] },
   ])("withholds a preview for malformed or caller-scoped input", (args) => {
     expect(knowledgeApprovalPreview(request(args))).toBeUndefined();
   });
 
   it("redacts credential-like text and does not copy unknown metadata", () => {
-    const preview = knowledgeApprovalPreview(request({ query: "email token=preview-secret" }));
+    const preview = knowledgeApprovalPreview(
+      request({ query: "email token=preview-secret", additionalTopics: ["calendar token=second-preview-secret"] }),
+    );
     expect(JSON.stringify(preview)).not.toContain("preview-secret");
   });
 });

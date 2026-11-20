@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { getCapabilityGuide } from "./capability-operating-guide.js";
+import { createDefaultToolRegistry } from "@goatcitadel/policy-engine";
+import {
+  CAPABILITY_GUIDE_OVERVIEW,
+  CAPABILITY_GUIDE_SECTIONS,
+  getCapabilityGuide,
+} from "./capability-operating-guide.js";
 import { buildBaseAgentSystemPrompt, type BuildBaseAgentSystemPromptInput } from "./base-agent-system-prompt.js";
 
 function prompt(overrides: Partial<BuildBaseAgentSystemPromptInput> = {}) {
@@ -19,6 +24,20 @@ function prompt(overrides: Partial<BuildBaseAgentSystemPromptInput> = {}) {
 }
 
 describe("capability operating guide", () => {
+  it("flags removed or renamed built-in tools mentioned in guide prose", () => {
+    const registry = createDefaultToolRegistry();
+    const guideProse = [
+      CAPABILITY_GUIDE_OVERVIEW,
+      ...CAPABILITY_GUIDE_SECTIONS.flatMap(({ title, workflow, limitations }) => [title, workflow, limitations]),
+    ].join("\n");
+    const names = [...new Set([...guideProse.matchAll(/`([^`\n]+)`/gu)].map((match) => match[1]!))];
+    expect(names.length).toBeGreaterThan(0);
+    expect(
+      names.filter((name) => !registry.get(name)),
+      "Operating guide tool references must match the current built-in registry.",
+    ).toEqual([]);
+  });
+
   it.each([
     ["email", "connectors"],
     ["run code", "code"],

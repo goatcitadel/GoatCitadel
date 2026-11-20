@@ -20,6 +20,7 @@ import {
   coerceRetryAfterMs,
   isChangePlanRequest,
   isOpenCodeJsonInvocation,
+  parseCapabilityExplanationArgs,
   parseOpenCodeRunOutput,
   splitUtf8HeadTail,
   truncateUtf8Bytes,
@@ -556,15 +557,10 @@ export async function executeTool(
       return finalizeToolResult(await runtimeHooks.searchCapabilities(request));
     }
     case "capabilities.explain": {
-      const { query, limit } = request.args;
-      if (
-        Object.keys(request.args).some((key) => key !== "query" && key !== "limit") ||
-        typeof query !== "string" ||
-        !query.trim() ||
-        query.length > 512 ||
-        (limit !== undefined && (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 5))
-      ) {
-        throw new Error("Capability explanation requires a bounded query and optional limit from 1 to 5.");
+      if (!parseCapabilityExplanationArgs(request.args)) {
+        throw new Error(
+          "Capability explanation requires a bounded query, up to two additional topics, and a limit from 1 to 5.",
+        );
       }
       if (!runtimeHooks.explainCapabilities) throw new Error("Capability explanation is unavailable in this runtime.");
       return finalizeToolResult(await runtimeHooks.explainCapabilities(request));
