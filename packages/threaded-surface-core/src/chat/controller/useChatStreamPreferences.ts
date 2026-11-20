@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { gatewayLocalStorage } from "@goatcitadel/mission-control-shared/api/gateway-transport";
 import type { ChatVisualStreamMode } from "../chat-streaming-preview";
 import { readVisualStreamModeFromStorage } from "../mission-threaded-controller-helpers";
 
@@ -11,7 +12,7 @@ export function useChatStreamPreferences({ STREAM_PREF_KEY }: Input) {
   const [streamEnabled, setStreamEnabled] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     try {
-      const raw = window.localStorage.getItem(STREAM_PREF_KEY);
+      const raw = gatewayLocalStorage().getItem(STREAM_PREF_KEY);
       return raw === null ? true : raw === "true";
     } catch {
       return true;

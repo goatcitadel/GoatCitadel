@@ -1,3 +1,4 @@
+import { isPracticeGateway } from "./gateway-transport.js";
 import { fetchStartupRead } from "./startup-reads";
 import {
   getGatewayCallerScope,
@@ -599,6 +600,7 @@ export function readGatewayAuthHeaders(_path: string): Record<string, string> {
 }
 
 function readGatewayAuthState(): GatewayAuthState | undefined {
+  if (isPracticeGateway()) return undefined;
   if (typeof window === "undefined") {
     return undefined;
   }
@@ -618,6 +620,7 @@ export function getGatewayAuthStorageMode(): GatewayAuthStorageMode {
 }
 
 export function setGatewayAuthStorageMode(mode: GatewayAuthStorageMode): void {
+  if (isPracticeGateway()) return;
   if (typeof window === "undefined") {
     return;
   }
@@ -637,6 +640,7 @@ export function setGatewayAuthStorageMode(mode: GatewayAuthStorageMode): void {
 }
 
 export function persistGatewayAuthState(state: GatewayAuthState, mode: GatewayAuthStorageMode = "session"): void {
+  if (isPracticeGateway()) return;
   if (typeof window === "undefined") {
     return;
   }
@@ -658,6 +662,7 @@ export function persistGatewayAuthState(state: GatewayAuthState, mode: GatewayAu
 }
 
 export function clearGatewayAuthState(): void {
+  if (isPracticeGateway()) return;
   if (typeof window === "undefined") {
     return;
   }
@@ -702,6 +707,7 @@ function notifyGatewayAuthRejected(rejection: GatewayAuthRejection): void {
 }
 
 export function readStoredGatewayAuthState(): GatewayAuthState | undefined {
+  if (isPracticeGateway()) return undefined;
   if (typeof window === "undefined") {
     return undefined;
   }

@@ -1,3 +1,4 @@
+import { gatewayFetch } from "./gateway-transport.js";
 import type { ChatMode, ChatSendMessageRequest, ChatStreamChunk } from "@goatcitadel/contracts";
 import { createCorrelationId, recordClientDiagnostic } from "../state/dev-diagnostics-store";
 import { buildGatewayHeaders, buildGatewayUrl, handleGatewayAuthRejectionResponse } from "./client-core.js";
@@ -29,7 +30,7 @@ export async function streamAgentChatMessage(
   // double-recording the non-ok case.
   let terminalRecorded = false;
   try {
-    const response = await fetch(buildGatewayUrl(path), {
+    const response = await gatewayFetch(buildGatewayUrl(path), {
       method: "POST",
       signal: options.signal,
       headers: buildGatewayHeaders(path, "POST", correlationId, {
@@ -144,7 +145,7 @@ export async function streamRetryChatTurn(
 ): Promise<void> {
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/retry/stream`;
   const correlationId = createCorrelationId();
-  const response = await fetch(buildGatewayUrl(path), {
+  const response = await gatewayFetch(buildGatewayUrl(path), {
     method: "POST",
     signal: options.signal,
     headers: buildGatewayHeaders(path, "POST", correlationId, {
@@ -170,7 +171,7 @@ export async function streamEditChatTurn(
 ): Promise<void> {
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/edit/stream`;
   const correlationId = createCorrelationId();
-  const response = await fetch(buildGatewayUrl(path), {
+  const response = await gatewayFetch(buildGatewayUrl(path), {
     method: "POST",
     signal: options.signal,
     headers: buildGatewayHeaders(path, "POST", correlationId, {
@@ -199,7 +200,7 @@ export async function resumeChatTurnStream(
   }
   const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/stream${query.size > 0 ? `?${query.toString()}` : ""}`;
   const correlationId = createCorrelationId();
-  const response = await fetch(buildGatewayUrl(path), {
+  const response = await gatewayFetch(buildGatewayUrl(path), {
     method: "GET",
     signal: options.signal,
     headers: buildGatewayHeaders(path, "GET", correlationId, {

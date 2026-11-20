@@ -11,7 +11,7 @@ import {
 import { useApprovalModeControl } from "./use-approval-mode-control";
 import { projectFirstRunState } from "./first-run-state";
 
-export type FirstRunStep = "model" | "safety" | "message";
+export type FirstRunStep = "model" | "tutorial" | "safety" | "message";
 export function useFirstRunSetup(workspaceId: string | undefined) {
   const client = useQueryClient();
   const query = useQuery({
@@ -154,7 +154,7 @@ export function useFirstRunSetup(workspaceId: string | undefined) {
       if (!live.current.mounted || live.current.generation !== generation || getGatewayApiBaseUrl() !== installation)
         return;
       client.setQueryData(["system", "onboarding"], fresh);
-      if (projectFirstRunState(fresh).modelReady) setStep("safety");
+      if (projectFirstRunState(fresh).modelReady) setStep(fresh.completed ? "safety" : "tutorial");
       else setNotice("Model readiness changed. Connect and confirm the current default before continuing.");
     } catch (error) {
       if (live.current.mounted && live.current.generation === generation) setNotice(describeApiError(error).summary);

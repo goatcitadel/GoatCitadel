@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { OperatorInboxItem } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { isPracticeGateway } from "@goatcitadel/mission-control-shared/api/gateway-transport";
 import { buildApprovalEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { buildApprovalReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-generic-evidence";
 import {
@@ -326,6 +327,9 @@ export function InboxApprovalDetail({
               item={item}
               approval={approval}
               workspaceId={installWide ? null : workspaceId}
+              // The guided Inbox review reuses the timed control from Chat.
+              sessionId={isPracticeGateway() ? approval.linkage?.sessionId : undefined}
+              onTemporaryGrantResolved={isPracticeGateway() ? (message) => rereadSettled(message, true) : undefined}
               // The operator asked for a skill change themselves, so it approves in one click, as on the Skills tab.
               reviewedInPlace={installWide && approval.kind === "skill.lifecycle"}
               focusAction={focusAction}
