@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   ConflictError,
+  FeatureDisabledError,
   PolicyViolationError,
   ValidationError,
   type OperatorProfileFact,
@@ -400,6 +401,7 @@ export class ChatPostCommitEffectService {
         // can retry instead of silently losing otherwise-valid review material.
         if (
           error instanceof ConflictError ||
+          error instanceof FeatureDisabledError ||
           error instanceof PolicyViolationError ||
           error instanceof ValidationError ||
           error instanceof TypeError

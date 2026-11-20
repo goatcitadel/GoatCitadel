@@ -19,8 +19,10 @@ import {
   type GoogleWorkspaceOAuthStartResponse,
   type GoogleWorkspaceOAuthStatus,
   type IntegrationConnection,
+  type ToolInvokeRequest,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
+import { GOOGLE_CONNECTION_ID_PATTERN, normalizeGoogleReadRequest } from "./google-workspace-read-request.js";
 import { McpOAuthPkceStore } from "./mcp-oauth-discovery.js";
 import { SecretStoreUnavailableError, isSecretStoreUnavailableLikeError } from "./secret-store-service.js";
 import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
@@ -36,15 +38,15 @@ export const GOOGLE_OAUTH_CALLBACK_PATH = "/api/v1/integrations/google/oauth/cal
 const REFRESH_SKEW_MS = 5 * 60_000;
 const FLOW_TTL_MS = 10 * 60_000;
 const MAX_CLIENT_SECRET_CHARS = 512;
-const CONNECTION_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,160}$/;
 const REAUTH_ERRORS = new Set(["invalid_grant", "invalid_client", "unauthorized_client"]);
 const SETTINGS_PATH = "Settings › Connections › Integrations";
 // Google sends `expires_in`; when it does not, assume its documented one-hour lifetime.
 const DEFAULT_ACCESS_TOKEN_LIFETIME_MS = 60 * 60_000;
-
 /** What the OS keychain holds for one connection. Only this service reads or writes it. */
 interface GoogleWorkspaceCredential {
   version: 1;
+  /** Rotates on sign-in and survives refresh. Older saved credentials use the connection revision. */
+  signInId?: string;
   clientId: string;
   accessToken: string;
   refreshToken: string;
@@ -94,7 +96,7 @@ export function defaultGoogleOAuthRedirectUri(env: NodeJS.ProcessEnv = process.e
  */
 export class GoogleWorkspaceOAuthService {
   private readonly secretStore: SecretStorePort;
-  private readonly connections: Pick<AsyncStorage["integrationConnections"], "get" | "update">;
+  private readonly connections: Pick<AsyncStorage["integrationConnections"], "get" | "list" | "update">;
   private readonly client: GoogleOAuthClient;
   private readonly now: () => number;
   private readonly defaultRedirectUri: string;
@@ -254,6 +256,7 @@ export class GoogleWorkspaceOAuthService {
     }
     this.saveCredential(connectionId, {
       version: 1,
+      signInId: randomUUID(),
       clientId: flow.clientId,
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
@@ -291,7 +294,7 @@ export class GoogleWorkspaceOAuthService {
 
   /** Cleanup after the connection itself was deleted: revoke when possible and remove every keychain entry. */
   public async forgetConnection(connectionId: string): Promise<void> {
-    if (!CONNECTION_ID_PATTERN.test(connectionId) || !this.keychainAvailable()) return;
+    if (!GOOGLE_CONNECTION_ID_PATTERN.test(connectionId) || !this.keychainAvailable()) return;
     this.signOut(connectionId);
     await this.revokeAndForget(connectionId);
     this.removeSecret(clientSecretAccount(connectionId));
@@ -321,11 +324,36 @@ export class GoogleWorkspaceOAuthService {
     return deleted;
   }
 
+  public async normalizeReadRequest(request: ToolInvokeRequest): Promise<ToolInvokeRequest> {
+    return normalizeGoogleReadRequest(
+      {
+        connections: this.connections,
+        readConnection: (connectionId) => this.readConnection(connectionId),
+        readEligibleSignInId: (connection, capability) => {
+          const credential = this.keychainAvailable() ? this.readCredential(connection.connectionId) : undefined;
+          return credential &&
+            !credential.requiresReauth &&
+            credential.clientId === readClientId(connection.config) &&
+            isGoogleWorkspaceCapabilityGranted(capability, credential.grantedScopes)
+            ? googleSignInId(connection, credential)
+            : undefined;
+        },
+      },
+      request,
+    );
+  }
+
   /** The tool executor's hook: an access token for the capability that `toolName` needs. */
-  public async resolveToolAccessToken(input: { connectionId: string; toolName: string }): Promise<string> {
+  public async resolveToolAccessToken(input: {
+    connectionId: string;
+    toolName: string;
+    signInId?: string;
+  }): Promise<string> {
     const capability = googleWorkspaceCapabilityForTool(input.toolName);
     if (!capability) throw new Error(`blocked: ${input.toolName} is not a Google Workspace tool.`);
-    return await this.resolveAccessToken(input.connectionId, capability);
+    return input.signInId
+      ? await this.resolveCheckedAccessToken(input.connectionId, capability, false, input.signInId)
+      : await this.resolveAccessToken(input.connectionId, capability);
   }
 
   /**
@@ -341,6 +369,7 @@ export class GoogleWorkspaceOAuthService {
     connectionId: string,
     capability: GoogleWorkspaceCapability,
     renewed: boolean,
+    expectedSignInId?: string,
   ): Promise<string> {
     const connection = await this.readConnection(connectionId);
     if (connection.catalogId !== GOOGLE_WORKSPACE_CATALOG_ID) {
@@ -358,6 +387,9 @@ export class GoogleWorkspaceOAuthService {
     const credential = this.readCredential(connectionId);
     if (!credential) {
       throw new Error(`blocked: Google sign-in is missing for this connection. Connect Google in ${SETTINGS_PATH}.`);
+    }
+    if (expectedSignInId && googleSignInId(connection, credential) !== expectedSignInId) {
+      throw new Error("blocked: This Google sign-in changed. Request the read again to review the current account.");
     }
     if (credential.requiresReauth || credential.clientId !== readClientId(connection.config)) {
       throw new Error(`blocked: Google sign-in needs to be renewed. Reconnect Google in ${SETTINGS_PATH}.`);
@@ -378,7 +410,7 @@ export class GoogleWorkspaceOAuthService {
     await this.refreshOnce(connection, credential);
     // Re-check this caller's capability, client and grant against whatever is stored now: a reconnect
     // during the refresh may have replaced the sign-in with different switches or scopes.
-    return await this.resolveCheckedAccessToken(connectionId, capability, true);
+    return await this.resolveCheckedAccessToken(connectionId, capability, true, expectedSignInId);
   }
 
   /** Single flight per connection: concurrent tool calls share one refresh request. */
@@ -469,7 +501,7 @@ export class GoogleWorkspaceOAuthService {
   }
 
   private async requireConnection(connectionId: string): Promise<IntegrationConnection> {
-    if (!CONNECTION_ID_PATTERN.test(connectionId)) {
+    if (!GOOGLE_CONNECTION_ID_PATTERN.test(connectionId)) {
       throw new ValidationError({ field: "connectionId", message: "Unknown integration connection." });
     }
     const connection = await this.readConnection(connectionId);
@@ -570,9 +602,14 @@ export class GoogleWorkspaceOAuthService {
     return (
       current?.refreshToken === credential.refreshToken &&
       current.accessToken === credential.accessToken &&
+      current.signInId === credential.signInId &&
       !current.requiresReauth
     );
   }
+}
+
+function googleSignInId(connection: IntegrationConnection, credential: GoogleWorkspaceCredential): string {
+  return credential.signInId ?? `legacy:${connection.revision}`;
 }
 
 function credentialAccount(connectionId: string): string {

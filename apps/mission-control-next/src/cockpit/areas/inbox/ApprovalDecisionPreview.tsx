@@ -1,4 +1,4 @@
-import type { ApprovalRequest } from "@goatcitadel/contracts";
+import { isGoogleWorkspaceReadTool, type ApprovalRequest } from "@goatcitadel/contracts";
 import { ApprovalReviewSummaryContent } from "./ApprovalReviewSummaryContent";
 import type { useApprovalReviewEvidence } from "./use-approval-review-evidence";
 
@@ -27,7 +27,9 @@ export function ApprovalDecisionPreview({
     <p role="alert">
       {review.unavailable || unavailable
         ? "The approval preview could not load. Reopen the review or use Deny."
-        : "The exact action preview is unavailable, so this approval can't be approved. You can still deny it."}
+        : isGoogleWorkspaceReadTool(approval.kind) && !approval.payload.connectionId
+          ? "This read is missing the Google connection. Deny this request and retry from Chat."
+          : "The exact action preview is unavailable. Retry from its source. You can still deny it."}
     </p>
   ) : !showSummary ? null : (
     <ApprovalReviewSummaryContent

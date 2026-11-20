@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PolicyViolationError, type CommitmentClassification } from "@goatcitadel/contracts";
+import { FeatureDisabledError, PolicyViolationError, type CommitmentClassification } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import type { BackgroundReviewService } from "./background-review-service.js";
 import {
@@ -303,6 +303,36 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
     expect(classifyTurnForCommitments).toHaveBeenCalledTimes(1);
     expect(persistTurnCommitments).toHaveBeenCalledTimes(1);
     expect(currentMetaRead).not.toHaveBeenCalled();
+  });
+
+  it("settles disabled optional memory review without failing the completed chat's background job", async () => {
+    const storage = createStorage();
+    seedEffectRun(storage, "effect-feature-disabled", "background_review", "worker-current");
+    const proposeTraceMemoryCandidate = vi.fn(async () => {
+      throw new FeatureDisabledError("memoryLifecycleAdminV1Enabled");
+    });
+    const service = createService(storage, {
+      authority: authorityHarness([], { readDurableRunVersion: (runId) => storage.durableRuns.getRun(runId).version })
+        .port,
+      backgroundReview: {
+        extractTurnMemoryFacts: vi.fn(async () => [
+          { kind: "preference", content: "Concise replies", confidence: 0.95 },
+        ]),
+        suggestTurnSkill: vi.fn(async () => ({ shouldAuthor: false })),
+      } as unknown as BackgroundReviewService,
+      proposeTraceMemoryCandidate,
+    });
+    await expect(
+      service.execute(backgroundInput(), context("effect-feature-disabled", "worker-current")),
+    ).resolves.toMatchObject({
+      status: "evidence_recorded",
+      memoryReviewCandidateCount: 0,
+      memoryReviewCandidateRejectedCount: 1,
+    });
+    expect(proposeTraceMemoryCandidate).toHaveBeenCalledTimes(1);
+    expect(storage.durableRuns.getRun("effect-feature-disabled").metadata).toHaveProperty(
+      "generalChatPostCommitCanonical.stages.background_evidence",
+    );
   });
 
   it("files operator facts with the governed review owner while keeping durable receipts content-free", async () => {

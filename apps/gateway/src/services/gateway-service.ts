@@ -130,7 +130,10 @@ import {
   renderAdmittedSkillInstructions,
   type ChatFeatureAdmissionHost,
 } from "./chat-feature-admission-service.js";
-import { assertScheduledChatDispatchCurrent } from "./scheduled-chat-authority.js";
+import {
+  assertScheduledChatDispatchCurrent,
+  resolveScheduledApprovalReplayPolicy,
+} from "./scheduled-chat-authority.js";
 import {
   authorizeAdmittedChatProviderFallback,
   fingerprintChatProviderFallbackRoute,
@@ -757,10 +760,7 @@ import { createGatewayChatAutoActions, type ChatAutoActionPolicy } from "./chat-
 import { isManagedProjectFileTool } from "@goatcitadel/contracts";
 import { isChatAutoApprovalEnabled } from "./chat-approval-mode-service.js";
 import { assertChatAutoCodeModeAllowed, runChatCodeModeRequest } from "./code-mode-request-tool.js";
-import {
-  assertLocalApprovedActionOwner,
-  RemoteWorkerApprovalResumeRequiredError,
-} from "./remote-worker-approved-action-guard.js";
+import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
 import {
   prepareRemoteWorkerChatApprovalHandoff,
   shouldDeferRemoteWorkerChatApprovalWake,
@@ -813,8 +813,6 @@ import {
   executeApprovedExternalRuntimePendingAction as executeApprovedExternalRuntimePendingActionWithPort,
   isApprovedExternalRuntimePendingAction as needsExternalReplay,
   isAutoOverwrite,
-  readAuthActorSource,
-  readPermissionSurfaceValue,
   toToolInvokeRequest,
 } from "./gateway/external-runtime-approval-adapter.js";
 import {
@@ -823,6 +821,7 @@ import {
   isSystemOwnedRestrictedPermissionProfileRequest,
 } from "./gateway/tool-grant-policy.js";
 import { durableChatTurnPayloadToRecord } from "./gateway/chat-stream-codecs.js";
+import { refreshApprovedPendingToolPolicyContext } from "./gateway/pending-tool-approval-policy.js";
 import { GatewayChatStreamRuntime } from "./gateway/chat-stream-runtime.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type {
@@ -830,11 +829,7 @@ import type {
   ApprovalResolveResult,
   RemoteApprovalActionTokenIssueResult,
 } from "./approval-types.js";
-import {
-  isRecord,
-  type CompanionAccessValidationResult,
-  type CompanionSessionRecord,
-} from "./companion-auth-helpers.js";
+import { type CompanionAccessValidationResult, type CompanionSessionRecord } from "./companion-auth-helpers.js";
 import type {
   DurableChatTurnExecutionPayload,
   InspectableChatStreamChunk,
@@ -1886,7 +1881,9 @@ export class GatewayService {
           {
             storage: this.storage,
             readToolResult: (parentRunId, toolRunId) => this.durableFanout.readToolResult(parentRunId, toolRunId),
-            refreshPolicy: (approvalId) => this.refreshApprovedPendingToolPolicyContext(approvalId),
+            refreshPolicy: async (approvalId) => {
+              await this.refreshApprovedPendingToolPolicyContext(approvalId);
+            },
             executeApprovedAction: (approvalId, beforeExecute) =>
               this.policyEngine.executeApprovedAction(approvalId, input.signal, { beforeExecute }),
           },
@@ -2811,18 +2808,20 @@ export class GatewayService {
           DEFAULT_WORKSPACE_ID;
         const normalizedRequest = await this.enrichToolPolicyContext(
           this.applyRuntimeBrowserBackendDefaults(
-            await this.resolveToolInvokeRequestPaths({
-              ...request,
-              workspaceId: resolvedWorkspaceId,
-              // Resolve the parent Citadel from the workspace so Citadel Wards always
-              // enforce on the correct scope (Wards key on the real citadelId, never
-              // the workspaceId). Default to the personal Citadel — which has no Wards —
-              // when the workspace cannot be resolved, so the common case is unaffected.
-              citadelId:
-                request.citadelId ??
-                (await this.storage.workspaces?.find(resolvedWorkspaceId))?.citadelId ??
-                DEFAULT_CITADEL_ID,
-            }),
+            await this.resolveToolInvokeRequestPaths(
+              await this.googleWorkspaceOAuth.normalizeReadRequest({
+                ...request,
+                workspaceId: resolvedWorkspaceId,
+                // Resolve the parent Citadel from the workspace so Citadel Wards always
+                // enforce on the correct scope (Wards key on the real citadelId, never
+                // the workspaceId). Default to the personal Citadel — which has no Wards —
+                // when the workspace cannot be resolved, so the common case is unaffected.
+                citadelId:
+                  request.citadelId ??
+                  (await this.storage.workspaces?.find(resolvedWorkspaceId))?.citadelId ??
+                  DEFAULT_CITADEL_ID,
+              }),
+            ),
           ),
         );
         await this.delegatedWorkResultService.assertToolRequestWithinApprovedScope(normalizedRequest);
@@ -9337,8 +9336,9 @@ export class GatewayService {
       this.blockRestrictedChatExecution,
     );
     if (refused) return refused;
+    let assertScheduledReplayCurrent: (() => Promise<void>) | undefined;
     try {
-      await this.refreshApprovedPendingToolPolicyContext(approvalId);
+      assertScheduledReplayCurrent = await this.refreshApprovedPendingToolPolicyContext(approvalId);
     } catch (error) {
       // Keep the exact pending request for its worker. The approval-effect owner
       // retains a retryable wait; rejecting local dispatch is not tool failure.
@@ -9363,9 +9363,19 @@ export class GatewayService {
       return await this.executeApprovedIntegrationDryRunCommit(approvalId, pending);
     }
     if (needsExternalReplay(pending) && !(await isAutoOverwrite(this.storage.approvalEvents, pending))) {
-      return await this.executeApprovedExternalRuntimePendingAction(approvalId, pending, signal);
+      return assertScheduledReplayCurrent
+        ? await this.executeApprovedExternalRuntimePendingAction(
+            approvalId,
+            pending,
+            signal,
+            undefined,
+            assertScheduledReplayCurrent,
+          )
+        : await this.executeApprovedExternalRuntimePendingAction(approvalId, pending, signal);
     }
-    return this.policyEngine.executeApprovedAction(approvalId, signal);
+    return assertScheduledReplayCurrent
+      ? this.policyEngine.executeApprovedAction(approvalId, signal, { beforeExecute: assertScheduledReplayCurrent })
+      : this.policyEngine.executeApprovedAction(approvalId, signal);
   }
 
   /**
@@ -9392,6 +9402,7 @@ export class GatewayService {
     pending: PendingApprovalAction,
     signal?: AbortSignal,
     admissionHandle?: AdmittedExternalTurnContextHandle,
+    assertScheduledReplayCurrent?: () => Promise<void>,
   ): Promise<ToolInvokeResult | undefined> {
     const approvedRequest = toToolInvokeRequest(pending.request, signal);
     const refusal = await this.chatAutoActions.blockOpaqueDispatch(approvedRequest);
@@ -9456,6 +9467,7 @@ export class GatewayService {
             beforeExecute: async (boundary) => {
               await beforeExecute?.(boundary);
               if ("beforeExecute" in options) options.beforeExecute?.();
+              await assertScheduledReplayCurrent?.();
             },
           }),
         enrichMcpInvokePolicyContext: async (input) => await this.enrichMcpInvokePolicyContext(input),
@@ -9488,7 +9500,9 @@ export class GatewayService {
     return resumeAdmittedExternalApprovals(
       {
         storage: this.storage,
-        refreshPolicy: (approvalId) => this.refreshApprovedPendingToolPolicyContext(approvalId),
+        refreshPolicy: async (approvalId) => {
+          await this.refreshApprovedPendingToolPolicyContext(approvalId);
+        },
         executePending: (approvalId, pending, signal, context) =>
           this.executeApprovedExternalRuntimePendingAction(approvalId, pending, signal, context),
       },
@@ -9497,50 +9511,13 @@ export class GatewayService {
     );
   }
 
-  private async refreshApprovedPendingToolPolicyContext(approvalId: string): Promise<void> {
-    const pending = await this.storage.pendingApprovalActions.find(approvalId);
-    if (!pending || pending.actionType !== "tool.invoke" || pending.resolutionStatus !== "pending") {
-      return;
-    }
-    await assertLocalApprovedActionOwner(this.storage, approvalId, pending);
-    const request = pending.request;
-    const existing = isRecord(request.policyContext) ? request.policyContext : {};
-    const sessionId = readRecordString(request, "sessionId");
-    const workspaceId =
-      readRecordString(request, "workspaceId") ??
-      readRecordString(existing, "workspaceId") ??
-      (sessionId ? (await this.storage.chatSessionMeta.get(sessionId))?.workspaceId : undefined) ??
-      DEFAULT_WORKSPACE_ID;
-    const consentContext = isRecord(request.consentContext) ? request.consentContext : {};
-    const operatorId =
-      readRecordString(existing, "operatorId") ??
-      readRecordString(consentContext, "operatorId") ??
-      readRecordString(existing, "authActorId") ??
-      "system";
-    const resolved = await this.resolveToolPolicyContext({
-      operatorId,
-      authActorId: readRecordString(existing, "authActorId"),
-      authActorSource: readAuthActorSource(existing.authActorSource),
-      workspaceId,
-      sessionId,
-      taskId: readRecordString(request, "taskId") ?? readRecordString(existing, "taskId"),
-      runId: readRecordString(request, "runId") ?? readRecordString(existing, "runId"),
-      surface: readPermissionSurfaceValue(request.surface ?? existing.surface),
-      permissionProfileId:
-        readRecordString(request, "permissionProfileId") ?? readRecordString(existing, "permissionProfileId"),
-      localOperatorOverrideId:
-        readRecordString(request, "localOperatorOverrideId") ?? readRecordString(existing, "localOperatorOverrideId"),
-    });
-    await this.storage.pendingApprovalActions.upsertPending({
-      approvalId,
-      actionType: pending.actionType,
-      request: {
-        ...request,
-        workspaceId,
-        policyContext: resolved,
-      },
-      createdAt: pending.createdAt,
-      expiresAt: pending.expiresAt,
+  private refreshApprovedPendingToolPolicyContext(approvalId: string): Promise<(() => Promise<void>) | undefined> {
+    return refreshApprovedPendingToolPolicyContext(approvalId, {
+      storage: this.storage,
+      defaultWorkspaceId: DEFAULT_WORKSPACE_ID,
+      resolveToolPolicyContext: (input) => this.resolveToolPolicyContext(input),
+      resolveScheduledPolicy: (approval, request) =>
+        resolveScheduledApprovalReplayPolicy(this.chatFeatureAdmissionHost(), approval, request),
     });
   }
 
@@ -13122,9 +13099,4 @@ function readRealGitTopLevel(cwd: string): string {
     stdio: ["ignore", "pipe", "ignore"],
   });
   return fsSync.realpathSync(topLevel.trim());
-}
-
-function readRecordString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

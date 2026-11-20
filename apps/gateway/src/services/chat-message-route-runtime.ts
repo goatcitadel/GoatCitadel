@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type {
   ChatMessageRecord,
@@ -44,12 +43,8 @@ import {
 } from "./chat-durable-runtime-authority.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
 import { projectChatMessageForPublic, projectChatTurnTraceForPublic } from "./chat-secret-projection.js";
-import {
-  buildWorkspaceFileDownloadHref,
-  getExecutedWorkspaceFileWriteReceipt,
-  mergeWorkspaceFileDownloadContent,
-} from "./chat-turn-agent-runner/artifact-write-helpers.js";
-import { MAX_INLINE_FILE_DOWNLOAD_BYTES } from "./files-route-service.js";
+import { projectHistoricalGoogleReadApproval } from "./chat-google-read-approval-projection.js";
+import { projectAssistantWorkspaceFileDownloads } from "./chat-artifact-result-projection.js";
 
 export interface ChatThreadLoadOptions {
   includeDecisionTrace?: boolean;
@@ -611,31 +606,47 @@ async function projectExactLiveAppend(
   if (candidates.length !== 1 || !trace || !runId) return undefined;
   const { run, payload } = await readDurableChatRun(runtime, runId);
   if (
-    run.runId !== runId || !matchesActiveAppendRun(trace, run) || !payload ||
-    payload.sessionId !== sessionId || payload.turnId !== trace.turnId ||
+    run.runId !== runId ||
+    !matchesActiveAppendRun(trace, run) ||
+    !payload ||
+    payload.sessionId !== sessionId ||
+    payload.turnId !== trace.turnId ||
     payload.userMessageId !== trace.userMessageId ||
     payload.assistantMessageId !== trace.assistantMessageId ||
-    payload.branchKind !== "append" || payload.parentTurnId !== parentTurnId ||
-    payload.sourceTurnId !== undefined || payload.threadEventType !== "chat_thread_turn_appended" ||
+    payload.branchKind !== "append" ||
+    payload.parentTurnId !== parentTurnId ||
+    payload.sourceTurnId !== undefined ||
+    payload.threadEventType !== "chat_thread_turn_appended" ||
     payload.requestActor.actorKind === "system"
-  ) return undefined;
+  )
+    return undefined;
   const session = await runtime.storage.chatSessionMeta.get(sessionId);
   if (session?.sessionId !== sessionId || session.workspaceId !== payload.workspaceId) return undefined;
   const admissions = runtime.storage.sessionMutationAdmissions;
   const admission = await admissions.get(payload.admissionId);
   if (
-    !admission || admission.status !== "active" || admission.admissionKind !== "turn_write" ||
-    admission.operation !== "chat_turn" || admission.admissionId !== payload.admissionId ||
-    admission.workspaceId !== payload.workspaceId || admission.sessionId !== sessionId ||
-    admission.sessionIncarnationId !== payload.sessionIncarnationId || admission.turnId !== trace.turnId ||
+    !admission ||
+    admission.status !== "active" ||
+    admission.admissionKind !== "turn_write" ||
+    admission.operation !== "chat_turn" ||
+    admission.admissionId !== payload.admissionId ||
+    admission.workspaceId !== payload.workspaceId ||
+    admission.sessionId !== sessionId ||
+    admission.sessionIncarnationId !== payload.sessionIncarnationId ||
+    admission.turnId !== trace.turnId ||
     admission.aggregateRevision !== payload.admissionAggregateRevision ||
     admission.controllerGeneration !== payload.admissionControllerGeneration ||
     admission.materialSha256 !== payload.admissionMaterialSha256 ||
-    admission.actorKind !== payload.requestActor.actorKind || admission.actorId !== payload.requestActor.actorId
-  ) return undefined;
+    admission.actorKind !== payload.requestActor.actorKind ||
+    admission.actorId !== payload.requestActor.actorId
+  )
+    return undefined;
   const binding = await admissions.findDurableRunBinding({
-    admissionId: admission.admissionId, sessionIncarnationId: admission.sessionIncarnationId,
-    workspaceId: admission.workspaceId, sessionId, turnId: trace.turnId,
+    admissionId: admission.admissionId,
+    sessionIncarnationId: admission.sessionIncarnationId,
+    workspaceId: admission.workspaceId,
+    sessionId,
+    turnId: trace.turnId,
   });
   if (!binding || binding.durableRunId !== runId) return undefined;
   const userMessage = await readCanonicalChatMessage(runtime, trace.userMessageId);
@@ -662,11 +673,16 @@ async function buildChatThreadFromState(
     ).filter((turnId): turnId is string => Boolean(turnId)),
   );
   const liveAppend = liveAppendOptions
-    ? await projectExactLiveAppend(runtime, sessionId, state, heartbeatTurnIds, liveAppendOptions.includeDecisionTrace === true)
-        .catch((error: unknown) => {
-          if (error instanceof NotFoundError || error instanceof ConflictError) return undefined;
-          throw error;
-        })
+    ? await projectExactLiveAppend(
+        runtime,
+        sessionId,
+        state,
+        heartbeatTurnIds,
+        liveAppendOptions.includeDecisionTrace === true,
+      ).catch((error: unknown) => {
+        if (error instanceof NotFoundError || error instanceof ConflictError) return undefined;
+        throw error;
+      })
     : undefined;
   const liveTurnId = liveAppend?.trace.turnId;
   const renderableTraces = state.traces.filter(
@@ -700,10 +716,20 @@ async function buildChatThreadFromState(
       const assistantMessage = projectChatMessageForPublic(
         trace.assistantMessageId ? state.messagesById.get(trace.assistantMessageId) : undefined,
       );
+      const reconciledAssistantMessage = await projectHistoricalGoogleReadApproval(
+        runtime.storage,
+        assistantMessage,
+        trace,
+      );
       return {
         trace: projectChatTurnTraceForPublic(trace),
-        userMessage: trace.turnId === liveTurnId ? liveAppend?.userMessage : state.messagesById.get(trace.userMessageId),
-        assistantMessage: await projectAssistantWorkspaceFileDownloads(assistantMessage, trace, workspaceFileRootDir),
+        userMessage:
+          trace.turnId === liveTurnId ? liveAppend?.userMessage : state.messagesById.get(trace.userMessageId),
+        assistantMessage: await projectAssistantWorkspaceFileDownloads(
+          reconciledAssistantMessage,
+          trace,
+          workspaceFileRootDir,
+        ),
         generatedArtifacts: (generatedArtifactsByTurnId.get(trace.turnId) ?? []).map(
           chatGeneratedArtifactService.buildGeneratedArtifactReference,
         ),
@@ -716,64 +742,6 @@ async function buildChatThreadFromState(
     systemNotices,
     turns,
   });
-}
-
-async function projectAssistantWorkspaceFileDownloads(
-  assistantMessage: ChatMessageRecord | undefined,
-  trace: ChatTurnTraceRecord,
-  workspaceFileRootDir: string | undefined,
-): Promise<ChatMessageRecord | undefined> {
-  if (!assistantMessage || !workspaceFileRootDir) {
-    return assistantMessage;
-  }
-  let content = assistantMessage.content;
-  for (const toolRun of trace.toolRuns) {
-    if (toolRun.sessionId !== trace.sessionId || toolRun.turnId !== trace.turnId) {
-      continue;
-    }
-    const receipt = getExecutedWorkspaceFileWriteReceipt(toolRun);
-    if (!receipt) {
-      continue;
-    }
-    const verifiedPath = await resolveLiveWorkspaceDownloadPath(receipt.artifactPath, workspaceFileRootDir);
-    if (!verifiedPath) {
-      continue;
-    }
-    content = mergeWorkspaceFileDownloadContent(
-      content,
-      toolRun,
-      buildWorkspaceFileDownloadHref(verifiedPath, workspaceFileRootDir),
-    );
-  }
-  return content === assistantMessage.content ? assistantMessage : { ...assistantMessage, content };
-}
-
-async function resolveLiveWorkspaceDownloadPath(
-  artifactPath: string,
-  workspaceFileRootDir: string,
-): Promise<string | undefined> {
-  if (!path.isAbsolute(artifactPath)) {
-    return undefined;
-  }
-  try {
-    const [realWorkspaceRoot, realArtifactPath] = await Promise.all([
-      fs.realpath(workspaceFileRootDir),
-      fs.realpath(artifactPath),
-    ]);
-    const relativePath = path.relative(realWorkspaceRoot, realArtifactPath);
-    if (
-      !relativePath ||
-      path.isAbsolute(relativePath) ||
-      relativePath === ".." ||
-      relativePath.startsWith(`..${path.sep}`)
-    ) {
-      return undefined;
-    }
-    const stat = await fs.stat(realArtifactPath);
-    return stat.isFile() && stat.size > 0 && stat.size <= MAX_INLINE_FILE_DOWNLOAD_BYTES ? realArtifactPath : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 async function projectChatTimerNotice(

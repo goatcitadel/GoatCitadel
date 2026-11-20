@@ -33,6 +33,10 @@ import {
   buildPersistedToolContinuationResult,
   serializeToolResultForModel,
 } from "./chat-tool-result-projection.js";
+import {
+  readGoogleReadApprovalSummary,
+  reconcileGoogleReadApprovalReply,
+} from "./chat-google-read-approval-projection.js";
 import { projectArtifactPathsInAnswer, projectArtifactToolResultForModel } from "./chat-artifact-result-projection.js";
 /* eslint-disable max-lines -- Chat orchestration is still a centralized runtime coordinator pending a larger bounded-interface split. */
 import { createHash, randomUUID } from "node:crypto";
@@ -2616,7 +2620,10 @@ export class ChatTurnAgentRunner {
             .reduce((count, run) => count + toolRunBudgetCostForToolCall(run.toolName, run.args ?? {}), 0)
         : 0);
     const workspaceFileRootDir = this.deps.workspaceFileRootDir;
+    const googleReadApprovalSummaries = new Set<string>();
     for (const persistedRun of persistedSettledToolRuns) {
+      const approvalSummary = await readGoogleReadApprovalSummary(storage, persistedRun, input.workspaceId);
+      if (approvalSummary) googleReadApprovalSummaries.add(approvalSummary);
       const toolCallId = buildPersistedToolContinuationCallId(persistedRun);
       let persistedContinuationResult = projectArtifactToolResultForModel(
         persistedRun.toolName,
@@ -2670,6 +2677,16 @@ export class ChatTurnAgentRunner {
         }
       }
     }
+    if (googleReadApprovalSummaries.size > 0) {
+      conversationMessages.push({
+        role: "system",
+        content: [
+          "These saved approval and grant results are authoritative for the resumed reads in this turn.",
+          ...googleReadApprovalSummaries,
+          "Use the tool results to answer the user. Do not say these reads ran without approval or still need approval. The runtime adds the saved approval and grant confirmation to your reply.",
+        ].join("\n"),
+      });
+    }
     if (codingState && recoveredCodingState) {
       conversationMessages.push({
         role: "system",
@@ -2688,7 +2705,14 @@ export class ChatTurnAgentRunner {
     const hasPersistedExecutedSearchEvidence = persistedSettledToolRuns.some(
       (run) => run.toolName === "browser.search" && run.status === "executed" && run.result !== undefined,
     );
-    let assistantContent = "";
+    // An outcome-only request with one settled read needs no model to restate its saved receipt.
+    const reportGoogleReadReceiptOnly =
+      input.mode === "chat" &&
+      !delegatedResultContract &&
+      allPersistedToolRuns.length === 1 &&
+      googleReadApprovalSummaries.size === 1 &&
+      /\breport only whether the read succeeded and what grant was created\b/iu.test(input.content);
+    let assistantContent = reportGoogleReadReceiptOnly ? [...googleReadApprovalSummaries][0]! : "";
     let toolUseClosed = false;
     let assistantModel = input.model;
     let routingState: ChatTurnTraceRecord["routing"] = {
@@ -6716,6 +6740,9 @@ export class ChatTurnAgentRunner {
           "retry_narrower",
         );
       }
+    }
+    if (finalStatus === "completed" && !delegatedResultContract && googleReadApprovalSummaries.size > 0) {
+      assistantContent = reconcileGoogleReadApprovalReply(assistantContent, googleReadApprovalSummaries);
     }
     const finalizedCompletion = finalizeTurnCompletionState({
       completion: completionState,

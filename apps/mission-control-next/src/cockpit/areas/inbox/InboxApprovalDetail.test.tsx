@@ -145,6 +145,27 @@ afterEach(() => {
 });
 
 describe("Inbox approval detail", () => {
+  it("mounts the Calendar decision controls without a compact preview", async () => {
+    api.fetchApproval.mockResolvedValue({
+      ...approval,
+      kind: "calendar.list",
+      preview: { toolName: "calendar.list" },
+      linkage: { workspaceId: "default", sessionId: "chat-a", turnId: "turn-a" },
+    });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <InboxApprovalDetail item={item} workspaceId="default" />
+        </QueryClientProvider>,
+      ),
+    );
+    await settleUntil(() => Boolean(decisionControls()));
+    expect(decisionControls().disabled).toBe(false);
+    expect(actions.props).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sessionId: "chat-a", onTemporaryGrantResolved: expect.any(Function) }),
+    );
+  });
+
   it.each([true, false])("supplies the Chat allowance context only in practice (%s)", async (active) => {
     practice.active = active;
     api.fetchApproval.mockResolvedValue({

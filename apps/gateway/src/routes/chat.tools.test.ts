@@ -205,32 +205,35 @@ describe("chat tool routes", () => {
     expect(resolveChatToolApproval).toHaveBeenCalledTimes(1);
   });
 
-  it("accepts only an operator and a supported duration on the temporary Chat route", async () => {
-    const resolveChatToolApproval = vi.fn(async () => ({ allowScope: "session", resumed: true }));
-    const gateway = createApp({ resolveChatToolApproval });
-    const url = "/api/v1/chat/tools/approve-temporarily";
-    const payload = { sessionId: "session-1", approvalId: "approval-1", duration: "1h" };
-    for (const invalid of [
-      { ...payload, duration: "24h" },
-      { ...payload, allowScope: "workspace" },
-    ]) {
-      expect((await gateway.inject({ method: "POST", url, payload: invalid })).statusCode).toBe(400);
-    }
-    expect(
-      (
-        await gateway.inject({
-          method: "POST",
-          url,
-          payload,
-          headers: { authorization: "non-operator" },
-        })
-      ).statusCode,
-    ).toBe(403);
-    expect((await gateway.inject({ method: "POST", url, payload })).statusCode).toBe(200);
-    expect(resolveChatToolApproval).toHaveBeenCalledExactlyOnceWith("session-1", "approval-1", "approve", {
-      allowScope: "session",
-      temporaryGrantDuration: "1h",
-      resolvedBy: "operator-test",
-    });
-  });
+  it.each(["1h", "24h", "7d"])(
+    "accepts %s for an operator and rejects malformed temporary grants",
+    async (duration) => {
+      const resolveChatToolApproval = vi.fn(async () => ({ allowScope: "session", resumed: true }));
+      const gateway = createApp({ resolveChatToolApproval });
+      const url = "/api/v1/chat/tools/approve-temporarily";
+      const payload = { sessionId: "session-1", approvalId: "approval-1", duration };
+      for (const invalid of [
+        { ...payload, duration: "48h" },
+        { ...payload, allowScope: "workspace" },
+      ]) {
+        expect((await gateway.inject({ method: "POST", url, payload: invalid })).statusCode).toBe(400);
+      }
+      expect(
+        (
+          await gateway.inject({
+            method: "POST",
+            url,
+            payload,
+            headers: { authorization: "non-operator" },
+          })
+        ).statusCode,
+      ).toBe(403);
+      expect((await gateway.inject({ method: "POST", url, payload })).statusCode).toBe(200);
+      expect(resolveChatToolApproval).toHaveBeenCalledExactlyOnceWith("session-1", "approval-1", "approve", {
+        allowScope: "session",
+        temporaryGrantDuration: duration,
+        resolvedBy: "operator-test",
+      });
+    },
+  );
 });

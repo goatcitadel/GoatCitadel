@@ -198,7 +198,11 @@ export interface ToolExecutorRuntimeHooks {
    * capability switch and granted scope, refreshes before expiry, and returns an access token.
    * Absent means no native Google sign-in, so those tools stay unavailable.
    */
-  resolveGoogleWorkspaceAccessToken?: (input: { connectionId: string; toolName: string }) => Promise<string>;
+  resolveGoogleWorkspaceAccessToken?: (input: {
+    connectionId: string;
+    toolName: string;
+    signInId?: string;
+  }) => Promise<string>;
   /**
    * Reads the key a channel connection saved in secure storage, so a real send uses the key and never the
    * reference kept in the connection config. It is told which connection the send is for and reads only a key saved

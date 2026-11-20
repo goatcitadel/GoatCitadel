@@ -16,6 +16,8 @@ import {
   CHAT_TOOL_GRANT_DURATION_MS,
   buildToolEffectEvidence,
   canOfferChatToolGrant,
+  chatToolGrantDurationsFor,
+  isGoogleWorkspaceReadTool,
   MESH_CAPABILITY_ACTIVATION_APPROVAL_KIND,
   canonicalJsonString,
   assertMeshCapabilityActivationApprovalPayload,
@@ -70,6 +72,7 @@ import {
   resolveOutsideRootWriteApprovalChoice,
   type ChatApprovalWriteGrantChoice,
 } from "./chat-approval-write-grant.js";
+import { createGoogleReadAllowanceCommit, readGoogleReadGrantScope } from "./chat-google-read-allowance.js";
 import {
   isOfficialResearchSearchInvocation,
   resolveOfficialSearchProviders,
@@ -849,7 +852,12 @@ export async function resolveApproval(
           tokenId: context.remoteToken.tokenId,
         });
       }
-      result = await commitStandardApprovalResolution(host, approvalId, input);
+      result = await commitStandardApprovalResolution(
+        host,
+        approvalId,
+        input,
+        context?.commitChatReadAllowance ? { commitChatReadAllowance: context.commitChatReadAllowance } : undefined,
+      );
     });
   } catch (error) {
     if (!isApprovalExpiryConflict(error, approvalId)) {
@@ -1154,6 +1162,7 @@ async function commitStandardApprovalResolution(
     allowExpired?: boolean;
     expiration?: ApprovalExpirationContext;
     outcome?: import("@goatcitadel/contracts").ApprovalResolutionOutcome;
+    commitChatReadAllowance?: ApprovalResolutionContext["commitChatReadAllowance"];
   } = {},
 ): Promise<ApprovalResolveResult> {
   const storage = host.storage;
@@ -1225,6 +1234,7 @@ async function commitStandardApprovalResolution(
         })
       : await storage.approvals.resolve(approvalId, input, options.allowExpired ? { allowExpired: true } : undefined);
   const expiredRemoteTokenCount = await storage.remoteActionTokens.expirePendingByApprovalId(approvalId);
+  const chatReadAllowance = outcome === "approved" ? await options.commitChatReadAllowance?.() : undefined;
 
   const resolutionEvent = await storage.approvalEvents.append({
     approvalId,
@@ -1236,6 +1246,7 @@ async function commitStandardApprovalResolution(
       outcome,
       editedPayload: input.editedPayload,
       expiredRemoteTokenCount,
+      ...(chatReadAllowance ? { chatReadAllowance } : {}),
       ...(options.expiration
         ? {
             expired: true,
@@ -1531,13 +1542,14 @@ export async function resolveChatToolApproval(
   const resolvedBy = options?.resolvedBy?.trim() || "operator";
   const toolPattern = turn?.toolName ?? existingInlineApproval?.toolName ?? approval.kind;
   const duration = options?.temporaryGrantDuration;
+  let googleRead: import("@goatcitadel/contracts").GoogleReadGrantScope | undefined;
   if (duration) {
     const workspaceId = await readChatApprovalWorkspace(host, sessionId);
     if (
       decision !== "approve" ||
       allowScope !== "session" ||
       options.writeGrant ||
-      !Object.hasOwn(CHAT_TOOL_GRANT_DURATION_MS, duration) ||
+      !chatToolGrantDurationsFor(approval.kind).includes(duration) ||
       !workspaceId ||
       !canOfferChatToolGrant(approval, sessionId, workspaceId) ||
       !turn ||
@@ -1545,6 +1557,9 @@ export async function resolveChatToolApproval(
       turn.turnId !== approval.linkage?.turnId
     ) {
       throw new ValidationError({ message: "This approval cannot open a temporary allowance for this Chat." });
+    }
+    if (isGoogleWorkspaceReadTool(approval.kind)) {
+      googleRead = await readGoogleReadGrantScope(host, approval, approvalId, sessionId, workspaceId, turn.turnId);
     }
   }
   let grant: ToolGrantRecord | undefined;
@@ -1570,14 +1585,26 @@ export async function resolveChatToolApproval(
   const officialSearchAllowedHosts = persistentGrantScope
     ? resolveOfficialSearchApprovalGrantHosts(approval, toolPattern)
     : undefined;
-  const resolution = await host.resolveApproval(approvalId, {
+  const resolutionInput = {
     decision,
     resolvedBy,
     resolutionNote: duration
       ? "Approved from Chat with a request for a temporary tool allowance."
       : buildChatApprovalResolutionNote(decision, allowScope),
-  });
-  if (duration) {
+  };
+  const allowance =
+    duration && googleRead
+      ? createGoogleReadAllowanceCommit(host, { duration, scope: googleRead, toolPattern, resolvedBy })
+      : undefined;
+  const resolution = await host.resolveApproval(
+    approvalId,
+    resolutionInput,
+    ...(allowance ? ([allowance.context] as const) : []),
+  );
+  if (allowance) {
+    ({ grant, grantError } = await allowance.finish());
+  }
+  if (duration && !allowance) {
     // Only the canonical winning decision can mint this grant. Do not reuse
     // an existing grant or copy this allowance to a parent or workspace.
     try {

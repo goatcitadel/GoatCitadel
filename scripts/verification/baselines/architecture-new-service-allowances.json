@@ -2869,6 +2869,38 @@
       "maxDependencyMemberAccesses": 11,
       "reason": "Composes read-only capability explanation and existing discovery from narrow ports, preserving discovery gating and live config reads while keeping Gateway below its original line-count ceiling.",
       "evidence": "Capability knowledge runtime and discovery tests exercise bound runtime methods, workspace catalogs and feature gates. Repository counters measure 0 host callbacks and 11 dependency member accesses."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/gateway/pending-tool-approval-policy.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 8,
+      "reason": "Owns the pending tool approval policy refresh from persisted turn and session context before approved tool execution.",
+      "evidence": "Scheduled tool turn integration tests exercise approval replay with stored policy context. Repository counters measure 0 host callbacks and 8 dependency member accesses."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/chat-google-read-allowance.ts",
+      "maxHostCallbacks": 4,
+      "maxDependencyMemberAccesses": 4,
+      "reason": "Binds a timed Google read grant to the pending approval's account, session and target, and records the grant outcome within the resolution transaction.",
+      "evidence": "Approval lifecycle and scheduled tool turn tests cover timed Google reads and scoped grant reuse. Repository counters measure 4 host callbacks and 4 dependency member accesses."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/chat-google-read-approval-projection.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 2,
+      "reason": "Uses durable approval and resolution evidence to reconcile Calendar and Gmail read receipts in Chat.",
+      "evidence": "Chat message route and scheduled tool turn tests exercise projection of approval and grant evidence. Repository counters measure 0 host callbacks and 2 dependency member accesses."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/google-workspace-read-request.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 3,
+      "reason": "Normalizes Calendar and Gmail reads and binds each request to an eligible saved connection and sign-in before it reaches policy.",
+      "evidence": "Google Workspace OAuth service tests cover request normalization and connection binding. Repository counters measure 0 host callbacks and 3 dependency member accesses."
     }
   ]
 }
