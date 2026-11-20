@@ -368,6 +368,7 @@ A second limit in the executor would duplicate that guard.
 |---|---|
 | Shell output can retain a credential fragment across the capture limit | The stream collector drops the incomplete lines on both sides of a capture gap in `shell-output-capture.ts`. For intact captures, credential scrubbing runs before the smaller display cut. The collector test covers a long line crossing the gap. |
 | An unconstrained matched read grant can still be limited by other applicable read grants | The physical executor retains applicable path constraints before evaluating the read posture. The suggested early fallback to `full_disk` would expand the reads permitted by the physical executor. Keep the current boundary until the policy owner explicitly decides the precedence of overlapping grants. |
+| The QQBot multipart test claims sequential message numbers but exercises only one chunk | The test now submits both chunks and checks the original inbound message ID and fresh sequence numbers. The executor and channel setup guide specify a separately randomized sequence for every send. |
 
 ### There is no way to dismiss an AI finding
 

@@ -118,12 +118,7 @@ describe("executeTool", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
-    delete process.env.LINE_CHANNEL_ACCESS_TOKEN;
-    delete process.env.MATTERMOST_BOT_TOKEN;
-    delete process.env.NEXTCLOUD_TALK_TOKEN;
-    delete process.env.SLACK_BOT_TOKEN;
-    delete process.env.WHATSAPP_ACCESS_TOKEN;
-    delete process.env.ZALO_ACCESS_TOKEN;
+    killAllBackgroundProcesses();
     await removeTestWorkspace(testWorkspaceRoot);
   });
 
@@ -1720,7 +1715,7 @@ describe("executeTool", () => {
 
   it("sends channel messages through Slack bot API with rendered attachments", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
     const auditOnlySecret = "slack-callback-secret-value-1234567890";
     const fetchMock = vi.fn(
       async () =>
@@ -1963,7 +1958,7 @@ describe("executeTool", () => {
 
   it("keeps matched grant host constraints enforced across channel attachment redirects", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.MATTERMOST_BOT_TOKEN = "mattermost-token";
+    vi.stubEnv("MATTERMOST_BOT_TOKEN", "mattermost-token");
     const fetchMock = vi.fn(async (url: string | URL | Request) => {
       const href = String(url);
       if (href === "https://mattermost.example/api/v4/users/me") {
@@ -2371,7 +2366,7 @@ describe("executeTool", () => {
 
   it("does not retry ambiguous Slack mutations and requires manual reconciliation", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -2439,7 +2434,7 @@ describe("executeTool", () => {
 
   it("quarantines a sent mutation when delivery-ledger finalization fails", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
     const fetchMock = vi.fn(
       async () =>
         new Response(JSON.stringify({ ok: true, ts: "1712345678.000300", channel: "C123" }), {
@@ -2858,7 +2853,7 @@ describe("executeTool", () => {
 
   it("uploads inline Slack attachments through the external upload flow", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);
       if (url === "https://slack.com/api/chat.postMessage") {
@@ -2974,7 +2969,7 @@ describe("executeTool", () => {
 
   it("threads Slack bot-token replies from generic replyToMessageId inputs", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);
       if (url === "https://slack.com/api/chat.postMessage") {
@@ -3265,18 +3260,20 @@ describe("executeTool", () => {
 
     beforeEach(() => {
       resetGoogleChatAccessTokenCache();
-      process.env.GOOGLE_CHAT_SA_KEY = JSON.stringify({
-        type: "service_account",
-        client_email: "goatcitadel-chat@example-project.iam.gserviceaccount.com",
-        private_key_id: "key-id-1",
-        private_key: googleChatKey,
-        token_uri: "https://oauth2.googleapis.com/token",
-      });
+      vi.stubEnv(
+        "GOOGLE_CHAT_SA_KEY",
+        JSON.stringify({
+          type: "service_account",
+          client_email: "goatcitadel-chat@example-project.iam.gserviceaccount.com",
+          private_key_id: "key-id-1",
+          private_key: googleChatKey,
+          token_uri: "https://oauth2.googleapis.com/token",
+        }),
+      );
     });
 
     afterEach(() => {
       resetGoogleChatAccessTokenCache();
-      delete process.env.GOOGLE_CHAT_SA_KEY;
     });
 
     function googleChatAppStorage(deliveryId: string) {
@@ -3462,7 +3459,7 @@ describe("executeTool", () => {
 
   it("sends channel messages through Mattermost bot adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.MATTERMOST_BOT_TOKEN = "mm-token";
+    vi.stubEnv("MATTERMOST_BOT_TOKEN", "mm-token");
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);
       if (url.endsWith("/api/v4/users/me")) {
@@ -3566,7 +3563,7 @@ describe("executeTool", () => {
 
   it("uploads Mattermost attachments before creating the post", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.MATTERMOST_BOT_TOKEN = "mm-token";
+    vi.stubEnv("MATTERMOST_BOT_TOKEN", "mm-token");
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);
       if (url.endsWith("/api/v4/users/me")) {
@@ -3679,7 +3676,7 @@ describe("executeTool", () => {
 
   it("sends channel messages through LINE bot adapters using shared target keys", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.LINE_CHANNEL_ACCESS_TOKEN = "line-token";
+    vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "line-token");
     const fetchMock = vi.fn(
       async () =>
         new Response("", {
@@ -3758,7 +3755,7 @@ describe("executeTool", () => {
 
   it("sends channel messages through Nextcloud Talk bot adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.NEXTCLOUD_TALK_TOKEN = "nextcloud-secret";
+    vi.stubEnv("NEXTCLOUD_TALK_TOKEN", "nextcloud-secret");
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -3842,7 +3839,7 @@ describe("executeTool", () => {
 
   it("forwards Nextcloud Talk reply targets for quoted replies", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.NEXTCLOUD_TALK_TOKEN = "nextcloud-secret";
+    vi.stubEnv("NEXTCLOUD_TALK_TOKEN", "nextcloud-secret");
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -3911,7 +3908,7 @@ describe("executeTool", () => {
 
   it("rejects Nextcloud Talk attachments because the adapter is send-only", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.NEXTCLOUD_TALK_TOKEN = "nextcloud-secret";
+    vi.stubEnv("NEXTCLOUD_TALK_TOKEN", "nextcloud-secret");
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -3971,7 +3968,7 @@ describe("executeTool", () => {
 
   it("adds reactions through Nextcloud Talk bot adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.NEXTCLOUD_TALK_TOKEN = "nextcloud-secret";
+    vi.stubEnv("NEXTCLOUD_TALK_TOKEN", "nextcloud-secret");
     const fetchMock = vi.fn(
       async () =>
         new Response("", {
@@ -4082,7 +4079,7 @@ describe("executeTool", () => {
 
     it("matrix channel.send posts m.room.message", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
-      process.env.MATRIX_OUTBOUND_TOKEN = "syt_outbound";
+      vi.stubEnv("MATRIX_OUTBOUND_TOKEN", "syt_outbound");
       const fetchMock = vi.fn(
         async (..._args: unknown[]) =>
           new Response(JSON.stringify({ event_id: "$sent1" }), {
@@ -4110,12 +4107,11 @@ describe("executeTool", () => {
       expect(init.method).toBe("PUT");
       expect(new Headers(init.headers).get("authorization")).toBe("Bearer syt_outbound");
       expect(JSON.parse(String(init.body))).toEqual({ msgtype: "m.text", body: "hello matrix" });
-      delete process.env.MATRIX_OUTBOUND_TOKEN;
     });
 
     it("matrix rejects a present but invalid reply id instead of sending a plain message", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
-      process.env.MATRIX_OUTBOUND_TOKEN = "syt_outbound";
+      vi.stubEnv("MATRIX_OUTBOUND_TOKEN", "syt_outbound");
       const fetchMock = vi.fn(async (..._args: unknown[]) => new Response("{}", { status: 200 }));
       vi.stubGlobal("fetch", fetchMock);
       const result = await executeTool(
@@ -4131,12 +4127,11 @@ describe("executeTool", () => {
       expect(result).toMatchObject({ status: "failed" });
       expect(JSON.stringify(result)).toContain("replyToMessageId must be a Matrix event id");
       expect(fetchMock).not.toHaveBeenCalled();
-      delete process.env.MATRIX_OUTBOUND_TOKEN;
     });
 
     it("matrix rejects attachments instead of reporting a text-only send as sent", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
-      process.env.MATRIX_OUTBOUND_TOKEN = "syt_outbound";
+      vi.stubEnv("MATRIX_OUTBOUND_TOKEN", "syt_outbound");
       const fetchMock = vi.fn(async (..._args: unknown[]) => new Response("{}", { status: 200 }));
       vi.stubGlobal("fetch", fetchMock);
       const result = await executeTool(
@@ -4156,12 +4151,11 @@ describe("executeTool", () => {
       expect(result).toMatchObject({ status: "failed" });
       expect(JSON.stringify(result)).toContain("Matrix channel delivery is text-only; attachments are not supported.");
       expect(fetchMock).not.toHaveBeenCalled();
-      delete process.env.MATRIX_OUTBOUND_TOKEN;
     });
 
     it("matrix channel.react and channel.unsend use the message's room and event id", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
-      process.env.MATRIX_OUTBOUND_TOKEN = "syt_outbound";
+      vi.stubEnv("MATRIX_OUTBOUND_TOKEN", "syt_outbound");
       const fetchMock = vi.fn(
         async (..._args: unknown[]) => new Response(JSON.stringify({ event_id: "$new" }), { status: 200 }),
       );
@@ -4197,12 +4191,11 @@ describe("executeTool", () => {
       const [redactUrl, redactInit] = fetchMock.mock.calls[1] as [string, RequestInit];
       expect(String(redactUrl)).toContain("/rooms/!default%3Aexample.com/redact/%24orig/");
       expect(redactInit.method).toBe("PUT");
-      delete process.env.MATRIX_OUTBOUND_TOKEN;
     });
 
     it("matrix refuses a homeserver outside the allowlist before any request", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
-      process.env.MATRIX_OUTBOUND_TOKEN = "syt_outbound";
+      vi.stubEnv("MATRIX_OUTBOUND_TOKEN", "syt_outbound");
       const fetchMock = vi.fn(async (..._args: unknown[]) => new Response("{}", { status: 200 }));
       vi.stubGlobal("fetch", fetchMock);
       const result = await executeTool(
@@ -4217,7 +4210,6 @@ describe("executeTool", () => {
       );
       expect(result).toMatchObject({ status: "failed" });
       expect(fetchMock).not.toHaveBeenCalled();
-      delete process.env.MATRIX_OUTBOUND_TOKEN;
     });
   });
 
@@ -4265,7 +4257,7 @@ describe("executeTool", () => {
 
     it("qqbot channel.send posts a passive group reply", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
-      process.env.QQBOT_EXECUTOR_SECRET = "qq-exec-secret";
+      vi.stubEnv("QQBOT_EXECUTOR_SECRET", "qq-exec-secret");
       const fetchMock = vi.fn(async (url: unknown) =>
         String(url).startsWith("https://bots.qq.com/")
           ? jsonResponse({ access_token: "qq-access", expires_in: "7200" })
@@ -4295,12 +4287,11 @@ describe("executeTool", () => {
         msg_id: "evt-9",
         msg_seq: expect.any(Number),
       });
-      delete process.env.QQBOT_EXECUTOR_SECRET;
     });
 
     it("qqbot picks a different random msg_seq base for each send to the same anchor, and refuses a sixth chunk", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
-      process.env.QQBOT_EXECUTOR_SECRET = "qq-exec-secret-4";
+      vi.stubEnv("QQBOT_EXECUTOR_SECRET", "qq-exec-secret-4");
       const fetchMock = vi.fn(async (url: unknown) =>
         String(url).startsWith("https://bots.qq.com/")
           ? jsonResponse({ access_token: "qq-access-4", expires_in: "7200" })
@@ -4374,50 +4365,49 @@ describe("executeTool", () => {
       );
       expect(active).toMatchObject({ status: "sent" });
       expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/messages"))).toHaveLength(1);
-      delete process.env.QQBOT_EXECUTOR_SECRET;
     });
 
-    it("qqbot reuses the original msg_id with an incrementing msg_seq on later chunks", async () => {
+    it("qqbot preserves the original msg_id and uses a fresh msg_seq for each chunk", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
-      process.env.QQBOT_EXECUTOR_SECRET = "qq-exec-secret-3";
+      vi.stubEnv("QQBOT_EXECUTOR_SECRET", "qq-exec-secret-3");
       const fetchMock = vi.fn(async (url: unknown) =>
         String(url).startsWith("https://bots.qq.com/")
           ? jsonResponse({ access_token: "qq-access-3", expires_in: "7200" })
           : jsonResponse({ id: "qq-msg-3" }),
       );
       vi.stubGlobal("fetch", fetchMock);
-      await executeTool(
-        {
-          toolName: "channel.send",
-          args: {
-            connectionId: "conn-qqbot",
-            message: "second",
-            replyToMessageId: "qq-msg-1",
-            replyAnchorMessageId: "evt-9",
-            replyToPartIndex: 1,
+      const storage = chinaStorage("qqbot", { ...qqConfig, appId: "executor-app-3" });
+      for (const [partIndex, message] of ["first", "second"].entries()) {
+        await executeTool(
+          {
+            toolName: "channel.send",
+            args: {
+              connectionId: "conn-qqbot",
+              message,
+              ...(partIndex > 0 ? { replyToMessageId: "qq-msg-3" } : {}),
+              replyAnchorMessageId: "evt-9",
+              replyToPartIndex: partIndex,
+            },
+            agentId: "operator",
+            sessionId: "sess-qqbot-first",
           },
-          agentId: "operator",
-          sessionId: "sess-qqbot-first",
-        },
-        chinaPolicy,
-        chinaStorage("qqbot", { ...qqConfig, appId: "executor-app-3" }),
-      );
-      const sendCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/messages")) as unknown as [
-        string,
-        RequestInit,
-      ];
-      expect(JSON.parse(String(sendCall[1].body))).toEqual({
-        content: "second",
-        msg_type: 0,
-        msg_id: "evt-9",
-        msg_seq: expect.any(Number),
-      });
-      delete process.env.QQBOT_EXECUTOR_SECRET;
+          chinaPolicy,
+          storage,
+        );
+      }
+      const sends = (fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)
+        .filter(([url]) => url.includes("/messages"))
+        .map(([, init]) => JSON.parse(String(init.body)) as { msg_seq: number });
+      expect(sends).toHaveLength(2);
+      const [first, second] = sends;
+      expect(first).toEqual({ content: "first", msg_type: 0, msg_id: "evt-9", msg_seq: expect.any(Number) });
+      expect(second).toEqual({ content: "second", msg_type: 0, msg_id: "evt-9", msg_seq: expect.any(Number) });
+      expect(second?.msg_seq).not.toBe(first?.msg_seq);
     });
 
     it("qqbot uses the sandbox host and rejects attachments instead of dropping them", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
-      process.env.QQBOT_EXECUTOR_SECRET = "qq-exec-secret-2";
+      vi.stubEnv("QQBOT_EXECUTOR_SECRET", "qq-exec-secret-2");
       const fetchMock = vi.fn(async (url: unknown) =>
         String(url).startsWith("https://bots.qq.com/")
           ? jsonResponse({ access_token: "qq-access-2", expires_in: "7200" })
@@ -4456,7 +4446,6 @@ describe("executeTool", () => {
       expect(withAttachment).toMatchObject({ status: "failed" });
       expect(JSON.stringify(withAttachment)).toContain("QQBot channel delivery is text-only");
       expect(fetchMock.mock.calls.length).toBe(before);
-      delete process.env.QQBOT_EXECUTOR_SECRET;
     });
 
     it("qqbot react and unsend are not supported by this adapter", async () => {
@@ -4482,7 +4471,7 @@ describe("executeTool", () => {
 
     it("wecom channel.send posts message/send", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
-      process.env.WECOM_EXECUTOR_SECRET = "wecom-exec-secret";
+      vi.stubEnv("WECOM_EXECUTOR_SECRET", "wecom-exec-secret");
       const fetchMock = vi.fn(async (url: unknown) =>
         String(url).includes("/cgi-bin/gettoken")
           ? jsonResponse({ errcode: 0, errmsg: "ok", access_token: "wecom-access", expires_in: 7200 })
@@ -4511,12 +4500,11 @@ describe("executeTool", () => {
         agentid: 1000002,
         text: { content: "hello wecom" },
       });
-      delete process.env.WECOM_EXECUTOR_SECRET;
     });
 
     it("wecom retries once after an expired token and never exposes the token url on failure", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
-      process.env.WECOM_EXECUTOR_SECRET = "wecom-exec-secret-2";
+      vi.stubEnv("WECOM_EXECUTOR_SECRET", "wecom-exec-secret-2");
       let mints = 0;
       let sends = 0;
       const fetchMock = vi.fn(async (url: unknown) => {
@@ -4562,7 +4550,6 @@ describe("executeTool", () => {
       expect(failed).toMatchObject({ status: "failed" });
       expect(JSON.stringify(failed)).toContain("errcode 60020");
       expect(JSON.stringify(failed)).not.toContain("wecom-secret-token");
-      delete process.env.WECOM_EXECUTOR_SECRET;
     });
   });
 
@@ -4593,7 +4580,7 @@ describe("executeTool", () => {
 
     it("deletes the published message with DELETE /<topic>/<message id> and the bearer token", async () => {
       mocked.isBrowserToolName.mockReturnValue(false);
-      process.env.NTFY_UNSEND_TOKEN = "ntfy-token";
+      vi.stubEnv("NTFY_UNSEND_TOKEN", "ntfy-token");
       const fetchMock = vi.fn(
         async (..._args: unknown[]) => new Response(JSON.stringify({ id: "x" }), { status: 200 }),
       );
@@ -4613,7 +4600,6 @@ describe("executeTool", () => {
       const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
       expect(init.method).toBe("DELETE");
       expect(init.headers).toEqual({ Authorization: "Bearer ntfy-token" });
-      delete process.env.NTFY_UNSEND_TOKEN;
     });
 
     it("rejects a malformed message id and a host outside the allowlist before deleting", async () => {
@@ -4667,7 +4653,7 @@ describe("executeTool", () => {
 
   it("reacts to Slack messages through bot-token connectors", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
     const fetchMock = vi.fn(
       async () =>
         new Response(JSON.stringify({ ok: true }), {
@@ -4740,7 +4726,7 @@ describe("executeTool", () => {
 
   it("unsends Slack messages through bot-token connectors", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.SLACK_BOT_TOKEN = "xoxb-test";
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-test");
     const fetchMock = vi.fn(
       async () =>
         new Response(JSON.stringify({ ok: true }), {
@@ -5005,7 +4991,7 @@ describe("executeTool", () => {
 
   it("unsends Mattermost posts", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.MATTERMOST_BOT_TOKEN = "mm-token";
+    vi.stubEnv("MATTERMOST_BOT_TOKEN", "mm-token");
     const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -5067,7 +5053,7 @@ describe("executeTool", () => {
 
   it("sends channel messages through WhatsApp Cloud API adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.WHATSAPP_ACCESS_TOKEN = "wa-token";
+    vi.stubEnv("WHATSAPP_ACCESS_TOKEN", "wa-token");
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -5148,7 +5134,7 @@ describe("executeTool", () => {
 
   it("sends WhatsApp URL attachments as rich media messages", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.WHATSAPP_ACCESS_TOKEN = "wa-token";
+    vi.stubEnv("WHATSAPP_ACCESS_TOKEN", "wa-token");
     let messageCounter = 0;
     const fetchMock = vi.fn(async () => {
       messageCounter += 1;
@@ -5231,7 +5217,7 @@ describe("executeTool", () => {
 
   it("uploads inline WhatsApp attachments before sending them", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.WHATSAPP_ACCESS_TOKEN = "wa-token";
+    vi.stubEnv("WHATSAPP_ACCESS_TOKEN", "wa-token");
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);
       if (url.endsWith("/media")) {
@@ -5340,7 +5326,7 @@ describe("executeTool", () => {
 
   it("adds WhatsApp reactions through the Cloud API", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.WHATSAPP_ACCESS_TOKEN = "wa-token";
+    vi.stubEnv("WHATSAPP_ACCESS_TOKEN", "wa-token");
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -5565,7 +5551,7 @@ describe("executeTool", () => {
 
   it("sends channel messages through Zalo bot adapters", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    process.env.ZALO_ACCESS_TOKEN = "zalo-token";
+    vi.stubEnv("ZALO_ACCESS_TOKEN", "zalo-token");
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -6695,7 +6681,7 @@ describe("executeTool", () => {
     expect(result).toMatchObject({ exitCode: -1 });
     expect(String(result.stderr ?? "")).toMatch(/timed out/i);
     // The spawned process must be gone after the executor returns.
-    await expectPidDead(extractPid(result));
+    await expectPidDead(result.pid);
   }, 15_000);
 
   it("removes the background abort listener when the child closes", async () => {
@@ -6796,7 +6782,7 @@ describe("executeTool", () => {
 
     expect(result).toMatchObject({ exitCode: -1 });
     expect(String(result.stderr ?? "")).toMatch(/abort/i);
-    await expectPidDead(extractPid(result));
+    await expectPidDead(result.pid);
   }, 15_000);
 
   describe("spawn env scrubbing", () => {
@@ -6805,11 +6791,7 @@ describe("executeTool", () => {
     const CANARY_VALUE = "spawn-canary";
 
     beforeEach(() => {
-      process.env.FAKE_API_KEY = CANARY_VALUE;
-    });
-
-    afterEach(() => {
-      delete process.env.FAKE_API_KEY;
+      vi.stubEnv("FAKE_API_KEY", CANARY_VALUE);
     });
 
     it("shell.exec children do not inherit secret-pattern env vars", async () => {
@@ -6968,10 +6950,6 @@ describe("executeTool", () => {
   });
 });
 
-function extractPid(result: Record<string, unknown>): number | undefined {
-  return typeof result.pid === "number" ? result.pid : undefined;
-}
-
 function isPidAlive(pid: number | undefined): boolean {
   if (typeof pid !== "number") {
     return false;
@@ -6985,9 +6963,9 @@ function isPidAlive(pid: number | undefined): boolean {
   }
 }
 
-async function expectPidDead(pid: number | undefined): Promise<void> {
-  if (typeof pid !== "number") {
-    return;
+async function expectPidDead(pid: unknown): Promise<void> {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
+    throw new Error("Expected the executor to return a valid process ID");
   }
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (!isPidAlive(pid)) {
