@@ -156,7 +156,10 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
               decisions.map((item) => item.id),
             );
             const realm = await page.evaluate(() => performance.timeOrigin);
-            await list.getByRole("button", { name: "Details", exact: true }).first().focus();
+            const keyboardHelp = page.getByRole("button", { name: "Keyboard shortcuts", exact: true });
+            await keyboardHelp.click();
+            await page.getByRole("checkbox", { name: "Enable Inbox letter shortcuts", exact: true }).check();
+            await keyboardHelp.click();
             const visited = [];
             for (let position = 1; position <= decisions.length; position += 1) {
               await page.keyboard.press("j");
@@ -184,8 +187,10 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
             assert.equal(ownerUrl.searchParams.get("workspaceId"), workspaceId);
             assert.equal(ownerUrl.searchParams.get("sessionId"), sessionId);
             assert.equal(ownerUrl.searchParams.get("shell"), "cockpit");
-            await last.getByRole("button", { name: "Show source context", exact: true }).click();
-            const contextRegion = last.getByRole("region", { name: "Source conversation context" });
+            await page.keyboard.press("o");
+            const contextRegion = page
+              .locator('[data-inspector-body="true"]')
+              .getByRole("region", { name: "Source conversation context" });
             const canonicalMessages = await api(
               "/api/v1/chat/sessions/" + encodeURIComponent(sessionId) + "/messages?limit=1",
             );
@@ -215,7 +220,7 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
               assert.equal(await column.getAttribute("aria-pressed"), "true");
             }
             await verifyWindow(
-              page.getByRole("list", { name: "Needs attention records", exact: true }),
+              page.getByRole("list", { name: "Needs attention tasks", exact: true }),
               fixture.tasks.map((item) => "task:" + item.taskId),
             );
             await capture("tasks");

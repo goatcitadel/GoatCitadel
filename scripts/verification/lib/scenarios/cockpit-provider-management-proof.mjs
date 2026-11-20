@@ -528,12 +528,13 @@ export async function runCockpitProviderManagementProof({ context, browser, stac
                 .waitFor();
               await panel.getByRole("button", { name: "Review required step", exact: true }).click();
               const secure = page.getByRole("dialog");
-              await secure.waitFor();
+              const credentialField = secure.locator('input[type="password"]');
+              await credentialField.waitFor();
               assert.ok(
                 (await secure.innerText()).includes("plaintext") && (await secure.innerText()).includes(envVar),
               );
               const synthetic = "verification-profile-initial-credential";
-              await secure.locator('input[type="password"]').fill(synthetic);
+              await credentialField.fill(synthetic);
               const secureResponse = responseFor(
                 "POST",
                 `/api/v1/change-plans/${encodeURIComponent(plan.planId)}/provider-secret`,

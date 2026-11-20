@@ -685,15 +685,15 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
           await inspector.getByRole("button", { name: "Approve once", exact: true }).waitFor();
           // Follow the live toast before its normal six-second display expires.
           // The pending-plan review below must not consume that attention window.
-          await panel
-            .getByText("The draft remains unsaved until GoatCitadel confirms the change.", { exact: true })
-            .waitFor();
           // The approval opens in place on its own. This proof decides it in Inbox, so the in-place dialog is closed
           // without a decision, and the page must offer no Continue step and make no write of its own.
           const inPlaceApproval = page.getByRole("dialog");
           await inPlaceApproval.waitFor();
           await page.keyboard.press("Escape");
           await inPlaceApproval.waitFor({ state: "hidden" });
+          await panel
+            .getByText("The draft remains unsaved until GoatCitadel confirms the change.", { exact: true })
+            .waitFor();
           await panel.getByRole("button", { name: "Refresh approval change", exact: true }).click();
           assert.equal(
             await panel.getByRole("button", { name: "Continue approved change", exact: true }).count(),

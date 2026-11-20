@@ -174,6 +174,7 @@ export async function runCockpitFirstRunGuardProof({ context, stack, requestJson
               true,
             );
             await area.getByRole("button", { name: /Step 2.*Choose your safety settings/u }).click();
+            await area.getByRole("button", { name: "Skip tutorial", exact: true }).click();
             const approval = area.getByRole("combobox", { name: "Approval rule", exact: true });
             await approval.selectOption("approve_risky");
             await area.getByRole("button", { name: "Exit setup", exact: true }).click();

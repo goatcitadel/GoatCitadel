@@ -10,17 +10,15 @@ export function assertNativeInboxOwner(item, href, workspaceId) {
   assert.equal(destination.origin, "http://verification.invalid", "Inbox owner link must not change origin.");
   assert.equal(destination.searchParams.get("workspaceId"), workspaceId, "Inbox owner link lost its workspace.");
   assert.equal(destination.searchParams.get("shell"), "cockpit", "Inbox owner link must open the native owner.");
-  let identityKeys;
   if (item.kind === "user_input") {
     assert.equal(destination.pathname, "/chat");
-    assert.equal(destination.searchParams.get("item"), null, "Chat owner link carried an Inbox selection.");
-    identityKeys = ["sessionId", "turnId"];
+    assert.equal(destination.searchParams.has("item"), false, "Chat should not inherit the Inbox row selection.");
   } else {
     assert.equal(item.kind, "completed_background_run");
     assert.equal(destination.pathname, `/work/runs/${encodeURIComponent(item.source.runId)}`);
-    identityKeys = ["sessionId", "turnId", "runId", "taskId"];
   }
-  for (const key of identityKeys) {
+  const keys = item.kind === "user_input" ? ["sessionId", "turnId"] : ["sessionId", "turnId", "runId", "taskId"];
+  for (const key of keys) {
     if (item.source[key] !== undefined) assert.equal(destination.searchParams.get(key), item.source[key], `Inbox owner link lost ${key}.`);
   }
   return destination;

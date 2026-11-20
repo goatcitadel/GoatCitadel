@@ -172,6 +172,7 @@ function createDeferredInitHarness(overrides: Record<string, unknown> = {}) {
     readFeatureFlags: vi.fn(() => ({ durableKernelV1Enabled: true })),
     recoverInterruptedSecureConfigurationsOnBoot: vi.fn(async () => undefined),
     startMaintenanceScheduler: vi.fn(),
+    startCronScheduler: vi.fn(),
     startOrchestrationWorktreeReapScheduler: vi.fn(),
     startProactiveScheduler: vi.fn(),
     scheduleProviderCatalogPrewarm: vi.fn(),
@@ -293,6 +294,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     ).toBeLessThan(gateway.startProactiveScheduler.mock.invocationCallOrder[0]);
     expect(gateway.startProactiveScheduler).toHaveBeenCalled();
     expect(gateway.startMaintenanceScheduler).toHaveBeenCalled();
+    expect(gateway.startCronScheduler).toHaveBeenCalled();
     expect(gateway.startOrchestrationWorktreeReapScheduler).toHaveBeenCalled();
     expect(gateway.durableRunService.startWorker).toHaveBeenCalled();
     expect(gateway.recoverInterruptedSecureConfigurationsOnBoot.mock.invocationCallOrder[0]).toBeLessThan(
@@ -418,6 +420,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     const starts = {
       proactiveScheduler: gateway.startProactiveScheduler,
       maintenanceScheduler: gateway.startMaintenanceScheduler,
+      cronScheduler: gateway.startCronScheduler,
       chatTimerScheduler: gateway.startChatTimerScheduler,
       orchestrationWorktreeReapScheduler: gateway.startOrchestrationWorktreeReapScheduler,
       mobilePushDeliveryScheduler: gateway.startMobilePushDeliverySchedulerIfCredentialed,

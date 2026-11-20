@@ -54,7 +54,7 @@ export function assertShellGeometry({ variant, viewportWidth, railWidth, inspect
     assert.ok(inspectorWidth > 0 && inspectorWidth <= viewportWidth, "Tablet inspector escaped its viewport.");
     assert.ok(Math.abs(mainBefore - mainDuring) <= 1, "Tablet inspector must overlay the content.");
   } else {
-    assert.ok(inspectorWidth >= 360 && inspectorWidth <= 480, "Inspector width escaped its reviewed bounds.");
+    assert.ok(inspectorWidth >= 360 && inspectorWidth <= 560, "Inspector width escaped its reviewed bounds.");
     assert.ok(Math.abs(mainBefore - mainDuring - inspectorWidth) <= 1, "Desktop inspector must share the content row.");
   }
 }
@@ -167,13 +167,13 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
         if (variant === "desktop") {
           const handle = page.getByRole("separator", { name: "Resize inspector", exact: true });
           await handle.focus(); await page.keyboard.press("Home"); assert.equal(await handle.getAttribute("aria-valuenow"), "360");
-          await page.keyboard.press("End"); assert.equal(await handle.getAttribute("aria-valuenow"), "480");
-          await page.waitForFunction(() => document.querySelector('aside[data-inspector-mode="docked"]')?.getBoundingClientRect().width === 480);
+          await page.keyboard.press("End"); assert.equal(await handle.getAttribute("aria-valuenow"), "560");
+          await page.waitForFunction(() => document.querySelector('aside[data-inspector-mode="docked"]')?.getBoundingClientRect().width === 560);
           const point = await handle.evaluate(element => { const { x, y, width, height } = element.getBoundingClientRect(); return { x, y, width, height }; }); assert.ok(point);
           evidence.pointerStart = point;
           assert.equal(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute("aria-label"), { x: point.x + point.width / 2, y: point.y + 70 }), "Resize inspector");
           await page.mouse.move(point.x + point.width / 2, point.y + 70); await page.mouse.down();
-          await page.mouse.move(point.x + 200, point.y + 70, { steps: 4 }); await page.mouse.up();
+          await page.mouse.move(point.x + 260, point.y + 70, { steps: 4 }); await page.mouse.up();
           await page.waitForFunction(() => document.querySelector('[aria-label="Resize inspector"]')?.getAttribute("aria-valuenow") === "360");
           assert.equal(await handle.getAttribute("aria-valuenow"), "360");
         }

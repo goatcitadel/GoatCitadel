@@ -162,6 +162,19 @@ describe("cockpit Back and Forward gate", () => {
     await settle();
     expect(here()).toBe("/work");
   });
+  it("preserves the accepted owner link when closing an Inbox sheet clears its item from the URL", async () => {
+    register(false);
+    commitCockpitNavigation("/inbox?item=background-update");
+    deferTraversals();
+    const cleanup = registerCockpitSheetBack(vi.fn());
+
+    commitCockpitNavigation("/work/runs/background-run");
+    commitCockpitNavigation("/inbox", { replace: true });
+    await settle();
+    cleanup();
+
+    expect(here()).toBe("/work/runs/background-run?shell=cockpit");
+  });
   it("skips a lower sheet retired under the top and restores ordinary history", async () => {
     register(false);
     commitCockpitNavigation("/settings/models#local-ai");
@@ -233,6 +246,21 @@ describe("cockpit Back and Forward gate", () => {
     await settle();
     expect(here()).toBe(inbox);
     expect(owner.review).not.toHaveBeenCalled();
+  });
+  it("keeps the latest accepted destination when another navigation arrives during sheet restore", async () => {
+    register(false);
+    commitCockpitNavigation("/inbox?item=background-update");
+    deferTraversals();
+    const cleanup = registerCockpitSheetBack(() => {
+      queueMicrotask(() => commitCockpitNavigation("/inbox", { replace: true }));
+    });
+
+    commitCockpitNavigation("/work/runs/background-run");
+    commitCockpitNavigation("/settings/advanced");
+    await settle();
+    cleanup();
+
+    expect(here()).toBe("/settings/advanced?shell=cockpit");
   });
   it("removes orphan sheet entries retained by a document reload before opening another sheet", async () => {
     register(false);

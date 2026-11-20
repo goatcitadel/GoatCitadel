@@ -256,7 +256,7 @@ export async function runCockpitWorkLineageProof({ context, browser, stack, cita
             if (new URL(request.url()).pathname.startsWith(ownerPath)) foreignReads.push(request.url());
           });
           await foreignPage.goto(buildVerificationUiUrl(stack.uiUrl, `/work/runs/${encodeURIComponent(parentRunId)}?shell=cockpit`), { waitUntil: "domcontentloaded" });
-          await foreignPage.getByText("Run outside this workspace", { exact: true }).waitFor();
+          await foreignPage.getByRole("heading", { name: "Run in another workspace", exact: true }).waitFor();
           assert.equal(await foreignPage.getByRole("region", { name: "Delegation lineage", exact: true }).count(), 0);
           assert.equal(foreignReads.length, 0, "Foreign workspace must not inspect parent lineage");
         } finally { await foreignContext.close(); }
