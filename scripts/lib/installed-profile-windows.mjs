@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { parseEnv } from "node:util";
 import { directoryExists } from "./installed-profile-recovery.mjs";
 
-export function inspectLocalProfileStorage(activeRoot, storedRoot = activeRoot, env = process.env) {
+export function inspectLocalProfileStorage(activeRoot, storedRoot = activeRoot, env = process.env, { skipExternal = false } = {}) {
   const fileEnv = parseEnv(readProfileFile(path.join(storedRoot, ".env")) ?? "");
   const effectiveEnv = { ...fileEnv, ...env };
   const configDir = path.join(storedRoot, "config");
@@ -19,6 +19,7 @@ export function inspectLocalProfileStorage(activeRoot, storedRoot = activeRoot, 
     const mode = effectiveEnv.GOATCITADEL_POSTGRES_MODE?.trim().toLowerCase() || postgres?.mode;
     if (driver !== "sqlite" && (mode === "external" || postgres?.connectionString || postgres?.connectionStringEnv
       || effectiveEnv.GOATCITADEL_POSTGRES_CONNECTION_STRING || effectiveEnv.GOATCITADEL_POSTGRES_CONNECTION_STRING_ENV)) {
+      if (skipExternal) return [];
       throw new Error("Reset and restore needs a local database. This profile uses an external PostgreSQL connection.");
     }
     const dataDir = database?.bundledPostgres?.dataDir;

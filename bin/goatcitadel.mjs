@@ -174,7 +174,9 @@ async function main() {
   }
 
   if (command === "stop") {
-    await printRuntimeCommandResult(() => withInstalledProfileLock(stopGoatCitadelRuntime), rest);
+    const forUpdate = rest.includes("--for-update");
+    await printRuntimeCommandResult(() => withInstalledProfileLock(forUpdate
+      ? stopInstalledRuntimeForUpdate : stopGoatCitadelRuntime), rest.filter((arg) => arg !== "--for-update"));
     return;
   }
 
@@ -729,6 +731,18 @@ function withInstalledProfileLock(operation) {
     service: "desktop-profile",
     timeoutMs: MANAGED_LIFECYCLE_LOCK_TIMEOUT_MS,
   }, operation);
+}
+
+async function stopInstalledRuntimeForUpdate() {
+  if (!ownsWindowsInstalledProfile() || process.env.GOATCITADEL_DESKTOP_HOST !== "1") {
+    throw new Error("Update shutdown must come from the installed GoatCitadel desktop app.");
+  }
+  const postgres = inspectLocalProfileStorage(packagedRuntimeRoot, packagedRuntimeRoot, process.env, { skipExternal: true });
+  const stopped = await stopGoatCitadelRuntime();
+  if (stopped.status === "stopped" && stopped.notStopped.length === 0) {
+    stopProfilePostgres(postgres);
+  }
+  return stopped;
 }
 
 async function runInstalledProfileAction(args) {

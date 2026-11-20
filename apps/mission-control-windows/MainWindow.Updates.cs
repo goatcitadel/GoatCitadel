@@ -131,7 +131,7 @@ public sealed partial class MainWindow
                 _launcherService.ResolveLauncher().InstallRoot, Environment.ProcessPath);
             await _updates.GetVerifiedDownloadAsync(token);
             var restartRuntimeOnHandoffFailure = _lastRuntime?.IsReady == true;
-            if (!await StopRuntimeAsync())
+            if (!await StopRuntimeAsync(forUpdate: true))
                 throw new InvalidOperationException("The local runtime could not stop. The update was not started.");
             try
             {

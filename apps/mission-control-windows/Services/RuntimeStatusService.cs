@@ -34,9 +34,10 @@ public sealed class RuntimeStatusService
         return ParseStatus(output);
     }
 
-    public async Task<JsonDocument> StopAsync(CancellationToken cancellationToken = default)
+    public async Task<JsonDocument> StopAsync(CancellationToken cancellationToken = default, bool forUpdate = false)
     {
-        var output = await _launcherService.RunAsync(new[] { "stop", "--json" }, cancellationToken);
+        var args = forUpdate ? new[] { "stop", "--for-update", "--json" } : new[] { "stop", "--json" };
+        var output = await _launcherService.RunAsync(args, cancellationToken);
         JsonDocument result;
         try { result = JsonDocument.Parse(output); }
         catch (JsonException error) { throw new InvalidOperationException("Launcher returned invalid stop status.", error); }

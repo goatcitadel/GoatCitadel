@@ -105,6 +105,10 @@ test("database preflight requires the active database storage to be local", (t) 
   const { install, active } = fixture(t);
   const outside = path.join(install, "unrelated");
   assert.throws(() => inspectLocalProfileStorage(active, active, { GOATCITADEL_POSTGRES_MODE: "external" }), /external PostgreSQL/u);
+  assert.deepEqual(
+    inspectLocalProfileStorage(active, active, { GOATCITADEL_POSTGRES_MODE: "external" }, { skipExternal: true }),
+    [],
+  );
   assert.throws(() => inspectLocalProfileStorage(active, active, { GOATCITADEL_BUNDLED_POSTGRES_DATA_DIR: outside }), /inside this install/u);
   assert.deepEqual(inspectLocalProfileStorage(active, active, {}), [path.join(active, "data", "postgres")]);
 });

@@ -500,7 +500,7 @@ public sealed partial class MainWindow : Window
         await LaunchRuntimeAsync();
     }
 
-    private async Task<bool> StopRuntimeAsync()
+    private async Task<bool> StopRuntimeAsync(bool forUpdate = false)
     {
         if (_cleanedUp || _profileRecoveryChanging) return false;
         var observation = _runtimeLifecycle.BeginStop();
@@ -509,7 +509,7 @@ public sealed partial class MainWindow : Window
         StopEventStream();
         try
         {
-            using var result = await _runtimeStatusService.StopAsync(observation.Token);
+            using var result = await _runtimeStatusService.StopAsync(observation.Token, forUpdate);
             if (!_runtimeLifecycle.IsCurrent(observation)) return false;
             var stopped = RuntimeStatusService.ParseStatus(result.RootElement.GetRawText());
             if (!_runtimeLifecycle.TryCompleteStop(observation)) return false;
