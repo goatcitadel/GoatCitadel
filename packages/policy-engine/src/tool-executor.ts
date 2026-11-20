@@ -1286,7 +1286,10 @@ async function runRestricted(
   if (manager !== "pnpm" && manager !== "npm") {
     throw new Error("Only pnpm/npm are allowed");
   }
-  const cmdArgs = manager === "pnpm" ? [...(filter ? ["--filter", filter] : []), "run", kind] : ["run", kind];
+  if (manager === "npm" && filter) {
+    throw new Error("The filter option requires pnpm. Set cwd to run an npm script in a specific package.");
+  }
+  const cmdArgs = filter ? ["--filter", filter, "run", kind] : ["run", kind];
   const command = resolveRestrictedCommand(manager, cmdArgs);
   await assertBeforeProcessSpawn(runtimeHooks, request, toolName, cwd);
   const outcome = await runShellExecToCompletion(
@@ -1680,16 +1683,7 @@ async function canBypassReadPath(
   if (readAccessMode === "approval_required" && storage && (await hasVerifiedApprovalBypass(request, storage))) {
     return true;
   }
-  if (grants.length === 0) {
-    return false;
-  }
-  return grants.some((grant) => {
-    const allowedPaths = getAllowedGrantReadPaths(grant);
-    if (allowedPaths.length === 0) {
-      return false;
-    }
-    return isPathWithinAnyGrantRoot(resolvedPath, allowedPaths);
-  });
+  return false;
 }
 
 function getAllowedGrantReadPaths(grant: ToolGrantRecord): string[] {

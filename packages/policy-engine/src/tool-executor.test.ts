@@ -1270,6 +1270,20 @@ describe("executeTool", () => {
     // runner remains inside its independent 120-second production deadline.
   }, 45_000);
 
+  it("rejects an npm filter before spawning a package script", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const beforeProcessSpawn = vi.fn();
+    await expect(
+      executeTool(
+        toolRequest("tests.run", { manager: "npm", filter: "@goatcitadel/gateway" }),
+        policyConfig,
+        storageStub,
+        { beforeProcessSpawn },
+      ),
+    ).rejects.toThrow(/filter option requires pnpm/u);
+    expect(beforeProcessSpawn).not.toHaveBeenCalled();
+  });
+
   it("includes stdout when a restricted script fails", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const cwd = path.join(testWorkspaceRoot, "restricted-failure");
