@@ -1,5 +1,5 @@
 import { assertArtifactRedactionGate } from "../../../verify-artifact-redaction.mjs";
-import { runSelfConfigurationLane } from "./self-configuration-lane.mjs";
+import { collectConfigurationProofSecretEnvKeys, runSelfConfigurationLane } from "./self-configuration-lane.mjs";
 
 export const CHAT_EVOLUTION_LANE = "chat-evolution";
 
@@ -147,7 +147,7 @@ export function buildChatEvolutionProofMatrix(commandOutcomes = []) {
 }
 
 export async function runChatEvolutionLane(context, options = {}, deps) {
-  await runSelfConfigurationLane(context, options, deps);
+  await runSelfConfigurationLane(context, { ...options, acceptanceScope: "hermetic-foundation" }, deps);
   const {
     clampString,
     emptyArtifacts,
@@ -160,6 +160,7 @@ export async function runChatEvolutionLane(context, options = {}, deps) {
     writeJson,
   } = deps;
   const commandOutcomes = [];
+  const omitEnv = await collectConfigurationProofSecretEnvKeys(deps);
 
   for (const command of CHAT_EVOLUTION_COMMANDS) {
     await runScenario(context, {
@@ -172,6 +173,7 @@ export async function runChatEvolutionLane(context, options = {}, deps) {
         cwd: command.cwd ? path.join(repoRoot, command.cwd) : repoRoot,
         artifactRoot: path.join(context.artifactRoot, "diagnostics"),
         logName: command.id,
+        omitEnv,
       });
       commandOutcomes.push({ scenarioId: command.id, exitCode: result.code });
       return {
@@ -188,15 +190,20 @@ export async function runChatEvolutionLane(context, options = {}, deps) {
   await runScenario(context, {
     id: "chat-evolution.acceptance-boundary",
     lane: CHAT_EVOLUTION_LANE,
-    title: "Chat-driven evolution acceptance boundary",
+    title: "Chat Evolution hermetic foundation",
     subsystem: "release-proof",
   }, async () => {
     const proof = buildChatEvolutionProofMatrix(commandOutcomes);
     const outPath = path.join(context.artifactRoot, "diagnostics", "chat-evolution-proof-matrix.json");
     await writeJson(outPath, proof);
+    const commandsPassed = CHAT_EVOLUTION_COMMANDS.every((command) =>
+      commandOutcomes.some((outcome) => outcome.scenarioId === command.id && outcome.exitCode === 0),
+    );
     return {
-      status: "degraded",
-      notes: ["Four real-runtime evidence rows remain held, so public claims stay intentionally narrower than the source implementation."],
+      status: commandsPassed ? "passed" : "failed",
+      notes: [
+        "Real-provider, browser secure-input, Windows restart and rollback, and signed-installer evidence remain held.",
+      ],
       metrics: { hermeticRows: proof.hermeticRows.length, heldRows: proof.heldRows.length },
       artifacts: emptyArtifacts({ diagnostics: [relativeToRun(context, outPath)] }),
     };

@@ -57,6 +57,27 @@ describe("CitadelsRouteService.interpretSessionMessage", () => {
 });
 
 describe("CitadelsRouteService vault", () => {
+  it.each(["release_hold", "available", undefined] as const)(
+    "reports %s availability without resolving a key or changing stored metadata",
+    async (cryptoAvailability) => {
+      const snapshot = {
+        citadelId: "c1",
+        revision: "a".repeat(64),
+        items: [],
+        keys: { kekVersion: null, scopes: [], legacySecretCount: 0 },
+      };
+      const vaultKey = vi.fn();
+      const repo = repoStub({ getVaultSnapshot: vi.fn(async () => snapshot) });
+      const service = new CitadelsRouteService(repo, undefined, vaultKey, cryptoAvailability);
+
+      await expect(service.getVaultSnapshot("c1")).resolves.toEqual(
+        cryptoAvailability ? { ...snapshot, keys: { ...snapshot.keys, cryptoAvailability } } : snapshot,
+      );
+      expect(vaultKey).not.toHaveBeenCalled();
+      expect(snapshot.keys).not.toHaveProperty("cryptoAvailability");
+    },
+  );
+
   it("seals on store and opens on reveal, never exposing the value on store or list", async () => {
     const key = generateVaultKey();
     const store = new Map<string, CitadelVaultSecretRecord>();
@@ -75,17 +96,29 @@ describe("CitadelsRouteService vault", () => {
           updatedAt: "t",
         };
         store.set("s1", record);
-        return { citadelId: "c1", revision: "b".repeat(64), items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }] };
+        return {
+          citadelId: "c1",
+          revision: "b".repeat(64),
+          items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }],
+        };
       }),
       getVaultSecret: vi.fn((_cid: string, sid: string) => store.get(sid)),
-      getVaultSnapshot: vi.fn(() => ({ citadelId: "c1", revision: "b".repeat(64), items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }] })),
+      getVaultSnapshot: vi.fn(() => ({
+        citadelId: "c1",
+        revision: "b".repeat(64),
+        items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }],
+      })),
     });
     const service = new CitadelsRouteService(repo, undefined, () => key);
 
     const stored = await service.storeVaultSecret("c1", "stripe", "sk-live-SECRET-123", "a".repeat(64));
     expect(stored).toEqual({
       ok: true,
-      snapshot: { citadelId: "c1", revision: "b".repeat(64), items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }] },
+      snapshot: {
+        citadelId: "c1",
+        revision: "b".repeat(64),
+        items: [{ secretId: "s1", secretName: "stripe", createdAt: "t", updatedAt: "t" }],
+      },
     });
     // The persisted envelope is ciphertext, not the plaintext.
     expect(JSON.stringify(lastSealed)).not.toContain("sk-live-SECRET-123");
@@ -100,7 +133,10 @@ describe("CitadelsRouteService vault", () => {
 
   it("fails closed (unavailable) when no vault key is configured", async () => {
     const service = new CitadelsRouteService(repoStub({}));
-    await expect(service.storeVaultSecret("c1", "k", "v", "a".repeat(64))).resolves.toEqual({ ok: false, reason: "unavailable" });
+    await expect(service.storeVaultSecret("c1", "k", "v", "a".repeat(64))).resolves.toEqual({
+      ok: false,
+      reason: "unavailable",
+    });
     await expect(service.revealVaultSecret("c1", "s1")).resolves.toEqual({ ok: false, reason: "unavailable" });
   });
 

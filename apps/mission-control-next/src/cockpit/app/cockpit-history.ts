@@ -103,7 +103,7 @@ export function commitCockpitNavigation(
   const actual = new URL(current, "http://cockpit.invalid");
   actual.searchParams.set("shell", "cockpit");
   if (actual.pathname + actual.search + actual.hash === destination) return false;
-  if (afterCockpitSheetsClose(() => commitCockpitNavigation(href, options, isCurrent))) return true;
+  if (afterCockpitSheetsClose(() => commitCockpitNavigation(href, options, isCurrent), options?.replace)) return true;
   if (practiceLocation()) {
     setPracticeLocation(destination);
     return true;

@@ -443,6 +443,7 @@ export interface GatewayRouteServiceDependencies {
   citadels: CitadelsRoutePort;
   masonInterpret?: MasonInterpret;
   vaultKey?: VaultKeyProvider;
+  vaultCryptoAvailability?: CitadelVaultCryptoAvailability;
   compliance: ComplianceExportServiceDeps;
   capabilities: CapabilitiesRoutePort;
   chatArtifactRenders: ChatArtifactRendersRoutePort;
@@ -525,7 +526,7 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     autonomyControl: createAutonomyControlRouteService(deps.autonomyControl),
     approvals: new ApprovalsRouteService(deps.approvals),
     capabilityScope: new CapabilityScopeRouteService(deps.capabilityScope),
-    citadels: new CitadelsRouteService(deps.citadels, deps.masonInterpret, deps.vaultKey),
+    citadels: new CitadelsRouteService(deps.citadels, deps.masonInterpret, deps.vaultKey, deps.vaultCryptoAvailability),
     compliance: createComplianceRouteService(deps.compliance),
     capabilities: new CapabilitiesRouteService(deps.capabilities),
     chatArtifactRenders: createChatArtifactRendersRouteService(deps.chatArtifactRenders),
@@ -591,4 +592,4 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     workspaces: createWorkspacesRouteService(deps.workspaces),
   };
 }
-import type { ChangePlanRecord } from "@goatcitadel/contracts";
+import type { ChangePlanRecord, CitadelVaultCryptoAvailability } from "@goatcitadel/contracts";

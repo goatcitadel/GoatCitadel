@@ -4,17 +4,17 @@ import { assertNativeInboxOwner, assertCompletedBackgroundOwner } from "./ux-bud
 
 const question = { id: "user_input:prompt-a", kind: "user_input",
   source: { workspaceId: "isolated", sessionId: "session-a", turnId: "turn-a", promptId: "prompt-a" } };
-const questionHref = "/inbox?item=user_input%3Aprompt-a&sessionId=session-a&turnId=turn-a&workspaceId=isolated&shell=cockpit";
+const questionHref = "/chat?sessionId=session-a&turnId=turn-a&workspaceId=isolated&shell=cockpit";
 const update = { id: "completed_background_run:watcher-a", kind: "completed_background_run",
   source: { workspaceId: "isolated", runId: "child-a" } };
 const updateHref = "/work/runs/child-a?runId=child-a&workspaceId=isolated&shell=cockpit";
 
 describe("native Inbox owner evidence", () => {
   it("accepts native owners independent of query serialization order and retains exact identities", () => {
-    assert.equal(assertNativeInboxOwner(question, questionHref, "isolated").pathname, "/inbox");
+    assert.equal(assertNativeInboxOwner(question, questionHref, "isolated").pathname, "/chat");
     assert.equal(assertNativeInboxOwner(update, updateHref, "isolated").pathname, "/work/runs/child-a");
     assertNativeInboxOwner(question,
-      "/inbox?shell=cockpit&workspaceId=isolated&turnId=turn-a&sessionId=session-a&item=user_input%3Aprompt-a", "isolated");
+      "/chat?shell=cockpit&workspaceId=isolated&turnId=turn-a&sessionId=session-a", "isolated");
   });
   it("rejects a same-title row's substituted item, conversation, turn, workspace or Classic owner", () => {
     for (const [key, value] of [["item", "user_input:prompt-b"], ["sessionId", "session-b"],
@@ -23,6 +23,7 @@ describe("native Inbox owner evidence", () => {
       changed.searchParams.set(key, value);
       assert.throws(() => assertNativeInboxOwner(question, changed.pathname + changed.search, "isolated"));
     }
+    assert.throws(() => assertNativeInboxOwner(question, questionHref.replace("/chat", "/inbox"), "isolated"));
     assert.throws(() => assertNativeInboxOwner(question, "//external.invalid" + questionHref, "isolated"));
     assert.throws(() => assertNativeInboxOwner(question, "/\\external.invalid" + questionHref, "isolated"));
     assert.throws(() => assertNativeInboxOwner({ ...question, source: { ...question.source, workspaceId: "other" } }, questionHref, "isolated"));

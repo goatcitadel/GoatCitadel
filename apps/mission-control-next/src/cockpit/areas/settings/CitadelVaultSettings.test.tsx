@@ -73,6 +73,33 @@ it("renders bounded public names and explicit native reveal inspection without f
   expect(text(renderer!.root)).toContain("hides after 30 seconds");
   expect(JSON.stringify(renderer!.toJSON())).not.toContain("mc-next-");
 });
+it("keeps metadata refresh and reviewed deletion available while store and reveal are held", async () => {
+  owner.keys.cryptoAvailability = "release_hold";
+  owner.items = [
+    {
+      secretId: "secret-held",
+      secretName: "Stored name",
+      createdAt: "2026-09-30T00:00:00Z",
+      updatedAt: "2026-09-30T00:00:00Z",
+      chamberId: null,
+      keyVersion: 1,
+    },
+  ];
+  await mount();
+  expect(text(renderer!.root)).toContain("Storing and revealing secrets are disabled in this release.");
+  expect(button("Store secret").props.disabled).toBe(true);
+  expect(button("Refresh Vault metadata").props.disabled).toBe(false);
+  await act(async () => button("Refresh Vault metadata").props.onClick());
+  expect(api.read).toHaveBeenCalledTimes(2);
+  await act(async () => button("Inspect Stored name").props.onClick());
+  expect(button("Reveal secret").props.disabled).toBe(true);
+  expect(button("Delete secret").props.disabled).toBe(false);
+  await act(async () => button("Delete secret").props.onClick());
+  expect(renderer!.root.findByProps({ "aria-label": "Delete secret?" })).toBeDefined();
+  expect(api.store).not.toHaveBeenCalled();
+  expect(api.reveal).not.toHaveBeenCalled();
+  expect(api.remove).not.toHaveBeenCalled();
+});
 it("keeps an uncertain store locked across native remount without leaking upstream error text", async () => {
   await mount();
   await act(async () => button("Store secret").props.onClick());
@@ -133,6 +160,7 @@ it("toggles the secret entry between hidden and shown with a pressed Show contro
   expect(valueInput().props.type).toBe("password");
 });
 it("copies a revealed value and counts down visibly before hiding it at zero (ST-19)", async () => {
+  owner.keys.cryptoAvailability = "available";
   owner.items = [
     {
       secretId: "secret-1",
@@ -150,6 +178,8 @@ it("copies a revealed value and counts down visibly before hiding it at zero (ST
   vi.useFakeTimers();
   try {
     await mount();
+    expect(button("Store secret").props.disabled).toBe(false);
+    expect(text(renderer!.root)).not.toContain("disabled in this release");
     await act(async () => button("Inspect Token").props.onClick());
     await act(async () => button("Reveal secret").props.onClick());
     expect(text(renderer!.root)).toContain("synthetic-revealed");

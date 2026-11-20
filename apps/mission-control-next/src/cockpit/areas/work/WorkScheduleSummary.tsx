@@ -156,7 +156,7 @@ export function WorkScheduleNotice({ message, runHref }: { message: string; runH
       {runHref ? (
         <>
           {" "}
-          <NativeOwnerLink href={runHref} scope={runHref} className="font-medium text-accent">
+          <NativeOwnerLink href={runHref} scope={runHref} className="font-medium underline">
             Open run
           </NativeOwnerLink>
         </>
@@ -289,18 +289,25 @@ export function WorkScheduleRecordDetails({ selected }: { selected: CronJobRecor
 export function WorkScheduleActionButtons({
   enabled,
   disabled,
+  warningId,
   onReview,
 }: {
   enabled: boolean;
   disabled: boolean;
+  warningId?: string;
   onReview: (action: ScheduleAction) => void;
 }) {
   return (
     <div className="flex flex-wrap gap-2">
-      <Button size="sm" disabled={disabled} onClick={() => onReview("run")}>
+      <Button size="sm" disabled={disabled} aria-describedby={warningId} onClick={() => onReview("run")}>
         Run now
       </Button>
-      <Button size="sm" disabled={disabled} onClick={() => onReview(enabled ? "pause" : "resume")}>
+      <Button
+        size="sm"
+        disabled={disabled}
+        aria-describedby={enabled ? undefined : warningId}
+        onClick={() => onReview(enabled ? "pause" : "resume")}
+      >
         {enabled ? "Pause" : "Resume"}
       </Button>
       <Button size="sm" variant="danger" disabled={disabled} onClick={() => onReview("cancel")}>

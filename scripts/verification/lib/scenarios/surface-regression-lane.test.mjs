@@ -197,7 +197,11 @@ test("surface regression returns failure evidence when a browser assertion throw
   assert.equal(stackOptions.runtimeRoot, "clean-runtime-root");
   assert.equal(stackOptions.gatewayEnv.GOATCITADEL_VERIFY_STUB_LLM_KEY, "verification-stub-key");
   assert.equal(stackOptions.uiMode, "preview");
-  assert.deepEqual(stackOptions.gatewayEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
+  assert.deepEqual(stackOptions.gatewayEnvOmit, [
+    "OPENAI_API_KEY",
+    "SLACK_BOT_TOKEN",
+    "GOATCITADEL_VERIFY_VAULT_KEY_BASE64",
+  ]);
   assert.deepEqual(stackOptions.uiEnvOmit, ["OPENAI_API_KEY", "SLACK_BOT_TOKEN"]);
   assert.notEqual(stackOptions.gatewayEnv.GOATCITADEL_AUTH_MODE, "none");
   assert.equal(results[0].status, "failed");

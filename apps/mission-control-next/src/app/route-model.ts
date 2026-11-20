@@ -786,10 +786,8 @@ export function isExperimentalRoute(route: { area: PrimaryArea; section?: AppRou
 }
 
 /**
- * Primary-rail visibility is release-aware, with a narrow discoverability
- * exception for the personality catalog. Personalities remain explicitly
- * experimental on-surface, but hiding the only catalog leaves first-time users
- * with no way to inspect what is available before choosing a preset.
+ * Keep the experimental personality catalog and Vault metadata discoverable.
+ * Both destinations show their release status when opened.
  */
 export function isPrimaryRailRoute(route: { area: PrimaryArea; section?: AppRoute["section"] }): boolean {
   if (isHiddenRoute(route)) {
@@ -798,7 +796,10 @@ export function isPrimaryRailRoute(route: { area: PrimaryArea; section?: AppRout
   if (!isExperimentalRoute(route)) {
     return true;
   }
-  return route.area === "settings" && route.section === "personalities";
+  return (
+    (route.area === "settings" && route.section === "personalities") ||
+    (route.area === "library" && route.section === "citadel-vault")
+  );
 }
 
 /**

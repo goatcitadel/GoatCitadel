@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { copyFile, mkdtemp, mkdir, readdir, rm } from "node:fs/promises";
 import { buildApp } from "./app.js";
+import { listMissingTrackedRouteAccessClasses } from "./routes/route-access.js";
 
 interface JsonResponse<T = unknown> {
   statusCode: number;
@@ -197,6 +198,7 @@ function resolveSmokeProfile(raw: string | undefined): SmokeProfile {
 
 function resolveSmokeSteps(profile: SmokeProfile): SmokeStep[] {
   const health: SmokeStep = { name: "health", run: smokeHealth };
+  const routeAccess: SmokeStep = { name: "route-access-classification", run: smokeRouteAccessClassification };
   const gatewayEvents: SmokeStep = { name: "gateway-events", run: smokeGatewayEvents };
   const sessions: SmokeStep = { name: "sessions", run: smokeSessions };
   const chat: SmokeStep = { name: "chat", run: smokeChat };
@@ -209,6 +211,7 @@ function resolveSmokeSteps(profile: SmokeProfile): SmokeStep[] {
   const npu: SmokeStep = { name: "npu", run: smokeNpu };
   const steps: SmokeStep[] = [
     health,
+    routeAccess,
     gatewayEvents,
     sessions,
     chat,
@@ -225,6 +228,7 @@ function resolveSmokeSteps(profile: SmokeProfile): SmokeStep[] {
   }
   return [
     health,
+    routeAccess,
     gatewayEvents,
     sessions,
     chat,
@@ -239,6 +243,16 @@ function resolveSmokeSteps(profile: SmokeProfile): SmokeStep[] {
     npu,
     { name: "onboarding", run: smokeOnboarding },
   ];
+}
+
+async function smokeRouteAccessClassification(app: Awaited<ReturnType<typeof buildApp>>): Promise<void> {
+  await app.ready();
+  assert.ok(
+    app.routeAccessManifest.some((entry) => entry.tracked),
+    "Gateway route-access manifest has no tracked routes.",
+  );
+  const unclassified = listMissingTrackedRouteAccessClasses(app).map(({ method, url }) => `${method} ${url}`);
+  assert.deepEqual(unclassified, [], "Tracked Gateway API routes require an explicit access class or route policy.");
 }
 
 function formatSmokeDuration(durationMs: number): string {

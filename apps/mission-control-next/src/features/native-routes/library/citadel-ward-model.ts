@@ -10,7 +10,11 @@ export const WARD_EFFECTS: WardEffect[] = [
 export const WARD_EFFECT_META: Record<WardEffect, { label: string; detail: string }> = {
   allow: { label: "Allow", detail: "Permit the matching action unless a stricter Ward also matches." },
   deny: { label: "Deny", detail: "Block the matching action. Deny always wins." },
-  require_approval: { label: "Require approval", detail: "Pause for an operator decision before execution." },
+  require_approval: {
+    label: "Require approval",
+    detail:
+      "Ask you before running a supported action. In this release, matching integration actions and outbound agent-to-agent (A2A) sends are blocked without opening an approval.",
+  },
   require_dry_run: { label: "Require dry run", detail: "Require a preview before execution." },
   redact: { label: "Redact", detail: "Apply redaction to matching action data." },
   route_local: {

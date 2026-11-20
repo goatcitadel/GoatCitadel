@@ -10,14 +10,17 @@ export function assertNativeInboxOwner(item, href, workspaceId) {
   assert.equal(destination.origin, "http://verification.invalid", "Inbox owner link must not change origin.");
   assert.equal(destination.searchParams.get("workspaceId"), workspaceId, "Inbox owner link lost its workspace.");
   assert.equal(destination.searchParams.get("shell"), "cockpit", "Inbox owner link must open the native owner.");
+  let identityKeys;
   if (item.kind === "user_input") {
-    assert.equal(destination.pathname, "/inbox");
-    assert.equal(destination.searchParams.get("item"), item.id, "Inbox question link selected another item.");
+    assert.equal(destination.pathname, "/chat");
+    assert.equal(destination.searchParams.get("item"), null, "Chat owner link carried an Inbox selection.");
+    identityKeys = ["sessionId", "turnId"];
   } else {
     assert.equal(item.kind, "completed_background_run");
     assert.equal(destination.pathname, `/work/runs/${encodeURIComponent(item.source.runId)}`);
+    identityKeys = ["sessionId", "turnId", "runId", "taskId"];
   }
-  for (const key of ["sessionId", "turnId", "runId", "taskId"]) {
+  for (const key of identityKeys) {
     if (item.source[key] !== undefined) assert.equal(destination.searchParams.get(key), item.source[key], `Inbox owner link lost ${key}.`);
   }
   return destination;
@@ -77,7 +80,7 @@ export async function runUxBudgetInboxWaits(environment) {
           const row = page.locator(`li[data-inbox-row=${JSON.stringify(item.id)}]`);
           await row.waitFor();
           assert.equal(await row.count(), 1, "Inbox question must select exactly its canonical row.");
-          assertNativeInboxOwner(item, await row.getByRole("link", { name: "Open in Inbox", exact: true }).getAttribute("href"), fixture.workspaceId);
+          assertNativeInboxOwner(item, await row.getByRole("link", { name: "Open in Chat", exact: true }).getAttribute("href"), fixture.workspaceId);
           await row.getByRole("button", { name: "Details", exact: true }).click();
           const review = page.getByRole("region", { name: "Current Chat question" });
           await review.getByText("Which path should the verification run take from here?").waitFor();
@@ -199,16 +202,19 @@ export async function runUxBudgetInboxWaits(environment) {
           const nativeOwner = inspector.getByRole("link", { name: "Open in Work", exact: true });
           assertNativeInboxOwner(item, await nativeOwner.getAttribute("href"), fixture.workspaceId);
           const tracePath = `/api/v1/observe/runs/${encodeURIComponent(seeded.childRunId)}/trace`;
-          const ownerResponse = page.waitForResponse((response) => response.request().method() === "GET" && new URL(response.url()).pathname === tracePath);
-          await nativeOwner.click();
-          await page.waitForURL(
-            (url) =>
-              url.pathname === `/work/runs/${encodeURIComponent(seeded.childRunId)}` &&
-              url.searchParams.get("runId") === seeded.childRunId &&
-              url.searchParams.get("workspaceId") === fixture.workspaceId &&
-              url.searchParams.get("shell") === "cockpit",
-          );
-          const traceResponse = await ownerResponse;
+          const [traceResponse] = await Promise.all([
+            page.waitForResponse(
+              (response) => response.request().method() === "GET" && new URL(response.url()).pathname === tracePath,
+            ),
+            page.waitForURL(
+              (url) =>
+                url.pathname === `/work/runs/${encodeURIComponent(seeded.childRunId)}` &&
+                url.searchParams.get("runId") === seeded.childRunId &&
+                url.searchParams.get("workspaceId") === fixture.workspaceId &&
+                url.searchParams.get("shell") === "cockpit",
+            ),
+            nativeOwner.click(),
+          ]);
           assert.equal(traceResponse.status(), 200, "Native Work must read the exact canonical run successfully.");
           assertCompletedBackgroundOwner(await traceResponse.json(), seeded.childRunId, fixture.workspaceId);
           await page.getByRole("heading", { name: "Chat turn", exact: true }).waitFor();

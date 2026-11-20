@@ -199,6 +199,7 @@ export function useCitadelVaultReview(citadelId: string) {
   );
   return {
     snapshot,
+    cryptoHeld: snapshot?.keys.cryptoAvailability === "release_hold",
     loading: state.loading,
     error: attempt.phase === "uncertain" ? (attempt.message ?? null) : state.error,
     reviewRequired: state.reviewRequired,
@@ -220,6 +221,6 @@ export function useCitadelVaultReview(citadelId: string) {
 /** Never surface upstream error text that could contain submitted credential bytes. */
 export function describeVaultError(error: unknown): string {
   return isApiRequestError(error) && error.status === 503
-    ? "Vault unavailable — your OS keychain could not provide a key. Secrets are never written in plaintext."
+    ? "Vault unavailable. Refresh its metadata to check the current state."
     : "The Vault request could not be confirmed. Refresh its metadata to inspect the current state.";
 }

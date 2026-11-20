@@ -7,6 +7,7 @@ describe("isExperimentalRoute (NAV-02 rail gating)", () => {
     const experimental = [
       { area: "library", section: "journey" },
       { area: "library", section: "curator" },
+      { area: "library", section: "citadel-vault" },
       { area: "ops", section: "improvement" },
       { area: "ops", section: "kanban" },
       { area: "settings", section: "personalities" },
@@ -35,7 +36,6 @@ describe("isExperimentalRoute (NAV-02 rail gating)", () => {
       "citadel",
       "citadel-wards",
       "citadel-council",
-      "citadel-vault",
       "citadel-blueprint",
     ] as const;
     for (const section of citadelSections) {
@@ -69,11 +69,14 @@ describe("isHiddenRoute (release-only navigation gating)", () => {
 });
 
 describe("isPrimaryRailRoute", () => {
-  it("keeps the experimental personality catalog discoverable without promoting its release status", () => {
+  it("keeps the experimental personality catalog and Vault metadata discoverable", () => {
     const personalities = { area: "settings", section: "personalities" } as const;
+    const vault = { area: "library", section: "citadel-vault" } as const;
 
     expect(isExperimentalRoute(personalities)).toBe(true);
     expect(isPrimaryRailRoute(personalities)).toBe(true);
+    expect(isExperimentalRoute(vault)).toBe(true);
+    expect(isPrimaryRailRoute(vault)).toBe(true);
     expect(isPrimaryRailRoute({ area: "library", section: "journey" })).toBe(false);
   });
 

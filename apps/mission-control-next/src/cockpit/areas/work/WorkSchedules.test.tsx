@@ -397,6 +397,37 @@ describe("Work schedules", () => {
     expect(runCronJobNow).not.toHaveBeenCalled();
   });
 
+  it("warns before running or resuming a saved No agent schedule", async () => {
+    const hostJob = job({ action: "no_agent", enabled: false });
+    vi.mocked(fetchCronJobs).mockResolvedValue({ items: [hostJob] });
+    vi.mocked(fetchCronJob).mockResolvedValue(hostJob);
+    await render();
+    await review();
+    const warning =
+      "This command runs with the Gateway’s operating system permissions without asking for approval on each run.";
+    const describedBy = (label: string) => {
+      const id = [...container.querySelectorAll("button")]
+        .find((button) => button.textContent?.trim() === label)
+        ?.getAttribute("aria-describedby");
+      return id ? document.getElementById(id)?.textContent : undefined;
+    };
+    expect(describedBy("Run now")).toBe(warning);
+    expect(describedBy("Resume")).toBe(warning);
+    const recordLink = [...container.querySelectorAll("a")].find(
+      (item) => item.textContent === "Inspect current schedule record",
+    );
+    expect(recordLink?.classList.contains("underline")).toBe(true);
+    await click("Run now");
+    expect(describedBy("Run schedule now")).toBe(warning);
+    await click("Don't run now");
+    await click("Resume");
+    expect(describedBy("Resume schedule")).toBe(warning);
+    await click("Don't resume");
+    expect(runCronJobNow).not.toHaveBeenCalled();
+    expect(startCronJob).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain("Path, capability and approval rules still apply");
+  });
+
   it("links a requested run to its run page when the Gateway names one", async () => {
     vi.mocked(runCronJobNow).mockResolvedValueOnce({
       jobId: "job-a",
@@ -411,6 +442,7 @@ describe("Work schedules", () => {
     await vi.waitFor(() => expect(container.textContent).toContain("Run requested."));
     const link = [...container.querySelectorAll("a")].find((item) => item.textContent === "Open run");
     expect(link?.getAttribute("href")).toContain("/work/runs/run-77");
+    expect(link?.classList.contains("underline")).toBe(true);
     const reviewButton = [...container.querySelectorAll("button")].find(
       (item) => item.textContent?.trim() === "Review schedule",
     );
@@ -777,6 +809,7 @@ describe("scheduler review and run evidence", () => {
     expect(fetchCronReviewQueue).not.toHaveBeenCalled();
     expect(region.textContent).not.toContain("No scheduler review items");
     expect(region.querySelector("button")).toBeNull();
+    expect(region.querySelector("a")?.classList.contains("underline")).toBe(true);
   });
 
   it("drops loaded review items once a settings refresh reports the flag off", async () => {

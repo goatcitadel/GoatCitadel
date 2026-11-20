@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  COCKPIT_BEHAVIOR_MANIFEST,
+  COCKPIT_RELEASE_SURFACE_STATUS_BY_PATH,
   NEXT_DIRECT_COMPATIBILITY_MANIFEST,
   NEXT_LEGACY_REDIRECT_MANIFEST,
   NEXT_RELEASE_SURFACE_MANIFEST,
@@ -48,6 +50,34 @@ test("cockpit captures are additive and preserve all classic PNG identities with
   assert.equal(classic.length * RELEASE_SURFACE_VARIANTS.length, 416);
   const slugs = NEXT_VISUAL_REGRESSION_MANIFEST.map((route) => route.slug);
   assert.equal(new Set(slugs).size, slugs.length, "Two shells must never share a baseline filename.");
+});
+
+test("Cockpit launch cases exercise the owner paths without changing the screenshot manifest", () => {
+  const expectedPaths = [
+    "/capabilities/skills",
+    "/capabilities/plugins",
+    "/capabilities/connectors",
+    "/capabilities/connectors/advanced",
+    "/capabilities/tools",
+    "/scripts",
+  ];
+  assert.deepEqual(COCKPIT_BEHAVIOR_MANIFEST.map(({ href }) => href), expectedPaths);
+  for (const route of COCKPIT_BEHAVIOR_MANIFEST) {
+    assert.equal(route.releaseStatus, "ship");
+    assert.equal(COCKPIT_RELEASE_SURFACE_STATUS_BY_PATH[route.href], route.releaseStatus);
+    assert.ok(resolveSurfaceRegressionManifest().includes(route));
+    assert.ok(!NEXT_VISUAL_REGRESSION_MANIFEST.some(({ slug }) => slug === route.slug));
+    const href = new URL(resolveReleaseSurfaceHref(route), "http://test.invalid");
+    assert.equal(href.searchParams.get("shell"), "cockpit");
+  }
+});
+
+test("Vault retains its Classic capture and has experimental release status in both shells", () => {
+  const vault = NEXT_VISUAL_REGRESSION_MANIFEST.find(({ slug }) => slug === "library-citadel-vault");
+  assert.equal(vault?.shell, "classic");
+  assert.equal(vault?.href, "/library/citadel-vault");
+  assert.equal(vault?.releaseStatus, "experimental");
+  assert.equal(COCKPIT_RELEASE_SURFACE_STATUS_BY_PATH[vault.href], vault.releaseStatus);
 });
 
 test("native manifest covers cockpit destinations and binds fixture, theme and explicit shell independently", () => {

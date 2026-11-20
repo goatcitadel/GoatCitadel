@@ -126,7 +126,7 @@ describe("cockpit settings index", () => {
   });
 });
 
-it("keeps hidden destinations direct-only and labels the discoverable experimental exception", () => {
+it("keeps hidden destinations direct-only and labels discoverable experimental entries", () => {
   const direct = buildSettingsIndex();
   const entries = buildSettingsIndex({ discovery: true }).flatMap((page) => page.entries);
   expect(direct.flatMap((page) => page.entries).some((entry) => entry.section === "workspace-capabilities")).toBe(true);
@@ -134,6 +134,10 @@ it("keeps hidden destinations direct-only and labels the discoverable experiment
     entries.some((entry) => entry.section === "workspace-capabilities" || entry.section === "citadel-capabilities"),
   ).toBe(false);
   expect(entries.find((entry) => entry.section === "personalities")?.releaseStatus).toBe("experimental");
+  expect(entries.find((entry) => entry.section === "citadel-vault")).toMatchObject({
+    href: "/settings/citadel#citadel-vault",
+    releaseStatus: "experimental",
+  });
   expect(searchSettingsPages(buildSettingsIndex({ discovery: true }), "workspace skills")).toEqual([]);
 });
 

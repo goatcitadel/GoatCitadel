@@ -4,6 +4,8 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   buildVisualBaselineFileName,
+  COCKPIT_BEHAVIOR_MANIFEST,
+  COCKPIT_RELEASE_SURFACE_STATUS_BY_PATH,
   NEXT_RELEASE_SURFACE_MANIFEST,
   NEXT_VISUAL_REGRESSION_MANIFEST,
   NEXT_VISUAL_SCENARIO_MANIFEST,
@@ -16,6 +18,7 @@ import { readMissionControlNextReleaseAuthority } from "./lib/mission-control-ne
 
 const root = process.cwd();
 const VALID_RELEASE_SURFACE_STATUSES = new Set(["ship", "hide", "experimental", "needs_release_polish"]);
+const COCKPIT_DEFAULT_DATE = "2026-10-02";
 
 const requiredFiles = [
   "README.md",
@@ -56,6 +59,7 @@ const requiredHeadings = {
     "## Recovery Truth",
     "## Backup Contract Evidence",
     "## Visible Surface Evidence",
+    "## Release-candidate acceptance",
   ],
   "docs/security/findings-triage.md": [
     "# GitHub Security Findings",
@@ -405,14 +409,7 @@ if (
 }
 
 const contract = await readFile(path.join(root, "docs", "1_0_CONTRACT.md"), "utf8");
-const contractUpdated = /^Last updated: (\d{4}-\d{2}-\d{2})\r?$/m.exec(contract)?.[1];
-const contractDate = contractUpdated ? new Date(`${contractUpdated}T00:00:00.000Z`) : undefined;
-if (
-  !contractDate || !Number.isFinite(contractDate.getTime()) ||
-  contractDate.toISOString().slice(0, 10) !== contractUpdated || contractUpdated < "2026-10-02"
-) {
-  errors.push("docs/1_0_CONTRACT.md must carry a valid freshness header dated 2026-10-02 or later.");
-}
+validateReleaseDocFreshness("docs/1_0_CONTRACT.md", contract);
 if (
   !/## Source of Truth Order[\s\S]*1\. current implementation under `apps\/` and `packages\/`[\s\S]*2\. \[docs\/CANONICAL_RUNTIME_STATE_MODEL\.md\]\(\.\/CANONICAL_RUNTIME_STATE_MODEL\.md\)[\s\S]*3\. this contract for `1\.0` promise and release-scope truth[\s\S]*4\. \[docs\/ENGINEERING_HANDBOOK\.md\]\(\.\/ENGINEERING_HANDBOOK\.md\)/m.test(
     contract,
@@ -494,9 +491,7 @@ if (/semantic pre-release versions/i.test(changelog) || /public surface is still
 
 const releaseEvidencePath = path.join(root, "docs", "1_0_RELEASE_EVIDENCE.md");
 const releaseEvidence = await readFile(releaseEvidencePath, "utf8");
-if (!/^Last updated: 2026-06-01$/m.test(releaseEvidence)) {
-  errors.push("docs/1_0_RELEASE_EVIDENCE.md must carry the current 2026-06-01 freshness header.");
-}
+validateReleaseDocFreshness("docs/1_0_RELEASE_EVIDENCE.md", releaseEvidence);
 if (!/large-service debt/i.test(releaseEvidence) || !/not proof that broad GatewayService decomposition is complete/i.test(releaseEvidence)) {
   errors.push("docs/1_0_RELEASE_EVIDENCE.md must keep architecture metrics framed as a large-service debt guard, not decomposition proof.");
 }
@@ -608,7 +603,19 @@ const manifestRouteKeys = new Set(NEXT_RELEASE_SURFACE_MANIFEST.map(nextReleaseR
 const canonicalRouteKeys = new Set(canonicalNextReleaseRoutes.map(nextReleaseRouteKey));
 const releaseScopeDoc = await readFile(path.join(root, "docs", "1_0_RELEASE_SURFACE_SCOPE.md"), "utf8");
 const releaseEvidenceDoc = await readFile(path.join(root, "docs", "1_0_RELEASE_EVIDENCE.md"), "utf8");
-validateReleaseSurfaceScopeDoc(releaseScopeDoc, canonicalNextReleaseRoutes);
+validateReleaseDocFreshness("docs/1_0_RELEASE_SURFACE_SCOPE.md", releaseScopeDoc);
+const scopeSections = new Map(
+  releaseScopeDoc.split(/^## /mu).slice(1).map((section) => [section.split(/\r?\n/u, 1)[0].trim(), section]),
+);
+const cockpitScope = new Map(Object.entries(COCKPIT_RELEASE_SURFACE_STATUS_BY_PATH));
+const classicScope = new Map(canonicalNextReleaseRoutes.map((route) => [releaseScopeDocRoutePath(route), route.status]));
+validateReleaseSurfaceScopeDoc(scopeSections.get("Cockpit release surface") ?? "", cockpitScope, "Cockpit");
+validateReleaseSurfaceScopeDoc(scopeSections.get("Classic release surface") ?? "", classicScope, "Classic");
+for (const route of COCKPIT_BEHAVIOR_MANIFEST) {
+  if (!route.releaseStatus || route.releaseStatus === "hide") {
+    errors.push(`Cockpit surface proof route ${route.href} needs a visible release status.`);
+  }
+}
 validateReleaseEvidenceCounts(releaseEvidenceDoc, canonicalNextReleaseRoutes);
 validateReadmeRouteCounts(readme, canonicalNextReleaseRoutes);
 if (NEXT_RELEASE_SURFACE_MANIFEST.length !== canonicalNextReleaseRoutes.length) {
@@ -784,12 +791,23 @@ function nextReleaseRouteKey(route) {
   return `${route.canonicalArea ?? route.expectedArea}/${route.canonicalSection ?? route.expectedSection ?? "root"}`;
 }
 
-function validateReleaseSurfaceScopeDoc(source, canonicalRoutes) {
+function validateReleaseDocFreshness(file, source) {
+  const updated = /^Last updated: (\d{4}-\d{2}-\d{2})\r?$/mu.exec(source)?.[1];
+  const date = updated ? new Date(`${updated}T00:00:00.000Z`) : undefined;
+  if (
+    !date || !Number.isFinite(date.getTime()) ||
+    date.toISOString().slice(0, 10) !== updated || updated < COCKPIT_DEFAULT_DATE
+  ) {
+    errors.push(`${file} must carry a valid freshness header dated ${COCKPIT_DEFAULT_DATE} or later.`);
+  }
+}
+
+function validateReleaseSurfaceScopeDoc(source, canonicalByRoute, shell) {
   const documentedRows = parseReleaseSurfaceScopeRows(source);
   const documentedByRoute = new Map();
   for (const row of documentedRows) {
     if (documentedByRoute.has(row.route)) {
-      errors.push(`docs/1_0_RELEASE_SURFACE_SCOPE.md repeats route ${row.route}.`);
+      errors.push(`docs/1_0_RELEASE_SURFACE_SCOPE.md repeats ${shell} route ${row.route}.`);
       continue;
     }
     if (!VALID_RELEASE_SURFACE_STATUSES.has(row.status)) {
@@ -798,23 +816,22 @@ function validateReleaseSurfaceScopeDoc(source, canonicalRoutes) {
     documentedByRoute.set(row.route, row);
   }
 
-  const canonicalByRoute = new Map(canonicalRoutes.map((route) => [releaseScopeDocRoutePath(route), route]));
-  for (const [routePath, route] of canonicalByRoute) {
+  for (const [routePath, status] of canonicalByRoute) {
     const documented = documentedByRoute.get(routePath);
     if (!documented) {
-      errors.push(`docs/1_0_RELEASE_SURFACE_SCOPE.md is missing canonical route ${routePath}.`);
+      errors.push(`docs/1_0_RELEASE_SURFACE_SCOPE.md is missing ${shell} route ${routePath}.`);
       continue;
     }
-    if (documented.status !== route.status) {
+    if (documented.status !== status) {
       errors.push(
-        `docs/1_0_RELEASE_SURFACE_SCOPE.md route ${routePath} must use status ${route.status}, not ${documented.status}.`,
+        `docs/1_0_RELEASE_SURFACE_SCOPE.md ${shell} route ${routePath} must use status ${status}, not ${documented.status}.`,
       );
     }
   }
 
   for (const routePath of documentedByRoute.keys()) {
     if (!canonicalByRoute.has(routePath)) {
-      errors.push(`docs/1_0_RELEASE_SURFACE_SCOPE.md includes non-canonical route ${routePath}.`);
+      errors.push(`docs/1_0_RELEASE_SURFACE_SCOPE.md includes an unknown ${shell} route ${routePath}.`);
     }
   }
 }

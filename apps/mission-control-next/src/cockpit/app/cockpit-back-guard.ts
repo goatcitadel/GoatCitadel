@@ -95,9 +95,11 @@ export function registerCockpitSheetBack(close: () => void): () => void {
 }
 
 /** Complete an already-reviewed navigation from the real page entry, not a sheet duplicate. */
-export function afterCockpitSheetsClose(after: () => void): boolean {
+export function afterCockpitSheetsClose(after: () => void, replace = false): boolean {
   if (sheetRestore) {
-    sheetRestore.after = after;
+    // A route-backed sheet may clean up its selection URL after React renders
+    // the close. Keep the navigation already accepted for the sheet.
+    if (!replace || !sheetRestore.after) sheetRestore.after = after;
     return true;
   }
   const current = sheetEntries.get(sheetId() ?? "");

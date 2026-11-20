@@ -6,6 +6,8 @@ import { markMutationCommitted } from "../plugins/idempotency.js";
 import { redactSecretText } from "@goatcitadel/contracts";
 
 const SCRIPT_PREVIEW_LIMIT = 64 * 1024;
+const scriptReadRoute = { config: { goatcitadelRouteAccessClass: "operator", rateLimit: { max: 120 } } } as const;
+const scriptRetentionRoute = { config: { ...scriptReadRoute.config, rateLimit: { max: 60 } } };
 const scope = z.object({ workspaceId: z.string().trim().min(1).max(256) });
 const retention = scope
   .extend({
@@ -20,7 +22,7 @@ export const scriptsRoutes: FastifyPluginAsync = async (app) => {
     if (!resolveAuthenticatedOperatorAdmissionContext(request)?.directLocal)
       return reply.code(403).send({ error: "Scripts requires a local operator connection." });
   });
-  app.get("/api/v1/scripts", { config: { rateLimit: { max: 120 } } }, async (request, reply) => {
+  app.get("/api/v1/scripts", scriptReadRoute, async (request, reply) => {
     const input = scope.safeParse(request.query);
     if (!input.success) return reply.code(400).send({ error: "Choose a workspace." });
     try {
@@ -29,7 +31,7 @@ export const scriptsRoutes: FastifyPluginAsync = async (app) => {
       return sendRouteError(reply, error, request.log);
     }
   });
-  app.patch("/api/v1/scripts/retention", { config: { rateLimit: { max: 60 } } }, async (request, reply) => {
+  app.patch("/api/v1/scripts/retention", scriptRetentionRoute, async (request, reply) => {
     const input = retention.safeParse(request.body);
     if (!input.success) return reply.code(400).send({ error: "Invalid retention change." });
     try {
@@ -40,7 +42,7 @@ export const scriptsRoutes: FastifyPluginAsync = async (app) => {
       return sendRouteError(reply, error, request.log);
     }
   });
-  app.get("/api/v1/scripts/:id/preview", { config: { rateLimit: { max: 120 } } }, async (request, reply) => {
+  app.get("/api/v1/scripts/:id/preview", scriptReadRoute, async (request, reply) => {
     const query = scope.safeParse(request.query);
     const params = z.object({ id: z.string().regex(/^[a-f0-9]{64}$/u) }).safeParse(request.params);
     if (!query.success || !params.success) return reply.code(400).send({ error: "Invalid preview request." });

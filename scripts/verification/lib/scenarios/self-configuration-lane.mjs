@@ -285,11 +285,20 @@ export function buildSelfConfigurationProofMatrix(commandOutcomes = []) {
       exitCode: outcome.exitCode,
     })),
     claimBoundary:
-      "A successful hermetic command set proves the bounded source owners only. Held rows keep this run degraded and cannot be satisfied by mocks, saved-file checks, or model assertions.",
+      "A successful hermetic command set proves the bounded source owners only. Held rows keep full parity acceptance degraded and cannot be satisfied by mocks, saved-file checks, or model assertions.",
   };
 }
 
-export async function runSelfConfigurationLane(context, _options = {}, deps) {
+export async function collectConfigurationProofSecretEnvKeys(deps) {
+  const collect = deps.collectVerificationSecretEnvKeys ?? collectVerificationSecretEnvKeys;
+  const keys = await collect(deps.path.join(deps.repoRoot, "config"));
+  if (!Array.isArray(keys) || keys.some((key) => typeof key !== "string" || !/^[A-Z][A-Z0-9_]+$/u.test(key))) {
+    throw new Error("Self-configuration verification requires a valid secret environment scrub.");
+  }
+  return keys;
+}
+
+export async function runSelfConfigurationLane(context, options = {}, deps) {
   const {
     clampString,
     emptyArtifacts,
@@ -302,10 +311,7 @@ export async function runSelfConfigurationLane(context, _options = {}, deps) {
     writeJson,
   } = deps;
   const commandOutcomes = [];
-  const omitEnv = await (deps.collectVerificationSecretEnvKeys ?? collectVerificationSecretEnvKeys)(path.join(repoRoot, "config"));
-  if (!Array.isArray(omitEnv) || omitEnv.some(key => typeof key !== "string" || !/^[A-Z][A-Z0-9_]+$/u.test(key))) {
-    throw new Error("Self-configuration verification requires a valid secret environment scrub.");
-  }
+  const omitEnv = await collectConfigurationProofSecretEnvKeys(deps);
 
   for (const command of SELF_CONFIGURATION_COMMANDS) {
     await runScenario(
@@ -337,23 +343,28 @@ export async function runSelfConfigurationLane(context, _options = {}, deps) {
     );
   }
 
+  const foundationOnly = options.acceptanceScope === "hermetic-foundation";
   await runScenario(
     context,
     {
       id: "self-configuration.acceptance-boundary",
       lane: SELF_CONFIGURATION_LANE,
-      title: "Self-configuration parity acceptance boundary",
+      title: foundationOnly
+        ? "Self-configuration hermetic foundation"
+        : "Self-configuration parity acceptance boundary",
       subsystem: "release-proof",
     },
     async () => {
       const proof = buildSelfConfigurationProofMatrix(commandOutcomes);
       const outPath = path.join(context.artifactRoot, "diagnostics", "self-configuration-proof-matrix.json");
       await writeJson(outPath, proof);
+      const commandsPassed = SELF_CONFIGURATION_COMMANDS.every((command) =>
+        commandOutcomes.some((outcome) => outcome.scenarioId === command.id && outcome.exitCode === 0),
+      );
+      const foundationStatus = commandsPassed ? "passed" : "failed";
       return {
-        status: "degraded",
-        notes: [
-          "Live provider, packaged restart, and browser secure-input evidence are held, so this run proves foundations rather than shipped parity.",
-        ],
+        status: foundationOnly ? foundationStatus : "degraded",
+        notes: ["Live-provider, packaged restart, and browser secure-input evidence remain held."],
         metrics: {
           hermeticRows: proof.hermeticRows.length,
           heldRows: proof.heldRows.length,

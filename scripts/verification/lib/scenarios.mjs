@@ -5096,8 +5096,11 @@ async function waitForDurableRunStatus(gatewayUrl, runId, acceptedStatuses, atte
   );
 }
 
-async function stabilizeVisualRegressionSnapshot(page) {
-  await page.evaluate(() => {
+async function stabilizeVisualRegressionSnapshot(page, transcriptRegionSelector) {
+  await page.evaluate((regionSelector) => {
+    const transcript = regionSelector
+      ? document.querySelector(regionSelector)?.querySelector("[data-transcript-scroller]")
+      : null;
     window.scrollTo(0, 0);
     document.documentElement.scrollTop = 0;
     document.body.scrollTop = 0;
@@ -5107,7 +5110,7 @@ async function stabilizeVisualRegressionSnapshot(page) {
       }
       const canScroll = element.scrollHeight > element.clientHeight || element.scrollWidth > element.clientWidth;
       if (canScroll) {
-        element.scrollTop = 0;
+        if (element !== transcript) element.scrollTop = 0;
         element.scrollLeft = 0;
       }
     }
@@ -5150,7 +5153,7 @@ async function stabilizeVisualRegressionSnapshot(page) {
       }
       node.textContent = next;
     }
-  });
+  }, transcriptRegionSelector);
   await page.waitForTimeout(100);
 }
 

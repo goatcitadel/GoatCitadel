@@ -3,7 +3,7 @@ import { COCKPIT_VISUAL_MANIFEST } from "./cockpit-visual-manifest.mjs";
 /*
  * Legacy `RELEASE_SURFACE_MANIFEST` was retired in Track D Phase 3 alongside
  * the on-disk `apps/mission-control/` source. The Mission Control Next
- * manifest below is the only release-bearing surface set.
+ * shell retains separate Cockpit launch and Classic rollback coverage.
  */
 
 export const RELEASE_SURFACE_VARIANTS = [
@@ -86,7 +86,7 @@ export const NEXT_RELEASE_SURFACE_STATUS_BY_SLUG = {
   "library-citadel-wards": "ship",
   "library-citadel-council": "ship",
   "library-citadel-blueprint": "ship",
-  "library-citadel-vault": "ship",
+  "library-citadel-vault": "experimental",
   "ops-boards": "ship",
   "ops-activity": "ship",
   "ops-sessions": "ship",
@@ -561,6 +561,107 @@ export const NEXT_VISUAL_REGRESSION_MANIFEST = [
   ...COCKPIT_VISUAL_MANIFEST,
 ];
 
+// Stable Cockpit owner paths. Root aliases and record-specific links resolve through the Cockpit router.
+export const COCKPIT_RELEASE_SURFACE_STATUS_BY_PATH = {
+  "/chat": "ship",
+  "/chat/projects": "ship",
+  "/chat/messaging/add": "ship",
+  "/chat/messaging/advanced": "ship",
+  "/inbox": "ship",
+  "/work": "ship",
+  "/work/history": "ship",
+  "/work/schedules": "ship",
+  "/work/archive": "ship",
+  "/work/automation": "ship",
+  "/work/kanban": "experimental",
+  "/capabilities/skills": "ship",
+  "/capabilities/plugins": "ship",
+  "/capabilities/connectors": "ship",
+  "/capabilities/connectors/advanced": "ship",
+  "/capabilities/tools": "ship",
+  "/library": "ship",
+  "/library/memory": "ship",
+  "/library/notes": "ship",
+  "/library/files": "ship",
+  "/library/artifacts": "ship",
+  "/library/agents": "ship",
+  "/library/knowledge": "ship",
+  "/library/communications": "ship",
+  "/library/prompt-packs": "ship",
+  "/library/journey": "experimental",
+  "/library/curator": "experimental",
+  "/library/citadel": "ship",
+  "/library/citadel-overview": "ship",
+  "/library/citadel-blueprint": "ship",
+  "/library/citadel-wards": "ship",
+  "/library/citadel-council": "ship",
+  "/library/citadel-vault": "experimental",
+  "/scripts": "ship",
+  "/system": "ship",
+  "/system/runtime": "ship",
+  "/system/runtime/workers": "experimental",
+  "/system/spend": "ship",
+  "/system/spend/details": "ship",
+  "/system/quality": "ship",
+  "/system/diagnostics": "ship",
+  "/system/activity": "ship",
+  "/system/sessions": "ship",
+  "/system/dashboards": "ship",
+  "/system/browser-sessions": "ship",
+  "/system/improvement": "experimental",
+  "/settings/general": "ship",
+  "/settings/models": "ship",
+  "/settings/safety": "ship",
+  "/settings/citadel": "ship",
+  "/settings/access": "ship",
+  "/settings/advanced": "ship",
+  "/settings/first-run": "ship",
+};
+
+// These launch checks add browser behavior without changing visual baseline coverage.
+export const COCKPIT_BEHAVIOR_MANIFEST = [
+  {
+    slug: "cockpit-capabilities-skills",
+    href: "/capabilities/skills",
+    readyText: "Skills",
+    readySelector: '#main-content [role="tablist"][aria-label="Skills view"]',
+  },
+  {
+    slug: "cockpit-capabilities-plugins",
+    href: "/capabilities/plugins",
+    readyText: "Plugins",
+    readySelector: '#main-content [role="search"] input',
+  },
+  {
+    slug: "cockpit-capabilities-connectors",
+    href: "/capabilities/connectors",
+    readyText: "Connectors",
+    readySelector: '#main-content [role="search"] input',
+  },
+  {
+    slug: "cockpit-capabilities-connectors-advanced",
+    href: "/capabilities/connectors/advanced",
+    readyText: "Advanced setup",
+    readySelector: '#main-content [role="tablist"][aria-label="Advanced setup sections"]',
+  },
+  {
+    slug: "cockpit-capabilities-tools",
+    href: "/capabilities/tools",
+    readyText: "Tools",
+    readySelector: '#main-content [role="search"] input',
+  },
+  {
+    slug: "cockpit-scripts",
+    href: "/scripts",
+    readyText: "Scripts",
+    readySelector: '#main-content section[aria-label="Scripts"] input[type="search"]',
+  },
+].map((route) => ({
+  ...route,
+  shell: "cockpit",
+  releaseStatus: COCKPIT_RELEASE_SURFACE_STATUS_BY_PATH[route.href],
+}));
+
 export const NEXT_LEGACY_REDIRECT_MANIFEST = [
   { slug: "legacy-tab-chat", href: "/?tab=chat&surface=chat", expectedPath: "/chat" },
   {
@@ -754,6 +855,7 @@ export function resolveSurfaceRegressionManifest() {
     { ...COCKPIT_VISUAL_MANIFEST[0], slug: "cockpit-default-chat", shell: undefined },
     // A capture with a visualState is a visual-only state of a route already listed here, like the classic scenarios.
     ...COCKPIT_VISUAL_MANIFEST.filter((route) => !route.visualState),
+    ...COCKPIT_BEHAVIOR_MANIFEST,
     ...NEXT_RELEASE_SURFACE_MANIFEST.map((route) => ({ ...route, shell: "classic" })),
   ];
 }

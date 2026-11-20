@@ -1,6 +1,6 @@
 import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 import { installVisualLocalAiFixture } from "./visual-host-fixture.mjs";
-import { installCockpitVisualPreferences } from "./cockpit-visual-readiness.mjs";
+import { cockpitVisualTranscriptAtLatest, installCockpitVisualPreferences } from "./cockpit-visual-readiness.mjs";
 
 const VISUAL_STUB_KEY = "verification-visual-regression-stub-key";
 const VISUAL_STUB_REPLY = "# Verification artifact\n\nDeterministic visual-regression content.";
@@ -203,7 +203,13 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                     verificationTarget.packageName,
                     VISUAL_ROUTE_READY_TIMEOUT_MS,
                   );
-                  await stabilizeVisualRegressionSnapshot(page);
+                  const transcriptRegion = route.readyAtLatest ? route.readySelector : undefined;
+                  await stabilizeVisualRegressionSnapshot(page, transcriptRegion);
+                  if (transcriptRegion) {
+                    await page.waitForFunction(cockpitVisualTranscriptAtLatest, transcriptRegion, {
+                      timeout: VISUAL_ROUTE_READY_TIMEOUT_MS,
+                    });
+                  }
                   await assertMobileVisualGeometry(page, route, variant);
                   if (verificationTarget.isNext && route.slug === "ops-costs") {
                     await assertSpendChartGeometry(page, variant);

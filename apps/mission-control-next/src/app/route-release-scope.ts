@@ -194,10 +194,10 @@ export const ROUTE_RELEASE_SCOPE: readonly RouteReleaseScope[] = [
   {
     area: "library",
     section: "citadel-vault",
-    status: "ship",
-    releaseAction: "Store, reveal, and delete Citadel secrets sealed at rest under a per-Citadel keychain key.",
-    verification: "verify:surface:regression, verify:auth:matrix",
-    note: "Vault is release-bearing for sealed per-Citadel secret storage and fails closed when the keychain is unavailable; per-Chamber keys and rotation are the tracked follow-on.",
+    status: "experimental",
+    releaseAction: "Inspect Vault metadata and review removal of existing secrets where allowed.",
+    verification: "verify:surface:regression hold check, verify:auth:matrix",
+    note: "Storing and revealing secrets are disabled in this release while the Vault key is held. A separate development fixture can exercise sealed storage.",
   },
   {
     area: "ops",
