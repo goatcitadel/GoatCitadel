@@ -253,17 +253,16 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
           await page.getByRole("tab", { name: "Run", exact: true }).waitFor();
           await closeInspector();
           stage = "safe recorded source linkage";
-          await article
-            .locator("summary")
-            .filter({ hasText: /^2 sources$/u })
-            .click();
+          const sourceDisclosure = article
+            .locator("details")
+            .filter({ has: page.locator("summary", { hasText: /^2 sources$/u }) });
+          await sourceDisclosure.locator("summary").click();
+          await sourceDisclosure.getByRole("link", { name: cited.citations[0].title, exact: true }).waitFor();
           assertSourceLinks({
             citations: cited.citations,
             turn: cited,
             sessionId,
-            rendered: await article
-              .locator("details")
-              .filter({ has: page.locator("summary", { hasText: /^2 sources$/u }) })
+            rendered: await sourceDisclosure
               .locator("a")
               .evaluateAll((links) => links.map((link) => ({ title: link.textContent, href: link.href }))),
           });
