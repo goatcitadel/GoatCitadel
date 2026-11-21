@@ -9,6 +9,17 @@ name: Verification UX Budgets Nightly
 # cap at 200, so any value other than empty fails. Leave it empty until the proof is count-aware (see
 # docs/review/2026-10-cockpit-verification-gaps.md, check 4). The nightly never sets it.
 on:
+  pull_request:
+    paths:
+      - ".github/workflows/verification-ux-budgets-nightly.yml"
+      - "apps/gateway/**"
+      - "apps/mission-control-next/**"
+      - "config/**"
+      - "packages/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "scripts/verification/**"
   workflow_dispatch:
     inputs:
       long_list_count:
@@ -22,11 +33,9 @@ on:
 permissions:
   contents: read
 
-# Scheduled and manual runs queue separately, so a manual run is never cancelled by the nightly (or the
-# other way round), and manual runs with different inputs don't cancel each other. A newer run of the same
-# kind replaces an older one.
+# Each pull request has its own queue. Scheduled and manual runs also queue separately.
 concurrency:
-  group: verification-ux-budgets-nightly-${{ github.event_name }}-${{ inputs.long_list_count }}
+  group: verification-ux-budgets-nightly-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.long_list_count }}
   cancel-in-progress: true
 
 jobs:
@@ -67,11 +76,18 @@ jobs:
         run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'started_after=' + new Date().toISOString() + '\n')"
 
       - name: Run the UX-budgets lane
+        if: github.event_name != 'pull_request'
         env:
           GOATCITADEL_UI_PACKAGE: "@goatcitadel/mission-control-next"
           # Empty on scheduled runs, which keeps the 105-record fixture. Only a large-data dispatch sets it.
           GOATCITADEL_VERIFY_LONG_LIST_COUNT: ${{ inputs.long_list_count }}
         run: pnpm verify:ux:budgets
+
+      - name: Enforce Chat startup budgets
+        if: github.event_name == 'pull_request'
+        env:
+          GOATCITADEL_UI_PACKAGE: "@goatcitadel/mission-control-next"
+        run: node scripts/verification/cockpit-performance-proof.mjs --startup-only
 
       - name: Run review generation
         if: always()

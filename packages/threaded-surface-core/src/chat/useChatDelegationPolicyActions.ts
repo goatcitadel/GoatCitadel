@@ -25,15 +25,18 @@ import {
 } from "@goatcitadel/mission-control-shared/api/client";
 import { resolveActiveWorkflowTurn } from "@goatcitadel/mission-control-shared/components/chat/active-workflow-turn";
 
-
-import type { ActiveExplorerObservation, DelegationActionOwner, DelegationActions } from "./delegation-action-code.types";
+import type {
+  ActiveExplorerObservation,
+  DelegationActionOwner,
+  DelegationActions,
+} from "./delegation-action-code.types";
 
 let delegationActionCode: Promise<typeof import("./delegation-action-code")> | undefined;
 function loadDelegationActionCode() {
-  return delegationActionCode ??= import("./delegation-action-code").catch((error: unknown) => {
+  return (delegationActionCode ??= import("./delegation-action-code").catch((error: unknown) => {
     delegationActionCode = undefined;
     throw error;
-  });
+  }));
 }
 
 export interface ChatProactivePolicyPatch {
@@ -109,13 +112,6 @@ export interface ActiveChatDelegationRun {
   explorer?: ChatDelegateResponse["explorer"];
 }
 
-export class ExplorerObservationDetachedError extends Error {
-  public constructor() {
-    super("Workspace explorer observation continued in background.");
-    this.name = "ExplorerObservationDetachedError";
-  }
-}
-
 export function toActiveDelegationStep(step: ChatDelegationStepRecord): ActiveChatDelegationStep {
   return {
     stepId: step.stepId,
@@ -151,30 +147,6 @@ export function toActiveDelegationScopeControl(
   };
 }
 
-export function inferDelegationRunStatus(
-  steps: ActiveChatDelegationStep[],
-  fallback: ChatDelegationRunStatus = "running",
-) {
-  if (steps.length === 0) {
-    return fallback;
-  }
-  if (steps.some((step) => step.status === "running" || step.status === "pending")) {
-    return "running";
-  }
-  const completedCount = steps.filter((step) => step.status === "completed").length;
-  const failedOrSkippedCount = steps.filter((step) => step.status === "failed" || step.status === "skipped").length;
-  if (completedCount === steps.length) {
-    return "completed";
-  }
-  if (completedCount > 0 && failedOrSkippedCount > 0) {
-    return "partial";
-  }
-  if (failedOrSkippedCount > 0) {
-    return "failed";
-  }
-  return fallback;
-}
-
 export function createSeedDelegationSteps(request: ChatDelegateRequest): ActiveChatDelegationStep[] {
   if (request.steps?.length) {
     return request.steps
@@ -207,73 +179,6 @@ export function resolveDelegationRoute(
     providerId: prefs?.providerId ?? selectedProviderId,
     model: prefs?.model ?? selectedModel,
   };
-}
-
-function mergeDelegationStep(
-  currentSteps: ActiveChatDelegationStep[],
-  nextStep: ActiveChatDelegationStep,
-): ActiveChatDelegationStep[] {
-  // Assumes `currentSteps` is already sorted by `.index`. Callers seed via
-  // `createSeedDelegationSteps` which sorts, and every other code path that
-  // builds a fresh list also sorts before assigning. By inserting in-order
-  // instead of `.sort()`-ing after every merge, we drop O(n log n) work
-  // from every streaming update.
-  const matchingIndex = currentSteps.findIndex(
-    (step) =>
-      step.stepId === nextStep.stepId ||
-      (!step.runId && step.index === nextStep.index && step.role.toLowerCase() === nextStep.role.toLowerCase()),
-  );
-  const mergedStep = matchingIndex >= 0 ? { ...currentSteps[matchingIndex], ...nextStep } : nextStep;
-  const remainingSteps =
-    matchingIndex >= 0 ? currentSteps.filter((_, position) => position !== matchingIndex) : currentSteps;
-  const insertionIndex = remainingSteps.findIndex((step) => step.index > mergedStep.index);
-  if (insertionIndex < 0) {
-    return [...remainingSteps, mergedStep];
-  }
-  return [...remainingSteps.slice(0, insertionIndex), mergedStep, ...remainingSteps.slice(insertionIndex)];
-}
-
-export function applyDelegationStatusChunk(
-  current: ActiveChatDelegationRun | null,
-  chunk: { runId?: string; taskId?: string },
-): ActiveChatDelegationRun | null {
-  return current
-    ? {
-        ...current,
-        runId: chunk.runId ?? current.runId,
-        taskId: chunk.taskId ?? current.taskId,
-      }
-    : current;
-}
-
-export function applyDelegationStepChunk(
-  current: ActiveChatDelegationRun | null,
-  chunk: { runId?: string; taskId?: string },
-  nextStep: ActiveChatDelegationStep,
-): ActiveChatDelegationRun | null {
-  if (!current) {
-    return current;
-  }
-  const steps = mergeDelegationStep(current.steps, nextStep);
-  return {
-    ...current,
-    runId: chunk.runId ?? current.runId,
-    taskId: chunk.taskId ?? current.taskId,
-    steps,
-    status: inferDelegationRunStatus(steps, "running"),
-  };
-}
-
-export function applyDelegationStreamFailure(current: ActiveChatDelegationRun | null): ActiveChatDelegationRun | null {
-  return current
-    ? {
-        ...current,
-        status: inferDelegationRunStatus(
-          current.steps,
-          current.steps.some((step) => step.status === "completed") ? "partial" : "failed",
-        ),
-      }
-    : current;
 }
 
 export function resolveSelectedTurn(
@@ -386,11 +291,19 @@ export function useChatDelegationPolicyActions(input: UseChatDelegationPolicyAct
   const publicationRef = useRef<object | null>(null);
   const sessionAdoptionRef = useRef<{ token: object; scope: string; adopt: () => void } | null>(null);
   const scopeRoute = resolveDelegationRoute(prefs, selectedProviderId, selectedModel);
-  const scopeForSession = (session: ChatSessionRecord | null) => JSON.stringify([
-    session?.sessionId, session?.projectId, selectedTurn?.turnId, selectedTurn?.trace.durable?.runId,
-    scopeRoute.providerId, scopeRoute.model, input.fullWebAccess, input.codeModeNeedsProjectBinding,
-    input.surfaceMode, session?.workspaceId,
-  ]);
+  const scopeForSession = (session: ChatSessionRecord | null) =>
+    JSON.stringify([
+      session?.sessionId,
+      session?.projectId,
+      selectedTurn?.turnId,
+      selectedTurn?.trace.durable?.runId,
+      scopeRoute.providerId,
+      scopeRoute.model,
+      input.fullWebAccess,
+      input.codeModeNeedsProjectBinding,
+      input.surfaceMode,
+      session?.workspaceId,
+    ]);
   const scope = scopeForSession(selectedSession);
   const scopeRef = useRef(scope);
   const releaseOnScopeChangeRef = useRef(false);
@@ -398,7 +311,12 @@ export function useChatDelegationPolicyActions(input: UseChatDelegationPolicyAct
     scopeRef.current = scope;
     lifetimeRef.current += 1;
     const adoption = sessionAdoptionRef.current;
-    if (adoption && adoption.token === attemptRef.current && adoption.scope === scope && !runtimeBlockerActiveRef?.current) {
+    if (
+      adoption &&
+      adoption.token === attemptRef.current &&
+      adoption.scope === scope &&
+      !runtimeBlockerActiveRef?.current
+    ) {
       // ensureSession independently confirmed this exact creation before selecting it.
       adoption.adopt();
     } else {
@@ -679,36 +597,90 @@ export function useChatDelegationPolicyActions(input: UseChatDelegationPolicyAct
     [activeDelegationRun?.label, activeDelegationRun?.runId, selectedSession?.sessionId, selectedTurn?.turnId],
   );
 
-
   // Admission and visible seed state belong to the mounted owner, before any import.
-  const prepareDelegation = (method: keyof DelegationActions, args: unknown[]): { request: ChatDelegateRequest; label: string } | null => {
+  const prepareDelegation = (
+    method: keyof DelegationActions,
+    args: unknown[],
+  ): { request: ChatDelegateRequest; label: string } | null => {
     if (method === "handleAcceptDelegation" && delegationSuggestion) {
-      return { request: buildSeedRequest(delegationSuggestion.objective, delegationSuggestion.roles, delegationSuggestion.mode), label: "Delegation" };
+      return {
+        request: buildSeedRequest(
+          delegationSuggestion.objective,
+          delegationSuggestion.roles,
+          delegationSuggestion.mode,
+        ),
+        label: "Delegation",
+      };
     }
     if (method === "handleRunCodeDelegation" && selectedSession) {
       const preset = CODE_DELEGATION_PRESETS[args[0] as keyof typeof CODE_DELEGATION_PRESETS];
-      const objective = draft.trim() || messages.filter(item => item.role === "user").at(-1)?.content?.trim() || selectedSession.title?.trim() || "";
+      const objective =
+        draft.trim() ||
+        messages
+          .filter((item) => item.role === "user")
+          .at(-1)
+          ?.content?.trim() ||
+        selectedSession.title?.trim() ||
+        "";
       if (!objective || codeModeNeedsProjectBinding) return null;
-      return { request: buildSeedRequest(preset.prefix + objective, [...preset.roles], preset.mode), label: preset.label };
+      return {
+        request: buildSeedRequest(preset.prefix + objective, [...preset.roles], preset.mode),
+        label: preset.label,
+      };
     }
-    if (method === "handleExploreWorkspace" && selectedSession?.projectId && selectedTurn?.trace.durable?.runId && !selectedTurnHasDelegation && draft.trim()) {
+    if (
+      method === "handleExploreWorkspace" &&
+      selectedSession?.projectId &&
+      selectedTurn?.trace.durable?.runId &&
+      !selectedTurnHasDelegation &&
+      draft.trim()
+    ) {
       const route = resolveDelegationRoute(prefs, selectedProviderId, selectedModel);
-      return { request: { objective: draft.trim(), roles: ["Workspace explorer"], mode: "sequential", surfaceMode: "chat", ...route, executionProfile: "read_only_explorer", policyRunId: selectedTurn.trace.durable.runId }, label: "Workspace exploration" };
+      return {
+        request: {
+          objective: draft.trim(),
+          roles: ["Workspace explorer"],
+          mode: "sequential",
+          surfaceMode: "chat",
+          ...route,
+          executionProfile: "read_only_explorer",
+          policyRunId: selectedTurn.trace.durable.runId,
+        },
+        label: "Workspace exploration",
+      };
     }
     return null;
   };
-  const buildSeedRequest = (objective: string, roles: string[], mode: NonNullable<ChatDelegateRequest["mode"]>): ChatDelegateRequest => {
+  const buildSeedRequest = (
+    objective: string,
+    roles: string[],
+    mode: NonNullable<ChatDelegateRequest["mode"]>,
+  ): ChatDelegateRequest => {
     const graph = buildDelegationGraph(selectedTurn, roles);
     const route = resolveDelegationRoute(prefs, selectedProviderId, selectedModel);
     const policyRunId = activeDelegationRun?.runId ?? activeWorkflowTurn?.trace.orchestration?.runId;
-    return { objective, ...graph, mode, surfaceMode, ...route,
+    return {
+      objective,
+      ...graph,
+      mode,
+      surfaceMode,
+      ...route,
       ...(fullWebAccess ? { fullWebAccess: true } : {}),
       ...(policyRunId ? { policyRunId } : {}),
-      ...(activeDelegationRun?.taskId ? { policyTaskId: activeDelegationRun.taskId } : {}) };
+      ...(activeDelegationRun?.taskId ? { policyTaskId: activeDelegationRun.taskId } : {}),
+    };
   };
-  async function invoke<K extends Exclude<keyof DelegationActions, "runDelegationAction">>(method: K, ...args: Parameters<DelegationActions[K]>): Promise<void> {
+  async function invoke<K extends Exclude<keyof DelegationActions, "runDelegationAction">>(
+    method: K,
+    ...args: Parameters<DelegationActions[K]>
+  ): Promise<void> {
     const policy = method === "handleProactivePolicyPatch";
-    if (!mountedRef.current || renderLifetime !== lifetimeRef.current || (!policy && (attemptRef.current || sending || runtimeBlockerActiveRef?.current))) return;
+    if (
+      !mountedRef.current ||
+      renderLifetime !== lifetimeRef.current ||
+      (!policy && (attemptRef.current || sending || runtimeBlockerActiveRef?.current))
+    )
+      return;
     if (method !== "handleRunQuickResearch" && !selectedSession) return;
     if (method === "handleAcceptDelegation" && !delegationSuggestion) return;
     if (method === "handleRunCodeDelegation" && codeModeNeedsProjectBinding) {
@@ -716,11 +688,19 @@ export function useChatDelegationPolicyActions(input: UseChatDelegationPolicyAct
       return;
     }
     if (method === "handleExploreWorkspace") {
-      const error = !selectedSession?.projectId ? "Bind this Chat to a project before exploring its governed workspace scope."
-        : !selectedTurn?.trace.durable?.runId ? "Send a Chat turn first so workspace exploration can attach to durable progress and recovery."
-        : selectedTurnHasDelegation ? "This Chat turn already owns delegated work. Send a new turn before exploring the workspace."
-        : !draft.trim() ? "Write what you want to find, then choose Explore workspace." : null;
-      if (error) { setError(error); return; }
+      const error = !selectedSession?.projectId
+        ? "Bind this Chat to a project before exploring its governed workspace scope."
+        : !selectedTurn?.trace.durable?.runId
+          ? "Send a Chat turn first so workspace exploration can attach to durable progress and recovery."
+          : selectedTurnHasDelegation
+            ? "This Chat turn already owns delegated work. Send a new turn before exploring the workspace."
+            : !draft.trim()
+              ? "Write what you want to find, then choose Explore workspace."
+              : null;
+      if (error) {
+        setError(error);
+        return;
+      }
     }
     const prepared = prepareDelegation(method, args);
     if (method === "handleRunCodeDelegation" && !prepared) {
@@ -734,34 +714,63 @@ export function useChatDelegationPolicyActions(input: UseChatDelegationPolicyAct
       publicationRef.current = token;
     }
     // Completed updates may still be queued in React after busy ownership releases.
-    const isCurrent = () => mountedRef.current && actionLifetime === lifetimeRef.current && (policy || publicationRef.current === token) && !runtimeBlockerActiveRef?.current;
+    const isCurrent = () =>
+      mountedRef.current &&
+      actionLifetime === lifetimeRef.current &&
+      (policy || publicationRef.current === token) &&
+      !runtimeBlockerActiveRef?.current;
     if (!policy) setSending(true);
     if (prepared) {
       directDelegationGenerationRef.current += 1;
-      setActiveDelegationRun({ attachedTurnId: selectedTurn?.turnId ?? null, label: prepared.label,
-        objective: prepared.request.objective, mode: resolveDelegationMode(prepared.request.mode), status: "running", steps: createSeedDelegationSteps(prepared.request) });
+      setActiveDelegationRun({
+        attachedTurnId: selectedTurn?.turnId ?? null,
+        label: prepared.label,
+        objective: prepared.request.objective,
+        mode: resolveDelegationMode(prepared.request.mode),
+        status: "running",
+        steps: createSeedDelegationSteps(prepared.request),
+      });
     }
-    const actionInput = method === "handleRunQuickResearch" && !selectedSession ? {
-      ...input,
-      ensureSession: async () => {
-        let confirmedScope: string | undefined;
-        const result = await input.ensureSession(created => {
-          if (!isCurrent() || !created.sessionId) return;
-          confirmedScope = scopeForSession(created);
-          sessionAdoptionRef.current = {
-            token, scope: confirmedScope, adopt: () => { actionLifetime = lifetimeRef.current; },
-          };
-        });
-        if (confirmedScope && scopeForSession(result) !== confirmedScope) {
-          throw new Error("Created conversation does not match its confirmed research owner.");
-        }
-        return result;
-      },
-    } : input;
-    const owner: DelegationActionOwner = { input: actionInput, delegationSuggestion, activeDelegationRun, selectedTurn,
-      activeWorkflowTurn, selectedTurnHasDelegation, setActiveDelegationRun, setDelegationSuggestion,
-      setProactivePolicyDraft, setProactivePolicyConflict, directDelegationGenerationRef,
-      activeExplorerObservationRef, explorerAttentionGenerationRef, isCurrent };
+    const actionInput =
+      method === "handleRunQuickResearch" && !selectedSession
+        ? {
+            ...input,
+            ensureSession: async () => {
+              let confirmedScope: string | undefined;
+              const result = await input.ensureSession((created) => {
+                if (!isCurrent() || !created.sessionId) return;
+                confirmedScope = scopeForSession(created);
+                sessionAdoptionRef.current = {
+                  token,
+                  scope: confirmedScope,
+                  adopt: () => {
+                    actionLifetime = lifetimeRef.current;
+                  },
+                };
+              });
+              if (confirmedScope && scopeForSession(result) !== confirmedScope) {
+                throw new Error("Created conversation does not match its confirmed research owner.");
+              }
+              return result;
+            },
+          }
+        : input;
+    const owner: DelegationActionOwner = {
+      input: actionInput,
+      delegationSuggestion,
+      activeDelegationRun,
+      selectedTurn,
+      activeWorkflowTurn,
+      selectedTurnHasDelegation,
+      setActiveDelegationRun,
+      setDelegationSuggestion,
+      setProactivePolicyDraft,
+      setProactivePolicyConflict,
+      directDelegationGenerationRef,
+      activeExplorerObservationRef,
+      explorerAttentionGenerationRef,
+      isCurrent,
+    };
     let codeLoaded = false;
     try {
       const code = await loadDelegationActionCode();
@@ -788,7 +797,8 @@ export function useChatDelegationPolicyActions(input: UseChatDelegationPolicyAct
   const handleTriggerProactive = () => invoke("handleTriggerProactive");
   const handleSuggestDelegation = () => invoke("handleSuggestDelegation");
   const handleAcceptDelegation = () => invoke("handleAcceptDelegation");
-  const handleRunCodeDelegation = (preset: keyof typeof CODE_DELEGATION_PRESETS) => invoke("handleRunCodeDelegation", preset);
+  const handleRunCodeDelegation = (preset: keyof typeof CODE_DELEGATION_PRESETS) =>
+    invoke("handleRunCodeDelegation", preset);
   const handleExploreWorkspace = () => invoke("handleExploreWorkspace");
 
   return {

@@ -10,7 +10,7 @@ import {
   composerControlsProps,
   useComposerSources,
 } from "./ChatComposerTools";
-import { ChatModelOptionsButton, type ModelOptionsRequest } from "./ChatComposerControls";
+import { ChatModelOptionsButton, type ModelOptionsRequest } from "./ChatModelOptionsButton";
 import { ChatComposerModePills, ChatComposerPlusMenu } from "./ChatComposerPlusMenu";
 import { ComposerSuggestionsHint, composerDescribedBy } from "./ChatComposerSuggestionsHint";
 import { ChatComposerPalette } from "./ChatComposerPalette";
@@ -122,7 +122,7 @@ export function ChatTextComposer({
     !props.composerPalette?.globalOpen &&
     !props.pendingAttachments.length &&
     ((command === "/schedule" && Boolean(onOpenSchedules)) ||
-      (command === "/timer" && Boolean(props.chatTimerPanel)) ||
+      (command === "/timer" && (props.chatTimerAvailable ?? Boolean(props.chatTimerPanel))) ||
       (command === "/status" && Boolean(props.sessionStatusPanel)));
   const localReady =
     localCommand &&

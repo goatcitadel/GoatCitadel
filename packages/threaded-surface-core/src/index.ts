@@ -49,10 +49,10 @@ export {
 } from "./chat/composer-palette";
 export type { ChatStreamingPreview, ChatVisualStreamMode } from "./chat/chat-streaming-preview";
 export type { ThreadedDelegatedScopeControls } from "./chat/useChatDelegatedScopeControls";
-export {
-  verifyChatCapabilityProfileAgainstTurn,
-  type ChatCapabilityProfileInspection,
-  type ChatCapabilityProfileInspectionStatus,
+export { verifyChatCapabilityProfileAgainstTurn } from "./chat/chat-capability-profile-inspection";
+export type {
+  ChatCapabilityProfileInspection,
+  ChatCapabilityProfileInspectionStatus,
 } from "./chat/useChatCapabilityProfileInspection";
 export {
   deriveSessionControlBannerViewModel,

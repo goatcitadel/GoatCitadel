@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { ChatCompletionReasoningEffort } from "@goatcitadel/contracts";
 import type { ChatModelOptionsControls as Controls } from "./ChatComposerControls";
 import { useProviderLabelLookup } from "../../data/use-model-label";
-import { PLAN_HELP, REVIEW_HELP, presentThinkingLevel } from "./chat-vocabulary";
+import { PLAN_HELP, REVIEW_HELP } from "./chat-optional-vocabulary";
+import { presentThinkingLevel } from "./chat-vocabulary";
 import { useChatModelLabels } from "./use-chat-model-labels";
 import {
   GUIDED_THINKING_LEVELS,

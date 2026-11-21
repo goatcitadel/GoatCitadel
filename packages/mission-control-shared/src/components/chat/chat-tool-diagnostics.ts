@@ -1,5 +1,8 @@
 import type { ChatToolRunRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import { readOpenCodeRunSummary } from "@goatcitadel/contracts";
+import { hasChatToolFailureSignal, isFailedCodeModeRequest } from "./chat-tool-failure.js";
+
+export { isFailedCodeModeRequest } from "./chat-tool-failure.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -79,14 +82,6 @@ function joinSummaryParts(...parts: Array<string | undefined>): string | undefin
   return present.length > 0 ? present.join(" ") : undefined;
 }
 
-/**
- * A Chat Code Mode request whose code did not finish. The tool call still settles as executed, so the waiting turn
- * resumes with the outcome; the failure is in its result (`{ status: "failed", error }`).
- */
-export function isFailedCodeModeRequest(run: Pick<ChatToolRunRecord, "toolName" | "result">): boolean {
-  return run.toolName === "code_mode.request" && isRecord(run.result) && run.result.status === "failed";
-}
-
 export function getChatToolRunDiagnostics(run: ChatToolRunRecord): {
   url?: string;
   finalUrl?: string;
@@ -127,14 +122,7 @@ export function getChatToolRunDiagnostics(run: ChatToolRunRecord): {
     artifactSummary: readString(result?.artifactSummary),
     originalByteLength: readNumber(result?.originalByteLength, result?.byteLength),
     fallbackAttemptCount: fallbackChain.length > 1 ? fallbackChain.length - 1 : 0,
-    hasFailureSignal:
-      run.status === "failed" ||
-      run.status === "blocked" ||
-      failedRequest ||
-      Boolean(run.error) ||
-      Boolean(browserFailureClass) ||
-      (typeof result?.exitCode === "number" && result.exitCode !== 0) ||
-      Boolean(readOpenCodeRunSummary(result?.externalAgent)?.error),
+    hasFailureSignal: hasChatToolFailureSignal(run),
   };
 }
 

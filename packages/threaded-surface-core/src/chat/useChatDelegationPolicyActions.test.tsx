@@ -8,17 +8,19 @@ import type {
   ChatThreadResponse,
 } from "@goatcitadel/contracts";
 import {
-  applyDelegationStatusChunk,
-  applyDelegationStepChunk,
-  applyDelegationStreamFailure,
   createSeedDelegationSteps,
-  inferDelegationRunStatus,
   resolveDelegationMode,
   resolveDelegationRoute,
   resolveSelectedTurn,
   shouldHydrateTraceDelegationRun,
   useChatDelegationPolicyActions,
 } from "./useChatDelegationPolicyActions";
+import {
+  applyDelegationStatusChunk,
+  applyDelegationStepChunk,
+  applyDelegationStreamFailure,
+  inferDelegationRunStatus,
+} from "./delegation-stream-projection";
 import { useChatDelegatedScopeControls, type ThreadedDelegatedScopeControls } from "./useChatDelegatedScopeControls";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -338,7 +340,10 @@ function Harness(props: {
   thread?: ChatThreadResponse | null;
   codeModeNeedsProjectBinding?: boolean;
   runtimeBlocked?: boolean;
-  createSession?: (publish: (session: ChatSessionRecord) => void, onResolved?: (session: ChatSessionRecord) => void) => Promise<ChatSessionRecord>;
+  createSession?: (
+    publish: (session: ChatSessionRecord) => void,
+    onResolved?: (session: ChatSessionRecord) => void,
+  ) => Promise<ChatSessionRecord>;
 }) {
   const [sending, setSending] = useState(Boolean(props.sendingInitial));
   const [createdSession, setCreatedSession] = useState<ChatSessionRecord | null>(null);
@@ -353,7 +358,8 @@ function Harness(props: {
   const lastLocalPrefMutationAtRef = useRef(0);
   const runtimeBlockerActiveRef = useRef(Boolean(props.runtimeBlocked));
   runtimeBlockerActiveRef.current = Boolean(props.runtimeBlocked);
-  const selectedSession = props.selectedSession === undefined ? makeSession() : props.selectedSession ?? createdSession;
+  const selectedSession =
+    props.selectedSession === undefined ? makeSession() : (props.selectedSession ?? createdSession);
   const setError = useCallback((value: string | null) => {
     if (value) {
       errorsRef.current.push(value);
@@ -363,8 +369,11 @@ function Harness(props: {
     noticesRef.current.push({ content, tone });
   }, []);
   const { createSession } = props;
-  const ensureSession = useCallback(async (onResolved?: (session: ChatSessionRecord) => void) => selectedSession ??
-    (createSession ? createSession(setCreatedSession, onResolved) : makeSession()), [createSession, selectedSession]);
+  const ensureSession = useCallback(
+    async (onResolved?: (session: ChatSessionRecord) => void) =>
+      selectedSession ?? (createSession ? createSession(setCreatedSession, onResolved) : makeSession()),
+    [createSession, selectedSession],
+  );
 
   const result = useDelegationHook({
     selectedSession,
@@ -2163,7 +2172,6 @@ describe("useChatDelegationPolicyActions", () => {
   });
 });
 
-
 // The admission assertions also protect ownership before the first code import.
 describe("Task 3 delegation action admission", () => {
   beforeEach(() => {
@@ -2174,7 +2182,9 @@ describe("Task 3 delegation action admission", () => {
 
   it("admits only one same-tick launch and publishes seed state synchronously", async () => {
     let finish!: (value: unknown) => void;
-    const remote = new Promise<unknown>(resolve => { finish = resolve; });
+    const remote = new Promise<unknown>((resolve) => {
+      finish = resolve;
+    });
     runChatDelegationMock.mockReturnValue(remote);
     let renderer!: ReturnType<typeof create>;
     await act(async () => {
@@ -2190,7 +2200,9 @@ describe("Task 3 delegation action admission", () => {
     });
     expect(latestHarness!.sending).toBe(true);
     expect(latestHarness!.result.activeDelegationRun).toMatchObject({
-      label: "Review", status: "running", steps: [
+      label: "Review",
+      status: "running",
+      steps: [
         { stepId: "plan-1", status: "pending" },
         { stepId: "plan-2", status: "pending" },
       ],
@@ -2212,20 +2224,32 @@ describe("Task 3 delegation action admission", () => {
       const thread = makeThreadWithDurableParent();
       const props = { selectedSession: session, thread, prefs: makePrefs({ subagentPolicy: "off" }) };
       let renderer!: ReturnType<typeof create>;
-      await act(async () => { renderer = create(<Harness {...props} />); await flushEffects(); });
+      await act(async () => {
+        renderer = create(<Harness {...props} />);
+        await flushEffects();
+      });
       const captured = latestHarness!.result.handleRunCodeDelegation;
       const changedThread = makeThreadWithDurableParent();
       changedThread.turns[0]!.trace.durable = { runId: "parent-B", status: "completed" };
       await act(async () => {
-        renderer.update(<Harness {...props}
-          selectedSession={replacement.startsWith("session") ? { ...session, sessionId: "session-B" } : session}
-          thread={replacement.startsWith("parent") ? changedThread : thread} />);
+        renderer.update(
+          <Harness
+            {...props}
+            selectedSession={replacement.startsWith("session") ? { ...session, sessionId: "session-B" } : session}
+            thread={replacement.startsWith("parent") ? changedThread : thread}
+          />,
+        );
         await flushEffects();
       });
       if (replacement.endsWith("roundtrip")) {
-        await act(async () => { renderer.update(<Harness {...props} />); await flushEffects(); });
+        await act(async () => {
+          renderer.update(<Harness {...props} />);
+          await flushEffects();
+        });
       }
-      await act(async () => { await captured("review"); });
+      await act(async () => {
+        await captured("review");
+      });
       renderer.unmount();
       expect(runChatDelegationMock).not.toHaveBeenCalled();
     },
@@ -2233,17 +2257,29 @@ describe("Task 3 delegation action admission", () => {
 
   it("does not publish a late non-stream result across a session replacement", async () => {
     let finish!: (value: unknown) => void;
-    runChatDelegationMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    runChatDelegationMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
     let renderer!: ReturnType<typeof create>;
     await act(async () => {
       renderer = create(<Harness prefs={makePrefs({ subagentPolicy: "off" })} />);
       await flushEffects();
     });
     let launch!: Promise<void>;
-    await act(async () => { launch = latestHarness!.result.handleRunCodeDelegation("review"); await flushEffects(); });
     await act(async () => {
-      renderer.update(<Harness selectedSession={{ ...makeSession(), sessionId: "session-B" }}
-        prefs={makePrefs({ subagentPolicy: "off" })} />);
+      launch = latestHarness!.result.handleRunCodeDelegation("review");
+      await flushEffects();
+    });
+    await act(async () => {
+      renderer.update(
+        <Harness
+          selectedSession={{ ...makeSession(), sessionId: "session-B" }}
+          prefs={makePrefs({ subagentPolicy: "off" })}
+        />,
+      );
       await flushEffects();
     });
     await act(async () => {
@@ -2254,47 +2290,68 @@ describe("Task 3 delegation action admission", () => {
     const notices = [...latestHarness!.notices];
     renderer.unmount();
     expect(current).toBeNull();
-    expect(notices.some(notice => notice.content.includes("old session"))).toBe(false);
+    expect(notices.some((notice) => notice.content.includes("old session"))).toBe(false);
   });
-  it.each(["session", "parent"] as const)("ignores late stream publication after %s replacement", async (replacement) => {
-    type OnChunk = Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").streamChatDelegation>[2];
-    let emit!: OnChunk;
-    let finish!: () => void;
-    const pending = new Promise<void>(resolve => { finish = resolve; });
-    streamChatDelegationMock.mockImplementationOnce((_sessionId, _request, onChunk: OnChunk) => {
-      emit = onChunk;
-      return pending;
-    });
-    const session = makeSession();
-    const thread = makeThreadWithDurableParent();
-    const props = { selectedSession: session, thread, streamEnabled: true, prefs: makePrefs({ subagentPolicy: "off" }) };
-    let renderer!: ReturnType<typeof create>;
-    await act(async () => { renderer = create(<Harness {...props} />); await flushEffects(); });
-    let launch!: Promise<void>;
-    await act(async () => { launch = latestHarness!.result.handleRunCodeDelegation("review"); await flushEffects(); });
-    const changedThread = makeThreadWithDurableParent();
-    changedThread.turns[0]!.trace.durable = { runId: "parent-B", status: "completed" };
-    await act(async () => {
-      renderer.update(<Harness {...props}
-        selectedSession={replacement === "session" ? { ...session, sessionId: "session-B" } : session}
-        thread={replacement === "parent" ? changedThread : thread} />);
-      await flushEffects();
-    });
-    const before = latestHarness!.result.activeDelegationRun;
-    const noticeCount = latestHarness!.notices.length;
-    await act(async () => {
-      emit({ type: "status", runId: "stale-stream", message: "stale stream status" });
-      emit({ type: "done", result: { runId: "stale-stream", steps: [], stitchedOutput: "stale stream output" } });
-      finish();
-      await launch;
-    });
-    const after = latestHarness!.result.activeDelegationRun;
-    const notices = latestHarness!.notices.slice(noticeCount);
-    renderer.unmount();
-    expect(after).toEqual(before);
-    expect(notices).toEqual([]);
-  });
-
+  it.each(["session", "parent"] as const)(
+    "ignores late stream publication after %s replacement",
+    async (replacement) => {
+      type OnChunk = Parameters<
+        typeof import("@goatcitadel/mission-control-shared/api/client").streamChatDelegation
+      >[2];
+      let emit!: OnChunk;
+      let finish!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      streamChatDelegationMock.mockImplementationOnce((_sessionId, _request, onChunk: OnChunk) => {
+        emit = onChunk;
+        return pending;
+      });
+      const session = makeSession();
+      const thread = makeThreadWithDurableParent();
+      const props = {
+        selectedSession: session,
+        thread,
+        streamEnabled: true,
+        prefs: makePrefs({ subagentPolicy: "off" }),
+      };
+      let renderer!: ReturnType<typeof create>;
+      await act(async () => {
+        renderer = create(<Harness {...props} />);
+        await flushEffects();
+      });
+      let launch!: Promise<void>;
+      await act(async () => {
+        launch = latestHarness!.result.handleRunCodeDelegation("review");
+        await flushEffects();
+      });
+      const changedThread = makeThreadWithDurableParent();
+      changedThread.turns[0]!.trace.durable = { runId: "parent-B", status: "completed" };
+      await act(async () => {
+        renderer.update(
+          <Harness
+            {...props}
+            selectedSession={replacement === "session" ? { ...session, sessionId: "session-B" } : session}
+            thread={replacement === "parent" ? changedThread : thread}
+          />,
+        );
+        await flushEffects();
+      });
+      const before = latestHarness!.result.activeDelegationRun;
+      const noticeCount = latestHarness!.notices.length;
+      await act(async () => {
+        emit({ type: "status", runId: "stale-stream", message: "stale stream status" });
+        emit({ type: "done", result: { runId: "stale-stream", steps: [], stitchedOutput: "stale stream output" } });
+        finish();
+        await launch;
+      });
+      const after = latestHarness!.result.activeDelegationRun;
+      const notices = latestHarness!.notices.slice(noticeCount);
+      renderer.unmount();
+      expect(after).toEqual(before);
+      expect(notices).toEqual([]);
+    },
+  );
 });
 
 describe("delegation execution code arrival", () => {
@@ -2327,7 +2384,9 @@ describe("delegation execution code arrival", () => {
 
   afterEach(async () => {
     if (renderer) {
-      await act(async () => { renderer!.unmount(); });
+      await act(async () => {
+        renderer!.unmount();
+      });
       renderer = undefined;
     }
     useDelegationHook = useChatDelegationPolicyActions;
@@ -2353,12 +2412,28 @@ describe("delegation execution code arrival", () => {
 
   it("restores canonical prior explorer work while execution code is still untouched", async () => {
     fetchLatestChatWorkspaceExplorerMock.mockResolvedValueOnce({
-      run: { runId: "prior-explorer", parentRunId: "parent-run-1", objective: "Prior governed exploration", mode: "sequential", status: "completed", stitchedOutput: "Prior answer" },
-      steps: [{ stepId: "prior-step", runId: "prior-explorer", role: "workspace-explorer", status: "completed", index: 0 }],
+      run: {
+        runId: "prior-explorer",
+        parentRunId: "parent-run-1",
+        objective: "Prior governed exploration",
+        mode: "sequential",
+        status: "completed",
+        stitchedOutput: "Prior answer",
+      },
+      steps: [
+        { stepId: "prior-step", runId: "prior-explorer", role: "workspace-explorer", status: "completed", index: 0 },
+      ],
       explorer: { answer: "Prior answer", partialResult: false, gaps: [] },
     });
-    await mount({ selectedSession: { ...makeSession(), projectId: "project-1" }, thread: makeThreadWithDurableParent() });
-    expect(latestHarness!.result.activeDelegationRun).toMatchObject({ runId: "prior-explorer", label: "Workspace exploration", explorer: { answer: "Prior answer" } });
+    await mount({
+      selectedSession: { ...makeSession(), projectId: "project-1" },
+      thread: makeThreadWithDurableParent(),
+    });
+    expect(latestHarness!.result.activeDelegationRun).toMatchObject({
+      runId: "prior-explorer",
+      label: "Workspace exploration",
+      explorer: { answer: "Prior answer" },
+    });
     expect(imports).toBe(0);
     expect(streamChatDelegationMock).not.toHaveBeenCalled();
   });
@@ -2377,19 +2452,31 @@ describe("delegation execution code arrival", () => {
     expect(latestHarness!.result.activeDelegationRun).toMatchObject({ label: "Review", status: "running" });
     expect(runChatDelegationMock).not.toHaveBeenCalled();
     expect(imports).toBe(1);
-    await act(async () => { resolveCode(); await Promise.all([first, second]); });
+    await act(async () => {
+      resolveCode();
+      await Promise.all([first, second]);
+    });
     expect(runChatDelegationMock).toHaveBeenCalledOnce();
     expect(latestHarness!.sending).toBe(false);
   });
 
   it.each(["session", "parent", "session-roundtrip", "parent-roundtrip", "unmount", "project", "access"] as const)(
-    "dispatches nothing when pending import outlives %s", async replacement => {
+    "dispatches nothing when pending import outlives %s",
+    async (replacement) => {
       const session = { ...makeSession(), projectId: "project-1" };
       const thread = makeThreadWithDurableParent();
-      const props = { selectedSession: session, thread, prefs: makePrefs({ subagentPolicy: "off" }), fullWebAccess: true };
+      const props = {
+        selectedSession: session,
+        thread,
+        prefs: makePrefs({ subagentPolicy: "off" }),
+        fullWebAccess: true,
+      };
       await mount(props);
       let launch!: Promise<void>;
-      await act(async () => { launch = latestHarness!.result.handleRunCodeDelegation("review"); await flushEffects(); });
+      await act(async () => {
+        launch = latestHarness!.result.handleRunCodeDelegation("review");
+        await flushEffects();
+      });
       const changedThread = makeThreadWithDurableParent();
       changedThread.turns[0]!.trace.durable = { runId: "parent-B", status: "completed" };
       await act(async () => {
@@ -2397,17 +2484,33 @@ describe("delegation execution code arrival", () => {
           renderer!.unmount();
           renderer = undefined;
         } else {
-          renderer!.update(<Harness {...props}
-            selectedSession={replacement.startsWith("session") ? { ...session, sessionId: "session-B" } : replacement === "project" ? { ...session, projectId: "project-B" } : session}
-            fullWebAccess={replacement === "access" ? false : true}
-            thread={replacement.startsWith("parent") ? changedThread : thread} />);
+          renderer!.update(
+            <Harness
+              {...props}
+              selectedSession={
+                replacement.startsWith("session")
+                  ? { ...session, sessionId: "session-B" }
+                  : replacement === "project"
+                    ? { ...session, projectId: "project-B" }
+                    : session
+              }
+              fullWebAccess={replacement === "access" ? false : true}
+              thread={replacement.startsWith("parent") ? changedThread : thread}
+            />,
+          );
         }
         await flushEffects();
       });
       if (replacement.endsWith("roundtrip")) {
-        await act(async () => { renderer!.update(<Harness {...props} />); await flushEffects(); });
+        await act(async () => {
+          renderer!.update(<Harness {...props} />);
+          await flushEffects();
+        });
       }
-      await act(async () => { resolveCode(); await launch; });
+      await act(async () => {
+        resolveCode();
+        await launch;
+      });
       expect(runChatDelegationMock).not.toHaveBeenCalled();
       expect(streamChatDelegationMock).not.toHaveBeenCalled();
     },
@@ -2416,162 +2519,303 @@ describe("delegation execution code arrival", () => {
   it("releases its busy ownership on import failure and retries the real factory", async () => {
     await mount();
     let launch!: Promise<void>;
-    await act(async () => { launch = latestHarness!.result.handleRunCodeDelegation("review"); await flushEffects(); });
-    await act(async () => { rejectCode(new Error("execution chunk unavailable")); await launch; });
+    await act(async () => {
+      launch = latestHarness!.result.handleRunCodeDelegation("review");
+      await flushEffects();
+    });
+    await act(async () => {
+      rejectCode(new Error("execution chunk unavailable"));
+      await launch;
+    });
     expect(latestHarness!.sending).toBe(false);
     expect(latestHarness!.errors).toHaveLength(1);
     expect(runChatDelegationMock).not.toHaveBeenCalled();
     // Vitest caches rejected mock factories independently of the real loader.
     vi.resetModules();
     installCodeGate();
-    await act(async () => { launch = latestHarness!.result.handleRunCodeDelegation("review"); await flushEffects(); });
+    await act(async () => {
+      launch = latestHarness!.result.handleRunCodeDelegation("review");
+      await flushEffects();
+    });
     expect(latestHarness!.sending).toBe(true);
-    await act(async () => { resolveCode(); await launch; });
+    await act(async () => {
+      resolveCode();
+      await launch;
+    });
     expect(runChatDelegationMock).toHaveBeenCalledOnce();
     expect(imports).toBe(2);
   });
 
   it("keeps direct seed ahead of racing history and refuses background handoff before observation", async () => {
     let finishHistory!: (value: unknown) => void;
-    fetchLatestChatWorkspaceExplorerMock.mockReturnValueOnce(new Promise(resolve => { finishHistory = resolve; }));
-    await mount({ selectedSession: { ...makeSession(), projectId: "project-1" }, thread: makeThreadWithDurableParent() });
+    fetchLatestChatWorkspaceExplorerMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishHistory = resolve;
+      }),
+    );
+    await mount({
+      selectedSession: { ...makeSession(), projectId: "project-1" },
+      thread: makeThreadWithDurableParent(),
+    });
     let launch!: Promise<void>;
-    await act(async () => { launch = latestHarness!.result.handleExploreWorkspace(); await flushEffects(); });
+    await act(async () => {
+      launch = latestHarness!.result.handleExploreWorkspace();
+      await flushEffects();
+    });
     const seed = latestHarness!.result.activeDelegationRun;
-    expect(latestHarness!.result.continueActiveExplorerInBackground({ parentRunId: "parent-run-1", watcherId: "delegation-child:step-1" })).toBe(false);
+    expect(
+      latestHarness!.result.continueActiveExplorerInBackground({
+        parentRunId: "parent-run-1",
+        watcherId: "delegation-child:step-1",
+      }),
+    ).toBe(false);
     expect(latestHarness!.sending).toBe(true);
     await act(async () => {
-      finishHistory({ run: { runId: "historical-explorer", objective: "old", mode: "sequential", status: "completed" }, steps: [] });
+      finishHistory({
+        run: { runId: "historical-explorer", objective: "old", mode: "sequential", status: "completed" },
+        steps: [],
+      });
       await flushEffects();
     });
     expect(latestHarness!.result.activeDelegationRun).toEqual(seed);
     expect(streamChatDelegationMock).not.toHaveBeenCalled();
-    await act(async () => { resolveCode(); await launch; });
+    await act(async () => {
+      resolveCode();
+      await launch;
+    });
     expect(streamChatDelegationMock).toHaveBeenCalledOnce();
   });
 
-  it.each(["done", "missing-final", "error"] as const)("preserves stream %s after delayed real-code arrival", async outcome => {
-    streamChatDelegationMock.mockImplementationOnce(async (_sessionId, _request, emit) => {
-      emit({ type: "status", runId: "delayed-stream", message: "Delayed stream started" });
-      emit({ type: "step", runId: "delayed-stream", step: { stepId: "plan-1", runId: "delayed-stream", role: "Coder", index: 0, status: "completed" } });
-      if (outcome === "error") throw new Error("Delayed stream failed");
-      if (outcome === "done") emit({ type: "done", result: { runId: "delayed-stream", steps: [{ stepId: "plan-1", runId: "delayed-stream", role: "Coder", index: 0, status: "completed" }], stitchedOutput: "Delayed final output" } });
-    });
-    await mount({ streamEnabled: true });
-    let launch!: Promise<void>;
-    await act(async () => { launch = latestHarness!.result.handleRunCodeDelegation("review"); await flushEffects(); });
-    expect(streamChatDelegationMock).not.toHaveBeenCalled();
-    await act(async () => { resolveCode(); await launch; });
-    expect(latestHarness!.sending).toBe(false);
-    expect(latestHarness!.notices.some(notice => notice.content === "Delayed stream started")).toBe(true);
-    if (outcome === "done") {
-      expect(latestHarness!.result.activeDelegationRun).toMatchObject({ runId: "delayed-stream", status: "completed", stitchedOutput: "Delayed final output" });
-      expect(latestHarness!.errors).toEqual([]);
-    } else {
-      expect(latestHarness!.errors).toContain(outcome === "error" ? "Delayed stream failed" : "Review finished without a final result payload.");
-    }
-  });
+  it.each(["done", "missing-final", "error"] as const)(
+    "preserves stream %s after delayed real-code arrival",
+    async (outcome) => {
+      streamChatDelegationMock.mockImplementationOnce(async (_sessionId, _request, emit) => {
+        emit({ type: "status", runId: "delayed-stream", message: "Delayed stream started" });
+        emit({
+          type: "step",
+          runId: "delayed-stream",
+          step: { stepId: "plan-1", runId: "delayed-stream", role: "Coder", index: 0, status: "completed" },
+        });
+        if (outcome === "error") throw new Error("Delayed stream failed");
+        if (outcome === "done")
+          emit({
+            type: "done",
+            result: {
+              runId: "delayed-stream",
+              steps: [{ stepId: "plan-1", runId: "delayed-stream", role: "Coder", index: 0, status: "completed" }],
+              stitchedOutput: "Delayed final output",
+            },
+          });
+      });
+      await mount({ streamEnabled: true });
+      let launch!: Promise<void>;
+      await act(async () => {
+        launch = latestHarness!.result.handleRunCodeDelegation("review");
+        await flushEffects();
+      });
+      expect(streamChatDelegationMock).not.toHaveBeenCalled();
+      await act(async () => {
+        resolveCode();
+        await launch;
+      });
+      expect(latestHarness!.sending).toBe(false);
+      expect(latestHarness!.notices.some((notice) => notice.content === "Delayed stream started")).toBe(true);
+      if (outcome === "done") {
+        expect(latestHarness!.result.activeDelegationRun).toMatchObject({
+          runId: "delayed-stream",
+          status: "completed",
+          stitchedOutput: "Delayed final output",
+        });
+        expect(latestHarness!.errors).toEqual([]);
+      } else {
+        expect(latestHarness!.errors).toContain(
+          outcome === "error" ? "Delayed stream failed" : "Review finished without a final result payload.",
+        );
+      }
+    },
+  );
 
-  it.each(["provider", "model", "route-roundtrip"] as const)("invalidates pending code when effective prefs change: %s", async replacement => {
-    await mount();
-    const originalPrefs = latestHarness!.prefs!;
-    let launch!: Promise<void>;
-    await act(async () => { launch = latestHarness!.result.handleRunCodeDelegation("review"); await flushEffects(); });
-    await act(async () => {
-      latestHarness!.setPrefs({ ...originalPrefs,
-        providerId: replacement === "model" ? originalPrefs.providerId : "google",
-        model: replacement === "provider" ? originalPrefs.model : "replacement-model" });
-      await flushEffects();
-    });
-    if (replacement === "route-roundtrip") {
-      await act(async () => { latestHarness!.setPrefs(originalPrefs); await flushEffects(); });
-    }
-    await act(async () => { resolveCode(); await launch; });
-    expect(runChatDelegationMock).not.toHaveBeenCalled();
-    expect(latestHarness!.sending).toBe(false);
-    await act(async () => { await latestHarness!.result.handleRunCodeDelegation("review"); });
-    expect(runChatDelegationMock).toHaveBeenCalledOnce();
-    expect(runChatDelegationMock).toHaveBeenCalledWith("session-1", expect.objectContaining({
-      providerId: replacement === "provider" ? "google" : originalPrefs.providerId,
-      model: replacement === "model" ? "replacement-model" : originalPrefs.model,
-    }));
-  });
+  it.each(["provider", "model", "route-roundtrip"] as const)(
+    "invalidates pending code when effective prefs change: %s",
+    async (replacement) => {
+      await mount();
+      const originalPrefs = latestHarness!.prefs!;
+      let launch!: Promise<void>;
+      await act(async () => {
+        launch = latestHarness!.result.handleRunCodeDelegation("review");
+        await flushEffects();
+      });
+      await act(async () => {
+        latestHarness!.setPrefs({
+          ...originalPrefs,
+          providerId: replacement === "model" ? originalPrefs.providerId : "google",
+          model: replacement === "provider" ? originalPrefs.model : "replacement-model",
+        });
+        await flushEffects();
+      });
+      if (replacement === "route-roundtrip") {
+        await act(async () => {
+          latestHarness!.setPrefs(originalPrefs);
+          await flushEffects();
+        });
+      }
+      await act(async () => {
+        resolveCode();
+        await launch;
+      });
+      expect(runChatDelegationMock).not.toHaveBeenCalled();
+      expect(latestHarness!.sending).toBe(false);
+      await act(async () => {
+        await latestHarness!.result.handleRunCodeDelegation("review");
+      });
+      expect(runChatDelegationMock).toHaveBeenCalledOnce();
+      expect(runChatDelegationMock).toHaveBeenCalledWith(
+        "session-1",
+        expect.objectContaining({
+          providerId: replacement === "provider" ? "google" : originalPrefs.providerId,
+          model: replacement === "model" ? "replacement-model" : originalPrefs.model,
+        }),
+      );
+    },
+  );
 
   it("preserves pending code when an unrelated preference changes", async () => {
     await mount();
     let launch!: Promise<void>;
-    await act(async () => { launch = latestHarness!.result.handleRunCodeDelegation("review"); await flushEffects(); });
     await act(async () => {
-      latestHarness!.setPrefs(current => current ? { ...current, proactiveMode: "auto" } : current);
+      launch = latestHarness!.result.handleRunCodeDelegation("review");
       await flushEffects();
     });
-    await act(async () => { resolveCode(); await launch; });
+    await act(async () => {
+      latestHarness!.setPrefs((current) => (current ? { ...current, proactiveMode: "auto" } : current));
+      await flushEffects();
+    });
+    await act(async () => {
+      resolveCode();
+      await launch;
+    });
     expect(runChatDelegationMock).toHaveBeenCalledOnce();
     expect(latestHarness!.sending).toBe(false);
   });
 
-  it.each(["adopt-created", "navigate-away", "unconfirmed-selection"] as const)("handles a real creation rerender: %s", async outcome => {
-    const created = { ...makeSession(), sessionId: "created-session" };
-    let finishCreation!: (session: ChatSessionRecord) => void;
-    let enteredCreation!: () => void;
-    const creationEntered = new Promise<void>(resolve => { enteredCreation = resolve; });
-    const createSession = vi.fn((publish: (session: ChatSessionRecord) => void, onResolved?: (session: ChatSessionRecord) => void) => {
-      if (outcome !== "unconfirmed-selection") onResolved?.(created);
-      publish(created);
-      enteredCreation();
-      return new Promise<ChatSessionRecord>(resolve => { finishCreation = resolve; });
-    });
-    const props = { selectedSession: null, createSession, prefs: makePrefs({ subagentPolicy: "off" }) };
-    await mount(props);
-    let launch!: Promise<void>;
-    await act(async () => { launch = latestHarness!.result.handleRunQuickResearch(); await flushEffects(); });
-    await act(async () => { resolveCode(); await creationEntered; });
-    // Selection really rendered before ensureSession finishes its canonical/sidebar read.
-    expect(latestHarness!.selectedSession?.sessionId).toBe(created.sessionId);
-    expect(runChatResearchMock).not.toHaveBeenCalled();
-    if (outcome === "navigate-away") {
+  it.each(["adopt-created", "navigate-away", "unconfirmed-selection"] as const)(
+    "handles a real creation rerender: %s",
+    async (outcome) => {
+      const created = { ...makeSession(), sessionId: "created-session" };
+      let finishCreation!: (session: ChatSessionRecord) => void;
+      let enteredCreation!: () => void;
+      const creationEntered = new Promise<void>((resolve) => {
+        enteredCreation = resolve;
+      });
+      const createSession = vi.fn(
+        (publish: (session: ChatSessionRecord) => void, onResolved?: (session: ChatSessionRecord) => void) => {
+          if (outcome !== "unconfirmed-selection") onResolved?.(created);
+          publish(created);
+          enteredCreation();
+          return new Promise<ChatSessionRecord>((resolve) => {
+            finishCreation = resolve;
+          });
+        },
+      );
+      const props = { selectedSession: null, createSession, prefs: makePrefs({ subagentPolicy: "off" }) };
+      await mount(props);
+      let launch!: Promise<void>;
       await act(async () => {
-        renderer!.update(<Harness {...props} selectedSession={{ ...makeSession(), sessionId: "navigated-session" }} />);
+        launch = latestHarness!.result.handleRunQuickResearch();
         await flushEffects();
       });
-    }
-    await act(async () => { finishCreation(created); await launch; });
-    expect(createSession).toHaveBeenCalledOnce();
-    if (outcome === "adopt-created") {
-      expect(runChatResearchMock).toHaveBeenCalledWith(created.sessionId, expect.objectContaining({ query: "Coordinate the launch research" }));
-      expect(latestHarness!.notices.some(notice => notice.content.startsWith("Research summary:"))).toBe(true);
-      expect(latestHarness!.errors).toEqual([]);
-    } else {
+      await act(async () => {
+        resolveCode();
+        await creationEntered;
+      });
+      // Selection really rendered before ensureSession finishes its canonical/sidebar read.
+      expect(latestHarness!.selectedSession?.sessionId).toBe(created.sessionId);
       expect(runChatResearchMock).not.toHaveBeenCalled();
-      expect(latestHarness!.notices.some(notice => notice.content.startsWith("Research summary:"))).toBe(false);
-    }
-    expect(latestHarness!.sending).toBe(false);
-  });
+      if (outcome === "navigate-away") {
+        await act(async () => {
+          renderer!.update(
+            <Harness {...props} selectedSession={{ ...makeSession(), sessionId: "navigated-session" }} />,
+          );
+          await flushEffects();
+        });
+      }
+      await act(async () => {
+        finishCreation(created);
+        await launch;
+      });
+      expect(createSession).toHaveBeenCalledOnce();
+      if (outcome === "adopt-created") {
+        expect(runChatResearchMock).toHaveBeenCalledWith(
+          created.sessionId,
+          expect.objectContaining({ query: "Coordinate the launch research" }),
+        );
+        expect(latestHarness!.notices.some((notice) => notice.content.startsWith("Research summary:"))).toBe(true);
+        expect(latestHarness!.errors).toEqual([]);
+      } else {
+        expect(runChatResearchMock).not.toHaveBeenCalled();
+        expect(latestHarness!.notices.some((notice) => notice.content.startsWith("Research summary:"))).toBe(false);
+      }
+      expect(latestHarness!.sending).toBe(false);
+    },
+  );
 
   it("does not let an obsolete failure release a newer scope's busy ownership", async () => {
     let rejectOld!: (error: Error) => void;
     let finishNew!: (value: unknown) => void;
     let enteredOld!: () => void;
-    const oldDispatched = new Promise<void>(resolve => { enteredOld = resolve; });
-    runChatDelegationMock.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject; enteredOld(); }));
-    runChatDelegationMock.mockImplementationOnce(() => new Promise(resolve => { finishNew = resolve; }));
+    const oldDispatched = new Promise<void>((resolve) => {
+      enteredOld = resolve;
+    });
+    runChatDelegationMock.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectOld = reject;
+          enteredOld();
+        }),
+    );
+    runChatDelegationMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishNew = resolve;
+        }),
+    );
     await mount();
     let oldLaunch!: Promise<void>;
-    await act(async () => { oldLaunch = latestHarness!.result.handleRunCodeDelegation("review"); await flushEffects(); });
-    await act(async () => { resolveCode(); await oldDispatched; });
+    await act(async () => {
+      oldLaunch = latestHarness!.result.handleRunCodeDelegation("review");
+      await flushEffects();
+    });
+    await act(async () => {
+      resolveCode();
+      await oldDispatched;
+    });
     // Dispatch is asynchronous; wait for its real API mock entry before navigating.
     expect(runChatDelegationMock).toHaveBeenCalledOnce();
     await act(async () => {
-      renderer!.update(<Harness selectedSession={{ ...makeSession(), sessionId: "session-B" }} prefs={makePrefs({ subagentPolicy: "off" })} />);
+      renderer!.update(
+        <Harness
+          selectedSession={{ ...makeSession(), sessionId: "session-B" }}
+          prefs={makePrefs({ subagentPolicy: "off" })}
+        />,
+      );
       await flushEffects();
     });
     let newLaunch!: Promise<void>;
-    await act(async () => { newLaunch = latestHarness!.result.handleRunCodeDelegation("review"); await flushEffects(); });
+    await act(async () => {
+      newLaunch = latestHarness!.result.handleRunCodeDelegation("review");
+      await flushEffects();
+    });
     expect(latestHarness!.sending).toBe(true);
-    await act(async () => { rejectOld(new Error("old scope failed")); await oldLaunch; });
+    await act(async () => {
+      rejectOld(new Error("old scope failed"));
+      await oldLaunch;
+    });
     expect(latestHarness!.sending).toBe(true);
     expect(latestHarness!.errors).not.toContain("old scope failed");
-    await act(async () => { finishNew({ runId: "new-scope", steps: [], stitchedOutput: "new scope" }); await newLaunch; });
+    await act(async () => {
+      finishNew({ runId: "new-scope", steps: [], stitchedOutput: "new scope" });
+      await newLaunch;
+    });
     expect(latestHarness!.sending).toBe(false);
     expect(latestHarness!.result.activeDelegationRun?.runId).toBe("new-scope");
   });

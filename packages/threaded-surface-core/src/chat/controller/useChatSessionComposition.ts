@@ -16,7 +16,7 @@ import { useEnsureListedSession } from "../useEnsureListedSession";
 import { useChatSessionStatus } from "../useChatSessionStatus";
 import type { OutboundContextBlock } from "../useChatSurfaceOrchestration";
 import { useChatThreadController } from "../useChatThreadController";
-import { useChatTimerPanel } from "../useChatTimerPanel";
+import { useDeferredChatTimerPanel } from "../useDeferredChatTimerPanel";
 import { useExternalSourceAttachments } from "../useExternalSourceAttachments";
 import { useRunVariablePanel } from "../useRunVariablePanel";
 import { useChatActivationGrants } from "./useChatActivationGrants";
@@ -172,14 +172,18 @@ export function useChatSessionComposition({
     setDraft,
     composerRef: coordination.composerRef,
   });
-  const timerPanel = useChatTimerPanel({
-    selectedSessionId: selection.selectedSessionId,
-    workspaceId,
-    enabled: chatTimersEnabled,
-    eventStreamState: eventStreamStatus.state,
-    thread: sessionData.thread,
-    pushLocalNotice: pushLocalNotice,
-  });
+  const timerPanel = useDeferredChatTimerPanel(
+    {
+      selectedSessionId: selection.selectedSessionId,
+      workspaceId,
+      enabled: chatTimersEnabled,
+      eventStreamState: eventStreamStatus.state,
+      thread: sessionData.thread,
+      pushLocalNotice: pushLocalNotice,
+    },
+    selection.selectedSessionRevisionRef,
+    setUiError,
+  );
   const { openChatTimerPanel } = timerPanel;
 
   useEffect(() => {

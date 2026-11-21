@@ -76,6 +76,7 @@ export type ComposerProps = ChatMediaProps & {
     | "onDrop"
     | "isDragActive"
     | "chatTimerPanel"
+    | "chatTimerAvailable"
     | "sessionStatusPanel"
     | "projectSwitchContext"
   >;

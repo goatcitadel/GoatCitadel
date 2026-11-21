@@ -15,6 +15,19 @@ test("requires both saved themes against the opposite operating system theme",()
  assert.equal(evaluateCockpitPerformance({...accepted,inverseFirstFrameBackground:"rgb(18, 34, 53)"}).passed,false);
 });
 
+test("startup-only acceptance enforces the startup budgets without accepting missing full-lane measurements", () => {
+ const measured = {...accepted, idleRequests: undefined, elsewhereTurnRequests: undefined};
+ const startupOnly = { startupOnly: true };
+ assert.equal(evaluateCockpitPerformance(measured, startupOnly).passed, true);
+ assert.equal(evaluateCockpitPerformance(measured).passed, false);
+ for (const key of ["startupRequests", "initialJavaScriptGzipBytes", "cls"]) {
+  assert.equal(evaluateCockpitPerformance({...measured, [key]: undefined}, startupOnly).passed, false);
+  assert.equal(evaluateCockpitPerformance({...measured, [key]: accepted[key] + 1}, startupOnly).passed, false);
+ }
+ assert.equal(evaluateCockpitPerformance({...measured, chatReadyWithinStartupWindow: false}, startupOnly).passed, false);
+ assert.equal(evaluateCockpitPerformance({...measured, inverseFirstFrameTheme: undefined}, startupOnly).passed, false);
+});
+
 test("startup readiness must be measured rather than inferred from a later script response",()=>{
  assert.equal(evaluateCockpitPerformance({...accepted,chatReadyWithinStartupWindow:undefined}).passed,false);
  assert.equal(evaluateCockpitPerformance({...accepted,chatReadyWithinStartupWindow:false}).passed,false);

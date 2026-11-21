@@ -8,9 +8,9 @@ import type {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   useChatCapabilityProfileInspection,
-  verifyChatCapabilityProfileAgainstTurn,
   type ChatCapabilityProfileInspection,
 } from "./useChatCapabilityProfileInspection";
+import { verifyChatCapabilityProfileAgainstTurn } from "./chat-capability-profile-inspection";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -171,18 +171,16 @@ async function renderInspection(turn: ChatThreadTurnRecord): Promise<{
   let renderer!: ReactTestRenderer;
   await act(async () => {
     renderer = create(<Harness selectedTurn={turn} />);
-    await Promise.resolve();
-    await Promise.resolve();
   });
+  await act(async () => vi.dynamicImportSettled());
   return {
     latest: () => value,
     renderer,
     update: async (selectedTurn) => {
       await act(async () => {
         renderer.update(<Harness selectedTurn={selectedTurn} />);
-        await Promise.resolve();
-        await Promise.resolve();
       });
+      await act(async () => vi.dynamicImportSettled());
     },
   };
 }
@@ -195,9 +193,16 @@ describe("useChatCapabilityProfileInspection", () => {
 
   it("inspects a profile-free context receipt through its scoped owner without claiming a profile match", async () => {
     const routedContext = makeRoutedContext();
-    fetchContext.mockResolvedValue({ state: "admission_bound", sessionId: "session-1", turnId: "turn-1", workspaceId: "workspace-1", routedContext });
-    const result = await renderInspection(makeTurn({ capabilityProfileId: undefined, capabilityProfileHash: undefined,
-      routing: { routedContext } }));
+    fetchContext.mockResolvedValue({
+      state: "admission_bound",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      workspaceId: "workspace-1",
+      routedContext,
+    });
+    const result = await renderInspection(
+      makeTurn({ capabilityProfileId: undefined, capabilityProfileHash: undefined, routing: { routedContext } }),
+    );
     expect(fetchContext).toHaveBeenCalledExactlyOnceWith("session-1", "turn-1", "workspace-1");
     expect(fetchProfile).not.toHaveBeenCalled();
     expect(result.latest()).toMatchObject({ status: "admission_verified", profile: null, routedContext });
@@ -207,10 +212,17 @@ describe("useChatCapabilityProfileInspection", () => {
   it.each(["scope", "hash", "revoked"])("hides profile-free context details after %s drift", async (drift) => {
     const routedContext = makeRoutedContext();
     if (drift === "revoked") fetchContext.mockRejectedValue({ status: 403 });
-    else fetchContext.mockResolvedValue({ state: "admission_bound", sessionId: drift === "scope" ? "other" : "session-1",
-      turnId: "turn-1", workspaceId: "workspace-1", routedContext: { ...routedContext, ...(drift === "hash" ? { contentHash: "wrong" } : {}) } });
-    const result = await renderInspection(makeTurn({ capabilityProfileId: undefined, capabilityProfileHash: undefined,
-      routing: { routedContext } }));
+    else
+      fetchContext.mockResolvedValue({
+        state: "admission_bound",
+        sessionId: drift === "scope" ? "other" : "session-1",
+        turnId: "turn-1",
+        workspaceId: "workspace-1",
+        routedContext: { ...routedContext, ...(drift === "hash" ? { contentHash: "wrong" } : {}) },
+      });
+    const result = await renderInspection(
+      makeTurn({ capabilityProfileId: undefined, capabilityProfileHash: undefined, routing: { routedContext } }),
+    );
     expect(result.latest()?.status).toBe(drift === "revoked" ? "forbidden" : "invalid");
     expect(result.latest()?.routedContext).toBeUndefined();
     act(() => result.renderer.unmount());

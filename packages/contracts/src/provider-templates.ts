@@ -6,20 +6,14 @@ import type {
   ProviderProfile,
 } from "./llm.js";
 
-// Shared by the Anthropic API-key and Claude Code subscription templates, newest first.
-// Older ids stay listed while Anthropic still serves them; the live model probe stays authoritative.
-const CLAUDE_DEFAULT_MODEL = "claude-sonnet-5-5";
-const CLAUDE_KNOWN_MODELS = [
-  "claude-fable-5-1",
-  "claude-opus-5-5",
-  "claude-sonnet-5-5",
-  "claude-haiku-5-5",
-  "claude-opus-4-8",
-  "claude-fable-5",
-  "claude-sonnet-4-6",
-  "claude-sonnet-4",
-  "claude-opus-4",
-] as const;
+import { providerModelDefaults, type BuiltinProviderId } from "./provider-model-routing.js";
+export {
+  findProviderModelDefaults,
+  inferProviderForModelId,
+  isAggregatorProvider,
+  providerAllowsForeignModelIds,
+  providerRecognizesModelId,
+} from "./provider-model-routing.js";
 
 export interface ProviderTemplateDefinition {
   providerId: string;
@@ -33,70 +27,30 @@ export interface ProviderTemplateDefinition {
   knownModels?: string[];
 }
 
-export const providerTemplates: readonly ProviderTemplateDefinition[] = [
-  {
-    providerId: "openai",
+const connectionTemplates = {
+  openai: {
     label: "OpenAI",
     baseUrl: "https://api.openai.com/v1",
-    defaultModel: "gpt-5.4",
     apiStyle: "openai-responses",
-    knownModels: [
-      "gpt-6-astra",
-      "gpt-6-sol",
-      "gpt-6-luna",
-      "gpt-5.6",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5-mini",
-      "gpt-4.1-mini",
-      "gpt-4o-mini",
-      "chat-latest",
-    ],
   },
-  {
-    providerId: "openai-codex",
+  "openai-codex": {
     label: "OpenAI Codex (ChatGPT OAuth)",
     baseUrl: "https://chatgpt.com/backend-api/codex",
-    defaultModel: "gpt-6-sol",
     apiStyle: "openai-codex-responses",
-    knownModels: [
-      "gpt-6-astra",
-      "gpt-6.1-sol",
-      "gpt-6-sol",
-      "gpt-6-luna",
-      "gpt-5.6-sol",
-      "gpt-5.6-terra",
-      "gpt-5.6-luna",
-      "gpt-5.5",
-    ],
   },
-  {
-    providerId: "anthropic",
+  anthropic: {
     label: "Anthropic",
     baseUrl: "https://api.anthropic.com/v1",
-    defaultModel: CLAUDE_DEFAULT_MODEL,
     apiStyle: "anthropic-messages",
-    knownModels: [...CLAUDE_KNOWN_MODELS],
   },
-  {
-    providerId: "claude-code",
+  "claude-code": {
     label: "Claude Code (Claude subscription)",
     baseUrl: "https://api.anthropic.com/v1",
-    defaultModel: CLAUDE_DEFAULT_MODEL,
     apiStyle: "anthropic-messages",
-    knownModels: [...CLAUDE_KNOWN_MODELS],
   },
-  {
-    // Runs the operator's locally installed Claude Code CLI (`claude -p`) under
-    // their own `claude` login. GoatCitadel holds no credential for it; baseUrl
-    // is never fetched and only tells the network allowlist where the CLI egresses.
-    providerId: "claude-code-cli",
+  "claude-code-cli": {
     label: "Claude Code CLI (local login)",
     baseUrl: "https://api.anthropic.com/v1",
-    defaultModel: "claude-sonnet-5-5",
     apiStyle: "claude-code-cli",
     authMode: "claude-code-cli-login",
     capabilities: {
@@ -107,179 +61,107 @@ export const providerTemplates: readonly ProviderTemplateDefinition[] = [
       jsonMode: false,
       reasoning: true,
     },
-    knownModels: ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "claude-fable-5-1"],
   },
-  {
-    providerId: "bedrock",
+  bedrock: {
     label: "Amazon Bedrock",
     baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-    defaultModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     apiStyle: "bedrock-messages",
     authMode: "aws-bedrock-api-key",
-    knownModels: [
-      "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-      "us.amazon.nova-pro-v1:0",
-      "us.meta.llama4-maverick-17b-instruct-v1:0",
-    ],
   },
-  {
-    providerId: "google",
+  google: {
     label: "Google (compatible endpoint)",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    defaultModel: "models/gemini-2.5-flash",
     apiStyle: "openai-chat-completions",
-    knownModels: [
-      "models/gemini-2.5-flash",
-      "models/gemini-2.5-flash-lite",
-      "models/gemini-2.5-pro",
-      "models/gemini-flash-latest",
-      "gemini-3.1-flash-image-preview",
-      "gemini-3-pro-image-preview",
-      "gemini-2.5-flash-image",
-    ],
   },
-  {
-    providerId: "vertex",
+  vertex: {
     label: "Google Vertex AI",
     baseUrl:
       "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/us-central1/endpoints/openapi",
-    defaultModel: "google/gemini-2.5-flash",
     apiStyle: "openai-chat-completions",
     authMode: "google-adc",
     googleCloud: { location: "us-central1", endpointId: "openapi" },
     capabilities: { reasoning: true, reasoningEfforts: ["low", "medium", "high"] },
-    knownModels: ["google/gemini-2.5-flash", "google/gemini-2.5-pro"],
   },
-  {
-    providerId: "fireworks",
+  fireworks: {
     label: "Fireworks AI",
     baseUrl: "https://api.fireworks.ai/inference/v1",
-    defaultModel: "accounts/fireworks/models/kimi-k2p6",
     apiStyle: "openai-chat-completions",
-    knownModels: ["accounts/fireworks/models/kimi-k2p6"],
   },
-  {
-    providerId: "minimax",
+  minimax: {
     label: "MiniMax (compatible endpoint)",
     baseUrl: "https://api.minimax.io/v1",
-    defaultModel: "MiniMax-M2.7",
     apiStyle: "openai-chat-completions",
-    knownModels: [
-      "MiniMax-M2.7",
-      "MiniMax-M2.7-highspeed",
-      "MiniMax-M2.5",
-      "MiniMax-M2.5-highspeed",
-      "MiniMax-M2.1",
-      "MiniMax-M2.1-highspeed",
-      "MiniMax-M2",
-    ],
   },
-  {
-    providerId: "vercel",
+  vercel: {
     label: "Vercel AI Gateway",
     baseUrl: "https://ai-gateway.vercel.sh/v1",
-    defaultModel: "openai/gpt-5.4",
     apiStyle: "openai-chat-completions",
-    knownModels: ["openai/gpt-5.4", "openai/gpt-5.4-mini", "openai/gpt-4.1-mini", "openai/gpt-oss-120b"],
   },
-  {
-    providerId: "lmstudio",
+  lmstudio: {
     label: "LM Studio",
     baseUrl: "http://127.0.0.1:1234/v1",
-    defaultModel: "local-model",
     apiStyle: "openai-chat-completions",
   },
-  {
-    providerId: "ollama",
+  ollama: {
     label: "Ollama",
     baseUrl: "http://127.0.0.1:11434/v1",
-    defaultModel: "llama3.1",
     apiStyle: "openai-chat-completions",
   },
-  {
-    providerId: "llamacpp",
+  llamacpp: {
     label: "llama.cpp",
     baseUrl: "http://127.0.0.1:8080/v1",
-    defaultModel: "gemma-4-local",
     apiStyle: "openai-chat-completions",
-    knownModels: ["gemma-4-local", "gemma-4", "gemma-4-it"],
   },
-  {
-    providerId: "localai",
+  localai: {
     label: "LocalAI",
     baseUrl: "http://127.0.0.1:8080/v1",
-    defaultModel: "local-model",
     apiStyle: "openai-chat-completions",
   },
-  {
-    providerId: "genie-ir20",
+  "genie-ir20": {
     label: "Genie IR20 (Tailnet)",
     baseUrl: "http://100.64.0.4:8910/v1",
-    defaultModel: "IBM-Granite",
     apiStyle: "openai-chat-completions",
   },
-  {
-    providerId: "openrouter",
+  openrouter: {
     label: "OpenRouter",
     baseUrl: "https://openrouter.ai/api/v1",
-    defaultModel: "openai/gpt-5.4",
     apiStyle: "openai-chat-completions",
-    knownModels: [
-      "openai/gpt-5.4",
-      "openai/gpt-5.4-mini",
-      "anthropic/claude-sonnet-4",
-      "google/gemini-2.5-flash",
-      "zai/glm-5v-turbo",
-    ],
   },
-  {
-    providerId: "mistral",
+  mistral: {
     label: "Mistral",
     baseUrl: "https://api.mistral.ai/v1",
-    defaultModel: "mistral-small-latest",
     apiStyle: "openai-chat-completions",
-    knownModels: ["mistral-small-latest", "mistral-medium-latest", "mistral-large-latest"],
   },
-  {
-    providerId: "deepseek",
+  deepseek: {
     label: "DeepSeek",
     baseUrl: "https://api.deepseek.com/v1",
-    defaultModel: "deepseek-v4-pro",
     apiStyle: "openai-chat-completions",
-    knownModels: ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"],
   },
-  {
-    providerId: "glm",
+  glm: {
     label: "GLM (Z.AI)",
     baseUrl: "https://api.z.ai/api/paas/v4",
-    defaultModel: "glm-5",
     apiStyle: "openai-chat-completions",
-    knownModels: ["glm-5", "glm-5-air", "glm-5-flash", "glm-5-turbo", "glm-5v-turbo"],
   },
-  {
-    providerId: "moonshot",
+  moonshot: {
     label: "Moonshot (Kimi API)",
     baseUrl: "https://api.moonshot.ai/v1",
-    defaultModel: "kimi-k2.6",
     apiStyle: "openai-chat-completions",
-    knownModels: ["kimi-k2.6", "kimi-k2", "kimi-1"],
   },
-  {
-    providerId: "perplexity",
+  perplexity: {
     label: "Perplexity",
     baseUrl: "https://api.perplexity.ai",
-    defaultModel: "sonar",
     apiStyle: "openai-chat-completions",
-    knownModels: ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"],
   },
-  {
-    providerId: "huggingface",
+  huggingface: {
     label: "HuggingFace Inference",
     baseUrl: "https://router.huggingface.co/v1",
-    defaultModel: "openai/gpt-oss-120b",
     apiStyle: "openai-chat-completions",
   },
-];
+} satisfies Record<BuiltinProviderId, Omit<ProviderTemplateDefinition, "providerId" | "defaultModel" | "knownModels">>;
+
+export const providerTemplates: readonly ProviderTemplateDefinition[] = Object.entries(providerModelDefaults).map(
+  ([providerId, models]) => ({ providerId, ...connectionTemplates[providerId as BuiltinProviderId], ...models }),
+);
 
 export const builtinProviderProfiles: readonly ProviderProfile[] = providerTemplates.map((template) => ({
   profileId: `builtin:${template.providerId}`,
@@ -297,96 +179,12 @@ export const builtinProviderProfiles: readonly ProviderProfile[] = providerTempl
   modelDiscovery: resolveBuiltinModelDiscovery(template.providerId),
 }));
 
-const FOREIGN_MODEL_PROVIDER_IDS = new Set([
-  "openrouter",
-  "vercel",
-  "huggingface",
-  "lmstudio",
-  "ollama",
-  "llamacpp",
-  "localai",
-  "genie-ir20",
-  "fireworks",
-]);
-
-// Cloud aggregators/routers that forward requests to third-party model hosts.
-// The ultimate host is obscured from GoatCitadel, which matters for data-
-// sensitivity routing (see citadel-model-routing.ts): an aggregator must never
-// satisfy a prefer_local/local_only posture. Deliberately NOT the same set as
-// FOREIGN_MODEL_PROVIDER_IDS, which also contains local engines.
-const AGGREGATOR_PROVIDER_IDS = new Set(["openrouter", "vercel", "huggingface"]);
-
-export function isAggregatorProvider(providerId: string): boolean {
-  return AGGREGATOR_PROVIDER_IDS.has(providerId.trim().toLowerCase());
-}
-
-const MODEL_PREFIX_PROVIDER_IDS: Record<string, string> = {
-  anthropic: "anthropic",
-  "claude-code": "claude-code",
-  "claude-code-cli": "claude-code-cli",
-  google: "google",
-  openai: "openai",
-  "openai-codex": "openai-codex",
-  zai: "glm",
-};
-
 export function findProviderTemplate(providerId: string): ProviderTemplateDefinition | undefined {
   return providerTemplates.find((template) => template.providerId === providerId);
 }
 
 export function findBuiltinProviderProfile(providerId: string): ProviderProfile | undefined {
   return builtinProviderProfiles.find((profile) => profile.providerId === providerId);
-}
-
-export function providerAllowsForeignModelIds(providerId: string): boolean {
-  return FOREIGN_MODEL_PROVIDER_IDS.has(providerId.trim().toLowerCase());
-}
-
-export function providerRecognizesModelId(providerId: string, modelId: string): boolean {
-  const normalizedProviderId = providerId.trim().toLowerCase();
-  const normalizedModelId = modelId.trim();
-  if (!normalizedProviderId || !normalizedModelId) {
-    return false;
-  }
-
-  const providerPrefix = normalizedModelId.split("/", 1)[0]?.trim().toLowerCase();
-  if (normalizedModelId.includes("/") && providerPrefix && MODEL_PREFIX_PROVIDER_IDS[providerPrefix]) {
-    if (normalizedProviderId === "vertex" && providerPrefix === "google") {
-      return true;
-    }
-    return MODEL_PREFIX_PROVIDER_IDS[providerPrefix] === normalizedProviderId;
-  }
-
-  const template = findProviderTemplate(normalizedProviderId);
-  return template?.defaultModel === normalizedModelId || template?.knownModels?.includes(normalizedModelId) === true;
-}
-
-export function inferProviderForModelId(modelId: string): string | undefined {
-  const normalizedModelId = modelId.trim();
-  if (!normalizedModelId) {
-    return undefined;
-  }
-
-  const providerPrefix = normalizedModelId.split("/", 1)[0]?.trim().toLowerCase();
-  if (providerPrefix && MODEL_PREFIX_PROVIDER_IDS[providerPrefix]) {
-    return MODEL_PREFIX_PROVIDER_IDS[providerPrefix];
-  }
-
-  for (const template of providerTemplates) {
-    if (providerAllowsForeignModelIds(template.providerId)) {
-      continue;
-    }
-    // The local CLI transport is opt-in: a bare Claude model id must never route to it
-    // or take ownership away from the Anthropic / Claude Code providers.
-    if (template.providerId === "claude-code-cli") {
-      continue;
-    }
-    if (template.defaultModel === normalizedModelId || template.knownModels?.includes(normalizedModelId)) {
-      return template.providerId;
-    }
-  }
-
-  return undefined;
 }
 
 function resolveBuiltinModelDiscovery(providerId: string): ProviderProfile["modelDiscovery"] {

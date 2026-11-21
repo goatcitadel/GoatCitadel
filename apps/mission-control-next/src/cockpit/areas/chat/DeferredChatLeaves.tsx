@@ -1,3 +1,4 @@
+import { isBackgroundChatUserInputPrompt, type ApprovalRequest } from "@goatcitadel/contracts";
 import { lazy, Suspense, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import {
   createDeferredDialogRuntime,
@@ -28,6 +29,41 @@ const ChatInspector = lazy(async () => ({ default: (await import("./ChatInspecto
 const ProjectAssignmentReview = lazy(async () => ({
   default: (await import("./ProjectAssignmentReview")).ProjectAssignmentReview,
 }));
+const ChatPendingQuestion = lazy(async () => ({
+  default: (await import("./ChatPendingQuestion")).ChatPendingQuestion,
+}));
+
+export function DeferredPendingChatQuestion({
+  identity,
+  ...props
+}: ComponentProps<typeof ChatPendingQuestion> & { identity: string }) {
+  const { prompt } = props;
+  return (
+    <DeferredChatLeaf
+      identity={identity}
+      label="Answer controls"
+      fallback={
+        <section
+          aria-label="Pending question"
+          tabIndex={-1}
+          data-chat-waiting-decision=""
+          className="mt-3 border-l-2 border-status-waiting pl-3 text-sm"
+        >
+          <h3 className="font-semibold text-fg">{prompt.title || "Your input is needed"}</h3>
+          {isBackgroundChatUserInputPrompt(prompt) ? (
+            <p className="mt-1 text-xs text-fg-muted">Optional · Work continues</p>
+          ) : null}
+          <p className="mt-1 text-fg-secondary">{prompt.question}</p>
+          <p aria-busy="true" className="mt-2 text-xs text-fg-muted">
+            Loading answer controls…
+          </p>
+        </section>
+      }
+    >
+      <ChatPendingQuestion {...props} />
+    </DeferredChatLeaf>
+  );
+}
 
 export function DeferredChatInspector(props: ComponentProps<typeof ChatInspector>) {
   return (
@@ -175,6 +211,120 @@ export function DeferredBrowserErrandCards(props: ComponentProps<typeof ErrandCa
       )}
     >
       <ErrandCards {...props} />
+    </DeferredChatLeaf>
+  );
+}
+
+const ChatEmptyState = lazy(async () => ({ default: (await import("./ChatSetupViews")).ChatEmptyState }));
+const ChatSetupGate = lazy(async () => ({ default: (await import("./ChatSetupViews")).ChatSetupGate }));
+const loadingConversations = (
+  <div className="flex min-h-0 flex-1 flex-col items-center justify-center-safe p-5 text-center">
+    <p role="status" className="text-sm text-fg-muted">
+      Loading conversations…
+    </p>
+  </div>
+);
+
+const LazyChatBuildEditor = lazy(async () => ({ default: (await import("./ChatBuildEditor")).ChatBuildEditor }));
+const ChatApprovalTarget = lazy(async () => ({
+  default: (await import("./ChatApprovalTarget")).ChatApprovalTarget,
+}));
+
+const ChatAllowanceReceipt = lazy(async () => ({
+  default: (await import("./ChatAllowances")).ChatAllowanceReceipt,
+}));
+const ChatExpiredApprovalRecovery = lazy(async () => ({
+  default: (await import("./ChatExpiredApprovalRecovery")).ChatExpiredApprovalRecovery,
+}));
+
+export function DeferredChatSetup({
+  identity,
+  ...props
+}: Omit<ComponentProps<typeof ChatSetupGate>, "hidden"> & { identity: string }) {
+  return (
+    <DeferredChatLeaf label="Chat setup" identity={identity}>
+      <ChatSetupGate {...props} hidden={false} />
+    </DeferredChatLeaf>
+  );
+}
+
+export function DeferredChatEmpty({
+  identity,
+  ...props
+}: ComponentProps<typeof ChatEmptyState> & { identity: string }) {
+  if (props.rail.loading) return loadingConversations;
+  return (
+    <DeferredChatLeaf label="Conversations" identity={identity} loadingVisible fallback={loadingConversations}>
+      <ChatEmptyState {...props} />
+    </DeferredChatLeaf>
+  );
+}
+
+const loadingWorkbench = (
+  <p aria-busy="true" className="p-4 text-sm text-fg-muted">
+    Loading code workbench…
+  </p>
+);
+
+export function DeferredChatBuildEditor({
+  panel,
+  sessionId,
+  unavailable,
+}: {
+  panel: ComponentProps<typeof LazyChatBuildEditor>["panel"] | null;
+  sessionId?: string;
+  unavailable?: boolean;
+}) {
+  if (!panel) {
+    if (!unavailable) return loadingWorkbench;
+    return (
+      <p role="alert" className="p-4 text-sm text-status-failed">
+        The build editor could not load. Return to the conversation and try again.
+      </p>
+    );
+  }
+  return (
+    <Suspense fallback={loadingWorkbench}>
+      <LazyChatBuildEditor key={sessionId} panel={panel} />
+    </Suspense>
+  );
+}
+
+export function DeferredChatApprovalTarget({ approval }: { approval?: ApprovalRequest }) {
+  const targetPreview = approval?.preview;
+  const showTarget =
+    targetPreview &&
+    (typeof targetPreview.path === "string" ||
+      typeof targetPreview.target === "string" ||
+      (typeof targetPreview.command === "string" && typeof targetPreview.toolName === "string") ||
+      (approval?.kind === "code_mode.run" && typeof targetPreview.codePreview === "string"));
+  if (!showTarget) return null;
+  return (
+    <DeferredChatLeaf label="Approval target" identity={approval?.approvalId} fallback={null}>
+      <ChatApprovalTarget kind={approval?.kind} preview={targetPreview} />
+    </DeferredChatLeaf>
+  );
+}
+
+export function DeferredChatAllowanceReceipt(props: ComponentProps<typeof ChatAllowanceReceipt>) {
+  return (
+    <DeferredChatLeaf
+      label="Temporary allowance"
+      identity={props.grant.grantId}
+      fallback={<p className="mt-3 text-sm text-fg-secondary">{props.message}</p>}
+    >
+      <ChatAllowanceReceipt key={props.grant.grantId} {...props} />
+    </DeferredChatLeaf>
+  );
+}
+
+export function DeferredChatExpiredApprovalRecovery({
+  approvalId,
+  ...props
+}: ComponentProps<typeof ChatExpiredApprovalRecovery> & { approvalId: string }) {
+  return (
+    <DeferredChatLeaf label="Approval recovery" identity={approvalId}>
+      <ChatExpiredApprovalRecovery {...props} />
     </DeferredChatLeaf>
   );
 }

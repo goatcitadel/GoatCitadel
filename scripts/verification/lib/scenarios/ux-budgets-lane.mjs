@@ -67,7 +67,18 @@ export async function runUxBudgetsLane(context, options = {}, deps) {
     const fixture = await seedMissionControlNextFixture(stack.gatewayUrl, { runtimeRoot: stack.runtimeRoot });
     browser = await chromium.launch({ headless: true });
 
-    if (options.performanceOnly) { await runCockpitPerformanceProof({ context, browser, stack, fixture, deps, startupDiagnosticOnly:options.startupDiagnosticOnly === true }); return; }
+    if (options.performanceOnly) {
+      await runCockpitPerformanceProof({
+        context,
+        browser,
+        stack,
+        fixture,
+        deps,
+        startupDiagnosticOnly: options.startupDiagnosticOnly === true,
+        startupOnly: options.startupOnly === true,
+      });
+      return;
+    }
     if (options.ownerControlsOnly) {
       const proof = {
         context,

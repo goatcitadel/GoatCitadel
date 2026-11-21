@@ -7,13 +7,8 @@ import type { ChatSessionRecord, OnboardingState } from "@goatcitadel/contracts"
 import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
 import { ScopeLineProvider } from "../../app/scope-line";
-import {
-  ChatEmptyState,
-  ChatHeaderSubtitle,
-  ChatSessionHeader,
-  ChatSetupBanner,
-  ChatSetupGate,
-} from "./ChatAreaChrome";
+import { ChatHeaderSubtitle, ChatSessionHeader } from "./ChatAreaChrome";
+import { ChatEmptyState, ChatSetupBanner, ChatSetupGate } from "./ChatSetupViews";
 import type { ChannelConversationContext } from "./channel-conversation";
 
 const media = vi.hoisted(() => ({ phone: false }));

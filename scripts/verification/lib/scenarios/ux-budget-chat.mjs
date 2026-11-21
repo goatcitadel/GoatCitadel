@@ -97,7 +97,8 @@ export async function runUxBudgetChat(environment) {
           await page.getByRole("textbox", { name: "Message", exact: true }).fill("/timer");
           await page.getByRole("button", { name: "Open timer" }).click();
           const timerDialog = page.getByRole("dialog", { name: "Set a Chat timer" });
-          await timerDialog.waitFor();
+          // The loading dialog shares the title. Measure the editor after its handoff.
+          await timerDialog.getByRole("textbox", { name: "Reminder message", exact: true }).waitFor();
           const timerBounds = await timerDialog.evaluate((element) => {
             const bounds = element.getBoundingClientRect();
             return {

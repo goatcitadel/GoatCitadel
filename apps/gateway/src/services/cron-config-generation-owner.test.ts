@@ -10,7 +10,11 @@ import {
   recoverLastGoodConfigGeneration,
   type CompleteUnifiedConfigPayload,
 } from "./config-generation-service.js";
-import { CronConfigGenerationOwner, readCanonicalCronSpecs } from "./cron-config-generation-owner.js";
+import {
+  CronConfigGenerationOwner,
+  projectStoredCronSpecs,
+  readCanonicalCronSpecs,
+} from "./cron-config-generation-owner.js";
 import { computeNextCronRunAt } from "./gateway/cron-automation-service.js";
 import { PRIVATE_BETA_BACKUP_JOB_ID } from "./gateway/cron-job-ids.js";
 
@@ -26,6 +30,43 @@ afterEach(async () => {
 });
 
 describe("CronConfigGenerationOwner", () => {
+  it("keeps a retained commitment occurrence out of Settings and protects it during config recovery", async () => {
+    const { root } = await createRoot([]);
+    const storage = createStorage(root);
+    const job = spec({ enabled: false });
+    storage.cronJobs.createSpec(job);
+    const commitment = storage.agentCommitments.upsertByDedupe({
+      commitmentId: "config-recovery-commitment",
+      sessionId: "config-recovery-session",
+      workspaceId: "default",
+      kind: "check_in",
+      dueAt: "2020-01-01T00:00:00.000Z",
+      confidence: 1,
+      dedupeKey: "config-recovery-commitment",
+      suggestedText: "Check in after the decision.",
+    });
+    const occurrence = storage.agentCommitments.claimScheduledOccurrence({
+      commitmentId: commitment.commitmentId,
+      expectedRevision: 1,
+    });
+    const anchor = storage.cronJobs.get(occurrence.jobId);
+    expect(anchor).toMatchObject({ enabled: false, schedule: "0 0 1 1 *", action: "agent_turn" });
+
+    expect(projectStoredCronSpecs(storage.cronJobs.list()).map(({ jobId }) => jobId)).toEqual([job.jobId]);
+    const config = new ConfigGenerationService(root);
+    const owner = new CronConfigGenerationOwner(config, createSqliteAsyncStorage(storage));
+    await owner.reconcileStartupGeneration();
+    expect(readCanonicalCronSpecs(config.getActivePayload().cronJobs).map(({ jobId }) => jobId)).toEqual([job.jobId]);
+
+    const orphan = spec({ jobId: "extraneous-schedule" });
+    storage.cronJobs.createSpec(orphan);
+    await owner.reconcileCommittedGeneration();
+    expect(storage.cronJobs.get(orphan.jobId)).toBeUndefined();
+    expect(storage.cronJobs.get(occurrence.jobId)).toEqual(anchor);
+    expect(storage.cronRuns.get(occurrence.runId)).toEqual(occurrence);
+    expect(storage.agentCommitments.get(commitment.commitmentId)?.scheduledRunId).toBe(occurrence.runId);
+  });
+
   it("records creator proof atomically outside imported config and reviews unchanged historical actions", async () => {
     const job = spec({
       action: "agent_turn",

@@ -431,8 +431,11 @@ vi.mock("./chat/useChatComposerInteractions", () => ({
   useChatComposerInteractions: (...args: unknown[]) => useChatComposerInteractionsMock(...args),
 }));
 
-vi.mock("./chat/useChatMultimodalControls", () => ({
-  useChatMultimodalControls: (...args: unknown[]) => useChatMultimodalControlsMock(...args),
+vi.mock("./chat/useDeferredChatMultimodalControls", () => ({
+  useDeferredChatMultimodalControls: (...args: unknown[]) => ({
+    multimodal: useChatMultimodalControlsMock(...args),
+    multimodalRuntime: null,
+  }),
 }));
 
 vi.mock("./chat/useRouteGeneratedArtifactReveal", () => ({
@@ -2244,8 +2247,13 @@ describe("MissionThreadedControllerHost", () => {
       latestSurfaceInput?.onSessionRailOpenChange(true);
       latestSurfaceInput?.onDockOpenChange(true);
       latestSurfaceInput?.sessionRail.onSelectSession("session-1", { turnId: "turn-1" });
+    });
+    await act(async () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onRequestProviderChange("anthropic");
       latestSurfaceInput?.activeSessionSurfaceProps?.onRequestModelChange("claude-4");
+      await vi.dynamicImportSettled();
+    });
+    await act(async () => {
       latestSurfaceInput?.activeSessionSurfaceProps?.onOpenRunDetails("turn-1");
       latestSurfaceInput?.activeSessionSurfaceProps?.onAcknowledgeRouteBoundary();
       latestSurfaceInput?.activeSessionSurfaceProps?.onDraftChange("Draft body");

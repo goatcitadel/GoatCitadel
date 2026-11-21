@@ -30,6 +30,19 @@ describe("IconButton tooltip", () => {
     await vi.waitFor(() => expect(tooltipText()).toBe("Collapse sidebar"));
   });
 
+  it("dismisses with Escape without replacing the focused button", async () => {
+    await act(async () => root.render(<IconButton label="Collapse sidebar" icon={<span />} />));
+    const trigger = button();
+    await act(async () => trigger.focus());
+    await vi.waitFor(() => expect(tooltipText()).toBe("Collapse sidebar"));
+    await act(async () => {
+      trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(tooltipText()).toBeUndefined();
+    expect(button()).toBe(trigger);
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("opens after a 500 ms touch long-press and not before", async () => {
     vi.useFakeTimers();
     await act(async () => root.render(<IconButton label="Collapse sidebar" icon={<span />} />));

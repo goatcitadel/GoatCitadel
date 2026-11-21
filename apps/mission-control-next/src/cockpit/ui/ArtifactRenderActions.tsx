@@ -21,16 +21,6 @@ interface RenderState {
 const IDLE: RenderState = { activity: "idle", renders: [] };
 const TEXT_ONLY_MARKER = "(sent without images: the current model has no vision capability)";
 
-/** The cockpit's value for the shared viewer's actions slot (see GeneratedArtifactActionsContext). */
-export function renderCockpitArtifactActions(artifact: ChatGeneratedArtifactRecord) {
-  // Keyed by identity so another artifact (or version) mounts with fresh state in the same commit.
-  return <ArtifactRenderActions key={artifactIdentity(artifact)} artifact={artifact} />;
-}
-
-function artifactIdentity(artifact: ChatGeneratedArtifactRecord): string {
-  return `${artifact.artifactId}:${artifact.contentHash ?? artifact.version}`;
-}
-
 /**
  * Render-and-look actions for an `html` generated artifact: offline PNG snapshots through the
  * gateway's render route, and a critique turn dispatched into the artifact's conversation.

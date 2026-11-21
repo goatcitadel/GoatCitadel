@@ -2,22 +2,15 @@ import type {
   ChatCitationRecord,
   ChatDelegationRunStatus,
   ChatDelegationStepStatus,
-  ChatMemoryMode,
-  ChatPlanningMode,
   ChatThinkingLevel,
-  ChatRoutedContextDisposition,
-  ChatRoutedContextKind,
-  ChatSpecialistCandidateStatus,
   ChatToolRunRecord,
-  ChatTurnFailureClass,
   ChatTurnTraceRecord,
-  ChatWebMode,
 } from "@goatcitadel/contracts";
 import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
 import {
-  getChatToolRunDiagnostics,
+  hasChatToolFailureSignal,
   isFailedCodeModeRequest,
-} from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
+} from "@goatcitadel/mission-control-shared/components/chat/chat-tool-failure";
 import {
   humanizeToken,
   presentChatTurnStatus,
@@ -39,8 +32,7 @@ const toolRunStatuses: Record<ChatToolRunRecord["status"], StatusPresentation> =
 export function presentToolRunStatus(tool: ChatToolRunRecord): StatusPresentation {
   // The request settled so its turn could resume, but its code did not run to the end.
   if (tool.status === "executed" && isFailedCodeModeRequest(tool)) return toolRunStatuses.failed;
-  if (tool.status === "executed" && getChatToolRunDiagnostics(tool).hasFailureSignal)
-    return status("Needs review", "waiting");
+  if (tool.status === "executed" && hasChatToolFailureSignal(tool)) return status("Needs review", "waiting");
   return toolRunStatuses[tool.status] ?? status("Unknown", "neutral");
 }
 
@@ -68,19 +60,6 @@ export function presentDelegationStepStatus(value: ChatDelegationStepStatus): St
   return delegationStepStatuses[value] ?? status("Unknown", "neutral");
 }
 
-const memoryModes: Record<ChatMemoryMode, string> = { auto: "Automatic", on: "On", off: "Off" };
-const webModes: Record<ChatWebMode, string> = {
-  auto: "Automatic",
-  off: "Off",
-  quick: "Quick search",
-  deep: "Deep research",
-};
-const planningModes: Record<ChatPlanningMode, string> = { off: "Off", advisory: "Advisory" };
-const toolAutonomy: Record<"safe_auto" | "manual", string> = {
-  // Manual sends the model no tools at all; it never asks before each one.
-  safe_auto: "Safe Auto (approvals still apply)",
-  manual: "Manual (tools off)",
-};
 const thinkingLevels: Record<ChatThinkingLevel, string> = {
   off: "Off",
   minimal: "Minimal",
@@ -95,28 +74,6 @@ export const APPROVAL_PAUSED_NOTE =
   "GoatCitadel is unreachable, so this decision can't be sent. Approve and Deny come back when the connection returns.";
 
 export const presentThinkingLevel = (value: ChatThinkingLevel) => thinkingLevels[value] ?? "Unknown";
-export const presentMemoryMode = (value: ChatMemoryMode) => memoryModes[value] ?? "Unknown";
-export const presentWebMode = (value: ChatWebMode) => webModes[value] ?? "Unknown";
-export const presentPlanningMode = (value: ChatPlanningMode) => planningModes[value] ?? "Unknown";
-export const presentToolAutonomy = (value: "safe_auto" | "manual") => toolAutonomy[value] ?? "Unknown";
-
-const routedDispositions: Record<ChatRoutedContextDisposition, string> = {
-  included: "Included",
-  truncated: "Shortened",
-  omitted: "Left out",
-  already_attached: "Already attached",
-};
-export const presentRoutedDisposition = (value: ChatRoutedContextDisposition) => routedDispositions[value] ?? "Unknown";
-
-const routedKinds: Record<ChatRoutedContextKind, string> = {
-  attachment: "Attachment",
-  memory_item: "Memory item",
-  external_attachment: "External attachment",
-  personal_note: "Personal note",
-  generated_artifact: "Saved artifact",
-};
-export const presentRoutedContextKind = (value: ChatRoutedContextKind) => routedKinds[value] ?? "Context item";
-
 const sourceTypes: Record<NonNullable<ChatCitationRecord["sourceType"]>, string> = {
   web: "Web",
   file: "File",
@@ -124,35 +81,6 @@ const sourceTypes: Record<NonNullable<ChatCitationRecord["sourceType"]>, string>
   memory: "Memory",
 };
 export const presentSourceType = (value: ChatCitationRecord["sourceType"]) => (value && sourceTypes[value]) || "Source";
-
-const failureClasses: Record<ChatTurnFailureClass, string> = {
-  provider_timeout: "the model provider timed out",
-  network_interrupted: "the network connection dropped",
-  tool_blocked: "a tool was blocked",
-  tool_failed: "a tool failed",
-  auth_required: "sign-in is required",
-  tool_loop_guard: "the tool loop guard stopped repeated calls",
-  global_circuit_breaker: "the safety circuit breaker stopped the run",
-  tool_run_budget_exceeded: "the tool call limit was reached",
-  turn_budget_exceeded: "the time limit for this message was reached",
-  budget_exceeded: "the budget was reached",
-  approval_required: "an approval is required",
-  interrupted_by_restart: "GoatCitadel restarted",
-  skill_security_blocked: "a skill was blocked by security checks",
-  guidance_security_blocked: "guidance was blocked by security checks",
-  provider_rate_limited: "the model provider is limiting requests",
-  context_too_long: "the conversation is too long for the model",
-  provider_billing: "the model provider turned the request down for account reasons",
-  unknown: "unknown",
-};
-export const presentFailureClass = (value: ChatTurnFailureClass) => failureClasses[value] ?? "unknown";
-
-/** The composer's mode toggles, explained in one place for the tooltip, the screen-reader text and the options popover. */
-export const PLAN_HELP = "Plan before acting. GoatCitadel still governs every tool and approval.";
-export const REVIEW_HELP =
-  "Check each answer with one extra model call before it finishes; the result shows under the answer. Adds cost to every message.";
-export const WEB_HELP =
-  "Auto searches when the message needs current information; Off removes web tools; Deep searches on every message with a larger budget. GoatCitadel policy and available tools still apply.";
 
 /**
  * The badge on a turn that is still streaming. Once the answer has streamed, Review answer's extra model call runs
@@ -217,14 +145,3 @@ export function presentApprovalAction(toolName?: string | null, kind?: string | 
   if (kind) return actionKinds[kind] ?? humanizeToken(kind);
   return "Action request";
 }
-
-const specialistCandidateStatuses: Record<ChatSpecialistCandidateStatus, string> = {
-  suggested: "Suggested",
-  drafted: "Draft",
-  disabled: "Disabled",
-  approved: "Approved",
-  active: "Active",
-  retired: "Retired",
-};
-export const presentSpecialistCandidateStatus = (value: ChatSpecialistCandidateStatus) =>
-  specialistCandidateStatuses[value] ?? "Unknown";

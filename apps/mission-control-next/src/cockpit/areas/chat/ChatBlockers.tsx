@@ -1,33 +1,31 @@
 import { useChatSpecialistApproval } from "./use-chat-specialist-approval";
-import { ChatExpiredApprovalRecovery } from "./ChatExpiredApprovalRecovery";
 import { errandScreenshotAttachmentId, useChatApprovalFeedback } from "./use-chat-approval-feedback";
 import { RiskBadge } from "../../ui/RiskBadge";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { isBackgroundChatUserInputPrompt, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
+import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { lazy, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AttachmentImage } from "../../ui/AttachmentImage";
 import { ChatApprovalRenderer } from "./ChatApprovalRenderer";
-import { ChatAllowanceReceipt } from "./ChatAllowances";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
 import { useGatewayUnavailable } from "../../app/gateway-unavailable-context";
 import { approvalExpiredUnresolved } from "../inbox/approval-settlement";
 import { hasExpired, useMinuteClock } from "../inbox/use-minute-clock";
 import { useApprovalDeadlineCheck } from "./use-approval-deadline-check";
 import { CHANGED_APPROVAL_RECORD } from "../inbox/inbox-approval-guard";
-import { DeferredChatLeaf } from "./DeferredChatLeaves";
+import {
+  DeferredChatApprovalTarget,
+  DeferredChatAllowanceReceipt,
+  DeferredChatExpiredApprovalRecovery,
+  DeferredPendingChatQuestion,
+} from "./DeferredChatLeaves";
 import { presentApprovalAction } from "./chat-vocabulary";
-import { approvalTargetLine } from "../inbox/approval-target";
 import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
 import { useReportWaitingDecision } from "./chat-jump-to-latest";
-const ChatPendingQuestion = lazy(async () => ({
-  default: (await import("./ChatPendingQuestion")).ChatPendingQuestion,
-}));
-
 const changedActionWarning = "This MCP action changed. Review the updated action before deciding.";
 
 type Blockers = Pick<
@@ -129,7 +127,6 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
     });
   // The persisted record outranks the retained prompt: once it is decided, the card reports the decision
   // instead of asking for one while Chat waits for the queue to clear it.
-  const targetLine = approvalTargetLine(reviewedApproval?.kind, reviewedApproval?.preview);
   const decided = reviewedApproval && reviewedApproval.status !== "pending" ? reviewedApproval : undefined;
 
   const expiry = decided ? null : approvalExpiryLabel(approval?.expiresAt);
@@ -176,8 +173,7 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
       </p>
       {otherTabNotice ? <p className="mt-3 text-sm text-fg-secondary">{otherTabNotice}</p> : null}
       {temporaryGrantNotice?.grant && props.selectedSessionId ? (
-        <ChatAllowanceReceipt
-          key={temporaryGrantNotice.grant.grantId}
+        <DeferredChatAllowanceReceipt
           workspaceId={workspaceId}
           sessionId={props.selectedSessionId}
           grant={temporaryGrantNotice.grant}
@@ -217,7 +213,7 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
                       : "Approval needed"}
               </h3>
               <p className="mt-1 text-fg-secondary">{presentApprovalAction(approval.toolName, approval.kind)}</p>
-              {targetLine ? <p className="mt-1 text-xs text-fg-secondary wrap-anywhere">{targetLine}</p> : null}
+              <DeferredChatApprovalTarget approval={reviewedApproval} />
             </div>
             {approval.riskLevel ? <RiskBadge risk={approval.riskLevel} /> : null}
           </div>
@@ -367,7 +363,13 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
               )}
             </div>
           ) : null}
-          {expired ? <ChatExpiredApprovalRecovery props={props} turnId={reviewedApproval?.linkage?.turnId} /> : null}
+          {expired ? (
+            <DeferredChatExpiredApprovalRecovery
+              approvalId={approval.approvalId}
+              props={props}
+              turnId={reviewedApproval?.linkage?.turnId}
+            />
+          ) : null}
           <NativeOwnerLink
             href={continuationHref("/inbox", approval.approvalId)}
             scope={noticeScope}
@@ -386,35 +388,14 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
           </Button>
         </div>
       ) : input ? (
-        <DeferredChatLeaf
+        <DeferredPendingChatQuestion
           key={questionScope}
           identity={questionScope}
-          label="Answer controls"
-          fallback={
-            <section
-              aria-label="Pending question"
-              tabIndex={-1}
-              data-chat-waiting-decision=""
-              className="mt-3 border-l-2 border-status-waiting pl-3 text-sm"
-            >
-              <h3 className="font-semibold text-fg">{input.title || "Your input is needed"}</h3>
-              {isBackgroundChatUserInputPrompt(input) ? (
-                <p className="mt-1 text-xs text-fg-muted">Optional · Work continues</p>
-              ) : null}
-              <p className="mt-1 text-fg-secondary">{input.question}</p>
-              <p aria-busy="true" className="mt-2 text-xs text-fg-muted">
-                Loading answer controls…
-              </p>
-            </section>
-          }
-        >
-          <ChatPendingQuestion
-            prompt={input}
-            pending={props.userInputPending}
-            onSubmit={props.onSubmitUserInput}
-            onSkip={() => setQuestionSkipped(true)}
-          />
-        </DeferredChatLeaf>
+          prompt={input}
+          pending={props.userInputPending}
+          onSubmit={props.onSubmitUserInput}
+          onSkip={() => setQuestionSkipped(true)}
+        />
       ) : null}
     </div>
   );

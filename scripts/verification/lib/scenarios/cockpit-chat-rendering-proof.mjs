@@ -326,13 +326,14 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
           await page.reload({ waitUntil: "domcontentloaded" });
           await findTurn(invalid.userMessage.content);
           const runCard = await revealConversationRun(page);
+          // The durable summary can appear before the scoped delegation read settles.
+          await runCard.getByText("Supervised work · Partial", { exact: true }).waitFor();
           assert.equal(
             await runCard.evaluate((element) => element.tagName === "DETAILS" && element.open),
             true,
             "Partial run evidence must expand automatically",
           );
           await runCard.getByText(delegation.objective, { exact: true }).waitFor();
-          await runCard.getByText("Supervised work · Partial", { exact: true }).waitFor();
           await runCard.getByRole("button", { name: "Inspect run", exact: true }).click();
           await page.getByRole("tab", { name: "Run", exact: true }).click();
           const runPanel = page.getByRole("tabpanel", { name: "Run", exact: true });

@@ -374,7 +374,7 @@ export class CronConfigGenerationOwner implements CronSpecMutationOwner {
     const desiredIds = new Set(specs.map((spec) => spec.jobId));
     if (deleteExtraneous) {
       for (const existing of await this.storage.cronJobs.list()) {
-        if (!desiredIds.has(existing.jobId)) {
+        if (!desiredIds.has(existing.jobId) && isConfigOwnedCronSpec(existing)) {
           await this.storage.cronJobs.deleteWithRevision(existing.jobId, existing.revision);
         }
       }
@@ -437,6 +437,20 @@ export function projectCanonicalCronSpec(spec: CronJobSpecInput): CronJobSpecInp
     ...(contextFrom ? { contextFrom } : {}),
     ...(citadelId ? { citadelId } : {}),
   };
+}
+
+/** Commitment occurrences keep a disabled storage anchor for their run and audit evidence. */
+function isConfigOwnedCronSpec(spec: CronJobSpecInput): boolean {
+  return !(
+    spec.action === "agent_turn" &&
+    !spec.enabled &&
+    /^commitment_[a-f0-9]{40}$/u.test(spec.jobId) &&
+    spec.actionConfig?.agentTurn?.commitment
+  );
+}
+
+export function projectStoredCronSpecs(stored: CronJobRecord[]): CronJobSpecInput[] {
+  return stored.filter(isConfigOwnedCronSpec).map(projectCanonicalCronSpec);
 }
 
 export function readCanonicalCronSpecs(section: unknown): CronJobSpecInput[] {
@@ -518,7 +532,7 @@ function upsertCanonicalSpec(specs: CronJobSpecInput[], desired: CronJobSpecInpu
 function mergeStorageOnlySpecs(active: CronJobSpecInput[], stored: CronJobRecord[]): CronJobSpecInput[] {
   const merged = new Map(active.map((spec) => [spec.jobId, spec]));
   for (const record of stored) {
-    if (!merged.has(record.jobId)) {
+    if (!merged.has(record.jobId) && isConfigOwnedCronSpec(record)) {
       merged.set(record.jobId, projectCanonicalCronSpec(record));
     }
   }

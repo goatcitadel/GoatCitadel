@@ -79,6 +79,7 @@ async function render() {
       </QueryClientProvider>,
     ),
   );
+  await act(async () => vi.dynamicImportSettled());
   for (let tick = 0; tick < 5; tick += 1)
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));

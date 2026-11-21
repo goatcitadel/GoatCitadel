@@ -155,6 +155,7 @@ export interface MissionControlActiveSessionSurfaceProps {
     onStopFanout?: (invocationId: string) => void;
     onClose: () => void;
   };
+  chatTimerAvailable?: boolean;
   chatTimerPanel?: {
     open: boolean;
     busy: boolean;

@@ -75,6 +75,7 @@ export const Turn = memo(function Turn({
   turn,
   position,
   isLatest = false,
+  inlineApprovalId,
   previewText,
   streaming,
   actions,
@@ -92,6 +93,7 @@ export const Turn = memo(function Turn({
   position?: number;
   /** The newest turn in the conversation; only it can offer Continue. */
   isLatest?: boolean;
+  inlineApprovalId?: string;
   previewText: string | null;
   streaming: boolean;
   actions: TurnActions;
@@ -286,6 +288,7 @@ export const Turn = memo(function Turn({
       isChatTurnTerminalStatus(turn.trace.status) ? (
         <ChatTurnDetails
           turn={turn}
+          inlineApprovalId={inlineApprovalId}
           answerContent={assistantText}
           streaming={streaming}
           readOnly={actions.historicalReadOnly}

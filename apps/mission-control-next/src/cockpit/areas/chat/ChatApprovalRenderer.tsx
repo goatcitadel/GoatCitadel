@@ -13,6 +13,7 @@ import {
   type ComponentProps,
 } from "react";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
+import { ShieldAlert } from "lucide-react";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import {
   getGatewayAccessRevision,
@@ -23,6 +24,8 @@ import {
 import { readCockpitHistory, subscribeCockpitHistory } from "../../app/cockpit-history";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { ApprovalDecisionHelp } from "../inbox/ApprovalDecisionHelp";
+import { hasExpired, useMinuteClock } from "../inbox/use-minute-clock";
 import { DeferredOutsideRootWriteGrantOptions } from "./DeferredOutsideRootWriteGrantOptions";
 import { ChatApprovalPausedFieldset } from "./ChatApprovalPausedFieldset";
 import { importChatApprovalRendererBody, importChatApprovalSettlement } from "./load-chat-approval-renderer";
@@ -32,7 +35,8 @@ type SettlementCode = Awaited<ReturnType<typeof importChatApprovalSettlement>>;
 type RendererCode = ({ kind: "decision" } & DecisionCode) | ({ kind: "settlement" } & SettlementCode);
 type RendererKind = RendererCode["kind"];
 type DecisionProps = ComponentProps<DecisionCode["ApprovalDecisionBar"]>;
-type ChatApprovalRendererProps = Omit<DecisionProps, "approval" | "workspaceId"> & {
+type DecisionIntent = NonNullable<DecisionProps["deferredIntent"]>;
+type ChatApprovalRendererProps = Omit<DecisionProps, "approval" | "workspaceId" | "deferredIntent"> & {
   /** Chat reads and decides its approvals in the conversation's workspace. */
   workspaceId: string;
   approvalId: string;
@@ -136,6 +140,38 @@ export function ChatApprovalRenderer({
   const kind = record ? (record.status === "pending" ? "decision" : "settlement") : undefined;
   const owner = useMemo<Owner>(() => ({ scope, kind }), [scope, kind]);
   const committedOwner = useRef(owner);
+  const committedRecord = useRef({ record, connectionLost });
+  useLayoutEffect(() => {
+    committedRecord.current = { record, connectionLost };
+  }, [record, connectionLost]);
+  const [intent, setIntent] = useState<{
+    owner: Owner;
+    record: ApprovalRequest;
+    decision: DecisionIntent;
+    trigger: HTMLButtonElement;
+  }>();
+  const matchingIntent = intent?.owner === owner && intent.record === record ? intent.decision : undefined;
+  const shellReview =
+    kind === "decision" &&
+    record?.kind === "shell.exec" &&
+    record.riskLevel === "danger" &&
+    Boolean(record.preview?.command && typeof record.preview.command === "string") &&
+    decisionProps.inlineDangerReview &&
+    decisionProps.sessionId !== undefined &&
+    (record.linkage?.actionType === undefined || record.linkage.actionType === "tool.invoke") &&
+    record.linkage?.workspaceId === decisionProps.workspaceId &&
+    record.linkage.sessionId === decisionProps.sessionId &&
+    !decisionProps.specialistEvidence &&
+    !decisionProps.reviewAgain &&
+    !decisionProps.withholdApprove &&
+    !decisionProps.focusAction;
+  const shouldLoad = !shellReview || intent?.owner === owner;
+  const expired = hasExpired(
+    shellReview ? record?.expiresAt : undefined,
+    useMinuteClock(shellReview ? record?.expiresAt : undefined),
+  );
+  const decisionRequested = useRef<Owner | undefined>(undefined);
+  const focusOnDecision = useRef<DecisionIntent["action"] | undefined>(undefined);
   const mounted = useRef(true);
   const cancelButton = useRef<HTMLButtonElement>(null);
   const activeReview = useRef<ReloadReview | undefined>(undefined);
@@ -168,13 +204,17 @@ export function ChatApprovalRenderer({
     setReview(undefined);
   }, [owner, history]);
   useEffect(() => {
-    if (!approvalId || !kind) return;
+    if (!approvalId || !kind || !shouldLoad) return;
     let active = true;
     const owned = () => active && current();
     // The signal may be stale. Only the current record chooses which branch to load.
     void loadRendererCode(kind).then(
       (code) => {
-        if (owned()) setState({ owner, code });
+        if (owned()) {
+          focusOnDecision.current =
+            intent?.owner === owner && document.activeElement === intent.trigger ? intent.decision.action : undefined;
+          setState({ owner, code });
+        }
       },
       () => {
         if (owned()) setState({ owner, failed: true });
@@ -183,10 +223,36 @@ export function ChatApprovalRenderer({
     return () => {
       active = false;
     };
-  }, [approvalId, kind, owner, current]);
+  }, [approvalId, kind, owner, current, intent, shouldLoad]);
   const ownedState = state?.owner === owner ? state : undefined;
   const code = ownedState && "code" in ownedState ? ownedState.code : undefined;
   const failed = Boolean(ownedState && "failed" in ownedState);
+  const requestShellDecision = (action: DecisionIntent["action"], trigger: HTMLButtonElement) => {
+    if (!record || !current() || expired || connectionLost || decisionRequested.current === owner) return;
+    decisionRequested.current = owner;
+    const capturedHistory = readCockpitHistory();
+    let claimed = false;
+    setIntent({
+      owner,
+      record,
+      trigger,
+      decision: {
+        action,
+        claim: () => {
+          if (
+            claimed ||
+            !current() ||
+            committedRecord.current.record !== record ||
+            committedRecord.current.connectionLost ||
+            capturedHistory !== readCockpitHistory()
+          )
+            return false;
+          claimed = true;
+          return true;
+        },
+      },
+    });
+  };
   const hasRecord = Boolean(record);
   useLayoutEffect(() => {
     if (hasRecord && failed) return;
@@ -216,7 +282,7 @@ export function ChatApprovalRenderer({
     window.location.reload();
   };
   return (
-    <div aria-busy={Boolean(record && !code && !failed)}>
+    <div aria-busy={Boolean(record && shouldLoad && !code && !failed)}>
       {!record ? (
         <ApprovalRecordRecovery pending={recordPending} recovery={recovery} />
       ) : (
@@ -232,13 +298,57 @@ export function ChatApprovalRenderer({
                 Reload app
               </Button>
             </div>
+          ) : !code && shellReview ? (
+            <ChatApprovalPausedFieldset paused={connectionLost}>
+              <div className="space-y-2 border-t border-line-subtle pt-3">
+                {expired ? (
+                  <p className="text-fg-muted">This approval has expired and can no longer be decided.</p>
+                ) : (
+                  <div role="group" aria-label="Approval decisions" className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      aria-disabled={shouldLoad || undefined}
+                      onClick={(event) => requestShellDecision("review", event.currentTarget)}
+                    >
+                      <ShieldAlert aria-hidden="true" className="size-4 shrink-0" />
+                      Review danger approval
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      aria-disabled={shouldLoad || undefined}
+                      onClick={(event) => requestShellDecision("deny", event.currentTarget)}
+                    >
+                      Deny
+                    </Button>
+                  </div>
+                )}
+                {shouldLoad ? <p role="status">Loading approval controls…</p> : null}
+                <ApprovalDecisionHelp />
+              </div>
+            </ChatApprovalPausedFieldset>
           ) : !code ? (
             <p className="min-h-10">
               {record.status === "pending" ? "Loading approval controls…" : "Loading follow-on work…"}
             </p>
           ) : code.kind === "decision" ? (
             <ChatApprovalPausedFieldset paused={connectionLost}>
-              <code.ApprovalDecisionBar key={scope} {...decisionProps} approval={record} />
+              <code.ApprovalDecisionBar
+                key={scope}
+                {...decisionProps}
+                approval={record}
+                deferredIntent={matchingIntent}
+                focusAction={
+                  decisionProps.focusAction ??
+                  (matchingIntent && focusOnDecision.current
+                    ? focusOnDecision.current === "review"
+                      ? "approve"
+                      : "deny"
+                    : undefined)
+                }
+              />
               {decisionProps.sessionId ? (
                 <DeferredOutsideRootWriteGrantOptions
                   key={`folder-${scope}`}

@@ -7,7 +7,8 @@ import {
   GeneratedArtifactActionsContext,
   GeneratedArtifactViewer,
 } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
-import { ArtifactRenderActions, renderCockpitArtifactActions } from "./ArtifactRenderActions";
+import { ArtifactRenderActions } from "./ArtifactRenderActions";
+import { renderCockpitArtifactActions } from "./artifact-actions-slot";
 
 const api = vi.hoisted(() => ({
   renderChatGeneratedArtifact: vi.fn(),
@@ -158,7 +159,8 @@ describe("ArtifactRenderActions", () => {
         <GeneratedArtifactViewer artifact={record} compact />
       </GeneratedArtifactActionsContext.Provider>
     );
-    act(() => root.render(view(artifact())));
+    await act(async () => root.render(view(artifact())));
+    await act(async () => vi.dynamicImportSettled());
     await act(async () => button("Render").click());
     expect(container.querySelectorAll("img")).toHaveLength(2);
 
@@ -167,8 +169,8 @@ describe("ArtifactRenderActions", () => {
     expect(container.querySelectorAll("img")).toHaveLength(0);
     expect(container.textContent).not.toContain("Rendered 2 images");
   });
-  it("mounts under every shared viewer through the cockpit actions slot", () => {
-    act(() =>
+  it("mounts under every shared viewer through the cockpit actions slot", async () => {
+    await act(async () =>
       root.render(
         <GeneratedArtifactActionsContext.Provider value={renderCockpitArtifactActions}>
           <GeneratedArtifactViewer artifact={artifact()} compact />
@@ -176,6 +178,7 @@ describe("ArtifactRenderActions", () => {
         </GeneratedArtifactActionsContext.Provider>,
       ),
     );
+    await act(async () => vi.dynamicImportSettled());
 
     expect(container.querySelectorAll("[aria-label='Artifact render actions']")).toHaveLength(1);
     expect(button("Render")).toBeDefined();

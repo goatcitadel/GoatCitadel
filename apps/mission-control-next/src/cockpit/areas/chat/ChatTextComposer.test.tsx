@@ -249,9 +249,11 @@ function composerProps(overrides: Partial<ComposerProps> = {}): ComposerProps {
 /** Opens the composer's + panel; it renders in a portal, so it is found on the document. */
 async function openPlusPanel(): Promise<HTMLElement> {
   await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Add and options"]')!.click());
+  await act(async () => vi.dynamicImportSettled());
   const panel = await vi.waitFor(() => {
     const panel = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Add and options"]');
     expect(panel).not.toBeNull();
+    expect(buttonIn(panel!, "Commands and context")).toBeDefined();
     return panel!;
   });
   return panel;

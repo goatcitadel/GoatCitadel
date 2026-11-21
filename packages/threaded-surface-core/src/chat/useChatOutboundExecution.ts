@@ -6,8 +6,6 @@ import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/cl
 import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
 import type {
   ChatMessageRecord,
-  ChatMode,
-  RoutingPreflightResult,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
   ChatThreadResponse,
@@ -481,22 +479,18 @@ export function useChatOutboundExecution(
         getGatewayApiBaseUrl() !== renderedGatewayBase
       )
         return;
-      const preflightHash = (value: RoutingPreflightResult | null) => (value ? JSON.stringify(value) : null);
       const executionCorrelationId = createChatExecutionCorrelationId();
       const trimmedContent = item.content.trim();
       const attachmentsSnapshot = item.attachments;
-      const attachmentIds = attachmentsSnapshot.map((entry) => entry.attachmentId);
       // Queue-frozen external-source selection: sends carry exactly the refs
       // captured at enqueue time (never re-read from live selection state).
       const externalContextRefs =
         item.action === "send" && item.externalContextRefs && item.externalContextRefs.length > 0
           ? item.externalContextRefs.map((ref) => ({ ...ref }))
           : undefined;
-      const externalContextOptIn = externalContextRefs ? { contextRefs: externalContextRefs } : {};
-      const templateInvocationOptIn =
-        item.action === "send" && item.templateInvocation ? { templateInvocation: item.templateInvocation } : {};
-      const workspaceSnapshotOptIn =
-        item.action === "send" && item.workspaceSnapshot ? { workspaceSnapshot: item.workspaceSnapshot } : {};
+      const templateInvocation = item.action === "send" ? item.templateInvocation : undefined;
+      const workspaceSnapshot = item.action === "send" ? item.workspaceSnapshot : undefined;
+      const modelCouncil = item.modelCouncil;
       const currentPrefs = prefsRef.current;
       const requestPrefs =
         item.requestPrefs ??
@@ -506,25 +500,6 @@ export function useChatOutboundExecution(
           selectedModel,
           fullWebAccess,
         });
-      const effectiveMode: ChatMode = requestPrefs.mode;
-      const executionProviderId = requestPrefs.providerId;
-      const executionModel = requestPrefs.model;
-      const outboundPrefs = resolveOutboundExecutionPrefs(requestPrefs);
-      const councilOptIn = item.modelCouncil ? { modelCouncil: item.modelCouncil } : {};
-      const optimisticPrefs =
-        currentPrefs && (executionProviderId || executionModel)
-          ? {
-              ...currentPrefs,
-              mode: effectiveMode,
-              providerId: executionProviderId,
-              model: executionModel,
-              webMode: requestPrefs.webMode,
-              memoryMode: requestPrefs.memoryMode,
-              thinkingLevel: requestPrefs.thinkingLevel,
-              speedMode: requestPrefs.speedMode,
-              subagentPolicy: requestPrefs.subagentPolicy,
-            }
-          : currentPrefs;
       const localAttachments = attachmentsSnapshot.map((entry) => ({
         attachmentId: entry.attachmentId,
         fileName: entry.fileName,
@@ -662,22 +637,15 @@ export function useChatOutboundExecution(
         });
         executionStarted = true;
         await execute(item, {
-          preflightHash,
           executionCorrelationId,
           trimmedContent,
           attachmentsSnapshot,
-          attachmentIds,
           externalContextRefs,
-          externalContextOptIn,
-          templateInvocationOptIn,
-          workspaceSnapshotOptIn,
+          templateInvocation,
+          workspaceSnapshot,
           requestPrefs,
-          effectiveMode,
-          executionProviderId,
-          executionModel,
-          outboundPrefs,
-          councilOptIn,
-          optimisticPrefs,
+          modelCouncil,
+          currentPrefs,
           localAttachments,
           localUserMessageId,
           shouldProjectOptimisticUserMessage,

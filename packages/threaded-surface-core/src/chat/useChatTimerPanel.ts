@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatThreadResponse, ChatTimerRecord } from "@goatcitadel/contracts";
 import {
   cancelChatTimer,
@@ -238,28 +238,31 @@ export function useChatTimerPanel(input: {
     if (panel.open && enabled) void refresh();
   }, [panel.open, enabled, eventStreamState, refresh, thread]);
 
-  return {
-    openChatTimerPanel: open,
-    chatTimerPanel: enabled
-      ? {
-          ...panel,
-          busy: pendingScopes.current.has(scope),
-          onDueAtChange: (value: string) => setPanel((current) => ({ ...current, dueAt: value })),
-          onTimezoneChange: (value: string) => setPanel((current) => ({ ...current, timezone: value })),
-          onMessageChange: (value: string) => setPanel((current) => ({ ...current, message: value })),
-          onNotificationRuleChange: (value: string) =>
-            setPanel((current) => ({ ...current, notificationRuleId: value })),
-          onCancelOnNextReplyChange: (value: boolean) =>
-            setPanel((current) => ({ ...current, cancelOnNextReply: value })),
-          onCreate: () => void submit(),
-          onCancelTimer: (timerId: string, revision: number) => void cancel(timerId, revision),
-          onClose: () => {
-            if (!isCurrent()) return;
-            editorGeneration.current += 1;
-            readTicket.current += 1;
-            setPanel((current) => ({ ...current, open: false }));
-          },
-        }
-      : undefined,
-  };
+  const busy = pendingScopes.current.has(scope);
+  const chatTimerPanel = useMemo(
+    () =>
+      enabled
+        ? {
+            ...panel,
+            busy,
+            onDueAtChange: (value: string) => setPanel((current) => ({ ...current, dueAt: value })),
+            onTimezoneChange: (value: string) => setPanel((current) => ({ ...current, timezone: value })),
+            onMessageChange: (value: string) => setPanel((current) => ({ ...current, message: value })),
+            onNotificationRuleChange: (value: string) =>
+              setPanel((current) => ({ ...current, notificationRuleId: value })),
+            onCancelOnNextReplyChange: (value: boolean) =>
+              setPanel((current) => ({ ...current, cancelOnNextReply: value })),
+            onCreate: () => void submit(),
+            onCancelTimer: (timerId: string, revision: number) => void cancel(timerId, revision),
+            onClose: () => {
+              if (!isCurrent()) return;
+              editorGeneration.current += 1;
+              readTicket.current += 1;
+              setPanel((current) => ({ ...current, open: false }));
+            },
+          }
+        : undefined,
+    [busy, cancel, enabled, isCurrent, panel, setPanel, submit],
+  );
+  return { openChatTimerPanel: open, chatTimerPanel };
 }

@@ -1,7 +1,6 @@
 import type {
   ChatAttachmentRecord,
   ChatMessageRecord,
-  ChatMode,
   ChatModelCouncilRequest,
   ChatRoutedContextRef,
   ChatSessionPrefsRecord,
@@ -25,11 +24,8 @@ import {
 import type { PendingStreamTurnSeed } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
 import type { ActiveChatStreamState, UseChatOutboundExecutionInput } from "./useChatOutboundExecution.types";
 import type { OutboundQueueItem, OutboundRequestPrefsSnapshot } from "./useChatSurfaceOrchestration";
-import type {
-  OptimisticChatUserMessage,
-  UseChatOutboundExternalContext,
-  resolveOutboundExecutionPrefs,
-} from "./useChatOutboundExecution";
+import type { OptimisticChatUserMessage, UseChatOutboundExternalContext } from "./useChatOutboundExecution";
+import { resolveOutboundExecutionPrefs } from "./useChatOutboundExecution";
 import type { useChatStreamingPreviewState } from "./useChatStreamingPreviewState";
 import type { useChatOperatorPrompts } from "./useChatOperatorPrompts";
 import type { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
@@ -51,23 +47,16 @@ import type { shouldExecuteLocalChatCommand } from "./chat-page-pure-helpers";
 type PreviewOwner = ReturnType<typeof useChatStreamingPreviewState>;
 type PromptOwner = ReturnType<typeof useChatOperatorPrompts>;
 const previewRuntime = { ChatStreamingPreviewBuffer, isReducedMotionPreferred };
-export interface PreparedOutboundExecution {
-  preflightHash: (value: RoutingPreflightResult | null) => string | null;
+interface OutboundExecutionSeed {
   executionCorrelationId: string;
   trimmedContent: string;
   attachmentsSnapshot: ChatAttachmentRecord[];
-  attachmentIds: string[];
   externalContextRefs: ChatRoutedContextRef[] | undefined;
-  externalContextOptIn: { contextRefs?: ChatRoutedContextRef[] };
-  templateInvocationOptIn: { templateInvocation?: RunTemplateInvocation };
-  workspaceSnapshotOptIn: { workspaceSnapshot?: ChatWorkspaceSnapshotRequest };
+  templateInvocation?: RunTemplateInvocation;
+  workspaceSnapshot?: ChatWorkspaceSnapshotRequest;
   requestPrefs: OutboundRequestPrefsSnapshot;
-  effectiveMode: ChatMode;
-  executionProviderId: string | undefined;
-  executionModel: string | undefined;
-  outboundPrefs: ReturnType<typeof resolveOutboundExecutionPrefs>;
-  councilOptIn: { modelCouncil?: ChatModelCouncilRequest };
-  optimisticPrefs: ChatSessionPrefsRecord | null;
+  modelCouncil?: ChatModelCouncilRequest;
+  currentPrefs: ChatSessionPrefsRecord | null;
   localAttachments: Array<Pick<ChatAttachmentRecord, "attachmentId" | "fileName" | "mimeType" | "sizeBytes">>;
   localUserMessageId: string;
   shouldProjectOptimisticUserMessage: boolean;
@@ -166,28 +155,43 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
     assertCurrentCustody,
     isCurrentCustody,
   } = owner;
-  return async (item: OutboundQueueItem, prepared: PreparedOutboundExecution): Promise<void> => {
+  return async (item: OutboundQueueItem, seed: OutboundExecutionSeed): Promise<void> => {
     const {
-      preflightHash,
       executionCorrelationId,
       trimmedContent,
       attachmentsSnapshot,
-      attachmentIds,
       externalContextRefs,
-      externalContextOptIn,
-      templateInvocationOptIn,
-      workspaceSnapshotOptIn,
+      templateInvocation,
+      workspaceSnapshot,
       requestPrefs,
-      effectiveMode,
-      executionProviderId,
-      executionModel,
-      outboundPrefs,
-      councilOptIn,
-      optimisticPrefs,
+      modelCouncil,
+      currentPrefs,
       localAttachments,
       localUserMessageId,
       shouldProjectOptimisticUserMessage,
-    } = prepared;
+    } = seed;
+    const preflightHash = (value: RoutingPreflightResult | null) => (value ? JSON.stringify(value) : null);
+    const attachmentIds = localAttachments.map((entry) => entry.attachmentId);
+    const externalContextOptIn = externalContextRefs ? { contextRefs: externalContextRefs } : {};
+    const templateInvocationOptIn = templateInvocation ? { templateInvocation } : {};
+    const workspaceSnapshotOptIn = workspaceSnapshot ? { workspaceSnapshot } : {};
+    const councilOptIn = modelCouncil ? { modelCouncil } : {};
+    const { mode: effectiveMode, providerId: executionProviderId, model: executionModel } = requestPrefs;
+    const outboundPrefs = resolveOutboundExecutionPrefs(requestPrefs);
+    const optimisticPrefs =
+      currentPrefs && (executionProviderId || executionModel)
+        ? {
+            ...currentPrefs,
+            mode: effectiveMode,
+            providerId: executionProviderId,
+            model: executionModel,
+            webMode: requestPrefs.webMode,
+            memoryMode: requestPrefs.memoryMode,
+            thinkingLevel: requestPrefs.thinkingLevel,
+            speedMode: requestPrefs.speedMode,
+            subagentPolicy: requestPrefs.subagentPolicy,
+          }
+        : currentPrefs;
     let canonicalTurnAccepted = false;
     let session: ChatSessionRecord | null = null;
     // Closure-local counters for the streaming preview path: accumulated per

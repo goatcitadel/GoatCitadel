@@ -205,7 +205,7 @@ export async function runCockpitChatFirstSessionProof({context,browser,stack,cit
     }
     const reply=await uploadReply;
     if(caseName==="unconfirmed-upload-receipt"){
-     assert.equal(reply.status(),502);await page.getByText("The attachment didn’t upload. Select the file again to retry.",{exact:true}).waitFor();
+     assert.equal(reply.status(),502);await page.getByRole("alert").getByText("The gateway hit an error. Try again, or check System health.",{exact:true}).waitFor();
      assert.equal(await draft.inputValue(),admitted);assert.equal(await page.locator('[aria-label="Attached files"]').count(),0);
      assert.equal(await page.getByText(/^Detected image request and generated it via /u).count(),0);assert.equal(await page.getByText("Generated image added to the draft attachments.",{exact:true}).count(),0);
      await checkStored(stored[0]);report.storedButBrowserUnconfirmed=true;

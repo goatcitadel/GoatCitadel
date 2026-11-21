@@ -178,6 +178,8 @@ export interface MissionThreadedRenderSurfaceInput {
   dockOpen: boolean;
   onDockOpenChange: (next: boolean) => void;
   onWorkbenchOpenChange?: (open: boolean) => void;
+  canOpenBuildEditor?: boolean;
+  buildEditorUnavailable?: boolean;
   sessionRail: MissionThreadedSessionRailData;
   activeSessionSurfaceProps: MissionControlActiveSessionSurfaceProps | null;
   emptyStateProps: MissionThreadedEmptyStateProps;

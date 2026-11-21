@@ -4,7 +4,7 @@ import { Button } from "../../ui/Button";
 import { useProviderLabelLookup } from "../../data/use-model-label";
 import { SAFETY_RULES_HREF } from "../capabilities/tools/tool-links";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
-import { presentFailureClass } from "./chat-vocabulary";
+import { presentFailureClass } from "./chat-optional-vocabulary";
 
 const MODEL_SETTINGS_HREF = "/settings/models#providers";
 

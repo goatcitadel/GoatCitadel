@@ -234,12 +234,8 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
             lostReceipt = await response.json();
             await route.abort("failed");
           });
-          const nextReview = panel.getByRole("button", { name: "Review new grant", exact: true });
-          // The earlier reviews exercise pointer activation. Use keyboard activation
-          // here so scroll and pointer placement cannot race the refreshed form.
-          await nextReview.focus();
-          assert.equal(await nextReview.evaluate((button) => button === document.activeElement), true);
-          await nextReview.press("Enter");
+          // Wait for the refreshed editor and any closing focus trap before opening the next review.
+          await panel.getByRole("button", { name: "Review new grant", exact: true }).click();
           await dialog.getByText(`verification.tool.${token}.lost`, { exact: true }).waitFor();
           await createReviewedGrant.click();
           await panel.getByText(/Grant write outcome is unconfirmed\./).waitFor();

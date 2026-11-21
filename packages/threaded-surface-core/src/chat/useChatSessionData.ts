@@ -23,8 +23,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatThreadState } from "./use-chat-thread-state";
 import {
   fetchChatSessionCoreState,
-  fetchChatSessions,
-  fetchChatSessionSearch,
   fetchSettings,
   type ChatProjectsResponse,
   type ChatGeneratedArtifactsResponse,
@@ -41,15 +39,11 @@ import { readRouteSidebarSession } from "./chat-route-session-read";
 import {
   getDevBootstrapPromise,
   appendMissingSidebarSession,
-  sidebarMembershipIncomplete,
   sidebarRefreshPriority,
   chatViewRefreshPhase,
   sidebarLoadDiagnostic,
   ignoredPrebootstrapRefreshDiagnostic,
-  appendSidebarSessions,
-  projectChatSessionSearch,
   readSidebarBootstrap,
-  reconcileSidebarSessions,
   routeFallbackSessionId,
   selectSidebarSession,
   sidebarActivityReconcileKey,
@@ -291,6 +285,14 @@ export function useChatSessionData(input: ChatSessionDataInput) {
         }
         return;
       }
+      const pageRequest = {
+        workspaceId,
+        view: nextHistoryView,
+        query: trimmedSearchQuery,
+        limit: sessionLimit,
+        mode: surfaceMode,
+        signal: controller.signal,
+      };
       if (options.reconcileLoadedRange) {
         setSidebarLoadingMore(false);
         // Repeat the retained page reads in batches. Preserve their ordering and
@@ -298,63 +300,11 @@ export function useChatSessionData(input: ChatSessionDataInput) {
         const retainedCursors = loadedSidebarPages.current.cursors;
         const cursors = retainedCursors.length ? [...retainedCursors] : [undefined];
         try {
-          const pages = await Promise.all(
-            cursors.map((cursor) =>
-              trimmedSearchQuery
-                ? fetchChatSessionSearch({
-                    query: trimmedSearchQuery,
-                    mode: "discovery",
-                    view: nextHistoryView,
-                    limit: sessionLimit,
-                    workspaceId,
-                    cursor,
-                    surface: surfaceMode,
-                    includeActivity: true,
-                  }).then((response) => response.items.map((item) => ({ ...item.session, searchHits: item.hits })))
-                : fetchChatSessions(
-                    {
-                      scope: "all",
-                      view: nextHistoryView,
-                      limit: sessionLimit,
-                      workspaceId,
-                      cursor,
-                      mode: surfaceMode,
-                      includeActivity: true,
-                    },
-                    { signal: controller.signal },
-                  ).then((response) => response.items),
-            ),
-          );
+          const { reconcileSidebarPages } = await loadChatHistoryCode();
           if (!isCurrent()) return;
-          // Cursor absence is not membership evidence: ranking may move a retained
-          // record beyond these pages. Verify only the retained IDs in bounded batches.
-          const retainedIds = sessionsRef.current?.items.map((item) => item.sessionId) ?? [];
-          const members = new Map<string, ChatSessionsResponse["items"][number]>();
-          for (let offset = 0; offset < retainedIds.length; offset += 100) {
-            const sessionIds = retainedIds.slice(offset, offset + 100);
-            const response = await fetchChatSessions(
-              {
-                sessionIds,
-                workspaceId,
-                scope: "all",
-                view: nextHistoryView,
-                mode: surfaceMode,
-                q: trimmedSearchQuery || undefined,
-                includeActivity: true,
-              },
-              { signal: controller.signal },
-            );
-            if (!isCurrent()) return;
-            if (sidebarMembershipIncomplete(response, sessionIds)) {
-              throw new Error("Conversation membership could not be verified. The previous list is retained.");
-            }
-            for (const record of response.items) members.set(record.sessionId, record);
-          }
-          const records = new Map(pages.flat().map((record) => [record.sessionId, record]));
-          setSessions((current) => {
-            if (!current || !isCurrent()) return current;
-            return reconcileSidebarSessions(current, members, records);
-          });
+          const reconcile = await reconcileSidebarPages(pageRequest, cursors, () => sessionsRef.current, isCurrent);
+          if (!reconcile || !isCurrent()) return;
+          setSessions((current) => (current && isCurrent() ? reconcile(current) : current));
           // Reconciliation cannot bootstrap a missing list or hydrate an unapplied deep link.
           if (
             retainedCursors.length &&
@@ -380,32 +330,9 @@ export function useChatSessionData(input: ChatSessionDataInput) {
       if (append) {
         setSidebarLoadingMore(true);
         try {
-          const nextSessions = trimmedSearchQuery
-            ? await fetchChatSessionSearch(
-                {
-                  query: trimmedSearchQuery,
-                  mode: "discovery",
-                  view: nextHistoryView,
-                  limit: sessionLimit,
-                  workspaceId,
-                  cursor,
-                  surface: surfaceMode,
-                  includeActivity: true,
-                },
-                { signal: controller.signal },
-              ).then<ChatSessionsResponse>(projectChatSessionSearch)
-            : await fetchChatSessions(
-                {
-                  scope: "all",
-                  view: nextHistoryView,
-                  limit: sessionLimit,
-                  workspaceId,
-                  cursor,
-                  mode: surfaceMode,
-                  includeActivity: true,
-                },
-                { signal: controller.signal },
-              );
+          const { readSidebarPage, appendSidebarSessions } = await loadChatHistoryCode();
+          if (!isCurrent()) return;
+          const nextSessions = await readSidebarPage(pageRequest, cursor);
           if (!isCurrent()) return;
           setSessions((current) => {
             if (!isCurrent()) return current;

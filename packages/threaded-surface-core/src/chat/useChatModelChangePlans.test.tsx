@@ -103,6 +103,14 @@ const deferred = <T,>() => {
   return { promise, resolve, reject };
 };
 const request = () => act(async () => current.requestThreadModelPatch({ thinkingLevel: "extended" }));
+async function requestUntil(started: () => void) {
+  let completion: Promise<void> | undefined;
+  await act(async () => {
+    completion = current.requestThreadModelPatch({ thinkingLevel: "extended" });
+    await vi.waitFor(started);
+  });
+  return { completion };
+}
 const cardPlans = () => state.chatChangePlans.map((item) => `${item.planId}:${item.status}`);
 
 beforeEach(async () => {
@@ -241,9 +249,12 @@ describe("a model change for one Chat", () => {
       api.confirmChangePlan.mockReturnValue(confirm.promise);
       api.fetchChatSessionPrefs.mockResolvedValue({ revision: 8, thinkingLevel: "extended" });
       prefsRef.current = { revision: 1, model: "other-model" } as unknown as ChatSessionPrefsRecord;
-      await request();
+      const { completion } = await requestUntil(() => expect(api.confirmChangePlan).toHaveBeenCalledOnce());
       await switchToOther();
-      await act(async () => confirm.resolve(applied()));
+      await act(async () => {
+        confirm.resolve(applied());
+        await completion;
+      });
       expect(api.confirmChangePlan).toHaveBeenCalledOnce();
       expect(api.fetchChatSessionPrefs).not.toHaveBeenCalled();
       expect(setPrefs).not.toHaveBeenCalled();
@@ -258,9 +269,12 @@ describe("a model change for one Chat", () => {
       api.confirmChangePlan.mockResolvedValue(applied());
       api.fetchChatSessionPrefs.mockReturnValue(reread.promise);
       prefsRef.current = { revision: 1, model: "other-model" } as unknown as ChatSessionPrefsRecord;
-      await request();
+      const { completion } = await requestUntil(() => expect(api.fetchChatSessionPrefs).toHaveBeenCalledOnce());
       await switchToOther();
-      await act(async () => reread.resolve({ revision: 8, thinkingLevel: "extended" } as ChatSessionPrefsRecord));
+      await act(async () => {
+        reread.resolve({ revision: 8, thinkingLevel: "extended" } as ChatSessionPrefsRecord);
+        await completion;
+      });
       expect(setPrefs).not.toHaveBeenCalled();
       expect(prefsRef.current).toEqual({ revision: 1, model: "other-model" });
       expect(setUiError).not.toHaveBeenCalled();
@@ -272,9 +286,12 @@ describe("a model change for one Chat", () => {
       api.confirmChangePlan.mockRejectedValue(new Error("network lost"));
       api.fetchChangePlan.mockReturnValue(lookup.promise);
       api.fetchChatSessionPrefs.mockResolvedValue({ revision: 8, thinkingLevel: "extended" });
-      await request();
+      const { completion } = await requestUntil(() => expect(api.fetchChangePlan).toHaveBeenCalledOnce());
       await switchToOther();
-      await act(async () => lookup.resolve(applied()));
+      await act(async () => {
+        lookup.resolve(applied());
+        await completion;
+      });
       expect(setPrefs).not.toHaveBeenCalled();
       expect(prefsRef.current).toBeNull();
       expect(pushLocalNotice).not.toHaveBeenCalled();
@@ -285,9 +302,12 @@ describe("a model change for one Chat", () => {
       api.createChangePlan.mockResolvedValue(plan());
       api.confirmChangePlan.mockReturnValue(confirm.promise);
       api.fetchChangePlan.mockResolvedValue(plan());
-      await request();
+      const { completion } = await requestUntil(() => expect(api.confirmChangePlan).toHaveBeenCalledOnce());
       await switchToOther();
-      await act(async () => confirm.reject(new Error("revision conflict")));
+      await act(async () => {
+        confirm.reject(new Error("revision conflict"));
+        await completion;
+      });
       expect(setUiError).not.toHaveBeenCalled();
       expect(setPrefs).not.toHaveBeenCalled();
     });

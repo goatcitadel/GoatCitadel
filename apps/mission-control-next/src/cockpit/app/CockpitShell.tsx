@@ -3,7 +3,7 @@ import { EmbeddedPageHeaderProvider } from "../../features/native-routes/embedde
 import { Skeleton } from "../ui/Skeleton";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { ClassicOwnerLink } from "../ui/ClassicOwnerLink";
-import { Activity, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Activity, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -36,12 +36,13 @@ import {
 } from "./area-loaders";
 import { applyCockpitAppearance } from "./cockpit-appearance";
 import { useAreaShortcuts } from "./use-area-shortcuts";
-import { ShortcutHelp } from "./ShortcutHelp";
 import { cockpitDocumentTitle } from "./cockpit-document-title";
 import { useFocusPageOnAreaChange } from "./use-focus-page-on-area-change";
 import { useCockpitTitleDetailValue } from "./cockpit-title-detail";
 import { useCockpitScroll } from "./use-cockpit-scroll";
 import { getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+
+const ShortcutHelp = lazy(async () => ({ default: (await import("./ShortcutHelp")).ShortcutHelp }));
 
 const loadCommandPalette = () => import("./CommandPalette").then((module) => module.CommandPalette);
 
@@ -100,7 +101,7 @@ function CockpitShellContent({
     status: paletteStatus,
     trigger: paletteTrigger,
   } = useDeferredOverlay({ scopeKey: chatScope, load: loadCommandPalette });
-  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState<boolean | null>(null);
   const tablet = useMediaQuery(RESPONSIVE_QUERIES.tablet);
   // NV-13: phones get the tab bar and its status strip; the hidden sidebar must not keep reading.
   const wide = useMediaQuery(RESPONSIVE_QUERIES.abovePhone);
@@ -290,7 +291,13 @@ function CockpitShellContent({
         {!firstRun && !wide ? <MobileNavigationSlot onOpenPalette={openPaletteFrom} streamState={streamState} /> : null}
       </div>
       {Palette ? <Palette open={paletteOpen} onOpenChange={requestPalette} /> : null}
-      <ShortcutHelp open={helpOpen} onOpenChange={setHelpOpen} />
+      {helpOpen !== null ? (
+        <AreaErrorBoundary label="Keyboard shortcuts" resetKey={chatScope}>
+          <Suspense fallback={<p role="status">Loading keyboard shortcuts…</p>}>
+            <ShortcutHelp open={helpOpen} onOpenChange={setHelpOpen} />
+          </Suspense>
+        </AreaErrorBoundary>
+      ) : null}
     </InspectorProvider>
   );
 }

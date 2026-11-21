@@ -20,7 +20,7 @@ import {
   presentRoutedDisposition,
   presentToolAutonomy,
   presentWebMode,
-} from "./chat-vocabulary";
+} from "./chat-optional-vocabulary";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
 import { ThreadedDocumentsPanel } from "../../../features/threaded-surface/ThreadedDocumentsPanel";
 import { ThreadedContextConflictNotices } from "../../../features/threaded-surface/ThreadedContextConflictNotices";

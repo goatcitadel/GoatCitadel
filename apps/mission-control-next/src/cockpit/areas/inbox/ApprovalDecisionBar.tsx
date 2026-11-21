@@ -7,7 +7,7 @@ import { specialistApprovalCode } from "./load-specialist-approval-code";
 import { useDeferredApprovalCode } from "./use-deferred-approval-code";
 import { connectorSetupHref } from "../../app/routes";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffectEvent, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { scopeDiffers } from "./installation-settings-approval";
 import {
@@ -27,6 +27,7 @@ import { Button } from "../../ui/Button";
 import { hasExpired, useMinuteClock } from "./use-minute-clock";
 import { approvalReviewRecord, CHANGED_APPROVAL_RECORD, canResolveInboxApproval } from "./inbox-approval-guard";
 import { ApprovalDecisionPreview, ApprovalDecisionHelp } from "./ApprovalDecisionPreview";
+import { ApprovalDecisionStatus } from "./ApprovalDecisionStatus";
 import { ApprovalReviewSummaryContent } from "./ApprovalReviewSummaryContent";
 import { useApprovalReviewEvidence } from "./use-approval-review-evidence";
 import { splitApprovalExplanation } from "./approval-preview";
@@ -83,6 +84,8 @@ interface ApprovalDecisionBarProps {
   installationSetting?: boolean;
   /** Lets the conversation card open its ordinary danger review without an overlay. */
   inlineDangerReview?: boolean;
+  /** A matching Chat control requested the details or denial before the decision code was loaded. */
+  deferredIntent?: { action: "review" | "deny"; claim: () => boolean };
   /** The conversation refreshed an MCP action after a stale decision. */
   reviewAgain?: boolean;
   /** Wording for the one-click approve button, when the action has its own ("Run it"). */
@@ -159,6 +162,7 @@ function ApprovalDecisionReview({
   reviewedInPlace = false,
   installationSetting = false,
   inlineDangerReview = false,
+  deferredIntent,
   reviewAgain = false,
   approveLabel,
   approveDanger = false,
@@ -324,6 +328,10 @@ function ApprovalDecisionReview({
     }
   }
 
+  const deliverDeferredDecision = useEffectEvent((intent: typeof deferredIntent) => {
+    if (intent?.action === "deny" && intent.claim()) void decide("reject");
+  });
+  useLayoutEffect(() => deliverDeferredDecision(deferredIntent), [deferredIntent]);
   const allowance = useChatAllowanceControls(
     offerTemporaryGrant,
     Boolean(attempt),
@@ -427,6 +435,7 @@ function ApprovalDecisionReview({
               pending={Boolean(attempt) || (specializedReview && !specialistReady)}
               reviewedInPlace={reviewedInPlace}
               inlineDangerReview={reviewInCard}
+              initiallyOpen={deferredIntent?.action === "review"}
               reviewLabel={reviewAgain ? "Review again" : undefined}
               approveLabel={approveLabel}
               approveDanger={approveDanger}
@@ -440,21 +449,13 @@ function ApprovalDecisionReview({
         {allowance.trigger}
       </div>
       {allowance.panel}
-      {attempt || notice ? (
-        <p role={attempt?.phase === "uncertain" ? "alert" : "status"} className="text-fg-muted">
-          {attempt?.message ?? notice}
-        </p>
-      ) : null}
-      {attempt?.phase === "uncertain" ? (
-        <Button type="button" size="sm" disabled={rechecking} onClick={() => void checkAgain()}>
-          Check again
-        </Button>
-      ) : null}
-      {error && !(reviewAgain && error === CHANGED_APPROVAL_RECORD) ? (
-        <p role="alert" className="text-status-failed">
-          {error}
-        </p>
-      ) : null}
+      <ApprovalDecisionStatus
+        message={attempt?.message ?? notice}
+        uncertain={attempt?.phase === "uncertain"}
+        error={reviewAgain && error === CHANGED_APPROVAL_RECORD ? undefined : error}
+        rechecking={rechecking}
+        checkAgain={checkAgain}
+      />
       {compact ? null : <ApprovalDecisionHelp />}
     </div>
   );

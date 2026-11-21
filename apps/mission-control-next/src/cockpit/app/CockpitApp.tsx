@@ -12,7 +12,7 @@ import { createCockpitQueryClient } from "../data/query-client";
 import { useCockpitRealtime } from "../data/realtime";
 import { GeneratedArtifactActionsContext } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactActionsContext";
 import { AreaErrorBoundary } from "../ui/AreaErrorBoundary";
-import { renderCockpitArtifactActions } from "../ui/ArtifactRenderActions";
+import { renderCockpitArtifactActions } from "../ui/artifact-actions-slot";
 import { CockpitToaster } from "../ui/Toaster";
 import { CockpitAccessGate } from "./CockpitAccessGate";
 import { applyCockpitAppearance } from "./cockpit-appearance";

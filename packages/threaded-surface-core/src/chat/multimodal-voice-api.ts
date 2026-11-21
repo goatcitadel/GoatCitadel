@@ -1,4 +1,1 @@
-export {
-  startVoiceTalkSession,
-  stopVoiceTalkSession,
-} from "@goatcitadel/mission-control-shared/api/client";
+export { startVoiceTalkSession, stopVoiceTalkSession } from "@goatcitadel/mission-control-shared/api/voice";

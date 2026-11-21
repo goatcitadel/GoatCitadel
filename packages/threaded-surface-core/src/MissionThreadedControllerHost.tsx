@@ -23,7 +23,6 @@ import { useChatStreamPreferences } from "./chat/controller/useChatStreamPrefere
 import { useChatSubmissionComposition } from "./chat/controller/useChatSubmissionComposition";
 import { useChatSurfaceComposition } from "./chat/controller/useChatSurfaceComposition";
 import { useChatSurfaceNavigation } from "./chat/controller/useChatSurfaceNavigation";
-import { createThreadedWorkflowPanel } from "./chat/create-threaded-workflow-panel";
 import { useChatChangePlanState } from "./chat/useChatChangePlanState";
 import type { MissionThreadedControllerHostProps } from "./MissionThreadedControllerHost.types";
 export {
@@ -36,7 +35,7 @@ import type {
   ChatGeneratedArtifactRecord,
   ThreadKnowledgeRetrievalMode,
 } from "@goatcitadel/contracts";
-import { useCallback, useDeferredValue, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { type AgenticRunTreeResponse } from "@goatcitadel/mission-control-shared/api/agentic";
 
@@ -582,38 +581,63 @@ export function MissionThreadedControllerHost({
     onOpenStartHere,
   };
 
-  const workflowPanel = createThreadedWorkflowPanel({
-    workspaceId,
-    selectedSession: session.threadController.selectedSession,
-    isCoworkSurface: surfaceRuntime.surfaceState.isCoworkSurface,
-    isCodeSurface: surfaceRuntime.surfaceState.isCodeSurface,
-    isChatSurface: surfaceRuntime.surfaceState.isChatSurface,
-    coworkViewModel: surfaceRuntime.runPresentation.coworkViewModel,
-    blockHistoricalMutation: blockHistoricalMutation,
-    handleRetryTurn: submission.orchestration.handleRetryTurn,
-    handleStopActiveTurn: submission.orchestration.handleStopActiveTurn,
-    onOpenTasks,
-    handleRevealActiveTurnDetails: composer.turnNavigation.handleRevealActiveTurnDetails,
-    composerRef: coordination.composerRef,
-    historicalModeActive: surfaceRuntime.historicalModeActive,
-    handleAgenticControl: surfaceRuntime.handleAgenticControl,
-    agenticControlPending,
-    agenticControlStatus,
-    selectedTurn: surfaceRuntime.surfaceState.selectedTurn,
-    selectedProject: session.threadController.selectedProject,
-    codeModeNeedsProjectBinding: surfaceRuntime.surfaceState.codeModeNeedsProjectBinding,
-    activeGeneratedArtifact,
-    handleCloseGeneratedArtifact: actions.artifactActions.handleCloseGeneratedArtifact,
-    activeCodeProjects: chatSessionRailPresentation.activeCodeProjects,
-    selectedProjectBindingCandidateId: surfaceRuntime.surfaceState.selectedProjectBindingCandidateId,
-    sessionControlPending: session.sessionControls.sessionControlPending,
-    handleAssignProject: session.sessionControls.handleAssignProject,
-    handleImportCodeProject: session.sessionControls.handleImportCodeProject,
-    pushLocalNotice: pushLocalNotice,
-    handleRunCodeHelper: actions.codeLaunch.handleRunCodeHelper,
-    onOpenApprovals,
-    workbenchController: surfaceRuntime.workbenchController,
-  });
+  const canOpenBuildEditor = Boolean(
+    session.threadController.selectedSession &&
+    (surfaceRuntime.surfaceState.isChatSurface || surfaceRuntime.surfaceState.isCodeSurface),
+  );
+  const loadWorkflowPanel = secondaryEvidenceEnabled === undefined || (workbenchRequested && canOpenBuildEditor);
+  const [workflowFactory, setWorkflowFactory] =
+    useState<typeof import("./chat/create-threaded-workflow-panel").createThreadedWorkflowPanel>();
+  const [buildEditorUnavailable, setBuildEditorUnavailable] = useState(false);
+  useEffect(() => {
+    if (!loadWorkflowPanel || workflowFactory) return;
+    let active = true;
+    setBuildEditorUnavailable(false);
+    void import("./chat/create-threaded-workflow-panel").then(
+      ({ createThreadedWorkflowPanel }) => {
+        if (active) setWorkflowFactory(() => createThreadedWorkflowPanel);
+      },
+      () => {
+        if (active) setBuildEditorUnavailable(true);
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [loadWorkflowPanel, workflowFactory]);
+  const workflowPanel =
+    workflowFactory?.({
+      workspaceId,
+      selectedSession: session.threadController.selectedSession,
+      isCoworkSurface: surfaceRuntime.surfaceState.isCoworkSurface,
+      isCodeSurface: surfaceRuntime.surfaceState.isCodeSurface,
+      isChatSurface: surfaceRuntime.surfaceState.isChatSurface,
+      coworkViewModel: surfaceRuntime.runPresentation.coworkViewModel,
+      blockHistoricalMutation: blockHistoricalMutation,
+      handleRetryTurn: submission.orchestration.handleRetryTurn,
+      handleStopActiveTurn: submission.orchestration.handleStopActiveTurn,
+      onOpenTasks,
+      handleRevealActiveTurnDetails: composer.turnNavigation.handleRevealActiveTurnDetails,
+      composerRef: coordination.composerRef,
+      historicalModeActive: surfaceRuntime.historicalModeActive,
+      handleAgenticControl: surfaceRuntime.handleAgenticControl,
+      agenticControlPending,
+      agenticControlStatus,
+      selectedTurn: surfaceRuntime.surfaceState.selectedTurn,
+      selectedProject: session.threadController.selectedProject,
+      codeModeNeedsProjectBinding: surfaceRuntime.surfaceState.codeModeNeedsProjectBinding,
+      activeGeneratedArtifact,
+      handleCloseGeneratedArtifact: actions.artifactActions.handleCloseGeneratedArtifact,
+      activeCodeProjects: chatSessionRailPresentation.activeCodeProjects,
+      selectedProjectBindingCandidateId: surfaceRuntime.surfaceState.selectedProjectBindingCandidateId,
+      sessionControlPending: session.sessionControls.sessionControlPending,
+      handleAssignProject: session.sessionControls.handleAssignProject,
+      handleImportCodeProject: session.sessionControls.handleImportCodeProject,
+      pushLocalNotice: pushLocalNotice,
+      handleRunCodeHelper: actions.codeLaunch.handleRunCodeHelper,
+      onOpenApprovals,
+      workbenchController: surfaceRuntime.workbenchController,
+    }) ?? null;
   const chatChangePlanReceipt = createChatChangePlanReceipt({
     thread: session.sessionData.thread,
     changePlanState,
@@ -627,6 +651,8 @@ export function MissionThreadedControllerHost({
     dockOpen: surfaceRuntime.workbenchController.dockOpen,
     onDockOpenChange: handleDockOpenChange,
     onWorkbenchOpenChange: setWorkbenchRequested,
+    canOpenBuildEditor,
+    buildEditorUnavailable,
     sessionRail: chatSessionRailPresentation.sessionRailData,
     activeSessionSurfaceProps: activePresentation.activeSessionSurfaceProps,
     emptyStateProps,
@@ -723,6 +749,8 @@ export function MissionThreadedControllerHost({
         onOpenApprovals={onOpenApprovals}
       />
       {surfaceRuntime.workbenchController.workbenchRuntime}
+      {composer.multimodalRuntime}
+      {session.timerPanel.runtime}
       {frame}
     </>
   );

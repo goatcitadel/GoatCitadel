@@ -321,6 +321,7 @@ export function ChatTranscript({
       turn={turn}
       position={position}
       isLatest={turn.turnId === latestTurn?.turnId}
+      inlineApprovalId={turn.turnId === latestTurn?.turnId ? props.pendingApproval?.approvalId : undefined}
       previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
       streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
       actions={turnActions}

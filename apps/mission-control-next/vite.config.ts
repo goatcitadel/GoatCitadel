@@ -376,8 +376,12 @@ export function createCockpitBootChunkSelector() {
     const normalizedId = id.replaceAll("\\", "/");
     // A pending generic approval must not preload kind-specific evidence or specialist renderers.
     const kindSpecificApprovalOwner =
-      /\/packages\/mission-control-shared\/(?:dist|src)\/content\/(?:approval-purpose-evidence|external-source-approval-evidence|communications-approval-evidence|skill-state-approval-evidence|code-mode-request-input)\.[jt]s$/u.test(normalizedId) ||
-      /\/apps\/mission-control-next\/src\/(?:cockpit\/areas\/inbox\/(?:SpecialistApprovalReview\.tsx|specialist-approval-evidence\.ts)|features\/native-routes\/ops\/native-runtime-approval-evidence\.ts)$/u.test(normalizedId);
+      /\/packages\/mission-control-shared\/(?:dist|src)\/content\/(?:approval-purpose-evidence|external-source-approval-evidence|communications-approval-evidence|skill-state-approval-evidence|code-mode-request-input)\.[jt]s$/u.test(
+        normalizedId,
+      ) ||
+      /\/apps\/mission-control-next\/src\/(?:cockpit\/areas\/inbox\/(?:SpecialistApprovalReview\.tsx|specialist-approval-evidence\.ts)|features\/native-routes\/ops\/native-runtime-approval-evidence\.ts)$/u.test(
+        normalizedId,
+      );
     // Cache both success and failure before existing automatic placement rules.
     if (graph && coldRuntimeVendors === undefined) coldRuntimeVendors = findColdCockpitRuntimeVendors(graph);
     // Exact optional overlay owners stay automatic even when a discarded umbrella
@@ -554,6 +558,14 @@ export function createCockpitBootChunkSelector() {
         !namedBootBindings?.has(id)
       )
         return undefined;
+      if (
+        /\/packages\/contracts\/(?:dist|src)\/(?:external-source-chat|external-source-validation|google-workspace-actions|provider-templates|tool-groups)\.[jt]s$/u.test(
+          normalizedId,
+        ) &&
+        graph.getModuleInfo(id)?.ast &&
+        !namedBootBindings?.has(id)
+      )
+        return undefined;
       if (lazyOnlyIcons?.has(id)) return undefined;
       if (bootModules.has(id)) {
         const normalized = id.replaceAll("\\", "/");
@@ -616,12 +628,7 @@ export default defineConfig(({ mode, command }) => {
     },
     // Managed ownership is a per-process launch identity. Do not let a repo
     // .env file replace the environment injected into this Vite process.
-    plugins: [
-      managedUiHealthPlugin(process.env),
-      monacoAmdAssetsPlugin(configDir),
-      tailwindcss(),
-      react(),
-    ],
+    plugins: [managedUiHealthPlugin(process.env), monacoAmdAssetsPlugin(configDir), tailwindcss(), react()],
     resolve: {
       dedupe: ["react", "react-dom"],
       alias: [
@@ -646,6 +653,14 @@ export default defineConfig(({ mode, command }) => {
     },
     build: {
       target: ["chrome120", "edge120", "firefox120", "safari17"],
+      modulePreload: {
+        resolveDependencies: (_chunk, dependencies, { hostId, hostType }) =>
+          // The Cockpit entry and its static runtime are already evaluating when a deferred entry runs.
+          // Keep Vite's preloads for the actual deferred code and its other dependencies.
+          hostType === "js" && /^assets\/cockpit-entry-[^/]+\.js$/.test(hostId)
+            ? dependencies.filter((dependency) => !/^assets\/cockpit-(?:entry|runtime)-[^/]+\.js$/.test(dependency))
+            : dependencies,
+      },
       minify: "terser",
       terserOptions: {
         maxWorkers: 2,

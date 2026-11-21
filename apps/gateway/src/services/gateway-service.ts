@@ -608,7 +608,7 @@ import { RealtimeEventService } from "./realtime-event-service.js";
 import { BackupRetentionService } from "./backup-retention-service.js";
 import * as settingsAuthService from "./settings-auth-service.js";
 import { ConfigGenerationService, type CompleteUnifiedConfigPayload } from "./config-generation-service.js";
-import { CronConfigGenerationOwner, projectCanonicalCronSpec } from "./cron-config-generation-owner.js";
+import { CronConfigGenerationOwner, projectStoredCronSpecs } from "./cron-config-generation-owner.js";
 import {
   assertProviderSecretEffectsRestored,
   reconcileProviderSecretEffects,
@@ -13039,7 +13039,7 @@ export class GatewayService {
     features: RuntimeSettings["features"],
   ): Promise<CompleteUnifiedConfigPayload> {
     const cronJobs = {
-      jobs: (await this.storage.cronJobs.list()).map(projectCanonicalCronSpec),
+      jobs: projectStoredCronSpecs(await this.storage.cronJobs.list()),
     };
     return this.buildUnifiedConfigPayloadFromRuntime(runtimeConfig, llmConfig, features, cronJobs);
   }
@@ -13048,7 +13048,7 @@ export class GatewayService {
     runtimeConfig: GatewayRuntimeConfig,
     llmConfig: ReturnType<LlmService["exportConfigFile"]>,
     features: RuntimeSettings["features"],
-    cronJobs: { jobs: ReturnType<typeof projectCanonicalCronSpec>[] },
+    cronJobs: { jobs: ReturnType<typeof projectStoredCronSpecs> },
   ): CompleteUnifiedConfigPayload {
     return buildUnifiedConfigPayloadFromRuntime(runtimeConfig, llmConfig, features, cronJobs, (fullPath) =>
       this.serializeRootPath(fullPath),
