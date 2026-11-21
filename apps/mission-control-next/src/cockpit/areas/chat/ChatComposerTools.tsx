@@ -241,6 +241,20 @@ export function ChatComposerTools({
  * The phone row beside the draft: one Options button and icon send/stop buttons. Each keeps the accessible name of
  * the wider layout's text button, so "Send" is still the Send button.
  */
+export function ChatComposerEditNotice({ onCancel }: { onCancel: ComposerProps["onCancelEdit"] }) {
+  return (
+    <div
+      role="status"
+      className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-sunken px-3 py-2 text-xs text-fg-secondary"
+    >
+      <span>Editing a new version of this message.</span>
+      <button type="button" onClick={onCancel} className="font-medium text-accent hover:underline">
+        Cancel edit
+      </button>
+    </div>
+  );
+}
+
 export function ChatComposerPhoneActions({
   props,
   canSubmit,

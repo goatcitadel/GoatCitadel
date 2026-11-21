@@ -31,5 +31,6 @@
     <Compile Include="..\Services\DesktopStableReleaseVerifier.cs" Link="Services\DesktopStableReleaseVerifier.cs" />
     <Compile Include="..\Services\DesktopStartupCopy.cs" Link="Services\DesktopStartupCopy.cs" />
     <Compile Include="..\Services\DesktopStartupDiagnostics.cs" Link="Services\DesktopStartupDiagnostics.cs" />
+    <Compile Include="..\Services\StartupDraftHandoff.cs" Link="Services\StartupDraftHandoff.cs" />
   </ItemGroup>
 </Project>

@@ -46,10 +46,13 @@ public sealed partial class MainWindow : Window
     private bool _trayAvailable;
     private bool _webViewReady;
     private bool _webViewNavigationSucceeded;
+    private global::Windows.Foundation.TypedEventHandler<Microsoft.Web.WebView2.Core.CoreWebView2,
+        Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs>? _webMessageReceived;
 
     public MainWindow()
     {
         InitializeComponent();
+        InitializeStartupDraft();
 
         _launcherService = new LauncherService();
         _profileInstallRoot = ResolveProfileInstallRoot();
@@ -209,7 +212,11 @@ public sealed partial class MainWindow : Window
             if (_cleanedUp) return;
             _webViewDataFolder = userDataFolder;
             _startupDiagnostics?.RecordPhase("webview-initialized", browserVersion: environment.BrowserVersionString);
-            view.CoreWebView2.WebMessageReceived += MissionWebView_WebMessageReceived;
+            _webMessageReceived = (sender, args) =>
+            {
+                if (ReferenceEquals(view, MissionWebView)) MissionWebView_WebMessageReceived(sender, args);
+            };
+            view.CoreWebView2.WebMessageReceived += _webMessageReceived;
             view.CoreWebView2.NavigationStarting += (_, args) =>
             {
                 if (!ReferenceEquals(view, MissionWebView)) { args.Cancel = true; return; }
@@ -220,6 +227,7 @@ public sealed partial class MainWindow : Window
                     args.Cancel = true;
                     ShowToast(error);
                 }
+                else ResetStartupDraftDestination();
             };
             view.CoreWebView2.NavigationCompleted += (_, args) =>
             {
@@ -275,6 +283,7 @@ public sealed partial class MainWindow : Window
             }
             using var document = JsonDocument.Parse(args.WebMessageAsJson);
             var root = document.RootElement;
+            if (TryHandleStartupDraft(sender, args.Source, root)) return;
             if (root.ValueKind != JsonValueKind.Object
                 || !root.TryGetProperty("type", out var type)
                 || type.GetString() != "goatcitadel.evolution.pick_source"

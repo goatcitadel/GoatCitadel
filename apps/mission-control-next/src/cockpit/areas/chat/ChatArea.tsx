@@ -3,8 +3,10 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { useQuery } from "@tanstack/react-query";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { fetchOnboardingState } from "@goatcitadel/mission-control-shared/api/client";
-import { MissionThreadedControllerHost } from "@goatcitadel/threaded-surface-core";
-import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
+import {
+  MissionThreadedControllerHost,
+  type MissionThreadedRenderSurfaceInput,
+} from "@goatcitadel/threaded-surface-core";
 import { ChatConversationRail } from "./ChatConversationRail";
 import { unsentConversationId } from "./conversation-reuse";
 import { ChatSessionHeader } from "./ChatAreaChrome";
@@ -13,13 +15,14 @@ import { ChatTranscript } from "./ChatTranscript";
 import { ChatNoticeText } from "./ChatNoticeText";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatTextComposer } from "./ChatTextComposer";
+import { startupDraftFor } from "./NativeStartupDraftGate";
 import { ChatManagedFilesSlot, useChatApprovalModeIntent } from "./chat-managed-files-surface";
 import { artifactInspectorHistoryMatches, buildEditorTurnId, inspectorTabFor } from "./chat-area-inspector-target";
 import { chatSelectionHref } from "./chat-selection-evidence";
 import type { ChatInspectorTab } from "./chat-inspector-evidence";
 import { readCockpitHistory } from "../../app/cockpit-history";
 import { useInspector } from "../../app/inspector";
-import { InspectorSourceContext, type InspectorContent } from "../../app/inspector-context";
+import { InspectorSourceContext } from "../../app/inspector-context";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { channelPageHref, messagingView } from "../../app/routes";
 import { ChatMainColumn } from "./ChatMainColumn";
@@ -33,27 +36,13 @@ import {
   DeferredChatEmpty,
   DeferredChatSetup,
   DeferredBtwSideChatPanel,
-  DeferredChatInspector,
   DeferredChatTimerPanel,
   DeferredProjectAssignmentReview,
   DeferredSessionStatusPanel,
+  conversationInspector,
 } from "./DeferredChatLeaves";
 import "../../../features/threaded-surface/styles/btw-side-chat.css";
 import { useOptionalStableHandler, useStableHandler } from "../../../features/threaded-surface/useStableHandler";
-
-function conversationInspector(
-  input: MissionThreadedRenderSurfaceInput,
-  targetTurnId: string | null,
-  tab: ChatInspectorTab | null,
-  onOpenArtifact: (turnId: string, artifactId?: string) => void,
-): InspectorContent {
-  const initialTab = tab ?? inspectorTabFor(input.activeSessionSurfaceProps, targetTurnId);
-  return {
-    source: "chat",
-    title: "Conversation",
-    body: <DeferredChatInspector {...{ input, targetTurnId, initialTab, onOpenArtifact }} />,
-  };
-}
 
 export { artifactInspectorHistoryMatches, buildEditorTurnId, inspectorTabFor } from "./chat-area-inspector-target";
 
@@ -399,6 +388,7 @@ export function ChatAreaView({
           <ChatTextComposer
             props={composerProps}
             gatewayUnavailable={gatewayUnavailable}
+            startupDraftContext={startupDraftFor(active, activeWorkspaceId, selectedSessionId, session?.sessionId)}
             reasoningEfforts={input.contextDockProps?.selectedModelReasoningEfforts}
             onOpenSchedules={() => navigate("/work/schedules")}
           />

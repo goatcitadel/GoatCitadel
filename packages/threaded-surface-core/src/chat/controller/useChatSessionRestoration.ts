@@ -10,7 +10,7 @@ import {
   type ChatSessionCreation,
 } from "@goatcitadel/mission-control-shared/state/chat-session-creation";
 import { setDevDiagnosticsLatestTraceSummary } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
 import {
   mergeHydratedOutboundQueue,
@@ -122,6 +122,7 @@ export function useChatSessionRestoration({
   const { setQueuedOutbound } = orchestration;
   const { sessionMetadataConflictDraftRef, setFolderName, setTagsValue } = metadataDraft;
   const draftStorageKey = createDraftStorageKey(workspaceId, selection.selectedSessionId);
+  const [hydratedDraftKey, setHydratedDraftKey] = useState<string | null>(null);
   const attachmentStorageKey = createAttachmentStorageKey(workspaceId, selection.selectedSessionId);
   const queueStorageKey = createQueueStorageKey(workspaceId, selection.selectedSessionId);
   // Which owner (caller, workspace, conversation) the draft was last hydrated for, and the draft as it was when
@@ -271,9 +272,10 @@ export function useChatSessionRestoration({
     };
     try {
       const draftRaw = gatewayLocalStorage().getItem(draftStorageKey);
-      hydrateDraft(
-        draftRaw && isWithinStorageBudget(draftRaw) && draftRaw.length <= MAX_HYDRATED_MESSAGE_CHARS ? draftRaw : null,
-      );
+      const usableDraft =
+        !draftRaw || (isWithinStorageBudget(draftRaw) && draftRaw.length <= MAX_HYDRATED_MESSAGE_CHARS);
+      hydrateDraft(usableDraft ? draftRaw : null);
+      setHydratedDraftKey(usableDraft ? draftStorageKey : null);
       // The same key again never replaces attachments added since with the stored copy.
       if (hydratedAttachmentKey !== attachmentStorageKey) {
         const attachmentsRaw = gatewayLocalStorage().getItem(attachmentStorageKey);
@@ -435,5 +437,5 @@ export function useChatSessionRestoration({
     setTagsValue,
   ]);
 
-  return {};
+  return { draftHydrated: hydratedDraftKey === draftStorageKey };
 }

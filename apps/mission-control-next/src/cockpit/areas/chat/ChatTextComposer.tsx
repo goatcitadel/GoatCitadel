@@ -5,6 +5,7 @@ import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent 
 import { Button } from "../../ui/Button";
 import { warmControlWave } from "../../ui/use-control-wave";
 import {
+  ChatComposerEditNotice,
   ChatComposerPhoneActions,
   ChatComposerTools,
   composerControlsProps,
@@ -19,6 +20,8 @@ import { composerSubmitLabel } from "./composer-submit-label";
 import { ChatRunVariables } from "./ChatRunVariables";
 import { committedCommandDraft, composerSendBlock, type ComposerSendBlock } from "./composer-send-block";
 import { isImeEnter } from "./ime";
+import type { StartupDraftContext } from "./startup-draft-bridge";
+import { NativeStartupDraftGate } from "./NativeStartupDraftGate";
 import { useProjectSwitchReview } from "../../../features/threaded-surface/useProjectSwitchReview";
 import { useChatSelectionReview } from "./use-chat-owner-navigation";
 import { DeferredSessionControlBanner } from "./DeferredChatLeaves";
@@ -64,11 +67,13 @@ export function ChatTextComposer({
   onOpenSchedules,
   gatewayUnavailable = false,
   reasoningEfforts,
+  startupDraftContext,
 }: {
   props: ComposerProps;
   onOpenSchedules?: () => void;
   gatewayUnavailable?: boolean;
   reasoningEfforts?: ChatCompletionReasoningEffort[];
+  startupDraftContext?: StartupDraftContext;
 }) {
   const capture = getWorkflowSkillCaptureDisplay(props.draft);
   useAutoGrowTextarea(props.composerRef, props.draft, { minLines: 2, maxLines: 8 });
@@ -157,6 +162,11 @@ export function ChatTextComposer({
       role="status"
       className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-secondary${reasonBesideSend ? " ml-auto justify-end text-right" : ""}`}
     >
+      <NativeStartupDraftGate
+        destination={startupDraftContext}
+        allowed={!gatewayUnavailable && !channelConversation && !composing && !props.editingTurnId && !props.sending}
+        composer={props}
+      />
       <p className="min-w-0">{visibleReason.message}</p>
       {visibleReason.kind === "historical" && props.onReturnToLatest ? (
         <Button size="sm" onClick={props.onReturnToLatest}>
@@ -220,17 +230,7 @@ export function ChatTextComposer({
     >
       {props.sessionControlBanner ? <DeferredSessionControlBanner {...props.sessionControlBanner} /> : null}
       <div className="mx-auto max-w-3xl">
-        {props.editingTurnId ? (
-          <div
-            role="status"
-            className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-sunken px-3 py-2 text-xs text-fg-secondary"
-          >
-            <span>Editing a new version of this message.</span>
-            <button type="button" onClick={props.onCancelEdit} className="font-medium text-accent hover:underline">
-              Cancel edit
-            </button>
-          </div>
-        ) : null}
+        {props.editingTurnId ? <ChatComposerEditNotice onCancel={props.onCancelEdit} /> : null}
         <ChatLegacyInputNotice
           workspaceId={props.projectSwitchContext?.workspaceId}
           sessionId={props.selectedSessionId}

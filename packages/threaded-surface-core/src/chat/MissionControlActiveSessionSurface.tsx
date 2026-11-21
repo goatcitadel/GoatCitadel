@@ -252,6 +252,8 @@ export interface MissionControlActiveSessionSurfaceProps {
   planningMode: "off" | "advisory";
   effectiveToolAutonomy?: string;
   draft: string;
+  /** The selected conversation's browser draft has been restored. */
+  draftHydrated?: boolean;
   commandSuggestions: CommandSuggestionItem[];
   commandIndex: number;
   composerPalette?: {

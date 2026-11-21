@@ -329,7 +329,7 @@ export function MissionThreadedControllerHost({
     setSelectedTurnId,
     setLocalNotices,
   });
-  useChatSessionRestoration({
+  const { draftHydrated } = useChatSessionRestoration({
     initialOutboundSessionCreationRef: coordination.initialOutboundSessionCreationRef,
     workspaceId,
     selection,
@@ -654,7 +654,9 @@ export function MissionThreadedControllerHost({
     canOpenBuildEditor,
     buildEditorUnavailable,
     sessionRail: chatSessionRailPresentation.sessionRailData,
-    activeSessionSurfaceProps: activePresentation.activeSessionSurfaceProps,
+    activeSessionSurfaceProps: activePresentation.activeSessionSurfaceProps
+      ? { ...activePresentation.activeSessionSurfaceProps, draftHydrated }
+      : activePresentation.activeSessionSurfaceProps,
     emptyStateProps,
     ...createChatDropTargetProps({
       isDragActive,

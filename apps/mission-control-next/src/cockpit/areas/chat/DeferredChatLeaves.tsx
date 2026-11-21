@@ -8,6 +8,8 @@ import {
 import type { ChatTimerPanel } from "../../../features/threaded-surface/ChatTimerPanel";
 import type { SessionControlBanner } from "../../../features/threaded-surface/SessionControlBanner";
 import { AreaErrorBoundary } from "../../ui/AreaErrorBoundary";
+import type { InspectorContent } from "../../app/inspector-context";
+import { inspectorTabFor } from "./chat-area-inspector-target";
 
 const BtwPanel = lazy(async () => ({
   default: (await import("../../../features/threaded-surface/ThreadedBtwSideChatPanel")).ThreadedBtwSideChatPanel,
@@ -71,6 +73,20 @@ export function DeferredChatInspector(props: ComponentProps<typeof ChatInspector
       <ChatInspector {...props} />
     </DeferredChatLeaf>
   );
+}
+
+export function conversationInspector(
+  input: ComponentProps<typeof ChatInspector>["input"],
+  targetTurnId: string | null,
+  tab: ComponentProps<typeof ChatInspector>["initialTab"] | null,
+  onOpenArtifact: ComponentProps<typeof ChatInspector>["onOpenArtifact"],
+): InspectorContent {
+  const initialTab = tab ?? inspectorTabFor(input.activeSessionSurfaceProps, targetTurnId);
+  return {
+    source: "chat",
+    title: "Conversation",
+    body: <DeferredChatInspector {...{ input, targetTurnId, initialTab, onOpenArtifact }} />,
+  };
 }
 
 export function DeferredProjectAssignmentReview({
