@@ -265,6 +265,49 @@ const buttonIn = (scope: ParentNode, label: string) =>
   );
 
 describe("cockpit text composer", () => {
+  it("accepts a native startup draft when Chat is ready and the composer has no send warning", async () => {
+    const postMessage = vi.fn<(message: Record<string, unknown>) => void>();
+    const webview = Object.assign(new EventTarget(), { postMessage });
+    vi.stubGlobal("chrome", { webview });
+    const props = composerProps({ draft: "" });
+    function ReadyComposer() {
+      const [draft, onDraftChange] = useState("");
+      return (
+        <ChatTextComposer
+          props={{ ...props, draft, onDraftChange }}
+          startupDraftContext={{ key: "ready-chat", label: "New conversation", newChat: true }}
+        />
+      );
+    }
+    try {
+      await act(async () => root.render(<ReadyComposer />));
+      expect(container.querySelector("#cockpit-chat-send-reason")).toBeNull();
+      const offer = "4565d705-636c-44f8-81ba-1f7b95b100d7";
+      await vi.waitFor(() => expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ action: "ready" })));
+      const ready = postMessage.mock.calls.find(([message]) => message.action === "ready")?.[0];
+      await act(async () => {
+        webview.dispatchEvent(
+          new MessageEvent("message", {
+            data: {
+              ...ready,
+              action: "offer",
+              origin: window.location.origin,
+              offer,
+              text: "draft typed before Chat was ready",
+              append: false,
+              focus: true,
+            },
+          }),
+        );
+      });
+      expect(container.querySelector("textarea")?.value).toBe("draft typed before Chat was ready");
+      expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ action: "ack", outcome: "applied", offer }));
+      expect(props.onSend).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("sends a plain reply through the existing controller callback", async () => {
     const props = composerProps();
     await act(async () => root.render(<ChatTextComposer props={props} />));

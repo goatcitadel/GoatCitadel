@@ -162,11 +162,6 @@ export function ChatTextComposer({
       role="status"
       className={`flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-fg-secondary${reasonBesideSend ? " ml-auto justify-end text-right" : ""}`}
     >
-      <NativeStartupDraftGate
-        destination={startupDraftContext}
-        allowed={!gatewayUnavailable && !channelConversation && !composing && !props.editingTurnId && !props.sending}
-        composer={props}
-      />
       <p className="min-w-0">{visibleReason.message}</p>
       {visibleReason.kind === "historical" && props.onReturnToLatest ? (
         <Button size="sm" onClick={props.onReturnToLatest}>
@@ -228,6 +223,11 @@ export function ChatTextComposer({
       onDrop={props.onDrop}
       className={`border-t bg-raised p-3 max-sm:px-2 max-sm:py-2 ${props.isDragActive ? "border-accent" : "border-line-subtle"}`}
     >
+      <NativeStartupDraftGate
+        destination={startupDraftContext}
+        allowed={!gatewayUnavailable && !channelConversation && !composing && !props.editingTurnId && !props.sending}
+        composer={props}
+      />
       {props.sessionControlBanner ? <DeferredSessionControlBanner {...props.sessionControlBanner} /> : null}
       <div className="mx-auto max-w-3xl">
         {props.editingTurnId ? <ChatComposerEditNotice onCancel={props.onCancelEdit} /> : null}
