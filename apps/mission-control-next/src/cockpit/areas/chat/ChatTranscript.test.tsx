@@ -987,6 +987,7 @@ describe("ChatTranscript", () => {
     );
     const note = container.querySelector('[aria-label="Latest conversation update"]');
     expect(note?.textContent).toContain("Command completed");
+    await act(async () => vi.dynamicImportSettled());
     const items = [...(note?.querySelectorAll("ul > li") ?? [])];
     expect(items.map((item) => item.querySelector("code")?.textContent)).toEqual([
       "/new [title]",
@@ -1018,8 +1019,9 @@ describe("ChatTranscript", () => {
     );
     const note = container.querySelector('[aria-label="Latest conversation update"]');
     expect(note?.querySelector("ul")).toBeNull();
-    expect(note?.querySelectorAll("br")).toHaveLength(1);
-    expect(note?.textContent).toContain("Sources: 3");
+    expect(note?.querySelector(".whitespace-pre-line")?.textContent).toBe(
+      "Command completed: Research finished.\nSources: 3",
+    );
   });
 
   it("shows only the selected branch and opens recorded turn details", async () => {
