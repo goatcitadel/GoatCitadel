@@ -1988,7 +1988,7 @@
           "name": "indexed_memory_corpus",
           "groupName": "canonical",
           "definitionSha256": "12b5e2fb543b5eeb5d3b501d1a297c1b8e9a6704a6607a0b8b27a8b172b894e4",
-          "implementationSha256": "bcdbb938144bbff45c5093250be7c0872a3d0ac9100377645b49e1d6f93ea724"
+          "implementationSha256": "c89741f384ed568d48e9ea38fbe66e231e3bd3d9299fb4eaf753cd444c352e65"
         },
         {
           "version": 284,
@@ -2002,14 +2002,14 @@
           "name": "improvement_watch_evidence",
           "groupName": "canonical",
           "definitionSha256": "5d6210db513712569dd2c441babc3cfa72d83a1aff2b745a745f12509903fb6b",
-          "implementationSha256": "4ed1fa23bc2b002a396a67e3be785f1af95bde2abca0845e85cb13f57db1b4e3"
+          "implementationSha256": "4a0ee37d9c5a0510db228b59d6fb4ce1da7d80b2bf818d2f230f115362ae5d71"
         },
         {
           "version": 286,
           "name": "prompt_pack_pre_work_watch_bindings",
           "groupName": "canonical",
           "definitionSha256": "e5171cd35e8a4887911e53ac2f4d5ff266c43bfc2cc65bb83edb50daec981f80",
-          "implementationSha256": "96caf1b275d82d7873b9edfe3a2ba9df6a30ec72d18956bf7013b1cb7123fbd3"
+          "implementationSha256": "89042f5e17710213e94a740bce5d969d4790e0fd62e1b348f640851bcef36d50"
         },
         {
           "version": 287,
