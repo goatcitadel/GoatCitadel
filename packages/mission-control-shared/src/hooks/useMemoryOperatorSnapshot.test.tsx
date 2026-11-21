@@ -311,8 +311,9 @@ describe("useMemoryOperatorSnapshot", () => {
     apiMocks.fetchTraceMemoryCandidates.mockResolvedValue({
       items: [
         {
-          id: "candidate-1",
+          candidateId: "candidate-1",
           workspaceId: "default",
+          reviewHash: "a".repeat(64),
           status: "proposed",
           sourceKind: "session",
           sourceRef: "session-1",
@@ -508,14 +509,20 @@ describe("useMemoryOperatorSnapshot", () => {
     await act(async () => {
       await latest?.resolveTraceMemoryCandidate("candidate-1", "promote");
     });
-    expect(apiMocks.promoteTraceMemoryCandidate).toHaveBeenCalledWith("candidate-1");
+    expect(apiMocks.promoteTraceMemoryCandidate).toHaveBeenCalledWith("candidate-1", {
+      workspaceId: "default",
+      expectedReviewHash: "a".repeat(64),
+    });
     expect(apiMocks.rejectTraceMemoryCandidate).not.toHaveBeenCalled();
     expect(latest?.notice).toEqual({ tone: "success", message: "Trace candidate promoted by operator." });
 
     await act(async () => {
       await latest?.resolveTraceMemoryCandidate("candidate-1", "reject");
     });
-    expect(apiMocks.rejectTraceMemoryCandidate).toHaveBeenCalledWith("candidate-1");
+    expect(apiMocks.rejectTraceMemoryCandidate).toHaveBeenCalledWith("candidate-1", {
+      workspaceId: "default",
+      expectedReviewHash: "a".repeat(64),
+    });
     expect(latest?.notice).toEqual({ tone: "success", message: "Trace candidate rejected." });
   });
 

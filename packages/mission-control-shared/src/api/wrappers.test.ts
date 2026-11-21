@@ -408,14 +408,17 @@ describe("shared API wrappers", () => {
       "/api/v1/memory/trace-candidates",
       { method: "POST", body: JSON.stringify({ proposedInsight: "Review this." }) },
     );
+    const review = { workspaceId: "workspace 1", expectedReviewHash: "b".repeat(64) };
     await expectCall(
-      memory.promoteTraceMemoryCandidate("trace/1"),
+      memory.promoteTraceMemoryCandidate("trace/1", review),
       "/api/v1/memory/trace-candidates/trace%2F1/promote",
-      { method: "POST" },
+      { method: "POST", body: JSON.stringify(review) },
     );
-    await expectCall(memory.rejectTraceMemoryCandidate("trace/1"), "/api/v1/memory/trace-candidates/trace%2F1/reject", {
-      method: "POST",
-    });
+    await expectCall(
+      memory.rejectTraceMemoryCandidate("trace/1", review),
+      "/api/v1/memory/trace-candidates/trace%2F1/reject",
+      { method: "POST", body: JSON.stringify(review) },
+    );
     await expectCall(
       memory.forgetMemory({
         itemIds: ["memory-1"],
