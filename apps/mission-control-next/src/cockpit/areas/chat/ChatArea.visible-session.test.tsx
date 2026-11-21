@@ -93,7 +93,9 @@ describe("visible Chat session", () => {
     surface.sessionRail.loading = true;
     await act(async () => root.render(view(surface)));
     expect(container.querySelector('section[aria-label="Chat"]')).toBeTruthy();
-    expect(container.querySelector('[role="status"]')?.textContent).toBe("Loading conversations…");
+    const loading = container.querySelector('section[aria-label="Chat"] [aria-busy="true"]');
+    expect(loading?.textContent).toBe("Loading conversations…");
+    expect(loading?.closest('[role="status"], [aria-live]')).toBeNull();
     expect(container.textContent).not.toContain("Choose a conversation");
     expect(container.textContent).not.toContain("Conversation ready");
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="New conversation"]')?.disabled).toBe(true);
