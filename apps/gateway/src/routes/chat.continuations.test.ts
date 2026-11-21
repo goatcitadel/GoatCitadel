@@ -10,7 +10,7 @@ it("views are read only, renewals require exact hash and authenticated operator 
     request.authActorId = "fixture-operator";
   });
   app.decorate("services", {
-    chatSupport: { inspectChatContinuation: inspect, prepareChatContinuation: prepare },
+    chatAssistantSupport: { inspectChatContinuation: inspect, prepareChatContinuation: prepare },
   } as never);
   registerChatContinuationRoutes(app);
   const url = "/api/v1/chat/sessions/s/continuations",

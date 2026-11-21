@@ -49,6 +49,7 @@ import {
 } from "./tool-executor.js";
 import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 import { channelEnvSecretStandIn } from "./tool-executor/channel-env-secret.test-support.js";
+import { googleMailMaterial } from "./tool-executor/google-mail-compose.js";
 
 /** A send reads a connection's variable only through the hook the Gateway supplies, so every test gets a stand-in. */
 const executeTool: typeof executeToolWithHooks = (request, config, storage, runtimeHooks = {}) =>
@@ -2287,11 +2288,42 @@ describe("executeTool", () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "gmail-1" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const markFailed = vi.fn();
+    const beforeExternalSideEffect = vi.fn();
+    const args = {
+      connectionId: "conn-gmail",
+      to: ["operator@example.com"],
+      subject: "Grant check",
+      bodyText: "This should not leave through Gmail.",
+    };
+    const mime = Buffer.from(
+      [
+        `To: ${args.to[0]}`,
+        `Subject: ${args.subject}`,
+        "MIME-Version: 1.0",
+        "Content-Type: text/plain; charset=UTF-8",
+        "",
+        args.bodyText,
+        "",
+      ].join("\r\n"),
+    );
+    // Exercise the provider boundary with the MIME the Gateway's review hook would already have frozen.
+    const resolveGoogleWorkspacePreparedMail = vi.fn(async () => ({
+      toolName: "gmail.send",
+      raw: mime.toString("base64url"),
+      sha256: createHash("sha256").update(mime).digest("hex"),
+      materialHash: googleMailMaterial(args),
+    }));
+    const resolveGoogleWorkspaceAccessToken = vi.fn(async () => "google-token");
     const commsStorage = {
       integrationConnections: {
         get: vi.fn(() => ({
           connectionId: "conn-gmail",
           key: "gmail",
+          catalogId: "automation.gmail",
+          kind: "automation",
+          status: "connected",
+          enabled: true,
+          workspaceId: "workspace-gmail",
           config: {},
         })),
       },
@@ -2312,14 +2344,11 @@ describe("executeTool", () => {
     const result = await executeTool(
       {
         toolName: "gmail.send",
-        args: {
-          connectionId: "conn-gmail",
-          to: ["operator@example.com"],
-          subject: "Grant check",
-          bodyText: "This should not leave through Gmail.",
-        },
+        args,
         agentId: "operator",
         sessionId: "sess-gmail-grant",
+        workspaceId: "workspace-gmail",
+        googleReadSignInId: "bound-sign-in",
         policyContext: {
           matchedGrantAllowedHosts: ["approved.example"],
         } as ToolInvokeRequest["policyContext"],
@@ -2332,9 +2361,16 @@ describe("executeTool", () => {
         },
       },
       commsStorage,
-      { resolveGoogleWorkspaceAccessToken: async () => "google-token" },
+      { resolveGoogleWorkspaceAccessToken, resolveGoogleWorkspacePreparedMail, beforeExternalSideEffect },
     );
 
+    expect(resolveGoogleWorkspaceAccessToken).toHaveBeenCalledWith({
+      connectionId: args.connectionId,
+      toolName: "gmail.send",
+      signInId: "bound-sign-in",
+    });
+    expect(resolveGoogleWorkspacePreparedMail).toHaveBeenCalledOnce();
+    expect(beforeExternalSideEffect).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(markFailed).toHaveBeenCalledWith(
       "delivery-gmail",

@@ -48,12 +48,13 @@ function fixture() {
     lastError: "secret-error",
     connectionId: "private-account",
   } as CapabilityConnectorItem;
+  const connectors = [connector];
   const host = {
     requireSession: vi.fn(async () => ({ sessionId: "session", workspaceId: "workspace" })),
     listCatalog: vi.fn(async () => entries),
     listConnectors: vi.fn(async () => ({
       workspaceId: "workspace",
-      items: [connector],
+      items: connectors,
       issues: [],
       generatedAt: "2026-11-18T12:00:00Z",
       approvalReliefAvailable: false,
@@ -83,7 +84,7 @@ function fixture() {
     args: { query: "email" },
     policyContext: { workspaceId: "workspace", authActorId: "operator", authActorSource: "token" },
   };
-  return { host, entries, connector, request, service: new CapabilityExplanationService(host) };
+  return { host, entries, connector, connectors, request, service: new CapabilityExplanationService(host) };
 }
 
 describe("capability explanations", () => {
@@ -107,22 +108,37 @@ describe("capability explanations", () => {
   });
 
   it.each([
-    [["gmail.send"], "setup_needed"],
-    [["gmail.send", "gmail.read"], "ready"],
-  ] as const)("requires all Gmail reply capabilities from the same connection", async (grants, state) => {
-    const { service, request, entries, connector } = fixture();
-    connector.googleGrantedCapabilities = [...grants];
-    entries.push({
-      ...entries[0]!,
-      capabilityId: "tool:gmail.reply",
-      title: "gmail.reply",
-      toolName: "gmail.reply",
-      summary: "Reply in a Gmail thread",
-    });
-    request.args = { query: "gmail.reply" };
-    const result = await service.explain(request);
-    expect(result.capabilities).toContainEqual(expect.objectContaining({ toolName: "gmail.reply", state }));
-  });
+    ["metadata and send access", [["gmail.send", "gmail.read"]], "setup_needed"],
+    ["grants on separate accounts", [["gmail.send"], ["gmail.content"]], "setup_needed"],
+    ["both grants on one account", [["gmail.send", "gmail.content"]], "approval_needed"],
+  ] as const)(
+    "requires all Gmail reply capabilities from the same connection with %s",
+    async (_label, grants, state) => {
+      const { service, request, entries, connector, connectors, host } = fixture();
+      connectors.splice(
+        0,
+        connectors.length,
+        ...grants.map((capabilities, index) => ({
+          ...connector,
+          id: `integration:google-${index}`,
+          connectionId: `google-${index}`,
+          googleGrantedCapabilities: [...capabilities],
+        })),
+      );
+      host.inspectToolAccess.mockResolvedValue({ allowed: true, requiresApproval: true, reasonCodes: [] });
+      entries.push({
+        ...entries[0]!,
+        capabilityId: "tool:gmail.reply",
+        title: "gmail.reply",
+        toolName: "gmail.reply",
+        summary: "Reply in a Gmail thread",
+      });
+      request.args = { query: "gmail.reply" };
+      const result = await service.explain(request);
+      expect(result.permissionsGranted).toBe(false);
+      expect(result.capabilities).toContainEqual(expect.objectContaining({ toolName: "gmail.reply", state }));
+    },
+  );
 
   it("answers email capability questions with scoped evidence, without copying connector secrets", async () => {
     const { service, request, host } = fixture();

@@ -440,6 +440,7 @@ export async function requestJson(gatewayUrl, route, init = {}) {
       ...(init.headers ?? {}),
     },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    signal: init.signal,
   });
   const text = await response.text();
   let body = null;

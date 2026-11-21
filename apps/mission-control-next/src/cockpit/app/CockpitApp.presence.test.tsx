@@ -25,7 +25,10 @@ vi.mock("./use-cockpit-route", () => ({
   useCockpitRoute: () => ({ area: state.area, rest: state.rest, resolution: { kind: "native" } }),
 }));
 vi.mock("../../app/use-gateway-access", () => ({
-  useGatewayAccess: () => ({ callerScope: state.callerScope, gatewayAccess: { status: state.ready ? "ready" : "loading" } }),
+  useGatewayAccess: () => ({
+    callerScope: state.callerScope,
+    gatewayAccess: { status: state.ready ? "ready" : "loading" },
+  }),
 }));
 vi.mock("../data/realtime", () => ({ useCockpitRealtime: () => "closed" }));
 vi.mock("./use-gateway-reachability", () => ({ useGatewayReachability: () => ({ unavailable: false }) }));
@@ -65,9 +68,12 @@ it("leases only ready workspace and actually visible Chat session", async () => 
   expect(state.upsert).not.toHaveBeenCalled();
   state.ready = true;
   await render();
-  expect(state.upsert).toHaveBeenLastCalledWith(
-    expect.objectContaining({ workspaceId: "w1", focused: true, visible: true }),
+  await vi.waitFor(() =>
+    expect(state.upsert).toHaveBeenLastCalledWith(
+      expect.objectContaining({ workspaceId: "w1", focused: true, visible: true }),
+    ),
   );
+  expect(state.upsert.mock.lastCall?.[0]).not.toHaveProperty("sessionId");
   await act(async () => state.visible!("s1"));
   expect(state.upsert).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: "s1" }));
   state.rest = ["projects", "project-a"];
@@ -80,7 +86,7 @@ it("leases only ready workspace and actually visible Chat session", async () => 
   state.workspace = "w2";
   state.area = "chat";
   await render();
-  expect(state.upsert).toHaveBeenLastCalledWith(expect.objectContaining({ workspaceId: "w2" }));
+  await vi.waitFor(() => expect(state.upsert).toHaveBeenLastCalledWith(expect.objectContaining({ workspaceId: "w2" })));
   expect(state.upsert.mock.lastCall?.[0]).not.toHaveProperty("sessionId");
   state.ready = false;
   await render();
@@ -108,14 +114,29 @@ it("keeps the ready shell and drafts mounted behind expired access", async () =>
 });
 
 it("recreates controller state for a different server caller and retains it only for same-caller recovery", async () => {
- state.ready=true; state.callerScope="caller-a";
- const host=document.createElement("div");document.body.append(host);root=createRoot(host);
- const render=()=>act(async()=>root!.render(<CockpitApp/>));
- await render(); const original=host.querySelector<HTMLInputElement>("input")!;original.value="caller A unsent draft";
- state.ready=false;await render(); expect(state.activeEffects).toBe(0);
- state.ready=true;await render();expect(host.querySelector("input")).toBe(original);expect(original.value).toBe("caller A unsent draft");
- state.ready=false;await render();state.callerScope="caller-b";state.ready=true;await render();
- expect(host.querySelector("input")).not.toBe(original);expect(host.textContent).not.toContain("caller A unsent draft");
- expect(host.querySelector<HTMLInputElement>("input")!.value).toBe("keep this draft");
- state.callerScope="caller-a";
+  state.ready = true;
+  state.callerScope = "caller-a";
+  const host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+  const render = () => act(async () => root!.render(<CockpitApp />));
+  await render();
+  const original = host.querySelector<HTMLInputElement>("input")!;
+  original.value = "caller A unsent draft";
+  state.ready = false;
+  await render();
+  expect(state.activeEffects).toBe(0);
+  state.ready = true;
+  await render();
+  expect(host.querySelector("input")).toBe(original);
+  expect(original.value).toBe("caller A unsent draft");
+  state.ready = false;
+  await render();
+  state.callerScope = "caller-b";
+  state.ready = true;
+  await render();
+  expect(host.querySelector("input")).not.toBe(original);
+  expect(host.textContent).not.toContain("caller A unsent draft");
+  expect(host.querySelector<HTMLInputElement>("input")!.value).toBe("keep this draft");
+  state.callerScope = "caller-a";
 });

@@ -809,16 +809,15 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
     seedEffectRun(storage, "effect-maintenance", "memory_maintenance", "worker-current");
     const noteSuccessfulRootTurnSync = vi.fn();
     const requestDurableRunProcessing = vi.fn();
-    const evaluateGovernedMemoryMaintenance = vi.fn(async () => ({
-      status: "queued_for_review" as const,
-      jobId: `blj-${"a".repeat(40)}`,
-    }));
     const service = createService(storage, {
       authority: authorityHarness([]).port,
       legacyMemoryMaintenance: noteSuccessfulRootTurnSync,
       legacyRunRequest: requestDurableRunProcessing,
-      evaluateGovernedMemoryMaintenance,
-      resolveBackgroundLearningReadiness: async () => ({ ...readyLearning(), canEvaluateMaintenance: true }),
+      resolveBackgroundLearningReadiness: async () => ({
+        ...readyLearning(),
+        maintenance: { state: "ready" },
+        canEvaluateMaintenance: true,
+      }),
     });
     const execution = context("effect-maintenance", "worker-current");
 
@@ -829,7 +828,6 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
     await service.execute(maintenanceInput(), execution);
 
     expect(noteSuccessfulRootTurnSync).not.toHaveBeenCalled();
-    expect(evaluateGovernedMemoryMaintenance).toHaveBeenCalledTimes(1);
     expect(requestDurableRunProcessing).not.toHaveBeenCalled();
     expect(storage.memoryMaintenance.listRuns("workspace-1")).toEqual([]);
     expect(storage.durableRuns.listRuns(20).filter((run) => run.workflowKey === "memory.maintenance")).toEqual([]);
@@ -843,6 +841,11 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
     const service = createService(storage, {
       authority: authorityHarness([]).port,
       evaluateGovernedMemoryMaintenance: evaluate,
+      resolveBackgroundLearningReadiness: async () => ({
+        ...readyLearning(),
+        maintenance: { state: "ready" },
+        canEvaluateMaintenance: true,
+      }),
     });
     const execution = context("effect-governed-maintenance", "worker-current");
     const input = maintenanceInput();

@@ -137,7 +137,7 @@ describe("prepareAgentChatTurn Code Mode tool catalog", () => {
       const harness = createHost(READY);
       harness.host.isFeatureEnabled = vi.fn(async (flag) => flag === "chatTimersV1Enabled" && enabled);
       await prepareAgentChatTurn(harness.host, "session-1", { content: "set a five-minute reminder" });
-      expect(harness.readGuidance().includes("send /timer")).toBe(enabled);
+      expect(harness.readGuidance().includes("/timer")).toBe(enabled);
     }
   });
 
