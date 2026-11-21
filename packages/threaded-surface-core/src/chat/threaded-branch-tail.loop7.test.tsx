@@ -2,10 +2,9 @@ import React from "react";
 import { act, create } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyComposerSuggestion, useChatComposerInteractions } from "./useChatComposerInteractions";
+import { applyDelegationStreamFailure, inferDelegationRunStatus } from "./delegation-stream-projection";
 import {
-  applyDelegationStreamFailure,
   createSeedDelegationSteps,
-  inferDelegationRunStatus,
   resolveDelegationRoute,
   resolveSelectedTurn,
 } from "./useChatDelegationPolicyActions";

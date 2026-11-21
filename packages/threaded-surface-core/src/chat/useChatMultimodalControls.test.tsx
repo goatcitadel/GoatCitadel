@@ -27,10 +27,13 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchVoiceRuntimeStatus: apiMocks.fetchVoiceRuntimeStatus,
   fetchVoiceStatus: apiMocks.fetchVoiceStatus,
   generateLlmImage: apiMocks.generateLlmImage,
-  startVoiceTalkSession: apiMocks.startVoiceTalkSession,
   stopRealtimeVoiceSession: apiMocks.stopRealtimeVoiceSession,
-  stopVoiceTalkSession: apiMocks.stopVoiceTalkSession,
   transcribeVoice: apiMocks.transcribeVoice,
+}));
+
+vi.mock("@goatcitadel/mission-control-shared/api/voice", () => ({
+  startVoiceTalkSession: apiMocks.startVoiceTalkSession,
+  stopVoiceTalkSession: apiMocks.stopVoiceTalkSession,
 }));
 
 vi.mock("../settings-page-utils", () => ({
@@ -311,7 +314,9 @@ describe("useChatMultimodalControls", () => {
       latest!.controls.onMediaControlsOpenChange(true);
       await flushAsyncEffects();
     });
-    await act(async () => { await vi.dynamicImportSettled(); });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     expect(apiMocks.fetchVoiceStatus).toHaveBeenCalledTimes(1);
     expect(apiMocks.fetchVoiceRuntimeStatus).toHaveBeenCalledTimes(1);
     expect(latest!.controls.voiceInputAvailable).toBe(true);
@@ -330,7 +335,9 @@ describe("useChatMultimodalControls", () => {
       renderer = create(<Harness />);
       await flushAsyncEffects();
     });
-    await act(async () => { await vi.dynamicImportSettled(); });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
 
     expect(latest!.controls.voiceInputAvailable).toBe(true);
     expect(latest!.controls.voiceOutputAvailable).toBe(true);
@@ -368,7 +375,9 @@ describe("useChatMultimodalControls", () => {
       renderer = create(<Harness />);
       await flushAsyncEffects();
     });
-    await act(async () => { await vi.dynamicImportSettled(); });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
 
     await act(async () => {
       await latest!.controls.handleToggleVoiceTalk();
@@ -1077,8 +1086,14 @@ describe("useChatMultimodalControls", () => {
   it("admits only one image action before React publishes busy", async () => {
     let renderer!: ReactTestRenderer;
     let release!: (value: unknown) => void;
-    apiMocks.generateLlmImage.mockReturnValue(new Promise((resolve) => { release = resolve; }));
-    await act(async () => { renderer = create(<Harness />); });
+    apiMocks.generateLlmImage.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
     let first!: Promise<boolean>;
     let second!: Promise<boolean>;
     act(() => {
@@ -1104,11 +1119,21 @@ describe("useChatMultimodalControls", () => {
   it("does not upload an old image result after selected-session ownership changes", async () => {
     let renderer!: ReactTestRenderer;
     let release!: (value: unknown) => void;
-    apiMocks.generateLlmImage.mockReturnValue(new Promise((resolve) => { release = resolve; }));
-    await act(async () => { renderer = create(<Harness />); });
+    apiMocks.generateLlmImage.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
     let pending!: Promise<boolean>;
-    act(() => { pending = latest!.controls.handleGenerateImage({ clearDraftOnSuccess: true, trigger: "auto_send" }); });
-    await act(async () => { renderer.update(<Harness selectedSessionId="session-2" activeThreadSessionId="session-2" />); });
+    act(() => {
+      pending = latest!.controls.handleGenerateImage({ clearDraftOnSuccess: true, trigger: "auto_send" });
+    });
+    await act(async () => {
+      renderer.update(<Harness selectedSessionId="session-2" activeThreadSessionId="session-2" />);
+    });
     try {
       await act(async () => {
         release({ operation: "generate", data: [{ b64Json: "aW1hZ2U=" }] });
@@ -1125,19 +1150,35 @@ describe("useChatMultimodalControls", () => {
   it("does not insert a transcript into a different selected session", async () => {
     let renderer!: ReactTestRenderer;
     let release!: (value: { text: string }) => void;
-    apiMocks.transcribeVoice.mockReturnValue(new Promise((resolve) => { release = resolve; }));
-    await act(async () => { renderer = create(<Harness draft="Existing" />); });
+    apiMocks.transcribeVoice.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    await act(async () => {
+      renderer = create(<Harness draft="Existing" />);
+    });
     let pending!: Promise<void>;
     await act(async () => {
-      pending = latest!.controls.handleAudioFileSelected({ item: () => new File(["audio"], "note.wav", { type: "audio/wav" }) } as unknown as FileList);
+      pending = latest!.controls.handleAudioFileSelected({
+        item: () => new File(["audio"], "note.wav", { type: "audio/wav" }),
+      } as unknown as FileList);
       await flushAsyncEffects();
     });
     expect(latest!.controls.voiceBusy).toBe(true);
-    await act(async () => { renderer.update(<Harness selectedSessionId="session-2" activeThreadSessionId="session-2" />); });
+    await act(async () => {
+      renderer.update(<Harness selectedSessionId="session-2" activeThreadSessionId="session-2" />);
+    });
     try {
-      await act(async () => { release({ text: "old transcript" }); await pending; });
+      await act(async () => {
+        release({ text: "old transcript" });
+        await pending;
+      });
       expect(latest!.snapshot().draft).toBe("Existing");
-      expect(latest!.snapshot().notices).not.toContainEqual({ message: "Inserted transcript from note.wav.", tone: "success" });
+      expect(latest!.snapshot().notices).not.toContainEqual({
+        message: "Inserted transcript from note.wav.",
+        tone: "success",
+      });
     } finally {
       await act(async () => renderer.unmount());
     }
