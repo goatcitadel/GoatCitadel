@@ -17,6 +17,7 @@ export const TOOL_LABELS: Readonly<Record<string, string>> = {
   "code_mode.request": "Ask to run code",
   "runtime.configure": "Ask to set up a search provider",
   "session.status": "Check the chat's status",
+  "chat.reminder.preview": "Preview a Chat reminder",
   "session.search": "Search this chat's history",
   "session.history": "Read earlier chat messages",
   "user_input.request": "Ask you a question",

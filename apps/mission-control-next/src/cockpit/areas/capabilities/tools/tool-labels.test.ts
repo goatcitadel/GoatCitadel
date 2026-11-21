@@ -48,7 +48,7 @@ const BANNED_WORDS = [
 
 describe("tool labels", () => {
   it("has a plain label for every grouped tool", () => {
-    expect(GROUPED_TOOLS).toHaveLength(111);
+    expect(GROUPED_TOOLS).toHaveLength(112);
     for (const { group, toolName } of GROUPED_TOOLS) {
       const label = TOOL_LABELS[toolName];
       expect(label, `${group}: ${toolName}`).toBeTruthy();
@@ -92,6 +92,7 @@ describe("tool labels", () => {
 
   it("says plain words for the examples the panel is built around", () => {
     expect(toolLabel("capabilities.explain")).toBe("Explain capabilities and setup");
+    expect(toolLabel("chat.reminder.preview")).toBe("Preview a Chat reminder");
     expect(toolLabel("fs.read")).toBe("Read a file");
     expect(toolLabel("fs.write")).toBe("Write a file");
     expect(toolLabel("shell.exec")).toBe("Run a shell command");
