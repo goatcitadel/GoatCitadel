@@ -16,6 +16,8 @@ afterEach(() => {
 
 it("runs a fresh occurrence-bound heartbeat through the real safe tool owner and retains its quiet decision across restart", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-heartbeat-tool-"));
+  // Use the registered local provider identity for the loopback fixture's budget admission.
+  const providerId = "lmstudio";
   let toolRequests = 0;
   let observedToolResult = false;
   const provider = await startFakeOpenAiCompatibleServer((request) => {
@@ -86,11 +88,11 @@ it("runs a fresh occurrence-bound heartbeat through the real safe tool owner and
       await fs.copyFile(path.join(examples, name), path.join(configDir, name));
     const config = JSON.parse(await fs.readFile(path.join(examples, "goatcitadel.example.json"), "utf8"));
     config.llm = {
-      activeProviderId: "fake-openai",
+      activeProviderId: providerId,
       activeModel: "fixture-chat",
       providers: [
         {
-          providerId: "fake-openai",
+          providerId,
           label: "Heartbeat fixture",
           baseUrl: provider.baseUrl,
           apiStyle: "openai-chat-completions",
@@ -108,7 +110,7 @@ it("runs a fresh occurrence-bound heartbeat through the real safe tool owner and
       JSON.stringify({
         version: 1,
         entries: {
-          "fake-openai/fixture-chat": { contextWindow: 128_000, outputTokenLimit: 16_000 },
+          [`${providerId}/fixture-chat`]: { contextWindow: 128_000, outputTokenLimit: 16_000 },
         },
       }),
     );
@@ -126,16 +128,18 @@ it("runs a fresh occurrence-bound heartbeat through the real safe tool owner and
     await gateway.init();
     const session = await gateway.createChatSession({ title: "Heartbeat tool proof" });
     const sessionId = session.sessionId;
-    await gateway.storage.sessionAutonomyPrefs.patch(sessionId, {
+    const owner = (gateway as unknown as { heartbeatOccurrenceService: HeartbeatOccurrenceService })
+      .heartbeatOccurrenceService;
+    const claim = { workspaceId: "default", sessionId, expectedPriorCadence: {}, idleFloorSeconds: 0 };
+    await expect(owner.claimAndEnqueue(claim)).resolves.toEqual({
+      disposition: "database_parked",
+      reason: "execution_disabled",
+    });
+    await gateway.patchSessionAutonomyPrefs(sessionId, {
       heartbeatEnabled: true,
       activeHours: { start: 0, end: 0 },
     });
-    // This is the existing internal scheduler owner, not a fabricated system request or mock enqueue.
-    const owner = (gateway as unknown as { heartbeatOccurrenceService: HeartbeatOccurrenceService })
-      .heartbeatOccurrenceService;
-    expect(
-      await owner.claimAndEnqueue({ workspaceId: "default", sessionId, expectedPriorCadence: {}, idleFloorSeconds: 0 }),
-    ).toEqual({ disposition: "enqueued" });
+    await expect(owner.claimAndEnqueue(claim)).resolves.toEqual({ disposition: "enqueued" });
     const cadence = await gateway.storage.sessionAutonomyPrefs.get(sessionId);
     const occurrenceId = cadence!.lastProactiveRunId!;
     expect(occurrenceId).toBeTruthy();
