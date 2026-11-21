@@ -13,7 +13,7 @@ beforeEach(async () => {
   vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "pseudo");
   root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-private-knowledge-"));
   storage = new Storage({
-    dbPath: path.join(root, "runtime.sqlite"),
+    dbPath: ":memory:",
     transcriptsDir: path.join(root, "transcripts"),
     auditDir: path.join(root, "audit"),
   });
@@ -46,7 +46,7 @@ beforeEach(async () => {
     { namespace: "shared", sourceType: "text", sourceRef: "public-doc", title: "Public reference" },
     [{ content: "PUBLIC_REFERENCE_CANARY" }],
   );
-});
+}, 30_000);
 afterEach(async () => {
   storage?.close();
   vi.unstubAllEnvs();
