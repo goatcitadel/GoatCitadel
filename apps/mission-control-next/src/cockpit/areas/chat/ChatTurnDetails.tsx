@@ -19,6 +19,7 @@ const COPIED_MS = 2000;
 const ChatToolActivityBody = lazy(async () => ({
   default: (await import("./ChatToolActivityBody")).ChatToolActivityBody,
 }));
+const ChatTurnSources = lazy(async () => ({ default: (await import("./ChatTurnSources")).ChatTurnSources }));
 
 type TurnActions = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -83,15 +84,6 @@ const isRecoveredWebRead = (tool: ChatToolRunRecord, toolRuns: readonly ChatTool
       readPageTextLength(run) >= MIN_USABLE_PAGE_TEXT_CHARS,
   );
 
-function safeSourceHref(value: string): string | null {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
-  } catch {
-    return null;
-  }
-}
-
 export function ChatTurnDetails({
   turn,
   inlineApprovalId,
@@ -115,6 +107,7 @@ export function ChatTurnDetails({
 }) {
   const coarsePointer = useCoarsePointer();
   const { showTechnicalDetails } = useUiPreferences();
+  const [sourcesOpened, setSourcesOpened] = useState(false);
   const [copy, setCopy] = useState<{ status: string; copied: boolean }>({ status: "", copied: false });
   // CH-31: success is temporary; the confirmation clears after a moment. Failures stay until the next try.
   useEffect(() => {
@@ -185,30 +178,13 @@ export function ChatTurnDetails({
   return (
     <div className="mt-3 space-y-2 text-xs text-fg-muted">
       {turn.citations.length ? (
-        <details>
+        <details onToggle={(event) => event.currentTarget.open && setSourcesOpened(true)}>
           <summary className="cursor-pointer text-accent">{plural(turn.citations.length, "source")}</summary>
-          <ul className="mt-1 divide-y divide-line-subtle">
-            {turn.citations.map((source) => {
-              const href = safeSourceHref(source.url);
-              return (
-                <li key={source.citationId} className="py-2">
-                  {href ? (
-                    <a
-                      href={href}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                      className="font-medium text-accent underline-offset-2 hover:underline"
-                    >
-                      {source.title || "Open source"}
-                    </a>
-                  ) : (
-                    <span className="font-medium text-fg-secondary">{source.title || "Source"}</span>
-                  )}
-                  {source.snippet ? <p className="mt-1 line-clamp-3 text-fg-muted">{source.snippet}</p> : null}
-                </li>
-              );
-            })}
-          </ul>
+          {sourcesOpened ? (
+            <DeferredChatLeaf label="Sources" identity={turn.turnId}>
+              <ChatTurnSources sources={turn.citations} />
+            </DeferredChatLeaf>
+          ) : null}
         </details>
       ) : null}
       {turn.toolRuns.length ? (

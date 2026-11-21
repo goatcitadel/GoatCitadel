@@ -86,6 +86,28 @@ async function renderRows(turn: ChatThreadTurnRecord) {
   await openToolRows();
 }
 
+it("shows the source count immediately and mounts safe links when the disclosure opens", async () => {
+  const turn = turnWith([]);
+  turn.citations = [
+    { citationId: "safe", title: "Evidence", url: "https://example.com/evidence", sourceType: "web" },
+    { citationId: "unsafe", title: "Unavailable link", url: "file:///example", sourceType: "web" },
+  ];
+  render(turn);
+  const summary = [...container.querySelectorAll("summary")].find((item) => item.textContent === "2 sources")!;
+  expect(container.textContent).not.toContain("Evidence");
+
+  await act(async () => {
+    const details = summary.parentElement as HTMLDetailsElement;
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+    await vi.dynamicImportSettled();
+  });
+
+  expect(container.querySelector('a[href="https://example.com/evidence"]')?.textContent).toBe("Evidence");
+  expect(container.querySelector('a[href^="file:"]')).toBeNull();
+  expect(container.textContent).toContain("Unavailable link");
+});
+
 describe("ChatTurnDetails design advisories", async () => {
   it("lists each advisory under the tool run with its line and an informational label", async () => {
     await renderRows(
