@@ -202,6 +202,11 @@ export async function runMemoryEnumerationScenario(context, stack, deps) {
       const artifacts = await captureMemoryRecoveryVisual(context, stack, deps, {
         slug: "memory-saved-workspace-lessons", page, browserLog, correlationId, logCursor,
       });
+      await page.setViewportSize({ width: 390, height: 844 });
+      const diagnostics = await page.getByRole("button", { name: "Open memory diagnostics and maintenance" }).boundingBox();
+      assert.ok(diagnostics && diagnostics.x >= 0 && diagnostics.x + diagnostics.width <= 390,
+        "The memory diagnostics action must fit inside the mobile viewport.");
+      await page.setViewportSize({ width: 1440, height: 1024 });
 
       await page.getByRole("button", { name: "Show all statuses", exact: true }).click();
       await page.getByRole("textbox", { name: "Search memory", exact: true }).waitFor();

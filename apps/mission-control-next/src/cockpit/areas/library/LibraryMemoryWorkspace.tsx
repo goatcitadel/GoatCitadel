@@ -175,7 +175,12 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
       ) : null}
       {noActiveMemoryItems ? (
         savedLessons.length ? (
-          <Section title="Memory items" actions={emptyItemActions}>
+          <Section
+            title="Memory items"
+            actions={
+              <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-2">{emptyItemActions}</div>
+            }
+          >
             <p className="text-sm text-fg-muted">No active memory items.</p>
           </Section>
         ) : (
