@@ -383,6 +383,11 @@ export function DeferredChatBuildEditor({
 }
 
 export function DeferredChatApprovalTarget({ approval }: { approval?: ApprovalRequest }) {
+  if (approval?.targetLabel !== undefined) {
+    return approval.targetLabel ? (
+      <p className="mt-1 text-xs text-fg-secondary wrap-anywhere">{approval.targetLabel}</p>
+    ) : null;
+  }
   const targetPreview = approval?.preview;
   const showTarget =
     targetPreview &&

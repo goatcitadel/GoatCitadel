@@ -83,6 +83,8 @@ const STRUCTURED_REVIEW_BASE_ROSTER = ["general_correctness", "test_coverage"] a
 export const REQUIRED_RELEASE_PROOF_LANE_NAMES = [
   "verify:fast",
   "verify:runtime:truth",
+  "verify:chat-evolution",
+  "verify:mesh:readiness",
   "verify:auth:matrix",
   "verify:desktop",
   "verify:code-mode:sandbox",

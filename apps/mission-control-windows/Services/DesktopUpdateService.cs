@@ -182,7 +182,8 @@ public sealed class DesktopUpdateService : IDisposable
             AvailableRelease = available, LastSuccessfulCheck = _preferences.LastSuccessfulCheck,
             NextCheckAt = _preferences.NextCheckAt, DownloadedPath = downloaded,
             DownloadedBytes = downloaded is null ? 0 : available!.Installer.SizeBytes,
-            Message = available is not null ? "An update is available. Download and install when you are ready."
+            Message = downloaded is not null ? ReadyToInstallMessage(available!)
+                : available is not null ? "An update is available. Download and install when you are ready."
                 : candidate is null && Status.Channel == "stable" ? "No stable release available."
                 : candidate is null ? "No newer complete preview release available." : "You are up to date.",
         });
@@ -256,9 +257,7 @@ public sealed class DesktopUpdateService : IDisposable
                 partial = null;
             }
             SetStatus(Status with { Phase = "downloaded", DownloadedBytes = asset.SizeBytes, DownloadedPath = destination,
-                Message = candidate.PublisherSigned
-                    ? "Download verified against signed release evidence. Open the folder to run the installer when ready."
-                    : "Checksum verified. This preview is unsigned. Open the folder and run the installer when ready." });
+                Message = ReadyToInstallMessage(candidate) });
         }
         catch (Exception error) when (IsExpectedError(error)) { ReportError(error); }
         finally
@@ -268,20 +267,55 @@ public sealed class DesktopUpdateService : IDisposable
         }
     }
 
-    public async Task<string> GetVerifiedDownloadAsync(CancellationToken token = default)
+    private static string ReadyToInstallMessage(DesktopUpdateRelease release) =>
+        (release.PublisherSigned ? "Download verified against signed release evidence. "
+            : "Checksum verified. ")
+        + "Save your work before updating. GoatCitadel and its local runtime will stop, then the app will reopen.";
+
+    public Task<string> GetVerifiedDownloadAsync(CancellationToken token = default) =>
+        UseVerifiedDownloadAsync(null, null, token);
+
+    public async Task LaunchVerifiedDownloadAsync(
+        DesktopUpdateRelease release, Action<string> launch, CancellationToken token)
+    {
+        await _gate.WaitAsync(token);
+        try
+        {
+            await UseVerifiedDownloadAsync(release, launch, token);
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<string> UseVerifiedDownloadAsync(
+        DesktopUpdateRelease? approvedRelease, Action<string>? launch, CancellationToken token)
     {
         var candidate = Status.AvailableRelease ?? throw new IOException("No downloaded update.");
+        if (approvedRelease is not null && (candidate != approvedRelease || Status.Phase != "downloaded"))
+            throw new InvalidOperationException("The offered update changed. Check for updates and try again.");
         var file = Status.DownloadedPath ?? throw new IOException("Download the update first.");
         var expected = Path.Join(_store.DirectoryPath, candidate.Installer.Sha256, candidate.Installer.Name);
         if (!string.Equals(file, expected, StringComparison.OrdinalIgnoreCase)) throw new IOException("Invalid download path.");
-        await VerifyFileAsync(file, candidate.Installer, token);
+        await using var stream = OpenInstallerForVerification(file);
+        await VerifyInstallerBytesAsync(stream, candidate.Installer, token);
+        token.ThrowIfCancellationRequested();
+        launch?.Invoke(file);
         return file;
     }
 
     public static async Task VerifyFileAsync(string file, DesktopUpdateAsset asset, CancellationToken token)
     {
+        await using var stream = OpenInstallerForVerification(file);
+        await VerifyInstallerBytesAsync(stream, asset, token);
+    }
+
+    private static FileStream OpenInstallerForVerification(string file)
+    {
         DesktopUpdateStore.AssertRegularPath(file);
-        await using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+    }
+
+    private static async Task VerifyInstallerBytesAsync(FileStream stream, DesktopUpdateAsset asset, CancellationToken token)
+    {
         if (stream.Length != asset.SizeBytes) throw new IOException("Downloaded installer size is incorrect.");
         var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, token)).ToLowerInvariant();
         if (!string.Equals(hash, asset.Sha256, StringComparison.Ordinal)) throw new IOException("Downloaded installer checksum is incorrect.");

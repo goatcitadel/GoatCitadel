@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { NATIVE_GOOGLE_ACTIONS } from "./google-workspace-actions.js";
 import {
   ESSENTIAL_TOOL_GROUP_IDS,
   SWITCHABLE_TOOL_GROUP_IDS,
@@ -31,7 +32,12 @@ describe("tool group map contract", () => {
         seen.set(toolName, group.id);
       }
     }
-    expect(seen.size).toBe(112);
+    expect(seen.size).toBe(132);
+  });
+
+  it("puts every native Google action in Email and calendar", () => {
+    for (const name of ["calendar.respond_event", ...NATIVE_GOOGLE_ACTIONS.map((action) => action.name)])
+      expect(toolGroupForTool(name)?.id).toBe("email_and_calendar");
   });
 
   it("keeps mcp.invoke and the session tools in Core", () => {

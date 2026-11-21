@@ -4,7 +4,7 @@ import {
   type CapabilityCatalogEntry,
   type CapabilityConnectorsResponse,
   type CapabilityConnectorItem,
-  googleWorkspaceCapabilityForTool,
+  googleWorkspaceCapabilitiesForTool,
   type CapabilityExplanationItem,
   type CapabilityExplanationCoverage,
   type CapabilityExplanationResponse,
@@ -484,7 +484,8 @@ export class CapabilityExplanationService {
         return item;
       }
     }
-    const google = googleWorkspaceCapabilityForTool(entry.toolName);
+    const requiredGoogle = googleWorkspaceCapabilitiesForTool(entry.toolName);
+    const google = requiredGoogle.length > 0;
     let search = entry.toolName === "browser.search";
     if (search) {
       try {
@@ -521,7 +522,11 @@ export class CapabilityExplanationService {
         };
       const states = related.map((connector) => {
         const state = this.explainConnector(connector, connectors);
-        if (!google || state.state !== "ready" || connector.googleGrantedCapabilities?.includes(google)) {
+        if (
+          !google ||
+          state.state !== "ready" ||
+          requiredGoogle.every((capability) => connector.googleGrantedCapabilities?.includes(capability))
+        ) {
           return state;
         }
         return {

@@ -1,20 +1,11 @@
-import {
-  Document,
-  HeadingLevel,
-  Packer,
-  Paragraph,
-  ShadingType,
-  Table,
-  TableCell,
-  TableRow,
-  TextRun,
-  WidthType,
-} from "docx";
+import type { Paragraph, Table } from "docx";
 import { createArtifactDesignPlan, cssColor, type ArtifactDesignPlan } from "./artifact-design.js";
 import { createDocumentPdf, createPlainDocumentPdf } from "./document-pdf.js";
 import { createStoredZip, type ZipEntry } from "./presentation-pptx.js";
 
 export type DocumentArtifactFormat = "markdown" | "txt" | "html" | "json" | "csv" | "docx" | "pdf";
+
+type DocxModule = typeof import("docx");
 
 export interface DocumentArtifactSection {
   heading: string;
@@ -231,6 +222,8 @@ async function buildDocx(input: DocumentArtifactInput): Promise<Buffer> {
 }
 
 async function buildStyledDocx(input: DocumentArtifactInput): Promise<Buffer> {
+  const docx = await import("docx");
+  const { Document, HeadingLevel, Packer, Paragraph, TextRun } = docx;
   const design = resolveDocumentDesign(input, "docx");
   const children: Array<Paragraph | Table> = [
     new Paragraph({
@@ -248,7 +241,7 @@ async function buildStyledDocx(input: DocumentArtifactInput): Promise<Buffer> {
     }),
   ];
   if (input.body?.trim()) {
-    children.push(bodyParagraph(input.body.trim(), design));
+    children.push(bodyParagraph(docx, input.body.trim(), design));
   }
   const sections = normalizedSections(input);
   sections.forEach((section, index) => {
@@ -268,7 +261,7 @@ async function buildStyledDocx(input: DocumentArtifactInput): Promise<Buffer> {
       }),
     );
     if (section.body) {
-      children.push(bodyParagraph(section.body, design));
+      children.push(bodyParagraph(docx, section.body, design));
     }
     for (const bullet of section.bullets) {
       children.push(
@@ -287,7 +280,7 @@ async function buildStyledDocx(input: DocumentArtifactInput): Promise<Buffer> {
       );
     }
     if (index === 0 && section.bullets[0] && design.mode !== "plain" && design.mode !== "minimal") {
-      children.push(calloutTable(section.bullets[0], design));
+      children.push(calloutTable(docx, section.bullets[0], design));
     }
   });
   const doc = new Document({
@@ -350,7 +343,7 @@ function buildHtmlCss(design: ArtifactDesignPlan): string {
   ].join("");
 }
 
-function bodyParagraph(text: string, design: ArtifactDesignPlan): Paragraph {
+function bodyParagraph({ Paragraph, TextRun }: DocxModule, text: string, design: ArtifactDesignPlan): Paragraph {
   return new Paragraph({
     spacing: { after: 140 },
     children: [
@@ -364,7 +357,11 @@ function bodyParagraph(text: string, design: ArtifactDesignPlan): Paragraph {
   });
 }
 
-function calloutTable(text: string, design: ArtifactDesignPlan): Table {
+function calloutTable(
+  { Paragraph, ShadingType, Table, TableCell, TableRow, TextRun, WidthType }: DocxModule,
+  text: string,
+  design: ArtifactDesignPlan,
+): Table {
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     borders: {

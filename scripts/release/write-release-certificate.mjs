@@ -28,6 +28,8 @@ const WINDOWS_RESERVED_BASENAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$
 const RELEASE_PROOF_WORKFLOW_FILE = "verification-1-0-release-proof.yml";
 const RELEASE_PROOF_COVERED_LANES = [
   "verify:runtime:truth",
+  "verify:chat-evolution",
+  "verify:mesh:readiness",
   "verify:auth:matrix",
   "verify:desktop",
   "verify:code-mode:sandbox",
@@ -54,6 +56,8 @@ const RELEASE_PROOF_COVERED_LANE_NAMES = new Set(RELEASE_PROOF_COVERED_LANES);
 const REQUIRED_LANE_SPECS = [
   { name: "verify:fast", workflowFile: "verification-fast.yml", required: true },
   { name: "verify:runtime:truth", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:chat-evolution", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
+  { name: "verify:mesh:readiness", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
   { name: "verify:auth:matrix", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
   { name: "verify:desktop", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },
   { name: "verify:code-mode:sandbox", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true },

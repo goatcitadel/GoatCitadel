@@ -26,10 +26,10 @@ function resolveSourceState() {
   };
 }
 
-function runSkipBuild(outDir) {
+function runSkipBuild(outDir, ...extraArgs) {
   const environment = { ...process.env };
   delete environment.GITHUB_SHA;
-  return spawnSync(process.execPath, [scriptPath, "--target", "windows-x64", "--out-dir", outDir, "--skip-build"], {
+  return spawnSync(process.execPath, [scriptPath, "--target", "windows-x64", "--out-dir", outDir, "--skip-build", ...extraArgs], {
     cwd: repoRoot,
     encoding: "utf8",
     env: environment,
@@ -54,6 +54,18 @@ function withHostFixture(manifest, assertion) {
   }
 }
 
+test("a native ownership release requires the process identity helper in the host payload", () => {
+  withHostFixture({ target: "windows-x64", ...resolveSourceState() }, ({ root }) => {
+    const missing = runSkipBuild(root, "--require-process-identity");
+    assert.notEqual(missing.status, 0);
+    assert.match(missing.stderr, /Native process identity helper is missing/u);
+
+    fs.writeFileSync(path.join(root, "GoatCitadel-Process-Identity.exe"), "process-identity-helper");
+    const present = runSkipBuild(root, "--require-process-identity");
+    assert.equal(present.status, 0, present.stderr || present.stdout);
+  });
+});
+
 test("skip-build preserves a host and manifest with exact source provenance", () => {
   const source = resolveSourceState();
   const manifest = {
@@ -71,6 +83,18 @@ test("skip-build preserves a host and manifest with exact source provenance", ()
     assert.match(result.stdout, /Reused verified GoatCitadel Windows host/u);
     assert.deepEqual(fs.readFileSync(executablePath), executableBefore);
     assert.deepEqual(fs.readFileSync(manifestPath), manifestBefore);
+  });
+});
+
+test("the credential beta requires a native reader in the x64 host payload", () => {
+  withHostFixture({ target: "windows-x64", ...resolveSourceState() }, ({ root }) => {
+    const missing = runSkipBuild(root, "--require-credential-read");
+    assert.notEqual(missing.status, 0);
+    assert.match(missing.stderr, /Native credential reader is missing/u);
+
+    fs.writeFileSync(path.join(root, "GoatCitadel-Credential-Read.exe"), "credential-reader-helper");
+    const present = runSkipBuild(root, "--require-credential-read");
+    assert.equal(present.status, 0, present.stderr || present.stdout);
   });
 });
 

@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { ConflictError, SemanticValidationError } from "@goatcitadel/contracts";
 import {
+  projectCapabilityChangePlanOutcome,
   projectCapabilityPublicValue,
   projectCapabilityToolSchemaForPublic,
   projectCodeModeRunArtifactPreviewForPublic,
@@ -479,7 +480,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
           expectedTargetRevision: body.data.expectedRevision,
         });
         return reply.code(202).send(
-          projectCapabilityPublicValue({
+          projectCapabilityChangePlanOutcome({
             pendingApproval: null,
             noMutationRequired: false,
             detail,
@@ -547,7 +548,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
           expectedTargetRevision: body.data.expectedRevision,
         });
         return reply.code(202).send(
-          projectCapabilityPublicValue({
+          projectCapabilityChangePlanOutcome({
             pendingApproval: null,
             noMutationRequired: false,
             detail,
@@ -617,7 +618,7 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
           expectedTargetRevision: body.data.expectedRevision,
         });
         return reply.code(202).send(
-          projectCapabilityPublicValue({
+          projectCapabilityChangePlanOutcome({
             pendingApproval: null,
             noMutationRequired: false,
             detail,

@@ -118,7 +118,7 @@ describe("DatabaseCutoverService", () => {
     expect(createBackup).not.toHaveBeenCalled();
   });
 
-  it("probes the configured SQLite database read-only and reports its current migration version", async () => {
+  it("reads the current SQLite migration version off the Gateway thread without writing the database", async () => {
     const rootDir = await makeTempDir();
     const dbPath = path.join(rootDir, "data", "index.db");
     await fs.mkdir(path.dirname(dbPath), { recursive: true });
@@ -132,6 +132,7 @@ describe("DatabaseCutoverService", () => {
       database.close();
     }
     const bytesBeforeProbe = await fs.readFile(dbPath);
+    const mainThreadPrepare = vi.spyOn(DatabaseSync.prototype, "prepare");
     const service = new DatabaseCutoverService({
       config: buildSqliteConfig(dbPath),
       createBackup: vi.fn(),
@@ -147,6 +148,16 @@ describe("DatabaseCutoverService", () => {
       issues: [],
     });
     await expect(fs.readFile(dbPath)).resolves.toEqual(bytesBeforeProbe);
+    expect(mainThreadPrepare).not.toHaveBeenCalled();
+
+    const changed = new DatabaseSync(dbPath);
+    try {
+      changed.exec("INSERT INTO schema_migrations (version) VALUES (8)");
+    } finally {
+      changed.close();
+    }
+    await expect(service.getHealthSnapshot()).resolves.toMatchObject({ reachable: true, migrationVersion: 8 });
+    expect(mainThreadPrepare).not.toHaveBeenCalled();
   });
 
   it("fails closed without creating or disclosing a missing configured SQLite path", async () => {

@@ -80,7 +80,7 @@ export function useSettingsApprovalContinuation({
       current.current.identity === identity &&
       (accessRevision === undefined || getGatewayAccessRevision() === accessRevision) &&
       (installation === undefined || getGatewayApiBaseUrl() === installation);
-    const context = { workspaceId };
+    const context = { workspaceId, ...(plan.origin.surface === "chat" ? { sessionId: plan.origin.sessionId } : {}) };
     publish(key, { state: "checking", message: "Checking the current plan and required approval…" });
     setNotice(undefined);
     let dispatched = false;
@@ -160,11 +160,14 @@ export function useSettingsApprovalContinuation({
     }
   }
 
+  // A fresh canonical completion settles the presentation, including a lost
+  // response. Keep the attempt lock if an older approval snapshot reappears.
+  const completed = plan?.status === "completed";
   return {
-    visible: eligible || Boolean(attempt),
+    visible: !completed && (eligible || Boolean(attempt)),
     disabled: !eligible || Boolean(attempt),
-    state: attempt?.state,
-    message: attempt?.message ?? (notice?.identity === identity ? notice.message : undefined),
+    state: completed ? undefined : attempt?.state,
+    message: completed ? undefined : (attempt?.message ?? (notice?.identity === identity ? notice.message : undefined)),
     continueApproved,
   };
 }

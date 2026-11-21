@@ -228,3 +228,33 @@ it("states an inbox failure without claiming there are no suggestions", async ()
   await vi.waitFor(() => expect(container.textContent).toContain("Inbox unavailable"));
   expect(container.textContent).not.toContain("No improvement suggestions");
 });
+
+it("shows applied-change monitoring and withholds current success across a failed owner read", async () => {
+  const response = {
+    generatedAt: "now",
+    items: [
+      {
+        ...suggestion,
+        mutationApplied: true,
+        latestActivation: {
+          status: "active",
+          watchStatus: "stable",
+          positiveSignalCount: 5,
+          watchSignalTarget: 5,
+          regressionCount: 0,
+          watchEvidenceStatus: "observed",
+        },
+      },
+    ],
+  };
+  vi.mocked(fetchCuratorReviewItems).mockResolvedValue(response as never);
+  await open("/system/improvement");
+  await vi.waitFor(() => expect(container.textContent).toContain("Monitoring met the target for this change."));
+  expect(container.textContent).not.toContain("Apply improvement candidate cand-1");
+  vi.mocked(fetchCuratorReviewItems).mockRejectedValueOnce(new Error("Synthetic owner unavailable"));
+  await act(async () => button("Refresh inbox")!.click());
+  await vi.waitFor(() => expect(container.textContent).toContain("Current monitoring records could not be read."));
+  expect(container.textContent).not.toContain("Monitoring met the target for this change.");
+  await act(async () => button("Refresh inbox")!.click());
+  await vi.waitFor(() => expect(container.textContent).toContain("Monitoring met the target for this change."));
+});

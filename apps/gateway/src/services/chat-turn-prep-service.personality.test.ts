@@ -97,7 +97,7 @@ function createHost(
     llmService: {
       getRuntimeConfig: vi.fn(() => ({ providers: [] })),
     },
-    getSession: vi.fn(() => ({ sessionId: "session-1" })),
+    getSession: vi.fn(() => ({ sessionId: "session-1", kind: "dm" })),
     ensureChatSessionRuntimeGrants: vi.fn(),
     maybeAutoTitleChatSession: vi.fn(),
     normalizeWorkspaceId: vi.fn((workspaceId?: string) => workspaceId ?? "default"),
@@ -748,6 +748,14 @@ describe("prepareAgentChatTurn route admission", () => {
 });
 
 describe("prepareAgentChatTurn personality overlay", () => {
+  it.each(["group", "thread"] as const)("excludes private profile memory from a canonical %s session", async (kind) => {
+    const harness = createHost("chat", {}, [], "PRIVATE_PROFILE_PREFERENCE");
+    harness.host.getSession = vi.fn(async () => ({ sessionId: "session-1", kind })) as never;
+    await prepareAgentChatTurn(harness.host, "session-1", { content: "hello" });
+    expect(harness.host.composeFrozenOperatorProfileDigest).not.toHaveBeenCalled();
+    expect(harness.readGuidance()).not.toContain("PRIVATE_PROFILE_PREFERENCE");
+  });
+
   it("applies the base agent prompt and personality overlay to every mode by default", async () => {
     for (const mode of ["chat", "cowork", "code"] as const) {
       const harness = createHost(mode);

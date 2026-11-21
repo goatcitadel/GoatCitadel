@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act, useState, type ComponentType, type ReactNode, type Ref } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { Storage } from "happy-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { ChangePlanRecord, ChatThreadTurnRecord } from "@goatcitadel/contracts";
@@ -133,6 +134,7 @@ function renderWithProviders(node: ReactNode) {
   root.render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
 }
 beforeEach(() => {
+  vi.stubGlobal("localStorage", new Storage());
   viewport.preview = null;
   viewport.virtualMounts = 0;
   viewport.virtualDataCount = 0;
@@ -147,7 +149,6 @@ afterEach(() => {
   container.remove();
   client.clear();
   vi.unstubAllGlobals();
-  localStorage.removeItem("goatcitadel.ui.technical_details.v1");
 });
 
 describe("ChatTranscript", () => {

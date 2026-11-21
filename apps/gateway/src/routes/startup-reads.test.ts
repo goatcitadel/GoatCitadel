@@ -3,12 +3,18 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startupReadRoutes } from "./startup-reads.js";
 import { withRouteAccess } from "./route-access.js";
 import { registerChatMessagingRoutes } from "./chat.messaging.js";
+import { OpenAICodexOAuthService } from "../services/openai-codex-oauth-service.js";
+import { SecretStoreService } from "../services/secret-store-service.js";
 let app: FastifyInstance;
 const reads = vi.fn();
+const readCodexCredential = vi.fn<() => Promise<string | undefined>>();
+const readCodexCredentialSync = vi.fn<() => string | undefined>();
 const row = (path: string, correlationId = "row-one") => ({ path, correlationId, originSurface: "chat" });
 const url = (items: unknown) => "/api/v1/startup-reads?" + new URLSearchParams({ reads: JSON.stringify(items) });
 beforeEach(async () => {
   reads.mockReset();
+  readCodexCredential.mockReset();
+  readCodexCredentialSync.mockReset();
   app = Fastify();
   app.decorate("requireOperatorAuth", async (request, reply) => {
     if (request.headers.authorization !== "Bearer test-operator")
@@ -37,6 +43,14 @@ beforeEach(async () => {
     reads(request.params);
     return reply.code(404).send({ error: "Record missing" });
   });
+  const secretStore = new SecretStoreService();
+  vi.spyOn(secretStore, "isAvailable").mockReturnValue(true);
+  vi.spyOn(secretStore, "getSecret").mockImplementation(readCodexCredentialSync);
+  vi.spyOn(secretStore, "getSecretAsync").mockImplementation(readCodexCredential);
+  const codex = new OpenAICodexOAuthService(secretStore);
+  app.get("/api/v1/llm/config", withRouteAccess(app, "operator"), () =>
+    codex.withPublicStatusSnapshot(() => codex.getStatus()),
+  );
   await app.register(startupReadRoutes);
 });
 afterEach(async () => {
@@ -71,6 +85,45 @@ it("preserves caller peer, original guards, cookie custody and individual record
       host: "gateway.example:8787",
     }),
   );
+});
+it("shares the default Codex status within each batch and reports timings without credential data", async () => {
+  const credential = Promise.withResolvers<string | undefined>();
+  readCodexCredential.mockReturnValueOnce(credential.promise);
+  // The unrelated read has to finish before the simulated keychain responds.
+  reads.mockImplementationOnce(() => credential.resolve(undefined));
+  const input = {
+    method: "GET" as const,
+    url: url([row("/api/v1/llm/config"), row("/api/v1/settings", "row-two"), row("/api/v1/llm/config", "row-three")]),
+    headers: { authorization: "Bearer test-operator" },
+  };
+  const first = await app.inject(input);
+  expect(first.statusCode).toBe(200);
+  expect(readCodexCredential).toHaveBeenCalledTimes(1);
+  expect(first.json().items.map((item: { bodyText: string }) => JSON.parse(item.bodyText).connected)).toEqual([
+    false,
+    undefined,
+    false,
+  ]);
+  expect(first.headers["server-timing"]).toMatch(
+    /^startup-batch;dur=\d+\.\d, startup-read-0;dur=\d+\.\d, startup-read-1;dur=\d+\.\d, startup-read-2;dur=\d+\.\d, codex-keychain;dur=\d+\.\d$/u,
+  );
+
+  readCodexCredential.mockResolvedValue(
+    JSON.stringify({
+      accessToken: "fixture-access",
+      refreshToken: "fixture-refresh",
+      updatedAt: 1,
+    }),
+  );
+  const second = await app.inject(input);
+  expect(readCodexCredential).toHaveBeenCalledTimes(2);
+  expect(second.json().items.map((item: { bodyText: string }) => JSON.parse(item.bodyText).connected)).toEqual([
+    true,
+    undefined,
+    true,
+  ]);
+  expect(readCodexCredentialSync).not.toHaveBeenCalled();
+  expect(second.body).not.toContain("fixture-access");
 });
 it.each([{}, { authorization: "Bearer test-operator", "x-test-purpose": "session_control_client" }])(
   "rejects unauthorized or purpose-restricted callers before dispatch",

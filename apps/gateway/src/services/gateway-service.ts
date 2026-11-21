@@ -504,6 +504,7 @@ import { pluginSnapshotResolver } from "./capability-plugins-composition.js";
 import { readPluginPieceOwner } from "./capability-plugin-store.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 import { GoogleWorkspaceOAuthService } from "./google-workspace-oauth-service.js";
+import { GoogleWorkspaceReviewService } from "./google-workspace-review-service.js";
 import { applyRuntimeBrowserBackendDefaults } from "./runtime-browser-backend-defaults.js";
 import { submitEvolutionWebSearchCredential } from "./web-search-credential-change.js";
 import { assertRuntimeConfigurationApprovalBinding } from "./runtime-configuration-approval-binding.js";
@@ -1473,6 +1474,11 @@ export class GatewayService {
         }),
     });
     this.googleWorkspaceOAuth = new GoogleWorkspaceOAuthService({ secretStore, storage: this.storage });
+    const googleWorkspaceReview = new GoogleWorkspaceReviewService({
+      storage: this.storage,
+      dataRoot: path.resolve(config.rootDir, config.assistant.dataDir),
+      sandbox: () => this.config.toolPolicy.sandbox,
+    });
     this.chatAutoActions = createGatewayChatAutoActions(config, this.storage, (request) =>
       this.policyEngine.inspectAccess(request),
     );
@@ -1508,6 +1514,9 @@ export class GatewayService {
         this.resolveConnectionSecret({ ref }, "ref", "refEnv", undefined, { connectionId }),
       resolveChannelEnvSecret: resolveChannelSendEnvSecret,
       resolveGoogleWorkspaceAccessToken: (input) => this.googleWorkspaceOAuth.resolveToolAccessToken(input),
+      captureGoogleWorkspaceSource: (request, source) => googleWorkspaceReview.captureSource(request, source),
+      resolveGoogleWorkspacePreparedMail: (request) => googleWorkspaceReview.resolvePreparedMail(request),
+      createGoogleWorkspaceFilePort: (request) => googleWorkspaceReview.filePort(request),
       acquireLocalEmbeddingLease: (request) => this.acquireLocalEmbeddingLease(request),
       prepareEmbeddingUsageDispatch: (input) => this.llmService.prepareScopedModelUsageDispatch(input),
       requestChangePlan: async (request, intent) => await this.requestChangePlanFromTool(request, intent),
@@ -2849,18 +2858,20 @@ export class GatewayService {
         const normalizedRequest = await this.enrichToolPolicyContext(
           this.applyRuntimeBrowserBackendDefaults(
             await this.resolveToolInvokeRequestPaths(
-              await this.googleWorkspaceOAuth.normalizeReadRequest({
-                ...request,
-                workspaceId: resolvedWorkspaceId,
-                // Resolve the parent Citadel from the workspace so Citadel Wards always
-                // enforce on the correct scope (Wards key on the real citadelId, never
-                // the workspaceId). Default to the personal Citadel — which has no Wards —
-                // when the workspace cannot be resolved, so the common case is unaffected.
-                citadelId:
-                  request.citadelId ??
-                  (await this.storage.workspaces?.find(resolvedWorkspaceId))?.citadelId ??
-                  DEFAULT_CITADEL_ID,
-              }),
+              await googleWorkspaceReview.normalize(
+                await this.googleWorkspaceOAuth.normalizeToolRequest({
+                  ...request,
+                  workspaceId: resolvedWorkspaceId,
+                  // Resolve the parent Citadel from the workspace so Citadel Wards always
+                  // enforce on the correct scope (Wards key on the real citadelId, never
+                  // the workspaceId). Default to the personal Citadel — which has no Wards —
+                  // when the workspace cannot be resolved, so the common case is unaffected.
+                  citadelId:
+                    request.citadelId ??
+                    (await this.storage.workspaces?.find(resolvedWorkspaceId))?.citadelId ??
+                    DEFAULT_CITADEL_ID,
+                }),
+              ),
             ),
           ),
         );

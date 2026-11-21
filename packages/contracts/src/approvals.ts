@@ -106,6 +106,8 @@ export interface ApprovalRequest {
   status: ApprovalStatus;
   payload: Record<string, unknown>;
   preview: Record<string, unknown>;
+  /** Bounded display label from the scoped detail read. Null means there is no safe label. */
+  targetLabel?: string | null;
   rollbackNote?: string;
   linkage?: ApprovalLinkage;
   createdAt: string;

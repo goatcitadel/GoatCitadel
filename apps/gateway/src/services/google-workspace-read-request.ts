@@ -23,8 +23,9 @@ const CALENDAR_READ_FIELDS = new Set([
   "timeMin",
   "timeMax",
   "maxResults",
+  "pageToken",
 ]);
-const GMAIL_READ_FIELDS = new Set(["connectionId", "query", "maxResults"]);
+const GMAIL_READ_FIELDS = new Set(["connectionId", "query", "maxResults", "pageToken"]);
 
 interface GoogleReadRequestDeps {
   connections: Pick<AsyncStorage["integrationConnections"], "list">;
@@ -44,9 +45,15 @@ export async function normalizeGoogleReadRequest(
   if (Object.keys(args).some((key) => !fields.has(key))) {
     throw new ValidationError({
       message: gmail
-        ? "Gmail searches accept connectionId, query and maxResults."
-        : "Calendar reads accept connectionId, calendarId, fromIso, toIso and maxResults.",
+        ? "Gmail searches accept connectionId, query, maxResults and pageToken."
+        : "Calendar reads accept connectionId, calendarId, fromIso, toIso, maxResults and pageToken.",
     });
+  }
+  if (
+    args.pageToken !== undefined &&
+    (typeof args.pageToken !== "string" || !args.pageToken || args.pageToken.length > 8192)
+  ) {
+    throw new ValidationError({ message: "The saved page token is invalid. Start the query again." });
   }
   const textField = gmail ? "query" : "calendarId";
   const textValue = args[textField];

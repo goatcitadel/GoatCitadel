@@ -234,7 +234,7 @@ describe("Connect Google", () => {
     expect(window.location.hash).toBe("#integration-connections");
     expect(api.completeGoogleWorkspaceOAuth).toHaveBeenCalledWith(CONNECTION_ID, { state: STATE, code: "4/0Adeu" });
     expect(container!.textContent).toContain(
-      "Connected to Google as operator@example.com. Allowed: Read Gmail. Google did not grant Read Calendar events, so those stay off.",
+      "Connected to Google as operator@example.com. Allowed: Search Gmail. Google did not grant Read Calendar events, so those stay off.",
     );
     expect(onChanged).toHaveBeenCalled();
   });

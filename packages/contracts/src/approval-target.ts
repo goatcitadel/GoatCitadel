@@ -1,4 +1,4 @@
-import { redactSecretText } from "@goatcitadel/contracts/secret-redaction";
+import { redactSecretText } from "./secret-redaction.js";
 
 const LINE_LIMIT = 160;
 const CUT_NOTE = " (cut short)";

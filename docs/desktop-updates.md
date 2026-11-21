@@ -10,9 +10,9 @@ The native Windows host owns update checks, preferences, notifications, and down
 - **Remind me tomorrow** suppresses notifications for 24 hours, including newer previews. The Settings panel remains available.
 - Downloads require a click. The host checks architecture, fixed GitHub asset locations, size, and SHA-256, then stores the installer under the installation's runtime/updates directory. Show installer rechecks its bytes.
 - Checksum verification and signed release evidence are separate signals. An unsigned Preview has no publisher-signing claim. Windows notification registration is optional; the host falls back to an in-app message.
-- The app never executes an installer or restarts automatically. Close it and run the verified installer yourself when ready. Integrated installation remains deferred until protected signing and upgrade acceptance are proven.
+- After verification, **Download** becomes **Update and restart**. Save your work first. Settings requests require confirmation in the Windows host. GoatCitadel stops its local runtime and closes, then a separate helper runs the verified installer without the setup wizard and reopens the app. **Show installer** opens the downloaded file's location for manual installation.
 
-Preferences live at `<installation>/runtime/updates/preferences.json`. The native bridge accepts a fixed set of requests only from the exact installed Mission Control origin; renderer-provided URLs, file paths, and installer execution requests are rejected.
+Preferences live at `<installation>/runtime/updates/preferences.json`. The native bridge accepts a fixed set of requests only from the exact installed Mission Control origin. The host chooses the installer path and rechecks file size and SHA-256 before launching it.
 
 ## Preview publishing
 

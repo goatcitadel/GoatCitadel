@@ -44,6 +44,33 @@ it("uses one GET for parallel authorized startup reads and preserves independent
   expect(await responses[0]!.json()).toEqual({ revision: 2 });
   expect(await responses[1]!.json()).toEqual({ error: "Missing" });
 });
+it("settles the selected Chat thread without waiting for other startup reads", async () => {
+  let finishBatch!: (response: Response) => void;
+  const fetch = vi.fn<(url: string, options: RequestInit) => Promise<Response>>().mockImplementation((url) =>
+    new URL(url).pathname === "/api/v1/startup-reads"
+      ? new Promise((resolve) => {
+          finishBatch = resolve;
+        })
+      : Promise.resolve(json({ sessionId: "s1", thread: { sessionId: "s1", turns: [] } })),
+  );
+  vi.stubGlobal("fetch", fetch);
+  beginStartupReadWindow(scope);
+  const core = scope.installation + "/api/v1/chat/sessions/s1/core-state";
+  const read = init();
+  const settings = fetchStartupRead(scope.installation + "/api/v1/settings", init(), scope, () => true);
+  const prefs = fetchStartupRead(core + "?includeThread=false", init(), scope, () => true);
+  const thread = fetchStartupRead(core, read, scope, () => true);
+  expect(fetch).toHaveBeenCalledWith(core, read);
+  expect(await (await thread).json()).toMatchObject({ thread: { sessionId: "s1", turns: [] } });
+  await vi.waitFor(() => expect(finishBatch).toBeTypeOf("function"));
+  const batch = new URL(fetch.mock.calls.find(([url]) => new URL(url).pathname === "/api/v1/startup-reads")![0]);
+  expect(JSON.parse(batch.searchParams.get("reads")!).map((item: { path: string }) => item.path)).toEqual([
+    "/api/v1/settings",
+    "/api/v1/chat/sessions/s1/core-state?includeThread=false",
+  ]);
+  finishBatch(json({ items: [result({}), result({})] }));
+  await Promise.all([settings, prefs]);
+});
 it.each([404, 405])(
   "falls back to original GET routes only when the older runtime lacks the transport (%s)",
   async (status) => {

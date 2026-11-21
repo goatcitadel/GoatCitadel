@@ -85,6 +85,7 @@ describe("Chat session controls", () => {
         new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0, pointerType: "mouse" }),
       );
       node.click();
+      await vi.dynamicImportSettled();
     });
     await vi.waitFor(() => expect(item("Export conversation")).toBeDefined());
   };
@@ -100,6 +101,23 @@ describe("Chat session controls", () => {
     await act(async () => item("Archive conversation")?.click());
     expect(context.onToggleArchiveSession).toHaveBeenCalledOnce();
     expect(document.body.querySelector("[role=dialog]")).toBeNull();
+  });
+
+  it("keeps an explicitly scoped phone menu open while the selected conversation finishes loading", async () => {
+    const phoneActions = { onOpenProjects: vi.fn(), onNewConversation: vi.fn() };
+    await act(async () =>
+      root.render(<ChatSessionOverflow dock={null} sessionId="session-1" phoneActions={phoneActions} />),
+    );
+    trigger().focus();
+    await act(async () => trigger().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await vi.waitFor(() => expect(item("Projects")).toBeDefined());
+    await act(async () =>
+      root.render(
+        <ChatSessionOverflow dock={dock()} sessionId="session-1" phoneActions={phoneActions} onInspect={vi.fn()} />,
+      ),
+    );
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    expect(item("Inspect conversation")).toBeDefined();
   });
 
   it("opens from the keyboard, closes on Escape and returns focus to the trigger", async () => {

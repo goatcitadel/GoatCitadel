@@ -700,43 +700,13 @@ describe("executeTool", () => {
       createdAt: new Date().toISOString(),
       usesRemaining: 0,
     };
-    const documents: Array<Record<string, unknown>> = [];
-    const chunksByDocId = new Map<string, Array<Record<string, unknown>>>();
+    const { storage: knowledgeHarness } = createExecutorKnowledgeHarness();
     const storageWithConsumedGrant = {
       toolGrants: {
         findActive: vi.fn(() => grant),
         listActive: vi.fn(() => []),
       },
-      knowledge: {
-        listDocuments: vi.fn(() => []),
-        createDocument: vi.fn((input: Record<string, unknown>) => {
-          const doc = {
-            docId: `doc-${documents.length + 1}`,
-            namespace: input.namespace,
-            sourceType: input.sourceType,
-            sourceRef: input.sourceRef,
-            title: input.title,
-            metadata: input.metadata ?? {},
-            createdAt: new Date().toISOString(),
-          };
-          documents.unshift(doc);
-          return doc;
-        }),
-        appendChunks: vi.fn((docId: string, entries: Array<Record<string, unknown>>) => {
-          const saved = entries.map((entry, index) => ({
-            chunkId: `chunk-${index + 1}`,
-            docId,
-            seq: index,
-            content: entry.content,
-            tokenEstimate: 1,
-            createdAt: new Date().toISOString(),
-          }));
-          chunksByDocId.set(docId, saved);
-          return saved;
-        }),
-        listChunksByDocument: vi.fn((docId: string) => chunksByDocId.get(docId) ?? []),
-        listChunksByNamespace: vi.fn(() => []),
-      },
+      knowledge: knowledgeHarness.knowledge,
     } as unknown as Storage & AsyncStorage;
 
     try {

@@ -127,6 +127,7 @@ function ChatSessionHeaderRow({
     active || buildEditor || phone ? (
       <ChatSessionOverflow
         key={selectedSessionId}
+        sessionId={selectedSessionId ?? undefined}
         dock={active ? input.contextDockProps : null}
         onFork={onFork}
         forkLabel={phone && channel ? "Continue in a new chat" : undefined}

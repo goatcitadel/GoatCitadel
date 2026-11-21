@@ -157,6 +157,24 @@ test("release proof requires measured orchestration performance", () => {
   assert.match(workflow, /laneScript:\s*verify:orchestration:perf/);
 });
 
+test("every named 1.0 contract gate is required by the certificate and covered by its workflow", () => {
+  const contract = fs.readFileSync(new URL("../../docs/1_0_CONTRACT.md", import.meta.url), "utf8")
+    .split("## Release Gates")[1].split("## Source of Truth Order")[0];
+  const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
+  const workflow = fs.readFileSync(new URL("../../.github/workflows/verification-1-0-release-proof.yml", import.meta.url), "utf8");
+  const required = writer.match(/const REQUIRED_LANE_SPECS = \[([\s\S]*?)\]\.map/)[1];
+  const covered = writer.match(/const RELEASE_PROOF_COVERED_LANES = \[([\s\S]*?)\];/)[1];
+  const matrix = new Set([...workflow.matchAll(/laneScript:\s*([^\s#]+)/gu)].map((match) => match[1]));
+  const gates = [...contract.matchAll(/^- `(verify:[^`]+)` is green/gmu)].map((match) => match[1]);
+  assert.ok(gates.length > 0);
+  for (const gate of gates) {
+    assert.ok(required.includes(`{ name: "${gate}", workflowFile: RELEASE_PROOF_WORKFLOW_FILE, required: true }`), `${gate} must block certificate issuance`);
+    assert.ok(covered.includes(`"${gate}"`), `${gate} must be recorded as umbrella-covered`);
+    assert.ok(matrix.has(gate), `${gate} must run in the release-proof matrix`);
+  }
+  assert.deepEqual(new Set([...covered.matchAll(/"(verify:[^"]+)"/gu)].map((match) => match[1])), matrix);
+});
+
 test("release certificate records additive exact-SHA summary fields", () => {
   const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
   assert.match(writer, /targetCommit:\s*commit/);

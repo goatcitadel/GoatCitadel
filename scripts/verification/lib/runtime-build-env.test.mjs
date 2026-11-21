@@ -41,3 +41,20 @@ test("scrubbed fixture build child inherits its live parent lease while Gateway/
   try { await assert.rejects(buildVerificationBuildEnv(env, {}, fixture.gatewayEnvOmit, root), /no longer valid/u); }
   finally { await fs.writeFile(lease.lockPath, original); }
 });
+
+test("Windows build PATH deduplication keeps the first search order and executable discovery below cmd limits", {skip:process.platform!=="win32"}, async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),"build-path-proof-"));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  await fs.writeFile(path.join(root,"verification-compiler.cmd"),"@echo PATH_COMPILER_OK\r\n");
+  const compilerPaths=Array.from({length:300},(_,index)=>index%2?root.toUpperCase():root);
+  const base={SystemRoot:process.env.SystemRoot,PATHEXT:".COM;.EXE;.BAT;.CMD",Path:compilerPaths.join(";"),OPENAI_API_KEY:"synthetic-secret"};
+  assert(base.Path.length>8191,"Fixture must exceed cmd.exe's environment expansion boundary");
+  const env=await buildVerificationBuildEnv(base,{},["OPENAI_API_KEY"],root);
+  assert.equal(env.OPENAI_API_KEY,undefined);
+  const result=spawnSync(path.join(process.env.SystemRoot,"System32","cmd.exe"),["/d","/s","/c","verification-compiler"],{cwd:os.tmpdir(),env,encoding:"utf8"});
+  assert.equal(result.status,0,result.stderr);
+  assert.match(result.stdout,/PATH_COMPILER_OK/u);
+  assert(env.Path===root,"Duplicate entries must collapse case-insensitively, preserving the first spelling/order");
+  const ordered=await buildVerificationBuildEnv({...base,Path:[root,"C:\\DistinctTool",root.toUpperCase(),"C:\\DistinctTool"].join(";")},{},[],root);
+  assert.equal(ordered.Path,[root,"C:\\DistinctTool"].join(";"));
+});

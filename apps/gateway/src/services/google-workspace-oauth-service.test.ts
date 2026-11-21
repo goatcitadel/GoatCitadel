@@ -133,6 +133,48 @@ async function connect(
 }
 
 describe("Google Workspace sign-in", { timeout: 60_000 }, () => {
+  it("keeps full-message reads opt-in and requires both grants for replies and draft sends", async () => {
+    const ctx = setup();
+    const connection = await googleConnection();
+    await connect(ctx, connection.connectionId, ["gmail.read", "gmail.send"], {
+      scope: `${GMAIL_READONLY} ${GMAIL_SEND}`,
+    });
+    const request = {
+      toolName: "gmail.get_message",
+      agentId: "assistant",
+      sessionId: "s",
+      workspaceId: "default",
+      args: { connectionId: connection.connectionId, messageId: "m" },
+    };
+    await expect(ctx.service.normalizeToolRequest(request)).rejects.toThrow(/Read complete Gmail messages/);
+    await expect(
+      ctx.service.resolveToolAccessToken({ connectionId: connection.connectionId, toolName: "gmail.reply" }),
+    ).rejects.toThrow(/Read complete Gmail messages/);
+    await connect(ctx, connection.connectionId, ["gmail.content", "gmail.drafts"], {
+      scope: `${GMAIL_READONLY} https://www.googleapis.com/auth/gmail.compose`,
+    });
+    expect((await ctx.service.normalizeToolRequest(request)).googleReadSignInId).toBeTruthy();
+    const direct = await ctx.service.normalizeToolRequest({
+      ...request,
+      args: { ...request.args, __gcSafety: { verified: false, confirmed: false, enforced: true } },
+    });
+    expect(direct.args).not.toHaveProperty("__gcSafety");
+    expect(direct.googleReadSignInId).toBeTruthy();
+    expect(await ctx.service.normalizeToolRequest(direct)).toEqual(direct);
+    // A broader compose grant technically permits sending, but the Send Gmail switch stays off.
+    await expect(
+      ctx.service.resolveToolAccessToken({ connectionId: connection.connectionId, toolName: "gmail.send_draft" }),
+    ).rejects.toThrow(/Send Gmail is turned off/);
+    await connect(ctx, connection.connectionId, ["gmail.content"], { scope: GMAIL_READONLY });
+    await expect(ctx.service.normalizeToolRequest(direct)).rejects.toThrow(/Google sign-in changed/);
+    await expect(
+      ctx.service.resolveToolAccessToken({
+        connectionId: connection.connectionId,
+        toolName: direct.toolName,
+        signInId: direct.googleReadSignInId,
+      }),
+    ).rejects.toThrow(/Google sign-in changed/);
+  });
   it("repairs a Calendar read with legacy date fields and binds it to the only eligible sign-in", async () => {
     const ctx = setup();
     const connection = await googleConnection({ calendarRead: true });
@@ -348,7 +390,7 @@ describe("Google Workspace sign-in", { timeout: 60_000 }, () => {
     );
     await expect(
       ctx.service.resolveToolAccessToken({ connectionId: connection.connectionId, toolName: "calendar.create_event" }),
-    ).rejects.toThrow(/^blocked: Create Calendar events is turned off/);
+    ).rejects.toThrow(/^blocked: Change Calendar events is turned off/);
     await expect(
       ctx.service.resolveToolAccessToken({ connectionId: connection.connectionId, toolName: "slack.send" }),
     ).rejects.toThrow(/^blocked: slack\.send is not a Google Workspace tool/);

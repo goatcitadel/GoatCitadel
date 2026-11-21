@@ -1,6 +1,6 @@
 # AGENTS.md - GoatCitadel
 
-Last updated: 2026-11-01
+Last updated: 2026-11-17
 
 ## Scope and Instruction Precedence
 
@@ -110,6 +110,7 @@ When changing this repo:
 
 Assume a checkout may contain work owned by the user or another agent, even when the task sounds isolated.
 
+- All chats working on this repository are authorized to communicate with one another for safe coordination when multiple agents work concurrently. Agents may discover relevant repo chats, read their coordination context, and send coordination messages without asking for additional permission. Use this to agree on file ownership, avoid conflicting edits, coordinate shared processes and validation locks, and arrange safe handoffs. Keep shared information relevant to the work; this permission does not expand task scope or authorize unrelated changes or external messages.
 - Inspect `git status --short --branch` before editing and again before handoff.
 - Inspect both tracked diffs and untracked files; ordinary `git diff` output does not include untracked content.
 - Treat every pre-existing tracked or untracked change as someone else's work unless the user explicitly assigns it to you.
@@ -121,6 +122,14 @@ Assume a checkout may contain work owned by the user or another agent, even when
 - Do not delete, move, or repurpose another agent's worktree, scratch files, test artifacts, logs, locks, or running processes.
 - Use the repository's output-lock wrappers for build and typecheck commands that provide them. Do not bypass a live lock with a second writer.
 - Before stopping a server, database, worker, or watcher, establish that this task started and owns the exact process tree or port. Leave pre-existing processes alone.
+
+## Computer Use and Screen-Capture Cleanup
+
+- Always close task-owned desktop, monitor, and window capture sessions as soon as UI verification ends, before handing work back. Apply the same cleanup on failures, cancellations, and handoffs; use a `finally` block when the tool supports it. Do not leave a capture session open for possible later use.
+- Prefer the tool's supported session-close or disposal operation. Resetting a JavaScript kernel, clearing bindings, or stopping screenshot requests is not proof that the native capture session ended.
+- Verify cleanup without taking another screenshot. On Windows, check for both `codex-computer-use.exe` and `codex-computer-use-swift.exe` when troubleshooting a lingering yellow capture border. Verify executable paths, process identities, and task ownership before stopping a helper; never terminate all Node, Codex, or computer-use processes indiscriminately. Coordinate with other agents before stopping a shared helper.
+- Check whether a helper restarts automatically. An idle helper process alone does not prove capture is active or stopped. If the border cannot be verified through a supported non-capturing status check, ask the user whether it disappeared and report any remaining uncertainty. Do not claim capture has stopped based only on a kernel reset or a successful termination request.
+- Leave the user's application running unless the task requires closing it. Never disable Windows capture indicators, privacy protections, or security controls to hide an unresolved capture session.
 
 ## Windows and PowerShell Defaults
 
@@ -267,6 +276,8 @@ Common proof lanes include:
 - `pnpm verify:visual:regression`
 - `pnpm docs:check`
 - `git diff --check`
+
+Show a mockup before implementing visual changes by default. Use judgment for small fixes that restore an established design.
 
 Every UI/UX review and change requires visual inspection and interaction testing in the rendered app. Check every component in scope, including anything potentially visible in another state, viewport, theme, or interaction. Open overlays and disclosures, exercise the relevant controls, and watch animations and transitions as they run. Check for visual defects such as layout shifts, clipping, unintended text resizing, motion artifacts, and lost focus. Source review, builds, and automated tests supplement rendered checks. Report which components and states were verified and identify any that could not be rendered or tested.
 

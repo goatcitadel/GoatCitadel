@@ -1,4 +1,8 @@
 export * from "./tool-registry.js";
+export { prepareGoogleMail, googleMailMaterial, type PreparedGoogleMail } from "./tool-executor/google-mail-compose.js";
+export { projectGoogleMessage } from "./tool-executor/google-mail-content.js";
+export { type GoogleFilePort, type GoogleAttachmentReference } from "./tool-executor/google-workspace-common.js";
+export { assertToolWritePath } from "./sandbox/tool-write-gate.js";
 export * from "./policy-resolver.js";
 export * from "./approval-gate.js";
 export { withLegacyToolApprovalPreview } from "./knowledge-approval-preview.js";

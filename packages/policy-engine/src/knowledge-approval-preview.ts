@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { clampInt, redactSecretText, type ApprovalRequest, type ToolInvokeRequest } from "@goatcitadel/contracts";
 import { browserApprovalPreview } from "./browser-approval-preview.js";
+import { toolActionApprovalPreview } from "./tool-action-approval-preview.js";
 import { capabilityExplanationApprovalPreview } from "./capability-explanation-approval-preview.js";
 
 const LOOKUP_LIMITS = new Map<string, { fallback: number; max: number }>([
@@ -120,7 +121,13 @@ export function withLegacyToolApprovalPreview(approval: ApprovalRequest): Approv
   }
   const actionPreview =
     lookupApprovalPreview(kind, payload) ??
-    (preview.input === undefined ? browserApprovalPreview(kind, payload) : undefined);
+    (preview.input === undefined ? browserApprovalPreview(kind, payload) : undefined) ??
+    (preview.input === undefined &&
+    preview.path === undefined &&
+    preview.target === undefined &&
+    preview.command === undefined
+      ? toolActionApprovalPreview(kind, payload)
+      : undefined);
   return actionPreview ? { ...approval, preview: { ...preview, ...actionPreview } } : approval;
 }
 
@@ -137,16 +144,10 @@ function knowledgeScopeSummary(request: ToolInvokeRequest, boundary: string): st
 
 /** Allowlisted review projection only: never copy executable args or metadata wholesale. */
 export function knowledgeApprovalPreview(request: ToolInvokeRequest): Record<string, unknown> | undefined {
-  if (
-    LOOKUP_LIMITS.has(request.toolName) ||
-    request.toolName === "session.history" ||
-    request.toolName === "capabilities.explain" ||
-    request.toolName === "time.now" ||
-    request.toolName === "gmail.read" ||
-    request.toolName === "calendar.list"
-  ) {
-    const lookup = lookupApprovalPreview(request.toolName, request.args);
-    return lookup ? { ...lookup, sessionId: request.sessionId, taskId: request.taskId } : undefined;
+  const detail =
+    lookupApprovalPreview(request.toolName, request.args) ?? toolActionApprovalPreview(request.toolName, request.args);
+  if (detail !== undefined) {
+    return { toolName: request.toolName, ...(detail ?? {}), sessionId: request.sessionId, taskId: request.taskId };
   }
   if (
     !["memory.write", "memory.upsert", "docs.ingest", "embeddings.index", "embeddings.query"].includes(request.toolName)

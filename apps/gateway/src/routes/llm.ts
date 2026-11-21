@@ -346,7 +346,7 @@ export const llmRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get("/api/v1/llm/config", async (request, reply) => {
     try {
-      return reply.send(projectLlmConfigPublicValue(fastify.services.llm.getLlmConfigWithDetails()));
+      return reply.send(projectLlmConfigPublicValue(await fastify.services.llm.getLlmConfigWithDetails()));
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }

@@ -450,8 +450,10 @@ test("the optional runtimes say what they are and that setup downloads them (U-F
   );
 });
 
-test("a silent install still skips both runtimes", () => {
+test("a silent install skips wizard progress pages and optional runtimes", () => {
   const iss = renderSample();
+  assert.match(iss, /if not WizardSilent\(\) then\s+begin\s+EnsurePayloadProgressPage\(\);[\s\S]*?PayloadProgressPage\.Show\(\)/u);
+  assert.match(iss, /if not WizardSilent\(\) then\s+begin\s+ArchiveProgressPage := CreateOutputMarqueeProgressPage/u);
   assert.match(iss, /\(not WizardSilent\(\)\) and IsComponentSelected\('chromium'\)/u);
   assert.match(iss, /\(not WizardSilent\(\)\) and IsComponentSelected\('voice'\)/u);
 });

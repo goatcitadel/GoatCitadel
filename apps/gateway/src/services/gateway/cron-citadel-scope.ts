@@ -10,7 +10,7 @@ export interface CronCitadelReader {
 /** Server-resolved execution scope for one cron job. Empty for global (unscoped) jobs. */
 export interface CronCitadelExecutionScope {
   citadelId?: string;
-  /** The citadel's default workspace, when it declares one; agent turns run there. */
+  /** The citadel's default workspace. Explicit Chat specs additionally verify their selected workspace in this citadel. */
   workspaceId?: string;
 }
 

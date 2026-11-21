@@ -90,11 +90,12 @@ export function composeToolsMcpRouteDependencies(
       createChatCompletion: (request, attribution) => gateway.createChatCompletion(request, attribution),
       generateImage: (input, attribution) => gateway.llmService.generateImage(input, attribution),
       getOpenAICodexOAuthStatus: () => gateway.llmService.getOpenAICodexOAuthStatus(),
-      getLlmConfigWithDetails: () => ({
-        revision: gateway.readSettingsRevision(),
-        ...getLlmConfigForGateway(gateway),
-        providerConfigs: gateway.llmService.exportConfigFile().providers,
-      }),
+      getLlmConfigWithDetails: () =>
+        gateway.llmService.withPublicCodexStatusSnapshot(() => ({
+          revision: gateway.readSettingsRevision(),
+          ...getLlmConfigForGateway(gateway),
+          providerConfigs: gateway.llmService.exportConfigFile().providers,
+        })),
       getProviderAdvice: async (input) => {
         const providers = await gateway.llmService.listProvidersWithProbedReadiness();
         const latestMeasurements = new Map(

@@ -2,7 +2,7 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
+import type { ChatThreadSystemNoticeRecord, ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InspectorProvider } from "../../app/inspector";
@@ -139,6 +139,56 @@ afterEach(() => {
   container.remove();
   composer.remove();
   client.clear();
+});
+
+describe("ChatTranscript system notices", () => {
+  const reminder: ChatThreadSystemNoticeRecord = {
+    kind: "timer_due",
+    noticeId: "timer-notice-test",
+    turnId: "timer-notice-test",
+    message: {
+      messageId: "timer-notice-test",
+      sessionId: "session-1",
+      role: "assistant",
+      actorType: "system",
+      actorId: "chat-timer",
+      sourceAuthority: "trusted_lifecycle",
+      content: "Take a stretch break.",
+      timestamp: "2026-10-25T10:01:00Z",
+    },
+  };
+
+  it("replaces the empty conversation state when the first timer notice arrives", async () => {
+    await render(<ChatTranscript props={props([])} />);
+    expect(container.textContent).toContain("What would you like to work on?");
+    await render(
+      <ChatTranscript
+        props={props([], { thread: { sessionId: "session-1", turns: [], systemNotices: [reminder] } })}
+      />,
+    );
+    expect(container.querySelector('section[aria-label="Timer due"]')?.textContent).toContain("Take a stretch break.");
+    expect(container.textContent).not.toContain("What would you like to work on?");
+  });
+
+  it("keeps each notice in order and in its own Chat", async () => {
+    const turns = [
+      channelTurn("first", "operator", "2026-10-25T10:00:00Z"),
+      channelTurn("second", "operator", "2026-10-25T10:02:00Z"),
+    ];
+    await render(
+      <ChatTranscript props={props(turns, { thread: { sessionId: "session-1", turns, systemNotices: [reminder] } })} />,
+    );
+    expect(container.textContent).toMatch(/User first.*Take a stretch break\..*User second/su);
+    await render(
+      <ChatTranscript
+        props={props([], {
+          selectedSessionId: "session-2",
+          thread: { sessionId: "session-1", turns: [], systemNotices: [reminder] },
+        })}
+      />,
+    );
+    expect(container.querySelector('section[aria-label="Timer due"]')).toBeNull();
+  });
 });
 
 describe("ChatTranscript in a channel conversation", () => {

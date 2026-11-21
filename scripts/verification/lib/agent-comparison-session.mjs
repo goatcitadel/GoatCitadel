@@ -190,6 +190,13 @@ export async function startComparisonSession({
       promptFile: path.join(destination, "prompt.txt"),
       deadlineAt,
       finished,
+      budget: Object.freeze({
+        owner: parent,
+        manifestSha256: binding.manifestSha256,
+        maxRequests: manifest.maxRequests,
+        maxCostUsd: manifest.maxCostUsd,
+        kind: local ? "local" : "provider",
+      }),
       ...(acceptanceFaults ? { acceptanceFaults } : {}),
       close: () => finish("operator_stop"),
     };

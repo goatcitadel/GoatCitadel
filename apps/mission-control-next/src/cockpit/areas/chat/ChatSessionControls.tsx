@@ -77,6 +77,7 @@ export function ChatSessionTitle({ title, dock }: { title: string; dock: Mission
 
 export function ChatSessionOverflow({
   dock,
+  sessionId,
   onFork,
   forkLabel,
   onInspect,
@@ -84,6 +85,8 @@ export function ChatSessionOverflow({
   phoneActions,
 }: {
   dock: MissionThreadedContextDockProps | null;
+  /** Route identity remains stable while the selected conversation's controls hydrate. */
+  sessionId?: string;
   onFork?: () => void;
   /** Names the fork item when the header names that action differently (a channel conversation continues in a new chat). */
   forkLabel?: string;
@@ -98,7 +101,7 @@ export function ChatSessionOverflow({
   // Radix gives the menu Escape, arrow keys and focus return; the bare <details> it replaces had none.
   return (
     <>
-      <Menu scopeKey={dock?.selectedSession.sessionId ?? ""}>
+      <Menu scopeKey={sessionId ?? dock?.selectedSession.sessionId ?? ""}>
         <MenuTrigger
           aria-label="Conversation actions"
           className="inline-flex min-h-8 shrink-0 items-center rounded-md border border-line px-2 text-sm text-fg-secondary hover:border-accent max-sm:min-h-11 max-sm:min-w-11 max-sm:justify-center"

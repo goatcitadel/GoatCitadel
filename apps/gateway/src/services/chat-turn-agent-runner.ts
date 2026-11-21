@@ -156,11 +156,13 @@ import {
 } from "./chat-tool-families.js";
 import {
   buildCodeModeRequestTurnShape,
-  isCodeModeRequestTurnShapeEligible,
+  explainCodeModeSignIn,
   isRestrictedAutonomousPermissionProfile,
+  isCodeModeRequestTurnShapeEligible,
   loadCodeModeRequestEligibility,
   type CodeModeRequestTurnFields,
 } from "./code-mode-request-eligibility.js";
+import { formatRecordedCodeModeResult, readStandaloneCodeModeSource } from "./code-mode-request-resume.js";
 import {
   buildAnswerRecoveryNudge,
   buildDegradedAnswerFooter,
@@ -2374,6 +2376,42 @@ export class ChatTurnAgentRunner {
       trace,
     };
 
+    const codeModeTurn = buildCodeModeRequestTurnShape(input);
+    const standaloneCodeSource =
+      normalizationProfile === "live" && isCodeModeRequestTurnShapeEligible(codeModeTurn)
+        ? readStandaloneCodeModeSource(executionIntentContent)
+        : undefined;
+    const recordedCodeRuns = standaloneCodeSource ? await listProjectedToolRuns() : [];
+    const recordedCodeResult = standaloneCodeSource
+      ? formatRecordedCodeModeResult(standaloneCodeSource, recordedCodeRuns)
+      : undefined;
+    const directReply =
+      recordedCodeResult ??
+      (await explainCodeModeSignIn(codeModeTurn, executionIntentContent, this.deps.getCodeModeReadiness));
+    if (directReply) {
+      throwIfChatTurnCancelled(input);
+      const completed = await this.patchTurnTrace(input, input.turnId, {
+        status: "completed",
+        completion: { status: "complete", repaired: false, providerCallCount: 0 },
+        finishedAt: new Date().toISOString(),
+      });
+      const messageId = input.outputMessageId ?? `assistant-${input.turnId}`;
+      yield {
+        type: "message_done",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        messageId,
+        content: directReply,
+      };
+      yield {
+        type: "trace_update",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        trace: recordedCodeResult ? { ...completed, toolRuns: recordedCodeRuns } : completed,
+      };
+      yield { type: "done", sessionId: input.sessionId, turnId: input.turnId, messageId };
+      return;
+    }
     const conversationMessages = projectHistoryMessagesForModel(input.historyMessages);
     // Plan first runs nothing: no delegation is offered or started for it, the model just writes the plan.
     const confirmedDelegation = planFirstNoTools ? undefined : await this.deps.resolveConfirmedDelegation?.(input);

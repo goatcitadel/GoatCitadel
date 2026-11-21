@@ -26,13 +26,18 @@ const optionalContractOwners = [
   "change-plan-feature-flag-labels",
   "channel-access",
   "channel-address-host",
+  "external-source-chat",
+  "external-source-validation",
   "google-workspace",
+  "google-workspace-actions",
   "mcp",
   "operator-write-access",
   "personal-ops",
+  "provider-templates",
   "public-web-address",
   "skill-categories",
   "skill-packs",
+  "tool-groups",
   "web-search",
 ] as const;
 function optionalContractFixture(
@@ -750,10 +755,17 @@ it("leaves globally retained capability operations and query automatic when the 
 const approvalChunks = ["ChatApprovalRendererBody", "ChatApprovalRendererSettlement"] as const;
 function expectedApprovalChunk(owner: string) {
   if (
-    /\/(?:approval-purpose-evidence|external-source-approval-evidence|communications-approval-evidence|skill-state-approval-evidence|code-mode-request-input)\.[jt]s$/u.test(owner) ||
-    /\/(?:SpecialistApprovalReview\.tsx|specialist-approval-evidence\.ts|native-runtime-approval-evidence\.ts)$/u.test(owner)
-  ) return undefined;
-  return /\/(?:ApprovalSettlement\.tsx|approval-follow-on\.ts|ApprovalChangePlanOutcome\.tsx|durable-chat-turn-payload\.[jt]s)$/u.test(owner)
+    /\/(?:approval-purpose-evidence|external-source-approval-evidence|communications-approval-evidence|skill-state-approval-evidence|code-mode-request-input)\.[jt]s$/u.test(
+      owner,
+    ) ||
+    /\/(?:SpecialistApprovalReview\.tsx|specialist-approval-evidence\.ts|native-runtime-approval-evidence\.ts)$/u.test(
+      owner,
+    )
+  )
+    return undefined;
+  return /\/(?:ApprovalSettlement\.tsx|approval-follow-on\.ts|ApprovalChangePlanOutcome\.tsx|durable-chat-turn-payload\.[jt]s)$/u.test(
+    owner,
+  )
     ? approvalChunks[1]
     : approvalChunks[0];
 }
@@ -1395,11 +1407,26 @@ const chatDemandOwnerAliases = [
 
 // Observed graph447 residual approval closure. Existing eighteen-owner tests remain unchanged.
 const residualApprovalAliases = [
-  ["/packages/mission-control-shared/dist/content/approval-generic-evidence.js", "/packages/mission-control-shared/src/content/approval-generic-evidence.ts"],
-  ["/packages/mission-control-shared/dist/content/external-source-approval-evidence.js", "/packages/mission-control-shared/src/content/external-source-approval-evidence.ts"],
-  ["/packages/mission-control-shared/dist/content/communications-approval-evidence.js", "/packages/mission-control-shared/src/content/communications-approval-evidence.ts"],
-  ["/packages/mission-control-shared/dist/content/skill-state-approval-evidence.js", "/packages/mission-control-shared/src/content/skill-state-approval-evidence.ts"],
-  ["/packages/mission-control-shared/dist/content/code-mode-request-input.js", "/packages/mission-control-shared/src/content/code-mode-request-input.ts"],
+  [
+    "/packages/mission-control-shared/dist/content/approval-generic-evidence.js",
+    "/packages/mission-control-shared/src/content/approval-generic-evidence.ts",
+  ],
+  [
+    "/packages/mission-control-shared/dist/content/external-source-approval-evidence.js",
+    "/packages/mission-control-shared/src/content/external-source-approval-evidence.ts",
+  ],
+  [
+    "/packages/mission-control-shared/dist/content/communications-approval-evidence.js",
+    "/packages/mission-control-shared/src/content/communications-approval-evidence.ts",
+  ],
+  [
+    "/packages/mission-control-shared/dist/content/skill-state-approval-evidence.js",
+    "/packages/mission-control-shared/src/content/skill-state-approval-evidence.ts",
+  ],
+  [
+    "/packages/mission-control-shared/dist/content/code-mode-request-input.js",
+    "/packages/mission-control-shared/src/content/code-mode-request-input.ts",
+  ],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/inbox-approval-attempts.ts"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/inbox-approval-guard.ts"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/use-minute-clock.ts"],
@@ -1412,11 +1439,22 @@ const residualApprovalAliases = [
 ] as const;
 function residualApprovalFixture(directory: "src" | "dist" = "dist") {
   const f = chatDemandFixture(directory);
-  const residual = residualApprovalAliases.map(aliases => "C:/repo" + (directory === "src" && aliases.length === 2 ? aliases[1] : aliases[0]));
-  for (const owner of residual) f.modules.set(owner, { isIncluded: true, importedIds: [], ast: program([{
-    type: "ExportNamedDeclaration", source: null, specifiers: [],
-    declaration: { type: "FunctionDeclaration", id: identifier("residualValue") },
-  }]) });
+  const residual = residualApprovalAliases.map(
+    (aliases) => "C:/repo" + (directory === "src" && aliases.length === 2 ? aliases[1] : aliases[0]),
+  );
+  for (const owner of residual)
+    f.modules.set(owner, {
+      isIncluded: true,
+      importedIds: [],
+      ast: program([
+        {
+          type: "ExportNamedDeclaration",
+          source: null,
+          specifiers: [],
+          declaration: { type: "FunctionDeclaration", id: identifier("residualValue") },
+        },
+      ]),
+    });
   // Existing lazy decision owner consumes this closure; no initial/main edge is introduced.
   f.modules.get(f.owners[8]!)!.importedIds = [...residual];
   return { ...f, residual };
@@ -1429,31 +1467,67 @@ it("keeps the shared workspace label hook in Cockpit only for the proved approva
   f.modules.delete(f.residual[0]!);
   expect(createCockpitBootChunkSelector()(owner, f.graph)).toBeUndefined();
 });
-it.each(["src", "dist"] as const)("joins the exact proven residual approval owners with the existing demand chunk (%s)", directory => {
-  const f = residualApprovalFixture(directory), select = createCockpitBootChunkSelector();
-  const named = new Set<string>(), boot = collectCockpitBootBindings(f.graph, root, named);
-  for (const owner of f.residual) {
-    expect(boot.has(owner)).toBe(false); expect(named.has(owner)).toBe(false);
-    expect(select(owner, f.graph)).toBe(expectedApprovalChunk(owner));
-    expect(createCockpitBootChunkSelector()(owner)).toBeUndefined();
-  }
-  for (const owner of f.owners) expect(select(owner, f.graph)).toBe(expectedApprovalChunk(owner));
-});
-const residualFailures = ["missing", "discarded", "unknown", "ast", "body", "duplicate", "cold", "conservative", "initial"] as const;
-it.each(residualApprovalAliases.flatMap((_, index) => residualFailures.map(kind => [index, kind] as const)))(
-  "refuses the whole residual cohort for owner %s with %s while retaining the independent demand guard", (index, kind) => {
-    const f = residualApprovalFixture(), owner = f.residual[index]!, info = f.modules.get(owner)!;
+it.each(["src", "dist"] as const)(
+  "joins the exact proven residual approval owners with the existing demand chunk (%s)",
+  (directory) => {
+    const f = residualApprovalFixture(directory),
+      select = createCockpitBootChunkSelector();
+    const named = new Set<string>(),
+      boot = collectCockpitBootBindings(f.graph, root, named);
+    for (const owner of f.residual) {
+      expect(boot.has(owner)).toBe(false);
+      expect(named.has(owner)).toBe(false);
+      expect(select(owner, f.graph)).toBe(expectedApprovalChunk(owner));
+      expect(createCockpitBootChunkSelector()(owner)).toBeUndefined();
+    }
+    for (const owner of f.owners) expect(select(owner, f.graph)).toBe(expectedApprovalChunk(owner));
+  },
+);
+const residualFailures = [
+  "missing",
+  "discarded",
+  "unknown",
+  "ast",
+  "body",
+  "duplicate",
+  "cold",
+  "conservative",
+  "initial",
+] as const;
+it.each(residualApprovalAliases.flatMap((_, index) => residualFailures.map((kind) => [index, kind] as const)))(
+  "refuses the whole residual cohort for owner %s with %s while retaining the independent demand guard",
+  (index, kind) => {
+    const f = residualApprovalFixture(),
+      owner = f.residual[index]!,
+      info = f.modules.get(owner)!;
     if (kind === "missing") f.modules.delete(owner);
     if (kind === "discarded") info.isIncluded = false;
     if (kind === "unknown") info.isIncluded = null;
     if (kind === "ast") info.ast = { type: "Unknown", body: [] };
     if (kind === "body") info.ast = { type: "Program", body: null };
-    if (kind === "duplicate") f.modules.set(owner.includes("/dist/") ? owner.replace("/dist/", "/src/").replace(/\.js$/u, ".ts") : owner.replace("C:/repo", "D:/other"), { ...info });
-    if (kind === "cold") f.modules.set(root, { isIncluded: true, importedIds: [owner], ast: program([{
-      type: "ImportDeclaration", source: literal(owner),
-      specifiers: [{ type: "ImportSpecifier", imported: identifier("residualValue"), local: identifier("residualValue") }],
-    }]) });
-    if (kind === "initial") f.modules.set("C:/repo/src/main.tsx", { isIncluded: true, importedIds: [owner], ast: program([]) });
+    if (kind === "duplicate")
+      f.modules.set(
+        owner.includes("/dist/")
+          ? owner.replace("/dist/", "/src/").replace(/\.js$/u, ".ts")
+          : owner.replace("C:/repo", "D:/other"),
+        { ...info },
+      );
+    if (kind === "cold")
+      f.modules.set(root, {
+        isIncluded: true,
+        importedIds: [owner],
+        ast: program([
+          {
+            type: "ImportDeclaration",
+            source: literal(owner),
+            specifiers: [
+              { type: "ImportSpecifier", imported: identifier("residualValue"), local: identifier("residualValue") },
+            ],
+          },
+        ]),
+      });
+    if (kind === "initial")
+      f.modules.set("C:/repo/src/main.tsx", { isIncluded: true, importedIds: [owner], ast: program([]) });
     if (kind === "conservative") f.modules.set(root, { isIncluded: true, importedIds: [owner], ast: program([]) });
     const select = createCockpitBootChunkSelector();
     for (const candidate of f.residual) expect(approvalChunks).not.toContain(select(candidate, f.graph));
@@ -1552,7 +1626,7 @@ it.each(chatDemandOwnerAliases.flatMap((_, index) => demandMetadataFailures.map(
     for (const candidate of f.owners) expect(approvalChunks).not.toContain(select(candidate, f.graph));
   },
 );
-it.each(chatDemandOwnerAliases.flatMap(([owner], index) => owner === rendererBodyOwner ? [] : [index]))(
+it.each(chatDemandOwnerAliases.flatMap(([owner], index) => (owner === rendererBodyOwner ? [] : [index])))(
   "does not accept a discarded real implementation for owner %s",
   (index) => {
     const f = chatDemandFixture();
@@ -1574,7 +1648,8 @@ it.each(chatDemandOwnerAliases.map((_, index) => index))(
     expect(named.has(owner)).toBe(false);
     const select = createCockpitBootChunkSelector();
     for (const candidate of f.owners) {
-      if (owner.endsWith(durableDemandAliases[0])) expect(select(candidate, f.graph)).toBe(expectedApprovalChunk(candidate));
+      if (owner.endsWith(durableDemandAliases[0]))
+        expect(select(candidate, f.graph)).toBe(expectedApprovalChunk(candidate));
       else expect(approvalChunks).not.toContain(select(candidate, f.graph));
     }
   },
@@ -1655,8 +1730,7 @@ it("groups exactly the complete already-cold vendor set, with no bootstrap or op
   f.scans.mockClear();
   for (const owner of f.owners)
     expect(select(owner, f.graph)).toBe(
-      owner.includes("/node_modules/zod/v4/") ||
-        optionalOverlayVendorSuffixes.some((suffix) => owner.endsWith(suffix))
+      owner.includes("/node_modules/zod/v4/") || optionalOverlayVendorSuffixes.some((suffix) => owner.endsWith(suffix))
         ? undefined
         : "cockpit-runtime",
     );
@@ -1672,17 +1746,14 @@ it.each([
   "packages/contracts/src/run-variables.ts",
   "packages/contracts/dist/sha256.js",
   "node_modules/@noble/hashes/esm/sha2.js",
-])(
-  "leaves on-demand validators automatic even when the boot graph reaches %s",
-  (entry) => {
-    const f = coldRuntimeVendorFixture();
-    const owner = `C:/repo/${entry}`;
-    f.modules.set(owner, { isIncluded: true, importedIds: [], ast: program([]) });
-    f.modules.get(root)!.importedIds = [...f.owners, owner];
-    expect(collectCockpitBootBindings(f.graph, root).has(owner)).toBe(true);
-    expect(createCockpitBootChunkSelector()(owner, f.graph)).toBeUndefined();
-  },
-);
+])("leaves on-demand validators automatic even when the boot graph reaches %s", (entry) => {
+  const f = coldRuntimeVendorFixture();
+  const owner = `C:/repo/${entry}`;
+  f.modules.set(owner, { isIncluded: true, importedIds: [], ast: program([]) });
+  f.modules.get(root)!.importedIds = [...f.owners, owner];
+  expect(collectCockpitBootBindings(f.graph, root).has(owner)).toBe(true);
+  expect(createCockpitBootChunkSelector()(owner, f.graph)).toBeUndefined();
+});
 const coldVendorFailures = [
   "missing",
   "duplicate",
@@ -1780,93 +1851,179 @@ it.each(optionalOverlayVendorSuffixes)(
     expect(createCockpitBootChunkSelector()(owner, f.graph)).toBeUndefined();
   },
 );
-it.each(optionalOverlayVendorSuffixes.flatMap((suffix) =>
-  (["named-cold", "namespace-cold", "missing-ast", "bootstrap", "lazy-only"] as const).map((mode) => [suffix, mode] as const),
-))(
-  "keeps real import semantics automatic for overlay %s under %s graph proof",
-  (suffix, mode) => {
-    const f = coldRuntimeVendorFixture();
-    const owner = f.owners.find((id) => id.endsWith(suffix))!;
-    if (mode === "named-cold" || mode === "namespace-cold") {
-      f.modules.get(root)!.ast = program([{
+it.each(
+  optionalOverlayVendorSuffixes.flatMap((suffix) =>
+    (["named-cold", "namespace-cold", "missing-ast", "bootstrap", "lazy-only"] as const).map(
+      (mode) => [suffix, mode] as const,
+    ),
+  ),
+)("keeps real import semantics automatic for overlay %s under %s graph proof", (suffix, mode) => {
+  const f = coldRuntimeVendorFixture();
+  const owner = f.owners.find((id) => id.endsWith(suffix))!;
+  if (mode === "named-cold" || mode === "namespace-cold") {
+    f.modules.get(root)!.ast = program([
+      {
         type: "ImportDeclaration",
         source: literal(owner),
-        specifiers: mode === "named-cold"
-          ? [{ type: "ImportSpecifier", imported: identifier("coldVendor"), local: identifier("coldVendor") }]
-          : [{ type: "ImportNamespaceSpecifier", local: identifier("overlay") }],
-      }]);
-    }
-    if (mode === "missing-ast") delete f.modules.get(root)!.ast;
-    if (mode === "bootstrap") f.modules.get(f.main)!.importedIds = [owner];
-    if (mode === "lazy-only") f.modules.get(root)!.importedIds = f.owners.filter((id) => id !== owner);
-    const proof = new Set<string>();
-    const cold = collectCockpitBootBindings(f.graph, root, proof);
-    expect(proof.has(owner)).toBe(mode === "named-cold");
-    expect(cold.has(owner)).toBe(mode !== "lazy-only");
-    expect(findColdCockpitRuntimeVendors(f.graph)?.has(owner) ?? false)
-      .toBe(mode === "namespace-cold" || mode === "missing-ast");
-    expect(createCockpitBootChunkSelector()(owner, f.graph)).toBeUndefined();
+        specifiers:
+          mode === "named-cold"
+            ? [{ type: "ImportSpecifier", imported: identifier("coldVendor"), local: identifier("coldVendor") }]
+            : [{ type: "ImportNamespaceSpecifier", local: identifier("overlay") }],
+      },
+    ]);
+  }
+  if (mode === "missing-ast") delete f.modules.get(root)!.ast;
+  if (mode === "bootstrap") f.modules.get(f.main)!.importedIds = [owner];
+  if (mode === "lazy-only") f.modules.get(root)!.importedIds = f.owners.filter((id) => id !== owner);
+  const proof = new Set<string>();
+  const cold = collectCockpitBootBindings(f.graph, root, proof);
+  expect(proof.has(owner)).toBe(mode === "named-cold");
+  expect(cold.has(owner)).toBe(mode !== "lazy-only");
+  expect(findColdCockpitRuntimeVendors(f.graph)?.has(owner) ?? false).toBe(
+    mode === "namespace-cold" || mode === "missing-ast",
+  );
+  expect(createCockpitBootChunkSelector()(owner, f.graph)).toBeUndefined();
+  expect(createCockpitBootChunkSelector()(owner)).toBeUndefined();
+});
+
+const optionalDelegationCommands = [
+  "runChatDelegation",
+  "runChatResearch",
+  "streamChatDelegation",
+  "suggestChatDelegation",
+  "triggerChatProactive",
+] as const;
+it.each([
+  "chat-document-operations",
+  "chat-history-reads",
+  "chat-operator-actions",
+  "chat-session-mutations",
+  "chat-session-evidence",
+  "chat-live-stream",
+])("keeps %s at its real import destination instead of its public API facade", (name) => {
+  const packagePath = "C:/repo/packages/mission-control-shared/";
+  expect(usesAutomaticCockpitPlacement(packagePath + "dist/api/" + name + ".js")).toBe(true);
+  expect(usesAutomaticCockpitPlacement(packagePath + "src/api/" + name + ".ts")).toBe(true);
+  expect(usesAutomaticCockpitPlacement(packagePath + "dist/api/" + name + "-other.js")).toBe(false);
+});
+it.each(["dist/api/chat-optional-actions.js", "src/api/chat-optional-actions.ts"])(
+  "places only the exact optional delegation owner %s automatically",
+  (relative) => {
+    const owner = "C:/repo/packages/mission-control-shared/" + relative;
+    expect(usesAutomaticCockpitPlacement(owner)).toBe(true);
+    expect(usesAutomaticCockpitPlacement(owner.replaceAll("/", String.fromCharCode(92)))).toBe(true);
     expect(createCockpitBootChunkSelector()(owner)).toBeUndefined();
   },
 );
-
-const optionalDelegationCommands = ["runChatDelegation", "runChatResearch", "streamChatDelegation", "suggestChatDelegation", "triggerChatProactive"] as const;
-it.each(["chat-document-operations", "chat-history-reads", "chat-operator-actions", "chat-session-mutations", "chat-session-evidence", "chat-live-stream"])(
-  "keeps %s at its real import destination instead of its public API facade",
-  (name) => {
-    const packagePath = "C:/repo/packages/mission-control-shared/";
-    expect(usesAutomaticCockpitPlacement(packagePath + "dist/api/" + name + ".js")).toBe(true);
-    expect(usesAutomaticCockpitPlacement(packagePath + "src/api/" + name + ".ts")).toBe(true);
-    expect(usesAutomaticCockpitPlacement(packagePath + "dist/api/" + name + "-other.js")).toBe(false);
-  },
-);
-it.each(["dist/api/chat-optional-actions.js", "src/api/chat-optional-actions.ts"])("places only the exact optional delegation owner %s automatically", relative => {
-  const owner = "C:/repo/packages/mission-control-shared/" + relative;
-  expect(usesAutomaticCockpitPlacement(owner)).toBe(true);
-  expect(usesAutomaticCockpitPlacement(owner.replaceAll("/", String.fromCharCode(92)))).toBe(true);
-  expect(createCockpitBootChunkSelector()(owner)).toBeUndefined();
-});
 it.each([
   "C:/repo/packages/mission-control-shared/dist/api/chat.js",
   "C:/repo/packages/mission-control-shared/dist/api/client.js",
   "C:/repo/packages/mission-control-shared/dist/api/chat-optional-actions-extra.js",
   "C:/repo/packages/mission-control-shared/dist/api/chat-optional-actions.js.map",
   "C:/repo/packages/another-package/dist/api/chat-optional-actions.js",
-])("retains exact optional API placement boundaries for %s", owner => {
+])("retains exact optional API placement boundaries for %s", (owner) => {
   expect(usesAutomaticCockpitPlacement(owner)).toBe(false);
   expect(usesAutomaticCockpitPlacement(owner.replaceAll("/", String.fromCharCode(92)))).toBe(false);
 });
-function optionalDelegationFixture(requested = "fetchChatDelegationRun", metadata: "named" | "namespace" | "missing" = "named") {
+function optionalDelegationFixture(
+  requested = "fetchChatDelegationRun",
+  metadata: "named" | "namespace" | "missing" = "named",
+) {
   const prefix = "C:/repo/packages/mission-control-shared/dist/api/";
-  const facade = prefix + "chat.js", optional = prefix + "chat-optional-actions.js", core = prefix + "client-core.js";
-  const own = (name: string) => ({ type: "ExportNamedDeclaration", source: null, specifiers: [], declaration: { type: "FunctionDeclaration", id: identifier(name) } });
-  const named = (source: string, name: string) => ({ type: "ImportDeclaration", source: literal(source), specifiers: [{ type: "ImportSpecifier", imported: identifier(name), local: identifier(name) }] });
+  const facade = prefix + "chat.js",
+    optional = prefix + "chat-optional-actions.js",
+    core = prefix + "client-core.js";
+  const own = (name: string) => ({
+    type: "ExportNamedDeclaration",
+    source: null,
+    specifiers: [],
+    declaration: { type: "FunctionDeclaration", id: identifier(name) },
+  });
+  const named = (source: string, name: string) => ({
+    type: "ImportDeclaration",
+    source: literal(source),
+    specifiers: [{ type: "ImportSpecifier", imported: identifier(name), local: identifier(name) }],
+  });
   const modules = new Map<string, Info>([
-    [root, { isIncluded: true, importedIds: [facade], ast: program([{ type: "ImportDeclaration", source: literal(facade), specifiers: [{ type: metadata === "namespace" ? "ImportNamespaceSpecifier" : "ImportSpecifier", imported: identifier(requested), local: identifier("api") }] }]) }],
-    [facade, { isIncluded: true, importedIds: [core, optional], ast: program([named("./client-core.js", "request"), own("fetchChatDelegationRun"), { type: "ExportNamedDeclaration", source: literal("./chat-optional-actions.js"), specifiers: optionalDelegationCommands.map(name => ({ type: "ExportSpecifier", local: identifier(name), exported: identifier(name) })) }]) }],
-    [optional, { isIncluded: true, importedIds: [core], ast: program([named("./client-core.js", "request"), ...optionalDelegationCommands.map(own)]) }],
+    [
+      root,
+      {
+        isIncluded: true,
+        importedIds: [facade],
+        ast: program([
+          {
+            type: "ImportDeclaration",
+            source: literal(facade),
+            specifiers: [
+              {
+                type: metadata === "namespace" ? "ImportNamespaceSpecifier" : "ImportSpecifier",
+                imported: identifier(requested),
+                local: identifier("api"),
+              },
+            ],
+          },
+        ]),
+      },
+    ],
+    [
+      facade,
+      {
+        isIncluded: true,
+        importedIds: [core, optional],
+        ast: program([
+          named("./client-core.js", "request"),
+          own("fetchChatDelegationRun"),
+          {
+            type: "ExportNamedDeclaration",
+            source: literal("./chat-optional-actions.js"),
+            specifiers: optionalDelegationCommands.map((name) => ({
+              type: "ExportSpecifier",
+              local: identifier(name),
+              exported: identifier(name),
+            })),
+          },
+        ]),
+      },
+    ],
+    [
+      optional,
+      {
+        isIncluded: true,
+        importedIds: [core],
+        ast: program([named("./client-core.js", "request"), ...optionalDelegationCommands.map(own)]),
+      },
+    ],
     [core, { isIncluded: true, importedIds: [], ast: program([own("request")]) }],
   ]);
   if (metadata === "missing") delete modules.get(facade)!.ast;
-  const graph: CockpitBootModuleGraph = { getModuleIds: () => modules.keys(), getModuleInfo: id => modules.get(id) ?? null };
+  const graph: CockpitBootModuleGraph = {
+    getModuleIds: () => modules.keys(),
+    getModuleInfo: (id) => modules.get(id) ?? null,
+  };
   return { graph, facade, optional, core };
 }
 it("keeps mandatory delegation history and transport without an unused optional facade edge", () => {
-  const f = optionalDelegationFixture(), proof = new Set<string>();
+  const f = optionalDelegationFixture(),
+    proof = new Set<string>();
   expect(collectCockpitBootBindings(f.graph, root, proof)).toEqual(new Set([root, f.facade, f.core]));
   expect(proof.has(f.optional)).toBe(false);
   expect(createCockpitBootChunkSelector()(f.optional, f.graph)).toBeUndefined();
   expect(createCockpitBootChunkSelector()(f.facade, f.graph)).toBe("cockpit-foundation");
 });
-it.each(optionalDelegationCommands)("records a real named cold binding to %s without forcing its placement", name => {
-  const f = optionalDelegationFixture(name), proof = new Set<string>();
+it.each(optionalDelegationCommands)("records a real named cold binding to %s without forcing its placement", (name) => {
+  const f = optionalDelegationFixture(name),
+    proof = new Set<string>();
   expect(collectCockpitBootBindings(f.graph, root, proof)).toEqual(new Set([root, f.optional, f.core]));
   expect(proof.has(f.optional)).toBe(true);
   expect(createCockpitBootChunkSelector()(f.optional, f.graph)).toBeUndefined();
 });
-it.each(["namespace", "missing"] as const)("retains conservative inclusion without named proof for optional %s metadata", metadata => {
-  const f = optionalDelegationFixture("fetchChatDelegationRun", metadata), proof = new Set<string>();
-  expect(collectCockpitBootBindings(f.graph, root, proof)).toEqual(new Set([root, f.facade, f.optional, f.core]));
-  expect(proof.has(f.optional)).toBe(false);
-  expect(createCockpitBootChunkSelector()(f.optional, f.graph)).toBeUndefined();
-});
+it.each(["namespace", "missing"] as const)(
+  "retains conservative inclusion without named proof for optional %s metadata",
+  (metadata) => {
+    const f = optionalDelegationFixture("fetchChatDelegationRun", metadata),
+      proof = new Set<string>();
+    expect(collectCockpitBootBindings(f.graph, root, proof)).toEqual(new Set([root, f.facade, f.optional, f.core]));
+    expect(proof.has(f.optional)).toBe(false);
+    expect(createCockpitBootChunkSelector()(f.optional, f.graph)).toBeUndefined();
+  },
+);

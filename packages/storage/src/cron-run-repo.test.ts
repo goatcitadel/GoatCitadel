@@ -20,6 +20,107 @@ function createRepos() {
 }
 
 describe("CronRunRepository", () => {
+  it("rejects a second reviewed execution after a fast first completion while exact retries stay read-only", () => {
+    const { db, runs, jobs } = createRepos();
+    try {
+      const job = jobs.get("job-1")!;
+      const input = {
+        jobId: job.jobId,
+        admissionKey: "operator-first",
+        scheduledFor: "2026-11-19T12:00:00.000Z",
+        trigger: "manual" as const,
+        expectedJobRevision: job.revision,
+        expectedExecutionGeneration: 0,
+      };
+      const first = runs.beginAdmission(input as never);
+      assert.equal(first.outcome, "begun");
+      if (first.outcome !== "begun") assert.fail();
+      const token = { runId: first.run.runId, jobId: job.jobId, executionGeneration: first.run.executionGeneration };
+      runs.admitInlineExecution(token);
+      runs.markSucceeded(token, { output: "done" });
+      assert.equal(runs.beginAdmission(input as never).outcome, "duplicate");
+      assert.throws(() => runs.beginAdmission({ ...input, admissionKey: "operator-second" } as never), ConflictError);
+      assert.equal(runs.listByJob(job.jobId).length, 1);
+      assert.equal(
+        runs.beginAdmission({ ...input, admissionKey: "operator-new-review", expectedExecutionGeneration: 1 } as never)
+          .outcome,
+        "begun",
+      );
+    } finally {
+      db.close();
+    }
+  });
+  it("freezes one exact event reference and refuses changed bytes or revision for the same event identity", () => {
+    const { db, jobs, runs } = createRepos();
+    try {
+      const eventSource = {
+        eventId: "event",
+        eventType: "subagent.end" as const,
+        workspaceId: "default",
+        sourceConnectionId: "hook",
+        payloadHash: "a".repeat(64),
+      };
+      const job = jobs.upsert({
+        jobId: "job-1",
+        name: "Event review",
+        action: "agent_turn",
+        schedule: "* * * * * UTC",
+        enabled: true,
+        actionConfig: {
+          agentTurn: {
+            prompt: "Check the approved result",
+            sessionId: "s",
+            eventWake: {
+              version: 1,
+              eventType: "subagent.end",
+              hookId: "hook",
+              workspaceId: "default",
+              sourceSessionId: "s",
+              notBefore: "2026-11-19T00:00:00.000Z",
+              timezone: "UTC",
+            },
+          },
+        },
+      });
+      const input = {
+        jobId: job.jobId,
+        admissionKey: "event:event",
+        trigger: "manual" as const,
+        scheduledFor: "2026-11-19T10:00:00.000Z",
+        expectedJobRevision: job.revision,
+        eventSource,
+      };
+      const first = runs.beginAdmission(input);
+      assert.deepEqual(first.outcome === "begun" && first.run.actionSnapshot.eventSource, eventSource);
+      assert.equal(runs.beginAdmission(input).outcome, "duplicate");
+      assert.throws(
+        () => runs.beginAdmission({ ...input, eventSource: { ...eventSource, payloadHash: "b".repeat(64) } }),
+        ConflictError,
+      );
+      assert.throws(() => runs.beginAdmission({ ...input, expectedJobRevision: job.revision + 1 }), ConflictError);
+      assert.equal(runs.listByJob(job.jobId).length, 1);
+    } finally {
+      db.close();
+    }
+  });
+  it("rejects an outdated reviewed job revision before reserving an occurrence", () => {
+    const { db, runs } = createRepos();
+    try {
+      assert.throws(
+        () =>
+          runs.beginAdmission({
+            jobId: "job-1",
+            admissionKey: "reviewed",
+            scheduledFor: new Date().toISOString(),
+            expectedJobRevision: 999,
+          }),
+        ConflictError,
+      );
+      assert.equal(runs.listByJob("job-1").length, 0);
+    } finally {
+      db.close();
+    }
+  });
   it("deduplicates admission, blocks overlap, and increments the job execution generation", () => {
     const { db, runs } = createRepos();
     try {

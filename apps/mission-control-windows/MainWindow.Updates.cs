@@ -15,6 +15,8 @@ public sealed partial class MainWindow
     private CancellationTokenSource? _updateCts;
     private TextBlock? _updateDialogText;
     private ContentDialog? _updateDialog;
+    private DesktopUpdateStatus? _renderedUpdateStatus;
+    private bool _installUpdatePending;
 
     private void InitializeUpdates()
     {
@@ -39,6 +41,8 @@ public sealed partial class MainWindow
             _updateTimer.Tick += (_, _) => _ = _updates.CheckAsync(cancellationToken: _updateCts.Token);
             _updateTimer.Start();
             _ = _updates.CheckAsync(cancellationToken: _updateCts.Token);
+            if (DesktopUpdateHandoff.TakeResult(install.InstallRoot) is { } result)
+                ShowToast(result);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
         {
@@ -69,6 +73,7 @@ public sealed partial class MainWindow
                 case "channel": await _updates.SetChannelAsync(channel ?? "", token); break;
                 case "snooze": await _updates.SnoozeAsync(token); break;
                 case "download": await _updates.DownloadAsync(tag ?? "", token); break;
+                case "install": await UpdateAndRestartAsync(tag, requestId is not null, token); break;
                 case "reveal":
                     var file = await _updates.GetVerifiedDownloadAsync(token);
                     var explorer = new ProcessStartInfo(Path.Join(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"))
@@ -95,6 +100,59 @@ public sealed partial class MainWindow
         finally { PublishUpdateStatus(requestId, actionError); }
     }
 
+    private async Task UpdateAndRestartAsync(string? tag, bool confirmInNativeHost, CancellationToken token)
+    {
+        if (_installUpdatePending || _profileRecoveryOpen || (confirmInNativeHost && _updateDialog is not null))
+            throw new InvalidOperationException("Close the other desktop dialog and try again.");
+        var release = _updates!.Status.AvailableRelease;
+        if (release is null || release.Tag != tag || _updates.Status.Phase != "downloaded")
+            throw new InvalidOperationException("The offered update changed. Check for updates and try again.");
+
+        _installUpdatePending = true;
+        RenderUpdateDialog(_updates.Status);
+        try
+        {
+            if (confirmInNativeHost)
+            {
+                var confirmation = new ContentDialog
+                {
+                    XamlRoot = Content.XamlRoot,
+                    Title = $"Update to GoatCitadel {release.Version}?",
+                    Content = (release.PublisherSigned ? "" : "This preview is unsigned. ")
+                        + "Save your work first. GoatCitadel and its local runtime will stop, then the app will reopen.",
+                    PrimaryButtonText = "Update and restart",
+                    CloseButtonText = "Cancel",
+                    DefaultButton = ContentDialogButton.Close,
+                };
+                if (await confirmation.ShowAsync() != ContentDialogResult.Primary) return;
+            }
+
+            var root = DesktopUpdateHandoff.ValidateInstalledHost(
+                _launcherService.ResolveLauncher().InstallRoot, Environment.ProcessPath);
+            await _updates.GetVerifiedDownloadAsync(token);
+            var restartRuntimeOnHandoffFailure = _lastRuntime?.IsReady == true;
+            if (!await StopRuntimeAsync())
+                throw new InvalidOperationException("The local runtime could not stop. The update was not started.");
+            try
+            {
+                await _updates.LaunchVerifiedDownloadAsync(release,
+                    file => DesktopUpdateHandoff.Begin(root, file, release), token);
+                if (!DispatcherQueue.TryEnqueue(Quit))
+                    throw new InvalidOperationException("GoatCitadel could not schedule its update shutdown.");
+            }
+            catch
+            {
+                if (restartRuntimeOnHandoffFailure) await LaunchRuntimeAsync();
+                throw;
+            }
+        }
+        finally
+        {
+            _installUpdatePending = false;
+            RenderUpdateDialog(_updates.Status);
+        }
+    }
+
     private void PublishUpdateStatus(string? requestId = null, string? error = null)
     {
         if (_updates is null || !_webViewReady
@@ -109,7 +167,7 @@ public sealed partial class MainWindow
     {
         ShowAndFocus();
         if (_updates is null) { ShowToast("Update checks are available in an installed Windows app."); return; }
-        if (_updateDialog is not null || _profileRecoveryOpen) return;
+        if (_updateDialog is not null || _profileRecoveryOpen || _installUpdatePending) return;
         var channel = new ComboBox { Header = "Update channel", ItemsSource = new[] { "stable", "preview" },
             SelectedItem = _updates.Status.Channel, HorizontalAlignment = HorizontalAlignment.Stretch };
         channel.SelectionChanged += (_, _) => _ = HandleUpdateActionAsync("channel", channel.SelectedItem as string);
@@ -135,24 +193,31 @@ public sealed partial class MainWindow
         _updateDialog.PrimaryButtonClick += (sender, args) =>
         {
             args.Cancel = true;
-            _ = HandleUpdateActionAsync("download", tag: _updates.Status.AvailableRelease?.Tag);
+            var status = _renderedUpdateStatus;
+            if (status is null) return;
+            _ = HandleUpdateActionAsync(status.Phase == "downloaded" ? "install" : "download",
+                tag: status.AvailableRelease?.Tag);
         };
         _updateDialog.SecondaryButtonClick += (sender, args) => { args.Cancel = true; _ = HandleUpdateActionAsync("reveal"); };
         RenderUpdateDialog(_updates.Status);
         _ = HandleUpdateActionAsync("check");
         try { await _updateDialog.ShowAsync(); }
-        finally { _updateDialog = null; _updateDialogText = null; }
+        finally { _updateDialog = null; _updateDialogText = null; _renderedUpdateStatus = null; }
     }
 
     private void RenderUpdateDialog(DesktopUpdateStatus status)
     {
         if (_updateDialog is null || _updateDialogText is null) return;
+        _renderedUpdateStatus = status;
         var offered = status.AvailableRelease;
         _updateDialogText.Text = $"Installed: {status.InstalledVersion}\n"
             + (offered is null ? "" : $"Available: {offered.Version}\n")
             + status.Message
+            + (offered is { PublisherSigned: false } ? "\nThis preview is unsigned." : "")
             + (status.Phase == "downloading" ? $"\n{status.DownloadedBytes / 1048576} MB downloaded" : "");
-        _updateDialog.IsPrimaryButtonEnabled = offered is not null && status.Phase is not ("checking" or "downloading");
+        _updateDialog.PrimaryButtonText = status.Phase == "downloaded" ? "Update and restart" : "Download";
+        _updateDialog.IsPrimaryButtonEnabled = !_installUpdatePending && offered is not null
+            && status.Phase is not ("checking" or "downloading");
         _updateDialog.IsSecondaryButtonEnabled = status.DownloadedPath is not null && status.Phase != "downloading";
     }
 

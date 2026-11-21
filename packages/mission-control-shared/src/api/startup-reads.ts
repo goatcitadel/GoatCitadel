@@ -44,6 +44,7 @@ const ALLOWED_HEADERS = new Set([
   "x-goatcitadel-origin-surface",
 ]);
 const RESPONSE_HEADERS = new Set(["content-type", "cache-control", "etag", "x-goatcitadel-correlation-id"]);
+const CHAT_CORE_PATH = /^\/api\/v1\/chat\/sessions\/[^/]+\/core-state$/u;
 const sameScope = (a: StartupReadScope, b: StartupReadScope) =>
   a.installation === b.installation &&
   a.accessRevision === b.accessRevision &&
@@ -183,12 +184,16 @@ export function fetchStartupRead(
   const parsed = new URL(url),
     path = parsed.pathname + parsed.search,
     headers = new Headers(init.headers);
+  // Chat needs the selected conversation's thread before an automatic draft
+  // handoff. Its original guarded GET should settle independently of the batch.
+  const loadsChatThread = CHAT_CORE_PATH.test(parsed.pathname) && parsed.searchParams.get("includeThread") !== "false";
   if (
     !windowScope ||
     !sameScope(scope, windowScope) ||
     Date.now() >= windowEnd ||
     init.method !== "GET" ||
     init.body ||
+    loadsChatThread ||
     !isStartupReadPath(path) ||
     [...headers.keys()].some((key) => !ALLOWED_HEADERS.has(key))
   )

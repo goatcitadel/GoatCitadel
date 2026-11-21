@@ -1,7 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { discoverOAuthServerInfo, registerClient } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { discoverOAuthServerInfo } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientInformationFull } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { checkResourceAllowed, resourceUrlFromServerUrl } from "@modelcontextprotocol/sdk/shared/auth-utils.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { redactSecretText, type McpServerRecord } from "@goatcitadel/contracts";
 import { fetchAllowlisted } from "@goatcitadel/policy-engine";
@@ -119,6 +118,7 @@ export async function discoverMcpAuthorizationServer(
   const serverUrl = input.server.url?.trim();
   if (!serverUrl) throw new Error(`MCP server ${label} needs a URL before its sign-in can be discovered.`);
   assertSecureDiscoveryUrl(serverUrl, "server URL", label);
+  const { discoverOAuthServerInfo } = await import("@modelcontextprotocol/sdk/client/auth.js");
   const info = await discoverOAuthServerInfo(serverUrl, { fetchFn: input.fetchFn });
   const metadata = info.authorizationServerMetadata;
   if (!metadata) {
@@ -134,7 +134,7 @@ export async function discoverMcpAuthorizationServer(
   if (!metadata.code_challenge_methods_supported?.includes("S256")) {
     throw new Error(`The sign-in provider for ${label} does not advertise PKCE S256, which MCP OAuth requires.`);
   }
-  const resource = resolveResource(serverUrl, info.resourceMetadata?.resource, label);
+  const resource = await resolveResource(serverUrl, info.resourceMetadata?.resource, label);
   const scope = input.scopes?.length
     ? input.scopes.join(" ")
     : info.resourceMetadata?.scopes_supported?.length
@@ -178,6 +178,7 @@ async function registerPublicClient(
         "Set a client ID environment variable in this server's OAuth settings.",
     );
   }
+  const { registerClient } = await import("@modelcontextprotocol/sdk/client/auth.js");
   const dispatch = () =>
     registerClient(authorizationServerUrl, {
       metadata,
@@ -264,7 +265,9 @@ function assertSecureDiscoveryUrl(value: string, what: string, label: string): v
   }
 }
 
-function resolveResource(serverUrl: string, advertised: string | undefined, label: string): string {
+async function resolveResource(serverUrl: string, advertised: string | undefined, label: string): Promise<string> {
+  const { checkResourceAllowed, resourceUrlFromServerUrl } =
+    await import("@modelcontextprotocol/sdk/shared/auth-utils.js");
   const requested = resourceUrlFromServerUrl(serverUrl);
   if (!advertised) return requested.href;
   if (!checkResourceAllowed({ requestedResource: requested, configuredResource: advertised })) {

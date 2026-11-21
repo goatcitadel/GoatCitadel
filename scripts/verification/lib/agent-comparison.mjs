@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { normalizePermissionEvidence } from "./agent-comparison-permissions.mjs";
 import { FEATURE_ACCEPTANCE_SUITE, FEATURE_ACCEPTANCE_TASKS } from "./agent-comparison-acceptance-fixtures.mjs";
+import { ASSISTANT_PARITY_SUITE, assistantNativeTasks } from "./assistant-parity/native-tasks.mjs";
 
 export const COMPARISON_VERSION = "goatcitadel.agent-comparison.v1";
 export const PRODUCTS = Object.freeze(["goatcitadel", "openclaw", "hermes"]);
@@ -105,6 +106,7 @@ export const SEPARATE_TASKS = Object.freeze(["approval_resume", "restart_recover
 export function comparisonTasks(manifest = {}) {
   if (manifest.suite === undefined) return COMPARISON_TASKS;
   if (manifest.suite === FEATURE_ACCEPTANCE_SUITE) return FEATURE_ACCEPTANCE_TASKS;
+  if (manifest.suite === ASSISTANT_PARITY_SUITE) return assistantNativeTasks();
   throw new Error("Unsupported opt-in comparison suite.");
 }
 export const sha256 = (value) =>
@@ -237,9 +239,13 @@ export function prepareComparison(config) {
   const transportProfile =
     config.transportProfile === undefined ? undefined : normalizeComparisonTransport(config.transportProfile);
   const pilotBudget = config.pilotBudget === undefined ? undefined : normalizeComparisonPilotBudget(config.pilotBudget);
-  const localPilotBudget = config.localPilotBudget === undefined ? undefined : normalizeComparisonLocalPilotBudget(config.localPilotBudget);
-  requireValue(!localPilotBudget || (transportProfile?.kind === "local" && !pilotBudget && config.maxRequests <= localPilotBudget.maxRequests),
-    "Local pilot accounting requires the local transport and its independent aggregate cap.");
+  const localPilotBudget =
+    config.localPilotBudget === undefined ? undefined : normalizeComparisonLocalPilotBudget(config.localPilotBudget);
+  requireValue(
+    !localPilotBudget ||
+      (transportProfile?.kind === "local" && !pilotBudget && config.maxRequests <= localPilotBudget.maxRequests),
+    "Local pilot accounting requires the local transport and its independent aggregate cap.",
+  );
   requireValue(
     transportProfile?.kind !== "local" || (config.maxCostUsd === 0 && !pilotBudget),
     "Local comparison has zero provider dollars and cannot consume a hosted pilot budget.",
@@ -717,7 +723,9 @@ export function comparisonMarkdown(report) {
         ]
       : []),
     ...(report.localPilotBudget
-      ? [`Shared local pilot: ${report.localPilotBudget.pilotId}; baseline, retry, child and retest campaigns share the conservative ${report.localPilotBudget.maxRequests}-request policy. Provider dollars remain zero.`]
+      ? [
+          `Shared local pilot: ${report.localPilotBudget.pilotId}; baseline, retry, child and retest campaigns share the conservative ${report.localPilotBudget.maxRequests}-request policy. Provider dollars remain zero.`,
+        ]
       : []),
     ``,
     "Controlled, unsupported, blocked, and unrun cells do not count as live task success.",

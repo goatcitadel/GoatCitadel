@@ -14,12 +14,36 @@ import {
   formatManagedEndpointCollision,
   parseManagedProcessMetadata,
   resolveLauncherEndpoint,
+  waitForManagedEndpointHealth,
 } from "./managed-runtime-ownership.mjs";
 import { queryProcessCreationIdentity } from "./managed-runtime-lifecycle.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const launcherPath = path.join(repoRoot, "bin", "goatcitadel.mjs");
 const PID_STATES = ["missing", "invalid", "running", "stale", "reused", "unverified"];
+
+test("managed readiness wakes a full ownership check as soon as health responds", async () => {
+  let time = 0;
+  const probes = [];
+  await waitForManagedEndpointHealth(async (timeoutMs) => {
+    probes.push([time, timeoutMs]);
+    return time >= 150;
+  }, 1_000, { now: () => time, wait: async (ms) => { time += ms; } });
+  assert.deepEqual(probes, [[50, 100], [100, 100], [150, 100]]);
+  assert.equal(time, 150);
+});
+
+test("managed readiness leaves time for the scheduled ownership check when health stays unavailable", async () => {
+  let time = 0;
+  const probes = [];
+  await waitForManagedEndpointHealth(async (timeoutMs) => {
+    probes.push([time, timeoutMs]);
+    time += timeoutMs;
+    return false;
+  }, 225, { now: () => time, wait: async (ms) => { time += ms; } });
+  assert.deepEqual(probes, [[50, 100], [200, 25]]);
+  assert.equal(time, 225);
+});
 
 test("managed process metadata rejects legacy PID files and validates the complete identity", () => {
   const metadata = {
@@ -336,6 +360,7 @@ test("real concurrent packaged launches serialize and start one process per mana
     GC_TEST_MANAGED_START_LOG: startLogPath,
     GC_TEST_MANAGED_START_DELAY_MS: "250",
     GOATCITADEL_DATABASE_DRIVER: "postgres",
+    GOATCITADEL_ALLOWED_ORIGINS: "https://operator.example",
   };
   t.after(async () => {
     await runLauncher(["stop", "--json"], launcherEnv, fixtureLauncher).catch(() => undefined);
@@ -394,6 +419,10 @@ test("real concurrent packaged launches serialize and start one process per mana
   assert.equal(starts.filter((entry) => entry.service === "gateway").length, 1);
   assert.equal(starts.filter((entry) => entry.service === "mission-control").length, 1);
   assert.equal(starts.find((entry) => entry.service === "gateway").databaseDriver, "postgres");
+  assert.deepEqual(
+    starts.find((entry) => entry.service === "gateway").allowedOrigins.split(","),
+    ["https://operator.example", `http://127.0.0.1:${uiPort}`],
+  );
   assert.equal(starts.find((entry) => entry.service === "mission-control").gatewayOrigin, `http://127.0.0.1:${gatewayPort}`);
   // The launcher gives the Gateway (and only the Gateway) the record path, inside its runtime logs folder.
   assert.equal(
@@ -665,7 +694,7 @@ function materializeManagedPackagedFixture(installRoot) {
     "const service = process.env.GOATCITADEL_MANAGED_SERVICE;",
     'const port = Number(service === "gateway" ? process.env.GATEWAY_PORT : process.env.GOATCITADEL_UI_PORT);',
     'const host = service === "gateway" ? process.env.GATEWAY_HOST : process.env.GOATCITADEL_UI_HOST;',
-    'fs.appendFileSync(process.env.GC_TEST_MANAGED_START_LOG, JSON.stringify({ service, pid: process.pid, databaseDriver: process.env.GOATCITADEL_DATABASE_DRIVER, gatewayOrigin: process.env.GOATCITADEL_UI_GATEWAY_ORIGIN, startupFailureFile: process.env.GOATCITADEL_STARTUP_FAILURE_FILE }) + "\\n");',
+    'fs.appendFileSync(process.env.GC_TEST_MANAGED_START_LOG, JSON.stringify({ service, pid: process.pid, databaseDriver: process.env.GOATCITADEL_DATABASE_DRIVER, gatewayOrigin: process.env.GOATCITADEL_UI_GATEWAY_ORIGIN, allowedOrigins: process.env.GOATCITADEL_ALLOWED_ORIGINS, startupFailureFile: process.env.GOATCITADEL_STARTUP_FAILURE_FILE }) + "\\n");',
     "const server = http.createServer((request, response) => {",
     '  response.setHeader("content-type", "application/json");',
     '  if (request.url === "/health") {',

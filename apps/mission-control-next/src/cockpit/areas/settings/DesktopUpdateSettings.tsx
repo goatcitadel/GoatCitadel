@@ -17,6 +17,7 @@ export function DesktopUpdateSettings() {
   const { act, busy, error, uncertain } = useDesktopUpdateActions(status);
   const actionBusy = busy || uncertain;
   const offered = status?.availableRelease;
+  const readyToInstall = status?.phase === "downloaded" && Boolean(status.downloadedPath);
   const buildDetails =
     status && (status.installedCommit || offered) ? (
       <TechnicalDetails>
@@ -103,8 +104,12 @@ export function DesktopUpdateSettings() {
             </Button>
             {offered ? (
               <>
-                <Button size="sm" disabled={actionBusy} onClick={() => void act("download")}>
-                  Download
+                <Button
+                  size="sm"
+                  disabled={actionBusy}
+                  onClick={() => void act(readyToInstall ? "install" : "download")}
+                >
+                  {readyToInstall ? "Update and restart" : "Download"}
                 </Button>
                 <Button size="sm" disabled={actionBusy} onClick={() => void act("notes")}>
                   View release notes
@@ -120,12 +125,6 @@ export function DesktopUpdateSettings() {
               </Button>
             ) : null}
           </div>
-          {status.downloadedPath ? (
-            <p className="text-sm text-fg-secondary">
-              Run the downloaded installer when your work is finished. The app will not install or restart
-              automatically.
-            </p>
-          ) : null}
         </>
       )}
       <Dialog

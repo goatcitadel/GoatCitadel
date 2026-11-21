@@ -12,6 +12,7 @@ import { upsertNotificationPresence } from "@goatcitadel/mission-control-shared/
 
 const PRESENCE_INTERVAL_MS = 45_000;
 const PRESENCE_TTL_MS = 90_000;
+const INITIAL_WORKSPACE_PRESENCE_DELAY_MS = 50;
 const CLIENT_STORAGE_KEY = "goatcitadel.notification-client-id";
 const ephemeralIdentifiers = new Map<string, string>();
 
@@ -51,6 +52,8 @@ export function useNotificationPresenceLease(workspaceId: string, sessionId?: st
     const clientId = sessionIdentifier(CLIENT_STORAGE_KEY);
     const leaseId = randomIdentifier();
     let disposed = false;
+    let published = false;
+    let initialPublish: number | undefined;
     let writes = Promise.resolve();
     const owner: PresenceLeaseOwner = {
       identity,
@@ -58,6 +61,9 @@ export function useNotificationPresenceLease(workspaceId: string, sessionId?: st
       sessionId: committedSessionId.current,
       publish(forceAway = false) {
         if (disposed && !forceAway) return;
+        window.clearTimeout(initialPublish);
+        initialPublish = undefined;
+        published = true;
         const input = {
           workspaceId,
           leaseId,
@@ -81,20 +87,26 @@ export function useNotificationPresenceLease(workspaceId: string, sessionId?: st
       },
     };
     active.current = owner;
-    const handleStateChange = () => owner.publish();
+    const handleStateChange = () => {
+      if (initialPublish === undefined) owner.publish();
+    };
     window.addEventListener("focus", handleStateChange);
     window.addEventListener("blur", handleStateChange);
     document.addEventListener("visibilitychange", handleStateChange);
     const interval = window.setInterval(handleStateChange, PRESENCE_INTERVAL_MS);
-    owner.publish();
+    // Chat can restore its conversation just after the workspace mounts.
+    // Give that scope one short opportunity to replace the initial workspace-only write.
+    if (owner.sessionId) owner.publish();
+    else initialPublish = window.setTimeout(() => owner.publish(), INITIAL_WORKSPACE_PRESENCE_DELAY_MS);
     return () => {
       disposed = true;
       if (active.current === owner) active.current = null;
+      window.clearTimeout(initialPublish);
       window.clearInterval(interval);
       window.removeEventListener("focus", handleStateChange);
       window.removeEventListener("blur", handleStateChange);
       document.removeEventListener("visibilitychange", handleStateChange);
-      owner.publish(true);
+      if (published) owner.publish(true);
     };
   }, [workspaceId, identity]);
 

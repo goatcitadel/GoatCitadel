@@ -257,6 +257,7 @@ describe("approvals routes", () => {
 
   it("reads one approval by id with the list's projection, scope and access", async () => {
     const rawApproval = createSensitiveApproval();
+    rawApproval.preview.path = "notes/fixture.txt";
     const getApproval = vi.fn(async (approvalId: string, workspaceId?: string) => {
       if (approvalId !== APPROVAL_ID || workspaceId === "workspace-other") {
         throw new NotFoundError({ entity: "Approval", id: approvalId });
@@ -270,6 +271,7 @@ describe("approvals routes", () => {
     const found = await app.inject({ method: "GET", url: `/api/v1/approvals/${APPROVAL_ID}?workspaceId=workspace-a` });
     expect(found.statusCode).toBe(200);
     expect(found.json().approvalId).toBe(APPROVAL_ID);
+    expect(found.json().targetLabel).toBe("Path: notes/fixture.txt");
     expect(getApproval).toHaveBeenCalledWith(APPROVAL_ID, "workspace-a");
     expectSecretSafeApprovalProjection(found.json());
     expectRawApprovalUnchanged(rawApproval);

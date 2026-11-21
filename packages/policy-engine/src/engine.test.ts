@@ -168,6 +168,34 @@ const EXAMPLE_HOST = host("example", "com");
 const API_EXAMPLE_HOST = host("api", "example", "com");
 const BLOCKED_EXAMPLE_HOST = host("blocked", "example");
 
+describe("native Google review boundaries", () => {
+  it.each([
+    "gmail.get_message",
+    "gmail.get_thread",
+    "gmail.send_draft",
+    "gmail.reply",
+    "gmail.download_attachment",
+    "calendar.free_busy",
+    "calendar.update_event",
+  ])("keeps %s approval-gated even in bypass mode", async (toolName) => {
+    const engine = new ToolPolicyEngine(
+      {
+        ...policyConfig,
+        tools: { ...policyConfig.tools, approvalMode: "bypass" },
+        sandbox: { ...policyConfig.sandbox, networkAllowlist: ["gmail.googleapis.com", "www.googleapis.com"] },
+      },
+      createStorageStub(),
+    );
+    const evaluation = await engine.evaluateAccess({
+      toolName,
+      args: { connectionId: "g" },
+      agentId: "assistant",
+      sessionId: "s",
+    });
+    expect(evaluation.requiresApproval).toBe(true);
+  });
+});
+
 describe("stored tool artifact reads", () => {
   const request: ToolInvokeRequest = {
     toolName: "tool_artifact.read",
@@ -1337,7 +1365,7 @@ describe("ToolPolicyEngine invocation coverage", () => {
 
   it("keeps Gmail send and Calendar create as danger tools that ask for approval on every call", async () => {
     const registry = new ToolRegistry();
-    for (const toolName of ["gmail.send", "calendar.create_event"]) {
+    for (const toolName of ["gmail.send", "calendar.create_event", "calendar.respond_event"]) {
       expect(registry.get(toolName)).toMatchObject({ riskLevel: "danger", requiresApproval: true });
     }
     const resolveGoogleWorkspaceAccessToken = vi.fn(async () => "google-token");
@@ -1363,6 +1391,13 @@ describe("ToolPolicyEngine invocation coverage", () => {
 
     expect(send.outcome).toBe("approval_required");
     expect(create.outcome).toBe("approval_required");
+    const respond = await engine.invoke({
+      toolName: "calendar.respond_event",
+      args: { connectionId: "google", eventId: "invite", eventEtag: '"v1"', responseStatus: "accepted" },
+      agentId: "assistant",
+      sessionId: "session-google-writes",
+    });
+    expect(respond.outcome).toBe("approval_required");
     // A Google sign-in never substitutes for the approval: no token is resolved before a decision.
     expect(resolveGoogleWorkspaceAccessToken).not.toHaveBeenCalled();
   });

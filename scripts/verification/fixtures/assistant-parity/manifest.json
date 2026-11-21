@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "corpusSha256": "80d46924b5659b7c3b772085afaeaa4d068bd720493ee29c735f080747344a07",
+  "labelsFrozenBeforeExecution": true,
+  "counts": {
+    "development": 72,
+    "held_out": 48,
+    "adversarial": 24
+  },
+  "upstreamRefs": {
+    "openclaw": "7f059c01cd032a41517e6aacdc5598d4bb3b70bb",
+    "hermes": "3371c03df62106a4c93a545787a471e328883d08"
+  },
+  "evidenceBoundary": "Fixture results are component invariants, not native behavioral parity. Held-out cases must not tune implementation.",
+  "independenceDefinition": "Independent template identity normalizes fixture marker and numeric substitutions. Repeated template invocations do not increase independent sample counts."
+}

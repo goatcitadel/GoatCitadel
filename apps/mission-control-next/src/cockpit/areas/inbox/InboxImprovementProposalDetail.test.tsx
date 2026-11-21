@@ -71,6 +71,23 @@ const settle = async () => {
   });
 };
 
+it.each(["current", "legacy"])(
+  "distinguishes %s static preflight from measured performance evaluation",
+  async (kind) => {
+    api.fetchCuratorReviewItem.mockResolvedValue({
+      ...review,
+      latestEvaluation: {
+        status: "passed",
+        evaluatorKind: kind === "current" ? "static_preflight" : "prompt_lab_regression",
+        evaluatorVersion: kind === "legacy" ? "improvement-ledger-v1.1.1" : "improvement-static-preflight-v1",
+      },
+    });
+    await render();
+    expect(container.textContent).toContain("Scope and version check · Passed");
+    expect(container.textContent).toContain("Task performance still needs testing");
+  },
+);
+
 beforeEach(() => {
   api.fetchCuratorReviewItem.mockReset().mockResolvedValue(review);
   api.fetchOperatorInbox.mockReset().mockResolvedValue(projection);

@@ -246,7 +246,7 @@ function CapabilityReview({
         if (!next && !pending) onCancel();
       }}
       title="Review Google access"
-      description="Choose what GoatCitadel may do with this Google account. Google shows the same list on its consent page, and you can still untick items there."
+      description="Choose what GoatCitadel may do with this Google account. Google groups some permissions together on its consent page. These separate GoatCitadel controls still apply, even when Google grants broader access."
     >
       <div className="space-y-4 text-sm">
         <fieldset className="space-y-3" disabled={pending}>
@@ -291,7 +291,7 @@ function CapabilityReview({
         </Field>
         <p className="text-fg-muted">
           Google returns you to <span className="break-all font-mono">{status.redirectUri}</span> on this computer.
-          Connecting again replaces the current sign-in with exactly the access chosen here.
+          Connecting again replaces the current sign-in. Only the capabilities chosen here are enabled in GoatCitadel.
         </p>
         <div className="flex flex-wrap gap-2">
           <Button

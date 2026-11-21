@@ -6,6 +6,35 @@ import {
   type GatewayFeatureFlags,
 } from "./feature-flags.js";
 
+describe("indexed corpus recall opt-in", () => {
+  it("requires an independent opt-in for background skill drafts", () => {
+    const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
+    expect(defaults.backgroundSkillDraftsV1Enabled).toBe(false);
+    expect(
+      buildUpdatedFeatureFlags(defaults, { backgroundSkillDraftsV1Enabled: true }).backgroundSkillDraftsV1Enabled,
+    ).toBe(true);
+    expect(
+      resolveGatewayFeatureFlags(
+        { backgroundSkillDraftsV1Enabled: false },
+        { ...defaults, backgroundSkillDraftsV1Enabled: true },
+      ).backgroundSkillDraftsV1Enabled,
+    ).toBe(false);
+  });
+  it("stays off without an explicit setting, preserves an opt-in, and supports revocation", () => {
+    const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
+    expect(defaults.memoryCorpusRecallV1Enabled).toBe(false);
+    expect(
+      resolveGatewayFeatureFlags({ memoryCorpusRecallV1Enabled: true }, defaults).memoryCorpusRecallV1Enabled,
+    ).toBe(true);
+    expect(
+      buildUpdatedFeatureFlags(
+        { ...defaults, memoryCorpusRecallV1Enabled: true },
+        { memoryCorpusRecallV1Enabled: false },
+      ).memoryCorpusRecallV1Enabled,
+    ).toBe(false);
+  });
+});
+
 describe("claudeCliToolBridgeEnabled feature flag", () => {
   const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
 

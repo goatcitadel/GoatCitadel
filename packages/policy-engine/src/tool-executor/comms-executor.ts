@@ -1,22 +1,16 @@
 /* eslint-disable max-lines -- Channel and outbound connector execution is split from the policy orchestrator, but the provider family is still broad. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHmac, randomBytes, randomInt } from "node:crypto";
-import type {
-  ChannelDeliveryStatus,
-  GmailMessageSummary,
-  ToolInvokeRequest,
-  ToolPolicyConfig,
-} from "@goatcitadel/contracts";
+import type { ChannelDeliveryStatus, ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import {
-  GMAIL_SUMMARY_HEADERS,
-  GMAIL_UNTRUSTED_CONTENT_NOTICE,
   NTFY_OUTBOUND_MARKER_TAG,
   clampInt,
   coerceRetryAfterMs,
   describeChannelPlatformUnsupported,
   describeRetiredChannel,
+  isNativeGoogleTool,
+  nativeGoogleAction,
   sanitizeChannelOutboundMessage,
-  summarizeGmailMessage,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "../sandbox/network-guard.js";
@@ -29,6 +23,10 @@ import {
   markCommsProviderSent,
 } from "./channel-delivery-part-execution.js";
 import { CommsPreBoundaryProviderError } from "./comms-provider-errors.js";
+import { executeGoogleMailAction } from "./google-mail-runtime.js";
+import { executeGoogleCalendarAction } from "./google-calendar-runtime.js";
+import { prepareGoogleMail, type PreparedGoogleMail } from "./google-mail-compose.js";
+import type { GoogleFilePort, GoogleHttpOptions, GoogleRuntimePort } from "./google-workspace-common.js";
 import { smtpSend } from "./smtp-mail-executor.js";
 import {
   GOOGLE_CHAT_MESSAGE_NAME_PATTERN,
@@ -92,7 +90,14 @@ interface ApprovalActionSecretRuntime {
     connectionId: string;
     toolName: string;
     signInId?: string;
+    args?: Record<string, unknown>;
   }) => Promise<string>;
+  captureGoogleWorkspaceSource?: (
+    request: ToolInvokeRequest,
+    source: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>>;
+  resolveGoogleWorkspacePreparedMail?: (request: ToolInvokeRequest) => Promise<PreparedGoogleMail | undefined>;
+  createGoogleWorkspaceFilePort?: (request: ToolInvokeRequest) => GoogleFilePort;
   /**
    * Reads the key a channel connection saved in secure storage, for that connection only; undefined when nothing is
    * stored for it or the reference was saved for another connection.
@@ -146,7 +151,7 @@ async function executeCommsToolWithBoundaryTracking(
   const connectionId = required(args.connectionId, "connectionId");
   const connection = await storage.integrationConnections.get(connectionId);
   if (
-    isReadOnlyCommsTool(toolName) &&
+    isNativeGoogleTool(toolName) &&
     connection.workspaceId !== undefined &&
     connection.workspaceId !== request.workspaceId
   ) {
@@ -184,27 +189,75 @@ async function executeCommsToolWithBoundaryTracking(
   let protectedApprovalTokenRef: string | undefined;
   try {
     assertIntegrationConnectionAvailable(connection);
-    if (toolName === "gmail.read") {
+    if (isNativeGoogleTool(toolName)) {
       const accessToken = await resolveGoogleWorkspaceToken(
         approvalActionSecrets,
         connectionId,
         toolName,
         request.googleReadSignInId,
+        toolName === "calendar.respond_event" ? { calendarId: args.calendarId } : undefined,
       );
-      const read = await gmailRead(accessToken, args, config.sandbox.networkAllowlist, grantAllowlist);
-      await markCommsProviderSent(storage, receipt, "gmail-read");
-      return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "gmail-read", ...read };
-    }
-    if (toolName === "calendar.list") {
-      const accessToken = await resolveGoogleWorkspaceToken(
-        approvalActionSecrets,
-        connectionId,
-        toolName,
-        request.googleReadSignInId,
-      );
-      const records = await calendarList(accessToken, args, config.sandbox.networkAllowlist, grantAllowlist);
-      await markCommsProviderSent(storage, receipt, "calendar-list");
-      return { ...queued, status: "sent", deliveryStatus: "sent", providerMessageId: "calendar-list", records };
+      const files = approvalActionSecrets.createGoogleWorkspaceFilePort?.(request);
+      const port: GoogleRuntimePort = {
+        identity: JSON.stringify([request.workspaceId, request.sessionId, connectionId, request.googleReadSignInId]),
+        operationIdentity: JSON.stringify([
+          request.workspaceId,
+          request.sessionId,
+          request.turnId,
+          request.toolRunId,
+          request.approvedByApprovalId,
+        ]),
+        http: (url, options) =>
+          googleWorkspaceHttp(url, accessToken, options, config.sandbox.networkAllowlist, grantAllowlist, toolName),
+        ...(files
+          ? {
+              files: {
+                read: files.read,
+                write: async (input) => {
+                  await markCommsMutationRequestStarted();
+                  return files.write(input);
+                },
+              },
+            }
+          : {}),
+        captureSource: approvalActionSecrets.captureGoogleWorkspaceSource
+          ? (source) => approvalActionSecrets.captureGoogleWorkspaceSource!(request, source)
+          : undefined,
+        assertCapability: async (requiredTool) => {
+          await resolveGoogleWorkspaceToken(
+            approvalActionSecrets,
+            connectionId,
+            requiredTool,
+            request.googleReadSignInId,
+          );
+        },
+      };
+      let prepared = await approvalActionSecrets.resolveGoogleWorkspacePreparedMail?.(request);
+      // Compatibility for narrow trusted test/operator hosts. Shipped Gateway invocations always carry an immutable review.
+      if (toolName === "gmail.send" && !prepared && !approvalActionSecrets.resolveGoogleWorkspacePreparedMail)
+        prepared = (await prepareGoogleMail(toolName, args, files, undefined, new Date().toISOString())).prepared;
+      const result = toolName.startsWith("gmail.")
+        ? await executeGoogleMailAction(toolName, args, port, prepared)
+        : await executeGoogleCalendarAction(toolName, args, port);
+      providerMessageId =
+        typeof result.providerMessageId === "string"
+          ? result.providerMessageId
+          : toolName === "gmail.read"
+            ? "gmail-read"
+            : toolName === "calendar.list"
+              ? "calendar-list"
+              : toolName;
+      await markCommsProviderSent(storage, receipt, providerMessageId);
+      return {
+        ...queued,
+        status: "sent",
+        deliveryStatus: "sent",
+        providerMessageId,
+        ...result,
+        ...(["gmail.get_message", "gmail.get_draft"].includes(toolName) && request.toolRunId
+          ? { sourceToolRunId: request.toolRunId }
+          : {}),
+      };
     }
     const providerRequest = await hydrateProtectedApprovalActionAtProviderBoundary(
       request,
@@ -213,15 +266,8 @@ async function executeCommsToolWithBoundaryTracking(
       approvalActionSecrets,
     );
     protectedApprovalTokenRef = providerRequest.secretRef;
-    // Resolved before any provider request, so a missing or refused sign-in stays pre-boundary.
-    const googleAccessToken = isGoogleWorkspaceWriteTool(toolName)
-      ? await resolveGoogleWorkspaceToken(approvalActionSecrets, connectionId, toolName)
-      : undefined;
     // Held only for this provider call; the stored connection and everything recorded below keep the references.
-    // Gmail and Calendar writes use the Google sign-in above and never read the config's saved keys.
-    const providerConfig = googleAccessToken
-      ? connectionConfig
-      : resolveSavedChannelSecrets(connection, connectionConfig, approvalActionSecrets);
+    const providerConfig = resolveSavedChannelSecrets(connection, connectionConfig, approvalActionSecrets);
     providerMessageId = await executeCommsProviderTool(
       toolName,
       connection.key,
@@ -231,7 +277,6 @@ async function executeCommsToolWithBoundaryTracking(
       grantAllowlist,
       target,
       message,
-      googleAccessToken,
     );
     await markCommsProviderSent(storage, receipt, providerMessageId);
     deleteApprovalActionTokenBestEffort(approvalActionSecrets, protectedApprovalTokenRef);
@@ -442,11 +487,7 @@ function deleteApprovalActionTokenBestEffort(runtime: ApprovalActionSecretRuntim
 }
 
 function isReadOnlyCommsTool(toolName: string): boolean {
-  return toolName === "gmail.read" || toolName === "calendar.list";
-}
-
-function isGoogleWorkspaceWriteTool(toolName: string): boolean {
-  return toolName === "gmail.send" || toolName === "calendar.create_event";
+  return toolName === "gmail.read" || toolName === "calendar.list" || nativeGoogleAction(toolName)?.readOnly === true;
 }
 
 /** The Gateway's Google sign-in owns tokens; a pasted access token in connection config is never read. */
@@ -455,6 +496,7 @@ async function resolveGoogleWorkspaceToken(
   connectionId: string,
   toolName: string,
   signInId?: string,
+  args?: Record<string, unknown>,
 ): Promise<string> {
   if (!runtime.resolveGoogleWorkspaceAccessToken) {
     throw new Error(`blocked: ${toolName} requires Google sign-in, which is not available in this runtime.`);
@@ -464,6 +506,7 @@ async function resolveGoogleWorkspaceToken(
       connectionId,
       toolName,
       ...(signInId ? { signInId } : {}),
+      ...(args ? { args } : {}),
     })
   ).trim();
   if (!token) {
@@ -617,19 +660,12 @@ async function executeCommsProviderTool(
   grantAllowlist: string[] | undefined,
   target: string,
   message: string,
-  googleAccessToken?: string,
 ): Promise<string | undefined> {
-  if (toolName === "gmail.send") {
-    return gmailSend(required(googleAccessToken, "Google access token"), args, allowlist, grantAllowlist);
-  }
   if (toolName === "smtp.send") {
     return smtpSend(connectionConfig, args, allowlist, grantAllowlist, {
       resolveSecret: secretFrom,
       markMutationRequestStarted: markCommsMutationRequestStarted,
     });
-  }
-  if (toolName === "calendar.create_event") {
-    return calendarCreate(required(googleAccessToken, "Google access token"), args, allowlist, grantAllowlist);
   }
   if (toolName.endsWith(".react") || toolName === "channel.react") {
     return commsReact(toolName, connectionKey, connectionConfig, args, allowlist, target, grantAllowlist);
@@ -3624,186 +3660,64 @@ async function whatsappUploadAttachment(
   return required(body.id, "WhatsApp uploaded media id");
 }
 
-function safeJsonParse<T>(body: string, fallback: T): T {
-  try {
-    return body ? (JSON.parse(body) as T) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-const GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
-const GMAIL_READ_MAX_RESULTS = 25;
-const GMAIL_READ_MAX_QUERY_CHARS = 512;
-const GMAIL_READ_CONCURRENCY = 5;
-const GMAIL_MESSAGE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
-
-/**
- * Lists matching messages, then reads only their metadata (From, To, Subject, Date, snippet)
- * with `messages.get?format=metadata`. Bodies and attachments are never fetched, and every
- * field is bounded and marked as untrusted external content.
- */
-async function gmailRead(
+/** Explicit read semantics matter: Google's free/busy endpoint uses POST without changing remote state. */
+async function googleWorkspaceHttp(
+  url: string,
   accessToken: string,
-  args: Record<string, unknown>,
+  options: GoogleHttpOptions = {},
   allowlist: string[],
   grantAllowlist?: string[],
+  operation = "Google Workspace request",
 ): Promise<Record<string, unknown>> {
-  const maxResults = clampInt(args.maxResults, 10, 1, GMAIL_READ_MAX_RESULTS);
-  const url = new URL(GMAIL_MESSAGES_URL);
-  const query = asString(args.query);
-  if (query) {
-    url.searchParams.set("q", query.slice(0, GMAIL_READ_MAX_QUERY_CHARS));
-  }
-  url.searchParams.set("maxResults", String(maxResults));
-  const list = await googleGetJson(url, accessToken, "gmail.read", allowlist, grantAllowlist);
-  const ids = (Array.isArray(list.messages) ? list.messages : [])
-    .map((item) => asString(record(item).id))
-    .filter((id): id is string => Boolean(id && GMAIL_MESSAGE_ID_PATTERN.test(id)))
-    .slice(0, maxResults);
-  const batches: GmailMessageSummary[][] = [];
-  for (let index = 0; index < ids.length; index += GMAIL_READ_CONCURRENCY) {
-    const batch = await Promise.all(
-      ids.slice(index, index + GMAIL_READ_CONCURRENCY).map(async (id) => {
-        const messageUrl = new URL(`${GMAIL_MESSAGES_URL}/${encodeURIComponent(id)}`);
-        messageUrl.searchParams.set("format", "metadata");
-        for (const header of GMAIL_SUMMARY_HEADERS) messageUrl.searchParams.append("metadataHeaders", header);
-        // A message deleted between the list and this read is skipped, not a failed read.
-        const message = await googleGetJson(messageUrl, accessToken, "gmail.read", allowlist, grantAllowlist, {
-          missingAsEmpty: true,
-        });
-        return summarizeGmailMessage(message);
-      }),
-    );
-    batches.push(batch.filter((item): item is GmailMessageSummary => Boolean(item)));
-  }
-  return {
-    records: batches.flat(),
-    ...(asString(list.nextPageToken) ? { hasMore: true } : {}),
-    contentTrust: "untrusted_external",
-    notice: GMAIL_UNTRUSTED_CONTENT_NOTICE,
-    sourceAttribution: [
-      {
-        sourceType: "text",
-        sourceRef: "gmail:users/me/messages",
-        title: "Gmail messages",
-        trustLevel: "untrusted_external",
+  const method = options.method ?? "GET";
+  const readOnly = options.readOnly ?? method === "GET";
+  const result = await fetchAllowlisted(
+    url,
+    {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...options.headers,
       },
-    ],
-  };
-}
-
-async function googleGetJson(
-  url: URL,
-  accessToken: string,
-  operation: string,
-  allowlist: string[],
-  grantAllowlist?: string[],
-  options: { missingAsEmpty?: boolean } = {},
-): Promise<Record<string, unknown>> {
-  const res = await fetchAllowlisted(
-    url.toString(),
-    { method: "GET", headers: { Authorization: `Bearer ${accessToken}` } },
+      ...(options.body ? { body: JSON.stringify(options.body) } : {}),
+    },
     allowlist,
     undefined,
     grantAllowlist,
+    { crossesExternalSideEffect: !readOnly },
   );
-  const body = await res.response.text();
-  if (options.missingAsEmpty && res.response.status === 404) {
+  if (options.missingAsEmpty && result.response.status === 404) {
+    await result.response.body?.cancel();
     return {};
   }
-  if (!res.response.ok) {
-    throw new Error(`${operation} failed (${res.response.status})`);
+  if (!result.response.ok) {
+    await result.response.body?.cancel();
+    throw new Error(`${operation} failed (${result.response.status})`);
   }
-  return parseJsonRecord(body);
-}
-
-async function gmailSend(
-  accessToken: string,
-  args: Record<string, unknown>,
-  allowlist: string[],
-  grantAllowlist?: string[],
-) {
-  const to = stringArray(args.to);
-  if (to.length === 0) {
-    throw new Error("gmail.send requires args.to");
+  if (result.response.status === 204) return {};
+  const reader = result.response.body?.getReader();
+  if (!reader) throw new Error("Google Workspace returned no confirmation body.");
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > 40 * 1024 * 1024) {
+        await reader.cancel();
+        throw new Error("Google Workspace response exceeded the byte limit.");
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
   }
-  const subject = required(args.subject, "subject");
-  const bodyText = required(args.bodyText, "bodyText");
-  const rawMessage = [
-    `To: ${to.join(", ")}`,
-    `Subject: ${subject}`,
-    'Content-Type: text/plain; charset="UTF-8"',
-    "",
-    bodyText,
-  ].join("\r\n");
-  const raw = Buffer.from(rawMessage).toString("base64url");
-  const res = await fetchAllowlisted(
-    `${GMAIL_MESSAGES_URL}/send`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify({ raw }),
-    },
-    allowlist,
-    undefined,
-    grantAllowlist,
-  );
-  const body = await res.response.text();
-  if (!res.response.ok) {
-    throw new Error(`gmail.send failed (${res.response.status})`);
-  }
-  return safeJsonParse<{ id?: string }>(body, {}).id ?? `gmail-${Date.now()}`;
-}
-
-async function calendarList(
-  accessToken: string,
-  args: Record<string, unknown>,
-  allowlist: string[],
-  grantAllowlist?: string[],
-) {
-  const calendarId = encodeURIComponent(asString(args.calendarId) ?? "primary");
-  const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events`);
-  if (asString(args.fromIso)) url.searchParams.set("timeMin", asString(args.fromIso) as string);
-  if (asString(args.toIso)) url.searchParams.set("timeMax", asString(args.toIso) as string);
-  url.searchParams.set("singleEvents", "true");
-  url.searchParams.set("orderBy", "startTime");
-  url.searchParams.set("maxResults", String(clampInt(args.maxResults, 10, 1, 100)));
-  const body = await googleGetJson(url, accessToken, "calendar.list", allowlist, grantAllowlist);
-  return Array.isArray(body.items) ? body.items : [];
-}
-
-async function calendarCreate(
-  accessToken: string,
-  args: Record<string, unknown>,
-  allowlist: string[],
-  grantAllowlist?: string[],
-) {
-  const calendarId = encodeURIComponent(asString(args.calendarId) ?? "primary");
-  const payload = {
-    summary: required(args.title, "title"),
-    description: asString(args.description),
-    location: asString(args.location),
-    start: { dateTime: required(args.startIso, "startIso"), timeZone: asString(args.timeZone) ?? "UTC" },
-    end: { dateTime: required(args.endIso, "endIso"), timeZone: asString(args.timeZone) ?? "UTC" },
-    attendees: stringArray(args.attendees).map((email) => ({ email })),
-  };
-  const res = await fetchAllowlisted(
-    `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify(payload),
-    },
-    allowlist,
-    undefined,
-    grantAllowlist,
-  );
-  const body = await res.response.text();
-  if (!res.response.ok) {
-    throw new Error(`calendar.create_event failed (${res.response.status})`);
-  }
-  return safeJsonParse<{ id?: string }>(body, {}).id ?? `calendar-${Date.now()}`;
+  const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new Error("Google Workspace returned an invalid confirmation.");
+  return parsed as Record<string, unknown>;
 }
 
 /**
@@ -4001,9 +3915,4 @@ function required(value: unknown, field: string): string {
   const parsed = asString(value);
   if (!parsed) throw new Error(`${field} is required`);
   return parsed;
-}
-
-function stringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((entry) => asString(entry)).filter((entry): entry is string => Boolean(entry));
 }

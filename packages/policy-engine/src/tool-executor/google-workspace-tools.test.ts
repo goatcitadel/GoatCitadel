@@ -39,12 +39,63 @@ afterEach(() => {
 });
 
 describe("Gmail and Calendar tools on the Google sign-in", () => {
+  it("returns the canonical source tool-run ID needed to reply after a complete read", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          id: "m",
+          payload: { mimeType: "text/plain", body: { data: Buffer.from("body").toString("base64url") } },
+        }),
+      ),
+    );
+    const { store } = storage();
+    const result = await executeCommsTool(
+      { ...request("gmail.get_message", { messageId: "m" }), toolRunId: "canonical-read-1" },
+      config,
+      store,
+      undefined,
+      { resolveGoogleWorkspaceAccessToken: async () => "token" },
+    );
+    expect(result.sourceToolRunId).toBe("canonical-read-1");
+    expect(result.message).toMatchObject({ id: "m", bodyText: "body" });
+  });
+  it("rejects an RSVP using another workspace's connection before resolving credentials or queuing delivery", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const { store } = storage();
+    vi.mocked(store.integrationConnections.get).mockResolvedValue({
+      connectionId: "google",
+      key: "gmail",
+      status: "connected",
+      config: {},
+      workspaceId: "other-workspace",
+    } as never);
+    const resolveGoogleWorkspaceAccessToken = vi.fn(async () => "google-token");
+    await expect(
+      executeCommsTool(
+        {
+          ...request("calendar.respond_event", { eventId: "invite", eventEtag: '"v1"', responseStatus: "accepted" }),
+          workspaceId: "current-workspace",
+        },
+        config,
+        store,
+        undefined,
+        { resolveGoogleWorkspaceAccessToken },
+      ),
+    ).rejects.toThrow(/another workspace/);
+    expect(resolveGoogleWorkspaceAccessToken).not.toHaveBeenCalled();
+    expect(store.commsDeliveries.createQueued).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("never reads a pasted access token; without the sign-in hook every tool is blocked before any request", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     for (const [toolName, args] of [
       ["gmail.read", {}],
       ["calendar.list", {}],
+      ["calendar.respond_event", { eventId: "invite", eventEtag: '"v1"', responseStatus: "accepted" }],
       ["gmail.send", { to: ["ops@example.com"], subject: "Hi", bodyText: "Body" }],
       ["calendar.create_event", { title: "Sync", startIso: "2026-11-02T17:00:00Z", endIso: "2026-11-02T17:30:00Z" }],
     ] as const) {
@@ -54,6 +105,108 @@ describe("Gmail and Calendar tools on the Google sign-in", () => {
       expect(String(result.error)).toMatch(/requires Google sign-in/i);
     }
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["accepted", "declined", "tentative"])(
+    "submits only the signed-in attendee's %s RSVP after checking the reviewed event version",
+    async (responseStatus) => {
+      const beforeExternalSideEffect = vi.fn();
+      const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+        if (init.method === "GET") {
+          expect(beforeExternalSideEffect).not.toHaveBeenCalled();
+          return Response.json({
+            id: "invite",
+            etag: '"v1"',
+            attendees: [
+              { email: "me@example.com", self: true, responseStatus: "needsAction" },
+              { email: "other@example.com", responseStatus: "accepted" },
+            ],
+          });
+        }
+        expect(beforeExternalSideEffect).toHaveBeenCalledTimes(1);
+        expect(init.method).toBe("PATCH");
+        expect(init.headers).toMatchObject({ "If-Match": '"v1"' });
+        expect(JSON.parse(String(init.body))).toEqual({
+          attendeesOmitted: true,
+          attendees: [{ email: "me@example.com", responseStatus }],
+        });
+        return Response.json({ id: "invite", attendees: [{ email: "me@example.com", self: true, responseStatus }] });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const { store } = storage();
+      const result = await executeCommsTool(
+        request("calendar.respond_event", { eventId: "invite", eventEtag: '"v1"', responseStatus }),
+        config,
+        store,
+        undefined,
+        {
+          resolveGoogleWorkspaceAccessToken: async () => "google-token",
+          beforeExternalSideEffect,
+        },
+      );
+      expect(result).toMatchObject({ status: "sent", providerMessageId: "invite" });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(String(fetchMock.mock.calls[1]![0])).toContain("sendUpdates=all");
+    },
+  );
+
+  it.each(["stale", "no_self", "secondary", "invalid_status"])(
+    "refuses %s RSVP before any mutation",
+    async (failure) => {
+      const beforeExternalSideEffect = vi.fn();
+      const fetchMock = vi.fn(async () =>
+        Response.json({
+          id: "invite",
+          etag: failure === "stale" ? '"v2"' : '"v1"',
+          attendees: failure === "no_self" ? [] : [{ email: "me@example.com", self: true }],
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const { store } = storage();
+      const result = await executeCommsTool(
+        request("calendar.respond_event", {
+          eventId: "invite",
+          eventEtag: '"v1"',
+          responseStatus: failure === "invalid_status" ? "yes" : "accepted",
+          ...(failure === "secondary" ? { calendarId: "someone@example.com" } : {}),
+        }),
+        config,
+        store,
+        undefined,
+        {
+          resolveGoogleWorkspaceAccessToken: async () => "google-token",
+          beforeExternalSideEffect,
+        },
+      );
+      expect(result.status).toBe("failed");
+      expect(beforeExternalSideEffect).not.toHaveBeenCalled();
+      expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(failure === "secondary" ? 2 : 1);
+    },
+  );
+
+  it.each(["network", "unconfirmed"])("does not retry an ambiguous RSVP after %s failure", async (failure) => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      if (init.method === "GET")
+        return Response.json({ id: "invite", etag: '"v1"', attendees: [{ self: true, email: "me@example.com" }] });
+      if (failure === "network") throw new Error("connection lost");
+      return Response.json({
+        id: "invite",
+        attendees: [{ self: true, email: "me@example.com", responseStatus: "needsAction" }],
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { store } = storage();
+    const result = await executeCommsTool(
+      request("calendar.respond_event", { eventId: "invite", eventEtag: '"v1"', responseStatus: "accepted" }),
+      config,
+      store,
+      undefined,
+      {
+        resolveGoogleWorkspaceAccessToken: async () => "google-token",
+      },
+    );
+    expect(result).toMatchObject({ status: "failed", deliveryStatus: "manual_reconciliation_required" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("sends with the Google sign-in and never reads saved channel keys from the connection config", async () => {

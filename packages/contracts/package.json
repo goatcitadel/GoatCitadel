@@ -24,6 +24,10 @@
       "types": "./dist/mesh-schema-node.d.ts",
       "default": "./dist/mesh-schema-node.js"
     },
+    "./approval-target": {
+      "types": "./dist/approval-target.d.ts",
+      "default": "./dist/approval-target.js"
+    },
     "./secret-redaction": {
       "types": "./dist/secret-redaction.d.ts",
       "default": "./dist/secret-redaction.js"

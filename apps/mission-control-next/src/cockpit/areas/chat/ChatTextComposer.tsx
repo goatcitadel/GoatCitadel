@@ -283,7 +283,7 @@ export function ChatTextComposer({
           className={
             phone
               ? "mt-2 flex items-end gap-1"
-              : "mt-2 rounded-md border border-line-control bg-canvas focus-within:border-accent"
+              : "cockpit-chat-composer mt-2 rounded-md border border-line-control bg-canvas focus-within:border-accent"
           }
         >
           <textarea

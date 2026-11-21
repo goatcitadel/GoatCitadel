@@ -2124,10 +2124,11 @@ async function executeOperation(page, operation, state) {
     }
     case "assert-single-failure": {
       const failureMessage = /^This turn failed before completion\. Retry once, or narrow the request/iu;
-      const turn = page.locator("article[data-turn-id]");
+      const failedTurnId = requireText(state.fixture.failureCorrelation?.turnId, "failed Chat turn ID");
+      const turn = page.locator(`article[data-turn-id="${failedTurnId}"]`);
       await turn.getByText(failureMessage).waitFor({ state: "visible" });
       const [messageCopies, failedBadges, retryControls, duplicateAlerts] = await Promise.all([
-        page.getByText(failureMessage).count(),
+        turn.getByText(failureMessage).count(),
         turn.locator('[data-tone="failed"]').count(),
         turn.getByRole("button", { name: "Retry", exact: true }).count(),
         page.locator('section[aria-label="Chat"] [role="alert"]').count(),
@@ -2141,7 +2142,7 @@ async function executeOperation(page, operation, state) {
         runControls !== 1 ||
         duplicateAlerts !== 0
       ) {
-        const owners = await page.getByText(failureMessage).evaluateAll((nodes) =>
+        const owners = await turn.getByText(failureMessage).evaluateAll((nodes) =>
           nodes.map((node) => ({
             tag: node.tagName,
             classes: node.className,
@@ -2752,12 +2753,15 @@ async function apiProbe(probe, state) {
       );
       return { status: 200, outcome: "provider completion armed to return a deterministic in-band failure" };
     }
-    case "chat-error-failed":
-      return await waitForExactChatTurnStatus(state, {
+    case "chat-error-failed": {
+      const failed = await waitForExactChatTurnStatus(state, {
         userContent: "Fail this deterministic usability turn.",
         status: "failed",
         failureRequired: true,
       });
+      state.fixture.failureCorrelation = {runId:failed.runId,sessionId:failed.sessionId,turnId:failed.turnId};
+      return failed;
+    }
     case "chat-stop-cancelled": {
       const cancelled = await waitForExactChatTurnStatus(state, {
         userContent: "Stop this deterministic usability turn.",

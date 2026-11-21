@@ -103,6 +103,33 @@ export function resolveCodeModeRequestEligibility(input: CodeModeRequestEligibil
   );
 }
 
+const EXPLICIT_CODE_MODE_RUN =
+  /^(?:(?:for [^.!?\r\n]{1,150},\s*)?please\s+)?(?:run|execute|use|request|ask me to approve)\b[^.!?\r\n]{0,250}\bcode mode\b/iu;
+
+/** Answer an explicit run request from runtime state when sign-in is required to turn Code Mode on. */
+export async function explainCodeModeSignIn(
+  turn: CodeModeRequestTurnShape,
+  content: string,
+  getCodeModeReadiness: (() => Promise<CodeModeReadiness>) | undefined,
+): Promise<string | undefined> {
+  if (
+    turn.actorSource !== "none" ||
+    !isCodeModeRequestTurnShapeEligible(turn) ||
+    !EXPLICIT_CODE_MODE_RUN.test(content.trim()) ||
+    !getCodeModeReadiness
+  )
+    return undefined;
+  const readiness = await getCodeModeReadiness().catch(() => undefined);
+  if (!readiness?.sandboxSupported || (readiness.reason !== "code_mode_off" && readiness.reason !== "sandbox_off"))
+    return undefined;
+  return [
+    "You need to sign in as an operator before you can approve turning on Code Mode.",
+    "1. Open [Settings › Access](/settings/access). Under **Sign-in**, choose **Configure access**. If sign-in is off, choose **Token**, enter your token in the password field, and review and save the change.",
+    "2. Sign in to GoatCitadel with that token. Return to this Chat and send your code request again.",
+    "3. Review the script on the approval card and select **Turn on Code Mode and run**.",
+  ].join("\n\n");
+}
+
 /**
  * Reads readiness only for a turn whose shape is eligible, and fails closed: without a reader, or when the read
  * fails, the turn is not offered `code_mode.request`.

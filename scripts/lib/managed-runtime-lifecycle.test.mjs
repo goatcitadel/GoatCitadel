@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import childProcess, { spawn } from "node:child_process";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -267,6 +268,43 @@ test("lifecycle lock holder inspection reports only a live non-self owner of the
       sentinel.kill("SIGKILL");
     }
     removeFixtureRoot(fixtureRoot);
+  }
+});
+
+test("Windows binds a direct service PID from its creation time with CIM fallback", {
+  skip: process.platform !== "win32",
+}, (t) => {
+  const pid = 1234;
+  const identity = "windows:133600000000000000";
+  const expected = { status: "verified", rootIdentity: identity, servingIdentity: identity, depth: 0 };
+  const queries = [];
+  let directResult = { status: 0, stdout: `${pid}|133600000000000007\n` };
+  const spawnSync = t.mock.method(childProcess, "spawnSync", (_program, args) => {
+    const script = Buffer.from(args.at(-1), "base64").toString("utf16le");
+    if (script.includes("GetProcessById")) {
+      queries.push("direct");
+      return directResult;
+    }
+    assert.match(script, /Get-CimInstance Win32_Process/u);
+    queries.push("ancestry");
+    return { status: 0, stdout: `${pid}|0|133600000000000000\n` };
+  });
+  syncBuiltinESMExports();
+  try {
+    const options = { rootPid: pid, servingPid: pid };
+    assert.deepEqual(inspectProcessBinding(options), expected);
+    assert.deepEqual(queries.splice(0), ["direct"]);
+
+    directResult = { status: 1, stdout: "" };
+    assert.deepEqual(inspectProcessBinding(options), expected);
+    assert.deepEqual(queries.splice(0), ["direct", "ancestry"]);
+
+    directResult = { status: 0, stdout: "missing\n" };
+    assert.deepEqual(inspectProcessBinding(options), { status: "missing" });
+    assert.deepEqual(queries, ["direct"]);
+  } finally {
+    spawnSync.mock.restore();
+    syncBuiltinESMExports();
   }
 });
 

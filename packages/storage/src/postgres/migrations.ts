@@ -251,7 +251,9 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
   {
     version: 2,
     name: "canonical_runtime_schema",
-    sql: buildPostgresRuntimeSchemaSql(),
+    get sql() {
+      return buildPostgresRuntimeSchemaSql();
+    },
   },
   {
     version: 3,

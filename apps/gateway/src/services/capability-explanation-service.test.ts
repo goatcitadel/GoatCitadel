@@ -106,6 +106,24 @@ describe("capability explanations", () => {
     expect(result.capabilities).toContainEqual(expect.objectContaining({ toolName: "calendar.list", state: calendar }));
   });
 
+  it.each([
+    [["gmail.send"], "setup_needed"],
+    [["gmail.send", "gmail.read"], "ready"],
+  ] as const)("requires all Gmail reply capabilities from the same connection", async (grants, state) => {
+    const { service, request, entries, connector } = fixture();
+    connector.googleGrantedCapabilities = [...grants];
+    entries.push({
+      ...entries[0]!,
+      capabilityId: "tool:gmail.reply",
+      title: "gmail.reply",
+      toolName: "gmail.reply",
+      summary: "Reply in a Gmail thread",
+    });
+    request.args = { query: "gmail.reply" };
+    const result = await service.explain(request);
+    expect(result.capabilities).toContainEqual(expect.objectContaining({ toolName: "gmail.reply", state }));
+  });
+
   it("answers email capability questions with scoped evidence, without copying connector secrets", async () => {
     const { service, request, host } = fixture();
     const result = await service.explain(request);

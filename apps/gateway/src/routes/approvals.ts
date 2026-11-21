@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { approvalTargetLine } from "@goatcitadel/contracts/approval-target";
 import {
   COMPANION_APPROVE_REFUSED_MESSAGE,
   companionSignedDecisionSchema,
@@ -246,7 +247,8 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
       const approval = await approvals.getApproval(params.data.approvalId, query.data.workspaceId);
       const projected = projectApprovalPublicResponse(approval);
       if (!companion) {
-        return reply.send(projected);
+        const targetLabel = approvalTargetLine(projected.kind, projected.preview) ?? null;
+        return reply.send({ ...projected, targetLabel });
       }
       // Only the paired phone gets an errand's plain line and spotlight screenshot.
       const errandPhoneView = await buildErrandPhoneApprovalView(

@@ -51,7 +51,8 @@ export async function verifyBackupAtPath(backupPath: string): Promise<BackupVeri
   }
 }
 
-async function verifyMaterializedBackupAtPath(
+/** Verify a private snapshot already created by the caller. */
+export async function verifyMaterializedBackupAtPath(
   backupPath: string,
   reportedBackupPath: string,
 ): Promise<BackupVerifyResponse> {

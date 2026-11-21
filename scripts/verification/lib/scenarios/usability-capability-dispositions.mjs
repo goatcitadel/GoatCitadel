@@ -319,8 +319,11 @@ async function probeSafeContract(input) {
       probeKind: "deterministic-contract-invocation",
       probeOutcome: response.body?.outcome ?? "ok",
       executed: true,
-      reason:
-        "Deterministic fixture tool executed through the real Gateway policy/executor boundary and its result contract passed.",
+      reason: resultContract.availability === "unavailable"
+        ? "The real Gateway invocation reports unavailable memory recall and admits no sources; this is a disabled-state proof, not successful retrieval."
+        : resultContract.nonMemoryDocumentExcluded === true
+          ? "The real memory boundary excludes the plain ingested document; this probe asserts source isolation, not positive memory retrieval."
+          : "Deterministic fixture tool executed through the real Gateway policy/executor boundary and its result contract passed.",
       httpStatus: response.status,
       approvalId,
       auditEventId: response.body?.auditEventId,
@@ -915,23 +918,29 @@ function validateDocsIngestResult(result, context) {
 }
 
 function validateMemoryReadResult(result, context) {
-  const item = findKnowledgeItem(result, context, "snippet");
-  if (result.namespace !== KNOWLEDGE_NAMESPACE || result.query !== KNOWLEDGE_NEEDLE.toLowerCase()) {
-    throw new Error("memory.read returned the wrong namespace or normalized query");
+  if (!nonEmptyText(context.fixture.knowledgeDocId)) throw new Error("Non-memory exclusion fixture is unavailable");
+  if (result.namespace !== KNOWLEDGE_NAMESPACE || result.query !== KNOWLEDGE_NEEDLE) {
+    throw new Error("Memory read returned the wrong namespace or query");
   }
-  if (item.title !== "Capability knowledge fixture" || item.sourceRef !== KNOWLEDGE_SOURCE) {
-    throw new Error("memory.read lost document attribution");
+  // docs.ingest creates a plain document, not an approved durable memory. The
+  // fresh-profile probe deliberately contains no eligible memory in this namespace.
+  if (!Array.isArray(result.items) || result.items.length !== 0) {
+    throw new Error("Memory read admitted a plain document or an unseeded source");
   }
-  return knowledgeSummary(item);
+  if (result.unavailable === true) {
+    if (result.coverage?.lexicalStatus !== "unavailable" || !nonEmptyText(result.coverage?.reason)) {
+      throw new Error("Unavailable memory read has contradictory coverage");
+    }
+    return { availability: "unavailable", admittedSources: 0, reason: result.coverage.reason };
+  }
+  if (!["ready", "building"].includes(result.coverage?.lexicalStatus)) {
+    throw new Error("Memory read has no current availability evidence");
+  }
+  return { availability: "ready", admittedSources: 0, nonMemoryDocumentExcluded: true };
 }
 
 function validateMemorySearchResult(result, context) {
-  const item = findKnowledgeItem(result, context, "snippet");
-  if (result.namespace !== KNOWLEDGE_NAMESPACE || result.query !== KNOWLEDGE_NEEDLE.toLowerCase()) {
-    throw new Error("memory.search returned the wrong namespace or normalized query");
-  }
-  if (!(item.score > 0)) throw new Error("memory.search returned no positive lexical score");
-  return knowledgeSummary(item);
+  return validateMemoryReadResult(result, context);
 }
 
 function validateDocsSearchResult(result, context) {

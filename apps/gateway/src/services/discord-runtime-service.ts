@@ -1,18 +1,16 @@
 /* eslint-disable max-lines -- Discord runtime behavior stays consolidated so gateway event handling remains debuggable in one place. */
 import { randomUUID } from "node:crypto";
-import {
-  type AutocompleteInteraction,
-  type ButtonInteraction,
+import type {
+  AutocompleteInteraction,
+  ButtonInteraction,
+  Channel,
+  ChatInputCommandInteraction,
   Client,
-  GatewayIntentBits,
-  Partials,
-  SlashCommandBuilder,
-  type Channel,
-  type ChatInputCommandInteraction,
-  type Message,
-  type RESTPostAPIApplicationCommandsJSONBody,
-  type User,
+  Message,
+  RESTPostAPIApplicationCommandsJSONBody,
+  User,
 } from "discord.js";
+import { loadDiscordSdk } from "./discord-sdk.js";
 import { logger } from "@goatcitadel/gateway-core";
 import {
   SharedHostAdmissionClosedError,
@@ -387,6 +385,7 @@ export class DiscordRuntimeService {
   }
 
   private createManagedRuntime(token: string, connections: IntegrationConnection[]): ManagedClientRecord {
+    const { Client, GatewayIntentBits, Partials } = loadDiscordSdk();
     const client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -1756,8 +1755,9 @@ function getErrorMessage(error: unknown): string {
 }
 
 function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJSONBody[] {
+  const { SlashCommandBuilder } = loadDiscordSdk();
   const stringChoice = (value: string) => ({ name: value, value });
-  const sharedCommands = buildSharedDiscordSlashCommandDefinitions();
+  const sharedCommands = buildSharedDiscordSlashCommandDefinitions(SlashCommandBuilder);
   const sharedNames = new Set(sharedCommands.map((command) => command.name));
 
   const discordSpecificCommands = [
@@ -2046,13 +2046,16 @@ function buildDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJS
   return [...sharedCommands, ...discordSpecificCommands];
 }
 
-function buildSharedDiscordSlashCommandDefinitions(): RESTPostAPIApplicationCommandsJSONBody[] {
+function buildSharedDiscordSlashCommandDefinitions(
+  SlashCommandBuilder: typeof import("discord.js").SlashCommandBuilder,
+): RESTPostAPIApplicationCommandsJSONBody[] {
   return SHARED_CHANNEL_COMMANDS.filter((definition) => definition.platforms.includes("discord")).map((definition) =>
-    buildSharedDiscordSlashCommandDefinition(definition.name, definition.description),
+    buildSharedDiscordSlashCommandDefinition(SlashCommandBuilder, definition.name, definition.description),
   );
 }
 
 function buildSharedDiscordSlashCommandDefinition(
+  SlashCommandBuilder: typeof import("discord.js").SlashCommandBuilder,
   name: string,
   description: string,
 ): RESTPostAPIApplicationCommandsJSONBody {
