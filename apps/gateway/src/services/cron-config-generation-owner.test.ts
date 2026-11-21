@@ -10,7 +10,11 @@ import {
   recoverLastGoodConfigGeneration,
   type CompleteUnifiedConfigPayload,
 } from "./config-generation-service.js";
-import { CronConfigGenerationOwner, readCanonicalCronSpecs } from "./cron-config-generation-owner.js";
+import {
+  CronConfigGenerationOwner,
+  projectStoredCronSpecs,
+  readCanonicalCronSpecs,
+} from "./cron-config-generation-owner.js";
 import { computeNextCronRunAt } from "./gateway/cron-automation-service.js";
 import { PRIVATE_BETA_BACKUP_JOB_ID } from "./gateway/cron-job-ids.js";
 
@@ -451,6 +455,35 @@ describe("CronConfigGenerationOwner", () => {
     await owner.reconcileStartupGeneration();
     expect(config.getRevision()).toBe(2);
     expect(storage.cronJobs.list()).toEqual(before);
+  });
+
+  it("preserves a disabled commitment run anchor across config projection and recovery", async () => {
+    const job = spec();
+    const anchor = spec({
+      jobId: `commitment_${"a".repeat(40)}`,
+      name: "Commitment occurrence",
+      action: "agent_turn",
+      actionConfig: {
+        agentTurn: {
+          prompt: "Check the reminder",
+          commitment: { commitmentId: "reminder", revision: 1, materialSha256: "b".repeat(64) },
+        },
+      },
+      schedule: "0 0 1 1 *",
+      enabled: false,
+    });
+    const { root } = await createRoot([job]);
+    const storage = createStorage(root);
+    storage.cronJobs.createSpec(job);
+    const storedAnchor = storage.cronJobs.createSpec(anchor);
+    const config = new ConfigGenerationService(root);
+    const owner = new CronConfigGenerationOwner(config, createSqliteAsyncStorage(storage));
+
+    expect(projectStoredCronSpecs(storage.cronJobs.list())).toEqual([job]);
+    await owner.reconcileStartupGeneration();
+    expect(readCanonicalCronSpecs(config.getActivePayload().cronJobs)).toEqual([job]);
+    await owner.reconcileCommittedGeneration();
+    expect(storage.cronJobs.get(anchor.jobId)).toEqual(storedAnchor);
   });
 });
 
