@@ -7,7 +7,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
-import type { ChatTimerDraft } from "../chat-timer-form";
+import type { FirstChatReminder } from "./chat-timer-submission";
 import { resolveOutboundSurfaceMode } from "../../pure-helpers";
 import { isLocalChatStatusCommand, isLocalChatTimerCommand } from "../chat-page-pure-helpers";
 import { resolveExecutionRoutePrefs } from "../mission-threaded-controller-helpers";
@@ -131,7 +131,7 @@ export function useChatSubmissionComposition({
     !session.sessionData.contextMutationReadOnly &&
     session.threadController.selectedSession?.scope !== "external";
   const timerScope = timerReviewScope(workspaceId);
-  const firstReminder = useRef<{ scope: string; draft: ChatTimerDraft; sessionId?: string } | null>(null);
+  const firstReminder = useRef<FirstChatReminder | null>(null);
 
   const operatorPromptSettersRef = useRef<{
     setPendingApproval: (value: null) => void;
@@ -233,50 +233,33 @@ export function useChatSubmissionComposition({
       return Promise.resolve();
     }
     if (timerAvailable && timerScope === timerReviewScope(workspaceId)) {
-      const reviewTimerDraft = (timerDraft?: ChatTimerDraft) => {
-        if (selection.selectedSessionId) {
-          setDraft("");
-          openChatTimerPanel(timerDraft);
-          return Promise.resolve();
-        }
-        if (timerDraft) {
-          if (firstReminder.current?.scope === timerScope) return Promise.resolve();
-          const reminder: NonNullable<typeof firstReminder.current> = { scope: timerScope, draft: timerDraft };
-          firstReminder.current = reminder;
-          return ensureSession((created) => {
-            if (firstReminder.current !== reminder || timerScope !== timerReviewScope(workspaceId)) return;
-            reminder.sessionId = created.sessionId;
-            setDraft((current) => (current === draft ? "" : current));
-          }).then(
-            () => {
-              if (firstReminder.current === reminder && !reminder.sessionId) firstReminder.current = null;
-            },
-            (error: unknown) => {
-              if (firstReminder.current !== reminder) return;
-              firstReminder.current = null;
-              if (
-                timerScope !== timerReviewScope(workspaceId) ||
-                (error instanceof DOMException && error.name === "AbortError")
-              )
-                return;
-              setUiError(error instanceof Error ? error.message : "Could not open a Chat for this timer.");
-            },
-          );
-        }
+      if (selection.selectedSessionId && isLocalChatTimerCommand(draft)) {
+        setDraft("");
+        openChatTimerPanel();
         return Promise.resolve();
-      };
-      if (selection.selectedSessionId && isLocalChatTimerCommand(draft)) return reviewTimerDraft();
+      }
       if (!sending && !pendingAttachments.length && !orchestration.editingTurnId && mayAskForRelativeTimer(draft)) {
         const revision = ++reminderParseRevision.current;
+        const isScopeCurrent = () => timerScope === timerReviewScope(workspaceId);
         const isCurrent = () =>
           revision === reminderParseRevision.current &&
-          timerScope === timerReviewScope(workspaceId) &&
+          isScopeCurrent() &&
           !coordination.sessionControlSendLockedRef.current;
-        return import("../chat-timer-form").then(
-          ({ parseChatTimerDraft }) => {
+        return import("./chat-timer-submission").then(
+          ({ reviewChatTimer }) => {
             if (!isCurrent()) return;
-            const parsed = parseChatTimerDraft(draft);
-            return parsed ? reviewTimerDraft(parsed) : composerSendHandlerRef.current();
+            return reviewChatTimer({
+              draft,
+              sessionId: selection.selectedSessionId,
+              scope: timerScope,
+              isScopeCurrent,
+              firstReminder,
+              ensureSession,
+              setDraft,
+              setUiError,
+              openChatTimerPanel,
+              send: composerSendHandlerRef.current,
+            });
           },
           () => {
             if (isCurrent()) setUiError("Could not load timer review. Try sending the reminder again.");
