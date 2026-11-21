@@ -139,7 +139,7 @@ export class OpenAICodexOAuthService {
       credentialAccount === OPENAI_CODEX_OAUTH_ACCOUNT && !sameAccountOnly ? this.getPublicStatusSnapshot() : undefined;
     if (snapshot?.status) return { ...snapshot.status };
 
-    const available = this.secretStore.isAvailable();
+    const available = this.isKeychainAvailable();
     const credential = this.readCredential(credentialAccount);
     const status = this.projectStatus(available, credential, sameAccountOnly);
     if (snapshot) snapshot.status = { ...status };
@@ -171,7 +171,7 @@ export class OpenAICodexOAuthService {
   }
 
   private async readPublicStatus(): Promise<OpenAICodexOAuthStatus> {
-    const available = this.secretStore.isAvailable();
+    const available = this.isKeychainAvailable();
     let credential: OpenAICodexOAuthCredential | undefined;
     if (available) {
       const started = performance.now();
@@ -324,7 +324,7 @@ export class OpenAICodexOAuthService {
 
   public deleteCredential(credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT): OpenAICodexOAuthStatus {
     this.assertKeychainAvailable();
-    this.secretStore.deleteSecret(credentialAccount);
+    this.removeCredential(credentialAccount);
     return this.getStatus(credentialAccount);
   }
 
@@ -354,7 +354,7 @@ export class OpenAICodexOAuthService {
     // Write canonical state before removing staging custody. Reconciliation can
     // safely clean the duplicate if the process stops between these operations.
     this.saveCredential(credential, OPENAI_CODEX_OAUTH_ACCOUNT);
-    this.secretStore.deleteSecret(sourceAccount);
+    this.removeCredential(sourceAccount);
     return this.getStatus();
   }
 
@@ -363,7 +363,7 @@ export class OpenAICodexOAuthService {
       throw new ConflictError({ message: "Temporary OAuth cleanup cannot target the canonical credential owner." });
     }
     this.assertKeychainAvailable();
-    this.secretStore.deleteSecret(credentialAccount);
+    this.removeCredential(credentialAccount);
   }
 
   public close(): void {
@@ -462,8 +462,12 @@ export class OpenAICodexOAuthService {
     );
   }
 
+  private isKeychainAvailable(): boolean {
+    return this.secretStore.isAvailable();
+  }
+
   private assertKeychainAvailable(): void {
-    if (!this.secretStore.isAvailable()) {
+    if (!this.isKeychainAvailable()) {
       throw new SecretStoreUnavailableError("OS keychain backend is required for OpenAI Codex OAuth.");
     }
   }
@@ -481,6 +485,10 @@ export class OpenAICodexOAuthService {
 
   private saveCredential(credential: OpenAICodexOAuthCredential, credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT): void {
     this.secretStore.setSecret(credentialAccount, JSON.stringify(credential));
+  }
+
+  private removeCredential(credentialAccount: string): void {
+    this.secretStore.deleteSecret(credentialAccount);
   }
 
   private projectPendingFlow(flowId: string, flow: PendingDeviceFlow): OpenAICodexDeviceStartResponse {

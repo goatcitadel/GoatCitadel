@@ -26,20 +26,8 @@ import type {
 } from "@goatcitadel/contracts";
 import type { ChatCommandOptions, ChatCommandResult } from "./chat-command-service.js";
 import type { CallerPolicyScope } from "./chat-policy-scope-service.js";
-import type { AssistantReadinessService } from "./assistant-readiness-service.js";
-import type { FollowThroughProjectionService } from "./follow-through-projection-service.js";
-import type { ChatLearningReceiptService } from "./chat-learning-receipt-service.js";
-import type { ChatContinuationService } from "./chat-continuation-service.js";
-import type { FollowThroughSetupService } from "./follow-through-setup-service.js";
-import { ServiceUnavailableError } from "@goatcitadel/contracts";
 
 export interface ChatSupportRouteDependencies {
-  assistantReadiness?: Pick<AssistantReadinessService, "getAssistantReadiness"> &
-    Partial<Pick<AssistantReadinessService, "prepareSetup">>;
-  followThrough?: Pick<FollowThroughProjectionService, "listFollowThrough" | "requestFollowThroughAction">;
-  learningReceipt?: Pick<ChatLearningReceiptService, "getTurnLearningReceipt">;
-  continuations?: Pick<ChatContinuationService, "inspect" | "prepare">;
-  followThroughSetup?: Pick<FollowThroughSetupService, "inspect" | "create">;
   changePlans: {
     create(sessionId: string, input: Omit<ChatChangePlanCreateInput, "sessionId">): Promise<ChatChangePlanRecord>;
     list(sessionId: string, limit?: number): Promise<ChatChangePlanRecord[]>;
@@ -173,50 +161,6 @@ export interface ChatSupportRouteDependencies {
 
 export class ChatSupportRouteService {
   public constructor(private readonly deps: ChatSupportRouteDependencies) {}
-  public inspectFollowThroughSetup(input: Parameters<FollowThroughSetupService["inspect"]>[0]) {
-    if (!this.deps.followThroughSetup)
-      throw new ServiceUnavailableError("Schedule setup is unavailable on this runtime.");
-    return this.deps.followThroughSetup.inspect(input);
-  }
-  public createFollowThroughSetup(input: Parameters<FollowThroughSetupService["create"]>[0]) {
-    if (!this.deps.followThroughSetup)
-      throw new ServiceUnavailableError("Schedule setup is unavailable on this runtime.");
-    return this.deps.followThroughSetup.create(input);
-  }
-  public inspectChatContinuation(input: Parameters<ChatContinuationService["inspect"]>[0]) {
-    if (!this.deps.continuations) throw new ServiceUnavailableError("Chat recovery is unavailable on this runtime.");
-    return this.deps.continuations.inspect(input);
-  }
-  public prepareChatContinuation(input: Parameters<ChatContinuationService["prepare"]>[0]) {
-    if (!this.deps.continuations) throw new ServiceUnavailableError("Chat recovery is unavailable on this runtime.");
-    return this.deps.continuations.prepare(input);
-  }
-  public getAssistantReadiness(sessionId: string, workspaceId?: string) {
-    if (!this.deps.assistantReadiness)
-      throw new ServiceUnavailableError("Assistant readiness is unavailable on this runtime.");
-    return this.deps.assistantReadiness.getAssistantReadiness(sessionId, workspaceId);
-  }
-  public prepareAssistantSetup(input: import("@goatcitadel/contracts").AssistantSetupReviewInput, actorId?: string) {
-    if (!this.deps.assistantReadiness?.prepareSetup)
-      throw new ServiceUnavailableError("Assistant setup reviews are unavailable on this runtime.");
-    return this.deps.assistantReadiness.prepareSetup(input, actorId);
-  }
-  public getTurnLearningReceipt(sessionId: string, turnId: string, workspaceId?: string) {
-    if (!this.deps.learningReceipt)
-      throw new ServiceUnavailableError("Learning receipts are unavailable on this runtime.");
-    return this.deps.learningReceipt.getTurnLearningReceipt(sessionId, turnId, workspaceId);
-  }
-  public listFollowThrough(sessionId: string, workspaceId?: string) {
-    if (!this.deps.followThrough) throw new ServiceUnavailableError("Follow-through is unavailable on this runtime.");
-    return this.deps.followThrough.listFollowThrough(sessionId, workspaceId);
-  }
-  public requestFollowThroughAction(
-    input: Parameters<FollowThroughProjectionService["requestFollowThroughAction"]>[0],
-    actorId?: string,
-  ) {
-    if (!this.deps.followThrough) throw new ServiceUnavailableError("Follow-through is unavailable on this runtime.");
-    return this.deps.followThrough.requestFollowThroughAction(input, actorId);
-  }
 
   /** Rejects a caller-supplied `policyTaskId` or `policyRunId` that does not belong to the session. */
   public assertCallerPolicyScope(sessionId: string, scope: CallerPolicyScope) {

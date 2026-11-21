@@ -187,7 +187,7 @@ describe("Google Workspace sign-in", { timeout: 60_000 }, () => {
       workspaceId: "default",
       args: { timeMin: "2026-11-17T20:00:00-08:00", timeMax: "2026-11-17T21:00:00-08:00", maxResults: 2 },
     };
-    const repaired = await ctx.service.normalizeReadRequest(request);
+    const repaired = await ctx.service.normalizeToolRequest(request);
     expect(repaired.args).toEqual({
       connectionId: connection.connectionId,
       fromIso: request.args.timeMin,
@@ -196,7 +196,7 @@ describe("Google Workspace sign-in", { timeout: 60_000 }, () => {
     });
     expect(repaired.googleReadSignInId).toEqual(expect.any(String));
     await expect(
-      ctx.service.normalizeReadRequest({
+      ctx.service.normalizeToolRequest({
         ...request,
         args: { ...request.args, fromIso: request.args.timeMax },
       }),
@@ -213,7 +213,7 @@ describe("Google Workspace sign-in", { timeout: 60_000 }, () => {
 
     const otherAccount = await googleConnection({ calendarRead: true });
     await connect(ctx, otherAccount.connectionId, ["calendar.read"], { scope: CALENDAR_READONLY });
-    await expect(ctx.service.normalizeReadRequest(request)).rejects.toThrow(/More than one Google account/);
+    await expect(ctx.service.normalizeToolRequest(request)).rejects.toThrow(/More than one Google account/);
   });
 
   it("asks Google for exactly the reviewed scopes, with PKCE S256 and a loopback redirect, and keeps the client secret in the keychain", async () => {

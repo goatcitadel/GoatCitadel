@@ -3181,6 +3181,22 @@
       "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 6
+    },
+    {
+      "path": "apps/gateway/src/services/a2a-grpc-listener.ts",
+      "planStep": "C0",
+      "reason": "Owns the existing gRPC transport behind the inbound A2A enablement check so Gateway startup can defer loading it.",
+      "evidence": "a2a-grpc-service.test.ts covers the real listener and peer authentication. The architecture collector measures 12 accesses and zero host callbacks.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 12
+    },
+    {
+      "path": "apps/gateway/src/services/google-workspace-review-service.ts",
+      "planStep": "C0",
+      "reason": "Binds Google Workspace mutations to captured source material and rechecks the workspace path jail for staged file operations.",
+      "evidence": "google-workspace-review-service.test.ts covers the source, workspace, and staged-file checks. The architecture collector measures 10 accesses and zero host callbacks.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 10
     }
   ]
 }

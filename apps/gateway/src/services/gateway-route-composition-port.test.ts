@@ -71,7 +71,7 @@ describe("Gateway channel credential custody composition", () => {
 });
 
 describe("Gateway setup route owner composition", () => {
-  it("binds Chat setup calls to the late-initialized plan owner", async () => {
+  it("exposes the injected Chat setup plan port without exposing the control plane", async () => {
     const unused = vi.fn();
     const plans = {
       create: vi.fn(async (input: unknown) => ({ planId: "p", input })),
@@ -80,22 +80,17 @@ describe("Gateway setup route owner composition", () => {
       findReplay: vi.fn(),
       findByIdempotencyKey: vi.fn(),
     };
-    const owner: { current?: typeof plans } = {};
-    const readOwner = vi.fn(() => owner.current);
-    const gateway = new Proxy(
+    const gateway = new Proxy({}, { get: () => unused }) as GatewayRouteCompositionHost;
+    const privateDependencies = new Proxy(
       {},
-      {
-        get: (_target, key) => (key === "evolutionControlPlaneService" ? readOwner() : unused),
-      },
-    ) as GatewayRouteCompositionHost;
-    const privateDependencies = new Proxy({}, { get: () => unused }) as GatewayRouteCompositionPrivateDependencies;
+      { get: (_target, key) => (key === "chatAssistant" ? { setupPlans: plans } : unused) },
+    ) as GatewayRouteCompositionPrivateDependencies;
     const port = createGatewayRouteCompositionPort(gateway, privateDependencies);
 
-    expect(readOwner).not.toHaveBeenCalled();
-    owner.current = plans;
-    expect(await port.chatSetupPlanOwner.create({ request: "fixture" } as never)).toMatchObject({ planId: "p" });
-    expect(plans.create).toHaveBeenCalledTimes(1);
-    expect(readOwner).toHaveBeenCalledTimes(1);
+    const request = { request: "fixture" } as unknown as Parameters<typeof port.chatAssistant.setupPlans.create>[0];
+    expect(port.chatAssistant.setupPlans).toBe(plans);
+    expect(await port.chatAssistant.setupPlans.create(request)).toMatchObject({ planId: "p" });
+    expect(plans.create).toHaveBeenCalledExactlyOnceWith(request);
     expect(port).not.toHaveProperty("evolutionControlPlaneService");
   });
 

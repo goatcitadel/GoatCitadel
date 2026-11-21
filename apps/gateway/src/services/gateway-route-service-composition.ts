@@ -1,6 +1,4 @@
 import { createGatewayRouteServices, type GatewayRouteServices } from "./gateway-route-services.js";
-import path from "node:path";
-import { ScriptsService } from "./scripts-service.js";
 import type { GatewayRouteCompositionPort } from "./gateway-route-composition-port.js";
 import { composeChatAssistantSupport, composeChatRouteDependencies } from "./gateway-route-composition-chat.js";
 import { composeIntegrationChannelRouteDependencies } from "./gateway-route-composition-integrations.js";
@@ -35,10 +33,6 @@ export {
 
 export function composeGatewayRouteServices(gateway: GatewayRouteCompositionPort): GatewayRouteServices {
   return {
-    scripts: new ScriptsService(
-      gateway.storage,
-      path.resolve(gateway.config.rootDir, gateway.config.assistant.workspaceDir),
-    ),
     ...createGatewayRouteServices({
       ...composeChatRouteDependencies(gateway),
       ...composeIntegrationChannelRouteDependencies(gateway),

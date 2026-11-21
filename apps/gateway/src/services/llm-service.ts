@@ -465,7 +465,7 @@ export class LlmService {
       const includeKeychain =
         options.includeKeychainForProviderId === provider.providerId ? true : includeKeychainDefault;
       const authMode = resolveProviderAuthMode(provider);
-      const oauthStatus = isOpenAICodexProvider(provider) ? this.openAICodexOAuth.getStatus() : undefined;
+      const oauthStatus = isOpenAICodexProvider(provider) ? this.getOpenAICodexOAuthStatus() : undefined;
       const googleAuthReadiness =
         authMode === "google-adc"
           ? this.googleCloudAuth.inspectReadiness({
@@ -978,7 +978,7 @@ export class LlmService {
     if (isOpenAICodexProvider(provider)) {
       throw new Error("OpenAI Codex uses ChatGPT OAuth. Connect it through the OpenAI Codex OAuth flow.");
     }
-    return this.secretStore.getProviderApiKey(providerId);
+    return this.readKeychainApiKey(providerId, { failOnError: true });
   }
 
   /**
@@ -3214,10 +3214,11 @@ export class LlmService {
   }
 
   private async resolveModelCatalogApiKey(provider: LlmProviderConfig): Promise<string | undefined> {
-    if (!this.secretStore.getProviderApiKeyAsync) return this.resolveApiKey(provider);
+    const readKeychain = this.secretStore.getProviderApiKeyAsync;
+    if (!readKeychain) return this.resolveApiKey(provider);
     let keychain: string | undefined;
     try {
-      keychain = await this.secretStore.getProviderApiKeyAsync(provider.providerId);
+      keychain = await readKeychain.call(this.secretStore, provider.providerId);
     } catch {
       // Fall back to configured credentials when the OS keychain is unavailable.
     }
@@ -3250,13 +3251,11 @@ export class LlmService {
     return JSON.stringify({ accessKeyId, secretAccessKey, ...(sessionToken ? { sessionToken } : {}) });
   }
 
-  private readKeychainApiKey(providerId: string): string | undefined {
+  private readKeychainApiKey(providerId: string, { failOnError = false } = {}): string | undefined {
     try {
       return this.secretStore.getProviderApiKey(providerId);
     } catch (error) {
-      if (error instanceof SecretStoreUnavailableError) {
-        return undefined;
-      }
+      if (failOnError) throw error;
       return undefined;
     }
   }

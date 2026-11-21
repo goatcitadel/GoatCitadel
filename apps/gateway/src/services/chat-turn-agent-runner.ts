@@ -160,7 +160,6 @@ import {
   isRestrictedAutonomousPermissionProfile,
   isCodeModeRequestTurnShapeEligible,
   loadCodeModeRequestEligibility,
-  type CodeModeRequestTurnFields,
 } from "./code-mode-request-eligibility.js";
 import { formatRecordedCodeModeResult, readStandaloneCodeModeSource } from "./code-mode-request-resume.js";
 import {
@@ -1513,9 +1512,8 @@ export class ChatTurnAgentRunner {
     return (await this.deps.toolExposureFlagEnabled?.(flag)) === true;
   }
 
-  /** Whether this turn offers `code_mode.request`, by the rule turn preparation also applies to the base prompt. */
-  private async isCodeModeRequestEligible(input: CodeModeRequestTurnFields): Promise<boolean> {
-    return await loadCodeModeRequestEligibility(buildCodeModeRequestTurnShape(input), this.deps.getCodeModeReadiness);
+  private get codeModeReadinessReader(): ChatTurnAgentRunnerDeps["getCodeModeReadiness"] {
+    return this.deps.getCodeModeReadiness;
   }
 
   /** Reads the turn's optional-input mailbox under its write fence; undefined when no reader is wired. */
@@ -2387,7 +2385,7 @@ export class ChatTurnAgentRunner {
       : undefined;
     const directReply =
       recordedCodeResult ??
-      (await explainCodeModeSignIn(codeModeTurn, executionIntentContent, this.deps.getCodeModeReadiness));
+      (await explainCodeModeSignIn(codeModeTurn, executionIntentContent, this.codeModeReadinessReader));
     if (directReply) {
       throwIfChatTurnCancelled(input);
       const completed = await this.patchTurnTrace(input, input.turnId, {
@@ -7126,9 +7124,10 @@ export class ChatTurnAgentRunner {
     // Browser errands drive the operator's own window: interactive Chat turns only, never scheduled or delegated ones.
     const browserErrandEligible =
       browserErrandsEnabled && input.mode === "chat" && !input.parentDelegationStepId && !restrictedAutonomousProfile;
+    const codeModeTurn = buildCodeModeRequestTurnShape(input);
     const reminderPreviewEligible =
-      timersEnabled && !quickWebProfile && isCodeModeRequestTurnShapeEligible(buildCodeModeRequestTurnShape(input));
-    const codeModeRequestEligible = await this.isCodeModeRequestEligible(input);
+      timersEnabled && !quickWebProfile && isCodeModeRequestTurnShapeEligible(codeModeTurn);
+    const codeModeRequestEligible = await loadCodeModeRequestEligibility(codeModeTurn, this.codeModeReadinessReader);
     for (const tool of catalog) {
       if (CODE_MODE_ONLY_TOOL_NAMES.has(tool.toolName)) continue;
       if (tool.toolName === CODE_MODE_REQUEST_TOOL_NAME && !codeModeRequestEligible) continue;

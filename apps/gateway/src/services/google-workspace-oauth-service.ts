@@ -4,8 +4,6 @@ import {
   GOOGLE_WORKSPACE_CAPABILITIES,
   GOOGLE_WORKSPACE_CAPABILITY_DEFINITIONS,
   GOOGLE_WORKSPACE_CATALOG_ID,
-  HEARTBEAT_PERMISSION_PROFILE_ID,
-  NotFoundError,
   ValidationError,
   getGoogleWorkspaceCapability,
   googleWorkspaceCapabilitiesForTool,
@@ -13,7 +11,6 @@ import {
   isNativeGoogleTool,
   isGoogleWorkspaceCapability,
   isGoogleWorkspaceCapabilityGranted,
-  isGoogleWorkspaceReadTool,
   readEnabledGoogleWorkspaceCapabilities,
   type GoogleWorkspaceCapability,
   type GoogleWorkspaceClientSecretSource,
@@ -26,7 +23,7 @@ import {
   type ToolInvokeRequest,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
-import { GOOGLE_CONNECTION_ID_PATTERN, normalizeGoogleReadRequest } from "./google-workspace-read-request.js";
+import { GOOGLE_CONNECTION_ID_PATTERN, normalizeGoogleToolRequest } from "./google-workspace-read-request.js";
 import { McpOAuthPkceStore } from "./mcp-oauth-discovery.js";
 import { SecretStoreUnavailableError, isSecretStoreUnavailableLikeError } from "./secret-store-service.js";
 import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
@@ -369,82 +366,22 @@ export class GoogleWorkspaceOAuthService {
     return deleted;
   }
 
-  public async normalizeReadRequest(request: ToolInvokeRequest): Promise<ToolInvokeRequest> {
-    return normalizeGoogleReadRequest(
-      {
-        connections: this.connections,
-        readConnection: (connectionId) => this.readConnection(connectionId),
-        readEligibleSignInId: (connection, capability) => this.readEligibleSignInId(connection, [capability]),
-      },
-      request,
-    );
-  }
-
   /** Bind each native action to the account that will be named in review and used at execution. */
   public async normalizeToolRequest(request: ToolInvokeRequest): Promise<ToolInvokeRequest> {
     if (!isNativeGoogleTool(request.toolName)) return request;
     const { __gcSafety: _browserSafety, ...args } = request.args;
-    const input = { ...request, args };
-    const bound = isGoogleWorkspaceReadTool(request.toolName)
-      ? await this.normalizeReadRequest(input)
-      : await this.normalizeActionRequest(input);
+    const bound = await normalizeGoogleToolRequest(
+      {
+        connections: this.connections,
+        readConnection: (connectionId) => this.readConnection(connectionId),
+        readEligibleSignInId: (connection, capabilities) => this.readEligibleSignInId(connection, capabilities),
+      },
+      { ...request, args },
+    );
     if (request.googleReadSignInId && request.googleReadSignInId !== bound.googleReadSignInId) {
       throw new ValidationError({ message: "This Google sign-in changed. Review the action again." });
     }
     return bound;
-  }
-
-  private async normalizeActionRequest(request: ToolInvokeRequest): Promise<ToolInvokeRequest> {
-    const requiredCapabilities = googleWorkspaceCapabilitiesForTool(request.toolName, request.args);
-    const selected = request.args.connectionId;
-    let connections: IntegrationConnection[];
-    if (typeof selected === "string" && GOOGLE_CONNECTION_ID_PATTERN.test(selected.trim())) {
-      connections = [
-        await this.readConnection(selected.trim()).catch((error: unknown) => {
-          if (error instanceof NotFoundError)
-            throw new ValidationError({
-              message: "That Google connection could not be found. Choose a saved connection.",
-            });
-          throw error;
-        }),
-      ];
-    } else if (
-      selected === undefined &&
-      request.turnId &&
-      request.policyContext?.permissionProfileId !== HEARTBEAT_PERMISSION_PROFILE_ID
-    ) {
-      connections = await this.connections.list("automation", 201);
-      if (connections.length > 200) throw new ValidationError({ message: "Choose a saved Google connection." });
-    } else {
-      throw new ValidationError({ message: "Choose a saved Google connection." });
-    }
-    const eligible = connections.flatMap((connection) => {
-      const enabled = readEnabledGoogleWorkspaceCapabilities(connection.config);
-      if (
-        connection.catalogId !== GOOGLE_WORKSPACE_CATALOG_ID ||
-        !connection.enabled ||
-        connection.status !== "connected" ||
-        (connection.workspaceId !== undefined && connection.workspaceId !== request.workspaceId) ||
-        !requiredCapabilities.every((capability) => enabled.includes(capability))
-      )
-        return [];
-      const signInId = this.readEligibleSignInId(connection, requiredCapabilities);
-      return signInId ? [{ connectionId: connection.connectionId, signInId }] : [];
-    });
-    if (eligible.length !== 1) {
-      const labels = requiredCapabilities.map((capability) => getGoogleWorkspaceCapability(capability).label);
-      throw new ValidationError({
-        message: eligible.length
-          ? "More than one Google account can perform this action. Choose a saved connection."
-          : `Connect Google and enable ${labels.join(" and ")} under Capabilities › Connectors.`,
-      });
-    }
-    const account = eligible[0]!;
-    return {
-      ...request,
-      args: { ...request.args, connectionId: account.connectionId },
-      googleReadSignInId: account.signInId,
-    };
   }
 
   private readEligibleSignInId(
