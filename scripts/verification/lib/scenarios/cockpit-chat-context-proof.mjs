@@ -22,7 +22,7 @@ async function disclose(actions, name) {
 }
 async function review(page, title, confirm, viewport) {
   const dialog = page.getByRole("dialog", { name: title, exact: true });
-  await dialog.waitFor();
+  await dialog.getByRole("button", { name: confirm, exact: true }).waitFor();
   for (const locator of [
     dialog,
     dialog.getByRole("button", { name: confirm, exact: true }),
