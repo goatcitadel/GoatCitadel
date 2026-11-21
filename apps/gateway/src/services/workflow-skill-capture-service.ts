@@ -20,7 +20,10 @@ import {
   sanitizeWorkflowSkillText as sanitize,
   validateWorkflowSkillDraft,
 } from "./workflow-skill-draft-validation.js";
-import { readWorkflowCaptureDurableAuthor } from "./workflow-skill-capture-authority.js";
+import {
+  readWorkflowCaptureDurableAuthor,
+  WorkflowCaptureAdmissionPendingError,
+} from "./workflow-skill-capture-authority.js";
 
 type CaptureActor = { actorId?: string; authActorSource?: ToolPolicyActorContext["authActorSource"] };
 interface CaptureSeed extends WorkflowSkillCaptureRequest {
@@ -42,14 +45,24 @@ interface CaptureDependencies {
     | "runImmediateTransaction"
     | "skillAggregateRevisions"
   >;
-  rootDir: string;
-  candidateRoot: string;
+  config: {
+    readonly rootDir: string;
+    readonly assistant: { readonly capabilities: { readonly candidateRoot: string } };
+  };
+  waitForTerminalAdmission?(identity: WorkflowCaptureAdmissionPendingError["identity"]): Promise<boolean>;
 }
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 const MAX_CONTENT_BYTES = 64 * 1024;
 
 export class WorkflowSkillCaptureService {
-  public constructor(private readonly deps: CaptureDependencies) {}
+  private readonly rootDir: string;
+  private readonly candidateRoot: string;
+
+  public constructor(private readonly deps: CaptureDependencies) {
+    const { rootDir, assistant } = deps.config;
+    this.rootDir = rootDir;
+    this.candidateRoot = path.resolve(rootDir, assistant.capabilities.candidateRoot);
+  }
 
   public async prepare(
     sessionId: string,
@@ -57,7 +70,7 @@ export class WorkflowSkillCaptureService {
     actor: CaptureActor,
   ): Promise<WorkflowSkillCaptureDraft> {
     const actorId = requireOperator(actor);
-    const source = await this.readSource(sessionId, input.sourceTurnId);
+    const source = await this.readSettledSource(sessionId, input.sourceTurnId);
     await this.assertTarget(input, source.workspaceId);
     const seed = seedSchema.parse({
       sourceTurnId: input.sourceTurnId,
@@ -85,7 +98,7 @@ export class WorkflowSkillCaptureService {
     actor: CaptureActor,
   ): Promise<WorkflowSkillCaptureResult> {
     const actorId = requireOperator(actor);
-    const draft = await this.readSource(sessionId, input.draftTurnId);
+    const draft = await this.readSettledSource(sessionId, input.draftTurnId);
     if (sha256(draft.assistantContent) !== input.reviewedContentSha256) {
       throw new ConflictError({ message: "The skill draft changed. Review its current content before staging." });
     }
@@ -109,7 +122,7 @@ export class WorkflowSkillCaptureService {
     const versionId = `workflow-version-${sha256(`${candidateId}\0${input.draftTurnId}\0${input.reviewedContentSha256}`).slice(0, 32)}`;
     const proposalId = `workflow-proposal-${sha256(versionId).slice(0, 32)}`;
     const createdAt = draft.finishedAt;
-    const root = path.resolve(this.deps.rootDir, this.deps.candidateRoot);
+    const root = this.candidateRoot;
     const bundlePath = path.join(root, candidateId, versionId);
     const manifest = {
       manifestVersion: 1,
@@ -143,7 +156,7 @@ export class WorkflowSkillCaptureService {
     };
     const artifact = (filename: keyof typeof files, mimeType: string): CapabilityArtifactRecord => ({
       artifactId: `${versionId}-${filename}`,
-      relPath: path.relative(this.deps.rootDir, path.join(bundlePath, filename)).replaceAll("\\", "/"),
+      relPath: path.relative(this.rootDir, path.join(bundlePath, filename)).replaceAll("\\", "/"),
       sha256: sha256(files[filename]),
       bytes: Buffer.byteLength(files[filename]),
       mimeType,
@@ -159,7 +172,7 @@ export class WorkflowSkillCaptureService {
       createdByActorId: actorId,
       title: validation.inferredSkillName ?? candidateId,
       summary: "Captured workflow; review and approval required before activation.",
-      bundleRoot: path.relative(this.deps.rootDir, bundlePath).replaceAll("\\", "/"),
+      bundleRoot: path.relative(this.rootDir, bundlePath).replaceAll("\\", "/"),
       lifecycleState: "candidate",
       manifestArtifact: artifact("manifest.json", "application/json"),
       instructionArtifact: artifact("SKILL.md", "text/markdown"),
@@ -253,6 +266,16 @@ export class WorkflowSkillCaptureService {
       throw new ConflictError({
         message: "The selected skill is unavailable in this workspace or its revision changed.",
       });
+    }
+  }
+
+  private async readSettledSource(sessionId: string, turnId: string) {
+    try {
+      return await this.readSource(sessionId, turnId);
+    } catch (error) {
+      if (!(error instanceof WorkflowCaptureAdmissionPendingError)) throw error;
+      if (!(await this.deps.waitForTerminalAdmission?.(error.identity))) throw error;
+      return this.readSource(sessionId, turnId);
     }
   }
 

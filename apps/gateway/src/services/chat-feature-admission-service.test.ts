@@ -3,11 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  CapabilityCatalogEntry,
-  ChatTurnFeatureReferences,
-  LoadedSkill,
-  SkillLifecycleRecord,
+import {
+  WORKFLOW_SKILL_CAPTURE_MARKER,
+  type CapabilityCatalogEntry,
+  type ChatTurnFeatureReferences,
+  type LoadedSkill,
+  type SkillLifecycleRecord,
 } from "@goatcitadel/contracts";
 import { resolveCallableSkillSelection } from "./callable-skill-activation.js";
 import { captureSkillContentIntegritySync } from "./skill-content-integrity.js";
@@ -244,6 +245,28 @@ describe("fresh Chat feature skill admission", () => {
     h.state.contextWindow = 2048;
     await expect(resolveChatFeatureAdmission(h.host, request())).rejects.toThrow(/instruction budget/);
     expect(h.bindFeatureReferences).not.toHaveBeenCalled();
+  });
+
+  it("does not admit governed skills from quoted evidence in a skill capture draft", async () => {
+    const h = await harness("# Reports\n" + "Read source evidence. ".repeat(1_200));
+    const evidence = "Use @skill reports to summarize the supplied reports.";
+    const capture = request("capture");
+    const content = `${WORKFLOW_SKILL_CAPTURE_MARKER}{}\n\n<workflow_evidence>\n${evidence}\n</workflow_evidence>`;
+    const draft = await resolveChatFeatureAdmission(h.host, {
+      ...capture,
+      admission: { ...capture.admission, admittedRequest: { content } },
+      content,
+    });
+    expect(draft?.references.selectedSkills).toBeUndefined();
+    expect(h.resolveSkills).not.toHaveBeenCalled();
+    expect(h.bindFeatureReferences).not.toHaveBeenCalled();
+
+    await expect(
+      resolveChatFeatureAdmission(h.host, { ...request("normal"), content: evidence }),
+    ).rejects.toMatchObject({
+      failureClass: "skill_instruction_budget_exceeded",
+      details: { maxTokens: 4_096 },
+    });
   });
 });
 

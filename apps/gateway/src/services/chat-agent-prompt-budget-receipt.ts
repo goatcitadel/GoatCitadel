@@ -7,6 +7,27 @@ import type {
 } from "@goatcitadel/contracts";
 import { canonicalJsonString } from "@goatcitadel/contracts";
 import { estimateTokensFromText } from "@goatcitadel/memory-core";
+import { z } from "zod";
+
+const modelVisibleContextBudgetCaveat =
+  "Estimate only. Provider-added context and tokenizer differences are not measured; this is not reported usage or execution authority.";
+
+const pendingContextBudgetSchema = z.object({
+  basis: z.literal("next_provider_request_estimate"),
+  providerId: z.string().nullable(),
+  model: z.string().nullable(),
+  contextWindowTokens: z.number().int().positive().nullable(),
+  estimatedInputTokens: z.number().int().positive(),
+  outputReservedTokens: z.number().int().positive().nullable(),
+  remainingInputTokens: z.number().int().nonnegative().nullable(),
+});
+
+export function readPendingContextBudget(
+  value: unknown,
+): ReturnType<typeof buildModelVisibleContextBudget> | undefined {
+  const parsed = pendingContextBudgetSchema.safeParse(value);
+  return parsed.success ? { ...parsed.data, caveat: modelVisibleContextBudgetCaveat } : undefined;
+}
 
 /** Shared estimator for missing provider usage and on-demand context visibility. */
 export function estimateFirstProviderRequestInputTokens(request: ChatCompletionRequest): number {
@@ -37,8 +58,7 @@ export function buildModelVisibleContextBudget(request: ChatCompletionRequest, c
       contextWindowTokens === null || outputReservedTokens === null
         ? null
         : Math.max(0, contextWindowTokens - estimatedInputTokens - outputReservedTokens),
-    caveat:
-      "Estimate only. Provider-added context and tokenizer differences are not measured; this is not reported usage or execution authority.",
+    caveat: modelVisibleContextBudgetCaveat,
   };
 }
 

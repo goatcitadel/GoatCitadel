@@ -8515,24 +8515,22 @@ export class ChatTurnAgentRunner {
       // therefore happen here, immediately after executor settlement and
       // before any of those sinks can observe the result.
       const contextBudgetRequest = input.contextBudgetRequest;
-      const visibleResult =
+      const contextBudget =
         preflight.toolName === "session.status" &&
-        rawResult.outcome === "executed" &&
-        rawResult.result &&
         contextBudgetRequest &&
+        ((rawResult.outcome === "executed" && rawResult.result) ||
+          (rawResult.outcome === "approval_required" && rawResult.approvalId && !mainExecutorDispatchStarted)) &&
         (await this.deps.chatContextBudgetVisibilityV1Enabled?.()) === true
-          ? {
-              ...rawResult,
-              result: {
-                ...rawResult.result,
-                contextBudget: buildModelVisibleContextBudget(
-                  contextBudgetRequest,
-                  contextBudgetRequest.providerId && contextBudgetRequest.model
-                    ? this.deps.getModelContextWindow?.(contextBudgetRequest.providerId, contextBudgetRequest.model)
-                    : undefined,
-                ),
-              },
-            }
+          ? buildModelVisibleContextBudget(
+              contextBudgetRequest,
+              contextBudgetRequest.providerId && contextBudgetRequest.model
+                ? this.deps.getModelContextWindow?.(contextBudgetRequest.providerId, contextBudgetRequest.model)
+                : undefined,
+            )
+          : undefined;
+      const visibleResult =
+        rawResult.outcome === "executed" && rawResult.result && contextBudget
+          ? { ...rawResult, result: { ...rawResult.result, contextBudget } }
           : rawResult;
       const result: ToolInvokeResult =
         explorerScopeRootPath && rawResult.result
@@ -8630,7 +8628,9 @@ export class ChatTurnAgentRunner {
             phase: executorDispatchStarted ? "approval_wait_after_auxiliary_dispatch" : "approval_wait",
           }),
           approvalId: result.approvalId,
-          result: persistedToolResult,
+          // The approval worker settles this exact tool row. Preserve the estimate
+          // as receipt metadata, without storing a copy of the provider request.
+          result: contextBudget ? { ...persistedToolResult, pendingContextBudget: contextBudget } : persistedToolResult,
           finishedAt: new Date().toISOString(),
         });
         return {

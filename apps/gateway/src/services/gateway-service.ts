@@ -2400,6 +2400,7 @@ export class GatewayService {
         await this.executeCodeModePendingApproval(approvalId, signal),
       executeApprovedPendingAction: async (approvalId, signal) =>
         await this.executeApprovedPendingAction(approvalId, signal),
+      chatContextBudgetVisibilityV1Enabled: () => this.isFeatureEnabled("chatContextBudgetVisibilityV1Enabled"),
       checkChatAutoApprovalReplay: (approvalId, actionType) =>
         this.chatAutoActions.checkApprovalReplay(approvalId, actionType, this.blockRestrictedChatExecution),
       runOutsideChatExecutionScope: (work) => this.chatAutoActions.runOutsideChatExecutionScope(work),

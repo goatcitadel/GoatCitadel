@@ -3,6 +3,7 @@ import { LibraryMemoryBatch } from "./LibraryMemoryBatch";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { fetchTrustedMemoryLearnings } from "@goatcitadel/mission-control-shared/api/memory";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
@@ -24,6 +25,7 @@ import { LIBRARY_SEARCH_DEBOUNCE_MS, LIBRARY_SECTION_LABELS } from "./library-se
 import { AreaHeader } from "../../ui/AreaHeader";
 import { AREA_PAGE } from "../../ui/area-layout";
 import { EmptyState } from "../../ui/EmptyState";
+import { Section } from "../../ui/Section";
 import { useWorkspaceNameLookup } from "../../data/use-workspace-name";
 
 const Diagnostics = lazy(() =>
@@ -70,6 +72,17 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
       }),
     staleTime: 0,
   });
+  const learnings = useQuery({
+    queryKey: ["library", "memory", workspaceId, "saved-lessons", access.identity],
+    queryFn: () => fetchTrustedMemoryLearnings(workspaceId),
+    staleTime: 0,
+  });
+  const savedLessons = learnings.isError
+    ? []
+    : (learnings.data?.items.filter((item) => item.workspaceId === workspaceId && item.status === "trusted") ?? []);
+  const listFeatureOff = listedFeatureFlag(list.error);
+  const learningsFeatureOff = listedFeatureFlag(learnings.error);
+  const showLearningError = learnings.isError && (!learningsFeatureOff || learningsFeatureOff !== listFeatureOff);
   // Status and namespace are both filtered by the Gateway, so paging and counts match what is shown.
   const rows = list.data?.items.filter((resource) => resource.kind === "memory") ?? [];
   const namespaces = [
@@ -84,12 +97,13 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
   function reloadDirectory() {
     // The proposals section may be hidden while it has no rows, so this button is also its refresh.
     void client.invalidateQueries({ queryKey: ["library", "memory-proposals", workspaceId] });
+    void learnings.refetch();
     if (cursors.length > 1) setCursors([undefined]);
     else void list.refetch();
   }
   useRetryWhenSwitchTurnsOn(
     "memoryLifecycleAdminV1Enabled",
-    listedFeatureFlag(list.error) === "memoryLifecycleAdminV1Enabled",
+    listFeatureOff === "memoryLifecycleAdminV1Enabled" || learningsFeatureOff === "memoryLifecycleAdminV1Enabled",
     reloadDirectory,
   );
   function select(id?: string) {
@@ -102,7 +116,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
   }
   const listed = list.data?.items.length ?? 0;
   // An empty first page only proves absence when no record was withheld and no page remains.
-  const nothingRemembered = Boolean(
+  const noActiveMemoryItems = Boolean(
     list.data &&
     !listed &&
     !list.data.withheldCount &&
@@ -114,41 +128,66 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
     cursors.length < 2,
   );
   const paged = cursors.length > 1 || Boolean(list.data?.nextCursor);
+  const emptyItemActions = (
+    <>
+      <Button
+        size="sm"
+        onClick={() => {
+          setStatus("all");
+          setCursors([undefined]);
+        }}
+      >
+        Show all statuses
+      </Button>
+      <Button size="sm" variant="ghost" onClick={() => setDiagnostics(true)}>
+        Open memory diagnostics and maintenance
+      </Button>
+    </>
+  );
   return (
     <section className={`${AREA_PAGE} min-w-0 wrap-anywhere`} aria-label="Library Memory">
       <AreaHeader
         title={LIBRARY_SECTION_LABELS.memory}
         description="Workspace and global memory. Editing and forgetting ask for approval first; the change is confirmed separately after approval."
         actions={
-          <Button size="sm" disabled={list.isFetching} onClick={reloadDirectory}>
+          <Button size="sm" disabled={list.isFetching || learnings.isFetching} onClick={reloadDirectory}>
             {stalePage ? "Reload memory directory" : "Refresh memory directory"}
           </Button>
         }
       />
-      {nothingRemembered ? (
-        <EmptyState
-          title="No active memories"
-          description="Memories appear here after you approve a memory write from Chat or promote a suggested proposal, which then shows here. Forgotten memories are listed under all statuses."
-          action={
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              <Button
-                size="sm"
-                onClick={() => {
-                  setStatus("all");
-                  setCursors([undefined]);
-                }}
-              >
-                Show all statuses
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setDiagnostics(true)}>
-                Open memory diagnostics and maintenance
-              </Button>
-            </div>
-          }
-        />
+      {savedLessons.length || learnings.isFetching || showLearningError ? (
+        <Section title="Saved workspace lessons" description="Recent trusted lessons in this workspace.">
+          {learnings.isFetching ? <p role="status">Reading saved lessons…</p> : null}
+          {showLearningError && learningsFeatureOff ? <FeatureOffNotice flag={learningsFeatureOff} /> : null}
+          {showLearningError && !learningsFeatureOff ? (
+            <Callout tone="error">Couldn’t read saved lessons. {describeApiError(learnings.error).summary}</Callout>
+          ) : null}
+          {savedLessons.length ? (
+            <ul className="min-w-0 divide-y divide-line-subtle">
+              {savedLessons.map((lesson) => (
+                <li key={lesson.learningId} className="min-w-0 whitespace-pre-wrap py-3">
+                  {lesson.insight}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </Section>
+      ) : null}
+      {noActiveMemoryItems ? (
+        savedLessons.length ? (
+          <Section title="Memory items" actions={emptyItemActions}>
+            <p className="text-sm text-fg-muted">No active memory items.</p>
+          </Section>
+        ) : (
+          <EmptyState
+            title="No active memory items"
+            action={<div className="flex flex-wrap items-center justify-center gap-2">{emptyItemActions}</div>}
+          />
+        )
       ) : (
         <>
           <form
+            aria-label="Filter memory items"
             className="flex min-w-0 flex-wrap items-end gap-2"
             onSubmit={(event) => {
               event.preventDefault();
@@ -219,8 +258,8 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
         </>
       )}
       {list.isFetching ? <p role="status">Reading memory directory…</p> : null}
-      {list.error && listedFeatureFlag(list.error) ? <FeatureOffNotice flag={listedFeatureFlag(list.error)!} /> : null}
-      {list.error && !listedFeatureFlag(list.error) ? (
+      {listFeatureOff ? <FeatureOffNotice flag={listFeatureOff} /> : null}
+      {list.error && !listFeatureOff ? (
         <Callout tone="error">
           {stalePage
             ? "Memory changed while paging. Reload the directory to read the current records."
@@ -240,7 +279,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
           <LibraryMemoryEditor key={`${workspaceId}:${itemId}`} itemId={itemId} workspaceId={workspaceId} />
         ) : null}
       </Sheet>
-      {nothingRemembered ? null : <p className="text-sm text-fg-muted">{list.data?.coverage}</p>}
+      {noActiveMemoryItems ? null : <p className="text-sm text-fg-muted">{list.data?.coverage}</p>}
       <ul className="min-w-0 divide-y divide-line-subtle">
         {rows.map((resource) =>
           resource.kind === "memory" ? (
@@ -295,7 +334,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
           </Button>
         </div>
       ) : null}
-      {nothingRemembered ? null : (
+      {noActiveMemoryItems ? null : (
         <div>
           <Button onClick={() => setDiagnostics(true)}>Open memory diagnostics and maintenance</Button>
         </div>
@@ -305,7 +344,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
           <Diagnostics workspaceId={workspaceId} />
         </Suspense>
       ) : null}
-      <LibraryMemoryProposals workspaceId={workspaceId} hideWhenEmpty={nothingRemembered} />
+      <LibraryMemoryProposals workspaceId={workspaceId} hideWhenEmpty={noActiveMemoryItems} />
     </section>
   );
 }

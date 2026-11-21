@@ -2901,6 +2901,286 @@
       "maxDependencyMemberAccesses": 3,
       "reason": "Normalizes Calendar and Gmail reads and binds each request to an eligible saved connection and sign-in before it reaches policy.",
       "evidence": "Google Workspace OAuth service tests cover request normalization and connection binding. Repository counters measure 0 host callbacks and 3 dependency member accesses."
+    },
+    {
+      "path": "apps/gateway/src/services/chat-memory-capture-service.ts",
+      "planStep": "C0",
+      "reason": "Captures governed Chat proposals from canonical messages, retaining scope and provenance.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 5,
+      "maxDependencyMemberAccesses": 27
+    },
+    {
+      "path": "apps/gateway/src/services/assistant-readiness-composition.ts",
+      "planStep": "C0",
+      "reason": "Binds readiness reads and governed setup to the active private Chat, settings revision, and current policy.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 9
+    },
+    {
+      "path": "apps/gateway/src/services/assistant-readiness-service.ts",
+      "planStep": "C0",
+      "reason": "Builds the operator-facing readiness response from live feature, learning, follow-through, and retirement state.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 4
+    },
+    {
+      "path": "apps/gateway/src/services/assistant-setup-review-service.ts",
+      "planStep": "C0",
+      "reason": "Prepares exact settings previews and replays only the authorized change plan.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 4
+    },
+    {
+      "path": "apps/gateway/src/services/automatic-background-budget.ts",
+      "planStep": "C0",
+      "reason": "Keeps one daily reservation and settlement policy for automatic model work.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 11
+    },
+    {
+      "path": "apps/gateway/src/services/background-learning-queue-service.ts",
+      "planStep": "C0",
+      "reason": "Fences learning jobs, verifies source and attempt ownership, accounts for budgets, and publishes committed outcomes.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 53
+    },
+    {
+      "path": "apps/gateway/src/services/background-learning-readiness.ts",
+      "planStep": "C0",
+      "reason": "Checks private source, configured provider and budget before marking a learning destination ready.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 22
+    },
+    {
+      "path": "apps/gateway/src/services/background-skill-candidate-evidence.ts",
+      "planStep": "C0",
+      "reason": "Verifies candidate version, artifact and evaluation evidence before reviewed skill reuse.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 8
+    },
+    {
+      "path": "apps/gateway/src/services/background-skill-draft-service.ts",
+      "planStep": "C0",
+      "reason": "Persists a reviewable skill draft against exact workspace, Chat and learning-job evidence.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 15
+    },
+    {
+      "path": "apps/gateway/src/services/chat-assistant-support-route-service.ts",
+      "planStep": "C0",
+      "reason": "Dispatches the dedicated readiness, setup, follow-through, recovery and receipt endpoints through typed owners.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 9
+    },
+    {
+      "path": "apps/gateway/src/services/chat-continuation-composition.ts",
+      "planStep": "C0",
+      "reason": "Binds approval recovery to the stored actor, workspace, turn, effect and exact plan revision.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 15
+    },
+    {
+      "path": "apps/gateway/src/services/chat-continuation-service.ts",
+      "planStep": "C0",
+      "reason": "Reads continuation eligibility and prepares one narrowly scoped recovery.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 2
+    },
+    {
+      "path": "apps/gateway/src/services/chat-learning-memory-manifest.ts",
+      "planStep": "C0",
+      "reason": "Captures the current admitted operator memory sources and their hashes for model dispatch.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 4
+    },
+    {
+      "path": "apps/gateway/src/services/chat-learning-receipt-composition.ts",
+      "planStep": "C0",
+      "reason": "Gives the receipt reader scoped session, memory policy and runtime feature access.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 7
+    },
+    {
+      "path": "apps/gateway/src/services/chat-learning-receipt-service.ts",
+      "planStep": "C0",
+      "reason": "Reports proposals, applied items and verified model dispatch evidence for the exact private Chat turn.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 11
+    },
+    {
+      "path": "apps/gateway/src/services/chat-learning-skill-manifest.ts",
+      "planStep": "C0",
+      "reason": "Keeps exact admitted skill content and source hashes with the model request.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 6
+    },
+    {
+      "path": "apps/gateway/src/services/durable-learning-review-workflow.ts",
+      "planStep": "C0",
+      "reason": "Adapts the learning queue to durable workflow leases, abort checks and terminal settlement.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 5
+    },
+    {
+      "path": "apps/gateway/src/services/follow-through-composition.ts",
+      "planStep": "C0",
+      "reason": "Resolves scoped schedule, heartbeat and commitment data for the Chat read model.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 12
+    },
+    {
+      "path": "apps/gateway/src/services/follow-through-event-runtime.ts",
+      "planStep": "C0",
+      "reason": "Coordinates durable event-triggered schedules using canonical trigger, deduplication and recovery records.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 12
+    },
+    {
+      "path": "apps/gateway/src/services/follow-through-event-wake-service.ts",
+      "planStep": "C0",
+      "reason": "Matches eligible event conditions and submits the canonical occurrence once.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 8
+    },
+    {
+      "path": "apps/gateway/src/services/follow-through-projection-service.ts",
+      "planStep": "C0",
+      "reason": "Projects scoped follow-through state and delegates actions to canonical owners.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 24
+    },
+    {
+      "path": "apps/gateway/src/services/follow-through-setup-composition.ts",
+      "planStep": "C0",
+      "reason": "Checks the current schedule, workspace, Chat and permission profile before setup.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 15
+    },
+    {
+      "path": "apps/gateway/src/services/follow-through-setup-service.ts",
+      "planStep": "C0",
+      "reason": "Previews exact schedule parameters and admits the reviewed setup action.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 5
+    },
+    {
+      "path": "apps/gateway/src/services/gateway/background-learning-queue-runtime.ts",
+      "planStep": "C0",
+      "reason": "Wires provider and budget checks, canonical proposal writers and post-commit notifications.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 17
+    },
+    {
+      "path": "apps/gateway/src/services/gateway/cron-agent-workspace-scope.ts",
+      "planStep": "C0",
+      "reason": "Checks that cron work and its Chat session share the authorized workspace.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 3
+    },
+    {
+      "path": "apps/gateway/src/services/gateway/settings-runtime-candidate.ts",
+      "planStep": "C0",
+      "reason": "Applies live settings owner transitions and compensates in reverse order on rollback.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 35
+    },
+    {
+      "path": "apps/gateway/src/services/heartbeat-silent-turn-cleanup.ts",
+      "planStep": "C0",
+      "reason": "Removes a silent heartbeat transactionally, preserving newer branch state and reporting retained evidence.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 11
+    },
+    {
+      "path": "apps/gateway/src/services/improvement-watch-reconciliation.ts",
+      "planStep": "C0",
+      "reason": "Reconciles committed watch evidence and governs snapshot restoration and notifications.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 8
+    },
+    {
+      "path": "apps/gateway/src/services/memory-consolidation-work-source.ts",
+      "planStep": "C0",
+      "reason": "Reads and validates bounded canonical work windows for consolidation review.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 18
+    },
+    {
+      "path": "apps/gateway/src/services/memory-context-source-reader.ts",
+      "planStep": "C0",
+      "reason": "Reads current scoped sources and validates cited memory without widening retrieval authority.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 10
+    },
+    {
+      "path": "apps/gateway/src/services/memory-corpus-semantic-service.ts",
+      "planStep": "C0",
+      "reason": "Applies the bounded semantic recall step within existing source-scope and provider checks.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 9
+    },
+    {
+      "path": "apps/gateway/src/services/memory-corpus-service.ts",
+      "planStep": "C0",
+      "reason": "Owns scoped corpus lookup and canonical tool note access behind the memory lifecycle.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 31
+    },
+    {
+      "path": "apps/gateway/src/services/memory-learning-source-admission.ts",
+      "planStep": "C0",
+      "reason": "Rechecks canonical source hashes and settled effects before a memory proposal can be promoted.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 6
+    },
+    {
+      "path": "apps/gateway/src/services/prompt-pack-watch-evidence.ts",
+      "planStep": "C0",
+      "reason": "Attaches pre-work watch bindings and reads the retained compared runs.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 2
+    },
+    {
+      "path": "apps/gateway/src/services/prompt-pack-watch.test-support.ts",
+      "planStep": "C0",
+      "reason": "Creates canonical fixture evidence for the improvement and Prompt Lab regression tests.",
+      "evidence": "Operator-approved November 20 parity scope and verify:architecture:metrics measurement.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 6
     }
   ]
 }

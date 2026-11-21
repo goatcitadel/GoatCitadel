@@ -3,14 +3,16 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { MemoryLearningRecord } from "@goatcitadel/contracts";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { LibraryMemoryWorkspace } from "./LibraryMemoryWorkspace";
 
-const api = vi.hoisted(() => ({ load: vi.fn(), fetchMemoryItems: vi.fn() }));
+const api = vi.hoisted(() => ({ load: vi.fn(), fetchMemoryItems: vi.fn(), fetchTrustedMemoryLearnings: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/memory", async (original) => ({
   ...(await original<typeof import("@goatcitadel/mission-control-shared/api/memory")>()),
   fetchMemoryItems: api.fetchMemoryItems,
+  fetchTrustedMemoryLearnings: api.fetchTrustedMemoryLearnings,
 }));
 vi.mock("./library-resources", async (original) => ({
   ...(await original<typeof import("./library-resources")>()),
@@ -59,6 +61,7 @@ let root: Root, container: HTMLDivElement, client: QueryClient;
 beforeEach(() => {
   switchState.on = undefined;
   vi.resetAllMocks();
+  api.fetchTrustedMemoryLearnings.mockResolvedValue({ items: [] });
   window.history.replaceState(null, "", "/library/memory?shell=cockpit");
   container = document.createElement("div");
   document.body.append(container);
@@ -86,7 +89,8 @@ const button = (label: string) => [...container.querySelectorAll("button")].find
 it("leads an empty memory directory with one empty state and no filters, bulk actions or paging (VR-02)", async () => {
   api.load.mockResolvedValue({ items: [], coverage: "0 matching records" });
   await render();
-  await vi.waitFor(() => expect(container.textContent).toContain("No active memories"));
+  await vi.waitFor(() => expect(container.textContent).toContain("No active memory items"));
+  expect(container.textContent).not.toContain("Saved workspace lessons");
   expect(container.querySelector("h1")?.textContent).toBe("Memory");
   expect(container.querySelector('input[type="search"], input:not([type])')).toBeNull();
   expect(container.textContent).not.toContain("bulk actions");
@@ -98,6 +102,56 @@ it("leads an empty memory directory with one empty state and no filters, bulk ac
   await act(async () => button("Show all statuses")!.click());
   await vi.waitFor(() => expect(api.load).toHaveBeenLastCalledWith(expect.objectContaining({ status: "all" })));
   expect(container.querySelector("form")).not.toBeNull();
+});
+
+it("shows a trusted lesson in Library when the memory items page is empty", async () => {
+  const lesson: MemoryLearningRecord = {
+    learningId: "saved-candidate",
+    workspaceId: "one",
+    key: "beta-project-name",
+    type: "repo_fact",
+    insight: "The beta test project is named Cedar Lantern.",
+    confidence: 1,
+    status: "trusted",
+    sourceRefs: [],
+    fileRefs: [],
+    authority: "trusted_lifecycle",
+    createdAt: "2026-11-20T20:00:00Z",
+    updatedAt: "2026-11-20T20:00:00Z",
+  };
+  api.load.mockResolvedValue({ items: [], coverage: "0 matching records" });
+  await render();
+  await vi.waitFor(() => expect(container.textContent).toContain("No active memory items"));
+  api.fetchTrustedMemoryLearnings.mockResolvedValue({
+    items: [
+      lesson,
+      { ...lesson, learningId: "outside-workspace", workspaceId: "another", insight: "Other workspace lesson" },
+      { ...lesson, learningId: "old-version", status: "superseded", insight: "Superseded lesson" },
+    ],
+  });
+  // A confirmed promotion invalidates this prefix even though /memory/items is still empty.
+  await act(async () => client.invalidateQueries({ queryKey: ["library", "memory", "one"] }));
+  await vi.waitFor(() => expect(container.textContent).toContain(lesson.insight));
+  expect(api.fetchTrustedMemoryLearnings).toHaveBeenLastCalledWith("one");
+  expect([...container.querySelectorAll("h2")].map((heading) => heading.textContent)).toEqual([
+    "Saved workspace lessons",
+    "Memory items",
+  ]);
+  expect(container.textContent).toContain("No active memory items.");
+  expect(container.textContent).not.toContain("Other workspace lesson");
+  expect(container.textContent).not.toContain("Superseded lesson");
+  expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+  await act(async () => button("Show all statuses")!.click());
+  await vi.waitFor(() => expect(api.load).toHaveBeenLastCalledWith(expect.objectContaining({ status: "all" })));
+  expect(container.textContent).toContain(lesson.insight);
+});
+
+it("reports a failed saved lesson read separately from an empty memory item list", async () => {
+  api.load.mockResolvedValue({ items: [], coverage: "0 matching records" });
+  api.fetchTrustedMemoryLearnings.mockRejectedValue(new Error("Gateway unavailable"));
+  await render();
+  await vi.waitFor(() => expect(container.textContent).toContain("Couldn’t read saved lessons."));
+  expect(container.textContent).toContain("No active memory items");
 });
 
 it.each([undefined, "next"])("discloses withheld records on an otherwise empty first page (%s)", async (nextCursor) => {
@@ -120,7 +174,7 @@ it.each([undefined, "next"])("discloses withheld records on an otherwise empty f
   });
   await render();
   await vi.waitFor(() => expect(container.textContent).toContain("Some inconsistent scope records were withheld."));
-  expect(container.textContent).not.toContain("No active memories");
+  expect(container.textContent).not.toContain("No active memory items");
   expect(container.textContent).not.toContain("Withheld record title");
   expect(container.textContent).not.toContain("Withheld record content");
   const next = button("Next memory page");
@@ -227,7 +281,7 @@ it("reads the directory again, without a reload, once memory administration is t
   await act(async () => {
     await client.invalidateQueries({ queryKey: ["system", "settings-feature-switches"] });
   });
-  await vi.waitFor(() => expect(container.textContent).toContain("No active memories"));
+  await vi.waitFor(() => expect(container.textContent).toContain("No active memory items"));
   expect(api.load.mock.calls.length).toBeGreaterThan(readsWhileOff);
   expect(container.textContent).not.toContain("turned off on this installation");
 });
@@ -235,7 +289,9 @@ it("reads the directory again, without a reload, once memory administration is t
 it("filters memory as you type, after a short pause, with no apply button", async () => {
   api.load.mockResolvedValue({ items: [], coverage: "0 matching records", total: 0 });
   await render();
-  await vi.waitFor(() => expect(api.load).toHaveBeenCalled());
+  await vi.waitFor(() => expect(button("Show all statuses")).toBeDefined());
+  await act(async () => button("Show all statuses")!.click());
+  await vi.waitFor(() => expect(container.querySelector("form input")).not.toBeNull());
   vi.useFakeTimers();
   try {
     const search = container.querySelector<HTMLInputElement>("form input")!;
@@ -258,11 +314,13 @@ it("filters memory as you type, after a short pause, with no apply button", asyn
   }
 });
 
-it("refreshes the proposals too when the directory is refreshed, since their section may be hidden", async () => {
+it("refreshes lessons and proposals with the memory directory, including when their sections are hidden", async () => {
   api.load.mockResolvedValue({ items: [], coverage: "0 matching records" });
   await render();
-  await vi.waitFor(() => expect(container.textContent).toContain("No active memories"));
+  await vi.waitFor(() => expect(container.textContent).toContain("No active memory items"));
+  const lessonReads = api.fetchTrustedMemoryLearnings.mock.calls.length;
   const invalidate = vi.spyOn(client, "invalidateQueries");
   await act(async () => button("Refresh memory directory")!.click());
   expect(invalidate).toHaveBeenCalledWith({ queryKey: ["library", "memory-proposals", "one"] });
+  expect(api.fetchTrustedMemoryLearnings).toHaveBeenCalledTimes(lessonReads + 1);
 });

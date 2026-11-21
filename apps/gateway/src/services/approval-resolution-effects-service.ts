@@ -19,6 +19,7 @@ import {
 import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
 import { RequesterMcpApprovalResumeRequiredError } from "./mcp-requester-admission-approval.js";
 import { yieldFanoutApprovalEffect } from "./chat-fanout-approval-service.js";
+import { readPendingContextBudget } from "./chat-agent-prompt-budget-receipt.js";
 import { StaleDelegationScopeResumeError, UnverifiableDelegationInstructionsError } from "./chat-delegation-service.js";
 import { isNativeExecutionApproval, readPendingNativeApprovalParentWake } from "./approval-native-runtime-parent.js";
 import { isSelfPolledApprovalKind } from "./browser-errands/errand-constants.js";
@@ -442,6 +443,7 @@ export interface ApprovalEffectsServiceDeps
   findProactiveDurableRunIdsForApproval(approvalId: string): Promise<string[]>;
   executeCodeModePendingApproval(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
   executeApprovedPendingAction(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
+  chatContextBudgetVisibilityV1Enabled?(): boolean | Promise<boolean>;
   checkChatAutoApprovalReplay?(approvalId: string, actionType: string): Promise<ToolInvokeResult | undefined>;
   runOutsideChatExecutionScope?<T>(work: () => T): T;
   prepareRemoteWorkerApprovalHandoff?(approvalId: string): Promise<Record<string, unknown>>;
@@ -3457,6 +3459,10 @@ export class ApprovalEffectsService {
     const testFallbackProjections: ChatMaterializationProjection[] = [];
     let queuedDurableProjection = false;
     try {
+      const exposeContextBudget =
+        pendingAction.actionType === "tool.invoke" &&
+        pendingAction.request.toolName === "session.status" &&
+        (await this.deps.chatContextBudgetVisibilityV1Enabled?.()) === true;
       await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
         let completedToolRunId: string | undefined;
         const completeMaterialization = async () => {
@@ -3495,7 +3501,6 @@ export class ApprovalEffectsService {
           return;
         }
         const now = new Date().toISOString();
-        const toolResult = asRecord(actionRecord?.result) ?? {};
         const toolName =
           asOptionalString(pendingAction.request.toolName) ??
           asOptionalString(inlineApproval.toolName) ??
@@ -3504,6 +3509,14 @@ export class ApprovalEffectsService {
         const toolRun = (await this.ctx.storage.chatToolRuns.listByTurn(inlineApproval.turnId)).find(
           (candidate) => candidate.approvalId === effect.approvalId,
         );
+        const contextBudget =
+          exposeContextBudget &&
+          toolRun?.toolName === "session.status" &&
+          toolRun.sessionId === inlineApproval.sessionId &&
+          toolRun.turnId === inlineApproval.turnId
+            ? readPendingContextBudget(toolRun.result?.pendingContextBudget)
+            : undefined;
+        const toolResult = { ...asRecord(actionRecord?.result), ...(contextBudget ? { contextBudget } : {}) };
         if (
           toolRun &&
           (await hasApprovedToolCompletionEvidence(this.ctx.storage, {

@@ -77,7 +77,9 @@ export function ChatLearningReview({ candidate, pending, readOnly, onDecision, o
                 if (eligible && !stale && edit.content.trim())
                   void Promise.resolve(onEdit?.(candidate, edit.content.trim()))
                     .then(() => setEdit(undefined))
-                    .catch(() => {});
+                    .catch(() => {
+                      // Keep the draft open while the receipt owner displays the error.
+                    });
               }}
             >
               <label htmlFor={id}>Reviewed lesson</label>

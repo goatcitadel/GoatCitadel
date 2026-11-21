@@ -91,7 +91,9 @@ export function ChatLearningReceiptControl({
           pending={pending}
           readOnly={readOnly}
           onDecision={(candidate, action) => {
-            void run(candidate, action).catch(() => {});
+            void run(candidate, action).catch(() => {
+              // The mutation handler already surfaced the error and refreshed the recorded outcome.
+            });
           }}
           onEdit={(candidate, content) => run(candidate, "edit", content)}
         />

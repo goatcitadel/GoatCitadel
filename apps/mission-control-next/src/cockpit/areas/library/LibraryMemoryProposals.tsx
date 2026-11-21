@@ -110,7 +110,7 @@ function LibraryMemoryProposalsContent({
             : "GoatCitadel confirmed rejection.",
       });
       await client.invalidateQueries({ queryKey: ["library", "memory-proposals", workspaceId, operation.identity] });
-      // A promotion adds a memory: read the memory list again so it shows next to the confirmation.
+      // A promotion adds a saved lesson. Refresh the directory so the trusted record appears.
       if (review.action === "promote") await client.invalidateQueries({ queryKey: ["library", "memory", workspaceId] });
     } catch (cause) {
       if (operation.current())
@@ -127,7 +127,7 @@ function LibraryMemoryProposalsContent({
   return (
     <Section
       title="Memory proposals"
-      description="Proposals are not trusted memory. Promotion is a decision you make explicitly."
+      description="Review suggested lessons and see past decisions. Confirm a promotion to save the lesson."
       actions={
         <Button size="sm" disabled={query.isFetching} onClick={() => void query.refetch()}>
           Refresh memory proposals

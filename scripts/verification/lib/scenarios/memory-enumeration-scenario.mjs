@@ -6,20 +6,20 @@ export async function runMemoryEnumerationScenario(context, stack, deps) {
   const { runScenario, requestJson, assertOk, randomUUID, chromium, installMissionControlNextBrowserState,
     attachBrowserLogging, buildVerificationUiUrl, waitForVerificationRouteReady, NEXT_UI_PACKAGE,
     captureBrowserArtifacts, assertBrowserConsoleHealthy, path, writeJson, relativeToRun } = deps;
+  const createWorkspace = async name => {
+    const result = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/seed", {
+      method: "POST", body: { workspaceName: name, sessionTitle: name, sessionCount: 1, longThreadTurns: 2 },
+    });
+    assertOk(result, "create memory enumeration fixture workspace");
+    assert.ok(result.body?.workspaceId);
+    return result.body.workspaceId;
+  };
   await runScenario(context, {
     id: "memory-truth.complete-enumeration",
     lane: "memory-truth",
     title: "Memory enumerates beyond 500, preserves workspace scope and reloads after canonical mutation",
     subsystem: "memory",
   }, async ({ correlationId }) => {
-    const createWorkspace = async name => {
-      const result = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/seed", {
-        method: "POST", body: { workspaceName: name, sessionTitle: name, sessionCount: 1, longThreadTurns: 2 },
-      });
-      assertOk(result, "create memory enumeration fixture workspace");
-      assert.ok(result.body?.workspaceId);
-      return result.body.workspaceId;
-    };
     const workspaceId = await createWorkspace("Memory enumeration workspace");
     const foreignWorkspaceId = await createWorkspace("Memory enumeration foreign workspace");
     const query = `Enumeration ${randomUUID().slice(0, 8)}`;
@@ -154,5 +154,69 @@ export async function runMemoryEnumerationScenario(context, stack, deps) {
         gatewayUrl: stack.gatewayUrl, correlationId, logCursor: browserCursor });
       throw error;
     } finally { await browser.close(); }
+  });
+  await runScenario(context, {
+    id: "memory-truth.saved-workspace-lessons",
+    lane: "memory-truth",
+    title: "Library shows trusted workspace lessons when the memory items list is empty",
+    subsystem: "memory",
+  }, async ({ correlationId }) => {
+    const workspaceId = await createWorkspace("Saved lessons workspace");
+    const foreignWorkspaceId = await createWorkspace("Saved lessons foreign workspace");
+    async function seedLesson(owner, insight) {
+      const result = await requestJson(stack.gatewayUrl, "/api/v1/memory/learnings", {
+        method: "POST",
+        body: { workspaceId: owner, key: "memory-truth.workspace-lesson", type: "repo_fact", insight, authority: "operator" },
+      });
+      assertOk(result, "seed trusted workspace lesson");
+      assert.equal(result.body.workspaceId, owner);
+      assert.equal(result.body.status, "trusted");
+      return result.body.learningId;
+    }
+    const insight = "The mushroom catalog is named Cedar Lantern.";
+    const foreignInsight = "The foreign catalog is named Maple Beacon.";
+    const lessonId = await seedLesson(workspaceId, insight);
+    await seedLesson(foreignWorkspaceId, foreignInsight);
+
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const browserContext = await browser.newContext({ viewport: { width: 1440, height: 1024 }, colorScheme: "dark" });
+      await installMissionControlNextBrowserState(browserContext, workspaceId);
+      const page = await browserContext.newPage();
+      const browserLog = attachBrowserLogging(page);
+      const logCursor = browserLog.mark();
+      const lessonResponse = () => page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname === "/api/v1/memory/learnings" && url.searchParams.get("workspaceId") === workspaceId &&
+          url.searchParams.get("status") === "trusted" && response.status() === 200;
+      });
+      const [initial] = await Promise.all([
+        lessonResponse(),
+        page.goto(buildVerificationUiUrl(stack.uiUrl, "/library/memory"), { waitUntil: "domcontentloaded" }),
+      ]);
+      assert.deepEqual((await initial.json()).items.map(item => item.learningId), [lessonId]);
+      await page.getByRole("heading", { name: "Saved workspace lessons", exact: true }).waitFor();
+      await page.getByText(insight, { exact: true }).waitFor();
+      await page.getByText("No active memory items.", { exact: true }).waitFor();
+      assert.equal(await page.getByText(foreignInsight, { exact: true }).count(), 0);
+      const artifacts = await captureMemoryRecoveryVisual(context, stack, deps, {
+        slug: "memory-saved-workspace-lessons", page, browserLog, correlationId, logCursor,
+      });
+
+      await page.getByRole("button", { name: "Show all statuses", exact: true }).click();
+      await page.getByRole("textbox", { name: "Search memory", exact: true }).waitFor();
+      await page.getByText(insight, { exact: true }).waitFor();
+      const [refreshed] = await Promise.all([
+        lessonResponse(),
+        page.getByRole("button", { name: "Refresh memory directory", exact: true }).click(),
+      ]);
+      assert.deepEqual((await refreshed.json()).items.map(item => item.learningId), [lessonId]);
+      await page.getByText(insight, { exact: true }).waitFor();
+      assert.equal(await page.getByText(foreignInsight, { exact: true }).count(), 0);
+      assertBrowserConsoleHealthy(browserLog, logCursor, NEXT_UI_PACKAGE);
+      return { status: "passed", metrics: { visibleTrustedLessons: 1 }, artifacts };
+    } finally {
+      await browser.close();
+    }
   });
 }

@@ -22,13 +22,17 @@ import {
   isBundledPostgresMode,
   resolveGatewayPostgresConnectionOptions,
 } from "./postgres-runtime-config.js";
-import { tcpPortAcceptsConnections } from "./bundled-postgres-port-probe.js";
+import { probeBundledPostgresTcpPort, tcpPortAcceptsConnections } from "./bundled-postgres-port-probe.js";
 import { NonRetryableStartupError, attachOperatorSummary } from "./startup-errors.js";
 
 export const POSTGRES_IMAGE = "postgres:16-alpine";
 const READY_POLL_MS = 500;
 const STARTUP_PROBE_HEARTBEAT_MS = 5_000;
 const NATIVE_BACKEND_MARKER_FILENAME = ".goatcitadel-native-bundled-postgres";
+const RECOVERY_POLL_MS = 3_000;
+const RECOVERY_RETRY_MS = 30_000;
+const RECOVERY_MAX_ATTEMPTS = 3;
+const RECOVERY_START_WAIT_SECONDS = 7;
 // SECURITY (codex finding #2): Path (relative to gateway rootDir) where the
 // generated bundled-Postgres superuser password is persisted. File is
 // written with mode 0o600. Existing data directories that were initialised
@@ -81,6 +85,14 @@ export async function ensureBundledPostgresPassword(config: GatewayRuntimeConfig
 export interface BundledPostgresRuntimeHandle {
   readonly strategy: "native" | "docker";
   stop(): Promise<void>;
+}
+
+interface InstalledNativePostgresRecoveryAuthority {
+  readonly dataDir: string;
+  readonly logFile: string;
+  readonly pgCtl: string;
+  readonly port: number;
+  readonly systemIdentifier: string;
 }
 
 interface BundledPostgresProbeResult {
@@ -238,6 +250,230 @@ function isNativeBundledPostgresConfigured(config: GatewayRuntimeConfig): boolea
   return Boolean(binDir) && binDir !== AUTO_NATIVE_BIN_DIR;
 }
 
+// The installed launcher marks its own Windows Gateway. Monitor only an
+// existing native cluster that was verified during that Gateway's startup.
+export function startInstalledNativePostgresRecovery(
+  config: GatewayRuntimeConfig,
+  canRecover: () => boolean,
+): (() => Promise<void>) | undefined {
+  if (
+    process.platform !== "win32" ||
+    process.env.GOATCITADEL_WINDOWS_MANAGED_POSTGRES_RECOVERY !== "1" ||
+    process.env.GOATCITADEL_MANAGED_SERVICE !== "gateway" ||
+    !isBundledPostgresMode(config) ||
+    !config.assistant.database.bundledPostgres.autoStart
+  ) {
+    return undefined;
+  }
+  const rootDir = path.resolve(config.rootDir);
+  const appDir = process.env.GOATCITADEL_APP_DIR;
+  if (
+    !appDir ||
+    !sameFilesystemPath(rootDir, path.resolve(appDir, "../runtime-root")) ||
+    !sameFilesystemPath(appDir, path.resolve(rootDir, "../app"))
+  ) {
+    return undefined;
+  }
+
+  const database = config.assistant.database.bundledPostgres;
+  const connection = resolveGatewayPostgresConnectionOptions(config);
+  const dataDir = path.resolve(rootDir, database.dataDir);
+  const logFile = bundledPostgresLogFilePath(config);
+  if (
+    connection.connectionString ||
+    connection.host !== "127.0.0.1" ||
+    connection.port !== database.port ||
+    !isDescendantOf(rootDir, dataDir) ||
+    !isDescendantOf(rootDir, logFile) ||
+    !nativeBackendMarkerExists(dataDir)
+  ) {
+    return undefined;
+  }
+  const target = { dataDir, logFile, port: database.port };
+  let stopped = false;
+  let pending: Promise<void> | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  let authority: InstalledNativePostgresRecoveryAuthority | undefined;
+  let missed = false;
+  let attempts = 0;
+  let retryAt = 0;
+
+  const check = async () => {
+    const postmasterState = await readRecoveryPostmasterState(target);
+    if (!authority) {
+      if (postmasterState === "running") {
+        try {
+          authority = await bindInstalledNativePostgresRecovery(config, target);
+        } finally {
+          // Never adopt a replacement cluster after a failed ownership check.
+          if (!authority) stopped = true;
+        }
+      }
+      return;
+    }
+    if (postmasterState !== "stopped" || !canRecover()) {
+      missed = false;
+      if (
+        attempts &&
+        postmasterState === "running" &&
+        (await probeBundledPostgresTcpPort(authority.port)) === "accepting"
+      ) {
+        attempts = 0;
+      }
+      return;
+    }
+    if (!missed) {
+      missed = true;
+      return;
+    }
+    if (attempts >= RECOVERY_MAX_ATTEMPTS || Date.now() < retryAt) return;
+    if (!(await verifyRecoveryCluster(authority))) return;
+    if ((await probeBundledPostgresTcpPort(authority.port)) !== "refused") return;
+    if ((await readRecoveryPostmasterState(authority)) !== "stopped" || stopped || !canRecover()) return;
+
+    attempts += 1;
+    retryAt = Date.now() + RECOVERY_RETRY_MS;
+    process.stderr.write("[bundled-pg] Restarting the installed profile's native PostgreSQL.\n");
+    try {
+      await launchNativeBundledPostgres(authority, ["-w", "-t", String(RECOVERY_START_WAIT_SECONDS)]);
+      process.stderr.write("[bundled-pg] The installed profile's native PostgreSQL accepted connections.\n");
+    } catch (error) {
+      if ((await readRecoveryPostmasterState(authority)) !== "running") throw error;
+      // pg_ctl stops waiting even though the postmaster may still be replaying WAL.
+      process.stderr.write("[bundled-pg] The installed profile's native PostgreSQL is still starting.\n");
+    }
+  };
+
+  function schedule(delayMs: number): void {
+    timer = setTimeout(() => {
+      pending = check()
+        .catch(() => {
+          process.stderr.write(
+            "[bundled-pg] The installed profile's native PostgreSQL recovery check failed. Check the PostgreSQL log.\n",
+          );
+        })
+        .finally(() => {
+          pending = undefined;
+          if (!stopped) schedule(RECOVERY_POLL_MS);
+        });
+    }, delayMs);
+    timer.unref();
+  }
+
+  schedule(0);
+  return async () => {
+    stopped = true;
+    clearTimeout(timer);
+    await pending;
+  };
+}
+
+function isDescendantOf(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+async function readRecoveryPostmasterState({
+  dataDir,
+  port,
+}: {
+  dataDir: string;
+  port: number;
+}): Promise<"running" | "stopped" | "unknown"> {
+  const pidFile = path.join(dataDir, "postmaster.pid");
+  const stat = await lstatIfPresent(pidFile);
+  if (!stat) return "stopped";
+  if (!stat.isFile() || stat.size > 4_096) return "unknown";
+  const [pidText, recordedDataDir, , recordedPort] = (await fs.readFile(pidFile, "utf8")).split(/\r?\n/u, 4);
+  const pid = Number(pidText);
+  if (
+    !pidText ||
+    !/^\d{1,10}$/u.test(pidText) ||
+    pid <= 0 ||
+    !recordedDataDir ||
+    !sameFilesystemPath(recordedDataDir, dataDir) ||
+    recordedPort !== String(port)
+  ) {
+    return "unknown";
+  }
+  try {
+    process.kill(pid, 0);
+    return "running";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH" ? "stopped" : "unknown";
+  }
+}
+
+function lstatIfPresent(filePath: string) {
+  return fs.lstat(filePath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+    return undefined;
+  });
+}
+
+async function bindInstalledNativePostgresRecovery(
+  config: GatewayRuntimeConfig,
+  target: { dataDir: string; logFile: string; port: number },
+): Promise<InstalledNativePostgresRecoveryAuthority | undefined> {
+  const { dataDir } = target;
+  const commands =
+    resolveNativePostgresCommands(config) ??
+    (config.assistant.database.bundledPostgres.binDir?.trim() === AUTO_NATIVE_BIN_DIR
+      ? discoverNativePostgresCommands()
+      : undefined);
+  if (!commands || !path.isAbsolute(commands.pgCtl)) return undefined;
+  if (!(await verifyRecoveryPaths(target, commands.pgCtl))) return undefined;
+  const systemIdentifier = await readNativeClusterIdentifier(dataDir, commands.pgCtl);
+  if (!systemIdentifier) return undefined;
+  return { ...target, pgCtl: commands.pgCtl, systemIdentifier };
+}
+
+async function verifyRecoveryCluster(authority: InstalledNativePostgresRecoveryAuthority): Promise<boolean> {
+  return (
+    (await verifyRecoveryPaths(authority, authority.pgCtl)) &&
+    (await readNativeClusterIdentifier(authority.dataDir, authority.pgCtl)) === authority.systemIdentifier
+  );
+}
+
+async function verifyRecoveryPaths(
+  { dataDir, logFile }: { dataDir: string; logFile: string },
+  pgCtl: string,
+): Promise<boolean> {
+  const logDir = path.dirname(logFile);
+  const optionsPath = path.join(dataDir, "postmaster.opts");
+  const [realDataDir, realLogDir, marker, options, control, log] = await Promise.all([
+    fs.realpath(dataDir),
+    fs.realpath(logDir),
+    fs.lstat(nativeBackendMarkerPath(dataDir)),
+    fs.lstat(optionsPath),
+    fs.realpath(path.join(dataDir, "global", "pg_control")),
+    lstatIfPresent(logFile),
+  ]);
+  if (
+    !sameFilesystemPath(realDataDir, dataDir) ||
+    !sameFilesystemPath(realLogDir, logDir) ||
+    !sameFilesystemPath(control, path.join(dataDir, "global", "pg_control")) ||
+    !marker.isFile() ||
+    !options.isFile() ||
+    options.size > 4_096 ||
+    (log && !log.isFile())
+  ) {
+    return false;
+  }
+  const args = await fs.readFile(optionsPath, "utf8");
+  const postgres = /^"?([^"\r\n]+?\.exe)"?(?=\s|$)/iu.exec(args)?.[1];
+  return Boolean(postgres && sameFilesystemPath(postgres, path.join(path.dirname(pgCtl), "postgres.exe")));
+}
+
+async function readNativeClusterIdentifier(dataDir: string, pgCtl: string): Promise<string | undefined> {
+  const pgControlData = path.join(path.dirname(pgCtl), "pg_controldata.exe");
+  const { stdout, stderr } = await execFileAwaited(pgControlData, ["-D", dataDir], 3_000, {
+    ...process.env,
+    LC_ALL: "C",
+  });
+  return stderr.trim() ? undefined : /^Database system identifier:\s*(\d+)\s*$/mu.exec(stdout)?.[1];
+}
+
 /**
  * Inspect `<dataDir>/postmaster.pid` and return the postmaster PID if (and
  * only if) it points to a process that is currently alive. Returns undefined
@@ -375,39 +611,15 @@ async function tryStartNativeBundledPostgres(
   try {
     // Use -W so the launcher exits promptly. The Gateway probes database
     // readiness separately and PostgreSQL writes diagnostics to its own log.
-    await new Promise<void>((resolve, reject) => {
-      const launcher = spawn(
-        commands.pgCtl,
-        [
-          "-D",
-          dataDir,
-          "-l",
-          logFile,
-          "start",
-          "-W",
-          "-o",
-          `-h 127.0.0.1 -p ${config.assistant.database.bundledPostgres.port}`,
-        ],
-        {
-          // Keep PostgreSQL out of the Gateway console's Ctrl+C broadcasts on
-          // Windows. A hidden window and ignored stdio alone do not detach it.
-          detached: process.platform === "win32",
-          // The postmaster can inherit pg_ctl's handles and keep pipes open.
-          stdio: "ignore",
-          windowsHide: true,
-        },
-      );
-      launcher.once("error", reject);
-      launcher.once("exit", (code, signal) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(
-            new Error(signal ? `pg_ctl start was terminated by ${signal}` : `pg_ctl start exited with code ${code}`),
-          );
-        }
-      });
-    });
+    await launchNativeBundledPostgres(
+      {
+        pgCtl: commands.pgCtl,
+        dataDir,
+        logFile,
+        port: config.assistant.database.bundledPostgres.port,
+      },
+      ["-W"],
+    );
     setBootCheckpoint("native-pg:pg_ctl-start-returned-ok");
   } catch (error) {
     setBootCheckpoint(
@@ -444,6 +656,35 @@ async function tryStartNativeBundledPostgres(
       }
     },
   };
+}
+
+function launchNativeBundledPostgres(
+  { pgCtl, dataDir, logFile, port }: { pgCtl: string; dataDir: string; logFile: string; port: number },
+  waitArgs: string[],
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const launcher = spawn(
+      pgCtl,
+      ["-D", dataDir, "-l", logFile, "start", ...waitArgs, "-o", `-h 127.0.0.1 -p ${port}`],
+      {
+        // Windows console broadcasts also reach hidden processes unless detached.
+        detached: process.platform === "win32",
+        // The postmaster can inherit pg_ctl's handles and keep pipes open.
+        stdio: "ignore",
+        windowsHide: true,
+      },
+    );
+    launcher.once("error", reject);
+    launcher.once("exit", (code, signal) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(
+          new Error(signal ? `pg_ctl start was terminated by ${signal}` : `pg_ctl start exited with code ${code}`),
+        );
+      }
+    });
+  });
 }
 
 async function tryStartDockerBundledPostgres(
@@ -621,7 +862,12 @@ function reportBundledPostgresStopFailure(strategy: "native" | "docker", error: 
   return failure;
 }
 
-function execFileAwaited(command: string, args: string[], timeoutMs: number): Promise<AwaitedProcessResult> {
+function execFileAwaited(
+  command: string,
+  args: string[],
+  timeoutMs: number,
+  env?: NodeJS.ProcessEnv,
+): Promise<AwaitedProcessResult> {
   return new Promise((resolve, reject) => {
     execFile(
       command,
@@ -630,6 +876,7 @@ function execFileAwaited(command: string, args: string[], timeoutMs: number): Pr
         encoding: "utf8",
         timeout: timeoutMs,
         windowsHide: true,
+        env,
       },
       (error, stdout, stderr) => {
         if (error) {

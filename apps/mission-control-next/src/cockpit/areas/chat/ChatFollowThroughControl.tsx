@@ -87,7 +87,7 @@ function FollowThroughSession({
       if (input) sessionStorage.setItem(storageKey, JSON.stringify(input));
       else sessionStorage.removeItem(storageKey);
     } catch {
-      /* The mounted panel still retains the exact request when browser storage is unavailable. */
+      // Keep the exact request in the mounted panel when browser storage is unavailable.
     }
   }
   async function perform(input: FollowThroughActionInput) {

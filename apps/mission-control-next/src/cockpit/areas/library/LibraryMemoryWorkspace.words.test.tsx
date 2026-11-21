@@ -11,6 +11,10 @@ vi.mock("./library-resources", async (original) => ({
   ...(await original<typeof import("./library-resources")>()),
   loadLibraryResources: api.load,
 }));
+vi.mock("@goatcitadel/mission-control-shared/api/memory", async (original) => ({
+  ...(await original<typeof import("@goatcitadel/mission-control-shared/api/memory")>()),
+  fetchTrustedMemoryLearnings: async () => ({ items: [] }),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/workspaces", async (original) => ({
   ...(await original<object>()),
   fetchWorkspaces: api.workspaces,
@@ -87,12 +91,12 @@ it("names the workspace a memory belongs to in plain words", async () => {
 it("keeps one quiet way to diagnostics inside the empty state and asks the proposals to hide", async () => {
   api.load.mockResolvedValue({ items: [], coverage: "0 matching records" });
   await render();
-  await vi.waitFor(() => expect(container.textContent).toContain("No active memories"));
+  await vi.waitFor(() => expect(container.textContent).toContain("No active memory items"));
   const openers = [...container.querySelectorAll("button")].filter(
     (item) => item.textContent === "Open memory diagnostics and maintenance",
   );
   expect(openers).toHaveLength(1);
-  expect(openers[0]!.closest("section")?.querySelector("h2")?.textContent).toBe("No active memories");
+  expect(openers[0]!.closest("section")?.querySelector("h2")?.textContent).toBe("No active memory items");
   expect(container.textContent).not.toContain("promote a proposal below");
   expect(container.textContent).toContain("proposals hidden when empty");
 });
@@ -123,12 +127,12 @@ it("keeps diagnostics when there is a memory", async () => {
 it("keeps diagnostics when a filtered list has no results", async () => {
   api.load.mockResolvedValue({ items: [], coverage: "0 matching records" });
   await render();
-  await vi.waitFor(() => expect(container.textContent).toContain("No active memories"));
+  await vi.waitFor(() => expect(container.textContent).toContain("No active memory items"));
   await act(async () =>
     [...container.querySelectorAll("button")].find((item) => item.textContent === "Show all statuses")!.click(),
   );
   await vi.waitFor(() => expect(container.querySelector("form")).not.toBeNull());
-  expect(container.textContent).not.toContain("No active memories");
+  expect(container.textContent).not.toContain("No active memory items");
   const openers = [...container.querySelectorAll("button")].filter(
     (item) => item.textContent === "Open memory diagnostics and maintenance",
   );

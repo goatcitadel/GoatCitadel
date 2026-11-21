@@ -129,6 +129,15 @@ as explicit C0 gate-reconciliation scope exceptions. The existing owners the PR 
 are at or below their original caps. Every original baseline-owner limit remains
 unchanged; this does not permit future growth above these caps.
 
+Additional operator clarification, November 20. The reviewed assistant parity
+refactor may register the exact measured dependency-access and host-callback
+caps for its 35 new owners as C0 entries in
+[`architecture-new-service-allowances.json`](../../scripts/verification/baselines/architecture-new-service-allowances.json).
+The entries cover Chat memory and continuation, governed learning, follow-through,
+heartbeat cleanup, settings application, and their focused evidence owners. Every
+pre-existing owner cap and the original architecture baseline remain unchanged.
+Future growth above the registered caps requires a separate decision.
+
 ### 2. Simplify onboarding through the first useful response
 
 Use the existing guided setup and Change Plans to provide one continuous flow:

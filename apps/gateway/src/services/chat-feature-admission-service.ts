@@ -3,6 +3,7 @@ import {
   canonicalJsonString,
   ConflictError,
   readChatTurnFeatureReferences,
+  WORKFLOW_SKILL_CAPTURE_MARKER,
   type ChatTurnFeatureReferences,
   type CapabilityCatalogEntry,
   type SkillActivationDecision,
@@ -93,7 +94,8 @@ export interface ChatFeatureAdmissionHost {
 export class ScheduledChatProviderRouteError extends ConflictError {
   constructor() {
     super({
-      message: "Scheduled Chat could not verify its provider and model. Check the provider settings before scheduling again.",
+      message:
+        "Scheduled Chat could not verify its provider and model. Check the provider settings before scheduling again.",
     });
   }
 }
@@ -177,7 +179,8 @@ export async function resolveChatFeatureAdmission(
       throw new ConflictError({ message: "Automatic fanout requires an active project-bound Chat session." });
     references.childWork = buildFanoutAdmissionReference(input.admission, project);
   }
-  if (await isEnabled("chatSkillInstructionsV1Enabled")) {
+  // Drafting has no tool execution. Skill mentions in the quoted workflow are evidence of past work.
+  if (!input.content.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER) && (await isEnabled("chatSkillInstructionsV1Enabled"))) {
     const workspaceId = input.admission.identity.workspaceId;
     const decision = await host.resolveSkills(input.content, workspaceId);
     const selectedIds = new Set(

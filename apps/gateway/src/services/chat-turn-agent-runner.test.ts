@@ -11,6 +11,7 @@ import { attachChatCompletionFailureContext } from "./llm-completion-helpers.js"
 import {
   createMockStorage,
   createToolCatalog,
+  EffectAwareChatTurnAgentRunner,
   namedToolCallCompletion,
   toolCallCompletion,
 } from "./chat-turn-agent-runner-test-fixtures.js";
@@ -510,6 +511,64 @@ describe("ChatTurnAgentRunner stream and tool-loop behavior", () => {
     expect(result.turnTrace.toolRuns.length).toBeGreaterThanOrEqual(1);
     expect(invokeTool.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
+
+  it.each([true, false])(
+    "stores a pending session context estimate only when visibility is enabled (%s)",
+    async (enabled) => {
+      const storage = createMockStorage();
+      const turnId = randomUUID();
+      const content = "Use session.status, then summarize it.";
+      const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValueOnce({
+        outcome: "approval_required",
+        policyReason: "Session status requires approval",
+        auditEventId: "audit-session-status-approval",
+        approvalId: "session-status-approval",
+      });
+      const orchestrator = new EffectAwareChatTurnAgentRunner({
+        storage: storage as never,
+        listToolCatalog: () => createToolCatalog(["session.status"]),
+        createChatCompletion: vi.fn().mockResolvedValueOnce(namedToolCallCompletion("session.status", {})),
+        invokeTool,
+        chatContextBudgetVisibilityV1Enabled: () => enabled,
+        getModelContextWindow: () => 8000,
+      });
+
+      const result = await orchestrator.run({
+        sessionId: "sess-context-status-approval",
+        turnId,
+        userMessageId: "msg-context-status-approval",
+        content,
+        mode: "chat",
+        providerId: "glm",
+        model: "glm-5",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        toolAutonomy: "safe_auto",
+        historyMessages: [{ role: "user", content }],
+      });
+
+      expect(result.turnTrace.status).toBe("waiting_for_approval");
+      const toolRun = storage.chatToolRuns.listByTurn(turnId)[0];
+      expect(toolRun).toMatchObject({ toolName: "session.status", approvalId: "session-status-approval" });
+      if (enabled) {
+        expect(toolRun?.result).toEqual({
+          pendingContextBudget: {
+            basis: "next_provider_request_estimate",
+            caveat: expect.any(String),
+            providerId: "glm",
+            model: "glm-5",
+            contextWindowTokens: 8000,
+            estimatedInputTokens: expect.any(Number),
+            outputReservedTokens: expect.any(Number),
+            remainingInputTokens: expect.any(Number),
+          },
+        });
+      } else {
+        expect(toolRun?.result).toBeUndefined();
+      }
+    },
+  );
 
   it("announces a long-running tool immediately and emits honest liveness heartbeats until settlement", async () => {
     const createChatCompletion = vi

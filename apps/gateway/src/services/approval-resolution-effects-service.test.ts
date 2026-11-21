@@ -3304,184 +3304,202 @@ describe("approval-resolution-effects-service", () => {
     }
   });
 
-  it("settles an approved search result without terminalizing the waiting durable Chat turn", async () => {
-    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
-    const now = "2026-08-06T00:00:00.000Z";
-    const runId = "durable-approved-search-resume";
-    const turnId = "turn-approved-search-resume";
-    const sessionId = "session-approved-search-resume";
-    const approvalId = storage.approvals.create({
-      kind: "tool.invoke",
-      riskLevel: "caution",
-      payload: {},
-      preview: {},
-    }).approvalId;
-    createExactWaitingApprovalRun(storage, {
-      runId,
-      sessionId,
-      turnId,
-      userMessageId: "user-approved-search-resume",
-      now,
-    });
-    storage.chatTurnTraces.create({
-      turnId,
-      sessionId,
-      userMessageId: "user-approved-search-resume",
-      assistantMessageId: `assistant-approved-${turnId}`,
-      status: "waiting_for_approval",
-      mode: "chat",
-      webMode: "auto",
-      memoryMode: "off",
-      thinkingLevel: "standard",
-      routing: {},
-      durable: { runId, status: "waiting", checkpointKind: "run_waiting" },
-      startedAt: now,
-    });
-    storage.chatInlineApprovals.upsert({
-      approvalId,
-      sessionId,
-      turnId,
-      toolName: "browser.search",
-      status: "pending",
-      reason: "Official-provider search requires approval.",
-      createdAt: now,
-    });
-    storage.chatToolRuns.create({
-      toolRunId: "tool-approved-search-resume",
-      turnId,
-      sessionId,
-      toolName: "browser.search",
-      status: "approval_required",
-      approvalId,
-      args: { query: "LaughLab funniest joke research", maxResults: 6 },
-      startedAt: now,
-    });
-    const effect = storage.approvalEffects.upsert({
-      approvalId,
-      effectKind: "pending_action_execute",
-      targetKind: "pending_action",
-      targetId: approvalId,
-      payload: { actionType: "tool.invoke", decision: "approve" },
-    });
-    storage.approvalEffects.upsert({
-      approvalId,
-      effectKind: "linked_chat_turn_wake",
-      targetKind: "chat_turn",
-      targetId: turnId,
-      payload: { decision: "approve", runId, turnId },
-    });
-    const requestRunProcessing = vi.fn();
-    const wakeDurableRun = vi.fn((wakeRunId: string, event: { eventKey: string; correlationId?: string }) => {
-      const current = storage.durableRuns.getRun(wakeRunId);
-      const metadata = { ...(current.metadata ?? {}), waitForEvent: null };
-      const queued = storage.durableRuns.updateRun({
-        runId: wakeRunId,
-        status: "queued",
-        metadata,
-        expectedVersion: current.version,
-      });
-      return {
-        runId: wakeRunId,
-        eventKey: event.eventKey,
-        correlationId: event.correlationId,
-        outcome: "woke" as const,
-        run: queued,
+  it.each([
+    { toolName: "browser.search", enabled: true, storedEstimate: true, exposed: false },
+    { toolName: "session.status", enabled: true, storedEstimate: true, exposed: true },
+    { toolName: "session.status", enabled: false, storedEstimate: true, exposed: false },
+    { toolName: "session.status", enabled: true, storedEstimate: false, exposed: false },
+  ])(
+    "settles $toolName before resuming Chat with context usage $exposed",
+    async ({ toolName, enabled, storedEstimate, exposed }) => {
+      const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+      const now = "2026-08-06T00:00:00.000Z";
+      const runId = "durable-approved-search-resume";
+      const turnId = "turn-approved-search-resume";
+      const sessionId = "session-approved-search-resume";
+      const args = toolName === "session.status" ? {} : { query: "LaughLab funniest joke research", maxResults: 6 };
+      const estimate = {
+        basis: "next_provider_request_estimate",
+        providerId: "provider-from-request",
+        model: "model-from-request",
+        contextWindowTokens: 8000,
+        estimatedInputTokens: 3000,
+        outputReservedTokens: 1000,
+        remainingInputTokens: 4000,
       };
-    });
-    const service = new ApprovalEffectsService(
-      { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
-      {
-        ...createApprovalEffectDeps(),
-        wakeDurableRun,
-        requestRunProcessing,
-      },
-    );
-    const claimNow = new Date();
-    const claimedEffect = storage.approvalEffects.claimNextPendingEffect(
-      (service as unknown as { workerId: string }).workerId,
-      claimNow.toISOString(),
-      new Date(claimNow.getTime() + 60_000).toISOString(),
-    );
-    expect(claimedEffect?.effectId).toBe(effect.effectId);
-    const actionRecord = {
-      outcome: "executed",
-      auditEventId: "audit-approved-search-resume",
-      result: {
-        results: [
-          {
-            title: "LaughLab and the science of jokes",
-            url: "https://example.test/laughlab",
-          },
-        ],
-      },
-    };
-
-    try {
-      await (
-        service as unknown as {
-          materializeExecutedChatApproval(
-            currentEffect: ApprovalEffectRecord,
-            currentAction: PendingApprovalAction,
-            result: Record<string, unknown>,
-          ): Promise<void>;
-        }
-      ).materializeExecutedChatApproval(
-        claimedEffect!,
-        {
-          approvalId,
-          actionType: "tool.invoke",
-          request: {
-            toolName: "browser.search",
-            args: { query: "LaughLab funniest joke research", maxResults: 6 },
-          },
-          createdAt: now,
-          resolutionStatus: "executed",
-          result: actionRecord,
-        },
-        actionRecord,
-      );
-
-      expect(storage.chatToolRuns.listByTurn(turnId)[0]).toMatchObject({
-        status: "executed",
-        approvalId,
-        result: actionRecord.result,
+      const approvalId = storage.approvals.create({
+        kind: "tool.invoke",
+        riskLevel: "caution",
+        payload: {},
+        preview: {},
+      }).approvalId;
+      createExactWaitingApprovalRun(storage, {
+        runId,
+        sessionId,
+        turnId,
+        userMessageId: "user-approved-search-resume",
+        now,
       });
-      expect(storage.chatInlineApprovals.get(approvalId)).toMatchObject({ status: "approved" });
-      expect(storage.approvalEffects.get(effect.effectId).status).toBe("completed");
-      expect(storage.durableRuns.getRun(runId).status).toBe("waiting");
-      expect(storage.durableRuns.listCheckpoints(runId)).toEqual([
-        expect.objectContaining({ checkpointKind: "run_waiting" }),
-      ]);
-      expect(storage.chatTurnTraces.get(turnId)).toMatchObject({
+      storage.chatTurnTraces.create({
+        turnId,
+        sessionId,
+        userMessageId: "user-approved-search-resume",
+        assistantMessageId: `assistant-approved-${turnId}`,
         status: "waiting_for_approval",
+        mode: "chat",
+        webMode: "auto",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        routing: {},
         durable: { runId, status: "waiting", checkpointKind: "run_waiting" },
+        startedAt: now,
       });
-      expect(storage.chatTurnTraces.get(turnId).finishedAt).toBeUndefined();
-      expect(storage.chatMessages.get(`assistant-approved-${turnId}`)).toBeUndefined();
-
-      const linkedWake = storage.approvalEffects.claimNextPendingEffect(
+      storage.chatInlineApprovals.upsert({
+        approvalId,
+        sessionId,
+        turnId,
+        toolName,
+        status: "pending",
+        reason: "The tool requires approval.",
+        createdAt: now,
+      });
+      storage.chatToolRuns.create({
+        toolRunId: "tool-approved-search-resume",
+        turnId,
+        sessionId,
+        toolName,
+        status: "approval_required",
+        approvalId,
+        args,
+        ...(storedEstimate ? { result: { pendingContextBudget: { ...estimate, rawPrompt: "private" } } } : {}),
+        startedAt: now,
+      });
+      const effect = storage.approvalEffects.upsert({
+        approvalId,
+        effectKind: "pending_action_execute",
+        targetKind: "pending_action",
+        targetId: approvalId,
+        payload: { actionType: "tool.invoke", decision: "approve" },
+      });
+      storage.approvalEffects.upsert({
+        approvalId,
+        effectKind: "linked_chat_turn_wake",
+        targetKind: "chat_turn",
+        targetId: turnId,
+        payload: { decision: "approve", runId, turnId },
+      });
+      const requestRunProcessing = vi.fn();
+      const wakeDurableRun = vi.fn((wakeRunId: string, event: { eventKey: string; correlationId?: string }) => {
+        const current = storage.durableRuns.getRun(wakeRunId);
+        const metadata = { ...(current.metadata ?? {}), waitForEvent: null };
+        const queued = storage.durableRuns.updateRun({
+          runId: wakeRunId,
+          status: "queued",
+          metadata,
+          expectedVersion: current.version,
+        });
+        return {
+          runId: wakeRunId,
+          eventKey: event.eventKey,
+          correlationId: event.correlationId,
+          outcome: "woke" as const,
+          run: queued,
+        };
+      });
+      const service = new ApprovalEffectsService(
+        { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
+        {
+          ...createApprovalEffectDeps(),
+          wakeDurableRun,
+          requestRunProcessing,
+          chatContextBudgetVisibilityV1Enabled: () => enabled,
+        },
+      );
+      const claimNow = new Date();
+      const claimedEffect = storage.approvalEffects.claimNextPendingEffect(
         (service as unknown as { workerId: string }).workerId,
         claimNow.toISOString(),
         new Date(claimNow.getTime() + 60_000).toISOString(),
       );
-      expect(linkedWake).toMatchObject({ effectKind: "linked_chat_turn_wake", targetId: turnId });
-      await (
-        service as unknown as {
-          handleLinkedChatTurnWake(currentEffect: ApprovalEffectRecord): Promise<void>;
-        }
-      ).handleLinkedChatTurnWake(linkedWake!);
+      expect(claimedEffect?.effectId).toBe(effect.effectId);
+      const actionRecord = {
+        outcome: "executed",
+        auditEventId: "audit-approved-search-resume",
+        result:
+          toolName === "session.status"
+            ? { ok: true, sessionId }
+            : { results: [{ title: "LaughLab and the science of jokes", url: "https://example.test/laughlab" }] },
+      };
 
-      expect(storage.durableRuns.getRun(runId).status).toBe("queued");
-      expect(storage.chatTurnTraces.get(turnId).status).toBe("running");
-      expect(requestRunProcessing).toHaveBeenCalledWith(runId);
-      expect(storage.approvalEffects.get(linkedWake!.effectId)).toMatchObject({
-        status: "completed",
-        result: expect.objectContaining({ outcome: "woke" }),
-      });
-    } finally {
-      storage.close();
-    }
-  });
+      try {
+        await (
+          service as unknown as {
+            materializeExecutedChatApproval(
+              currentEffect: ApprovalEffectRecord,
+              currentAction: PendingApprovalAction,
+              result: Record<string, unknown>,
+            ): Promise<void>;
+          }
+        ).materializeExecutedChatApproval(
+          claimedEffect!,
+          {
+            approvalId,
+            actionType: "tool.invoke",
+            request: { toolName, args },
+            createdAt: now,
+            resolutionStatus: "executed",
+            result: actionRecord,
+          },
+          actionRecord,
+        );
+
+        const settledToolRun = storage.chatToolRuns.listByTurn(turnId)[0];
+        expect(settledToolRun).toMatchObject({
+          status: "executed",
+          approvalId,
+        });
+        expect(settledToolRun?.result).toEqual(
+          exposed
+            ? { ...actionRecord.result, contextBudget: { ...estimate, caveat: expect.any(String) } }
+            : actionRecord.result,
+        );
+        expect(storage.chatInlineApprovals.get(approvalId)).toMatchObject({ status: "approved" });
+        expect(storage.approvalEffects.get(effect.effectId).status).toBe("completed");
+        expect(storage.durableRuns.getRun(runId).status).toBe("waiting");
+        expect(storage.durableRuns.listCheckpoints(runId)).toEqual([
+          expect.objectContaining({ checkpointKind: "run_waiting" }),
+        ]);
+        expect(storage.chatTurnTraces.get(turnId)).toMatchObject({
+          status: "waiting_for_approval",
+          durable: { runId, status: "waiting", checkpointKind: "run_waiting" },
+        });
+        expect(storage.chatTurnTraces.get(turnId).finishedAt).toBeUndefined();
+        expect(storage.chatMessages.get(`assistant-approved-${turnId}`)).toBeUndefined();
+
+        const linkedWake = storage.approvalEffects.claimNextPendingEffect(
+          (service as unknown as { workerId: string }).workerId,
+          claimNow.toISOString(),
+          new Date(claimNow.getTime() + 60_000).toISOString(),
+        );
+        expect(linkedWake).toMatchObject({ effectKind: "linked_chat_turn_wake", targetId: turnId });
+        await (
+          service as unknown as {
+            handleLinkedChatTurnWake(currentEffect: ApprovalEffectRecord): Promise<void>;
+          }
+        ).handleLinkedChatTurnWake(linkedWake!);
+
+        expect(storage.durableRuns.getRun(runId).status).toBe("queued");
+        expect(storage.chatTurnTraces.get(turnId).status).toBe("running");
+        expect(requestRunProcessing).toHaveBeenCalledWith(runId);
+        expect(storage.approvalEffects.get(linkedWake!.effectId)).toMatchObject({
+          status: "completed",
+          result: expect.objectContaining({ outcome: "woke" }),
+        });
+      } finally {
+        storage.close();
+      }
+    },
+  );
 
   it("rolls back durable completion and assistant materialization when the child trace patch fails", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });

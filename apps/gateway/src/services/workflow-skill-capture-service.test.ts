@@ -47,8 +47,7 @@ async function harness() {
   resources.push({ root, storage });
   const service = new WorkflowSkillCaptureService({
     storage: createSqliteAsyncStorage(storage),
-    rootDir: root,
-    candidateRoot: "candidates",
+    config: { rootDir: root, assistant: { capabilities: { candidateRoot: "candidates" } } },
   });
   const seed = async (id: string, user: string, assistant: string, sessionId = "session", bound = true) => {
     const timestamp = "2026-09-08T01:00:00.000Z";
@@ -75,43 +74,94 @@ async function harness() {
     });
     // This fixture models historical profile-bound records through the real sealed
     // repository. Current profile-free public turns are covered in the integration test.
-    const profile = bound ? sealChatTurnCapabilityProfile({
-      profileId: `profile-${id}`, schemaVersion: "chat.turn.capability-profile.v1",
-      identity: { turnId: id, sessionId, workspaceId: "default", citadelId: "personal",
-        operatorId: actor.actorId, authActorId: actor.actorId, authActorSource: actor.authActorSource },
-      source: { channel: "chat", account: "operator" },
-      catalog: { snapshotId: `catalog-${id}`, inspectableHash: hash("[]"), callableHash: hash("[]"), inspectableCount: 0, callableCount: 0 },
-      selection: {
-        contentHash: hash(canonicalJsonString(user)), effectiveProviderId: "test", effectiveModel: "test", allowedFallbacks: [],
-        mode: "chat", webMode: "off", memory: { mode: "off", retrievalMode: "standard", workspaceId: "default", sessionId,
-          contextManifestRef: `chat-memory-scope:${hash(sessionId)}`, writeApprovalRequired: true },
-        thinkingLevel: "standard", speedMode: "standard", subagentPolicy: "off", toolAutonomy: "manual",
-        tools: [], modelNameAllowMap: [], trustedSkills: [],
-      },
-      governance: { activeGrants: [], permission: { profileId: "safe", approvalMode: "approve_all", profileHash: hash("safe") },
-        policyDecisions: [], authReadiness: [
-          { kind: "provider", ref: "test", status: "ready", reasonCodes: [] },
-          { kind: "channel", ref: "chat", status: "ready", reasonCodes: [] },
-        ],
-        approval: { mode: "approve_all", selectedToolCount: 0, toolsRequiringApproval: [], approvalGranted: false } },
-      preflightFingerprint: hash(id), createdAt: timestamp,
-    }) : undefined;
+    const profile = bound
+      ? sealChatTurnCapabilityProfile({
+          profileId: `profile-${id}`,
+          schemaVersion: "chat.turn.capability-profile.v1",
+          identity: {
+            turnId: id,
+            sessionId,
+            workspaceId: "default",
+            citadelId: "personal",
+            operatorId: actor.actorId,
+            authActorId: actor.actorId,
+            authActorSource: actor.authActorSource,
+          },
+          source: { channel: "chat", account: "operator" },
+          catalog: {
+            snapshotId: `catalog-${id}`,
+            inspectableHash: hash("[]"),
+            callableHash: hash("[]"),
+            inspectableCount: 0,
+            callableCount: 0,
+          },
+          selection: {
+            contentHash: hash(canonicalJsonString(user)),
+            effectiveProviderId: "test",
+            effectiveModel: "test",
+            allowedFallbacks: [],
+            mode: "chat",
+            webMode: "off",
+            memory: {
+              mode: "off",
+              retrievalMode: "standard",
+              workspaceId: "default",
+              sessionId,
+              contextManifestRef: `chat-memory-scope:${hash(sessionId)}`,
+              writeApprovalRequired: true,
+            },
+            thinkingLevel: "standard",
+            speedMode: "standard",
+            subagentPolicy: "off",
+            toolAutonomy: "manual",
+            tools: [],
+            modelNameAllowMap: [],
+            trustedSkills: [],
+          },
+          governance: {
+            activeGrants: [],
+            permission: { profileId: "safe", approvalMode: "approve_all", profileHash: hash("safe") },
+            policyDecisions: [],
+            authReadiness: [
+              { kind: "provider", ref: "test", status: "ready", reasonCodes: [] },
+              { kind: "channel", ref: "chat", status: "ready", reasonCodes: [] },
+            ],
+            approval: { mode: "approve_all", selectedToolCount: 0, toolsRequiringApproval: [], approvalGranted: false },
+          },
+          preflightFingerprint: hash(id),
+          createdAt: timestamp,
+        })
+      : undefined;
     if (profile) {
       const asyncStorage = createSqliteAsyncStorage(storage);
       const owner = new SessionControlRuntimeOwner(new SessionControlService(asyncStorage));
       const turnAdmission = await owner.admitOperatorChatTurn({
-        sessionId, turnId: id, request: { content: user, authActorId: actor.actorId, authActorSource: actor.authActorSource },
-        actorId: actor.actorId, idempotencyKey: `admit:${id}`, correlationId: `admit:${id}`,
+        sessionId,
+        turnId: id,
+        request: { content: user, authActorId: actor.actorId, authActorSource: actor.authActorSource },
+        actorId: actor.actorId,
+        idempotencyKey: `admit:${id}`,
+        correlationId: `admit:${id}`,
       });
       await asyncStorage.runImmediateTransaction(async () => {
         await persistPreparedChatCapabilityAdmission(asyncStorage, {
-          turnId: id, capabilityProfile: profile, turnAdmission,
-          capabilityCatalogSnapshot: { snapshotId: profile.catalog.snapshotId, inspectableEntries: [], callableEntries: [], createdAt: timestamp },
+          turnId: id,
+          capabilityProfile: profile,
+          turnAdmission,
+          capabilityCatalogSnapshot: {
+            snapshotId: profile.catalog.snapshotId,
+            inspectableEntries: [],
+            callableEntries: [],
+            createdAt: timestamp,
+          },
         } as unknown as PreparedAgentChatTurn);
       });
       await owner.closeTurnWrite({
-        admission: turnAdmission, status: "completed", actorId: actor.actorId,
-        idempotencyKey: `complete:${id}`, correlationId: `complete:${id}`,
+        admission: turnAdmission,
+        status: "completed",
+        actorId: actor.actorId,
+        idempotencyKey: `complete:${id}`,
+        correlationId: `complete:${id}`,
       });
     }
     storage.chatTurnTraces.create({
@@ -193,7 +243,11 @@ describe("workflow skill capture", () => {
       "/tmp/private-task/report.md",
     ].entries()) {
       const draft = `${markdown}\nUse ${value}.`;
-      await h.seed(`private-${index}`, (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, draft);
+      await h.seed(
+        `private-${index}`,
+        (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt,
+        draft,
+      );
       await expect(
         h.service.stage("session", { draftTurnId: `private-${index}`, reviewedContentSha256: hash(draft) }, actor),
       ).rejects.toThrow("named inputs");
@@ -207,7 +261,8 @@ describe("workflow skill capture", () => {
     let draftReads = 0;
     vi.spyOn(h.storage.chatTurnCapabilityProfiles, "get").mockImplementation((profileId) => {
       const profile = read(profileId);
-      if (profileId === "profile-draft" && ++draftReads > 1) return { ...profile, identity: { ...profile.identity, authActorId: "changed-operator" } };
+      if (profileId === "profile-draft" && ++draftReads > 1)
+        return { ...profile, identity: { ...profile.identity, authActorId: "changed-operator" } };
       return profile;
     });
     await expect(
@@ -223,8 +278,13 @@ describe("workflow skill capture", () => {
     const request = { draftTurnId: "draft", reviewedContentSha256: hash(markdown) };
     const originalRead = h.storage.chatTurnCapabilityProfiles.get.bind(h.storage.chatTurnCapabilityProfiles);
     const profile = originalRead("profile-draft");
-    const read = vi.spyOn(h.storage.chatTurnCapabilityProfiles, "get").mockImplementation(id =>
-      id === profile.profileId ? { ...profile, identity: { ...profile.identity, authActorId: "another-operator" } } : originalRead(id));
+    const read = vi
+      .spyOn(h.storage.chatTurnCapabilityProfiles, "get")
+      .mockImplementation((id) =>
+        id === profile.profileId
+          ? { ...profile, identity: { ...profile.identity, authActorId: "another-operator" } }
+          : originalRead(id),
+      );
     await expect(h.service.stage("session", request, actor)).rejects.toThrow("capture request changed");
     read.mockRestore();
     expect(await h.service.stage("session", request, actor)).toMatchObject({ activationPerformed: false });
@@ -232,7 +292,13 @@ describe("workflow skill capture", () => {
   });
   it("does not treat any legacy message actor label as authenticated author evidence", async () => {
     const h = await harness();
-    await h.seed("unbound", (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt, markdown, "session", false);
+    await h.seed(
+      "unbound",
+      (await h.service.prepare("session", { sourceTurnId: "source" }, actor)).prompt,
+      markdown,
+      "session",
+      false,
+    );
     const request = { draftTurnId: "unbound", reviewedContentSha256: hash(markdown) };
     for (const actorId of [actor.actorId, "custom-import-label", "operator"]) {
       h.storage.chatMessages.upsert({ ...h.storage.chatMessages.get("unbound-user")!, actorId });
@@ -244,13 +310,21 @@ describe("workflow skill capture", () => {
     const h = await harness();
     const profile = h.storage.chatTurnCapabilityProfiles.get("profile-source");
     const prepared = await h.service.prepare("session", { sourceTurnId: "source" }, actor);
-    expect(prepared.sourceSha256).toBe(hash(canonicalJsonString({
-      workspaceId: "default", sessionId: "session", turnId: "source",
-      user: h.storage.chatMessages.get("source-user")!.content,
-      assistant: h.storage.chatMessages.get("source-assistant")!.content,
-      userAuthority: "operator", authenticatedActorId: actor.actorId,
-      capabilityProfileId: profile.profileId, capabilityProfileHash: profile.hashes.profileHash,
-    })));
+    expect(prepared.sourceSha256).toBe(
+      hash(
+        canonicalJsonString({
+          workspaceId: "default",
+          sessionId: "session",
+          turnId: "source",
+          user: h.storage.chatMessages.get("source-user")!.content,
+          assistant: h.storage.chatMessages.get("source-assistant")!.content,
+          userAuthority: "operator",
+          authenticatedActorId: actor.actorId,
+          capabilityProfileId: profile.profileId,
+          capabilityProfileHash: profile.hashes.profileHash,
+        }),
+      ),
+    );
   });
   it("requires canonical approval, reuses exact instructions in its workspace, and removes revoked skills", async () => {
     const h = await harness();

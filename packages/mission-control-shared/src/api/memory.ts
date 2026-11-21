@@ -361,6 +361,11 @@ export async function rejectTraceMemoryCandidate(
   );
 }
 
+export function fetchTrustedMemoryLearnings(workspaceId: string): Promise<{ items: MemoryLearningRecord[] }> {
+  const params = new URLSearchParams({ workspaceId, status: "trusted" });
+  return request<{ items: MemoryLearningRecord[] }>(`/api/v1/memory/learnings?${params.toString()}`);
+}
+
 export async function fetchMemoryItems(input?: MemoryItemListQuery): Promise<MemoryItemListPage> {
   const params = new URLSearchParams();
   if (input?.namespace) params.set("namespace", input.namespace);

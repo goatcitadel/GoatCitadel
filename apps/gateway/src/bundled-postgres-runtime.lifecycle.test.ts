@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -51,6 +52,7 @@ const mocks = vi.hoisted(() => {
     execFileSync: vi.fn(),
     spawn: vi.fn(),
     isBundledPostgresMode: vi.fn(),
+    probeBundledPostgresTcpPort: vi.fn(),
     tcpPortAcceptsConnections: vi.fn(),
     resolveGatewayPostgresConnectionOptions: vi.fn(),
     FakePostgresDatabaseClient,
@@ -68,6 +70,7 @@ vi.mock("@goatcitadel/storage", () => ({
 }));
 
 vi.mock("./bundled-postgres-port-probe.js", () => ({
+  probeBundledPostgresTcpPort: mocks.probeBundledPostgresTcpPort,
   tcpPortAcceptsConnections: mocks.tcpPortAcceptsConnections,
 }));
 
@@ -81,6 +84,7 @@ import {
   __bundledPostgresRuntimeInternals,
   buildBundledDockerContainerName,
   ensureBundledPostgresRuntime,
+  startInstalledNativePostgresRecovery,
 } from "./bundled-postgres-runtime.js";
 import { NonRetryableStartupError, readOperatorSummary } from "./startup-errors.js";
 
@@ -734,6 +738,135 @@ describe("bundled postgres runtime lifecycle", () => {
     await expect(action).rejects.toThrow("GOATCITADEL_BUNDLED_POSTGRES_PORT");
   });
 });
+
+describe.skipIf(process.platform !== "win32")("running installed Windows PostgreSQL recovery", () => {
+  let closeRecovery: ReturnType<typeof startInstalledNativePostgresRecovery>;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    mocks.probeBundledPostgresTcpPort.mockReset();
+    mocks.probeBundledPostgresTcpPort.mockResolvedValue("refused");
+    mocks.resolveGatewayPostgresConnectionOptions.mockReturnValue({ host: "127.0.0.1", port: 45432 });
+  });
+
+  afterEach(async () => {
+    try {
+      await closeRecovery?.();
+    } finally {
+      closeRecovery = undefined;
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("restarts the same initialized cluster once and closes its recovery timer", async () => {
+    const { config, dataDir, logFile, pgCtl, pidFile } = await prepareRecoveryFixture();
+    closeRecovery = startInstalledNativePostgresRecovery(config, () => true);
+    await runRecoveryCheck(0);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+
+    await fs.unlink(pidFile);
+    await runRecoveryCheck();
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    await runRecoveryCheck();
+
+    expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
+      pgCtl,
+      ["-D", dataDir, "-l", logFile, "start", "-w", "-t", "7", "-o", "-h 127.0.0.1 -p 45432"],
+      { detached: true, stdio: "ignore", windowsHide: true },
+    );
+    await runRecoveryCheck();
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+    expect(mocks.clients).toHaveLength(0);
+
+    await closeRecovery?.();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("requires a refused port, an unchanged cluster identifier and open runtime admission", async () => {
+    const { config, pidFile, readControl } = await prepareRecoveryFixture();
+    let accepting = true;
+    closeRecovery = startInstalledNativePostgresRecovery(config, () => accepting);
+    await runRecoveryCheck(0);
+    await fs.unlink(pidFile);
+    await runRecoveryCheck();
+
+    mocks.probeBundledPostgresTcpPort.mockResolvedValue("accepting");
+    await runRecoveryCheck();
+    mocks.probeBundledPostgresTcpPort.mockResolvedValue("unknown");
+    await runRecoveryCheck();
+    mocks.probeBundledPostgresTcpPort.mockResolvedValue("refused");
+    readControl.mockReturnValue("Database system identifier: 101\n");
+    await runRecoveryCheck();
+    readControl.mockReturnValue("Database system identifier: 100\n");
+    accepting = false;
+    await runRecoveryCheck();
+
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it("bounds launch failures to three attempts while the same outage continues", async () => {
+    const { config, pidFile } = await prepareRecoveryFixture();
+    mocks.spawn.mockImplementation(() => mockPgCtlExit(1));
+    closeRecovery = startInstalledNativePostgresRecovery(config, () => true);
+    await runRecoveryCheck(0);
+    await fs.unlink(pidFile);
+    await runRecoveryCheck();
+    await runRecoveryCheck();
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+
+    // Each step also waits for that real filesystem check to complete.
+    for (let index = 0; index < 31; index += 1) await runRecoveryCheck();
+    expect(mocks.spawn).toHaveBeenCalledTimes(3);
+  });
+
+  it("never arms for an external connection, missing native marker or disabled autostart", async () => {
+    const { config, dataDir, rootDir, pgCtl } = await prepareRecoveryFixture();
+    mocks.resolveGatewayPostgresConnectionOptions.mockReturnValue({
+      connectionString: "postgresql://external/example",
+    });
+    expect(startInstalledNativePostgresRecovery(config, () => true)).toBeUndefined();
+    mocks.resolveGatewayPostgresConnectionOptions.mockReturnValue({ host: "127.0.0.1", port: 45432 });
+    const disabled = buildConfig(rootDir, { autoStart: false, binDir: path.dirname(pgCtl) });
+    expect(startInstalledNativePostgresRecovery(disabled, () => true)).toBeUndefined();
+    await fs.unlink(path.join(dataDir, ".goatcitadel-native-bundled-postgres"));
+    expect(startInstalledNativePostgresRecovery(config, () => true)).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+async function runRecoveryCheck(delayMs = 3_000): Promise<void> {
+  await vi.advanceTimersByTimeAsync(delayMs);
+  // The timer schedules again only after its asynchronous filesystem work ends.
+  for (let index = 0; index < 200 && vi.getTimerCount() === 0; index += 1) await delay(5);
+  expect(vi.getTimerCount()).toBe(1);
+}
+
+async function prepareRecoveryFixture() {
+  const installRoot = await fs.realpath(await makeTempDir());
+  const rootDir = path.join(installRoot, "runtime-root");
+  const dataDir = path.join(rootDir, "data", "postgres");
+  const logFile = path.join(rootDir, "data", "logs", "goatcitadel-postgres.log");
+  const binDir = await writeFakePostgresInstall(path.join(installRoot, "Postgres bin"));
+  const pgCtl = path.join(binDir, "pg_ctl.exe");
+  const pidFile = path.join(dataDir, "postmaster.pid");
+  await fs.mkdir(path.join(dataDir, "global"), { recursive: true });
+  await fs.mkdir(path.dirname(logFile), { recursive: true });
+  await Promise.all([
+    fs.writeFile(path.join(dataDir, ".goatcitadel-native-bundled-postgres"), "native\n"),
+    fs.writeFile(path.join(dataDir, "global", "pg_control"), "control data"),
+    fs.writeFile(path.join(dataDir, "postmaster.opts"), `${path.join(binDir, "postgres.exe")} "-D" "${dataDir}"\n`),
+    fs.writeFile(pidFile, `${process.pid}\n${dataDir}\n123\n45432\n`),
+  ]);
+  const readControl = vi.fn(() => "Database system identifier: 100\n");
+  mocks.execFileSync.mockImplementation((command: string) =>
+    command.endsWith("pg_controldata.exe") ? readControl() : "",
+  );
+  vi.stubEnv("GOATCITADEL_APP_DIR", path.join(installRoot, "app"));
+  vi.stubEnv("GOATCITADEL_MANAGED_SERVICE", "gateway");
+  vi.stubEnv("GOATCITADEL_WINDOWS_MANAGED_POSTGRES_RECOVERY", "1");
+  return { config: buildConfig(rootDir, { binDir }), rootDir, dataDir, logFile, pgCtl, pidFile, readControl };
+}
 
 describe("native postgres discovery", () => {
   it("derives Windows install roots from the environment", () => {

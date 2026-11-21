@@ -1,7 +1,7 @@
 import fp from "fastify-plugin";
 import path from "node:path";
 import { setBootCheckpoint } from "../boot-tracker.js";
-import { ensureBundledPostgresRuntime } from "../bundled-postgres-runtime.js";
+import { ensureBundledPostgresRuntime, startInstalledNativePostgresRecovery } from "../bundled-postgres-runtime.js";
 import { repoHasConfigMarker } from "../config-files.js";
 import { loadGatewayConfig } from "../config.js";
 import { getStartupPhaseRecorder } from "../diagnostics/startup-phases.js";
@@ -68,6 +68,12 @@ export const gatewayPlugin = fp<GatewayPluginOptions>(async (fastify, options) =
     throw error;
   }
   setBootCheckpoint("storage-plugin:initCritical-returned");
+
+  const closePostgresRecovery = startInstalledNativePostgresRecovery(
+    config,
+    () => fastify.sharedHostLifecycle.snapshot().state === "accepting",
+  );
+  if (closePostgresRecovery) fastify.addHook("preClose", closePostgresRecovery);
 
   // codeql[js/missing-rate-limiting] Startup initialization is not an HTTP route handler.
   fastify.addHook("onReady", async () => {

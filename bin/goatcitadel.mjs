@@ -1997,7 +1997,8 @@ function describeEndpointReadinessFailure(endpoint, outcome) {
 function startPackagedGateway(nodeExecutable, gatewayUrl, expectedFingerprint) {
   const port = String(new URL(gatewayUrl).port || "8787");
   const startupFailurePath = prepareGatewayStartupFailureRecord();
-  const profileId = ownsWindowsInstalledProfile() ? readDesktopProfileId(packagedRuntimeRoot) : undefined;
+  const ownsWindowsProfile = ownsWindowsInstalledProfile();
+  const profileId = ownsWindowsProfile ? readDesktopProfileId(packagedRuntimeRoot) : undefined;
   startManagedDetachedProcess({
     pidPath: gatewayPidPath,
     service: "gateway",
@@ -2010,6 +2011,7 @@ function startPackagedGateway(nodeExecutable, gatewayUrl, expectedFingerprint) {
       GOATCITADEL_APP_DIR: appDir,
       GOATCITADEL_ROOT_DIR: packagedRuntimeRoot,
       GOATCITADEL_WINDOWS_PROFILE_RESOURCE: profileId ? desktopCredentialResource(baseDir, profileId) : "",
+      GOATCITADEL_WINDOWS_MANAGED_POSTGRES_RECOVERY: ownsWindowsProfile ? "1" : "",
       GATEWAY_HOST: "127.0.0.1",
       GATEWAY_PORT: port,
       GOATCITADEL_ALLOWED_ORIGINS: installedRuntimeAllowedOrigins(

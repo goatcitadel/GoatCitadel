@@ -59,7 +59,10 @@ export interface ChatMessageRouteRuntimeHost {
     assistant: { workspaceDir: string };
   };
   readonly storage: Storage;
-  readonly durableRunService: Pick<DurableRunService, "getDurableRun" | "requestRunProcessing">;
+  readonly durableRunService: Pick<
+    DurableRunService,
+    "getDurableRun" | "requestRunProcessing" | "awaitTerminalChatAdmissionRelease"
+  >;
   getSession(sessionId: string): unknown | Promise<unknown>;
   loadChatTurnSessionState(sessionId: string, options?: ChatThreadLoadOptions): Promise<ChatTurnSessionState>;
   publishRealtime(
