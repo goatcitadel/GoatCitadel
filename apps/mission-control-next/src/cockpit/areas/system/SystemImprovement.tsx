@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ImprovementWatchEvidence } from "./ImprovementWatchEvidence";
 import { useQuery } from "@tanstack/react-query";
 import type { CuratorReviewItem } from "@goatcitadel/contracts";
 import {
@@ -76,7 +77,7 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
                 Refresh inbox
               </Button>
             </div>
-            {inbox.isPending ? <p role="status">Reading suggestions…</p> : null}
+            {inbox.isPending ? <p>Reading suggestions…</p> : null}
             {inbox.error ? <Callout tone="error">{describeApiError(inbox.error).summary}</Callout> : null}
             {inbox.data && !suggestions.length ? (
               <p className="text-sm text-fg-muted">No improvement suggestions.</p>
@@ -85,6 +86,27 @@ function ImprovementWorkspace({ workspaceId }: { workspaceId: string }) {
               {suggestions.map((item) => (
                 <Suggestion key={item.candidate.candidateId} item={item} workspaceId={workspaceId} />
               ))}
+            </ul>
+          </section>
+          <section className={CARD} aria-label="Improvement monitoring">
+            <h2 className="text-base font-semibold">Monitoring</h2>
+            {inbox.error ? (
+              <Callout announce={false} tone="error">
+                Current monitoring records could not be read.
+              </Callout>
+            ) : null}
+            {!inbox.error && inbox.data && !inbox.data.items.some((item) => item.latestActivation) ? (
+              <p className="text-sm text-fg-muted">No monitoring records for this workspace.</p>
+            ) : null}
+            <ul className="grid min-w-0 grid-cols-1 divide-y divide-line-subtle">
+              {(!inbox.error ? inbox.data?.items : undefined)
+                ?.filter((item) => item.latestActivation)
+                .map((item) => (
+                  <li key={item.candidate.candidateId} className="min-w-0 space-y-2 py-3 wrap-anywhere">
+                    <strong className="text-sm">{item.candidate.summary}</strong>
+                    <ImprovementWatchEvidence activation={item.latestActivation} />
+                  </li>
+                ))}
             </ul>
           </section>
           <section className={CARD} aria-label="Improvement reports">
@@ -239,7 +261,7 @@ function ReportDetail({
   return (
     <section className={CARD} aria-label="Improvement report">
       <h2 className="text-base font-semibold">Weekly report</h2>
-      {report.isPending ? <p role="status">Reading report…</p> : null}
+      {report.isPending ? <p>Reading report…</p> : null}
       {report.error ? <Callout tone="error">{describeApiError(report.error).summary}</Callout> : null}
       {data ? (
         <>
@@ -316,7 +338,7 @@ function ReplayDetail({ runId, identity }: { runId: string; identity: string }) 
       <p className="text-sm text-fg-secondary">
         Inspection reads the saved test run record. Viewing it never re-runs or applies anything.
       </p>
-      {replay.isPending ? <p role="status">Reading test run…</p> : null}
+      {replay.isPending ? <p>Reading test run…</p> : null}
       {replay.error ? <Callout tone="error">{describeApiError(replay.error).summary}</Callout> : null}
       {run && replay.data ? (
         <>

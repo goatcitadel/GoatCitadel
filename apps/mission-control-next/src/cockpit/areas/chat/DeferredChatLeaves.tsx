@@ -1,4 +1,9 @@
-import { isBackgroundChatUserInputPrompt, type ApprovalRequest } from "@goatcitadel/contracts";
+import {
+  isBackgroundChatUserInputPrompt,
+  isChatTurnTerminalStatus,
+  type ApprovalRequest,
+  type ChatThreadTurnRecord,
+} from "@goatcitadel/contracts";
 import { lazy, Suspense, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import {
   createDeferredDialogRuntime,
@@ -21,6 +26,52 @@ const CodeModeCard = lazy(async () => ({
   default: (await import("./ChatCodeModeRequestCard")).ChatCodeModeRequestCard,
 }));
 const ErrandCards = lazy(async () => ({ default: (await import("./ChatBrowserErrandCard")).ChatBrowserErrandCards }));
+const ChatChangePlanReceipt = lazy(async () => ({
+  default: (await import("./ChatChangePlanReceipt")).ChatChangePlanReceipt,
+}));
+const ChatLearningDisclosure = lazy(async () => ({
+  default: (await import("./ChatLearningDisclosure")).ChatLearningDisclosure,
+}));
+
+export function DeferredChatLearningDisclosure({
+  turn,
+  workspaceId,
+  streaming,
+  readOnly,
+}: {
+  turn: ChatThreadTurnRecord;
+  workspaceId?: string;
+  streaming: boolean;
+  readOnly?: boolean;
+}) {
+  if (streaming || !workspaceId || !isChatTurnTerminalStatus(turn.trace.status)) return null;
+  return (
+    <DeferredChatLeaf label="Memory and learning" identity={turn.turnId} loadingVisible={false}>
+      <ChatLearningDisclosure
+        sessionId={turn.trace.sessionId}
+        workspaceId={workspaceId}
+        turnId={turn.turnId}
+        readOnly={readOnly}
+      />
+    </DeferredChatLeaf>
+  );
+}
+
+export function DeferredChatChangePlanReceipt(props: ComponentProps<typeof ChatChangePlanReceipt>) {
+  return (
+    <DeferredChatLeaf
+      label="Change-plan receipt"
+      identity={props.sessionId ?? "new"}
+      fallback={
+        <p aria-busy="true" className="min-h-24">
+          Loading change-plan receipt…
+        </p>
+      }
+    >
+      <ChatChangePlanReceipt {...props} />
+    </DeferredChatLeaf>
+  );
+}
 const timerLoader = createDeferredDialogRuntime(() =>
   import("../../../features/threaded-surface/ChatTimerPanel").then(({ ChatTimerPanel }) => ChatTimerPanel),
 );

@@ -1,3 +1,5 @@
+import { CHANGE_PLAN_RUNTIME_FEATURE_FLAGS } from "./change-plan.js";
+import { SHIPPED_FEATURE_FLAGS } from "./shipped-feature-flags.js";
 import { z } from "zod";
 import { OUTSIDE_ROOT_WRITE_MODES } from "./outside-root-write.js";
 import { WEB_SEARCH_NATIVE_ENGINES } from "./web-search.js";
@@ -823,6 +825,13 @@ export const AssistantConfigInputSchema = z
       })
       .passthrough()
       .optional(),
+    featurePreferenceOverrides: z
+      .object({
+        flags: z.partialRecord(z.enum(CHANGE_PLAN_RUNTIME_FEATURE_FLAGS), z.boolean()),
+        reviewed: z.array(z.enum(SHIPPED_FEATURE_FLAGS)).optional(),
+      })
+      .strict()
+      .optional(),
     features: z
       .object({
         durableKernelV1Enabled: z.boolean().optional(),
@@ -871,6 +880,8 @@ export const AssistantConfigInputSchema = z
         // PROPOSES memory candidates (approval-gated, never auto-applied).
         // Absent/false (default) ⇒ the consolidation job never runs.
         memoryConsolidationV1Enabled: z.boolean().optional(),
+        memoryCorpusRecallV1Enabled: z.boolean().optional(),
+        backgroundSkillDraftsV1Enabled: z.boolean().optional(),
         // Records a signed cron_job_executed evidence envelope for every cron
         // run and pins the envelope id on the job record. Absent/false
         // (default) ⇒ cron runs record no evidence, exactly as today.
@@ -890,6 +901,7 @@ export const AssistantConfigInputSchema = z
       .object({
         dailyUsdWarning: z.number().optional(),
         dailyUsdHardCap: z.number().optional(),
+        automaticBackgroundUsdCap: z.number().nonnegative().optional(),
         sessionTokenHardCap: z.number().optional(),
       })
       .passthrough()

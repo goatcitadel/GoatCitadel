@@ -202,6 +202,7 @@ export class CommitmentClassifierService {
             dedupeKey: classification.dedupeKey,
             suggestedText: classification.suggestedText,
             createdBy: "classifier",
+            status: "proposed",
             sourceTurnId: input.sourceTurnId,
           },
           nowIso,

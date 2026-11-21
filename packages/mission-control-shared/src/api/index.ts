@@ -27,3 +27,7 @@ export * from "./ops-saved-boards.js";
 export * from "./work-passport.js";
 export * from "./engineering-learnings.js";
 export * from "./hooks.js";
+export * from "./assistant-readiness.js";
+export * from "./follow-through.js";
+export * from "./chat-learning.js";
+export * from "./chat-continuation.js";

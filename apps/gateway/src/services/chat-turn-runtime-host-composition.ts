@@ -101,7 +101,10 @@ function composeSessionPreparation(
     buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
       source.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
     composeFrozenOperatorProfileDigest: source.composeFrozenOperatorProfileDigest
-      ? (workspaceId) => source.composeFrozenOperatorProfileDigest!(workspaceId)
+      ? (workspaceId, options) =>
+          options === undefined
+            ? source.composeFrozenOperatorProfileDigest!(workspaceId)
+            : source.composeFrozenOperatorProfileDigest!(workspaceId, options)
       : undefined,
     ensureChatSessionModelDefaults: (sessionId, prefs) => source.ensureChatSessionModelDefaults(sessionId, prefs),
     ensureChatSessionRuntimeGrants: (sessionId) => source.ensureChatSessionRuntimeGrants(sessionId),

@@ -1,6 +1,17 @@
+import { applySettingsRuntimeCandidate } from "./gateway/settings-runtime-candidate.js";
+import { readRealGitTopLevel } from "./chat-delegation-git-scope.js";
+import { cleanupSilentHeartbeatTurn } from "./heartbeat-silent-turn-cleanup.js";
+import {
+  readConsolidationChatScope,
+  validateConsolidationCandidate,
+  validateQueuedLearningCandidate,
+} from "./memory-learning-source-admission.js";
+import { resolveChatLearningMemoryManifest } from "./chat-learning-memory-manifest.js";
 import { assertMcpAdmissionToolAllowed } from "./mcp-admission-tool-policy-guard.js";
 import { resolveMcpToolPolicyOptions, type McpApprovalReliefPort } from "./mcp-approval-relief.js";
 import { buildChatRuntimeSkillReceipts } from "./chat-skill-selection-runtime.js";
+import { resolveChatLearningSkillManifest } from "./chat-learning-skill-manifest.js";
+import { runFollowThroughEventSweep } from "./follow-through-event-runtime.js";
 import { executeApprovedIntegrationDryRunCommit } from "./approved-integration-dry-run-owner.js";
 import { commitProviderSecretGeneration } from "./provider-secret-generation-owner.js";
 import { resolveChatRuntimeSkillSelection } from "./chat-skill-selection-runtime.js";
@@ -43,6 +54,7 @@ import { verifyProviderConnection, verifyTemporaryProviderCredential } from "./p
 import { resolveSustainedLocalCodingProfile } from "./chat-turn-execution-profile.js";
 import { readChangePlanApprovalDisposition } from "./evolution-control-plane-approval-disposition.js";
 import { composeChatTurnControl, type ChatTurnControlComposition } from "./gateway/chat-turn-control-composition.js";
+import { BackgroundSkillDraftService } from "./background-skill-draft-service.js";
 import { cleanupDelegatedChildResources } from "./delegated-child-process-cleanup.js";
 /* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import fs from "node:fs/promises";
@@ -103,11 +115,7 @@ import {
   providerRecognizesModelId,
   ValidationError,
 } from "@goatcitadel/contracts";
-import {
-  applyDurableExecutionBaselineToConfig,
-  buildUnifiedConfigPayloadFromRuntime,
-  replaceMutableConfigValue,
-} from "../config-sync-lib.js";
+import { applyDurableExecutionBaselineToConfig, buildUnifiedConfigPayloadFromRuntime } from "../config-sync-lib.js";
 import { projectTranscriptMessages, selectTranscriptMessageWindow } from "./chat-transcript-projection.js";
 import { createGatewayStorage } from "../storage-factory.js";
 import { DatabaseCutoverService } from "./database-cutover-service.js";
@@ -449,6 +457,12 @@ import {
   resolveMeshChatToolBinding,
 } from "./gateway/mesh-chat-binding.js";
 import * as chatMessageHistoryService from "./chat-message-history-service.js";
+import { collectChatContinuityLinks } from "./chat-continuity-links.js";
+import { BackgroundLearningReadinessRuntime } from "./background-learning-readiness.js";
+import type { BackgroundLearningQueueService } from "./background-learning-queue-service.js";
+import { AutomaticBackgroundBudget, DEFAULT_AUTOMATIC_BACKGROUND_DAILY_USD } from "./automatic-background-budget.js";
+import { StarterHeartbeat } from "./starter-heartbeat.js";
+import { createBackgroundLearningQueueRuntime } from "./gateway/background-learning-queue-runtime.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import * as chatAttachmentService from "./chat-attachment-service.js";
 import { createGatewayErrandPressGuard } from "./browser-errands/errand-approval-press-guard.js";
@@ -466,6 +480,7 @@ import type {
 } from "../orchestration/types.js";
 import { type ChannelSetupRecentTestCacheEntry } from "./channel-setup-test-cache.js";
 import { MemoryContextService } from "./memory-context-service.js";
+import { MemoryCorpusSemanticService } from "./memory-corpus-semantic-service.js";
 import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { LlamaCppSetupSelectionService } from "./llama-cpp-setup-selection-service.js";
 import { LlamaCppSetupService } from "./llama-cpp-setup-service.js";
@@ -536,7 +551,6 @@ import {
 } from "./gateway/system-cron-schedulers.js";
 import {
   EXISTING_LEARNINGS_DEDUP_LIMIT,
-  MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY,
   MemoryConsolidationService,
   PENDING_CANDIDATES_DEDUP_LIMIT,
 } from "./memory-consolidation-service.js";
@@ -679,7 +693,7 @@ import * as llmCompletionService from "./llm-completion-service.js";
 import * as durableExecutionService from "./durable-execution-service.js";
 import * as chatDurableRunService from "./chat-durable-run-service.js";
 import * as chatRoutedContextService from "./chat-routed-context-service.js";
-import { createModelChatWardDispatchGuard } from "./chat-route-local-ward.js";
+import { createModelChatWardDispatchGuard, isRouteLocalProvider } from "./chat-route-local-ward.js";
 import {
   resolveLiveModelCouncilBinding,
   resolveModelCouncilPrimaryRoute,
@@ -697,6 +711,7 @@ import { assertHeartbeatChatDispatchCurrent } from "./heartbeat-chat-authority.j
 import * as chatTurnPrepService from "./chat-turn-prep-service.js";
 import {
   buildPreviewPrefs,
+  projectChatSendRoutingInput,
   resolveChatRouteDescriptor,
   type ResolvedChatRouteDescriptor,
 } from "./chat-route-resolution.js";
@@ -793,7 +808,11 @@ import { resolveToolRequestPathsForSessionScope, withSharedSessionPathScopeReads
 import { buildToolRuntimeOwnerBinding } from "./tool-runtime-interposition.js";
 import { isOutsideRootWriteEligible } from "./outside-root-write-eligibility.js";
 import {
-  buildUpdatedFeatureFlags,
+  configurationFeatureFlags,
+  featurePreferenceMetadata,
+  readStoredFeatureFlags,
+  updateFeaturePreferences,
+  type StoredFeatureFlags,
   didDisengageAutonomyKillSwitch,
   resolveGatewayFeatureFlags,
 } from "./gateway/feature-flags.js";
@@ -999,13 +1018,6 @@ const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
 ] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 
-/**
- * P2-S1 background-review counter gate. A successful, eligible root turn bumps
- * this counter; the self-improvement review runs (and resets it) once it reaches
- * {@link BACKGROUND_REVIEW_TURN_INTERVAL}. Stored in `system_settings`.
- */
-const BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY = "background_review_turns_since_v1";
-const BACKGROUND_REVIEW_TURN_INTERVAL = 5;
 const IMPROVEMENT_SCHEDULER_INTERVAL_MS = 60_000;
 const CRON_SCHEDULER_INTERVAL_MS = 5_000;
 const CHAT_TIMER_SCHEDULER_INTERVAL_MS = 1_000;
@@ -1043,21 +1055,6 @@ function isValidToolName(name: string): boolean {
   return VALID_TOOL_NAME_PATTERN.test(name);
 }
 
-async function transitionLlamaCppRuntimeConfig(
-  runtime: LlamaCppRuntimeService,
-  nextConfig: GatewayRuntimeConfig["assistant"]["llamaCpp"],
-  lifecycle: ReturnType<LlamaCppRuntimeService["getLifecycleSnapshot"]>,
-  reason: string,
-): Promise<void> {
-  const assessment = runtime.assessConfigTransition(nextConfig);
-  runtime.assertCanApplyConfig(nextConfig);
-  if (assessment.identityChanged) {
-    await runtime.stop(reason);
-  }
-  runtime.updateConfig(nextConfig);
-  await runtime.restoreLifecycleSnapshot(lifecycle);
-}
-
 export class GatewayService {
   public config: GatewayRuntimeConfig;
   public readonly storage: Storage;
@@ -1082,6 +1079,7 @@ export class GatewayService {
   public readonly llmService: LlmService;
   private readonly assemblyService: AssemblyService;
   private readonly memoryContextService: MemoryContextService;
+  private readonly memoryCorpusSemanticService: MemoryCorpusSemanticService;
   public readonly meshService: MeshService;
   public readonly npuSidecar: NpuSidecarService;
   public readonly llamaCppRuntime: LlamaCppRuntimeService;
@@ -1090,6 +1088,10 @@ export class GatewayService {
   private readonly approvalExplainer: ApprovalExplainerService;
   private readonly commitmentClassifier: CommitmentClassifierService;
   private readonly backgroundReviewService: BackgroundReviewService;
+  private readonly backgroundLearningReadiness: BackgroundLearningReadinessRuntime;
+  private readonly backgroundLearningQueueService: BackgroundLearningQueueService;
+  private readonly automaticBackgroundBudget: AutomaticBackgroundBudget;
+  private readonly starterHeartbeat: StarterHeartbeat;
   public readonly turnRuntime: GatewayTurnRuntime;
   public readonly explicitContextPreparation: ExplicitContextPreparationPort = {
     prepare: (input) =>
@@ -1216,7 +1218,7 @@ export class GatewayService {
   private readonly managedSourceInstallService: ManagedSourceInstallService;
   private readonly productSourceUpdateService: ProductSourceUpdateService;
   /** One-window Chat route/command projection over the canonical singleton. */
-  public readonly chatChangePlanCompatibilityService: ChatChangePlanCompatibilityService;
+  private readonly chatChangePlanCompatibilityService: ChatChangePlanCompatibilityService;
   public readonly mutationIdempotencyStore: Storage["mutationIdempotency"];
   public readonly chatTurnExecutionRegistry = new ChatTurnExecutionRegistry();
   public readonly backgroundTasks = new Set<Promise<void>>();
@@ -1331,6 +1333,7 @@ export class GatewayService {
       storage: this.storage,
       isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       memoryWriteGate: this.memoryWriteGateService,
+      readTrustedLearnings: (workspaceId) => this.memoryLifecycleService.collectTrustedStandingLearnings(workspaceId),
     });
     this.workPassportService = new WorkPassportService(this.operatorProfileService);
     this.onboardingMarkerPath = path.resolve(config.rootDir, config.assistant.dataDir, "onboarding-state.json");
@@ -1493,6 +1496,9 @@ export class GatewayService {
       resolveFirecrawlCredential: (baseUrl) => this.webSearchCredentials.resolveFirecrawlCredential(baseUrl),
       // Live Settings value: a tool call that names another Firecrawl endpoint or key variable is blocked.
       resolveFirecrawlEndpoint: () => this.config.assistant.web.firecrawl,
+      searchMemory: (request) => this.memoryLifecycleService.readMemoryTool(request),
+      prepareMemoryWrite: (request) => this.memoryLifecycleService.prepareMemoryWriteTool(request),
+      writeMemory: (request, input) => this.memoryLifecycleService.writeMemoryTool(request, input),
       configureRuntime: (_request, targetId) => this.runtimeConfigurationService.assertConfigurationAvailable(targetId),
       resolveApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.resolve(secretRef),
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
@@ -1522,6 +1528,10 @@ export class GatewayService {
       subagentFanout: (request) => this.subagentFanout.execute(request),
       runBrowserErrand: (request) => this.browserErrandService.run(request),
       getChatSessionStatus: (sessionId) => this.chatSessionStatusService.getModelProjection(sessionId),
+      previewChatReminder: async (request) => {
+        if (!(await this.isFeatureEnabled("chatTimersV1Enabled"))) throw new Error("Chat timers are turned off.");
+        return this.chatTimerService.preview(request);
+      },
       readToolArtifact: (request) => chatToolArtifactService.readChatToolArtifactForTool(this, request),
       searchCapabilities: (request) => this.capabilityKnowledge.discovery.discover(request),
       explainCapabilities: async (request) => ({ ...(await this.capabilityKnowledge.explanation.explain(request)) }),
@@ -1762,6 +1772,17 @@ export class GatewayService {
         });
       },
     });
+    this.automaticBackgroundBudget = new AutomaticBackgroundBudget({
+      storage: this.storage,
+      getLimits: () => ({
+        automaticUsd: this.config.assistant.budgets.automaticBackgroundUsdCap ?? DEFAULT_AUTOMATIC_BACKGROUND_DAILY_USD,
+        totalUsd: this.config.assistant.budgets.dailyUsdHardCap,
+      }),
+      runWithDispatchGuard: (guard, work) => this.llmService.runWithDispatchGuard(guard, work),
+      onReconciliationFailure: (error) =>
+        this.logMaintenanceTaskFailure("automatic_background_usage_reconciliation", error),
+    });
+    this.starterHeartbeat = new StarterHeartbeat(this.storage);
     this.llmService.setDispatchWardGuard(
       createModelChatWardDispatchGuard({
         storage: this.storage,
@@ -1791,6 +1812,13 @@ export class GatewayService {
         await this.publishRealtime(eventType, source, payload);
       },
     });
+    this.memoryCorpusSemanticService = new MemoryCorpusSemanticService({
+      repository: this.storage.memoryRecall,
+      registerBackgroundTask: (task) => {
+        this.registerBackgroundTask(task);
+      },
+      onFailure: () => log.warn("Memory semantic index unavailable; using lexical retrieval."),
+    });
     this.memoryContextService = new MemoryContextService(
       this.storage,
       this.llmService,
@@ -1801,6 +1829,12 @@ export class GatewayService {
       (request) => this.acquireLocalEmbeddingLease(request),
       (input) => this.modelUsageAccounting.prepareDispatch(input),
       (diagnostics) => log.debug("Memory context composition metrics", diagnostics),
+      (input) => this.memoryLifecycleService.collectTrustedRecallSources(input),
+      {
+        search: (input) => this.memoryLifecycleService.searchEligibleCorpus(input),
+        enabled: () => this.isFeatureEnabled("memoryCorpusRecallV1Enabled"),
+        validate: (input) => this.memoryLifecycleService.validateRecallSources(input),
+      },
     );
     this.meshService = new MeshService(this.storage, {
       enabled: config.assistant.mesh.enabled,
@@ -2145,6 +2179,7 @@ export class GatewayService {
         ),
       onChatTurnCancelled: (sessionId, turnId, actorId) =>
         this.chatTurnControl.onChatTurnCancelled(sessionId, turnId, actorId),
+      onChatTurnFinalizersSettled: (run) => this.cronAutomationService.reconcileFinalizedChatChild(run),
       workflowRegistry: durableExecutionService.createDeferredDurableWorkflowExecutorRegistry(
         () => this.durableWorkflowRegistry,
       ),
@@ -2232,10 +2267,11 @@ export class GatewayService {
     this.heartbeatOccurrenceService = new HeartbeatOccurrenceService({
       storage: this.storage,
       sessionControlRuntimeOwner: this.sessionControlRuntimeOwner,
-      canEnqueueHeartbeat: async () =>
+      canEnqueueHeartbeat: async (sessionId) =>
         (await this.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled")) &&
         !(await this.isFeatureEnabled("autonomyV1Disabled")) &&
-        (await this.isFeatureEnabled("durableKernelV1Enabled")),
+        (await this.isFeatureEnabled("durableKernelV1Enabled")) &&
+        (await this.starterHeartbeat.isArmed(sessionId)),
       enqueuePreclaimedHeartbeat: async (input) => {
         const run = await enqueueAutonomousChatTurn(this.chatAutonomousTurnDeps(), {
           sessionId: input.occurrence.sessionId,
@@ -2307,6 +2343,7 @@ export class GatewayService {
       getPromptJudgeModelDefaults: async () => await this.getPromptJudgeModelDefaults(),
       backgroundTasks: this.backgroundTasks,
       runBackgroundWork: (label, work) => this.tryRunWithSharedHostWork("agent", label, work),
+      captureImprovementWatchBindings: (packId) => this.improvementService.capturePromptLabWatchBindings(packId),
       recordImprovementBenchmarkSignal: async (input) => {
         await this.improvementService.recordPromptLabBenchmarkCompletionSignal(input);
       },
@@ -3082,8 +3119,14 @@ export class GatewayService {
       resolveModelDefaults: async () => await this.getBackgroundJobModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
       proposeTraceMemoryCandidate: (input, actorId, authority) =>
-        this.memoryLifecycleService.proposeTraceMemoryCandidate(input, actorId, authority),
+        this.memoryLifecycleService.proposeTraceMemoryCandidate(input, actorId, authority, { deferEmbedding: true }),
       effectAuthority: chatPostCommitEffectAuthority,
+      resolveBackgroundLearningReadiness: (input) => this.backgroundLearningReadiness.resolve(input),
+      enqueueLearningReview: (input) => this.backgroundLearningQueueService.enqueueLearningReview(input),
+      evaluateGovernedMemoryMaintenance: (input) =>
+        this.memoryMaintenanceService.evaluateGovernedPostTurn(input, (request) =>
+          this.backgroundLearningQueueService.enqueueLearningReview(request),
+        ),
       isAutonomyDisabled: async () => await this.isFeatureEnabled("autonomyV1Disabled"),
       publishRealtime,
       recordDurableTimelineEvent: async (runId, eventType, payload) => {
@@ -3094,6 +3137,18 @@ export class GatewayService {
     this.commitmentClassifier = chatPostCommitRuntime.commitmentClassifier;
     this.backgroundReviewService = chatPostCommitRuntime.backgroundReviewService;
     this.memoryLifecycleService = new MemoryLifecycleService({
+      recallRepository: this.storage.memoryRecall,
+      isMemoryRecallEnabled: () => config.assistant.memory.enabled,
+      isCorpusRecallEnabled: () => this.isFeatureEnabled("memoryCorpusRecallV1Enabled"),
+      augmentCorpusRecall: (input, result) => this.memoryCorpusSemanticService.augment(input, result),
+      learnings: this.storage.memoryLearnings,
+      validateConsolidationCandidate: (candidate) =>
+        validateConsolidationCandidate(this.storage.memoryLearnings, candidate),
+      validateQueuedLearningCandidate: (candidate) => validateQueuedLearningCandidate(this.storage, candidate),
+      recallStorage: this.storage,
+      noteRepository: this.storage.memoryNotes,
+      isLearningRecallEnabled: async () =>
+        config.assistant.memory.enabled && (await this.isFeatureEnabled("memoryLifecycleAdminV1Enabled")),
       context: this.memoryContextService,
       learned: this.chatLearnedMemoryService,
       maintenance: this.memoryMaintenanceService,
@@ -3144,36 +3199,66 @@ export class GatewayService {
     });
     this.memoryConsolidationService = new MemoryConsolidationService({
       isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag),
-      listCompletedTurnTracesSince: async (sinceIso, limit) =>
-        await this.storage.chatTurnTraces.listCompletedSince(sinceIso, limit),
+      listWorkspaceIds: async () =>
+        (await this.storage.workspaces.list("active", 2000)).map((workspace) => workspace.workspaceId),
+      resolveEligibleSourceSession: (sessionId) => readConsolidationChatScope(this.storage, sessionId),
+      listCompletedTracePage: async (input) => await this.storage.chatTurnTraces.listCompletedTracePage(input),
+      readCanonicalSource: (input) => this.storage.memoryLearnings.readConsolidationSource(input),
+      inspectCanonicalSource: (input) => this.storage.memoryLearnings.inspectConsolidationSource(input),
       readTranscriptOrEmpty: async (sessionId) => await this.readTranscriptOrEmpty(sessionId),
       createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
-      // Rides the prompt-runner chokepoint, so drafting automatically moves to
-      // the cheap utility tier once utilityModelRoutingV1Enabled ships.
-      resolveModelDefaults: async () => await this.getPromptRunnerModelDefaults(),
+      resolveModelDefaults: async () => (await this.getBackgroundJobModelDefaults()) ?? {},
       proposeTraceMemoryCandidate: (input, actorId) =>
         this.memoryLifecycleService.proposeTraceMemoryCandidate(input, actorId),
-      listExistingInsightsForDedup: async () => [
+      listExistingInsightsForDedup: async (workspaceId) => [
         ...(
           await this.memoryLifecycleService.listMemoryLearnings({
+            workspaceId,
             status: "all",
             limit: EXISTING_LEARNINGS_DEDUP_LIMIT,
           })
         ).map((item) => item.insight),
         ...(
           await this.memoryLifecycleService.listTraceMemoryCandidates({
+            workspaceId,
             status: "proposed",
             limit: PENDING_CANDIDATES_DEDUP_LIMIT,
           })
         ).map((item) => item.proposedInsight),
       ],
-      getWatermark: async () =>
-        (await this.storage.systemSettings.get<string>(MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY))?.value,
-      setWatermark: async (iso) =>
-        await this.storage.systemSettings.set(MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY, iso),
+      readProgress: async (workspaceId) => await this.storage.memoryConsolidationProgress.readProgress(workspaceId),
+      claimProgress: async (...args) => await this.storage.memoryConsolidationProgress.claimProgress(...args),
+      commitProgress: async (...args) => await this.storage.memoryConsolidationProgress.commitProgress(...args),
       publishRealtime: async (eventType, source, payload) =>
         await this.publishRealtime(eventType, source, payload ?? {}),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+    });
+    const backgroundSkillDrafts = new BackgroundSkillDraftService({
+      storage: this.storage,
+      rootDir: config.rootDir,
+      candidateRoot: config.assistant.capabilities.candidateRoot,
+    });
+    this.backgroundLearningReadiness = new BackgroundLearningReadinessRuntime({
+      storage: this.storage,
+      readFeatureFlags: () => this.readFeatureFlags(),
+      memoryEnabled: () => this.config.assistant.memory.enabled,
+      readBudgets: () => this.config.assistant.budgets,
+      readAutomaticBudget: () => this.automaticBackgroundBudget.snapshot(),
+      resolveModel: (passive) =>
+        passive ? this.readBackgroundModelWithoutProbe() : this.getBackgroundJobModelDefaults(),
+      isReplayScratchSession: (sessionId) => this.isReplayScratchSession(sessionId),
+    });
+    this.backgroundLearningQueueService = createBackgroundLearningQueueRuntime({
+      storage: this.storage,
+      review: this.backgroundReviewService,
+      readiness: this.backgroundLearningReadiness,
+      resolveBackgroundModel: () => this.getBackgroundJobModelDefaults(),
+      readDailyUsdHardCap: () => this.config.assistant.budgets.dailyUsdHardCap,
+      llm: this.llmService,
+      hasForegroundExecution: () => this.chatTurnExecutionRegistry.hasAnyActiveChatTurnExecution(),
+      memory: this.memoryLifecycleService,
+      skillDrafts: backgroundSkillDrafts,
+      publishRealtime: (eventType, source, payload) => this.publishRealtime(eventType, source, payload),
     });
     this.durableOperatorService = new DurableOperatorService({
       durableRunService: this.durableRunService,
@@ -3248,6 +3333,17 @@ export class GatewayService {
         },
         chatTurn: this.buildDurableChatTurnWorkflowHost(),
         chatPostCommitEffect: chatPostCommitRuntime.effectExecutor,
+        learningReview: {
+          storage: this.storage,
+          backgroundLearningQueue: this.backgroundLearningQueueService,
+          publishRealtime: async (eventType, source, payload, options) => {
+            await this.publishRealtime(eventType, source, payload, options);
+          },
+          recordDurableTimelineEvent: async (runId, eventType, payload) => {
+            await this.recordDurableTimelineEvent(runId, eventType, payload);
+          },
+          recordImprovementDurableRunCompletion: (run, state) => this.recordImprovementDurableRunCompletion(run, state),
+        },
         proactiveTick: {
           chatProactiveService: this.chatProactiveService,
           gatewaySql: this.gatewaySql,
@@ -3649,6 +3745,22 @@ export class GatewayService {
       backupRetentionService: this.backupRetentionService,
       capabilityScopeResolver: this.capabilityScopeResolver,
       capabilitySystemService: this.capabilitySystemService,
+      chatAssistant: {
+        changePlans: {
+          create: (...args) => this.chatChangePlanCompatibilityService.create(...args),
+          list: (...args) => this.chatChangePlanCompatibilityService.list(...args),
+          confirm: (...args) => this.chatChangePlanCompatibilityService.confirm(...args),
+          cancel: (...args) => this.chatChangePlanCompatibilityService.cancel(...args),
+        },
+        setupPlans: {
+          get: (...args) => this.evolutionControlPlaneService.get(...args),
+          create: (...args) => this.evolutionControlPlaneService.create(...args),
+          cancel: (...args) => this.evolutionControlPlaneService.cancel(...args),
+          findReplay: (...args) => this.evolutionControlPlaneService.findReplay(...args),
+          findByIdempotencyKey: (...args) => this.evolutionControlPlaneService.findByIdempotencyKey(...args),
+        },
+        readLearningReadiness: (input) => this.backgroundLearningReadiness.resolve(input, { passive: true }),
+      },
       chatCompactionBreakerActionService: this.chatCompactionBreakerActionService,
       chatMessageRouteRuntimeHost: this.buildChatMessageRouteRuntimeHost(),
       chatProjectService: this.chatProjectService,
@@ -3737,7 +3849,8 @@ export class GatewayService {
       buildDefaultChatPersonalityOverlay: () => this.buildDefaultChatPersonalityOverlay(),
       buildLlmMessagesFromBranchPath: async (sessionId, pathTurnIds, currentUserMessage, options, state) =>
         await this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
-      composeFrozenOperatorProfileDigest: (workspaceId) => this.composeFrozenOperatorProfileDigest(workspaceId),
+      composeFrozenOperatorProfileDigest: (workspaceId, options) =>
+        this.composeFrozenOperatorProfileDigest(workspaceId, options),
       resolveBasePromptCapabilityCatalog: (scope) => this.resolveBasePromptCapabilityCatalog(scope),
       getCodeModeReadiness: async () => await this.capabilitySystemService.getCodeModeReadiness(),
       closeActiveChatTurnStream: (turnId, registrationId) => this.closeActiveChatTurnStream(turnId, registrationId),
@@ -3981,6 +4094,39 @@ export class GatewayService {
       revalidateChatRoutedContextSnapshot: (snapshot) => this.revalidateChatRoutedContextSnapshot(snapshot),
       durableRunService: this.durableRunService,
       runInChatApprovalScope: (run, work) => this.chatAutoActions.runInDurableTurn(run, work),
+      runAutomaticHeartbeat: (sessionId, work) =>
+        this.automaticBackgroundBudget.run(work, async () => {
+          if (
+            !(await this.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled")) ||
+            (await this.isFeatureEnabled("autonomyV1Disabled")) ||
+            !(await this.starterHeartbeat.isArmed(sessionId))
+          ) {
+            throw new ConflictError({ message: "The heartbeat was paused or its Chat changed before model dispatch." });
+          }
+        }),
+      notifyHeartbeatAttention: async ({ workspaceId, sessionId, turnId, occurrenceId }) => {
+        if (
+          !(await this.isFeatureEnabled("notificationRoutingV1Enabled")) ||
+          !(await this.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled")) ||
+          (await this.isFeatureEnabled("autonomyV1Disabled")) ||
+          !(await this.starterHeartbeat.isArmed(sessionId))
+        ) {
+          return { status: "skipped", reason: "heartbeat_notifications_disabled" };
+        }
+        const result = await createNotificationRoutingServiceForGateway(this.getRouteCompositionPort()).dispatch(
+          workspaceId,
+          {
+            eventId: `heartbeat-attention-${occurrenceId}`,
+            eventType: "heartbeat.attention",
+            sessionId,
+            turnId,
+            title: "A background check needs attention",
+            message: "Open GoatCitadel to see the update in Chat.",
+            source: "chat.heartbeat",
+          },
+        );
+        return { status: "recorded", deliveryStatuses: result.deliveries.map((delivery) => delivery.status) };
+      },
       resolveRemoteWorkerChatExecution: async (run, prepared) =>
         new RemoteWorkerChatPlacementService({
           ...this.remoteWorkerChatOfferDependencies(prepared.workspaceId),
@@ -4018,6 +4164,7 @@ export class GatewayService {
       publishRealtime: async (channel, topic, payload, options) =>
         await this.publishRealtime(channel, topic, payload, options),
       hooksService: this.hooksService,
+      captureNaturalChatMemoryIntent: (input) => this.memoryLifecycleService.captureNaturalChatMemoryIntent(input),
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       recordTurnCommitments: async (input) => await this.recordTurnCommitments(input),
@@ -4272,6 +4419,10 @@ export class GatewayService {
     await traceInitStep("loadOnboardingMarker", async () => await this.loadOnboardingMarker());
     await traceInitStep("applyStoredFeatureFlags", async () => {
       await this.applyStartupFeatureFlags();
+      const sources = this.config.featureSources;
+      if (sources && featurePreferenceMetadata(sources, sources.canonicalStore ?? {}).upgradeReview.length) {
+        sources.previousOperatorChoices = await this.storage.changePlans.readAppliedFeaturePreferences();
+      }
     });
     await traceInitStep("channelSetup.secretCustodyReconciliation", async () => {
       const reconciled = await reconcileChannelSetupDraftSecretCustody(
@@ -5346,7 +5497,13 @@ export class GatewayService {
     sessionId: string,
     input: SessionAutonomyPrefsPatchInput,
   ): Promise<SessionAutonomyPrefs> {
-    return await this.storage.sessionAutonomyPrefs.patch(sessionId, input);
+    return await this.storage.runImmediateTransaction(async () => {
+      const prefs = await this.storage.sessionAutonomyPrefs.patch(sessionId, input);
+      if (input.heartbeatEnabled !== undefined || input.heartbeatIntervalSeconds !== undefined) {
+        await this.starterHeartbeat.captureExplicitChoice(sessionId, prefs.heartbeatEnabled);
+      }
+      return prefs;
+    });
   }
 
   private toProactivePolicy(sessionId: string, prefs: SessionAutonomyPrefs): ProactivePolicy {
@@ -5439,9 +5596,17 @@ export class GatewayService {
       label: "cron scheduler",
       intervalMs: CRON_SCHEDULER_INTERVAL_MS,
       task: async () => {
-        await this.tryRunWithSharedHostWork("cron", "cron-due-sweep", () =>
-          this.cronAutomationService.runDueTaskCronJobs(),
-        );
+        await this.tryRunWithSharedHostWork("cron", "cron-due-sweep", async () => {
+          await this.cronAutomationService.runDueTaskCronJobs();
+          await runFollowThroughEventSweep({
+            storage: this.storage,
+            cron: this.cronAutomationService,
+            isEnabled: async () =>
+              !(await this.isFeatureEnabled("autonomyV1Disabled")) &&
+              (await this.isFeatureEnabled("durableKernelV1Enabled")) &&
+              (await this.isFeatureEnabled("scheduledChatTurnsV1Enabled")),
+          });
+        });
       },
       isClosing: () => this.closing,
       registerInflight: (task) => this.registerBackgroundTask(task),
@@ -5503,6 +5668,15 @@ export class GatewayService {
           this.tryRunWithSharedHostWork("worker", "memory-evaluation", () =>
             this.memoryLifecycleService.runDueEvaluation(),
           ),
+      },
+      {
+        label: "memory search index",
+        run: async () =>
+          this.config.assistant.memory.enabled && (await this.isFeatureEnabled("memoryCorpusRecallV1Enabled"))
+            ? this.tryRunWithSharedHostWork("worker", "memory-search-index", () =>
+                this.storage.memoryRecall.backfillPage({ limit: 200 }),
+              )
+            : undefined,
       },
       {
         label: "engineering learning freshness",
@@ -5860,15 +6034,8 @@ export class GatewayService {
   }
 
   /**
-   * P2-S1 — schedule the self-improvement background review for a successful eligible
-   * turn, counter-gated to run every {@link BACKGROUND_REVIEW_TURN_INTERVAL}
-   * eligible turns. Sibling of {@link scheduleMemoryMaintenancePostTurnEvaluation}
-   * — skips delegated child turns and runs fire-and-forget after a successful turn.
-   *
-   * Guards (master-autonomy / eval-integrity / non-human / closing / delegated-child)
-   * are resolved here and re-asserted inside the service; the counter only
-   * advances for eligible turns. The review is a tracked background task that can
-   * never throw out of the turn path.
+   * Compatibility reconciliation entry point. Canonical durable post-commit
+   * authority owns cadence and queued source admission; no inline inference.
    */
   public async scheduleBackgroundReviewIfDue(input: {
     sessionId: string;
@@ -5880,91 +6047,12 @@ export class GatewayService {
     /** True when the completed turn is itself an autonomous self-wake (skip). */
     autonomous?: boolean;
   }): Promise<void> {
-    // Skip delegated children (mirror the memory-maintenance sibling) and a closing gateway.
-    if (this.closing || input.delegatedChild) {
-      return;
-    }
-    // Skip autonomous turns: a cron/heartbeat/commitment self-wake runs inside a
-    // human session, but re-reviewing its output is a cost-amplifying loop (and
-    // a heartbeat `{notify:false}` carries no review value).
-    if (input.autonomous) {
-      return;
-    }
-    // Master autonomy kill switch: halts the entire self-improvement loop.
-    const autonomyEnabled = !(await this.isFeatureEnabled("autonomyV1Disabled"));
-    if (!autonomyEnabled) {
-      return;
-    }
-    // Eval-integrity / non-human / replay-scratch guard (mirror recordTurnCommitments).
-    const origin = (await this.storage.chatSessionMeta.get(input.sessionId))?.origin;
-    const evalIntegrityTurn = origin === "prompt_pack";
-    const humanSession =
-      origin !== "system" && origin !== "prompt_pack" && !(await this.isReplayScratchSession(input.sessionId));
-    if (evalIntegrityTurn || !humanSession) {
-      return;
-    }
-
-    const task = this.tryRunWithSharedHostWork("worker", "background-review", async () => {
-      // Counter mutation is part of the admitted unit: a rejected/deferred
-      // review must not consume its canonical cadence window.
-      if (!(await this.advanceBackgroundReviewCounter())) return undefined;
-      return this.backgroundReviewService.runBackgroundReview({
-        sessionId: input.sessionId,
-        sourceTurnId: input.turnId,
-        workspaceId: input.workspaceId,
-        userText: input.userText,
-        assistantText: input.assistantText,
-        autonomyEnabled,
-        evalIntegrityTurn,
-        humanSession,
-        turnSucceeded: true,
-      });
-    })
-      .then(async (result) => {
-        if (result?.ran && result.summaryMarker) {
-          await this.publishRealtime("self_improvement_review", "system", {
-            type: "background_review",
-            sessionId: input.sessionId,
-            workspaceId: input.workspaceId,
-            summaryMarker: result.summaryMarker,
-            memoryFactCount: result.memoryFacts.length,
-            skillProposed: result.skillProposed,
-            skillId: result.skillMutation?.skillId,
-          });
-        }
-      })
-      .catch((error) => {
-        log.warn("background review failed", {
-          sessionId: input.sessionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    this.registerBackgroundTask(task);
-  }
-
-  /**
-   * Increment the background-review turn counter; when it reaches the interval,
-   * reset it to 0 and return `true` (the review should run this turn). Otherwise
-   * persist the bumped counter and return `false`. Best-effort: a storage error
-   * never blocks or crashes the turn path (returns `false`).
-   */
-  private async advanceBackgroundReviewCounter(): Promise<boolean> {
-    try {
-      const current =
-        (await this.storage.systemSettings.get<number>(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY))?.value ?? 0;
-      const next = (typeof current === "number" && Number.isFinite(current) ? current : 0) + 1;
-      if (next >= BACKGROUND_REVIEW_TURN_INTERVAL) {
-        await this.storage.systemSettings.set(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY, 0);
-        return true;
-      }
-      await this.storage.systemSettings.set(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY, next);
-      return false;
-    } catch (error) {
-      log.warn("background review counter advance failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    }
+    if (this.closing || input.delegatedChild || input.autonomous) return;
+    const trace = await this.storage.chatTurnTraces.get(input.turnId);
+    if (trace?.sessionId !== input.sessionId || !trace.durable?.runId) return;
+    // Compatibility entry points may request reconciliation only. The durable
+    // post-commit owner alone advances cadence and admits queue source writes.
+    await this.durableRunService.reconcileGeneralChatPostCommit(trace.durable.runId);
   }
 
   public scheduleChatMemoryContextPrewarm(input: {
@@ -6054,6 +6142,7 @@ export class GatewayService {
   }
 
   public beginActiveChatTurnExecution(sessionId: string, turnId: string, operation: string): AbortController {
+    this.backgroundLearningQueueService?.notifyForegroundActivity();
     return this.chatTurnExecutionRegistry.beginActiveExecution(sessionId, turnId, operation);
   }
 
@@ -6549,10 +6638,27 @@ export class GatewayService {
     };
   }
 
+  private async readBackgroundModelWithoutProbe() {
+    return await resolveBackgroundJobModel({
+      resolvePreferredModel: async () => {
+        const runtime = this.llmService.getRuntimeConfig({ useCache: true });
+        const override = resolveUtilityModelOverride({
+          flagEnabled: await this.isFeatureEnabled("utilityModelRoutingV1Enabled"),
+          utilityProviderId: runtime.utilityProviderId,
+          utilityModel: runtime.utilityModel,
+          provider: runtime.providers.find((provider) => provider.providerId === runtime.utilityProviderId),
+        });
+        return override ?? this.getReadyLocalBackgroundModel();
+      },
+      ensureActiveProviderReadiness: async () => undefined,
+      getRuntimeConfig: () => this.llmService.getRuntimeConfig({ useCache: true }),
+    });
+  }
+
   /** Background jobs run on the ready active provider or an explicit utility override; `undefined` = skip. */
   private async getBackgroundJobModelDefaults(): Promise<{ providerId: string; model: string } | undefined> {
     return await resolveBackgroundJobModel({
-      getUtilityModelOverride: () => this.getUtilityModelOverride(),
+      resolvePreferredModel: async () => (await this.getUtilityModelOverride()) ?? this.getReadyLocalBackgroundModel(),
       ensureActiveProviderReadiness: async () => {
         try {
           await this.llmService.ensureProviderReadiness(
@@ -6572,6 +6678,19 @@ export class GatewayService {
       getRuntimeConfig: () =>
         this.llmService.getRuntimeConfig({ includeKeychainForActiveProvider: true, useCache: true }),
     });
+  }
+
+  private getReadyLocalBackgroundModel(): { providerId: string; model: string } | undefined {
+    const status = this.llamaCppRuntime.getStatus();
+    if (!status.healthy || !status.activeModelId) return undefined;
+    const runtime = this.llmService.getRuntimeConfig({ useCache: true });
+    const provider = runtime.providers.find(
+      (candidate) =>
+        candidate.providerId === "llamacpp" &&
+        isRouteLocalProvider(candidate) &&
+        candidate.baseUrl.replace(/\/+$/u, "") === status.baseUrl.replace(/\/+$/u, ""),
+    );
+    return provider ? { providerId: provider.providerId, model: status.activeModelId } : undefined;
   }
 
   private async getPromptJudgeModelDefaults(): Promise<{ providerId?: string; model?: string }> {
@@ -7547,6 +7666,9 @@ export class GatewayService {
   }
 
   public async withChatTurnWriteLease<T>(sessionId: string, operation: string, work: () => Promise<T>): Promise<T> {
+    // A durable Chat may wait for the worker before active execution begins.
+    // Release its shared local model slot at submission, before that wait.
+    this.backgroundLearningQueueService?.notifyForegroundActivity();
     return this.chatTurnExecutionRegistry.withWriteLease(sessionId, operation, work);
   }
 
@@ -7555,6 +7677,7 @@ export class GatewayService {
     operation: string,
     work: () => AsyncGenerator<ChatStreamChunk>,
   ): AsyncGenerator<ChatStreamChunk> {
+    this.backgroundLearningQueueService?.notifyForegroundActivity();
     yield* this.chatTurnExecutionRegistry.withWriteLeaseStream(sessionId, operation, work);
   }
 
@@ -7589,6 +7712,10 @@ export class GatewayService {
     );
   }
 
+  private async isNaturalMemoryReviewEnabled(): Promise<boolean> {
+    return this.config.assistant.memory.enabled && (await this.isFeatureEnabled("memoryLifecycleAdminV1Enabled"));
+  }
+
   public prepareAgentChatTurn(
     sessionId: string,
     input: ChatSendMessageRequest,
@@ -7612,7 +7739,10 @@ export class GatewayService {
       serverOnlyPosture?: chatTurnPrepService.SystemHeartbeatTurnPrepPosture;
     },
   ): Promise<chatTurnPrepService.PreparedAgentChatTurn> {
-    return chatTurnPrepService.prepareAgentChatTurn(this, sessionId, input, options);
+    return chatTurnPrepService.prepareAgentChatTurn(this, sessionId, input, {
+      ...options,
+      naturalMemoryReviewConfigured: this.config.assistant.memory.enabled,
+    });
   }
 
   public async assertTurnAdmissionWrite(admission: import("./chat-turn-types.js").ActiveTurnAdmission): Promise<void> {
@@ -7958,42 +8088,17 @@ export class GatewayService {
     );
   }
 
-  public resolveChatTurnEffectiveRoute(sessionId: string, request: ChatSendMessageRequest) {
-    const routeDecision = request.routeDecision;
-    const replayManualSelection = routeDecision?.selectionSource === "manual";
-    const replaySessionSelection = routeDecision?.selectionSource === "session";
-    const routePrefsOverride = replaySessionSelection
-      ? {
-          ...(request.prefsOverride ?? {}),
-          providerId: routeDecision?.requestedProviderId,
-          model: routeDecision?.requestedModel,
-        }
-      : request.prefsOverride;
-    return resolveChatRouteDescriptor(this, sessionId, {
-      action: "send",
-      content: request.content,
-      providerId: routeDecision
-        ? replayManualSelection
-          ? routeDecision.requestedProviderId
-          : undefined
-        : request.providerId,
-      model: routeDecision ? (replayManualSelection ? routeDecision.requestedModel : undefined) : request.model,
-      mode: request.mode,
-      webMode: request.webMode,
-      memoryMode: request.memoryMode,
-      thinkingLevel: request.thinkingLevel,
-      speedMode: request.speedMode,
-      subagentPolicy: request.subagentPolicy,
-      prefsOverride: routePrefsOverride,
-      permissionProfileId: request.permissionProfileId,
-      localOperatorOverrideId: request.localOperatorOverrideId,
-      policyRunId: request.policyRunId,
-      policyTaskId: request.policyTaskId,
-      fullWebAccess: request.fullWebAccess,
-      operatorId: request.operatorId,
-      authActorId: request.authActorId,
-      authActorSource: request.authActorSource,
-    });
+  public async resolveChatTurnEffectiveRoute(
+    sessionId: string,
+    request: ChatSendMessageRequest,
+    systemHeartbeat = false,
+  ) {
+    if (systemHeartbeat && !request.routeDecision) {
+      const model = await this.getBackgroundJobModelDefaults();
+      if (!model) throw new ConflictError({ message: "The heartbeat needs a ready background model." });
+      request = { ...request, ...model };
+    }
+    return resolveChatRouteDescriptor(this, sessionId, projectChatSendRoutingInput(request));
   }
 
   public async loadChatTurnCapabilityProfile(
@@ -8757,6 +8862,13 @@ export class GatewayService {
       getSessionIdleSeconds: async (sessionId) => await this.getSessionIdleSeconds(sessionId),
       hasRunningTurn: async (sessionId) => await this.hasRunningTurn(sessionId),
       claimAndEnqueueHeartbeat: (input) => this.heartbeatOccurrenceService.claimAndEnqueue(input),
+      canEnrollHeartbeat: (sessionId) =>
+        this.starterHeartbeat.armIfEligible(
+          sessionId,
+          async () =>
+            this.config.assistant.deploymentProfile !== "remote_hardened" &&
+            Boolean(await this.getBackgroundJobModelDefaults()),
+        ),
       isReplayScratchSession: async (sessionId) => await this.isReplayScratchSession(sessionId),
       getSession: async (sessionId) => await this.getSession(sessionId),
       normalizeWorkspaceId: (workspaceId) => this.normalizeWorkspaceId(workspaceId),
@@ -10335,127 +10447,17 @@ export class GatewayService {
     return existing;
   }
 
-  /**
-   * Prune a silent heartbeat turn from a human transcript (P1-F4 invisibility).
-   * Removes the seed user message + `{notify:false}` assistant message and the
-   * turn trace, reverting the active branch leaf to the pre-heartbeat leaf, in a
-   * single transaction (mirroring the undo path). Returns explicit recovery
-   * truth so retryable storage failures remain pending while an advanced branch
-   * becomes operator-visible manual reconciliation instead of being rewound.
-   */
   /** @internal */ public async cleanupSilentHeartbeatTurn(
     input: durableExecutionService.SilentHeartbeatCleanupRequest,
   ): Promise<durableExecutionService.SilentHeartbeatCleanupResult> {
-    let removed = false;
-    let resolution: durableExecutionService.SilentHeartbeatCleanupResult = { status: "already_completed" };
-    try {
-      const messageIds = [input.userMessageId, input.assistantMessageId].filter(
-        (id): id is string => typeof id === "string" && id.trim().length > 0,
-      );
-      await this.storage.runImmediateTransaction(async () => {
-        const activeLeafTurnId = (await this.storage.chatSessionBranchState.get(input.sessionId))?.activeLeafTurnId;
-        let hasMessages = false;
-        for (const messageId of messageIds) {
-          try {
-            await this.storage.chatMessages.get(messageId);
-            hasMessages = true;
-            break;
-          } catch (error) {
-            if (!(error instanceof NotFoundError)) {
-              throw error;
-            }
-          }
-        }
-        let hasTrace = true;
-        try {
-          await this.storage.chatTurnTraces.get(input.turnId);
-        } catch (error) {
-          if (error instanceof NotFoundError) {
-            hasTrace = false;
-          } else {
-            throw error;
-          }
-        }
-        if (!hasMessages && !hasTrace) {
-          return;
-        }
-        if (activeLeafTurnId !== input.turnId) {
-          resolution = {
-            status: "manual_reconciliation",
-            reason:
-              `Silent heartbeat ${input.turnId} was retained because the active leaf advanced to ` +
-              `${activeLeafTurnId ?? "none"}; automatic cleanup would corrupt newer branch truth.`,
-          };
-          return;
-        }
-        await this.storage.chatMessages.deleteByMessageIds(input.sessionId, messageIds);
-        await this.storage.chatTurnTraces.deleteByTurnIds(input.sessionId, [input.turnId]);
-        if (input.parentTurnId) {
-          const reverted = await this.storage.chatSessionBranchState.setActiveLeafIfCurrent(
-            input.sessionId,
-            input.turnId,
-            input.parentTurnId,
-            new Date().toISOString(),
-          );
-          if (!reverted) {
-            throw new Error(`Silent heartbeat ${input.turnId} lost active-leaf ownership during cleanup.`);
-          }
-        } else {
-          await this.storage.chatSessionBranchState.clear(input.sessionId);
-        }
-        removed = true;
-        resolution = { status: "completed" };
-      });
-    } catch (error) {
-      this.recordDevDiagnostic({
-        level: "warn",
-        category: "chat",
-        event: "chat.heartbeat.cleanup_failed",
-        message: "Failed to prune a silent heartbeat turn from the transcript.",
-        sessionId: input.sessionId,
-        turnId: input.turnId,
-        context: { error: error instanceof Error ? error.message : String(error) },
-      });
-      return {
-        status: "retryable_failure",
-        reason: error instanceof Error ? error.message : String(error),
-      };
-    }
-    if (!removed) {
-      return resolution;
-    }
-    try {
-      await this.publishRealtime(
-        "chat_thread_updated",
-        "chat",
-        {
-          type: "chat_thread_undone",
-          sessionId: input.sessionId,
-          removedTurnIds: [input.turnId],
-          ...(input.parentTurnId ? { activeLeafTurnId: input.parentTurnId } : {}),
-          reason: "silent_heartbeat",
-        },
-        {
-          eventClass: "operational_signal",
-          eventAuthority: "retained_stream",
-          links: {
-            sessionId: input.sessionId,
-            ...(input.parentTurnId ? { turnId: input.parentTurnId } : {}),
-          },
-        },
-      );
-    } catch (error) {
-      this.recordDevDiagnostic({
-        level: "warn",
-        category: "chat",
-        event: "chat.heartbeat.cleanup_projection_failed",
-        message: "Silent heartbeat cleanup committed, but its realtime projection failed.",
-        sessionId: input.sessionId,
-        turnId: input.turnId,
-        context: { error: error instanceof Error ? error.message : String(error) },
-      });
-    }
-    return { status: "completed" };
+    return await cleanupSilentHeartbeatTurn(
+      {
+        storage: this.storage,
+        recordDevDiagnostic: (diagnostic) => this.recordDevDiagnostic(diagnostic),
+        publishRealtime: (event, source, payload, options) => this.publishRealtime(event, source, payload, options),
+      },
+      input,
+    );
   }
 
   /** @internal */ public getCurrentRequestAttribution(): {
@@ -10793,8 +10795,32 @@ export class GatewayService {
     request: ChatCompletionRequest;
     memoryContext?: MemoryContextPack;
     memoryContextPlacement?: MemoryContextPlacement;
+    usageBinding?: { operationId: string; dispatchGeneration: string };
   }): Promise<void> {
-    await persistContextManifestForCompletionRequest({ contextManifests: this.storage.contextManifests }, input);
+    await persistContextManifestForCompletionRequest(
+      this.storage.contextManifests,
+      {
+        resolveStandingMemoryContext: (request) =>
+          resolveChatLearningMemoryManifest(
+            {
+              storage: this.storage,
+              isEnabled: () => this.isNaturalMemoryReviewEnabled(),
+              composeContext: (workspaceId) => this.operatorProfileService.composeFrozenProfileContext(workspaceId),
+            },
+            request,
+          ),
+        resolveSkillContext: (request) =>
+          resolveChatLearningSkillManifest(
+            {
+              storage: this.storage,
+              renderAdmitted: (refs, workspaceId) => this.resolveAdmittedSkillInstructions(refs, workspaceId),
+              renderProfile: (profile) => this.resolveActivatedSkillInstructions(profile),
+            },
+            request,
+          ),
+      },
+      input,
+    );
   }
 
   public async listMemoryItems(
@@ -10811,9 +10837,11 @@ export class GatewayService {
 
   public async getSettings(): Promise<RuntimeSettings> {
     this.configGenerationService.assertRuntimeReadsReady();
-    return await settingsAuthService.getSettings(
+    const settings = await settingsAuthService.getSettings(
       createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
     );
+    const automaticBackground = await this.backgroundLearningReadiness?.readSettings().catch(() => undefined);
+    return automaticBackground ? { ...settings, automaticBackground } : settings;
   }
 
   public readSettingsRevision(): number {
@@ -10866,11 +10894,14 @@ export class GatewayService {
    * first use), then returns the cached, byte-stable-per-revision digest. Cheap:
    * no model call on the hot path. Best-effort — a failure must not break a turn.
    */
-  public async composeFrozenOperatorProfileDigest(workspaceId: string): Promise<string | undefined> {
+  public async composeFrozenOperatorProfileDigest(
+    workspaceId: string,
+    options?: { includeLearnings?: boolean },
+  ): Promise<string | undefined> {
     try {
       const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
       await this.operatorProfileService.ensureOperatorProfile(normalizedWorkspaceId);
-      return await this.operatorProfileService.composeFrozenProfileDigest(normalizedWorkspaceId);
+      return await this.operatorProfileService.composeFrozenProfileDigest(normalizedWorkspaceId, options);
     } catch {
       return undefined;
     }
@@ -10891,11 +10922,18 @@ export class GatewayService {
     };
 
     let ownerRollback: { rollback(): Promise<void> } | undefined;
+    let previousFeatureOverrides: StoredFeatureFlags | undefined;
     await this.configGenerationService.commit({
       expectedRevision: input.expectedRevision,
       requireExpectedRevision: true,
       previousRuntime,
       buildCandidate: async () => {
+        if (this.config.featureSources) {
+          // Capture the actual DB projection inside the generation fence, including external legacy writes.
+          this.featureFlagsCache = undefined;
+          await this.readFeatureFlags();
+          previousFeatureOverrides = structuredClone(this.config.featureSources.canonicalStore ?? {});
+        }
         const candidate = await settingsAuthService.buildSettingsCandidate(deps, input);
         if (candidate.input.llamaCpp) {
           // This executes before staging or a durable transaction decision.
@@ -10912,6 +10950,7 @@ export class GatewayService {
         next.input.auth ? authCredentials.prepareGatewayTokenForRestart(next.config, previous.config) : undefined,
       captureRuntimeOwnerRecoveryIntent: async (candidate) => ({
         version: 1,
+        ...(previousFeatureOverrides ? { previousFeatureOverrides } : {}),
         ...(candidate.input.mesh
           ? {
               meshArtifact: await this.storage.mesh.snapshotRuntimeArtifacts(
@@ -10947,126 +10986,20 @@ export class GatewayService {
     registerRollback: (receipt: { rollback(): Promise<void> }) => void,
     reason: "settings_update" | "rollback" = "settings_update",
   ): Promise<{ rollback(): Promise<void> }> {
-    const input = candidate.input;
-    const compensations: Array<() => void | Promise<void>> = [];
-    const previousConfig = structuredClone(this.config);
-    const previousFeatures = structuredClone(await this.readFeatureFlags());
-    let rolledBack = false;
-    const rollback = async (): Promise<void> => {
-      if (rolledBack) {
-        return;
-      }
-      rolledBack = true;
-      const compensationErrors: unknown[] = [];
-      for (const compensate of [...compensations].reverse()) {
-        try {
-          await compensate();
-        } catch (compensationError) {
-          compensationErrors.push(compensationError);
-        }
-      }
-      if (compensationErrors.length > 0) {
-        throw new AggregateError(compensationErrors, "One or more settings owner reverse compensations failed.");
-      }
-    };
-    const rollbackReceipt = { rollback };
-    // Registration precedes every owner effect. ConfigGenerationService invokes
-    // this receipt only after its monotonic rollback canonical and committed
-    // recovery marker are durable.
-    registerRollback(rollbackReceipt);
-
-    // Process transitions can fail after changing desired state. Run them
-    // first and register semantic compensation before each attempt.
-    if (input.llamaCpp) {
-      const previousLlamaConfig = this.llamaCppRuntime.getConfigSnapshot();
-      const previousLlamaLifecycle = this.llamaCppRuntime.getLifecycleSnapshot();
-      const candidateLlamaEnabled = candidate.config.assistant.llamaCpp.enabled;
-      const candidateLlamaLifecycle = {
-        persistentDemand: {
-          manual: candidateLlamaEnabled && previousLlamaLifecycle.persistentDemand.manual,
-          api: candidateLlamaEnabled && previousLlamaLifecycle.persistentDemand.api,
-          autostart: candidateLlamaEnabled && candidate.config.assistant.llamaCpp.autoStart,
-        },
-        ...(this.llamaCppRuntime.assessConfigTransition(candidate.config.assistant.llamaCpp).identityChanged
-          ? {}
-          : previousLlamaLifecycle.idleShutdownRemainingMs === undefined
-            ? {}
-            : { idleShutdownRemainingMs: previousLlamaLifecycle.idleShutdownRemainingMs }),
-      };
-      compensations.push(async () => {
-        await transitionLlamaCppRuntimeConfig(
-          this.llamaCppRuntime,
-          previousLlamaConfig,
-          previousLlamaLifecycle,
-          "rollback",
-        );
-      });
-      await transitionLlamaCppRuntimeConfig(
-        this.llamaCppRuntime,
-        candidate.config.assistant.llamaCpp,
-        candidateLlamaLifecycle,
-        reason,
-      );
-    }
-
-    if (input.npu) {
-      const previousNpuConfig = this.npuSidecar.getConfigSnapshot();
-      compensations.push(async () => {
-        this.npuSidecar.updateConfig(previousNpuConfig);
-        await this.npuSidecar.stop("rollback");
-      });
-      this.npuSidecar.updateConfig(candidate.config.assistant.npu);
-      await this.npuSidecar.stop(reason);
-    }
-
-    if (input.mesh) {
-      const meshReplacement = await this.meshService.replaceOptionsReversibly({
-        enabled: candidate.config.assistant.mesh.enabled,
-        mode: candidate.config.assistant.mesh.mode,
-        localNodeId: candidate.config.assistant.mesh.nodeId,
-        localNodeLabel: candidate.config.assistant.mesh.label,
-        advertiseAddress: candidate.config.assistant.mesh.advertiseAddress,
-        requireMtls: candidate.config.assistant.mesh.security.requireMtls,
-        tailnetEnabled: candidate.config.assistant.mesh.security.tailnet.enabled,
-        joinToken: process.env[candidate.config.assistant.mesh.security.joinTokenEnv],
-        defaultLeaseTtlSeconds: candidate.config.assistant.mesh.leases.ttlSeconds,
-      });
-      compensations.push(() => meshReplacement.rollback());
-    }
-
-    if (input.llm || input.llamaCpp) {
-      const previousLlm = this.llmService.snapshotRuntimeConfigForPersistence();
-      compensations.push(() => {
-        this.llmService.replaceRuntimeConfig(previousLlm);
-      });
-      this.llmService.replaceRuntimeConfig(candidate.llm);
-    }
-    if (input.toolApprovalMode || input.networkAllowlist) {
-      const previousAllowlist = [...previousConfig.toolPolicy.sandbox.networkAllowlist];
-      compensations.push(() => this.llmService.updateNetworkAllowlist(previousAllowlist, { enforce: true }));
-      this.llmService.updateNetworkAllowlist(candidate.config.toolPolicy.sandbox.networkAllowlist, { enforce: true });
-    }
-
-    compensations.push(() => {
-      replaceMutableConfigValue(this.config.assistant, previousConfig.assistant);
-      replaceMutableConfigValue(this.config.toolPolicy, previousConfig.toolPolicy);
-      replaceMutableConfigValue(this.config.budgets, previousConfig.budgets);
-      replaceMutableConfigValue(this.config.llm, previousConfig.llm);
-    });
-    replaceMutableConfigValue(this.config.assistant, candidate.config.assistant);
-    replaceMutableConfigValue(this.config.toolPolicy, candidate.config.toolPolicy);
-    replaceMutableConfigValue(this.config.budgets, candidate.config.budgets);
-    replaceMutableConfigValue(this.config.llm, candidate.llm);
-
-    // Feature publication is last because it is durable and can wake parked
-    // autonomous runs. No later owner step is allowed to fail after it.
-    if (input.features) {
-      compensations.push(async () => {
-        await this.updateFeatureFlags(previousFeatures, { resumeParkedRuns: false });
-      });
-      await this.updateFeatureFlags(candidate.features, { resumeParkedRuns: false });
-    }
-    return rollbackReceipt;
+    return await applySettingsRuntimeCandidate(
+      {
+        config: this.config,
+        llamaCppRuntime: this.llamaCppRuntime,
+        npuSidecar: this.npuSidecar,
+        meshService: this.meshService,
+        llmService: this.llmService,
+        readFeatureFlags: () => this.readFeatureFlags(),
+        updateFeatureFlags: (patch, options) => this.updateFeatureFlags(patch, options),
+      },
+      candidate,
+      registerRollback,
+      reason,
+    );
   }
 
   /** @internal */ public assertDeploymentProfileUpdate(input: {
@@ -11671,7 +11604,38 @@ export class GatewayService {
     request: ChatCompletionRequest,
     attribution: ModelUsageAttributionContext = {},
   ): Promise<ChatCompletionResponse> {
-    return llmCompletionService.createChatCompletion(this, request, attribution);
+    const complete = () => llmCompletionService.createChatCompletion(this, request, attribution);
+    if (
+      attribution.utilityKind === "background_memory_extraction" ||
+      attribution.utilityKind === "background_skill_suggestion" ||
+      attribution.utilityKind === "memory_candidate_consolidation"
+    ) {
+      return await this.automaticBackgroundBudget.run(complete, async () => {
+        const flags = await this.readFeatureFlags();
+        let allowed = !flags.autonomyV1Disabled;
+        if (attribution.utilityKind === "memory_candidate_consolidation") {
+          allowed =
+            allowed &&
+            Boolean(
+              flags.memoryConsolidationV1Enabled &&
+              flags.memoryLifecycleAdminV1Enabled &&
+              this.config.assistant.memory.enabled,
+            );
+        } else if (attribution.sessionId) {
+          const destination = await this.backgroundLearningReadiness.readDestinations({
+            sessionId: attribution.sessionId,
+          });
+          allowed =
+            allowed &&
+            (attribution.utilityKind === "background_skill_suggestion" ? destination.skill : destination.memory);
+        } else {
+          allowed = false;
+        }
+        if (!allowed)
+          throw new ConflictError({ message: "The automatic learning destination changed before model dispatch." });
+      });
+    }
+    return await complete();
   }
 
   public async *createChatCompletionStream(
@@ -11891,7 +11855,7 @@ export class GatewayService {
 
   public async updateFeatureFlags(
     patch: Partial<RuntimeSettings["features"]>,
-    options: { resumeParkedRuns?: boolean } = {},
+    options: { resumeParkedRuns?: boolean; replaceStore?: StoredFeatureFlags } = {},
   ): Promise<RuntimeSettings["features"]> {
     if (patch.durableKernelV1Enabled === false) {
       throw new ValidationError({
@@ -11899,9 +11863,20 @@ export class GatewayService {
       });
     }
     const current = await this.readFeatureFlags();
-    const next = buildUpdatedFeatureFlags(current, patch);
+    const sources = this.config.featureSources;
+    const stored =
+      options.replaceStore ??
+      updateFeaturePreferences(
+        sources ?? { profile: {}, environment: {} },
+        readStoredFeatureFlags(
+          (await this.storage.systemSettings.get<StoredFeatureFlags>(FEATURE_FLAGS_SETTING_KEY))?.value,
+        ),
+        patch,
+      );
+    const next = resolveGatewayFeatureFlags(stored, sources ? configurationFeatureFlags(sources) : current);
     const autonomyKillSwitchDisengaged = didDisengageAutonomyKillSwitch(current, next);
-    await this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, next);
+    await this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, stored);
+    if (sources) sources.canonicalStore = stored;
     this.config.assistant.features = { ...next };
     // Prime the read cache so the new flags are visible immediately (Finding 6);
     // this is the sole writer, so no invalidation race with the TTL path.
@@ -11912,13 +11887,7 @@ export class GatewayService {
       // nothing else emits; without an explicit resume they stay "waiting" forever.
       // Best-effort — the flag write above already succeeded and must not be undone
       // by a resume failure.
-      try {
-        await this.durableRunService?.resumeRunsWaitingForAutonomyKillSwitch();
-      } catch (error) {
-        log.warn("Failed to resume autonomy-kill-switch-parked durable runs", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      await this.resumeRunsAfterAutonomyKillSwitchDisengaged();
     }
     return next;
   }
@@ -11947,8 +11916,27 @@ export class GatewayService {
     // stale system_settings projection, owns the exact flag set. Replace the
     // projection without waking parked autonomy runs; deferred startup clears
     // the durable decision before any scheduler/worker is started.
-    const canonicalFeatures = structuredClone(this.config.assistant.features);
-    await this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, canonicalFeatures);
+    const sources = this.config.featureSources;
+    const rollback = this.configGenerationService.getRollbackRuntimeOwnerRecoveryIntent?.();
+    const intent = rollback ?? this.configGenerationService.getRuntimeOwnerRecoveryIntent?.();
+    // A failed decision precedes owner effects. An unrelated legacy generation can also have
+    // no override snapshot. In both cases the DB still holds its exact authoritative projection.
+    const retained = intent?.preserveFeatureOverrides
+      ? ((await this.storage.systemSettings.get<StoredFeatureFlags>(FEATURE_FLAGS_SETTING_KEY))?.value ?? {})
+      : undefined;
+    const stored = readStoredFeatureFlags(
+      rollback?.previousFeatureOverrides ??
+        retained ??
+        sources?.canonicalStore ??
+        sources?.profile ??
+        this.config.assistant.features,
+    );
+    const canonicalFeatures = resolveGatewayFeatureFlags(
+      stored,
+      sources ? configurationFeatureFlags(sources) : this.config.assistant.features,
+    );
+    await this.storage.systemSettings.set(FEATURE_FLAGS_SETTING_KEY, stored);
+    if (sources) sources.canonicalStore = stored;
     this.config.assistant.features = canonicalFeatures;
     this.featureFlagsCache = canonicalFeatures;
     this.featureFlagsCacheAtMs = Date.now();
@@ -11959,10 +11947,12 @@ export class GatewayService {
     if (this.featureFlagsCache && nowMs - this.featureFlagsCacheAtMs < FEATURE_FLAGS_CACHE_TTL_MS) {
       return this.featureFlagsCache;
     }
-    const stored = (
-      await this.storage.systemSettings.get<Partial<RuntimeSettings["features"]>>(FEATURE_FLAGS_SETTING_KEY)
-    )?.value;
-    const fromConfig = this.config.assistant.features;
+    const stored = readStoredFeatureFlags(
+      (await this.storage.systemSettings.get<StoredFeatureFlags>(FEATURE_FLAGS_SETTING_KEY))?.value,
+    );
+    const sources = this.config.featureSources;
+    if (sources && !this.configGenerationService.isRuntimeOwnerReconciliationPending()) sources.canonicalStore = stored;
+    const fromConfig = sources ? configurationFeatureFlags(sources) : this.config.assistant.features;
     const resolved = resolveGatewayFeatureFlags(stored, fromConfig);
     this.featureFlagsCache = resolved;
     this.featureFlagsCacheAtMs = nowMs;
@@ -12225,6 +12215,7 @@ export class GatewayService {
 
   public async close(): Promise<void> {
     this.closing = true;
+    this.backgroundLearningQueueService.close();
     this.mcpStdioSessions.close();
     await this.runtimeReleaseTrustService.close();
     this.chatProactiveService.stopScheduler();
@@ -12247,6 +12238,7 @@ export class GatewayService {
     await this.npuSidecar.close();
     await this.llamaCppRuntime.close();
     await this.llmService.close();
+    await this.memoryCorpusSemanticService.close();
     await this.storage.close();
   }
 
@@ -12313,14 +12305,29 @@ export class GatewayService {
       return undefined;
     }
     const workspaceRoot = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir);
-    const projectPath = fsSync.realpathSync(path.resolve(workspaceRoot, project.workspacePath));
-    const sourceRepoRoot = readRealGitTopLevel(projectPath);
-    const sourceScope = path.relative(sourceRepoRoot, projectPath).replaceAll("\\", "/") || ".";
+    const configuredProjectPath = path.resolve(workspaceRoot, project.workspacePath);
     const workbench = await this.storage.chatSessionWorkbench.get(parentSessionId);
     const worktreePath =
       workbench?.worktreeStatus === "ready" && workbench.worktreePath && workbench.worktreePath !== "[outside-root]"
         ? path.resolve(this.config.rootDir, workbench.worktreePath.replace(/^\.\//, ""))
         : undefined;
+    const optionalScope = !current && !worktreePath;
+    let projectPath: string;
+    try {
+      projectPath = fsSync.realpathSync(configuredProjectPath);
+    } catch (error) {
+      if (!optionalScope || (error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw error;
+      }
+      assertWritePathInJail(configuredProjectPath, this.config.toolPolicy.sandbox.writeJailRoots);
+      return undefined;
+    }
+    const sourceRepoRoot = readRealGitTopLevel(projectPath, optionalScope);
+    if (!sourceRepoRoot) {
+      assertWritePathInJail(projectPath, this.config.toolPolicy.sandbox.writeJailRoots);
+      return undefined;
+    }
+    const sourceScope = path.relative(sourceRepoRoot, projectPath).replaceAll("\\", "/") || ".";
     const rootPath = fsSync.realpathSync(worktreePath ?? sourceRepoRoot);
     const scopedTarget = sourceScope === "." ? rootPath : path.resolve(rootPath, sourceScope);
     assertWritePathInJail(rootPath, this.config.toolPolicy.sandbox.writeJailRoots);
@@ -12936,6 +12943,7 @@ export class GatewayService {
     return {
       storage: this.storage,
       llmService: this.llmService,
+      resolveContinuityLinks: (sessionId, turnIds) => collectChatContinuityLinks(this.storage, sessionId, turnIds),
       readTranscriptOrEmpty: async (sessionId) => await this.readTranscriptOrEmpty(sessionId),
       loadChatTurnSessionState: async (sessionId) => await this.loadChatTurnSessionState(sessionId),
       buildUserMessageContent: (message, supportsVision, codeModeRequestEligible) =>
@@ -13103,14 +13111,4 @@ function changePlanApprovalLinkage(origin: ChangePlanRecord["origin"], actionTyp
     ...(origin.actorId ? { operatorId: origin.actorId } : {}),
     actionType,
   };
-}
-
-/** Resolves the real path of the Git repository containing `cwd`; throws when `cwd` is not inside one. */
-function readRealGitTopLevel(cwd: string): string {
-  const topLevel = execFileSync("git", ["rev-parse", "--show-toplevel"], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  return fsSync.realpathSync(topLevel.trim());
 }

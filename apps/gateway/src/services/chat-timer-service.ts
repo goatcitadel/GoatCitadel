@@ -1,11 +1,15 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   CHAT_TIMER_MAX_ACTIVE_PER_SESSION,
   CHAT_TIMER_MAX_ACTIVE_PER_WORKSPACE,
   CHAT_TIMER_MAX_HORIZON_MS,
   CHAT_TIMER_MIN_DELAY_MS,
+  ConflictError,
   NotFoundError,
   ValidationError,
+  zonedDateTimeToIso,
+  type ChatReminderPreview,
+  type ToolInvokeRequest,
   type ChatMessageRecord,
   type ChatTimerDeliveryStatus,
   type ChatTimerRecord,
@@ -14,6 +18,8 @@ import {
   type RealtimeEvent,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+
+import { buildCodeModeRequestTurnShape, isCodeModeRequestTurnShapeEligible } from "./code-mode-request-eligibility.js";
 
 const TIMER_MESSAGE_MAX_CHARS = 4_000;
 const TIMER_CLAIM_LEASE_MS = 30_000;
@@ -45,17 +51,104 @@ export interface ChatTimerServiceDependencies {
 export class ChatTimerService {
   public constructor(private readonly deps: ChatTimerServiceDependencies) {}
 
+  public async preview(request: ToolInvokeRequest): Promise<ChatReminderPreview> {
+    const { sessionId, turnId, args } = request;
+    if (!turnId || request.surface !== "chat") throw invalid("Review a reminder from an interactive Chat turn.");
+    const workspaceId = await this.requireSession(sessionId);
+    const trace = await this.deps.storage.chatTurnTraces.get(turnId);
+    if (request.workspaceId !== workspaceId || trace.sessionId !== sessionId)
+      throw invalid("Reminder Chat scope changed.");
+    const message = await this.deps.storage.chatMessages.get(trace.userMessageId);
+    const interactive = isCodeModeRequestTurnShapeEligible(
+      buildCodeModeRequestTurnShape({
+        mode: trace.mode,
+        parentDelegationStepId: message?.parentDelegationStepId,
+        permissionProfileId: request.permissionProfileId ?? request.policyContext?.permissionProfileId,
+        policyContext: request.policyContext,
+      }),
+    );
+    if (
+      !interactive ||
+      message?.sessionId !== sessionId ||
+      message.sourceAuthority !== "operator" ||
+      message.role !== "user"
+    ) {
+      throw invalid("Review a reminder from an interactive Chat turn.");
+    }
+    if (
+      Object.keys(args).some((key) => !["localDueAt", "timezone", "message"].includes(key)) ||
+      typeof args.localDueAt !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/u.test(args.localDueAt) ||
+      typeof args.timezone !== "string" ||
+      !args.timezone.trim() ||
+      args.timezone.length > 128 ||
+      (args.message !== undefined &&
+        (typeof args.message !== "string" || args.message.length > TIMER_MESSAGE_MAX_CHARS))
+    ) {
+      throw invalid("Choose a local date and time, timezone, and an optional reminder message.");
+    }
+    const timezone = args.timezone.trim();
+    const dueAt = zonedDateTimeToIso(args.localDueAt, timezone);
+    validateDueAt(dueAt, await this.timerClock());
+    return {
+      localDueAt: args.localDueAt,
+      timezone,
+      message: typeof args.message === "string" ? args.message.trim() : "",
+    };
+  }
+
   public async list(sessionId: string): Promise<ChatTimerRecord[]> {
     await this.requireSession(sessionId);
     return await this.deps.storage.chatTimers.listBySession(sessionId);
   }
 
-  public async create(sessionId: string, input: CreateChatTimerInput, createdBy: string): Promise<ChatTimerRecord> {
+  public async create(
+    sessionId: string,
+    input: CreateChatTimerInput,
+    createdBy: string,
+    attempt?: { key: string; replayOnly: boolean },
+  ): Promise<ChatTimerRecord> {
     const workspaceId = await this.requireSession(sessionId);
-    const normalized = validateCreateInput(input, await this.deps.storage.chatTimers.databaseNow());
+    const actor = createdBy.trim() || "operator";
+    const timerId = attempt
+      ? createHash("sha256")
+          .update(JSON.stringify(["chat-timer", workspaceId, sessionId, actor, attempt.key]))
+          .digest("hex")
+      : randomUUID();
+    if (attempt) {
+      // A transport retry can arrive after the countdown fired or its destination changed.
+      // Recover the original receipt before applying new-timer readiness or time bounds.
+      try {
+        const saved = await this.requireScopedTimer(timerId, sessionId, workspaceId);
+        if (
+          saved.createdBy !== actor ||
+          Date.parse(saved.dueAt) !== Date.parse(input.dueAt) ||
+          saved.timezone !== input.timezone.trim() ||
+          saved.message !== input.message.trim() ||
+          saved.notificationRuleId !==
+            (input.notificationRuleId === null ? null : input.notificationRuleId?.trim() || undefined) ||
+          saved.cancelOnNextReply !== Boolean(input.cancelOnNextReply)
+        ) {
+          throw new ConflictError({ message: "The saved timer differs from this confirmation." });
+        }
+        return saved;
+      } catch (error) {
+        if (!(error instanceof NotFoundError) || attempt.replayOnly) throw error;
+      }
+    }
+    const normalized = validateCreateInput(input, await this.timerClock());
     if (normalized.notificationRuleId) {
       const rule = await this.deps.storage.notificationRouting.getRule(normalized.notificationRuleId);
-      if (rule.workspaceId !== workspaceId || rule.lifecycleState !== "active") {
+      const activeTargets = (await this.deps.storage.notificationRouting.listTargets(workspaceId)).filter(
+        (target) => target.lifecycleState === "active",
+      );
+      if (
+        rule.workspaceId !== workspaceId ||
+        rule.lifecycleState !== "active" ||
+        !rule.eventTypes.includes("timer.due") ||
+        !rule.targetIds.length ||
+        !rule.targetIds.every((id) => activeTargets.some((target) => target.targetId === id))
+      ) {
         throw new NotFoundError({ entity: "Notification rule", id: normalized.notificationRuleId });
       }
     }
@@ -68,17 +161,23 @@ export class ChatTimerService {
       throw invalid("This workspace already has the maximum of 100 active timers.");
     }
     const timer = await this.deps.storage.chatTimers.create({
-      timerId: randomUUID(),
+      timerId,
       workspaceId,
       sessionId,
       dueAt: normalized.dueAt,
       timezone: normalized.timezone,
       message: normalized.message,
-      ...(normalized.notificationRuleId ? { notificationRuleId: normalized.notificationRuleId } : {}),
+      notificationRuleId: normalized.notificationRuleId,
       cancelOnNextReply: normalized.cancelOnNextReply ?? false,
-      createdBy: createdBy.trim() || "operator",
+      createdBy: actor,
     });
-    await this.publishChanged(timer, "chat_timer_created");
+    try {
+      await this.publishChanged(timer, "chat_timer_created");
+    } catch (cause) {
+      throw Object.assign(new Error("Timer saved. Refresh session timers to see it.", { cause }), {
+        mutationCommitted: true,
+      });
+    }
     return timer;
   }
 
@@ -94,11 +193,10 @@ export class ChatTimerService {
     await this.requireSession(sessionId);
     const count = await this.deps.storage.chatTimers.cancelOnNextReply(sessionId, messageId);
     if (count > 0) {
-      await this.deps.publishRealtime(
+      await this.publishTimerSignal(
         "chat_timer_changed",
-        "chat.timer",
         { type: "chat_timers_cancelled_on_reply", sessionId, messageId, count },
-        { eventClass: "operational_signal", eventAuthority: "retained_stream", links: { sessionId } },
+        { sessionId },
       );
     }
     return count;
@@ -130,7 +228,7 @@ export class ChatTimerService {
   private async fireClaimedTimer(timer: ChatTimerRecord): Promise<void> {
     const noticeMessageId = `timer-notice-${timer.timerId}`;
     const eventId = `timer-due-${timer.timerId}`;
-    const now = await this.deps.storage.chatTimers.databaseNow();
+    const now = await this.timerClock();
     const notice: ChatMessageRecord = {
       messageId: noticeMessageId,
       sessionId: timer.sessionId,
@@ -143,31 +241,31 @@ export class ChatTimerService {
     };
     await this.deps.storage.chatMessages.upsert(notice, now);
 
+    const event = {
+      eventId,
+      eventType: "timer.due" as const,
+      sessionId: timer.sessionId,
+      title: "Chat timer due",
+      message: timer.message,
+      source: "chat.timer" as const,
+    };
+    const retainEvent = () =>
+      this.deps.storage.notificationRouting.createEvent({ ...event, workspaceId: timer.workspaceId, createdAt: now });
     const deliveryStatus: ChatTimerDeliveryStatus = await (async () => {
+      if (timer.notificationRuleId === null) {
+        await retainEvent();
+        return "no_targets";
+      }
       try {
         const result = await this.deps.dispatchNotificationEvent(timer.workspaceId, {
-          eventId,
-          eventType: "timer.due",
-          sessionId: timer.sessionId,
-          title: "Chat timer due",
-          message: timer.message,
-          source: "chat.timer",
+          ...event,
           ...(timer.notificationRuleId ? { ruleId: timer.notificationRuleId } : {}),
         });
         return result.status;
       } catch {
         // Preserve the canonical attention event even when the delivery worker
         // fails before it can settle a target. createEvent is idempotent by id.
-        await this.deps.storage.notificationRouting.createEvent({
-          eventId,
-          workspaceId: timer.workspaceId,
-          eventType: "timer.due",
-          sessionId: timer.sessionId,
-          title: "Chat timer due",
-          message: timer.message,
-          source: "chat.timer",
-          createdAt: now,
-        });
+        await retainEvent();
         return "failed";
       }
     })();
@@ -178,16 +276,15 @@ export class ChatTimerService {
       notificationDeliveryStatus: deliveryStatus,
     });
     await this.publishChanged(fired, "chat_timer_fired");
-    await this.deps.publishRealtime(
+    await this.publishTimerSignal(
       "chat_thread_updated",
-      "chat.timer",
       { type: "chat_timer_due", sessionId: timer.sessionId, timerId: timer.timerId, noticeMessageId },
-      {
-        eventClass: "operational_signal",
-        eventAuthority: "retained_stream",
-        links: { workspaceId: timer.workspaceId, sessionId: timer.sessionId },
-      },
+      { workspaceId: timer.workspaceId, sessionId: timer.sessionId },
     );
+  }
+
+  private timerClock(): Promise<string> {
+    return this.deps.storage.chatTimers.databaseNow();
   }
 
   private async requireSession(sessionId: string): Promise<string> {
@@ -205,16 +302,23 @@ export class ChatTimerService {
   }
 
   private async publishChanged(timer: ChatTimerRecord, type: string): Promise<void> {
-    await this.deps.publishRealtime(
+    await this.publishTimerSignal(
       "chat_timer_changed",
-      "chat.timer",
       { type, timerId: timer.timerId, sessionId: timer.sessionId, status: timer.status, revision: timer.revision },
-      {
-        eventClass: "operational_signal",
-        eventAuthority: "retained_stream",
-        links: { workspaceId: timer.workspaceId, sessionId: timer.sessionId },
-      },
+      { workspaceId: timer.workspaceId, sessionId: timer.sessionId },
     );
+  }
+
+  private async publishTimerSignal(
+    eventType: "chat_timer_changed" | "chat_thread_updated",
+    payload: Record<string, unknown>,
+    links: { sessionId: string; workspaceId?: string },
+  ): Promise<void> {
+    await this.deps.publishRealtime(eventType, "chat.timer", payload, {
+      eventClass: "operational_signal",
+      eventAuthority: "retained_stream",
+      links,
+    });
   }
 }
 
@@ -222,14 +326,10 @@ function validateCreateInput(
   input: CreateChatTimerInput,
   nowIso: string,
 ): CreateChatTimerInput & { cancelOnNextReply: boolean } {
-  const dueMs = Date.parse(input.dueAt);
-  const nowMs = Date.parse(nowIso);
-  if (!Number.isFinite(dueMs)) throw invalid("Timer dueAt must be a valid ISO timestamp.");
-  if (dueMs - nowMs < CHAT_TIMER_MIN_DELAY_MS) throw invalid("Timer delay must be at least 5 seconds.");
-  if (dueMs - nowMs > CHAT_TIMER_MAX_HORIZON_MS) throw invalid("Timer horizon cannot exceed one year.");
+  const dueMs = validateDueAt(input.dueAt, nowIso);
   const timezone = input.timezone.trim();
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date(nowMs));
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone });
   } catch {
     throw invalid("Timer timezone must be a valid IANA timezone.");
   }
@@ -241,9 +341,18 @@ function validateCreateInput(
     dueAt: new Date(dueMs).toISOString(),
     timezone,
     message,
-    ...(input.notificationRuleId?.trim() ? { notificationRuleId: input.notificationRuleId.trim() } : {}),
+    notificationRuleId: input.notificationRuleId === null ? null : input.notificationRuleId?.trim() || undefined,
     cancelOnNextReply: input.cancelOnNextReply === true,
   };
+}
+
+function validateDueAt(dueAt: string, nowIso: string): number {
+  const dueMs = Date.parse(dueAt);
+  const delay = dueMs - Date.parse(nowIso);
+  if (!Number.isFinite(dueMs)) throw invalid("Timer dueAt must be a valid ISO timestamp.");
+  if (delay < CHAT_TIMER_MIN_DELAY_MS) throw invalid("Timer delay must be at least 5 seconds.");
+  if (delay > CHAT_TIMER_MAX_HORIZON_MS) throw invalid("Timer horizon cannot exceed one year.");
+  return dueMs;
 }
 
 function invalid(message: string): ValidationError {

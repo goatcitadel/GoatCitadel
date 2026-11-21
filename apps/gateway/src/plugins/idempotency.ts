@@ -86,6 +86,7 @@ const STREAMED_UPLOAD_QUERY_FIELDS: Readonly<Record<string, readonly string[]>> 
   "/api/v1/chat/attachments": ["sessionId", "projectId", "fileName", "mimeType"],
 };
 const CANONICAL_REPLAY_ROUTES = new Set([
+  "/api/v1/chat/sessions/:sessionId/timers",
   SECURE_CONFIGURATION_ROUTE,
   CONNECTOR_INSTALL_ROUTE,
   CAPABILITY_PLUGIN_INSPECTIONS_ROUTE,

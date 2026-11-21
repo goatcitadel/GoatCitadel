@@ -11,6 +11,8 @@ export interface LearnedMemoryItemRecord {
   redacted: boolean;
   createdAt: string;
   updatedAt: string;
+  claim?: MemoryClaim;
+  sourceHash?: string;
 }
 
 export interface LearnedMemoryConflictRecord {
@@ -32,3 +34,4 @@ export interface LearnedMemoryUpdateInput {
   confidence?: number;
   resolutionNote?: string;
 }
+import type { MemoryClaim } from "./memory-claims.js";

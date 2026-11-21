@@ -1,6 +1,6 @@
 import type { CronJobRecord } from "@goatcitadel/contracts";
 
-type ComputeNextRunAt = (schedule: string, from: Date, endAt?: string) => string | undefined;
+type ComputeNextRunAt = (job: CronJobRecord, from: Date) => string | undefined;
 
 /**
  * An enabled job the scheduler has not run yet has no recorded next run. The list works one out from the schedule with
@@ -8,8 +8,16 @@ type ComputeNextRunAt = (schedule: string, from: Date, endAt?: string) => string
  * Read-only: nothing is stored. The rule is passed in because it lives in the cron service that calls this.
  */
 export function withProjectedNextRun(job: CronJobRecord, now: Date, computeNextRunAt: ComputeNextRunAt): CronJobRecord {
+  if (job.actionConfig?.agentTurn?.eventWake || job.actionConfig?.agentTurn?.oneShot) {
+    const nextRunAt = job.enabled ? computeNextRunAt(job, now) : undefined;
+    return {
+      ...job,
+      nextRunAt,
+      nextRunProjected: nextRunAt && nextRunAt !== job.nextRunAt ? true : undefined,
+    };
+  }
   if (!job.enabled || job.nextRunAt || !job.schedule) return job;
-  const nextRunAt = computeNextRunAt(job.schedule, now, job.endAt);
+  const nextRunAt = computeNextRunAt(job, now);
   return nextRunAt ? { ...job, nextRunAt, nextRunProjected: true } : job;
 }
 

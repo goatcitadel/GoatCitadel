@@ -65,6 +65,7 @@ import {
   HEARTBEAT_DECISION_RECEIPT_METADATA_KEY,
 } from "./chat-durable-runtime-authority.js";
 import { IDEMPOTENT_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
+import { createDurableLearningReviewWorkflowExecutor } from "./durable-learning-review-workflow.js";
 import { buildService as buildErrandService } from "./browser-errands/browser-errand-test-fixtures.js";
 import type { ErrandTrackedDelivery } from "./browser-errands/errand-approval-delivery.js";
 
@@ -99,6 +100,50 @@ function buildRun(): DurableRunRecord {
     updatedAt: "2026-04-19T00:00:00.000Z",
   };
 }
+
+describe("durable learning review workflow", () => {
+  it("preserves a deferred review for retry and only completes a terminal proposal result", async () => {
+    const run: DurableRunRecord = {
+      ...buildRun(),
+      workflowKey: "learning.review",
+      payload: { version: "learning.review.v1", jobId: "learning-job" },
+    };
+    const deferred = {
+      disposition: "deferred" as const,
+      reasonCode: "foreground_priority",
+      jobId: "learning-job",
+      candidateIds: [],
+      skillProposalIds: [],
+    };
+    const completed = { ...deferred, disposition: "complete" as const, candidateIds: ["proposal-1"] };
+    const process = vi.fn().mockResolvedValueOnce(deferred).mockResolvedValueOnce(completed);
+    const releaseForRetry = vi.fn().mockResolvedValue(undefined);
+    const complete = vi.fn().mockResolvedValue(undefined);
+    const isReadyToClaim = vi.fn().mockResolvedValue(false);
+    const executor = createDurableLearningReviewWorkflowExecutor({
+      queue: { process, releaseForRetry, isReadyToClaim },
+      complete,
+      assertActive: (context) => context?.signal?.throwIfAborted(),
+    });
+    await expect(executor.isReadyToClaim?.(run)).resolves.toBe(false);
+    expect(executor.isRecoverable?.(run)).toEqual({ recoverable: true });
+    expect(executor.isRecoverable?.({ ...run, payload: {} })).toEqual({ recoverable: false });
+
+    const signal = new AbortController().signal;
+    await executor.execute(run, { signal });
+    expect(process).toHaveBeenCalledWith(run, signal);
+    expect(releaseForRetry).toHaveBeenCalledExactlyOnceWith(run, deferred);
+    expect(complete).not.toHaveBeenCalled();
+
+    await executor.execute(run);
+    expect(complete).toHaveBeenCalledExactlyOnceWith(run, {
+      ...completed,
+      authority: "system_proposal_only",
+      workflow: "learning.review",
+    });
+    expect(releaseForRetry).toHaveBeenCalledTimes(1);
+  });
+});
 
 function createConnectorDeliveryLedger(options?: {
   failMutationCompletion?: boolean;
@@ -1784,9 +1829,11 @@ describe("durable-execution-service orchestration workflow", () => {
     expect(clearButtons).toHaveBeenCalledTimes(1);
     const [deliveries] = clearButtons.mock.calls[0]!;
     await expect(deliveries[0]!.providerMessageId?.()).resolves.toBe("4242");
-    expect(harness.host.storage.durableRuns.createCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
-      state: expect.objectContaining({ deliveryStatus: "already_committed", result: { providerMessageId: "4242" } }),
-    }));
+    expect(harness.host.storage.durableRuns.createCheckpoint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: expect.objectContaining({ deliveryStatus: "already_committed", result: { providerMessageId: "4242" } }),
+      }),
+    );
     expect(readApproval).toHaveBeenCalledWith("approval-1");
     expect(approval.status).toBe("approved");
     expect(resolveApproval).not.toHaveBeenCalled();

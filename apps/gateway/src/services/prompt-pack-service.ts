@@ -55,6 +55,8 @@ import type {
   PromptPackReportRecord,
   PromptPackRunIntegrityRecord,
   PromptPackRunRecord,
+  PromptPackImprovementWatchBinding,
+  PromptPackComparisonEvidence,
   PromptPackScoreDimensionV2,
   PromptPackScoreDimensionV3,
   PromptPackScoreRecord,
@@ -199,6 +201,7 @@ import {
 import { resolvePromptPackJudgeTarget, shouldUsePromptPackJudgeJsonMode } from "./prompt-pack/judge-target.js";
 import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
+import { selectModernPromptPackReplay } from "./prompt-pack-modern-replay.js";
 import { applyPromptPlaceholderValues } from "./prompt-pack/parser.js";
 import { renderPromptPackRunVariableSchema } from "./prompt-pack/run-variable-markdown.js";
 import {
@@ -225,7 +228,6 @@ import {
   PROMPT_PACK_BENCHMARK_MAX_CONCURRENCY,
   PROMPT_PACK_BENCHMARK_MAX_PROVIDERS,
   PROMPT_PACK_BENCHMARK_MAX_TESTS,
-  PROMPT_PACK_CAPABILITY_KEYS,
   PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION,
   PROMPT_PACK_PASS_THRESHOLD,
   PROMPT_PACK_V2_DIMENSIONS,
@@ -440,6 +442,7 @@ export interface PromptPackServiceDeps {
   /** Shared background-task set for fire-and-forget benchmark tasks. */
   backgroundTasks: Set<Promise<void>>;
   runBackgroundWork?: <T>(label: string, work: (signal: AbortSignal) => Promise<T>) => Promise<T | undefined>;
+  captureImprovementWatchBindings?: (packId: string) => Promise<PromptPackImprovementWatchBinding[]>;
   recordImprovementBenchmarkSignal?: (input: {
     benchmarkRunId: string;
     packId: string;
@@ -458,6 +461,10 @@ export interface PromptPackServiceDeps {
     passDelta: number;
     latencyDeltaMs: number;
     capability: string;
+    testCode?: string;
+    currentRunId?: string;
+    baselineRunId?: string;
+    comparison?: PromptPackComparisonEvidence;
   }) => void | Promise<void>;
   appendAudit?: (payload: Record<string, unknown>) => Promise<unknown>;
 }
@@ -679,6 +686,7 @@ export class PromptPackService {
     }
     await this.ensurePromptPackSessionToolGrants(sessionId, executionProfile, resolvedPrompt.prompt, projectBinding);
 
+    const improvementWatchBindings = await this.deps.captureImprovementWatchBindings?.(pack.packId);
     await this.ctx.storage.promptPackRuns.create({
       runId,
       packId: pack.packId,
@@ -696,6 +704,7 @@ export class PromptPackService {
       executionStyle,
       diagnosticMetadata: test.diagnosticMetadata,
       runVariables: runVariableResolution.evidence,
+      improvementWatchBindings,
     });
 
     try {
@@ -1191,7 +1200,7 @@ export class PromptPackService {
     const tests = await this.ctx.storage.promptPacks.listTests(packId, 5000);
     const runs = await this.ctx.storage.promptPackRuns.listByPack(packId, 10000);
     const scores = await this.ctx.storage.promptPackScores.listByPack(packId, 10000);
-    const autoScoresV2 = await this.ctx.storage.promptPackAutoScoresV2.listByPack(packId, 10000);
+    const autoScoresV2 = await this.readPackAutoScores(packId);
     const humanReviewsV2 = await this.ctx.storage.promptPackHumanReviewsV2.listByPack(packId, 10000);
     const generation = {
       scoringSchemaVersion: PROMPT_PACK_DEFAULT_SCORING_SCHEMA_VERSION,
@@ -1767,6 +1776,7 @@ export class PromptPackService {
       (await this.ctx.storage.promptPackRuns.listByPack(packId, 10_000)).map((run) => [run.runId, run] as const),
     );
     const scoresByTest = new Map<string, PromptPackScoreRecord[]>();
+    const modernScores = await this.readPackAutoScores(packId);
     for (const score of await this.ctx.storage.promptPackScores.listByPack(packId, 10_000)) {
       const list = scoresByTest.get(score.testId) ?? [];
       list.push(score);
@@ -1784,9 +1794,58 @@ export class PromptPackService {
       )
     `);
     const omittedTests: string[] = [];
+    const observedWork = new Map<
+      string,
+      { currentRunId: string; baselineRunId: string; comparison: PromptPackComparisonEvidence }
+    >();
     let resultRows = 0;
+    let comparedTests = 0;
     for (const code of selectedCodes) {
       const test = byCode.get(code)!;
+      if (modernScores.length >= 10_000) {
+        omittedTests.push(`${test.code}:partial_score_coverage`);
+        continue;
+      }
+      if (modernScores.some((score) => score.testId === test.testId)) {
+        const compared = selectModernPromptPackReplay({
+          runs: [...runById.values()],
+          scores: modernScores,
+          testId: test.testId,
+          packId,
+          baselineRef: input.baselineRef,
+          ...(baselineBenchmark
+            ? {
+                baselineRunIds: baselineBenchmarkItems
+                  .filter((item) => item.testCode.toUpperCase() === code)
+                  .flatMap((item) => (item.runId ? [item.runId] : [])),
+              }
+            : {}),
+        });
+        if (!compared) {
+          omittedTests.push(`${test.code}:no_comparable_scored_baseline`);
+          continue;
+        }
+        observedWork.set(test.code.toUpperCase(), {
+          currentRunId: compared.current.runId,
+          baselineRunId: compared.baseline.runId,
+          comparison: compared.comparison,
+        });
+        for (const metric of compared.metrics) {
+          await insertResult.run({
+            resultId: `pprr-${randomUUID()}`,
+            regressionRunId,
+            testCode: test.code,
+            capability: metric.capability,
+            scoreDelta: metric.scoreDelta,
+            passDelta: compared.passDelta,
+            latencyDeltaMs: computePromptPackRunLatencyDelta(compared.current, compared.baseline),
+            createdAt: now,
+          });
+          resultRows++;
+        }
+        comparedTests++;
+        continue;
+      }
       const scoredRuns = scoresByTest.get(test.testId) ?? [];
       const currentScore = scoredRuns[0];
       if (!currentScore) {
@@ -1818,6 +1877,12 @@ export class PromptPackService {
         continue;
       }
       const baselineRun = runById.get(baselineScore.runId);
+      if (currentRun && baselineRun)
+        observedWork.set(test.code.toUpperCase(), {
+          currentRunId: currentRun.runId,
+          baselineRunId: baselineRun.runId,
+          comparison: { kind: "legacy_v1" },
+        });
       const currentPass = currentScore.totalScore >= PROMPT_PACK_PASS_THRESHOLD ? 1 : 0;
       const baselinePass = baselineScore.totalScore >= PROMPT_PACK_PASS_THRESHOLD ? 1 : 0;
       const passDelta = currentPass - baselinePass;
@@ -1845,6 +1910,7 @@ export class PromptPackService {
         });
         resultRows += 1;
       }
+      comparedTests++;
     }
 
     await (
@@ -1861,7 +1927,7 @@ export class PromptPackService {
       regressionRunId,
       summaryJson: JSON.stringify({
         totalTests: selectedCodes.length,
-        comparedTests: resultRows / PROMPT_PACK_CAPABILITY_KEYS.length,
+        comparedTests,
         omittedTests,
         resultRows,
       }),
@@ -1882,6 +1948,8 @@ export class PromptPackService {
         passDelta: result.passDelta,
         latencyDeltaMs: result.latencyDeltaMs,
         capability: result.capability,
+        testCode: result.testCode,
+        ...observedWork.get(result.testCode.toUpperCase()),
       });
     }
     return { regressionRunId };
@@ -1959,9 +2027,14 @@ export class PromptPackService {
     };
   }
 
+  private async readPackAutoScores(packId: string): Promise<PromptPackAutoScoreRecord[]> {
+    const scores = this.ctx.storage.promptPackAutoScoresV2;
+    return scores ? await scores.listByPack(packId, 10_000) : [];
+  }
+
   async getPromptPackCapabilityTrends(packId: string): Promise<{ items: CapabilityTrendSeries[] }> {
     await this.ctx.storage.promptPacks.getPack(packId);
-    const scores = [...(await this.ctx.storage.promptPackAutoScoresV2.listByPack(packId, 10_000))].sort(
+    const scores = [...(await this.readPackAutoScores(packId))].sort(
       (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
     );
     const runs = [...(await this.ctx.storage.promptPackRuns.listByPack(packId, 10_000))].sort((left, right) => {

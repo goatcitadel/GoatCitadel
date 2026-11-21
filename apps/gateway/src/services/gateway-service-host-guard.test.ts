@@ -100,6 +100,7 @@ const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "chatCompactionBreakerActionService",
   "chatMessageRouteRuntimeHost",
   "chatProjectService",
+  "chatAssistant",
   "chatTurnRuntime",
   "databaseCutoverService",
   "devDiagnostics",

@@ -1,6 +1,12 @@
 import { POSTGRES_SCHEMA_CONVERGENCE_V229_SQL } from "./schema-convergence-v229.js";
 import { CHAT_APPROVAL_MODE_SCHEMA_SQL } from "../chat-approval-mode-schema.js";
 import { MANAGED_PROJECT_FILE_SCHEMA_SQL } from "../managed-project-file-schema.js";
+import { MEMORY_CLAIMS_POSTGRES_SQL } from "../memory-claims-schema.js";
+import { MEMORY_RECALL_POSTGRES_SQL } from "../memory-recall-schema.js";
+import { BACKGROUND_LEARNING_QUEUE_INDEXES_SQL } from "../background-learning-schema.js";
+import { IMPROVEMENT_WATCH_EVIDENCE_POSTGRES_SQL } from "../improvement-watch-schema.js";
+import { PROMPT_PACK_WATCH_BINDINGS_POSTGRES_SQL } from "../prompt-pack-watch-schema.js";
+import { MEMORY_NOTE_ORIGINS_SQL } from "../memory-note-schema.js";
 import { CHAT_ARTIFACT_RENDER_RECEIPTS_POSTGRES_SQL } from "../chat-artifact-render-schema.js";
 import { APPROVAL_EXECUTION_LINKAGE_POSTGRES_SQL } from "../approval-execution-linkage-migration.js";
 import { APPROVAL_EXECUTION_LINKAGE_JSON_COMPATIBILITY_POSTGRES_SQL } from "../approval-execution-linkage-postgres-compatibility.js";
@@ -15424,6 +15430,68 @@ END
 $commitment_context_schema_convergence$;
     `,
     integritySha256: "4788dec7bb53fe6b8d95e614e5b8763e4d703efd9dd156bb7998b398148b4291",
+  },
+  {
+    version: 235,
+    name: "scoped_memory_claim_identity",
+    sql: MEMORY_CLAIMS_POSTGRES_SQL,
+    integritySha256: "fe7b2cf73addcc85f26c287249b87d118017c0360106e97642add709b90fb0b8",
+  },
+  {
+    version: 236,
+    name: "indexed_memory_corpus",
+    sql: MEMORY_RECALL_POSTGRES_SQL,
+    integritySha256: "4e0430b60cb28c9ed38947feea118089f0ac33bed3fe46345a57f2a2e041c4b7",
+  },
+  {
+    version: 237,
+    name: "background_learning_queue_indexes",
+    sql: BACKGROUND_LEARNING_QUEUE_INDEXES_SQL,
+    integritySha256: "e77f9eaaa94f760be556ade36417fb6f82059dda700e116f6b9be2fe28ab6375",
+  },
+  {
+    version: 238,
+    name: "improvement_watch_evidence",
+    sql: IMPROVEMENT_WATCH_EVIDENCE_POSTGRES_SQL,
+    integritySha256: "4e46eeb375471d267a9d711d8a24cc5cbdaf55c5f57c182911ae762cea73ad93",
+  },
+  {
+    version: 239,
+    name: "prompt_pack_pre_work_watch_bindings",
+    sql: PROMPT_PACK_WATCH_BINDINGS_POSTGRES_SQL,
+    integritySha256: "af2897925d73db45a555cbc11d42ee2083f713a817db24dfd51e8a1da376472a",
+  },
+  {
+    version: 240,
+    name: "canonical_memory_note_origins",
+    sql: MEMORY_NOTE_ORIGINS_SQL,
+    integritySha256: "e255dd04052da91d5bd821781def4e6873c1623c3aa1a3f24487a867df95f955",
+  },
+  {
+    // The historical additive path created narrower types. The generated
+    // bootstrap flattened expression and descending indexes. Preserve the
+    // learning scans' intended access paths and converge both schemas.
+    version: 241,
+    name: "learning_schema_convergence",
+    sql: `
+ALTER TABLE improvement_activations
+  ALTER COLUMN positive_signal_count TYPE BIGINT,
+  ALTER COLUMN watch_evidence_version TYPE BIGINT,
+  ALTER COLUMN watch_evidence_complete TYPE BIGINT;
+ALTER TABLE memory_learnings ALTER COLUMN confidence TYPE DOUBLE PRECISION;
+ALTER TABLE memory_recall_state ALTER COLUMN singleton TYPE BIGINT;
+
+DROP INDEX IF EXISTS idx_chat_turn_trace_completion_cursor,
+  idx_durable_runs_learning_foreground_recent,
+  idx_durable_runs_learning_foreground_status;
+CREATE INDEX idx_chat_turn_trace_completion_cursor
+  ON chat_turn_traces(status, COALESCE(finished_at, started_at), turn_id);
+CREATE INDEX idx_durable_runs_learning_foreground_recent
+  ON durable_runs(workflow_key, updated_at DESC);
+CREATE INDEX idx_durable_runs_learning_foreground_status
+  ON durable_runs(workflow_key, status, updated_at DESC);
+    `,
+    integritySha256: "f9dd48ff4b8c6a7a76b781cd9de2e4e5e559edcda499ad83315133439549c6b2",
   },
 ];
 

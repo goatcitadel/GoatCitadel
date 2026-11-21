@@ -2,7 +2,14 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import { safeJsonParse } from "./safe-json.js";
 
+export interface KnowledgeReadOptions {
+  /** Ordinary document tools must not read private memory or its historical write artifacts. */
+  excludeMemory?: boolean;
+}
+
 export interface KnowledgeDocumentRecord {
+  workspaceId?: string;
+  sessionId?: string;
   docId: string;
   namespace: string;
   sourceType: "file" | "url" | "text" | "memory" | "external_source_snapshot";
@@ -24,6 +31,8 @@ export interface KnowledgeChunkRecord {
 }
 
 interface KnowledgeDocumentRow {
+  workspace_id?: string | null;
+  session_id?: string | null;
   doc_id: string;
   namespace: string;
   source_type: "file" | "url" | "text" | "memory" | "external_source_snapshot";
@@ -61,9 +70,9 @@ export class KnowledgeRepository {
   public constructor(private readonly db: DatabaseClient) {
     this.insertDocumentStmt = db.prepare(`
       INSERT INTO knowledge_documents (
-        doc_id, namespace, source_type, source_ref, title, metadata_json, created_at
+        doc_id, namespace, source_type, source_ref, title, metadata_json, created_at, workspace_id, session_id
       ) VALUES (
-        @docId, @namespace, @sourceType, @sourceRef, @title, @metadataJson, @createdAt
+        @docId, @namespace, @sourceType, @sourceRef, @title, @metadataJson, @createdAt, @workspaceId, @sessionId
       )
     `);
     this.insertChunkStmt = db.prepare(`
@@ -145,6 +154,8 @@ export class KnowledgeRepository {
       sourceRef: string;
       title: string;
       metadata?: Record<string, unknown>;
+      workspaceId?: string;
+      sessionId?: string;
     },
     now = new Date().toISOString(),
   ): KnowledgeDocumentRecord {
@@ -157,9 +168,13 @@ export class KnowledgeRepository {
       title: input.title,
       metadataJson: JSON.stringify(input.metadata ?? {}),
       createdAt: now,
+      workspaceId: input.workspaceId?.trim() || null,
+      sessionId: input.sessionId?.trim() || null,
     });
     return {
       docId,
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
       namespace: input.namespace,
       sourceType: input.sourceType,
       sourceRef: input.sourceRef,
@@ -222,19 +237,28 @@ export class KnowledgeRepository {
     return out;
   }
 
-  public listDocuments(namespace?: string, limit = 100): KnowledgeDocumentRecord[] {
+  public listDocuments(namespace?: string, limit = 100, options: KnowledgeReadOptions = {}): KnowledgeDocumentRecord[] {
     const rows = toKnowledgeDocumentRows(
-      namespace
-        ? this.listDocumentsByNamespaceStmt.all({
-            namespace,
-            limit,
-          })
-        : this.listDocumentsStmt.all({
-            limit,
-          }),
+      options.excludeMemory
+        ? this.db
+            .prepare(
+              `SELECT * FROM knowledge_documents WHERE source_type <> 'memory'
+            ${namespace ? "AND namespace = @namespace" : ""} ORDER BY created_at DESC LIMIT @limit`,
+            )
+            .all({ ...(namespace ? { namespace } : {}), limit })
+        : namespace
+          ? this.listDocumentsByNamespaceStmt.all({
+              namespace,
+              limit,
+            })
+          : this.listDocumentsStmt.all({
+              limit,
+            }),
     );
     return rows.map((row) => ({
       docId: row.doc_id,
+      workspaceId: row.workspace_id ?? undefined,
+      sessionId: row.session_id ?? undefined,
       namespace: row.namespace,
       sourceType: row.source_type,
       sourceRef: row.source_ref,
@@ -255,6 +279,8 @@ export class KnowledgeRepository {
     }
     return {
       docId: row.doc_id,
+      workspaceId: row.workspace_id ?? undefined,
+      sessionId: row.session_id ?? undefined,
       namespace: row.namespace,
       sourceType: row.source_type,
       sourceRef: row.source_ref,
@@ -264,26 +290,48 @@ export class KnowledgeRepository {
     };
   }
 
-  public listChunksByNamespace(namespace?: string, limit = 500): KnowledgeChunkRecord[] {
+  public listChunksByNamespace(
+    namespace?: string,
+    limit = 500,
+    options: KnowledgeReadOptions = {},
+  ): KnowledgeChunkRecord[] {
     const rows = toKnowledgeChunkRows(
-      namespace
-        ? this.listChunksByNamespaceStmt.all({
-            namespace,
-            limit,
-          })
-        : this.listChunksStmt.all({
-            limit,
-          }),
+      options.excludeMemory
+        ? this.db
+            .prepare(
+              `SELECT kc.* FROM knowledge_chunks kc
+            INNER JOIN knowledge_documents kd ON kd.doc_id = kc.doc_id
+            WHERE kd.source_type <> 'memory' ${namespace ? "AND kd.namespace = @namespace" : ""}
+            ORDER BY kc.created_at DESC, kc.seq ASC LIMIT @limit`,
+            )
+            .all({ ...(namespace ? { namespace } : {}), limit })
+        : namespace
+          ? this.listChunksByNamespaceStmt.all({
+              namespace,
+              limit,
+            })
+          : this.listChunksStmt.all({
+              limit,
+            }),
     );
     return rows.map(mapChunkRow);
   }
 
-  public listChunksByDocument(docId: string, limit = 500): KnowledgeChunkRecord[] {
+  public listChunksByDocument(docId: string, limit = 500, options: KnowledgeReadOptions = {}): KnowledgeChunkRecord[] {
     const rows = toKnowledgeChunkRows(
-      this.listChunksByDocStmt.all({
-        docId,
-        limit,
-      }),
+      options.excludeMemory
+        ? this.db
+            .prepare(
+              `SELECT kc.* FROM knowledge_chunks kc
+            INNER JOIN knowledge_documents kd ON kd.doc_id = kc.doc_id
+            WHERE kc.doc_id = @docId AND kd.source_type <> 'memory'
+            ORDER BY kc.seq ASC LIMIT @limit`,
+            )
+            .all({ docId, limit })
+        : this.listChunksByDocStmt.all({
+            docId,
+            limit,
+          }),
     );
     return rows.map(mapChunkRow);
   }

@@ -78,6 +78,7 @@ describe("normalizeAgentTurnCronActionConfig", () => {
           operatorId: "  op-1  ",
           authActorId: "  op-1  ",
           permissionProfileId: "  trusted_local_power  ",
+          permissionProfileRevision: "  profile-revision  ",
           createdByJobId: "  parent-job  ",
           depth: 1,
         },
@@ -87,6 +88,7 @@ describe("normalizeAgentTurnCronActionConfig", () => {
       operatorId: "op-1",
       authActorId: "op-1",
       permissionProfileId: "trusted_local_power",
+      permissionProfileRevision: "profile-revision",
       createdByJobId: "parent-job",
       depth: 1,
     });
@@ -97,6 +99,17 @@ describe("normalizeAgentTurnCronActionConfig", () => {
       agentTurn: { prompt: "Scheduled work", createdBy: { operatorId: "   " } },
     });
     expect(config?.agentTurn?.createdBy).toBeUndefined();
+  });
+
+  it("requires an exact profile and session for optional reviewed authority fields", () => {
+    expect(() =>
+      normalizeAgentTurnCronActionConfig({
+        agentTurn: { prompt: "Scheduled work", createdBy: { permissionProfileRevision: "unbound" } },
+      }),
+    ).toThrow("requires its exact profile");
+    expect(() =>
+      normalizeAgentTurnCronActionConfig({ agentTurn: { prompt: "Scheduled work", workspaceId: "unbound" } }),
+    ).toThrow("requires a current Chat session");
   });
 });
 

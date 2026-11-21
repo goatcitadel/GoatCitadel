@@ -27,6 +27,8 @@ export interface RuntimeSettings {
   environment: string;
   deploymentProfile: DeploymentProfile;
   toolApprovalMode: ToolApprovalMode;
+  automaticBackgroundUsdCap?: number;
+  automaticBackground?: import("@goatcitadel/contracts").AutomaticBackgroundSettings;
   budgetMode: "saver" | "balanced" | "power";
   workspaceDir: string;
   /** The https address the internet uses to reach this installation. Absent when the operator has not set one. */
@@ -134,6 +136,7 @@ export interface RuntimeSettings {
     flashAttention?: boolean;
     status: LlamaCppRuntimeStatus;
   };
+  featurePreferences?: import("@goatcitadel/contracts").FeaturePreferenceMetadata;
   features: {
     durableKernelV1Enabled: boolean;
     replayOverridesV1Enabled: boolean;
@@ -159,7 +162,7 @@ export interface RuntimeSettings {
     orchestrationFinalStreamingV1Disabled?: boolean;
     /** Master autonomy kill switch (Phase 1 proactivity / self-improvement). Absent/false ⇒ autonomy ON; `true` halts all autonomous loops. */
     autonomyV1Disabled?: boolean;
-    /** Thinking display. `true` streams one thinking_delta per provider reasoning chunk. Absent/false (default) ⇒ no thinking_delta chunks are emitted; behavior is byte-identical to today. */
+    /** Streams thinking_delta chunks for providers that report reasoning. */
     chatThinkingStreamV1Enabled?: boolean;
     /** On-demand context estimates in session.status. Absent/false disables enrichment. */
     chatContextBudgetVisibilityV1Enabled?: boolean;
@@ -187,7 +190,7 @@ export interface RuntimeSettings {
     plannerFanoutV1Disabled?: boolean;
     /** R3-8 kill switch: model-callable `agent.fanout` spawn tool. Absent/false ⇒ feature ON. */
     subagentFanoutV1Disabled?: boolean;
-    /** Default-off Chat-native durable agent.fanout aggregate. */
+    /** Chat-native durable agent.fanout aggregate. */
     durableChatFanoutV1Enabled?: boolean;
     chatProviderFallbackV1Enabled?: boolean;
     chatSkillInstructionsV1Enabled?: boolean;
@@ -210,7 +213,7 @@ export interface RuntimeSettings {
     claudeCliToolBridgeEnabled?: boolean;
     claudeCliWarmContinuationEnabled?: boolean;
     /** Gateway-owned governed Change Plan authority. */
-    /** Browser errands in GoatCitadel's own Chrome window on this PC (off by default). */
+    /** Browser errands in GoatCitadel's own Chrome window on this PC. */
     browserErrandsEnabled?: boolean;
     evolutionControlPlaneV1Enabled?: boolean;
     /** The operator's own Settings saves and Capabilities installs apply without a separate approval (opt-in; ignored under remote_hardened). */
@@ -221,13 +224,15 @@ export interface RuntimeSettings {
     improvementModelEvaluationV1Enabled?: boolean;
     /** Managed-source evolution remains opt-in and registration-gated. */
     productSourceEvolutionV1Enabled?: boolean;
-    /** B2b TTS voice replies to audio-capable channels. Absent/false (default) ⇒ no audio synthesis on the reply path. */
+    /** TTS replies on configured audio-capable channels. */
     channelVoiceReplyV1Enabled?: boolean;
-    /** Opt-in: weekly governed memory consolidation (propose-only, approval-gated). Absent/false ⇒ job never runs. */
+    /** Weekly governed memory consolidation (propose-only, approval-gated). */
     memoryConsolidationV1Enabled?: boolean;
-    /** Opt-in: signed cron_job_executed evidence envelope on every cron run. Absent/false ⇒ no cron evidence, as today. */
+    memoryCorpusRecallV1Enabled?: boolean;
+    backgroundSkillDraftsV1Enabled?: boolean;
+    /** Signed cron_job_executed evidence envelopes for scheduled runs. */
     cronEvidenceV1Enabled?: boolean;
-    /** Opt-in: routes background LLM calls (improvement scans, judges, classifiers, prompt packs) to the cheap utility-model slot. Absent/false ⇒ today's selection. */
+    /** Allows background jobs to use a configured utility model. */
     utilityModelRoutingV1Enabled?: boolean;
     /** Kill switch: disables the boot-time chat-turn interruption reconciler. Absent/false ⇒ reconciler runs on every boot. */
     chatTurnInterruptionRecoveryV1Disabled?: boolean;

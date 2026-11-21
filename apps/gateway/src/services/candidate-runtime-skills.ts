@@ -21,7 +21,7 @@ export async function loadApprovedCandidateSkill(input: {
   if (
     version.workspaceId !== input.workspaceId ||
     version.lineageStatus !== "governed" ||
-    !["workflow_capture", "capability_pack"].includes(version.sourceKind) ||
+    !["workflow_capture", "capability_pack", "background_workflow"].includes(version.sourceKind) ||
     !["approved", "trusted"].includes(version.lifecycleState) ||
     version.programArtifact ||
     version.schemaArtifact

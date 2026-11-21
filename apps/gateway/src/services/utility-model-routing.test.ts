@@ -255,7 +255,7 @@ describe("resolveBackgroundJobModel", () => {
     const ensureActiveProviderReadiness = vi.fn(async () => undefined);
     await expect(
       resolveBackgroundJobModel({
-        getUtilityModelOverride: async () => ({ providerId: "openai-codex", model: "gpt-6-mini" }),
+        resolvePreferredModel: async () => ({ providerId: "openai-codex", model: "gpt-6-mini" }),
         ensureActiveProviderReadiness,
         getRuntimeConfig: () => signedInCli,
       }),
@@ -269,7 +269,7 @@ describe("resolveBackgroundJobModel", () => {
     const ensureActiveProviderReadiness = vi.fn(async () => undefined);
     await expect(
       resolveBackgroundJobModel({
-        getUtilityModelOverride: async () => undefined,
+        resolvePreferredModel: async () => undefined,
         ensureActiveProviderReadiness,
         getRuntimeConfig: () => signedInCli,
       }),
@@ -285,7 +285,7 @@ describe("resolveBackgroundJobModel", () => {
     };
     await expect(
       resolveBackgroundJobModel({
-        getUtilityModelOverride: async () => undefined,
+        resolvePreferredModel: async () => undefined,
         ensureActiveProviderReadiness: async () => {
           probed = true;
         },
@@ -297,7 +297,7 @@ describe("resolveBackgroundJobModel", () => {
   it("probes the active provider before deciding, so a not-yet-checked provider is used once it is ready", async () => {
     let probed = false;
     const result = await resolveBackgroundJobModel({
-      getUtilityModelOverride: async () => undefined,
+      resolvePreferredModel: async () => undefined,
       ensureActiveProviderReadiness: async () => {
         probed = true;
       },
@@ -315,7 +315,7 @@ describe("resolveBackgroundJobModel", () => {
   it("skips when the active provider is still not ready after the probe", async () => {
     await expect(
       resolveBackgroundJobModel({
-        getUtilityModelOverride: async () => undefined,
+        resolvePreferredModel: async () => undefined,
         ensureActiveProviderReadiness: async () => undefined,
         getRuntimeConfig: () => notReadyProbed,
       }),
@@ -325,7 +325,7 @@ describe("resolveBackgroundJobModel", () => {
   it("skips rather than failing when the readiness probe itself throws", async () => {
     await expect(
       resolveBackgroundJobModel({
-        getUtilityModelOverride: async () => undefined,
+        resolvePreferredModel: async () => undefined,
         ensureActiveProviderReadiness: async () => {
           throw new Error("probe failed");
         },
@@ -341,7 +341,7 @@ describe("resolveBackgroundJobModel", () => {
     };
     await expect(
       resolveBackgroundJobModel({
-        getUtilityModelOverride: async () => undefined,
+        resolvePreferredModel: async () => undefined,
         ensureActiveProviderReadiness: async () => {
           throw new Error("probe timed out");
         },

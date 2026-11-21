@@ -77,7 +77,8 @@ export const RULES = [
     id: "raw-error-text",
     // Server-recorded error text on a record (run.lastError, step.error). Hook state such as owner.error is already
     // presented by describeApiError, so it is not counted.
-    pattern: /(?<!=)\{\s*(?:[\w?.!]+\.lastError|(?:[\w?!]+\.)*(?:step|report|run|effect|record|item|data|tool)\??\.error)\s*\}/g,
+    pattern:
+      /(?<!=)\{\s*(?:[\w?.!]+\.lastError|(?:[\w?!]+\.)*(?:step|report|run|effect|record|item|data|tool)\??\.error)\s*\}/g,
     budget: 0,
     help: "render presentErrorText(…).summary and put the raw text in TechnicalDetails",
   },
@@ -113,8 +114,15 @@ export const ROOT_BUDGETS = {
   },
 };
 
-// TimeText is the cockpit's date primitive; schedule-cadence only validates a time zone name and shows nothing.
-const EXEMPT = { "local-date-format": new Set(["ui/TimeText.tsx", "areas/work/schedule-cadence.ts"]) };
+// TimeText and schedule-cadence own display formatting. Follow-through timing uses date parts to resolve DST folds
+// and gaps for schedule input.
+const EXEMPT = {
+  "local-date-format": new Set([
+    "ui/TimeText.tsx",
+    "areas/work/schedule-cadence.ts",
+    "areas/chat/follow-through-timing.ts",
+  ]),
+};
 
 /*
  * TechnicalDetails children are where IDs, raw times and raw errors belong, and key/href/to/data-* templates are never

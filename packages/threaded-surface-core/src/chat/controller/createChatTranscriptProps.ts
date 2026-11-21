@@ -28,6 +28,7 @@ type Input = {
   threadNotices: import("@goatcitadel/mission-control-shared/components/chat/ChatThreadPrimitives").ChatThreadNotice[];
   sessionStatusEnabled: boolean;
   chatTimerPanel: ReturnType<typeof useChatTimerPanel>["chatTimerPanel"];
+  onReviewReminder?: MissionControlActiveSessionSurfaceProps["onReviewReminder"];
   typedRunVariablesEnabled: boolean;
   runVariablePanel: ReturnType<typeof useRunVariablePanel>["runVariablePanel"];
   followThreadOutput: boolean;
@@ -126,6 +127,7 @@ export function createChatTranscriptProps({
   threadNotices,
   sessionStatusEnabled,
   chatTimerPanel,
+  onReviewReminder,
   typedRunVariablesEnabled,
   runVariablePanel,
   followThreadOutput,
@@ -180,6 +182,7 @@ export function createChatTranscriptProps({
   | "notices"
   | "sessionStatusPanel"
   | "chatTimerPanel"
+  | "onReviewReminder"
   | "runVariablePanel"
   | "followOutput"
   | "streamStatus"
@@ -267,6 +270,7 @@ export function createChatTranscriptProps({
         }
       : undefined,
     chatTimerPanel,
+    onReviewReminder: historicalModeActive ? undefined : onReviewReminder,
     runVariablePanel: typedRunVariablesEnabled ? runVariablePanel : undefined,
     followOutput: followThreadOutput,
     streamStatus: outbound.streamStatus as ChatStreamStatus,

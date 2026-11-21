@@ -156,10 +156,12 @@ export interface MissionControlActiveSessionSurfaceProps {
     onClose: () => void;
   };
   chatTimerAvailable?: boolean;
+  onReviewReminder?: (preview: import("@goatcitadel/contracts").ChatReminderPreview) => void;
   chatTimerPanel?: {
     open: boolean;
     busy: boolean;
     error: string | null;
+    delayMs?: number;
     dueAt: string;
     timezone: string;
     message: string;

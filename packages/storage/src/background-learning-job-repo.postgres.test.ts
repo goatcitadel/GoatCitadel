@@ -1,0 +1,276 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { createRemoteWorkerPostgresTestScope } from "./remote-worker-test-fixtures.js";
+import { createPostgresRemoteStorage } from "./postgres/remote-storage.js";
+import { SessionRepository } from "./session-repo.js";
+import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
+import { SessionControlRepository } from "./session-control-repo.js";
+import { ChatMessageRepository } from "./chat-message-repo.js";
+import { ChatTurnTraceRepository } from "./chat-turn-trace-repo.js";
+import { DurableRunRepository } from "./durable-run-repo.js";
+
+const connectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
+test(
+  "real PostgreSQL workers coalesce, fence leases and reserve concurrent cost under canonical source locks",
+  { skip: !connectionString, timeout: 240_000 },
+  async (t) => {
+    const scope = await createRemoteWorkerPostgresTestScope(connectionString!, "learning_queue");
+    const root = await mkdtemp(path.join(os.tmpdir(), "gc-learning-pg-"));
+    const scoped = new URL(connectionString!);
+    scoped.searchParams.set("options", `-csearch_path=${scope.schemaName}`);
+    const workers = [0, 1].map((index) =>
+      createPostgresRemoteStorage({
+        connection: { connectionString: scoped.toString(), database: scoped.pathname.slice(1) },
+        migrationsTable: "schema_migrations",
+        transcriptsDir: path.join(root, `transcripts-${index}`),
+        auditDir: path.join(root, `audit-${index}`),
+        startupWaitTimeoutMs: 120_000,
+      }),
+    );
+    t.after(async () => {
+      await Promise.allSettled(workers.map((worker) => worker.close()));
+      await scope.teardown();
+      if (
+        !path.resolve(root).startsWith(path.resolve(os.tmpdir()) + path.sep) ||
+        !path.basename(root).startsWith("gc-learning-pg-")
+      )
+        throw new Error("Unsafe fixture cleanup path");
+      await rm(root, { recursive: true, force: true });
+    });
+    await Promise.all(workers.map((worker) => worker.waitUntilReady()));
+    const [a, b] = workers,
+      db = scope.db,
+      now = new Date().toISOString();
+    new SessionRepository(db).upsert({
+      sessionId: "s",
+      sessionKey: "s",
+      kind: "dm",
+      channel: "web",
+      account: "operator",
+      timestamp: now,
+    });
+    const meta = new ChatSessionMetaRepository(db);
+    meta.ensure("s", now, "default");
+    meta.patch("s", { origin: "operator" });
+    new SessionControlRepository(db).initializeExistingSession({
+      workspaceId: "default",
+      sessionId: "s",
+      idempotencyKey: "init",
+      correlationId: "init",
+    });
+    const messages = new ChatMessageRepository(db);
+    messages.upsert({
+      messageId: "u",
+      sessionId: "s",
+      role: "user",
+      actorType: "user",
+      actorId: "operator",
+      sourceAuthority: "operator",
+      content: "Prefer concise replies",
+      timestamp: now,
+    });
+    messages.upsert({
+      messageId: "a",
+      sessionId: "s",
+      role: "assistant",
+      actorType: "agent",
+      actorId: "assistant",
+      sourceAuthority: "agent_proposed",
+      content: "Acknowledged",
+      timestamp: now,
+    });
+    new ChatTurnTraceRepository(db).create({
+      turnId: "turn",
+      sessionId: "s",
+      userMessageId: "u",
+      assistantMessageId: "a",
+      status: "completed",
+      mode: "chat",
+      webMode: "off",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      finishedAt: now,
+    });
+    const source = {
+      workspaceId: "default",
+      sessionId: "s",
+      sessionIncarnationId: meta.get("s")!.lifecycleIntentId!,
+      controllerGeneration: 1,
+      parentRunId: "parent",
+      postCommitGenerationId: "generation",
+      sourceTurnId: "turn",
+      effectExecutionId: "effect",
+    };
+    const runs = new DurableRunRepository(db);
+    runs.createRun({
+      runId: "parent",
+      workflowKey: "chat.turn.execute",
+      status: "completed",
+      payload: { version: "chat.turn.execute.v2", ...source, turnId: "turn", admissionControllerGeneration: 1 },
+    });
+    runs.createRun({
+      runId: "effect",
+      workflowKey: "chat.post_commit.effect",
+      status: "completed",
+      metadata: { ...source, turnId: "turn" },
+    });
+    const packets = await Promise.all(
+      workers.map((worker) => worker.backgroundLearningJobs.readEligibleSource(source)),
+    );
+    assert.ok(packets[0]);
+    assert.deepEqual(packets[0], packets[1]);
+    const enqueued = await Promise.all(
+      workers.map((worker) =>
+        worker.backgroundLearningJobs.enqueue({ source: packets[0]!.source, kind: "review", due: true }),
+      ),
+    );
+    assert.equal(enqueued[0]!.jobId, enqueued[1]!.jobId);
+    assert.deepEqual(enqueued.map((item) => item.disposition).sort(), ["deduplicated", "queued"]);
+    const job = (await a!.backgroundLearningJobs.get(enqueued[0]!.jobId))!;
+    assert.deepEqual(
+      (await b!.backgroundLearningJobs.listForSourceTurn("default", "s", "turn")).map((item) => item.jobId),
+      [job.jobId],
+    );
+    assert.deepEqual(await a!.backgroundLearningJobs.listForSourceTurn("foreign", "s", "turn"), []);
+    const claims = await Promise.all(
+      workers.map((worker, index) =>
+        worker.durableRuns.tryClaimQueuedRunWithDatabaseClock({
+          runId: job.runId,
+          workerId: `worker-${index}`,
+          leaseDurationMs: 60_000,
+        }),
+      ),
+    );
+    assert.equal(claims.filter(Boolean).length, 1);
+    const winner = claims.find(Boolean)!,
+      claim = { runId: job.runId, leaseOwnerId: winner.leaseOwnerId! };
+    const frozen = await a!.backgroundLearningJobs.freeze(job.jobId, claim);
+    await assert.rejects(() =>
+      b!.backgroundLearningJobs.beginDispatch(
+        job.jobId,
+        { ...claim, leaseOwnerId: "foreign" },
+        { operationId: "foreign", stage: "memory", from: 0, through: 1 },
+        frozen.revision,
+      ),
+    );
+    const budget = {
+      providerId: "openai",
+      model: "fixture",
+      pricingCatalogVersion: "fixture",
+      pricingCatalogHash: "b".repeat(64),
+      reservedCostUsd: 0.6,
+      dailyCostCeilingUsd: 1,
+    };
+    const second = await b!.backgroundLearningJobs.enqueue({
+      source: { ...packets[0]!.source, sessionId: "second", effectExecutionId: "second" },
+      kind: "review",
+      due: true,
+    });
+    const secondJob = (await b!.backgroundLearningJobs.get(second.jobId))!;
+    const secondRun = (await b!.durableRuns.tryClaimQueuedRunWithDatabaseClock({
+      runId: secondJob.runId,
+      workerId: "second",
+      leaseDurationMs: 60_000,
+    }))!;
+    const secondClaim = { runId: secondRun.runId, leaseOwnerId: secondRun.leaseOwnerId! };
+    const frozenSecond = await b!.backgroundLearningJobs.freeze(secondJob.jobId, secondClaim);
+    const dispatches = await Promise.all([
+      a!.backgroundLearningJobs.beginDispatch(
+        job.jobId,
+        claim,
+        { operationId: "paid-a", stage: "memory", from: 0, through: 1, budget },
+        frozen.revision,
+      ),
+      b!.backgroundLearningJobs.beginDispatch(
+        secondJob.jobId,
+        secondClaim,
+        { operationId: "paid-b", stage: "memory", from: 0, through: 1, budget },
+        frozenSecond.revision,
+      ),
+    ]);
+    assert.equal(dispatches.filter(Boolean).length, 1);
+    const dispositionSource = {
+      ...packets[0]!.source,
+      sessionId: "dispositions",
+      sourceTurnId: "excluded",
+      effectExecutionId: "excluded",
+    };
+    const disposition = await a!.backgroundLearningJobs.enqueue({
+      source: dispositionSource,
+      kind: "review",
+      due: true,
+    });
+    await b!.backgroundLearningJobs.enqueue({
+      source: { ...dispositionSource, sourceTurnId: "retained", effectExecutionId: "retained" },
+      kind: "review",
+      due: false,
+    });
+    let dispositionJob = (await a!.backgroundLearningJobs.get(disposition.jobId))!;
+    const dispositionRun = (await a!.durableRuns.tryClaimQueuedRunWithDatabaseClock({
+      runId: dispositionJob.runId,
+      workerId: "disposition-worker",
+      leaseDurationMs: 60_000,
+    }))!;
+    const dispositionClaim = { runId: dispositionRun.runId, leaseOwnerId: dispositionRun.leaseOwnerId! };
+    dispositionJob = await a!.backgroundLearningJobs.freeze(dispositionJob.jobId, dispositionClaim);
+    dispositionJob = (await a!.backgroundLearningJobs.beginDispatch(
+      dispositionJob.jobId,
+      dispositionClaim,
+      { operationId: "synthetic-settled-output", stage: "memory", from: 0, through: 2 },
+      dispositionJob.revision,
+    ))!;
+    dispositionJob = await b!.backgroundLearningJobs.settleDispatch(
+      dispositionJob.jobId,
+      dispositionClaim,
+      dispositionJob.revision,
+      "settled",
+      { facts: [] },
+    );
+    dispositionJob = await a!.backgroundLearningJobs.discardSourceBatch(
+      dispositionJob.jobId,
+      dispositionClaim,
+      dispositionJob.revision,
+    );
+    dispositionJob = await b!.backgroundLearningJobs.excludeCurrentSource(
+      dispositionJob.jobId,
+      dispositionClaim,
+      dispositionJob.revision,
+      "source_changed",
+    );
+    assert.equal(dispositionJob.cursor, 1);
+    assert.equal(dispositionJob.sourceDispositions?.[0]?.sourceTurnId, "excluded");
+    assert.equal(
+      (await a!.backgroundLearningJobs.get(dispositionJob.jobId))?.discardedBatches?.[0]?.operationId,
+      "synthetic-settled-output",
+    );
+    for (const stage of ["memory", "skill"] as const)
+      dispositionJob = await a!.backgroundLearningJobs.recordStageResult(
+        dispositionJob.jobId,
+        dispositionClaim,
+        dispositionJob.revision,
+        { stage, from: 1, through: 2, candidateIds: stage === "memory" ? ["retained-candidate"] : [] },
+      );
+    dispositionJob = await b!.backgroundLearningJobs.advance(
+      dispositionJob.jobId,
+      dispositionClaim,
+      dispositionJob.revision,
+      2,
+    );
+    assert.equal(dispositionJob.status, "completed");
+    assert.equal((await a!.backgroundLearningJobs.get(dispositionJob.jobId))?.stageResults?.[0]?.from, 1);
+    // A canonical edit racing read waits for source locks; it cannot retain the old hash.
+    const [old] = await Promise.all([
+      a!.backgroundLearningJobs.readEligibleSource(source),
+      scope.scopedPool.query("UPDATE chat_messages SET content = 'Prefer detailed replies' WHERE message_id = 'u'"),
+    ]);
+    const fresh = await b!.backgroundLearningJobs.readEligibleSource(source);
+    assert.ok(fresh);
+    assert.notEqual(fresh.source.sourceHash, packets[0]!.source.sourceHash);
+    assert.ok(!old || [packets[0]!.source.sourceHash, fresh.source.sourceHash].includes(old.source.sourceHash));
+    await scope.scopedPool.query("UPDATE chat_session_meta SET origin = 'delegated' WHERE session_id = 's'");
+    assert.equal(await a!.backgroundLearningJobs.readEligibleSource(source), undefined);
+  },
+);

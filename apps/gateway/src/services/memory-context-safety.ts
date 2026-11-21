@@ -12,7 +12,8 @@ import { scanPromptwareContent } from "./assembled-prompt-injection-guard.js";
 export const MEMORY_CONTEXT_PROMPT_INJECTION_REASON = "prompt_injection_detected_in_memory_context";
 
 type CandidateCitationMetadata = {
-  sourceType: "transcript" | "file" | "memory_item";
+  sourceType: MemoryCitation["sourceType"];
+  sourceHash?: string;
   timestamp?: string;
   rankScore?: number;
   rankSignals?: MemoryRetrievalMatchSignals;
@@ -91,6 +92,7 @@ export function enrichMemoryCitations(
           : (citation.provenance?.selectionReason ?? "selected from reusable cached context");
     return {
       ...citation,
+      ...(candidate?.sourceHash ? { sourceHash: candidate.sourceHash } : {}),
       provenance: {
         relationScope: citation.provenance?.relationScope ?? relationScope,
         freshness: citation.provenance?.freshness ?? classifyMemoryFreshness(candidate?.timestamp),

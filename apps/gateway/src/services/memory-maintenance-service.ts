@@ -24,6 +24,7 @@ import type {
   MemoryMaintenanceStatusRecord,
   RealtimeEvent,
   TranscriptEvent,
+  LearningReviewSource,
 } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
@@ -153,11 +154,7 @@ export class MemoryMaintenanceService {
     await this.requireReady();
     const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
     const { expectedRevision, ...patch } = input;
-    return this.ctx.storage.memoryMaintenance.patchPolicy(
-      normalizedWorkspaceId,
-      patch,
-      expectedRevision,
-    );
+    return this.ctx.storage.memoryMaintenance.patchPolicy(normalizedWorkspaceId, patch, expectedRevision);
   }
 
   public async getStatus(workspaceId?: string): Promise<MemoryMaintenanceStatusRecord> {
@@ -165,7 +162,7 @@ export class MemoryMaintenanceService {
     const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
     const policy = await this.ensurePolicy(normalizedWorkspaceId);
     const state = await this.refreshState(normalizedWorkspaceId, { touchEligibility: false });
-    const lastRun = (await this.ctx.storage.memoryMaintenance.listRuns(normalizedWorkspaceId, 1))[0];
+    const lastRun = await this.readLatestRun(normalizedWorkspaceId);
     const evaluation = this.evaluateDue(policy, state, lastRun, new Date());
     return {
       workspaceId: normalizedWorkspaceId,
@@ -181,6 +178,10 @@ export class MemoryMaintenanceService {
     const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
     await this.refreshState(normalizedWorkspaceId, { touchEligibility: false });
     return await this.ctx.storage.memoryMaintenance.listRuns(normalizedWorkspaceId, limit);
+  }
+
+  private async readLatestRun(workspaceId: string): Promise<MemoryMaintenanceRunRecord | undefined> {
+    return (await this.ctx.storage.memoryMaintenance.listRuns(workspaceId, 1))[0];
   }
 
   public async getRunProvenance(runId: string): Promise<MemoryMaintenanceProvenanceRecord> {
@@ -245,6 +246,43 @@ export class MemoryMaintenanceService {
    */
   public async noteSuccessfulRootTurnSync(sessionId: string): Promise<MemoryMaintenancePostTurnEvaluationResult> {
     return await this.evaluateSuccessfulRootTurn(sessionId, true);
+  }
+
+  /** Called inside the canonical post-commit stage fence. Reuses cadence and
+   * eligibility, but queues only inactive proposals, never legacy file output. */
+  public async evaluateGovernedPostTurn(
+    input: Omit<LearningReviewSource, "sourceHash">,
+    enqueue: (
+      input: Omit<LearningReviewSource, "sourceHash"> & { kind: "maintenance"; due: boolean },
+    ) => Promise<{ jobId?: string; disposition: "queued" | "deduplicated" | "disabled" }>,
+  ): Promise<{ status: "skipped" | "queued_for_review"; jobId?: string; reasonCode?: string }> {
+    if (!(await this.isOperational())) return { status: "skipped", reasonCode: "maintenance_not_operational" };
+    const source = await this.getEligibleSession(input.sessionId);
+    if (
+      !source ||
+      source.workspaceId !== input.workspaceId ||
+      (await this.ctx.storage.chatSessionPrefs.get(input.sessionId))?.memoryMode === "off"
+    )
+      return { status: "skipped", reasonCode: "maintenance_ineligible_source" };
+    await this.ctx.storage.memoryMaintenance.lockStateForUpdate(this.defaultState(input.workspaceId));
+    const policy = await this.ensurePolicy(input.workspaceId);
+    if (!policy.enabled || policy.runMode !== "hybrid")
+      return { status: "skipped", reasonCode: "maintenance_policy_disabled" };
+    const state = await this.refreshState(input.workspaceId, { touchEligibility: true });
+    const key = `governed_memory_maintenance_last_queued_v1:${encodeURIComponent(input.workspaceId)}`;
+    const previous = (await this.ctx.storage.systemSettings.get<{ queuedAt: string }>(key))?.value;
+    const lastRun = await this.readLatestRun(input.workspaceId);
+    const lastAttempt =
+      previous?.queuedAt && (!lastRun || previous.queuedAt > lastRun.createdAt)
+        ? { createdAt: previous.queuedAt }
+        : lastRun;
+    const due = this.evaluateDue(policy, state, lastAttempt, new Date());
+    if (state.activeRunId || !due.dueBySchedule || !due.thresholdsMet)
+      return { status: "skipped", reasonCode: "maintenance_not_due" };
+    const queued = await enqueue({ ...input, kind: "maintenance", due: true });
+    if (!queued.jobId) return { status: "skipped", reasonCode: "learning_not_ready" };
+    await this.ctx.storage.systemSettings.set(key, { queuedAt: new Date().toISOString(), jobId: queued.jobId });
+    return { status: "queued_for_review", jobId: queued.jobId };
   }
 
   private async evaluateSuccessfulRootTurn(
@@ -604,7 +642,7 @@ export class MemoryMaintenanceService {
   private evaluateDue(
     policy: MemoryMaintenancePolicyRecord,
     state: MemoryMaintenanceStateRecord,
-    lastRun: MemoryMaintenanceRunRecord | undefined,
+    lastRun: Pick<MemoryMaintenanceRunRecord, "createdAt"> | undefined,
     now: Date,
   ): DueEvaluation {
     if (policy.runMode === "manual" || !policy.schedule) {
@@ -673,7 +711,7 @@ export class MemoryMaintenanceService {
       return { status: "evaluated", workspaceId, reason: "manual_mode" };
     }
 
-    const lastRun = (await this.ctx.storage.memoryMaintenance.listRuns(workspaceId, 1))[0];
+    const lastRun = await this.readLatestRun(workspaceId);
     const due = this.evaluateDue(policy, normalizedState, lastRun, new Date());
     if (!due.dueBySchedule || !due.thresholdsMet) {
       return { status: "evaluated", workspaceId, reason: "not_due" };

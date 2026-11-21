@@ -1,7 +1,13 @@
 import type { ChatAttachmentRecord, ChatMode } from "@goatcitadel/contracts";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import {
+  getGatewayAccessRevision,
+  getGatewayCallerScopeRevision,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
+import type { ChatTimerDraft } from "../chat-timer-form";
 import { resolveOutboundSurfaceMode } from "../../pure-helpers";
 import { isLocalChatStatusCommand, isLocalChatTimerCommand } from "../chat-page-pure-helpers";
 import { resolveExecutionRoutePrefs } from "../mission-threaded-controller-helpers";
@@ -21,6 +27,23 @@ import { useChatPresetCatalogState } from "./useChatPresetCatalogState";
 import { useChatScopedErrors } from "./useChatScopedErrors";
 import { useChatSessionComposition } from "./useChatSessionComposition";
 import { useChatSessionSelection } from "./useChatSessionSelection";
+
+function timerReviewScope(workspaceId: string) {
+  return JSON.stringify([
+    workspaceId,
+    getGatewayApiBaseUrl(),
+    getGatewayAccessRevision(),
+    getGatewayCallerScopeRevision(),
+  ]);
+}
+
+function mayAskForRelativeTimer(draft: string): boolean {
+  const request = draft.trim();
+  return (
+    /^(?:please\s+)?remind\s+me\s+in\s+/iu.test(request) ||
+    (/^(?:please\s+)?(?:set|start)\s+/iu.test(request) && /\btimer\b/iu.test(request))
+  );
+}
 
 type Input = {
   getChatApprovalModeIntent?: MissionThreadedControllerHostProps["getChatApprovalModeIntent"];
@@ -102,6 +125,13 @@ export function useChatSubmissionComposition({
   const { captureOutboundExternalContextRefs } = session;
   const { refresh } = session;
   const { openChatTimerPanel } = session;
+  const { ensureSession } = session.sessionControls;
+  const timerAvailable =
+    session.chatTimersEnabled &&
+    !session.sessionData.contextMutationReadOnly &&
+    session.threadController.selectedSession?.scope !== "external";
+  const timerScope = timerReviewScope(workspaceId);
+  const firstReminder = useRef<{ scope: string; draft: ChatTimerDraft; sessionId?: string } | null>(null);
 
   const operatorPromptSettersRef = useRef<{
     setPendingApproval: (value: null) => void;
@@ -159,6 +189,33 @@ export function useChatSubmissionComposition({
     abortActiveChatStream,
   });
   const composerSendHandlerRef = useRef<() => Promise<void>>(orchestration.handleSend);
+  const reminderParseRevision = useRef(0);
+  useLayoutEffect(() => {
+    // An in-flight parser belongs to exactly the draft and destination that asked for review.
+    return () => {
+      reminderParseRevision.current += 1;
+    };
+  }, [
+    draft,
+    timerScope,
+    selection.selectedSessionId,
+    timerAvailable,
+    sending,
+    pendingAttachments.length,
+    orchestration.editingTurnId,
+  ]);
+
+  useEffect(() => {
+    const reminder = firstReminder.current;
+    if (!reminder) return;
+    if (!timerAvailable || reminder.scope !== timerScope) {
+      firstReminder.current = null;
+      return;
+    }
+    if (!selection.selectedSessionId) return;
+    firstReminder.current = null;
+    if (reminder.sessionId === selection.selectedSessionId) openChatTimerPanel(reminder.draft);
+  }, [openChatTimerPanel, selection.selectedSessionId, timerAvailable, timerScope]);
 
   const handleComposerSend = useCallback(() => {
     // Fail closed: an external controller owns this session's mutation authority.
@@ -175,22 +232,76 @@ export function useChatSubmissionComposition({
       void refresh();
       return Promise.resolve();
     }
-    if (session.chatTimersEnabled && selection.selectedSessionId && isLocalChatTimerCommand(draft)) {
-      setDraft("");
-      openChatTimerPanel();
-      return Promise.resolve();
+    if (timerAvailable && timerScope === timerReviewScope(workspaceId)) {
+      const reviewTimerDraft = (timerDraft?: ChatTimerDraft) => {
+        if (selection.selectedSessionId) {
+          setDraft("");
+          openChatTimerPanel(timerDraft);
+          return Promise.resolve();
+        }
+        if (timerDraft) {
+          if (firstReminder.current?.scope === timerScope) return Promise.resolve();
+          const reminder: NonNullable<typeof firstReminder.current> = { scope: timerScope, draft: timerDraft };
+          firstReminder.current = reminder;
+          return ensureSession((created) => {
+            if (firstReminder.current !== reminder || timerScope !== timerReviewScope(workspaceId)) return;
+            reminder.sessionId = created.sessionId;
+            setDraft((current) => (current === draft ? "" : current));
+          }).then(
+            () => {
+              if (firstReminder.current === reminder && !reminder.sessionId) firstReminder.current = null;
+            },
+            (error: unknown) => {
+              if (firstReminder.current !== reminder) return;
+              firstReminder.current = null;
+              if (
+                timerScope !== timerReviewScope(workspaceId) ||
+                (error instanceof DOMException && error.name === "AbortError")
+              )
+                return;
+              setUiError(error instanceof Error ? error.message : "Could not open a Chat for this timer.");
+            },
+          );
+        }
+        return Promise.resolve();
+      };
+      if (selection.selectedSessionId && isLocalChatTimerCommand(draft)) return reviewTimerDraft();
+      if (!sending && !pendingAttachments.length && !orchestration.editingTurnId && mayAskForRelativeTimer(draft)) {
+        const revision = ++reminderParseRevision.current;
+        const isCurrent = () =>
+          revision === reminderParseRevision.current &&
+          timerScope === timerReviewScope(workspaceId) &&
+          !coordination.sessionControlSendLockedRef.current;
+        return import("../chat-timer-form").then(
+          ({ parseChatTimerDraft }) => {
+            if (!isCurrent()) return;
+            const parsed = parseChatTimerDraft(draft);
+            return parsed ? reviewTimerDraft(parsed) : composerSendHandlerRef.current();
+          },
+          () => {
+            if (isCurrent()) setUiError("Could not load timer review. Try sending the reminder again.");
+          },
+        );
+      }
     }
     return composerSendHandlerRef.current();
   }, [
-    session.chatTimersEnabled,
+    timerAvailable,
+    timerScope,
+    workspaceId,
     draft,
+    ensureSession,
     openChatTimerPanel,
+    orchestration.editingTurnId,
+    pendingAttachments.length,
     refresh,
+    sending,
     selection.selectedSessionId,
     session.sessionStatusEnabled,
     coordination.pushLocalNoticeRef,
     coordination.sessionControlSendLockedRef,
     setDraft,
+    setUiError,
   ]);
 
   useEffect(() => {

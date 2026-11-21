@@ -352,9 +352,9 @@ export function ChatTranscript({
   };
   return (
     <WaitingDecisionContext.Provider value={setWaiting}>
-      <div ref={region} role="region" className="relative h-full min-h-0 flex-1" aria-label="Messages">
+      <div ref={region} role="region" className="relative flex h-full min-h-0 flex-1 flex-col" aria-label="Messages">
         <h2 className="sr-only">Messages</h2>
-        <span role="status" aria-live="polite" className="sr-only">
+        <span role="status" className="sr-only">
           {announcement}
         </span>
         <ChatTranscriptNavigation
@@ -364,7 +364,6 @@ export function ChatTranscript({
           virtuoso={virtuoso}
           onReaderJump={markReaderJump}
         />
-        {!props.followOutput ? <JumpToLatestButton waiting={waiting} unread={unread} onJump={jumpAndFocus} /> : null}
         <div
           key={scopeKey}
           ref={bindScroller}
@@ -374,7 +373,7 @@ export function ChatTranscript({
           onKeyDown={onTranscriptBoundaryKey}
           // #497: `relative` makes the scroller the containing block of the turns' absolute sr-only headings, so their
           // overflow stays inside it instead of escaping to <main> and shifting the header and composer.
-          className="relative h-full w-full overflow-y-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          className="relative min-h-0 w-full flex-1 overflow-y-auto focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
           <div className="w-full">
             {virtualized && Virtuoso && scrollElement ? (
@@ -421,6 +420,7 @@ export function ChatTranscript({
           ) : null}
           <ChatTranscriptFooter context={footerContext} />
         </div>
+        {!props.followOutput && <JumpToLatestButton waiting={waiting} unread={unread} onJump={jumpAndFocus} />}
       </div>
     </WaitingDecisionContext.Provider>
   );

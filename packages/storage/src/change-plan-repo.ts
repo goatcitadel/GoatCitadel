@@ -10,6 +10,8 @@ import {
   isChangePlanRequest,
   isChangePlanResult,
   isChangePlanStatus,
+  isShippedFeatureFlag,
+  type ShippedFeatureFlag,
   type ChangePlanAdapterRef,
   type ChangePlanOrigin,
   type ChangePlanRecord,
@@ -541,6 +543,37 @@ export class ChangePlanRepository {
       ? this.listSessionStmt.all({ ...bindings, sessionId: identifier(input.sessionId, "sessionId") })
       : this.listWorkspaceStmt.all(bindings)) as unknown as ChangePlanRow[];
     return rows.map(mapRow);
+  }
+
+  /** Historical decisions for legacy installs whose feature snapshot flattened untouched defaults. */
+  public readAppliedFeaturePreferences(): Partial<Record<ShippedFeatureFlag, boolean>> {
+    const choices: Partial<Record<ShippedFeatureFlag, boolean>> = {};
+    const rows = this.db
+      .prepare(
+        `
+      SELECT request_json FROM change_plans
+      WHERE kind = 'runtime_configuration' AND target_owner_id = 'runtime_settings'
+        AND (target_resource_id LIKE 'feature:%' OR target_resource_id = 'feature_flags')
+        AND status IN ('applied', 'completed') AND applied_at IS NOT NULL
+      ORDER BY expected_target_revision, applied_at, plan_id
+    `,
+      )
+      .all() as unknown as { request_json: string }[];
+    for (const row of rows) {
+      const request = parseObject(row.request_json, "feature preference");
+      if (!isChangePlanRequest(request) || request.kind !== "runtime_configuration") continue;
+      const change = request.change;
+      const flags =
+        change.operation === "feature_flag"
+          ? { [change.flag]: change.enabled }
+          : change.operation === "feature_flags"
+            ? change.flags
+            : {};
+      for (const [flag, enabled] of Object.entries(flags)) {
+        if (isShippedFeatureFlag(flag) && typeof enabled === "boolean") choices[flag] = enabled;
+      }
+    }
+    return choices;
   }
 
   public listActive(limit = 500): ChangePlanRecord[] {

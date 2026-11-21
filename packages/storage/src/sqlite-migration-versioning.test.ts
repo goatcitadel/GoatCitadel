@@ -28,6 +28,13 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
+        version: 288,
+        name: "learning_schema_convergence",
+      },
+    );
+    assert.deepEqual(
+      { ...rows.find((row) => row.version === 281) },
+      {
         version: 281,
         name: "skill_hub_remove_operation_kind",
       },

@@ -1,6 +1,10 @@
+import { resolveExactFirstProviderUsage, buildLegacyCompactionDimension } from "./chat-compaction-provider-evidence.js";
 import { createHash } from "node:crypto";
 import {
+  canonicalJsonString,
   redactStructuredSecrets,
+  type ChatContinuityLedgerV1,
+  type ChatContinuityCanonicalLink,
   type ChatCompletionRequest,
   type ChatCompactionAttemptDisposition,
   type ChatCompactionBreakerRecord,
@@ -15,7 +19,9 @@ import {
   buildChatCompactionStateKey,
   type AsyncStorage as Storage,
 } from "@goatcitadel/storage";
-import { buildConversationCompactionSummary, renderConversationSummaryForModel } from "./chat-compaction.js";
+import { renderConversationSummaryForModel } from "./chat-compaction.js";
+import { buildChatContinuityLedger, renderChatContinuityLedger } from "./chat-continuity-ledger.js";
+import { estimateFirstProviderRequestInputTokens } from "./chat-agent-prompt-budget-receipt.js";
 import type { LlmService } from "./llm-service.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
 
@@ -50,7 +56,12 @@ export interface ChatCompactionDimension {
 
 export interface ChatMessageHistoryDependencies {
   readonly storage: Pick<Storage, "chatConversationSummaries">;
-  readonly llmService: Pick<LlmService, "getRuntimeConfig">;
+  readonly llmService: Pick<LlmService, "getRuntimeConfig"> &
+    Partial<Pick<LlmService, "getModelContextWindow" | "getModelOutputTokenLimit">>;
+  resolveContinuityLinks?(
+    sessionId: string,
+    turnIds: string[],
+  ): Promise<{ links: ChatContinuityCanonicalLink[]; complete: boolean }>;
   readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]>;
   loadChatTurnSessionState(sessionId: string): Promise<ChatTurnSessionState>;
   /** `codeModeRequestEligible`: whether this turn is offered `code_mode.request` (attachment hints name its tools). */
@@ -77,6 +88,16 @@ export interface ChatMessageHistoryDependencies {
   }): Promise<void>;
 }
 
+function resolveHistoryModel(deps: ChatMessageHistoryDependencies, options?: { providerId?: string; model?: string }) {
+  const runtime = deps.llmService.getRuntimeConfig();
+  const providerId = options?.providerId ?? runtime.activeProviderId;
+  const provider = runtime.providers.find((item) => item.providerId === providerId);
+  const model = options?.model ?? provider?.defaultModel ?? runtime.activeModel;
+  const tokenMultiplier = deps.getModelTokenMultiplier?.(providerId, model) ?? 1;
+  const supportsVision = Boolean(provider?.capabilities?.vision || inferModelVisionSupport(model));
+  return { providerId, model, tokenMultiplier, supportsVision };
+}
+
 export async function buildLlmMessagesFromTranscript(
   deps: ChatMessageHistoryDependencies,
   sessionId: string,
@@ -91,12 +112,7 @@ export async function buildLlmMessagesFromTranscript(
     protectedTurnIds?: readonly string[];
   },
 ): Promise<ChatCompletionRequest["messages"]> {
-  const runtime = deps.llmService.getRuntimeConfig();
-  const providerId = options?.providerId ?? runtime.activeProviderId;
-  const providerSummary = runtime.providers.find((item) => item.providerId === providerId);
-  const model = options?.model ?? providerSummary?.defaultModel ?? runtime.activeModel;
-  const tokenMultiplier = deps.getModelTokenMultiplier?.(providerId, model) ?? 1;
-  const supportsVision = Boolean(providerSummary?.capabilities?.vision || inferModelVisionSupport(model));
+  const { tokenMultiplier, supportsVision } = resolveHistoryModel(deps, options);
   const transcript = await deps.readTranscriptOrEmpty(sessionId);
   const mapped = await Promise.all(
     transcript
@@ -273,12 +289,7 @@ async function buildLlmMessagesFromRecords(
     codeModeRequestEligible?: boolean;
   },
 ): Promise<ChatCompletionRequest["messages"]> {
-  const runtime = deps.llmService.getRuntimeConfig();
-  const providerId = options?.providerId ?? runtime.activeProviderId;
-  const providerSummary = runtime.providers.find((item) => item.providerId === providerId);
-  const model = options?.model ?? providerSummary?.defaultModel ?? runtime.activeModel;
-  const tokenMultiplier = deps.getModelTokenMultiplier?.(providerId, model) ?? 1;
-  const supportsVision = Boolean(providerSummary?.capabilities?.vision || inferModelVisionSupport(model));
+  const { providerId, model, tokenMultiplier, supportsVision } = resolveHistoryModel(deps, options);
   const mapped = await Promise.all(
     records.map(async (message) => {
       if (message.role === "assistant") {
@@ -572,7 +583,7 @@ async function compactBranchMappedMessages(
     return input.mapped;
   }
 
-  const summaryMessages: ChatCompletionRequest["messages"] = [];
+  const continuityWindows: ChatContinuityLedgerV1[] = [];
   const summaryDispositions: Array<Exclude<ChatCompactionAttemptDisposition, "no_progress">> = [];
   let completedBoundaryCount = 0;
   for (let index = 0; index < targetBoundaryTurnIds.length; index += CHAT_COMPACTION_WINDOW_SIZE) {
@@ -590,10 +601,7 @@ async function compactBranchMappedMessages(
     if (!summaryResult) {
       break;
     }
-    summaryMessages.push({
-      role: "system",
-      content: renderConversationSummaryForModel(summaryResult.summary),
-    });
+    continuityWindows.push(summaryResult.ledger);
     summaryDispositions.push(summaryResult.disposition);
     completedBoundaryCount += windowTurnIds.length;
   }
@@ -604,6 +612,9 @@ async function compactBranchMappedMessages(
     return input.mapped;
   }
   const completedBoundaryTurnIds = targetBoundaryTurnIds.slice(0, completedBoundaryCount);
+  // Validate the *combined* continuity context before committing a durable
+  // boundary. A per-window budget would grow without bound over long chats.
+  if (completedBoundaryCount > 0 && !renderBoundaryContinuity(completedBoundaryCount)) return input.mapped;
   const attemptedNewBoundary = canCreateInitialBoundary || canExtendBoundary;
   if (supportsBreaker && attemptedNewBoundary && completedBoundaryCount === existingBoundaryCount) {
     const attemptedSourceHash = hashBranchTurnSource(targetBoundaryTurnIds, grouped);
@@ -721,20 +732,65 @@ async function compactBranchMappedMessages(
   }
 
   const renderedBoundaryCount = activeState?.boundaryTurnIds.length ?? completedBoundaryCount;
-  const summarizedMessageIds = new Set(
-    input.branchTurnIds
-      .slice(0, renderedBoundaryCount)
-      .flatMap((turnId) => grouped.get(turnId) ?? [])
-      .map((message) => message.messageId),
-  );
-  const mappedVerbatim = input.records.flatMap((message, index) =>
-    summarizedMessageIds.has(message.messageId) ? [] : [input.mapped[index]!],
-  );
-  return [...summaryMessages.slice(0, renderedBoundaryCount / CHAT_COMPACTION_WINDOW_SIZE), ...mappedVerbatim];
+  return renderBoundaryContinuity(renderedBoundaryCount) ?? input.mapped;
+
+  function renderBoundaryContinuity(count: number): ChatCompletionRequest["messages"] | undefined {
+    if (count === 0) return input.mapped;
+    const windows = continuityWindows.slice(0, count / CHAT_COMPACTION_WINDOW_SIZE);
+    if (windows.length * CHAT_COMPACTION_WINDOW_SIZE !== count) return undefined;
+    const summarizedMessageIds = new Set(
+      input.branchTurnIds
+        .slice(0, count)
+        .flatMap((turnId) => grouped.get(turnId) ?? [])
+        .map((message) => message.messageId),
+    );
+    const tail = input.records.flatMap((message, index) =>
+      summarizedMessageIds.has(message.messageId) ? [] : [input.mapped[index]!],
+    );
+    const contextWindow =
+      input.providerId && input.model
+        ? deps.llmService.getModelContextWindow?.(input.providerId, input.model)
+        : undefined;
+    const outputCeiling =
+      input.providerId && input.model
+        ? deps.llmService.getModelOutputTokenLimit?.(input.providerId, input.model)
+        : undefined;
+    const multiplier = Math.max(1, input.tokenMultiplier ?? 1);
+    // Reserve the route's entire known output ceiling, schema budget and
+    // framing. Final routed-context admission still owns the full request.
+    const baseEstimate = estimateFirstProviderRequestInputTokens({
+      messages: [{ role: "system", content: input.systemContextText ?? "" }, ...tail],
+    });
+    const remaining =
+      contextWindow === undefined
+        ? 2000
+        : Math.floor((contextWindow - (outputCeiling ?? 4096) - 2200) / multiplier) - baseEstimate - 160;
+    const ledger: ChatContinuityLedgerV1 = {
+      version: 1,
+      sourceHash: createHash("sha256")
+        .update(windows.map((window) => window.sourceHash).join(":"))
+        .digest("hex"),
+      turnIds: windows.flatMap((window) => window.turnIds),
+      entries: windows.flatMap((window) => window.entries),
+      omittedSourceRefs: windows.flatMap((window) => window.omittedSourceRefs),
+      originalAsk: windows[0]?.originalAsk,
+      latestAsk: windows.at(-1)?.latestAsk,
+    };
+    const rendered = renderChatContinuityLedger(ledger, { maxTokens: Math.min(2000, remaining) });
+    if (rendered.requiresSourceExpansion || !rendered.text) return undefined;
+    return [
+      {
+        role: "system",
+        content: renderConversationSummaryForModel(`Compacted conversation context.\n${rendered.text}`),
+      },
+      ...tail,
+    ];
+  }
 }
 
 interface ConversationCompactionSummaryResult {
   summary: string;
+  ledger: ChatContinuityLedgerV1;
   disposition: Exclude<ChatCompactionAttemptDisposition, "no_progress">;
 }
 
@@ -757,9 +813,19 @@ async function getOrCreateConversationSummary(
   if (!source) {
     return undefined;
   }
-  const sourceHash = createHash("sha256").update(source).digest("hex");
   const summaryRepo = deps.storage.chatConversationSummaries;
   try {
+    const resolveContinuityLinks = deps.resolveContinuityLinks;
+    const canonical = resolveContinuityLinks
+      ? await resolveContinuityLinks.call(deps, input.sessionId, input.turnIds)
+      : { links: [], complete: true };
+    if (!canonical.complete) return undefined;
+    const ledger = buildChatContinuityLedger({
+      messages: input.messages,
+      turnIds: input.turnIds,
+      canonicalLinks: canonical.links,
+    });
+    const sourceHash = ledger.sourceHash;
     const existing =
       typeof summaryRepo.findReusableWindow === "function"
         ? await summaryRepo.findReusableWindow({ sessionId: input.sessionId, turnIds: input.turnIds, sourceHash })
@@ -769,13 +835,17 @@ async function getOrCreateConversationSummary(
               : summaryRepo.listByBranch(input.sessionId, input.branchHeadTurnId))
           ).find((summary) => summary.sourceHash === sourceHash && arraysEqual(summary.turnIds, input.turnIds));
     if (existing) {
+      if (!existing.continuityLedger || canonicalJsonString(existing.continuityLedger) !== canonicalJsonString(ledger))
+        return undefined;
       return {
         summary: existing.summary,
+        ledger: existing.continuityLedger,
         disposition: isStructuredConversationSummary(existing.summary) ? "structured" : "fallback",
       };
     }
-    const summary = buildConversationCompactionSummary(input.messages);
-    if (!summary) {
+    const rendered = renderChatContinuityLedger(ledger, { maxTokens: 2000 });
+    const summary = `Compacted conversation context.\n${rendered.text}`;
+    if (!rendered.text || rendered.requiresSourceExpansion || ledger.entries.length === 0) {
       return undefined;
     }
     await deps.onCompaction?.({
@@ -787,7 +857,7 @@ async function getOrCreateConversationSummary(
       turnCount: input.turnIds.length,
       sourceHash,
     });
-    const persisted = await deps.storage.chatConversationSummaries.upsert({
+    const persisted = await summaryRepo.upsert({
       sessionId: input.sessionId,
       branchHeadTurnId: input.branchHeadTurnId,
       startTurnId: input.turnIds[0]!,
@@ -796,6 +866,7 @@ async function getOrCreateConversationSummary(
       sourceHash,
       tokenEstimate: estimateTokensFromText(source),
       summary,
+      continuityLedger: ledger,
     });
     await deps.onCompaction?.({
       phase: "after",
@@ -809,6 +880,7 @@ async function getOrCreateConversationSummary(
     });
     return {
       summary: persisted.summary,
+      ledger: persisted.continuityLedger ?? ledger,
       disposition:
         persisted.summary === summary || isStructuredConversationSummary(persisted.summary) ? "structured" : "fallback",
     };
@@ -854,71 +926,6 @@ function selectCompatibleCompactionState(
     .filter((state) => isExactPrefix(state.boundaryTurnIds, branchTurnIds))
     .filter((state) => state.boundarySourceHash === hashBranchTurnSource(state.boundaryTurnIds, grouped))
     .sort((left, right) => right.boundaryTurnIds.length - left.boundaryTurnIds.length)[0];
-}
-
-interface ExactFirstProviderUsage {
-  turnId: string;
-  inputTokens: number;
-  observedTurnCount: number;
-}
-
-function resolveExactFirstProviderUsage(
-  state: ChatTurnSessionState | undefined,
-  branchTurnIds: string[],
-  dimension: ChatCompactionDimension,
-  afterTurnId?: string,
-): ExactFirstProviderUsage | undefined {
-  if (!state || !dimension.providerId || !dimension.model) {
-    return undefined;
-  }
-  const evidenceIndex = branchTurnIds.length - 1;
-  const afterIndex = afterTurnId === undefined ? -1 : branchTurnIds.lastIndexOf(afterTurnId);
-  if (evidenceIndex < 0 || (afterTurnId !== undefined && (afterIndex < 0 || evidenceIndex <= afterIndex))) {
-    return undefined;
-  }
-  const turnId = branchTurnIds[evidenceIndex]!;
-  const trace = state.tracesById.get(turnId);
-  if (trace?.status !== "completed") {
-    return undefined;
-  }
-  const usage = trace.completion?.firstProviderRequestUsage;
-  if (
-    usage?.source !== "provider_reported" ||
-    usage.availability !== "reported" ||
-    usage.compactionDimensionHash !== dimension.dimensionHash ||
-    usage.providerId !== dimension.providerId ||
-    usage.model !== dimension.model ||
-    !Number.isSafeInteger(usage.reportedInputTokens) ||
-    usage.reportedInputTokens! < 0 ||
-    usage.effectiveInputTokens !== usage.reportedInputTokens
-  ) {
-    // The dimension hash seals the provider/model/profile fingerprint. A
-    // deterministic estimate, mismatched route, failed turn, or malformed
-    // provider receipt is never allowed to judge breaker effectiveness.
-    return undefined;
-  }
-  return {
-    turnId,
-    inputTokens: usage.reportedInputTokens,
-    observedTurnCount: branchTurnIds.length,
-  };
-}
-
-function buildLegacyCompactionDimension(
-  providerId: string | undefined,
-  model: string | undefined,
-): ChatCompactionDimension {
-  const dimensionSource = JSON.stringify({
-    version: 1,
-    providerId: providerId ?? null,
-    model: model ?? null,
-    profile: null,
-  });
-  return {
-    dimensionHash: createHash("sha256").update(dimensionSource).digest("hex"),
-    providerId,
-    model,
-  };
 }
 
 function hashBranchTurnSource(turnIds: string[], grouped: Map<string, ChatMessageRecord[]>): string {

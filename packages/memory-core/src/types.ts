@@ -22,18 +22,47 @@ export interface MemoryItemSource {
   pinned?: boolean;
   retrievalHints?: string[];
   embedding?: number[];
+  sourceHash?: string;
+  indexedSemanticScore?: number;
 }
 
-export type MemorySourceInput = MemoryTranscriptSource | MemoryFileSource | MemoryItemSource;
+export interface MemoryLearningSource {
+  type: "memory_learning";
+  learningId: string;
+  title: string;
+  content: string;
+  updatedAt: string;
+  sourceHash: string;
+  retrievalHints?: string[];
+}
+
+export interface MemoryKnowledgeSource {
+  type: "knowledge_chunk";
+  chunkId: string;
+  title: string;
+  content: string;
+  updatedAt: string;
+  sourceHash: string;
+  indexedSemanticScore?: number;
+}
+
+export type MemorySourceInput =
+  | MemoryTranscriptSource
+  | MemoryFileSource
+  | MemoryItemSource
+  | MemoryLearningSource
+  | MemoryKnowledgeSource;
 
 export interface MemoryCandidate {
   candidateId: string;
-  sourceType: "transcript" | "file" | "memory_item";
+  sourceType: "transcript" | "file" | "memory_item" | "memory_learning" | "knowledge_chunk";
   sourceRef: string;
+  sourceHash?: string;
   text: string;
   timestamp?: string;
   retrievalHints?: string[];
   embedding?: number[];
+  indexedSemanticScore?: number;
 }
 
 export interface RankedMemoryCandidate extends MemoryCandidate {

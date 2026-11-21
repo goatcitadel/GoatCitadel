@@ -63,6 +63,7 @@ export async function patchSettings(input: {
   expectedRevision: number;
   deploymentProfile?: "local_dev" | "trusted_local" | "remote_hardened";
   toolApprovalMode?: "approve_all" | "approve_risky" | "bypass";
+  automaticBackgroundUsdCap?: number;
   budgetMode?: "saver" | "balanced" | "power";
   readAccessMode?: "roots_only" | "approval_required" | "full_disk";
   outsideRootWriteMode?: "deny" | "approval_required";
@@ -156,6 +157,7 @@ export async function patchSettings(input: {
     ubatchSize?: number | null;
     flashAttention?: boolean | null;
   };
+  featureReview?: import("@goatcitadel/contracts").FeaturePreferenceReview;
   features?: Partial<RuntimeSettingsResponse["features"]>;
 }): Promise<RuntimeSettingsResponse> {
   return request<RuntimeSettingsResponse>("/api/v1/settings", {

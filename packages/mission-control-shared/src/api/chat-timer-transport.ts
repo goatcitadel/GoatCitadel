@@ -10,10 +10,12 @@ export async function fetchChatTimers(sessionId: string): Promise<ChatTimerListR
 export async function createChatTimer(
   sessionId: string,
   input: CreateChatTimerInput,
+  attemptKey?: string,
 ): Promise<ChatTimerMutationResponse> {
   return request<ChatTimerMutationResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/timers`, {
     method: "POST",
     body: JSON.stringify(input),
+    attemptKey,
   });
 }
 

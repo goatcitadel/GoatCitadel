@@ -23,6 +23,16 @@ describe("gateway learned-memory hygiene", () => {
     expect(extractLearnedMemoryCandidates("Can we do this without adding more risk", "user")).toEqual([]);
   });
 
+  it("does not turn quoted, fenced, hypothetical or project questions into session evidence", () => {
+    for (const content of [
+      'The webpage says "Remember that the project must use Rust."',
+      "```\nRemember that the project must use Rust.\n```",
+      "If the project uses Rust, what should change?",
+      "What stack does this project use?",
+    ])
+      expect(extractLearnedMemoryCandidates(content, "user")).toEqual([]);
+  });
+
   it("skips assistant memory extraction when a turn contains blocked browser runs", () => {
     const blockedRun: ChatToolRunRecord = {
       toolRunId: "tool-1",

@@ -1,14 +1,12 @@
+import { MemoryContextQueryEmbedding } from "./memory-context-query-embedding.js";
+import { isExplicitMemoryRecallPrompt } from "./memory-context-utils.js";
 import { createHash } from "node:crypto";
-import path from "node:path";
 import {
-  ConflictError,
-  type MemoryContextAccessReceipt,
   type MemoryContextAssemblyReport,
   type MemoryContextComposeRequest,
   type MemoryContextCompositionDiagnostics,
   type MemoryContextPack,
   type MemoryQmdStatsResponse,
-  type MemoryRelationScope,
   type MemoryRetrievalStatusResponse,
 } from "@goatcitadel/contracts";
 import {
@@ -22,14 +20,9 @@ import {
   rankMemoryCandidates,
   selectMemoryCandidatesForDistillation,
   validateCitations,
-  type MemoryItemSource,
-  type MemorySourceInput,
 } from "@goatcitadel/memory-core";
 import {
-  assertWritePathInJail,
   currentEmbeddingProfile,
-  EmbeddingUsageSettlementError,
-  generateEmbedding,
   type AcquireLocalEmbeddingLease,
   type PrepareEmbeddingUsageDispatch,
 } from "@goatcitadel/policy-engine";
@@ -41,7 +34,11 @@ import {
   MEMORY_DISTILLER_SKIPPED_PER_CALL_CLI_REASON,
   MemoryDistillerSkippedError,
 } from "./memory-distiller-route.js";
-import { walkMemoryFiles } from "./memory-file-walk.js";
+import {
+  MemoryContextSourceReader,
+  type MemoryCorpusReadPort,
+  type ReadTrustedLearnings,
+} from "./memory-context-source-reader.js";
 import {
   enrichMemoryCitations,
   enrichMemoryPack,
@@ -62,8 +59,6 @@ import {
 } from "./memory-context-access-policy.js";
 import {
   calculateSavings,
-  extractMemoryEmbedding,
-  extractMemoryRetrievalHints,
   isMemoryContextAbort,
   parseDistillerResponse,
   projectMemoryRetrievalStatus,
@@ -74,40 +69,29 @@ import {
   truncate,
 } from "./memory-context-utils.js";
 
-const DEFAULT_MEMORY_WORKSPACE_ID = "default";
-
 export type { MemoryContextCompositionDiagnostics } from "@goatcitadel/contracts";
 
-interface QueryEmbeddingResult {
-  embedding?: number[];
-  providerIsReal: boolean;
-}
-interface PendingQueryEmbedding {
-  controller: AbortController;
-  promise: Promise<QueryEmbeddingResult>;
-  waiters: number;
-  settled: boolean;
-}
-
 export class MemoryContextService {
-  private readonly pendingQueryEmbeddings = new Map<string, PendingQueryEmbedding>();
-  private readonly queryEmbeddingCache = new Map<
-    string,
-    {
-      embedding: number[];
-      providerIsReal: boolean;
-      expiresAt: number;
-    }
-  >();
+  private readonly queryEmbedding: MemoryContextQueryEmbedding;
+  private readonly sourceReader: MemoryContextSourceReader;
   public constructor(
     private readonly storage: Storage,
     private readonly llmService: LlmService,
     private readonly config: GatewayRuntimeConfig,
     private readonly publishRealtime: (eventType: string, payload: Record<string, unknown>) => Promise<unknown>,
-    private readonly acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease,
-    private readonly prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch,
+    acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease,
+    prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch,
     private readonly observeComposition?: (diagnostics: Readonly<MemoryContextCompositionDiagnostics>) => void,
-  ) {}
+    collectTrustedLearnings?: ReadTrustedLearnings,
+    corpusRead?: MemoryCorpusReadPort,
+  ) {
+    this.sourceReader = new MemoryContextSourceReader(storage, config, collectTrustedLearnings, corpusRead);
+    this.queryEmbedding = new MemoryContextQueryEmbedding(
+      config,
+      acquireLocalEmbeddingLease,
+      prepareEmbeddingUsageDispatch,
+    );
+  }
   public async compose(
     input: MemoryContextComposeRequest,
     usageLineage?: TrustedUtilityModelUsageLineage,
@@ -131,7 +115,7 @@ export class MemoryContextService {
     };
     try {
       const pack = await this.composeInternal(input, usageLineage, diagnostics);
-      const result = await this.degradeUnsafeMemoryContext(input, pack);
+      const result = await this.degradeUnsafeMemoryContext(input, await this.checkCurrentLearningSources(input, pack));
       diagnostics.outcome = "completed";
       diagnostics.contextStatus = result.quality.status;
       diagnostics.availableCandidateCount = result.quality.assembly?.availableCandidateCount;
@@ -173,7 +157,9 @@ export class MemoryContextService {
       diagnostics.timings.accessMs = elapsedMs(accessStarted);
     });
     const relationScope = accessReceipt.mode === "session_only" ? "self" : resolveMemoryRelationScope(input);
-    const shouldShortCircuit = !memoryConfig.enabled || !qmd.enabled || prompt.length < qmd.minPromptChars;
+    const explicitRecall = input.intent === "explicit_recall" || isExplicitMemoryRecallPrompt(prompt);
+    const shouldShortCircuit =
+      !memoryConfig.enabled || !qmd.enabled || (!explicitRecall && prompt.length < qmd.minPromptChars);
     // Generate a query embedding for the prompt when the caller did not supply one,
     // so semantic-vector ranking can engage. Skipped on the short-circuit path
     // (disabled/short prompt never ranks, so the legacy behavior is preserved).
@@ -183,11 +169,11 @@ export class MemoryContextService {
           embedding: input.queryEmbedding,
           providerIsReal: currentEmbeddingProfile().provider !== "pseudo",
         }
-      : await this.resolveQueryEmbedding(input, prompt, accessReceipt.fingerprint, usageLineage, diagnostics).finally(
-          () => {
+      : await this.queryEmbedding
+          .resolve(input, prompt, accessReceipt.fingerprint, usageLineage, diagnostics)
+          .finally(() => {
             diagnostics.timings.embeddingMs = elapsedMs(embeddingStarted);
-          },
-        );
+          });
     diagnostics.timings.embeddingMs = elapsedMs(embeddingStarted);
     diagnostics.embeddingProviderIsReal = resolvedQueryEmbedding.providerIsReal;
     const queryEmbedding = resolvedQueryEmbedding.embedding;
@@ -251,18 +237,28 @@ export class MemoryContextService {
     }
 
     const sourceStarted = performance.now();
-    const sources = await this.collectSources(input, accessReceipt).finally(() => {
-      diagnostics.timings.sourceReadMs = elapsedMs(sourceStarted);
-    });
+    const sources = await this.sourceReader
+      .collect(
+        input,
+        accessReceipt,
+        resolvedQueryEmbedding.providerIsReal && queryEmbedding
+          ? { values: queryEmbedding, profile: currentEmbeddingProfile() }
+          : undefined,
+      )
+      .finally(() => {
+        diagnostics.timings.sourceReadMs = elapsedMs(sourceStarted);
+      });
     throwIfMemoryContextAborted(input.signal);
     const rankingStarted = performance.now();
     const availableCandidates = rankMemoryCandidates(
       prompt,
       collectMemoryCandidates(sources, {
+        maxCandidates: 300,
         maxTranscriptEvents: qmd.maxTranscriptEvents,
-        maxFileCandidates: qmd.maxMemoryFiles,
-        maxMemoryItems: qmd.maxMemoryFiles,
+        maxFileCandidates: 300,
+        maxMemoryItems: 300,
         maxCharsPerCandidate: 1400,
+        query: prompt,
       }),
       {
         maxCandidates: 40,
@@ -654,315 +650,6 @@ export class MemoryContextService {
     });
   }
 
-  /**
-   * Resolve the query embedding used for semantic-vector ranking. Honors an
-   * explicit `input.queryEmbedding`; otherwise generates one from the prompt.
-   * The returned `providerIsReal` follows the actual generated vector metadata,
-   * not only the configured provider: real providers can fall back to pseudo
-   * vectors on network/config errors, and those fallback vectors must not affect
-   * semantic ranking.
-   */
-  private async resolveQueryEmbedding(
-    input: MemoryContextComposeRequest,
-    prompt: string,
-    accessFingerprint: string,
-    usageLineage?: TrustedUtilityModelUsageLineage,
-    diagnostics?: MemoryContextCompositionDiagnostics,
-  ): Promise<{ embedding?: number[]; providerIsReal: boolean }> {
-    if (input.queryEmbedding && input.queryEmbedding.length > 0) {
-      if (diagnostics) diagnostics.embeddingCacheStatus = "supplied";
-      return {
-        embedding: input.queryEmbedding,
-        providerIsReal: currentEmbeddingProfile().provider !== "pseudo",
-      };
-    }
-    if (!prompt) {
-      return { providerIsReal: false };
-    }
-    // Cache only the query computation. Sources and canonical access are still
-    // read on every composition so edits, deletions and access changes take effect.
-    // Hash exact prompt bytes: embedding providers need not be case-insensitive.
-    const profile = currentEmbeddingProfile();
-    const cacheKey = createHash("sha256")
-      .update(
-        JSON.stringify({
-          prompt,
-          profile,
-          endpoint: process.env.GOATCITADEL_EMBEDDINGS_URL,
-          scope: input.scope,
-          citadelId: input.citadelId,
-          workspaceId: input.workspaceId,
-          workspace: input.workspace,
-          sessionId: input.sessionId,
-          taskId: input.taskId,
-          runId: input.runId,
-          phaseId: input.phaseId,
-          accessFingerprint,
-        }),
-      )
-      .digest("hex");
-    const now = Date.now();
-    for (const [key, entry] of this.queryEmbeddingCache) {
-      if (entry.expiresAt <= now) this.queryEmbeddingCache.delete(key);
-    }
-    const cached = this.queryEmbeddingCache.get(cacheKey);
-    if (!input.forceRefresh && cached) {
-      throwIfMemoryContextAborted(input.signal);
-      if (diagnostics) diagnostics.embeddingCacheStatus = "hit";
-      return { embedding: [...cached.embedding], providerIsReal: cached.providerIsReal };
-    }
-    this.queryEmbeddingCache.delete(cacheKey);
-    if (diagnostics) diagnostics.embeddingCacheStatus = input.forceRefresh ? "refresh" : "miss";
-    // A shared network attempt must have one exact accounting lineage. Cache
-    // reuse itself is free, but an in-flight call cannot borrow another turn's
-    // provider reservation or dispatch attribution.
-    const pendingKey = createHash("sha256")
-      .update(
-        JSON.stringify({
-          cacheKey,
-          lineage: Object.entries(usageLineage ?? {}).sort(([left], [right]) => left.localeCompare(right)),
-        }),
-      )
-      .digest("hex");
-    const existing = input.forceRefresh ? undefined : this.pendingQueryEmbeddings.get(pendingKey);
-    if (existing && !existing.controller.signal.aborted) {
-      if (diagnostics) diagnostics.embeddingCacheStatus = "shared";
-      return this.waitForQueryEmbedding(pendingKey, existing, input.signal);
-    }
-    // Force refresh owns its dispatch and cancellation. At the bounded map
-    // limit, continue safely without retaining another single-flight entry.
-    if (input.forceRefresh || this.pendingQueryEmbeddings.size >= 128) {
-      return this.generateQueryEmbedding(input, prompt, profile, cacheKey, usageLineage);
-    }
-    const controller = new AbortController();
-    const pending: PendingQueryEmbedding = {
-      controller,
-      waiters: 0,
-      settled: false,
-      promise: this.generateQueryEmbedding(
-        { ...input, signal: controller.signal },
-        prompt,
-        profile,
-        cacheKey,
-        usageLineage,
-      ).finally(() => {
-        pending.settled = true;
-        if (this.pendingQueryEmbeddings.get(pendingKey) === pending) this.pendingQueryEmbeddings.delete(pendingKey);
-      }),
-    };
-    this.pendingQueryEmbeddings.set(pendingKey, pending);
-    return this.waitForQueryEmbedding(pendingKey, pending, input.signal);
-  }
-
-  private waitForQueryEmbedding(
-    pendingKey: string,
-    pending: PendingQueryEmbedding,
-    signal?: AbortSignal,
-  ): Promise<QueryEmbeddingResult> {
-    pending.waiters += 1;
-    return new Promise((resolve, reject) => {
-      let finished = false;
-      const release = () => {
-        if (finished) return false;
-        finished = true;
-        signal?.removeEventListener("abort", onAbort);
-        pending.waiters -= 1;
-        if (pending.waiters === 0 && !pending.settled) {
-          if (this.pendingQueryEmbeddings.get(pendingKey) === pending) this.pendingQueryEmbeddings.delete(pendingKey);
-          pending.controller.abort(new Error("memory embedding has no remaining retrieval waiters"));
-        }
-        return true;
-      };
-      const onAbort = () => {
-        if (!release()) return;
-        try {
-          throwIfMemoryContextAborted(signal);
-        } catch (error) {
-          reject(error);
-        }
-      };
-      signal?.addEventListener("abort", onAbort, { once: true });
-      pending.promise.then(
-        (result) => {
-          if (release()) resolve({ ...result, ...(result.embedding ? { embedding: [...result.embedding] } : {}) });
-        },
-        (error) => {
-          if (release()) reject(error);
-        },
-      );
-      if (signal?.aborted) onAbort();
-    });
-  }
-
-  private async generateQueryEmbedding(
-    input: MemoryContextComposeRequest,
-    prompt: string,
-    profile: ReturnType<typeof currentEmbeddingProfile>,
-    cacheKey: string,
-    usageLineage?: TrustedUtilityModelUsageLineage,
-  ): Promise<QueryEmbeddingResult> {
-    throwIfMemoryContextAborted(input.signal);
-    try {
-      const generated = await generateEmbedding(prompt, undefined, undefined, {
-        purpose: "embedding_query",
-        ...(input.signal ? { signal: input.signal } : {}),
-        ...(this.acquireLocalEmbeddingLease ? { acquireLocalServiceLease: this.acquireLocalEmbeddingLease } : {}),
-        ...(this.prepareEmbeddingUsageDispatch
-          ? { prepareModelUsageDispatch: this.prepareEmbeddingUsageDispatch }
-          : {}),
-        modelUsageAttribution: {
-          ...usageLineage,
-          workspaceId: input.workspaceId,
-          sessionId: input.sessionId,
-          durableRunId: usageLineage?.durableRunId ?? input.runId,
-          taskId: input.taskId,
-          utilityKind: "memory_context_query_embedding",
-        },
-      });
-      throwIfMemoryContextAborted(input.signal);
-      const ttlMs = Math.min(300_000, this.config.assistant.memory.qmd.cacheTtlSeconds * 1000);
-      // Never retain a degraded result: a recovered provider must be retried.
-      if (
-        ttlMs > 0 &&
-        generated.embedding.length > 0 &&
-        profile.status === "active" &&
-        generated.profile.status === "active" &&
-        generated.metadata.provider === profile.provider
-      ) {
-        if (this.queryEmbeddingCache.size >= 128) {
-          const oldest = this.queryEmbeddingCache.keys().next().value;
-          if (oldest !== undefined) this.queryEmbeddingCache.delete(oldest);
-        }
-        this.queryEmbeddingCache.set(cacheKey, {
-          embedding: [...generated.embedding],
-          providerIsReal: generated.metadata.provider !== "pseudo",
-          expiresAt: Date.now() + ttlMs,
-        });
-      }
-      return {
-        ...(generated.embedding.length > 0 ? { embedding: generated.embedding } : {}),
-        providerIsReal: generated.metadata.provider !== "pseudo",
-      };
-    } catch (error) {
-      throwIfMemoryContextAborted(input.signal);
-      if (error instanceof ConflictError || error instanceof EmbeddingUsageSettlementError) {
-        throw error;
-      }
-      return { providerIsReal: false };
-    }
-  }
-
-  private async collectSources(
-    input: MemoryContextComposeRequest,
-    accessReceipt: MemoryContextAccessReceipt,
-  ): Promise<MemorySourceInput[]> {
-    const sources: MemorySourceInput[] = [];
-    const relationScope = accessReceipt.mode === "session_only" ? "self" : resolveMemoryRelationScope(input);
-    for (const sessionId of await this.resolveTranscriptSessionIds(input, relationScope, accessReceipt)) {
-      throwIfMemoryContextAborted(input.signal);
-      const transcript = await readTranscriptOrEmpty(this.storage, sessionId);
-      sources.push({
-        type: "transcript",
-        events: transcript,
-      });
-    }
-
-    if (accessReceipt.mode === "session_only") {
-      return sources;
-    }
-
-    throwIfMemoryContextAborted(input.signal);
-    for (const item of await this.collectMemoryItemSources(await this.resolveMemoryItemWorkspaceId(input))) {
-      sources.push(item);
-    }
-
-    throwIfMemoryContextAborted(input.signal);
-    const workspaceRelative = input.workspace?.trim() || "memory";
-    const workspaceRoot = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir);
-    const basePath = path.resolve(workspaceRoot, workspaceRelative);
-    try {
-      assertWritePathInJail(basePath, this.config.toolPolicy.sandbox.writeJailRoots);
-      const files = await walkMemoryFiles(basePath, workspaceRoot, {
-        maxFiles: this.config.assistant.memory.qmd.maxMemoryFiles,
-        maxBytesPerFile: this.config.assistant.memory.qmd.maxBytesPerFile,
-        allowedExtensions: this.config.assistant.memory.qmd.allowedExtensions,
-      });
-      throwIfMemoryContextAborted(input.signal);
-      for (const file of files) {
-        sources.push(file);
-      }
-    } catch {
-      // Ignore missing or inaccessible memory workspace paths.
-    }
-
-    return sources;
-  }
-
-  // Finding 1 hardening: the DB memory-item retrieval choke-point must ALWAYS be
-  // workspace-scoped. Resolve from the explicit workspaceId, else the session's
-  // owning workspace, else the default workspace — never undefined, which would
-  // trigger the unfiltered cross-workspace query in listActiveMemoryItems.
-  private async resolveMemoryItemWorkspaceId(input: MemoryContextComposeRequest): Promise<string> {
-    const explicit = input.workspaceId?.trim();
-    if (explicit) {
-      return explicit;
-    }
-    const sessionId = input.sessionId?.trim();
-    if (sessionId) {
-      const metaWorkspaceId = (await this.storage.chatSessionMeta?.get(sessionId))?.workspaceId?.trim();
-      if (metaWorkspaceId) {
-        return metaWorkspaceId;
-      }
-    }
-    return DEFAULT_MEMORY_WORKSPACE_ID;
-  }
-
-  private async collectMemoryItemSources(workspaceId?: string): Promise<MemoryItemSource[]> {
-    try {
-      return (
-        await this.storage.memoryMaintenance.listActiveMemoryItems(
-          this.config.assistant.memory.qmd.maxMemoryFiles,
-          normalizeMemoryWorkspaceId(workspaceId),
-        )
-      ).map((item) => ({
-        type: "memory_item",
-        itemId: item.itemId,
-        namespace: item.namespace,
-        title: item.title,
-        content: item.content,
-        updatedAt: item.updatedAt,
-        pinned: item.pinned,
-        retrievalHints: extractMemoryRetrievalHints(item.metadata),
-        embedding: extractMemoryEmbedding(item.metadata),
-      }));
-    } catch {
-      return [];
-    }
-  }
-
-  private async resolveTranscriptSessionIds(
-    input: MemoryContextComposeRequest,
-    relationScope: MemoryRelationScope,
-    accessReceipt: MemoryContextAccessReceipt,
-  ): Promise<string[]> {
-    const sessionIds = new Set<string>();
-    if (input.sessionId) {
-      sessionIds.add(input.sessionId);
-    }
-    if (
-      accessReceipt.mode === "workspace_private" &&
-      (relationScope === "peer" || relationScope === "project") &&
-      input.runId
-    ) {
-      for (const step of await this.storage.chatDelegationSteps.listByRun(input.runId)) {
-        if (step.childSessionId) {
-          sessionIds.add(step.childSessionId);
-        }
-      }
-    }
-    return [...sessionIds];
-  }
-
   private async degradeUnsafeMemoryContext(
     input: MemoryContextComposeRequest,
     pack: MemoryContextPack,
@@ -1009,6 +696,52 @@ export class MemoryContextService {
     });
     return degraded;
   }
+
+  private async checkCurrentLearningSources(
+    input: MemoryContextComposeRequest,
+    pack: MemoryContextPack,
+  ): Promise<MemoryContextPack> {
+    const citations = pack.citations.filter(
+      (citation) =>
+        ["memory_item", "memory_learning", "knowledge_chunk"].includes(citation.sourceType) &&
+        Boolean(citation.sourceHash),
+    );
+    if (!citations.length) return pack;
+    const current = await this.sourceReader.readCurrentSources(input, citations);
+    const hashes = new Map<string, string | undefined>();
+    for (const source of current) {
+      if (source.type === "memory_learning") hashes.set(`memory_learning:${source.learningId}`, source.sourceHash);
+      if (source.type === "memory_item") hashes.set(`memory_item:${source.itemId}`, source.sourceHash);
+      if (source.type === "knowledge_chunk") hashes.set(`knowledge_chunk:${source.chunkId}`, source.sourceHash);
+    }
+    if (
+      citations.every(
+        (citation) =>
+          citation.sourceHash && hashes.get(`${citation.sourceType}:${citation.sourceRef}`) === citation.sourceHash,
+      )
+    )
+      return pack;
+    const contextText =
+      "Memory context withheld because an admitted learning changed or became unavailable during composition.";
+    return await this.storage.memoryContexts.upsert({
+      cacheKey: createHash("sha256")
+        .update(`${pack.contextId}|learning_source_changed|${JSON.stringify([...hashes])}`)
+        .digest("hex"),
+      scope: pack.scope,
+      sessionId: pack.sessionId,
+      taskId: pack.taskId,
+      runId: pack.runId,
+      phaseId: pack.phaseId,
+      queryHash: pack.queryHash,
+      sourcesHash: buildSourcesHash([]),
+      contextText,
+      citations: [],
+      quality: { ...pack.quality, status: "fallback", reason: "learning_source_changed" },
+      originalTokenEstimate: pack.originalTokenEstimate,
+      distilledTokenEstimate: Math.ceil(contextText.length / 4),
+      expiresAt: new Date().toISOString(),
+    });
+  }
 }
 
 function elapsedMs(startedAt: number): number {
@@ -1024,24 +757,4 @@ function refreshMemoryPackAssembly(pack: MemoryContextPack, assembly: MemoryCont
       assembly,
     },
   };
-}
-
-// Finding 1: never return undefined — an undefined workspaceId makes
-// listActiveMemoryItems fall back to the unfiltered cross-workspace query. A
-// concrete workspace is resolved upstream (resolveMemoryItemWorkspaceId); this is
-// the final backstop.
-function normalizeMemoryWorkspaceId(workspaceId?: string): string {
-  const trimmed = workspaceId?.trim();
-  return trimmed || DEFAULT_MEMORY_WORKSPACE_ID;
-}
-
-async function readTranscriptOrEmpty(storage: Storage, sessionId: string) {
-  try {
-    return await storage.transcripts.read(sessionId);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
 }

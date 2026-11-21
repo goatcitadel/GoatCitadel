@@ -107,7 +107,7 @@ it("offers Reload conversation when the conversation is unavailable (CH-22)", as
 
 it("mentions a decision at the end of a response only when one is waiting (CH-10)", async () => {
   const thread = { sessionId: "session-1", turns: [turn("t1")] } as never;
-  const status = () => container.querySelector('[aria-live="polite"]')?.textContent;
+  const status = () => container.querySelector('[aria-label="Messages"] > [role="status"]')?.textContent;
   await render(<ChatTranscript props={props({ thread, hasActiveStream: true })} />);
   await render(<ChatTranscript props={props({ thread, hasActiveStream: false })} />);
   expect(status()).toBe("Response ended.");
@@ -131,8 +131,11 @@ it("names the waiting approval on Jump to latest, and moves focus to its card (C
       props={props({ thread, followOutput: false, pendingApproval: { approvalId: "a", riskLevel: "safe" } as never })}
     />,
   );
-  const jump = [...container.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Jump to"))!;
-  expect(jump.textContent).toBe("Jump to the approval waiting for you");
+  const jump = await vi.waitFor(() => {
+    const button = [...container.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Jump to"));
+    expect(button?.textContent).toBe("Jump to the approval waiting for you");
+    return button!;
+  });
   jump.focus();
   await act(async () => {
     jump.click();

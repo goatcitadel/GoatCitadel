@@ -248,6 +248,10 @@ export function createChatActiveSessionPresentation({
           threadNotices: chatSessionRailPresentation.threadNotices,
           sessionStatusEnabled: session.sessionStatusEnabled,
           chatTimerPanel: session.timerPanel.chatTimerPanel,
+          onReviewReminder:
+            session.chatTimersEnabled && session.threadController.selectedSession?.scope !== "external"
+              ? session.timerPanel.openChatTimerPanel
+              : undefined,
           typedRunVariablesEnabled: session.typedRunVariablesEnabled,
           runVariablePanel: session.runVariables.runVariablePanel,
           followThreadOutput,

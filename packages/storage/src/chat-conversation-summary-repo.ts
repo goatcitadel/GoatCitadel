@@ -11,7 +11,13 @@ import type {
   ChatCompactionStateRecord,
   ChatConversationSummaryRecord,
 } from "@goatcitadel/contracts";
-import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
+import {
+  ConflictError,
+  NotFoundError,
+  encodeChatContinuitySummary,
+  decodeChatContinuitySummary,
+  type ChatContinuityLedgerV1,
+} from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 
 const MAX_ID_LENGTH = 256;
@@ -112,6 +118,7 @@ interface ChatCompactionBreakerActionRow {
 }
 
 export interface ChatConversationSummaryUpsertInput {
+  continuityLedger?: ChatContinuityLedgerV1;
   summaryId?: string;
   sessionId: string;
   branchHeadTurnId: string;
@@ -567,6 +574,16 @@ export class ChatConversationSummaryRepository {
 
   public upsert(input: ChatConversationSummaryUpsertInput): ChatConversationSummaryRecord {
     validateSummaryInput(input);
+    if (
+      input.continuityLedger &&
+      (input.continuityLedger.sourceHash !== input.sourceHash ||
+        !arraysEqual(input.continuityLedger.turnIds, input.turnIds))
+    ) {
+      throw new RangeError("Continuity ledger must match the exact source hash and turn ids.");
+    }
+    const storedSummary = input.continuityLedger
+      ? encodeChatContinuitySummary(input.summary, input.continuityLedger)
+      : input.summary;
     const expectedWindowKey = buildConversationSummaryWindowKey(input.sessionId, input.turnIds, input.sourceHash);
     if (input.windowKey && input.windowKey !== expectedWindowKey) {
       throw new RangeError("windowKey must match the exact ordered turn ids and source hash");
@@ -586,7 +603,7 @@ export class ChatConversationSummaryRepository {
         sourceHash: input.sourceHash,
         windowKey,
         tokenEstimate: Math.floor(input.tokenEstimate),
-        summary: input.summary,
+        summary: storedSummary,
         createdAt,
         updatedAt,
       });
@@ -1612,6 +1629,14 @@ function mapSummaryRow(row: ChatConversationSummaryRow | undefined): ChatConvers
   ) {
     return undefined;
   }
+  const decoded = decodeChatContinuitySummary(row.summary_text);
+  if (
+    !decoded ||
+    (decoded.continuityLedger &&
+      (decoded.continuityLedger.sourceHash !== row.source_hash ||
+        !arraysEqual(decoded.continuityLedger.turnIds, turnIds)))
+  )
+    return undefined;
   return {
     summaryId: row.summary_id,
     sessionId: row.session_id,
@@ -1622,7 +1647,8 @@ function mapSummaryRow(row: ChatConversationSummaryRow | undefined): ChatConvers
     sourceHash: row.source_hash,
     ...(typeof row.window_key === "string" && row.window_key ? { windowKey: row.window_key } : {}),
     tokenEstimate: Number(row.token_estimate),
-    summary: row.summary_text,
+    summary: decoded.summary,
+    ...(decoded.continuityLedger ? { continuityLedger: decoded.continuityLedger } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

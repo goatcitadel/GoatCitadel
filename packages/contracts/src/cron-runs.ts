@@ -65,6 +65,28 @@ export interface CronRunBeginInput {
   admissionKey: string;
   scheduledFor: string;
   trigger?: CronRunTrigger;
+  /** Exact operator/event-reviewed spec; rechecked under the canonical occurrence lock. */
+  expectedJobRevision?: number;
+  /** Last execution reviewed by the operator, checked under the job lock. */
+  expectedExecutionGeneration?: number;
+  /** Server-authored operator identity, frozen with the occurrence for exact retries. */
+  operatorAction?: CronOperatorAction;
+  /** Internal verified-event reference, frozen alongside the job action. Not a public mutation argument. */
+  eventSource?: CronEventSource;
+}
+
+export interface CronOperatorAction {
+  actorId: string;
+  operationId: string;
+  expectedExecutionGeneration: number;
+}
+
+export interface CronEventSource {
+  eventId: string;
+  eventType: "subagent.end";
+  workspaceId: string;
+  sourceConnectionId: string;
+  payloadHash: string;
 }
 
 export type CronRunBeginResult =

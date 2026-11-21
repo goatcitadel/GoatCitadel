@@ -14,6 +14,7 @@ import {
 } from "./improvement-tune-reads.js";
 import { IMPROVEMENT_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
 import { systemCronScheduleLabel } from "./cron-job-schedule-labels.js";
+import { recordBoundPromptLabRegression } from "./prompt-pack-watch.test-support.js";
 import type { ServiceContext } from "./service-context.js";
 
 interface Harness {
@@ -30,6 +31,67 @@ interface Harness {
 }
 
 const harnesses: Harness[] = [];
+
+it("describes static eligibility checks without claiming a candidate run or comparative test", async () => {
+  const h = await createHarness(),
+    candidate = await createRoutingCandidate(h.service);
+  await h.service.validateImprovementCandidate(candidate.candidateId);
+  const detail = await h.service.getImprovementCandidateDetail(candidate.candidateId),
+    evaluation = detail.latestEvaluation;
+  assert.equal(evaluation?.evaluatorKind, "static_preflight");
+  assert.equal(evaluation?.metrics.comparativeEvaluationPerformed, 0);
+  assert.match(evaluation!.resultSummary, /No candidate run or comparative performance test was performed/u);
+  assert.equal(evaluation?.datasetOrPackRef, undefined);
+  assert.equal(evaluation?.baselineRef.metadata?.comparisonPerformed, false);
+});
+
+it("captures only pre-work watch eligibility and counts the same canonical run pair once across reports", async () => {
+  const h = await createHarness();
+  await h.service.recordPromptLabRegressionCompletionSignal({
+    regressionRunId: "seed",
+    packId: "watch-producer-pack",
+    capability: "truthfulness",
+    scoreDelta: -1,
+    passDelta: -1,
+    latencyDeltaMs: 0,
+  });
+  const [candidate] = await h.service.listImprovementCandidates(10);
+  assert.ok(candidate);
+  const activation = await h.service.requestImprovementActivation(candidate.candidateId, "operator");
+  await h.service.handleActivationApprovalResolution(
+    resolveApproval(h, activation.approvalId, { decision: "approve", resolvedBy: "operator" }),
+  );
+  const bindings = await h.service.capturePromptLabWatchBindings("watch-producer-pack");
+  assert.equal(bindings.length, 1);
+  assert.equal(bindings[0]?.activationId, activation.activationId);
+  assert.match(bindings[0]!.changeHash, /^[a-f0-9]{64}$/u);
+  const input = {
+    regressionRunId: "first-report",
+    packId: "watch-producer-pack",
+    capability: "truthfulness",
+    scoreDelta: 1,
+    passDelta: 1,
+    latencyDeltaMs: 0,
+  };
+  const signal = await recordBoundPromptLabRegression(h, activation, input);
+  assert.ok(signal);
+  const work = signal.metadata.observedWork as { currentRunId: string; baselineRunId: string };
+  assert.ok(work.currentRunId);
+  for (let i = 0; i < 5; i++)
+    await h.service.recordPromptLabRegressionCompletionSignal({
+      ...input,
+      ...work,
+      regressionRunId: `duplicate-report-${i}`,
+    });
+  await h.service.recordPromptLabRegressionCompletionSignal({
+    ...input,
+    regressionRunId: "after-the-fact",
+    improvementWatchRevision: { revisionId: bindings[0]!.revisionId, changeHash: bindings[0]!.changeHash },
+  });
+  const observed = await h.service.getImprovementActivation(activation.activationId);
+  assert.equal(observed.positiveSignalCount, 1);
+  assert.equal(observed.watchStatus, "watching");
+});
 
 afterEach(() => {
   for (const harness of harnesses.splice(0)) {
@@ -142,7 +204,7 @@ describe("ImprovementService ledger lifecycle", () => {
     assert.equal(harness.routingPolicies[candidate.targetKey], undefined);
   });
 
-  it("marks an activation stable after 20 qualifying watch-window signals", async () => {
+  it("ignores neutral traffic and stabilizes only after exact-revision positive observations", async () => {
     const harness = await createHarness();
     const candidate = await createRoutingCandidate(harness.service);
     const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
@@ -163,12 +225,25 @@ describe("ImprovementService ledger lifecycle", () => {
       });
     }
 
+    const neutral = await harness.service.getImprovementActivation(activation.activationId);
+    assert.equal(neutral.watchStatus, "watching");
+    assert.equal(neutral.positiveSignalCount, 0);
+    for (let index = 0; index < 20; index++)
+      await recordBoundPromptLabRegression(harness, activation, {
+        regressionRunId: `positive-${index}`,
+        packId: "pack-routing",
+        capability: "provider-balance",
+        scoreDelta: 0.1,
+        passDelta: 0.1,
+        latencyDeltaMs: 0,
+      });
     const stable = await harness.service.getImprovementActivation(activation.activationId);
     assert.equal(stable.watchStatus, "stable");
     assert.equal(stable.watchSignalCount, 20);
+    assert.equal(stable.positiveSignalCount, 20);
   });
 
-  it("reconciles active watch windows to stable after the watch deadline expires", async () => {
+  it("ends with insufficient evidence after a zero-traffic watch expires", async () => {
     const harness = await createHarness();
     const candidate = await createRoutingCandidate(harness.service);
     const activation = await harness.service.requestImprovementActivation(candidate.candidateId, "operator-1");
@@ -190,10 +265,12 @@ describe("ImprovementService ledger lifecycle", () => {
         watchEndsAt: "2000-01-01T00:00:00.000Z",
       });
 
-    (harness.service as unknown as { reconcileActiveWatchWindows: () => void }).reconcileActiveWatchWindows();
+    await (
+      harness.service as unknown as { reconcileActiveWatchWindows: () => Promise<void> }
+    ).reconcileActiveWatchWindows();
 
     const stable = await harness.service.getImprovementActivation(activation.activationId);
-    assert.equal(stable.watchStatus, "stable");
+    assert.equal(stable.watchStatus, "insufficient_evidence");
   });
 
   it("fails the activation when the first watch-window regression cannot restore the snapshot", async () => {
@@ -207,7 +284,7 @@ describe("ImprovementService ledger lifecycle", () => {
     await harness.service.handleActivationApprovalResolution(approval);
     harness.state.failRoutingRestore = true;
 
-    await harness.service.recordPromptLabRegressionCompletionSignal({
+    await recordBoundPromptLabRegression(harness, activation, {
       regressionRunId: "regression-negative-1",
       packId: "pack-routing",
       capability: "provider-balance",
@@ -265,7 +342,7 @@ describe("ImprovementService ledger lifecycle", () => {
     assert.equal(result.candidate.kind, "skill_revision");
     const detail = await harness.service.getImprovementCandidateDetail(result.candidate.candidateId);
     assert.equal(detail.candidate.status, "ready_for_approval");
-    assert.equal(detail.latestEvaluation?.evaluatorKind, "skill_eval_scorecard");
+    assert.equal(detail.latestEvaluation?.evaluatorKind, "static_preflight");
     assert.equal(detail.currentRevision?.candidateRef.refType, "skill_evaluation_run");
     await assert.rejects(
       () => harness.service.requestImprovementActivation(result.candidate!.candidateId, "operator-1"),

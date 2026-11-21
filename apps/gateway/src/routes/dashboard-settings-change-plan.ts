@@ -19,6 +19,7 @@ type ProviderProfile = NonNullable<Extract<ChangePlanRequest, { kind: "provider_
 export interface SettingsChangePlanInput {
   readonly expectedRevision: number;
   readonly toolApprovalMode?: RuntimeChangeFor<"tool_approval_mode">["mode"];
+  readonly automaticBackgroundUsdCap?: number;
   readonly budgetMode?: RuntimeChangeFor<"budget_mode">["mode"];
   readonly deploymentProfile?: RuntimeChangeFor<"deployment_profile">["profile"];
   readonly readAccessMode?: RuntimeChangeFor<"read_access_policy">["mode"];
@@ -65,6 +66,7 @@ export interface SettingsChangePlanInput {
     readonly modelsRootPath?: string;
     readonly modelPath?: string;
   };
+  readonly featureReview?: import("@goatcitadel/contracts").FeaturePreferenceReview;
   readonly features?: Readonly<Record<string, boolean | undefined>>;
 }
 
@@ -86,6 +88,13 @@ export function settingsChangePlanRequest(input: SettingsChangePlanInput): Chang
     case "toolApprovalMode":
       return input.toolApprovalMode
         ? { kind: "runtime_configuration", change: { operation: "tool_approval_mode", mode: input.toolApprovalMode } }
+        : null;
+    case "automaticBackgroundUsdCap":
+      return input.automaticBackgroundUsdCap !== undefined
+        ? {
+            kind: "runtime_configuration",
+            change: { operation: "automatic_background_budget", limitUsd: input.automaticBackgroundUsdCap },
+          }
         : null;
     case "budgetMode":
       return input.budgetMode
@@ -243,6 +252,10 @@ export function settingsChangePlanRequest(input: SettingsChangePlanInput): Chang
       }
       return { kind: "runtime_configuration", change: { operation: "llama_cpp_configuration", config: llama } };
     }
+    case "featureReview":
+      return input.featureReview
+        ? { kind: "runtime_configuration", change: { operation: "feature_preference_review", ...input.featureReview } }
+        : null;
     case "features": {
       const entries = Object.entries(input.features ?? {}).filter(
         (entry): entry is [string, boolean] => typeof entry[1] === "boolean",

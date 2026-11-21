@@ -16,6 +16,7 @@ export function validateCitations(
     if (
       citation.sourceType !== candidate.sourceType ||
       citation.sourceRef !== candidate.sourceRef ||
+      (citation.sourceHash !== undefined && citation.sourceHash !== candidate.sourceHash) ||
       !Number.isFinite(citation.score) ||
       citation.score < 0 ||
       citation.score > 1

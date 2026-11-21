@@ -4,6 +4,7 @@ import {
   getGatewayCallerScopeRevision,
 } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import type { ChatTimerDraft } from "./chat-timer-form";
 import type { ChatTimerRuntime } from "./ChatTimerRuntime";
 import type { useChatTimerPanel } from "./useChatTimerPanel";
 
@@ -17,7 +18,14 @@ export function useDeferredChatTimerPanel(
   onLoadError: (error: string) => void,
 ) {
   const { enabled, selectedSessionId, workspaceId } = input;
-  const scope = useMemo(() => ({ enabled, selectedSessionId, workspaceId }), [enabled, selectedSessionId, workspaceId]);
+  const callerScope = getGatewayCallerScopeRevision(),
+    accessScope = getGatewayAccessRevision(),
+    gatewayUrl = getGatewayApiBaseUrl(),
+    selectionVersion = selectionRevision.current;
+  const scope = useMemo(
+    () => ({ enabled, selectedSessionId, workspaceId, callerScope, accessScope, gatewayUrl, selectionVersion }),
+    [enabled, selectedSessionId, workspaceId, callerScope, accessScope, gatewayUrl, selectionVersion],
+  );
   const liveScope = useRef<object | null>(null);
   useLayoutEffect(() => {
     liveScope.current = scope;
@@ -26,41 +34,52 @@ export function useDeferredChatTimerPanel(
     };
   }, [scope]);
   const [Runtime, setRuntime] = useState<Runtime>();
-  const [request, setRequest] = useState<{ scope: object }>();
+  const [request, setRequest] = useState<{ scope: object; draft?: ChatTimerDraft }>();
   const [snapshot, setSnapshot] = useState<{ scope: object; panel: Panel }>();
   const publish = useCallback((panel: Panel) => setSnapshot({ scope, panel }), [scope]);
-  const openChatTimerPanel = useCallback(() => {
-    if (!enabled || !selectedSessionId || liveScope.current !== scope) return;
-    const access = getGatewayAccessRevision();
-    const caller = getGatewayCallerScopeRevision();
-    const gateway = getGatewayApiBaseUrl();
-    const revision = selectionRevision.current;
-    const current = () =>
-      liveScope.current === scope &&
-      selectionRevision.current === revision &&
-      access === getGatewayAccessRevision() &&
-      caller === getGatewayCallerScopeRevision() &&
-      gateway === getGatewayApiBaseUrl();
-    const open = () => {
-      if (current()) setRequest({ scope });
-    };
-    if (Runtime) {
-      open();
-      return;
-    }
-    void import("./ChatTimerRuntime").then(
-      ({ ChatTimerRuntime }) => {
-        if (!current()) return;
-        setRuntime(() => ChatTimerRuntime);
+  const openChatTimerPanel = useCallback(
+    (draft?: ChatTimerDraft) => {
+      if (!enabled || !selectedSessionId || liveScope.current !== scope) return;
+
+      const current = () =>
+        liveScope.current === scope &&
+        selectionRevision.current === selectionVersion &&
+        accessScope === getGatewayAccessRevision() &&
+        callerScope === getGatewayCallerScopeRevision() &&
+        gatewayUrl === getGatewayApiBaseUrl();
+      const open = () => {
+        if (current()) setRequest({ scope, draft });
+      };
+      if (Runtime) {
         open();
-      },
-      () => {
-        if (current()) {
-          onLoadError("Chat timers could not load. Try opening them again.");
-        }
-      },
-    );
-  }, [Runtime, enabled, onLoadError, scope, selectedSessionId, selectionRevision]);
+        return;
+      }
+      void import("./ChatTimerRuntime").then(
+        ({ ChatTimerRuntime }) => {
+          if (!current()) return;
+          setRuntime(() => ChatTimerRuntime);
+          open();
+        },
+        () => {
+          if (current()) {
+            onLoadError("Chat timers could not load. Try opening them again.");
+          }
+        },
+      );
+    },
+    [
+      Runtime,
+      enabled,
+      onLoadError,
+      scope,
+      selectedSessionId,
+      selectionRevision,
+      selectionVersion,
+      accessScope,
+      callerScope,
+      gatewayUrl,
+    ],
+  );
   return {
     openChatTimerPanel,
     chatTimerPanel: snapshot?.scope === scope ? snapshot.panel : undefined,

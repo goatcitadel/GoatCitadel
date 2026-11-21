@@ -1,6 +1,6 @@
 import { createGatewayRouteServices, type GatewayRouteServices } from "./gateway-route-services.js";
 import type { GatewayRouteCompositionPort } from "./gateway-route-composition-port.js";
-import { composeChatRouteDependencies } from "./gateway-route-composition-chat.js";
+import { composeChatAssistantSupport, composeChatRouteDependencies } from "./gateway-route-composition-chat.js";
 import { composeIntegrationChannelRouteDependencies } from "./gateway-route-composition-integrations.js";
 import { composeRuntimeAdminRouteDependencies } from "./gateway-route-composition-runtime.js";
 import { composeMemoryKnowledgeRouteDependencies } from "./gateway-route-composition-memory.js";
@@ -41,6 +41,7 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionPort
       ...composeToolsMcpRouteDependencies(gateway),
       ...composeSystemRouteDependencies(gateway),
     }),
+    chatAssistantSupport: composeChatAssistantSupport(gateway),
     mailDrafts: composeCommunicationsMailDraftStore(gateway),
     mailDraftRecovery: composeCommunicationsMailDraftRecovery(gateway),
   };

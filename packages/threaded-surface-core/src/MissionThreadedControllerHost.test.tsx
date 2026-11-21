@@ -103,6 +103,7 @@ const callChatMultimodalControlsMock = useChatMultimodalControlsMock;
 let mockSurfaceMode: ChatMode = "chat";
 let mockCompact = false;
 const handleSendMock = vi.fn(async () => undefined);
+const createChatTimerMock = vi.fn();
 // HX-411: mutable session-control status the mocked hook returns. Defaults to
 // operator/absent (unlocked) in setupMocks so the other suites are unaffected.
 const sessionControlHookState = vi.hoisted(() => ({
@@ -253,6 +254,10 @@ const generatedArtifact = {
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   ApiRequestError: ApiRequestErrorMock,
+  fetchChatTimers: vi.fn(async () => ({ items: [] })),
+  fetchNotificationRules: vi.fn(async () => ({ items: [] })),
+  fetchNotificationTargets: vi.fn(async () => ({ items: [] })),
+  createChatTimer: (...args: unknown[]) => createChatTimerMock(...args),
   attachThreadKnowledgeAttachment: (...args: unknown[]) => attachThreadKnowledgeAttachmentMock(...args),
   createChatGeneratedArtifact: (...args: unknown[]) => createChatGeneratedArtifactMock(...args),
   createChatSideChat: (...args: unknown[]) => createChatSideChatMock(...args),
@@ -4095,6 +4100,50 @@ describe("MissionThreadedControllerHost", () => {
     expect(latestSurfaceInput?.activeSessionSurfaceProps?.trust.fallbackSummary).toBe(
       "Fallback armed · local runtime busy",
     );
+  });
+
+  it("routes direct reminder text to confirmation without dispatching Chat or creating a timer", async () => {
+    const sessionData = useChatSessionDataMock();
+    useChatSessionDataMock.mockReturnValue({
+      ...sessionData,
+      settings: { ...sessionData.settings, features: { chatTimersV1Enabled: true } },
+    });
+    createChatTimerMock.mockClear();
+    await renderHost();
+    await selectDefaultSession();
+    await commitDraft("Remind me in 20 minutes to make tea.");
+    await act(async () => latestSurfaceInput?.activeSessionSurfaceProps?.onSend());
+    await act(async () => vi.dynamicImportSettled());
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.chatTimerPanel).toMatchObject({
+      open: true,
+      delayMs: 1_200_000,
+      message: "make tea.",
+      notificationRuleId: "",
+    });
+    expect(handleSendMock).not.toHaveBeenCalled();
+    expect(createChatTimerMock).not.toHaveBeenCalled();
+  });
+
+  it("passes an admitted absolute reminder preview to the same confirmation editor", async () => {
+    const sessionData = useChatSessionDataMock();
+    useChatSessionDataMock.mockReturnValue({
+      ...sessionData,
+      settings: { ...sessionData.settings, features: { chatTimersV1Enabled: true } },
+    });
+    createChatTimerMock.mockClear();
+    await renderHost();
+    await selectDefaultSession();
+    const preview = { localDueAt: "2027-02-01T10:30", timezone: "America/New_York", message: "Make tea" };
+    await act(async () => latestSurfaceInput?.activeSessionSurfaceProps?.onReviewReminder?.(preview));
+    await act(async () => vi.dynamicImportSettled());
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.chatTimerPanel).toMatchObject({
+      open: true,
+      dueAt: preview.localDueAt,
+      timezone: preview.timezone,
+      message: preview.message,
+      notificationRuleId: "",
+    });
+    expect(createChatTimerMock).not.toHaveBeenCalled();
   });
 
   it("covers auto image send branches with committed draft state", async () => {

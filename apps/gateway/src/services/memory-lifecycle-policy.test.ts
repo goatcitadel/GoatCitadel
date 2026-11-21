@@ -10,6 +10,53 @@ import {
 } from "./memory-lifecycle-policy.js";
 
 describe("memory-lifecycle-policy", () => {
+  it("keeps an opposite scalar preference inactive until an exact correction is reviewed", () => {
+    const identity = {
+      subject: "operator",
+      predicate: "reply_length",
+      scope: { kind: "workspace" as const, id: "A" },
+      cardinality: "scalar" as const,
+    };
+    expect(
+      decideLearnedMemoryWrite({
+        workspaceId: "A",
+        claim: { identity, value: "detailed" },
+        authority: "agent_proposed",
+        content: "I prefer detailed replies",
+        confidence: 0.99,
+        existing: [
+          {
+            itemId: "reply",
+            content: "I prefer concise replies",
+            confidence: 0.8,
+            claim: { identity, value: "concise" },
+            sourceHash: "one",
+          },
+        ],
+      }),
+    ).toEqual({ action: "record_conflict", existingItemId: "reply", incomingConfidence: 0.99 });
+  });
+
+  it("keeps unrelated properties independent even when their coarse type and confidence match", () => {
+    expect(
+      decideLearnedMemoryWrite({
+        content: "I prefer concise replies",
+        confidence: 0.8,
+        existing: [{ itemId: "language", content: "I prefer TypeScript", confidence: 0.8 }],
+      }),
+    ).toEqual({ action: "insert_active", incomingConfidence: 0.8 });
+  });
+
+  it("never replaces an unrelated fact just because a model gives it greater confidence", () => {
+    expect(
+      decideLearnedMemoryWrite({
+        content: "Use detailed explanations",
+        confidence: 0.99,
+        existing: [{ itemId: "language", content: "Prefer TypeScript", confidence: 0.4 }],
+      }),
+    ).toEqual({ action: "insert_active", incomingConfidence: 0.99 });
+  });
+
   it("normalizes and clamps lifecycle inputs consistently", () => {
     expect(clampMemoryConfidence(1.5)).toBe(1);
     expect(clampMemoryConfidence(-0.5)).toBe(0);
@@ -37,7 +84,7 @@ describe("memory-lifecycle-policy", () => {
     });
   });
 
-  it("records conflicts when competing memories disagree at similar confidence", () => {
+  it("does not infer a conflict between unbound legacy properties at similar confidence", () => {
     expect(
       decideLearnedMemoryWrite({
         content: "Prefers shipping broad rewrites quickly",
@@ -51,13 +98,12 @@ describe("memory-lifecycle-policy", () => {
         ],
       }),
     ).toEqual({
-      action: "record_conflict",
-      existingItemId: "item-1",
+      action: "insert_active",
       incomingConfidence: 0.62,
     });
   });
 
-  it("supersedes weaker conflicting memories when the new signal is materially stronger", () => {
+  it("does not infer supersession of an unbound legacy property from confidence", () => {
     expect(
       decideLearnedMemoryWrite({
         content: "Needs approvals before touching production systems",
@@ -71,8 +117,7 @@ describe("memory-lifecycle-policy", () => {
         ],
       }),
     ).toEqual({
-      action: "supersede",
-      existingItemId: "item-1",
+      action: "insert_active",
       incomingConfidence: 0.92,
     });
   });

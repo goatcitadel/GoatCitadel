@@ -30,6 +30,9 @@ export interface ChatPostCommitRuntimeCompositionInput {
   resolveModelDefaults(): Promise<{ providerId?: string; model?: string } | undefined>;
   resolveApiStyle(providerId?: string, model?: string): LlmApiStyle;
   proposeTraceMemoryCandidate: ChatPostCommitEffectServiceDeps["proposeTraceMemoryCandidate"];
+  resolveBackgroundLearningReadiness: ChatPostCommitEffectServiceDeps["resolveBackgroundLearningReadiness"];
+  enqueueLearningReview: NonNullable<ChatPostCommitEffectServiceDeps["enqueueLearningReview"]>;
+  evaluateGovernedMemoryMaintenance: NonNullable<ChatPostCommitEffectServiceDeps["evaluateGovernedMemoryMaintenance"]>;
   /** Required in production composition: post-commit children must never run unfenced. */
   effectAuthority: ChatPostCommitEffectAuthorityPort;
   isAutonomyDisabled(): Promise<boolean>;
@@ -56,33 +59,53 @@ export interface ChatPostCommitRuntimeComposition {
 export function createChatPostCommitRuntime(
   input: ChatPostCommitRuntimeCompositionInput,
 ): ChatPostCommitRuntimeComposition {
+  const {
+    storage,
+    createChatCompletion,
+    resolveModelDefaults,
+    resolveApiStyle,
+    resolveBackgroundLearningReadiness,
+    publishRealtime,
+  } = input;
   const commitmentClassifier = new CommitmentClassifierService({
-    storage: input.storage,
-    createChatCompletion: input.createChatCompletion,
-    resolveModelDefaults: input.resolveModelDefaults,
-    resolveApiStyle: input.resolveApiStyle,
+    storage,
+    createChatCompletion,
+    resolveModelDefaults,
+    resolveApiStyle,
   });
   const backgroundReviewService = new BackgroundReviewService({
-    createChatCompletion: input.createChatCompletion,
-    resolveModelDefaults: input.resolveModelDefaults,
-    resolveApiStyle: input.resolveApiStyle,
+    createChatCompletion,
+    resolveModelRoute: async (admittedModel) => {
+      const route = await resolveModelDefaults();
+      if (
+        !route ||
+        (admittedModel && (route.providerId !== admittedModel.providerId || route.model !== admittedModel.model))
+      ) {
+        return undefined;
+      }
+      return { ...route, apiStyle: resolveApiStyle(route.providerId, route.model) };
+    },
+    resolveBackgroundLearningReadiness,
   });
   const effectService = new ChatPostCommitEffectService({
-    storage: input.storage,
+    storage,
     commitmentClassifier,
     backgroundReview: backgroundReviewService,
+    enqueueLearningReview: input.enqueueLearningReview,
+    evaluateGovernedMemoryMaintenance: input.evaluateGovernedMemoryMaintenance,
+    resolveBackgroundLearningReadiness,
     proposeTraceMemoryCandidate: input.proposeTraceMemoryCandidate,
     effectAuthority: input.effectAuthority,
     isAutonomyDisabled: input.isAutonomyDisabled,
-    publishRealtime: input.publishRealtime,
+    publishRealtime,
   });
   return {
     commitmentClassifier,
     backgroundReviewService,
     effectExecutor: createDurableChatPostCommitEffectWorkflowExecutor({
-      storage: input.storage,
+      storage,
       executeGeneralChatPostCommitDurableEffect: (request, context) => effectService.execute(request, context),
-      publishRealtime: input.publishRealtime,
+      publishRealtime,
       recordDurableTimelineEvent: input.recordDurableTimelineEvent,
       recordImprovementDurableRunCompletion: input.recordImprovementDurableRunCompletion,
     }),

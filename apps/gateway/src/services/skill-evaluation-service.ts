@@ -13,6 +13,7 @@ import type {
   SkillEvaluationScenario,
   SkillEvaluationScenarioDraft,
   SkillListItem,
+  CandidateSkillEvaluationBinding,
 } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
@@ -33,9 +34,11 @@ export interface SkillEvaluationImprovementResult {
   candidate?: ImprovementCandidateRecord;
 }
 
+type EvaluationSkill = SkillListItem & { candidateBinding?: CandidateSkillEvaluationBinding };
+
 export interface SkillEvaluationServiceHost {
   storage: Pick<Storage, "skillEvaluationRuns" | "capabilityProposals">;
-  listSkills(): Promise<SkillListItem[]>;
+  resolveSkillForEvaluation(skillId: string): Promise<EvaluationSkill | undefined>;
   createCapabilityProposal(input: {
     proposalKind: "skill";
     title: string;
@@ -77,15 +80,17 @@ export class SkillEvaluationService {
   }> {
     const skill = await this.requireSkill(skillId);
     const run = this.buildEvaluationRun(skill, input, "completed");
-    const ledger = await this.host.recordSkillEvaluationSignal?.({
-      skillId: run.skillId,
-      skillName: run.skillName,
-      runId: run.runId,
-      accepted: run.accepted,
-      passRate: run.candidateResult?.score.passRate ?? run.baselineResult.score.passRate,
-      improvementDelta: run.improvementDelta,
-      summary: run.mutation?.summary ?? "Skill evaluation completed without an accepted mutation.",
-    });
+    const ledger = run.candidateBinding
+      ? undefined
+      : await this.host.recordSkillEvaluationSignal?.({
+          skillId: run.skillId,
+          skillName: run.skillName,
+          runId: run.runId,
+          accepted: run.accepted,
+          passRate: run.candidateResult?.score.passRate ?? run.baselineResult.score.passRate,
+          improvementDelta: run.improvementDelta,
+          summary: run.mutation?.summary ?? "Skill evaluation completed without an accepted mutation.",
+        });
     const stored = await this.host.storage.skillEvaluationRuns.upsert({
       ...run,
       ledgerSignalId: ledger?.signal?.signalId,
@@ -174,7 +179,7 @@ export class SkillEvaluationService {
   }
 
   private buildEvaluationRun(
-    skill: SkillListItem,
+    skill: EvaluationSkill,
     input: SkillEvaluationPreviewRequest,
     status: SkillEvaluationRunRecord["status"],
   ): SkillEvaluationRunRecord {
@@ -183,6 +188,39 @@ export class SkillEvaluationService {
     const scenarios = normalizeScenarios(skill, input.scenarios);
     const criteria = normalizeCriteria(input.criteria);
     const baselineResult = scoreInstruction(skill.instructionBody, scenarios, criteria);
+    if (skill.candidateBinding) {
+      if (
+        scenarios.length < 2 ||
+        new Set(scenarios.map((item) => item.prompt.trim().toLowerCase())).size < 2 ||
+        !scenarios.some((item) => item.tags?.includes("held_out"))
+      )
+        throw new ValidationError({
+          message:
+            "Candidate evaluation needs a source-independent held-out scenario and a distinct development scenario.",
+        });
+      const now = new Date().toISOString();
+      return {
+        runId: `skill-eval-${randomUUID()}`,
+        skillId: skill.skillId,
+        skillName: skill.name,
+        status,
+        createdAt: now,
+        updatedAt: now,
+        scenarios,
+        criteria,
+        baselineResult,
+        candidateBinding: skill.candidateBinding,
+        accepted: baselineResult.score.passRate >= targetPassRate,
+        improvementDelta: 0,
+        targetPassRate,
+        maxRounds: 1,
+        warnings: [
+          "Static instruction coverage only; no model task execution or comparative improvement was measured.",
+          "This result applies only to the exact candidate artifacts and source evidence. Operator review and approval are still required.",
+        ],
+        operatorTruth: OPERATOR_TRUTH,
+      };
+    }
     const mutation = buildMutation(skill.instructionBody, scenarios, criteria, baselineResult);
     const candidateResult = scoreInstruction(mutation.afterInstructionBody, scenarios, criteria);
     const improvementDelta = roundRate(candidateResult.score.passRate - baselineResult.score.passRate);
@@ -218,9 +256,9 @@ export class SkillEvaluationService {
     };
   }
 
-  private async requireSkill(skillId: string): Promise<SkillListItem> {
+  private async requireSkill(skillId: string): Promise<EvaluationSkill> {
     const normalized = skillId.trim();
-    const skill = (await this.host.listSkills()).find((item) => item.skillId === normalized);
+    const skill = await this.host.resolveSkillForEvaluation(normalized);
     if (!skill) {
       throw new NotFoundError({ entity: "skill", id: normalized });
     }

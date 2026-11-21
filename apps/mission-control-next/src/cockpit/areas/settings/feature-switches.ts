@@ -1,22 +1,11 @@
 import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS } from "@goatcitadel/contracts";
+import { SHIPPED_FEATURE_CONTROLS, SHIPPED_FEATURE_FLAGS, type ShippedFeatureFlag } from "@goatcitadel/contracts";
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 
-/** The features that are off unless turned on, and have a switch on Settings › Advanced, in the order that section lists them. */
-export const FEATURE_SWITCH_FLAGS = [
-  "memoryLifecycleAdminV1Enabled",
-  "memoryMaintenanceV1Enabled",
-  "chatSkillInstructionsV1Enabled",
-  "chatStaticMcpV1Enabled",
-  "connectorDiagnosticsV1Enabled",
-  "cronReviewQueueV1Enabled",
-  "engineeringLearningsV1Enabled",
-  "chatProviderFallbackV1Enabled",
-  "chatDelegationControlsV1Enabled",
-  "utilityModelRoutingV1Enabled",
-] as const;
-export type FeatureSwitchFlag = (typeof FEATURE_SWITCH_FLAGS)[number];
+/** Features with a switch on Settings › Advanced, in that section's display order. */
+export const FEATURE_SWITCH_FLAGS = SHIPPED_FEATURE_FLAGS.filter((flag) => SHIPPED_FEATURE_CONTROLS[flag].switchable);
+export type FeatureSwitchFlag = ShippedFeatureFlag;
 
 export interface FeatureSwitchDefinition {
   flag: FeatureSwitchFlag;
@@ -24,45 +13,22 @@ export interface FeatureSwitchDefinition {
   description: string;
   anchor: string;
   usedIn: string;
+  setup?: { label: string; href: string };
 }
 
 export const FEATURE_SWITCHES_ANCHOR = "feature-switches";
 export const FEATURE_SWITCHES_QUERY_KEY = ["system", "settings-feature-switches"] as const;
 
-const SLUGS: Record<FeatureSwitchFlag, string> = {
-  memoryLifecycleAdminV1Enabled: "memory-administration",
-  memoryMaintenanceV1Enabled: "memory-maintenance",
-  chatSkillInstructionsV1Enabled: "skills-in-chat",
-  chatStaticMcpV1Enabled: "connectors-in-chat",
-  connectorDiagnosticsV1Enabled: "connector-diagnostics",
-  cronReviewQueueV1Enabled: "scheduler-review",
-  engineeringLearningsV1Enabled: "engineering-learnings",
-  chatProviderFallbackV1Enabled: "provider-fallback",
-  chatDelegationControlsV1Enabled: "subagents-in-chat",
-  utilityModelRoutingV1Enabled: "utility-model",
-};
-
-const USED_IN: Record<FeatureSwitchFlag, string> = {
-  memoryLifecycleAdminV1Enabled: "Library › Memory",
-  memoryMaintenanceV1Enabled: "Library › Memory",
-  chatSkillInstructionsV1Enabled: "Chat, and Capabilities › Skills",
-  chatStaticMcpV1Enabled: "Chat, and Capabilities › Connectors",
-  connectorDiagnosticsV1Enabled: "Capabilities › Connectors › Advanced setup",
-  cronReviewQueueV1Enabled: "Work › Schedules",
-  engineeringLearningsV1Enabled: "Library › Knowledge",
-  chatProviderFallbackV1Enabled: "Each conversation's settings in Chat",
-  chatDelegationControlsV1Enabled: "Each conversation's settings in Chat",
-  utilityModelRoutingV1Enabled: "Background jobs",
-};
-
 export const FEATURE_SWITCHES: readonly FeatureSwitchDefinition[] = FEATURE_SWITCH_FLAGS.map((flag) => {
-  const named = CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS[flag];
+  const { label, description, slug, usedIn } = SHIPPED_FEATURE_CONTROLS[flag];
+  const control = SHIPPED_FEATURE_CONTROLS[flag];
   return {
     flag,
-    label: named?.label ?? flag,
-    description: named?.description ?? "",
-    anchor: `feature-switch-${SLUGS[flag]}`,
-    usedIn: USED_IN[flag],
+    label,
+    description,
+    anchor: `feature-switch-${slug}`,
+    usedIn,
+    setup: "setup" in control ? control.setup : undefined,
   };
 });
 
@@ -71,16 +37,20 @@ export function isFeatureSwitchFlag(value: unknown): value is FeatureSwitchFlag 
 }
 
 export function featureSwitchHref(flag: FeatureSwitchFlag): string {
-  return `/settings/advanced#feature-switch-${SLUGS[flag]}`;
+  return `/settings/advanced#feature-switch-${SHIPPED_FEATURE_CONTROLS[flag].slug}`;
 }
 
 /** The section anchor and each switch's own anchor, as they appear after the `#` of a link. */
 export function isFeatureSwitchHash(hash: string): boolean {
-  return hash === FEATURE_SWITCHES_ANCHOR || FEATURE_SWITCHES.some((entry) => entry.anchor === hash);
+  return (
+    hash === "feature-preference-review" ||
+    hash === FEATURE_SWITCHES_ANCHOR ||
+    FEATURE_SWITCHES.some((entry) => entry.anchor === hash)
+  );
 }
 
 export function featureSwitchLabel(flag: FeatureSwitchFlag): string {
-  return CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS[flag]?.label ?? flag;
+  return SHIPPED_FEATURE_CONTROLS[flag].label;
 }
 
 /** Whether a feature switch is on, read from the shared Settings query. `undefined` until the Gateway reports a boolean. */

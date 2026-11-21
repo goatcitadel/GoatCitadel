@@ -433,6 +433,17 @@ export interface ToolPolicyConfig {
   };
 }
 
+export interface MemoryToolWriteBinding {
+  workspaceId: string;
+  sessionId: string;
+  sessionIncarnation: string;
+  visibility: "workspace" | "session";
+  trustLevel: ToolExecutionTrustLevel;
+  upsertKey: string;
+  expectedItemId?: string;
+  expectedSourceHash?: string;
+}
+
 export interface ToolInvokeRequest {
   toolName: string;
   args: Record<string, unknown>;
@@ -449,6 +460,8 @@ export interface ToolInvokeRequest {
    * value on invoke and sets it only when it executes an approved pending action.
    */
   approvedByApprovalId?: string;
+  /** Engine-owned scope frozen before review; the lifecycle owner rechecks it at execution. */
+  memoryWriteBinding?: MemoryToolWriteBinding;
   /** Server-authored immutable routed-context binding for context.* tools. */
   routedContextSnapshotId?: string;
   /** Server-authored hash paired with routedContextSnapshotId. */

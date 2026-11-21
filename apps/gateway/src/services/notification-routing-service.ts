@@ -156,6 +156,9 @@ export class NotificationRoutingService {
   }
 
   public async request(workspaceId: string | undefined, input: NotifyRequest): Promise<NotificationDispatchResult> {
+    if (input.eventType === "heartbeat.attention") {
+      throw validationError("Background check notifications require a recorded heartbeat decision.", "eventType");
+    }
     if (input.targetIds?.length) {
       throw validationError(
         "Notification requests cannot select external targets; operator-authored rules own external routing.",

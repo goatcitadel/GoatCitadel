@@ -863,7 +863,13 @@ export class ToolPolicyEngine {
     options: ToolPolicyInvokeOptions = {},
   ): Promise<ToolInvokeResult> {
     // approvedByApprovalId is engine-owned: only executeApprovedAction sets it, never a caller.
-    const request = withoutEngineOwnedApproval(callerRequest);
+    const { memoryWriteBinding: _callerMemoryBinding, ...request } = withoutEngineOwnedApproval(callerRequest);
+    if (
+      (request.toolName === "memory.write" || request.toolName === "memory.upsert") &&
+      this.runtimeHooks.prepareMemoryWrite
+    ) {
+      (request as ToolInvokeRequest).memoryWriteBinding = await this.runtimeHooks.prepareMemoryWrite(request);
+    }
     if (request.toolName === "browser.storage.get" && !readBrowserStorageOrigin(request.args.origin)) {
       return this.blockRestrictedExecution(request, "browser.storage.get requires one explicit HTTP or HTTPS origin.");
     }
@@ -3915,6 +3921,7 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
     sessionId,
     turnId: typeof value.turnId === "string" && value.turnId.trim() ? value.turnId : undefined,
     toolRunId: typeof value.toolRunId === "string" && value.toolRunId.trim() ? value.toolRunId : undefined,
+    memoryWriteBinding: parseMemoryWriteBinding(value.memoryWriteBinding),
     citadelId: typeof value.citadelId === "string" && value.citadelId.trim() ? value.citadelId : undefined,
     workspaceId,
     taskId,
@@ -3943,6 +3950,37 @@ function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest 
     runtimeSkillApplications,
     writePathRepair,
     presentationGrounding,
+  };
+}
+
+function parseMemoryWriteBinding(value: unknown): ToolInvokeRequest["memoryWriteBinding"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>,
+    identifier = (field: string) =>
+      typeof row[field] === "string" && Boolean((row[field] as string).trim()) && (row[field] as string).length <= 300;
+  if (
+    !identifier("workspaceId") ||
+    !identifier("sessionId") ||
+    !/^[a-f0-9]{64}$/.test(String(row.sessionIncarnation)) ||
+    !/^[a-f0-9]{64}$/.test(String(row.upsertKey)) ||
+    !["workspace", "session"].includes(String(row.visibility)) ||
+    !["trusted_operator", "trusted_workspace", "mixed_untrusted", "untrusted_external"].includes(
+      String(row.trustLevel),
+    ) ||
+    ((row.expectedItemId !== undefined || row.expectedSourceHash !== undefined) &&
+      (!identifier("expectedItemId") || !/^[a-f0-9]{64}$/.test(String(row.expectedSourceHash))))
+  )
+    return undefined;
+  return {
+    workspaceId: String(row.workspaceId),
+    sessionId: String(row.sessionId),
+    sessionIncarnation: String(row.sessionIncarnation),
+    visibility: row.visibility as "workspace" | "session",
+    trustLevel: row.trustLevel as NonNullable<ToolInvokeRequest["trustLevel"]>,
+    upsertKey: String(row.upsertKey),
+    ...(row.expectedItemId
+      ? { expectedItemId: String(row.expectedItemId), expectedSourceHash: String(row.expectedSourceHash) }
+      : {}),
   };
 }
 

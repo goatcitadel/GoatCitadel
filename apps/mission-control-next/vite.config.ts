@@ -363,6 +363,20 @@ const COCKPIT_APPROVAL_RESIDUAL_OWNER_SUFFIXES = [
   ["/apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalAction.tsx"],
 ] as const;
 
+const COCKPIT_TOOL_ACTIVITY_OWNER_SUFFIXES = [
+  ["/apps/mission-control-next/src/cockpit/areas/chat/ChatToolActivityBody.tsx"],
+  ["/apps/mission-control-next/src/cockpit/areas/chat/ChatToolApprovalLine.tsx"],
+  [
+    "/packages/mission-control-shared/dist/components/chat/chat-tool-diff.js",
+    "/packages/mission-control-shared/src/components/chat/chat-tool-diff.ts",
+  ],
+  ["/apps/mission-control-next/src/cockpit/areas/chat/code-mode-request-copy.ts"],
+  ["/apps/mission-control-next/src/cockpit/ui/RecordedErrorDetails.tsx"],
+  ["/apps/mission-control-next/src/cockpit/areas/chat/chat-tool-run-change-stats.ts"],
+  ["/apps/mission-control-next/src/cockpit/areas/chat/chat-tool-run-groups.ts"],
+  ["/apps/mission-control-next/src/cockpit/areas/chat/ChatToolRunSummary.tsx"],
+] as const;
+
 /** Group retained static Cockpit dependencies; dynamic destinations keep their own chunks. */
 export function createCockpitBootChunkSelector() {
   let coldRuntimeVendors: Set<string> | null | undefined;
@@ -372,6 +386,7 @@ export function createCockpitBootChunkSelector() {
   let lazyApprovalBodyModules: Set<string> | undefined;
   let lazyChatDemandModules: Set<string> | undefined;
   let lazyApprovalResidualModules: Set<string> | undefined;
+  let lazyToolActivityModules: Set<string> | undefined;
   return (id: string, graph?: CockpitBootModuleGraph): string | undefined => {
     const normalizedId = id.replaceAll("\\", "/");
     // A pending generic approval must not preload kind-specific evidence or specialist renderers.
@@ -529,7 +544,34 @@ export function createCockpitBootChunkSelector() {
               lazyApprovalResidualModules = new Set(knownResidualOwners);
           }
         }
+        // These small helpers are all required by the rendered activity body. Keep
+        // them in one request only when the whole observed closure is deferred.
+        const activityOwners = COCKPIT_TOOL_ACTIVITY_OWNER_SUFFIXES.map((suffixes) =>
+          roots.filter((moduleId) => suffixes.some((suffix) => moduleId.replaceAll("\\", "/").endsWith(suffix))),
+        );
+        if (activityOwners.every((owners) => owners.length === 1)) {
+          const owners = activityOwners.flat();
+          const closure = new Set<string>();
+          visit(owners[0]!, closure, new Set(), true);
+          if (
+            owners.every((moduleId) => {
+              const info = graph.getModuleInfo(moduleId);
+              const ast = info?.ast as { type?: unknown; body?: unknown } | undefined;
+              return (
+                info?.isIncluded === true &&
+                ast?.type === "Program" &&
+                Array.isArray(ast.body) &&
+                closure.has(moduleId) &&
+                !bootModules!.has(moduleId) &&
+                !namedBootBindings!.has(moduleId) &&
+                !initialModules.has(moduleId)
+              );
+            })
+          )
+            lazyToolActivityModules = new Set(owners);
+        }
       }
+      if (lazyToolActivityModules?.has(id)) return "ChatToolActivityBody";
       if (kindSpecificApprovalOwner && !namedBootBindings?.has(id)) return undefined;
       // Pending approval summaries use the shared workspace labels on first render.
       // Keep the small shared hook outside the approval chunk used by other destinations.
@@ -552,7 +594,7 @@ export function createCockpitBootChunkSelector() {
       // behind a discarded contracts barrel. Actual imports keep their automatic
       // placement unless a named cold binding proves ordinary boot ownership.
       if (
-        /\/packages\/contracts\/(?:dist|src)\/(?:config-schemas|chat-feature-references|plugins|browser-errand-approval-conversation|capability-connectors|capability-plugins|change-plan-feature-flag-labels|channel-access|channel-address-host|google-workspace|mcp|operator-write-access|personal-ops|public-web-address|skill-categories|skill-packs|web-search)\.[jt]s$/u.test(
+        /\/packages\/contracts\/(?:dist|src)\/(?:config-schemas|chat-feature-references|plugins|browser-errand-approval-conversation|capability-connectors|capability-plugins|change-plan-feature-flag-labels|channel-access|channel-address-host|external-source-chat|external-source-validation|google-workspace(?:-actions)?|mcp|operator-write-access|personal-ops|provider-templates|public-web-address|shipped-feature-defaults|skill-categories|skill-packs|tool-groups|web-search)\.[jt]s$/u.test(
           normalizedId,
         ) &&
         !namedBootBindings?.has(id)

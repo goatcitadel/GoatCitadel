@@ -31,6 +31,7 @@ import {
   type LlmDispatchLineage,
   type LlmDispatchRoute,
 } from "./llm-dispatch-guard.js";
+import { isRouteLocalProvider } from "./chat-route-local-ward.js";
 import { extractProviderOwnedOutputCapErrorText, resolveOutputCapRecovery } from "./llm-output-cap-recovery.js";
 import { Agent, ProxyAgent } from "undici";
 import type { Dispatcher } from "undici";
@@ -1071,7 +1072,10 @@ export class LlmService {
   }
 
   /** @internal Plan-scoped OAuth custody. Public provider projections never expose the account name. */
-  public getOpenAICodexOAuthCredentialStatus(credentialAccount: string, sameAccountOnly = false): OpenAICodexOAuthStatus {
+  public getOpenAICodexOAuthCredentialStatus(
+    credentialAccount: string,
+    sameAccountOnly = false,
+  ): OpenAICodexOAuthStatus {
     return this.openAICodexOAuth.getStatus(credentialAccount, sameAccountOnly);
   }
 
@@ -1496,9 +1500,18 @@ export class LlmService {
         await this.authorizeModelUsageIntent(
           reservation?.eventId,
           input.attribution,
-          this.dispatchRoute(input.resolved as ResolvedProvider, input.model),
+          {
+            ...this.dispatchRoute(input.resolved as ResolvedProvider, input.model),
+            localTransport:
+              !target.proxyOrigin &&
+              isRouteLocalProvider({
+                providerId: resolved.provider.providerId,
+                baseUrl: target.url,
+              }),
+          },
           input.transportAttemptIndex,
           outputCapField?.value,
+          typeof requestInit.body === "string" ? Buffer.byteLength(requestInit.body) : undefined,
         );
         signal.throwIfAborted();
       }
@@ -2166,7 +2179,9 @@ export class LlmService {
     try {
       const provider = this.providers.get(providerId);
       const baseUrl = provider?.baseUrl;
-      const proxy = baseUrl ? selectActiveProviderProxy(new URL(baseUrl).hostname, provider?.request?.proxy) : undefined;
+      const proxy = baseUrl
+        ? selectActiveProviderProxy(new URL(baseUrl).hostname, provider?.request?.proxy)
+        : undefined;
       await this.authorizeDispatchWard(attribution, providerId, baseUrl, readProxyOrigin(proxy));
       return true;
     } catch (error) {
@@ -2196,12 +2211,20 @@ export class LlmService {
     route: LlmDispatchRoute,
     transportAttemptIndex: number,
     effectiveOutputTokenCap?: number,
+    requestInputBytes?: number,
   ): Promise<void> {
     const guard = this.dispatchGuardScope.get();
     if (!guard) return;
     try {
       if (!eventId) throw new Error("Governed inference requires a canonical usage intent.");
-      await guard({ usageEventId: eventId, attribution, route, transportAttemptIndex, effectiveOutputTokenCap });
+      await guard({
+        usageEventId: eventId,
+        attribution,
+        route,
+        transportAttemptIndex,
+        effectiveOutputTokenCap,
+        ...(requestInputBytes === undefined ? {} : { requestInputBytes }),
+      });
     } catch (error) {
       throw error instanceof LlmDispatchGuardRejectedError ? error : new LlmDispatchGuardRejectedError(error);
     }

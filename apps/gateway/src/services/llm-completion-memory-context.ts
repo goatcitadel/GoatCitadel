@@ -1,3 +1,4 @@
+import { completionSystemText, type StandingMemoryContext } from "./chat-learning-memory-manifest.js";
 import type {
   ChatCompletionRequest,
   MemoryContextPack,
@@ -63,26 +64,36 @@ export async function composeChatCompletionMemoryContext(
   }
 }
 
-/**
- * Persist the context manifest for a chat-turn completion request: every
- * non-memory system message plus (when present) the memory-context entry.
- * The memory-context system message itself is skipped so it is recorded once,
- * as the structured memory_context entry, not twice.
- */
+interface CompletionContextManifestInput {
+  request: ChatCompletionRequest;
+  memoryContext?: MemoryContextPack;
+  memoryContextPlacement?: MemoryContextPlacement;
+  usageBinding?: { operationId: string; dispatchGeneration: string };
+}
+
+interface AdmittedSkillContext {
+  instruction: string;
+  sources: { skillId: string; instructionSha256: string; treeSha256: string }[];
+}
+
+type ContextManifestWriter = Pick<Storage["contextManifests"], "ensure" | "appendEntry">;
+
+/** Persist admitted system messages in order, then the structured retrieval context. */
 export async function persistContextManifestForCompletionRequest(
-  deps: { contextManifests: Storage["contextManifests"] },
-  input: {
-    request: ChatCompletionRequest;
-    memoryContext?: MemoryContextPack;
-    memoryContextPlacement?: MemoryContextPlacement;
+  contextManifests: ContextManifestWriter,
+  admissionDeps: {
+    resolveStandingMemoryContext?: (request: ChatCompletionRequest) => Promise<StandingMemoryContext | undefined>;
+    resolveSkillContext?: (request: ChatCompletionRequest) => Promise<AdmittedSkillContext | undefined>;
   },
+  input: CompletionContextManifestInput,
 ): Promise<void> {
   const turnId = input.request.memory?.turnId?.trim();
   if (!turnId) {
     return;
   }
 
-  const manifest = await deps.contextManifests.ensure({
+  const standingMemoryContext = await admissionDeps.resolveStandingMemoryContext?.(input.request);
+  const manifest = await contextManifests.ensure({
     scope: "chat_turn",
     turnId,
     sessionId: input.request.memory?.sessionId?.trim(),
@@ -91,21 +102,39 @@ export async function persistContextManifestForCompletionRequest(
   const memoryContextSystemMessage = input.memoryContext
     ? buildMemoryContextSystemMessage(input.memoryContext)
     : undefined;
-  let entryIndex = 0;
+  const skillContext = await admissionDeps.resolveSkillContext?.(input.request);
+  for (const entry of completionContextEntries(
+    input,
+    manifest.manifestId,
+    memoryContextSystemMessage,
+    standingMemoryContext,
+    skillContext,
+  )) {
+    await contextManifests.appendEntry(entry);
+  }
+}
 
+function* completionContextEntries(
+  input: CompletionContextManifestInput,
+  manifestId: string,
+  memoryContextSystemMessage: string | undefined,
+  standingMemoryContext: StandingMemoryContext | undefined,
+  skillContext: AdmittedSkillContext | undefined,
+): Generator<Parameters<ContextManifestWriter["appendEntry"]>[0]> {
+  let entryIndex = 0;
   for (const [messageIndex, message] of input.request.messages.entries()) {
-    if (message.role !== "system" || typeof message.content !== "string") {
+    if (message.role !== "system") {
       continue;
     }
-    const contentText = message.content.trim();
+    const contentText = completionSystemText(message.content).trim();
     if (!contentText) {
       continue;
     }
     if (memoryContextSystemMessage && contentText === memoryContextSystemMessage) {
       continue;
     }
-    await deps.contextManifests.appendEntry({
-      manifestId: manifest.manifestId,
+    yield {
+      manifestId,
       kind: "system_message",
       entryIndex,
       title: contentText.split(/\r?\n/u, 1)[0]?.slice(0, 120) || "System message",
@@ -114,17 +143,36 @@ export async function persistContextManifestForCompletionRequest(
       metadata: {
         role: message.role,
         messageIndex,
+        ...(input.usageBinding ? { usageBinding: input.usageBinding } : {}),
+        ...(standingMemoryContext && contentText.includes(standingMemoryContext.instruction)
+          ? {
+              admittedMemories: standingMemoryContext.sources.map((source) => ({
+                sourceType: "memory_learning",
+                sourceRef: source.learningId,
+                sourceHash: source.sourceHash,
+              })),
+            }
+          : {}),
+        ...(skillContext?.instruction.trim() === contentText ? { admittedSkills: skillContext.sources } : {}),
       },
-    });
+    };
     entryIndex += 1;
   }
 
-  if (!input.memoryContext) {
+  if (
+    !input.memoryContext ||
+    !input.request.messages.some(
+      (message) =>
+        message.role === "system" &&
+        typeof message.content === "string" &&
+        message.content.trim() === memoryContextSystemMessage,
+    )
+  ) {
     return;
   }
 
-  await deps.contextManifests.appendEntry({
-    manifestId: manifest.manifestId,
+  yield {
+    manifestId,
     kind: "memory_context",
     entryIndex,
     title: "Memory context",
@@ -135,6 +183,12 @@ export async function persistContextManifestForCompletionRequest(
       status: input.memoryContext.quality.status,
       reason: input.memoryContext.quality.reason,
       citationsCount: input.memoryContext.citations.length,
+      sourceCitations: input.memoryContext.citations.slice(0, 40).map((citation) => ({
+        sourceType: citation.sourceType,
+        sourceRef: citation.sourceRef,
+        ...(citation.sourceHash ? { sourceHash: citation.sourceHash } : {}),
+      })),
+      ...(input.usageBinding ? { usageBinding: input.usageBinding } : {}),
       originalTokenEstimate: input.memoryContext.originalTokenEstimate,
       distilledTokenEstimate: input.memoryContext.distilledTokenEstimate,
       assembly: input.memoryContext.quality.assembly,
@@ -143,17 +197,18 @@ export async function persistContextManifestForCompletionRequest(
       createdAt: input.memoryContext.createdAt,
       expiresAt: input.memoryContext.expiresAt,
     },
-  });
+  };
 }
 
 export function shouldUseChatCompletionMemoryContext(
   host: LlmCompletionHost,
   memoryInput: ChatCompletionRequest["memory"],
 ): boolean {
+  const memory = host.config.assistant.memory;
   return (
-    host.config.assistant.memory.enabled &&
-    host.config.assistant.memory.qmd.enabled &&
-    host.config.assistant.memory.qmd.applyToChat &&
+    memory.enabled &&
+    memory.qmd.enabled &&
+    memory.qmd.applyToChat &&
     memoryInput?.mode !== "off" &&
     (memoryInput?.enabled ?? true)
   );

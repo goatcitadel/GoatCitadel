@@ -15,6 +15,7 @@ import {
   fetchCronReviewQueue,
 } from "@goatcitadel/mission-control-shared/api/cron";
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings";
+import { fetchFollowThrough, requestFollowThroughAction } from "@goatcitadel/mission-control-shared/api/follow-through";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WorkSchedules } from "./WorkSchedules";
 import { WorkArea } from "./WorkArea";
@@ -46,6 +47,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/cron", () => ({
   fetchCronReviewQueue: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/settings", () => ({ fetchSettings: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/follow-through", () => ({
+  fetchFollowThrough: vi.fn(),
+  requestFollowThroughAction: vi.fn(),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
   fetchWorkspaces: vi.fn(async () => ({ items: [{ workspaceId: "ws-c", name: "Research" }] })),
 }));
@@ -129,6 +134,23 @@ async function review(): Promise<void> {
 }
 
 describe("Work schedules", () => {
+  it("reads conversation follow-through in the active workspace from its schedule link", async () => {
+    window.history.replaceState(null, "", "/work/schedules?sessionId=chat-1");
+    vi.mocked(fetchFollowThrough).mockResolvedValue({
+      version: 1,
+      sessionId: "chat-1",
+      workspaceId: "default",
+      items: [],
+      warnings: [],
+      truncated: false,
+    });
+    await render();
+    await vi.waitFor(() => expect(fetchFollowThrough).toHaveBeenCalledWith("chat-1", "default"));
+    expect(container.textContent).toContain("Conversation follow-through");
+    expect(container.textContent).toContain("No accepted follow-ups or schedules");
+    expect(requestFollowThroughAction).not.toHaveBeenCalled();
+  });
+
   it.each(["array", "object", "number", "boolean", "null"])(
     "does not POST non-string %s watchdog configuration",
     async (kind) => {

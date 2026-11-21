@@ -2414,6 +2414,7 @@ export async function* streamPreparedAgentChatTurn(
                 signal: controller.signal,
                 canonicalWriteFence,
                 capabilityProfile: prepared.capabilityProfile,
+                naturalMemoryReviewOnly: prepared.naturalMemoryReviewOnly,
                 featureAdmission: prepared.featureAdmission,
                 ...(prepared.serverOnlyPosture ? { serverOnlyPosture: prepared.serverOnlyPosture } : {}),
                 capabilityProfileContent: prepared.capabilityProfileContent,

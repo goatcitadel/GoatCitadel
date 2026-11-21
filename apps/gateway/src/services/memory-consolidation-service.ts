@@ -6,10 +6,16 @@ import type {
   TraceMemoryCandidateInput,
   TraceMemoryCandidateRecord,
   TraceMemoryCandidateType,
-  TranscriptEvent,
 } from "@goatcitadel/contracts";
 import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
+import { createHash, randomUUID } from "node:crypto";
+import type { ConsolidationSourceExclusion } from "@goatcitadel/storage";
+import {
+  MemoryConsolidationWorkSource,
+  type ConsolidationSourceBinding,
+  type MemoryConsolidationWorkSourceDeps,
+} from "./memory-consolidation-work-source.js";
 
 // Governed background memory consolidation (competitive-gap program phase A3).
 //
@@ -30,15 +36,12 @@ export const MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY = "memory_consolidation_
 const DEFAULT_LOOKBACK_DAYS = 7;
 const MAX_TRACES_PER_RUN = 500;
 const MAX_SESSIONS_PER_RUN = 3;
+const MAX_SOURCE_WINDOWS_PER_RUN = 3;
 const MAX_CANDIDATES_PER_SESSION = 5;
 const MAX_CANDIDATES_PER_RUN = 10;
 const MAX_REFLECTION_ATTEMPTS = 3;
 const MIN_CANDIDATE_CONFIDENCE = 0.55;
 const SIMILARITY_SKIP_THRESHOLD = 0.6;
-const MAX_DIGEST_EVENTS = 40;
-const MAX_DIGEST_EVENT_CHARS = 400;
-const MAX_DIGEST_TOTAL_CHARS = 6_000;
-const MIN_DIGEST_CHARS = 200;
 export const EXISTING_LEARNINGS_DEDUP_LIMIT = 200;
 export const PENDING_CANDIDATES_DEDUP_LIMIT = 100;
 
@@ -60,12 +63,10 @@ const CONSOLIDATION_SYSTEM_PROMPT = [
   "Return [] when nothing durable was learned.",
 ].join("\n");
 
-export interface MemoryConsolidationDeps {
+export interface MemoryConsolidationDeps extends MemoryConsolidationWorkSourceDeps {
   isFeatureEnabled: (
     flag: "memoryConsolidationV1Enabled" | "autonomyV1Disabled" | "memoryLifecycleAdminV1Enabled",
   ) => Promise<boolean>;
-  listCompletedTurnTracesSince: (sinceIso: string, limit: number) => Promise<ChatTurnTraceRecord[]>;
-  readTranscriptOrEmpty: (sessionId: string) => Promise<TranscriptEvent[]>;
   createChatCompletion: (
     request: ChatCompletionRequest,
     attribution: ModelUsageAttributionContext,
@@ -75,9 +76,7 @@ export interface MemoryConsolidationDeps {
     input: TraceMemoryCandidateInput,
     actorId: string,
   ) => Promise<TraceMemoryCandidateRecord>;
-  listExistingInsightsForDedup: () => Promise<string[]>;
-  getWatermark: () => Promise<string | undefined>;
-  setWatermark: (iso: string) => Promise<unknown>;
+  listExistingInsightsForDedup: (workspaceId: string) => Promise<string[]>;
   publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => Promise<unknown>;
   recordDevDiagnostic?: (input: {
     level: "info" | "warn";
@@ -95,6 +94,8 @@ export interface MemoryConsolidationRunSummary {
   qualifyingTurns: number;
   sessionsSampled: number;
   sessionsFailed: number;
+  sourceWindowsSampled: number;
+  excludedTurns: number;
   drafted: number;
   deduplicated: number;
   proposed: number;
@@ -108,10 +109,15 @@ interface DraftedCandidate {
   confidence: number;
   sessionId: string;
   turnId?: string;
+  sourceBinding?: ConsolidationSourceBinding;
 }
 
 export class MemoryConsolidationService {
-  public constructor(private readonly deps: MemoryConsolidationDeps) {}
+  private readonly workSource: MemoryConsolidationWorkSource;
+
+  public constructor(private readonly deps: MemoryConsolidationDeps) {
+    this.workSource = new MemoryConsolidationWorkSource(deps);
+  }
 
   public async runConsolidation(): Promise<MemoryConsolidationRunSummary> {
     const empty: Omit<MemoryConsolidationRunSummary, "status"> = {
@@ -119,6 +125,8 @@ export class MemoryConsolidationService {
       qualifyingTurns: 0,
       sessionsSampled: 0,
       sessionsFailed: 0,
+      sourceWindowsSampled: 0,
+      excludedTurns: 0,
       drafted: 0,
       deduplicated: 0,
       proposed: 0,
@@ -135,90 +143,167 @@ export class MemoryConsolidationService {
       return { status: "skipped_kill_switch", ...empty };
     }
 
+    const summary: MemoryConsolidationRunSummary = { status: "completed", ...empty };
     const now = this.deps.now?.() ?? new Date();
-    const watermark =
-      (await this.deps.getWatermark()) ??
-      new Date(now.getTime() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    const traces = await this.deps.listCompletedTurnTracesSince(watermark, MAX_TRACES_PER_RUN);
-    const qualifying = traces.filter((trace) => isQualifyingTrace(trace));
-    const sessions = pickSessions(qualifying, MAX_SESSIONS_PER_RUN);
-
-    const summary: MemoryConsolidationRunSummary = {
-      status: "completed",
-      ...empty,
-      scannedTurns: traces.length,
-      qualifyingTurns: qualifying.length,
-      watermark,
-    };
-
-    const seenInsights = (await this.deps.listExistingInsightsForDedup()).map(tokenizeInsight);
-    const processedSessionIds = new Set<string>();
-    for (const session of sessions) {
-      // The autonomy kill switch may flip mid-run; re-check before every
-      // session so an engaged switch halts further proposals immediately.
-      if (await this.deps.isFeatureEnabled("autonomyV1Disabled")) {
-        summary.status = "skipped_kill_switch";
+    const workspaces = await this.workSource.listDueWorkspaces();
+    for (const { workspaceId, progress } of workspaces.slice(0, 20)) {
+      if (
+        summary.sessionsSampled >= MAX_SESSIONS_PER_RUN ||
+        summary.sourceWindowsSampled >= MAX_SOURCE_WINDOWS_PER_RUN ||
+        summary.proposed >= MAX_CANDIDATES_PER_RUN ||
+        summary.scannedTurns >= MAX_TRACES_PER_RUN
+      )
         break;
-      }
-      summary.sessionsSampled += 1;
-      let drafted: DraftedCandidate[];
+      const leaseOwner = randomUUID();
+      const claim = await this.workSource.claimProgress(workspaceId, progress.revision, leaseOwner, now.toISOString());
+      if (!claim) continue;
+      let nextCursor = progress.cursor;
+      const sourceExclusions: ConsolidationSourceExclusion[] = [];
       try {
-        drafted = await this.draftSessionCandidates(session.sessionId, watermark, session.traces);
-      } catch (error) {
-        if (isAuthoritativeModelUsageAccountingError(error)) {
-          throw error;
-        }
-        summary.sessionsFailed += 1;
-        this.deps.recordDevDiagnostic?.({
-          level: "warn",
-          category: "memory",
-          event: "memory.consolidation.session_failed",
-          message: "Memory consolidation drafting failed for a session",
-          context: {
-            sessionId: session.sessionId,
-            error: error instanceof Error ? error.message : String(error),
-          },
+        const after = progress.cursor ?? {
+          finishedAt: new Date(now.getTime() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+          turnId: "",
+        };
+        summary.watermark ??= after.finishedAt;
+        const traces = await this.workSource.listCompletedTracePage({
+          workspaceId,
+          after,
+          through: now.toISOString(),
+          limit: MAX_TRACES_PER_RUN - summary.scannedTurns,
         });
-        continue;
-      }
-      processedSessionIds.add(session.sessionId);
-      for (const candidate of drafted) {
-        if (summary.proposed >= MAX_CANDIDATES_PER_RUN) {
-          break;
+        const eligible = new Set<string>();
+        for (const sessionId of new Set(traces.map((trace) => trace.sessionId))) {
+          if (await this.workSource.isEligibleSession(sessionId, workspaceId)) eligible.add(sessionId);
         }
-        summary.drafted += 1;
-        const tokens = tokenizeInsight(candidate.insight);
-        if (seenInsights.some((existing) => jaccardSimilarity(existing, tokens) >= SIMILARITY_SKIP_THRESHOLD)) {
-          summary.deduplicated += 1;
-          continue;
+        const qualifying = traces.filter((trace) => isQualifyingTrace(trace) && eligible.has(trace.sessionId));
+        const sessions = pickSessions(qualifying, MAX_SESSIONS_PER_RUN - summary.sessionsSampled);
+        summary.scannedTurns += traces.length;
+        summary.qualifyingTurns += qualifying.length;
+        const seenInsights = (await this.deps.listExistingInsightsForDedup(workspaceId)).map(tokenizeInsight);
+        const processedTurnIds = new Set<string>();
+        for (const session of sessions) {
+          if (summary.sourceWindowsSampled >= MAX_SOURCE_WINDOWS_PER_RUN || summary.proposed >= MAX_CANDIDATES_PER_RUN)
+            break;
+          // The autonomy kill switch may flip mid-run; re-check before every
+          // session so an engaged switch halts further proposals immediately.
+          if (!(await this.learningEnabled())) {
+            summary.status = (await this.deps.isFeatureEnabled("autonomyV1Disabled"))
+              ? "skipped_kill_switch"
+              : "disabled";
+            break;
+          }
+          summary.sessionsSampled += 1;
+          const prepared = await this.workSource
+            .prepareSourceWindows(
+              session,
+              workspaceId,
+              MAX_SOURCE_WINDOWS_PER_RUN - summary.sourceWindowsSampled,
+              (exclusion) => {
+                sourceExclusions.push(exclusion);
+                processedTurnIds.add(exclusion.turnId);
+                summary.excludedTurns += 1;
+                this.reportRunIssue({
+                  event: "memory.consolidation.source_excluded",
+                  message:
+                    "A source turn was excluded from bounded consolidation; review it in Chat or prepare a smaller explicit memory.",
+                  context: { workspaceId, ...exclusion },
+                });
+              },
+            )
+            .catch(() => {
+              this.reportRunIssue({
+                event: "memory.consolidation.source_unavailable",
+                message: "Consolidation source could not be read; its checkpoint remains retryable.",
+                context: { workspaceId, sessionId: session.sessionId },
+              });
+              return { windows: [], unavailable: true };
+            });
+          if (prepared.unavailable) summary.sessionsFailed += 1;
+          for (const window of prepared.windows) {
+            summary.sourceWindowsSampled += 1;
+            let drafted: DraftedCandidate[];
+            try {
+              drafted = await this.draftSessionCandidates(session.sessionId, workspaceId, after.finishedAt, window);
+            } catch (error) {
+              if (isAuthoritativeModelUsageAccountingError(error)) {
+                throw error;
+              }
+              summary.sessionsFailed += 1;
+              this.reportRunIssue({
+                event: "memory.consolidation.session_failed",
+                message: "Memory consolidation drafting failed for a session",
+                context: {
+                  sessionId: session.sessionId,
+                  error: error instanceof Error ? error.message : String(error),
+                },
+              });
+              break;
+            }
+            let allCandidatesProcessed = true;
+            for (const candidate of drafted) {
+              if (summary.proposed >= MAX_CANDIDATES_PER_RUN) {
+                allCandidatesProcessed = false;
+                break;
+              }
+              if (
+                !(await this.learningEnabled()) ||
+                !(await this.workSource.isEligibleSession(session.sessionId, workspaceId))
+              ) {
+                allCandidatesProcessed = false;
+                break;
+              }
+              summary.drafted += 1;
+              if (candidate.sourceBinding && !(await this.workSource.hasCurrentBinding(candidate.sourceBinding))) {
+                allCandidatesProcessed = false;
+                break;
+              }
+              const tokens = tokenizeInsight(candidate.insight);
+              if (seenInsights.some((existing) => jaccardSimilarity(existing, tokens) >= SIMILARITY_SKIP_THRESHOLD)) {
+                summary.deduplicated += 1;
+                continue;
+              }
+              await this.deps.proposeTraceMemoryCandidate(
+                {
+                  workspaceId,
+                  candidateType: candidate.candidateType,
+                  proposedInsight: candidate.insight,
+                  confidence: candidate.confidence,
+                  sourceSessionId: candidate.sessionId,
+                  ...(candidate.turnId ? { sourceTurnId: candidate.turnId } : {}),
+                  metadata: {
+                    consolidation: true,
+                    consolidationRunKind: "weekly",
+                    ...(candidate.sourceBinding ? { consolidationSource: candidate.sourceBinding } : {}),
+                  },
+                },
+                "memory-consolidation-job",
+              );
+              seenInsights.push(tokens);
+              summary.proposed += 1;
+            }
+            if (allCandidatesProcessed) for (const trace of window) processedTurnIds.add(trace.turnId);
+            else break;
+          }
         }
-        await this.deps.proposeTraceMemoryCandidate(
-          {
-            candidateType: candidate.candidateType,
-            proposedInsight: candidate.insight,
-            confidence: candidate.confidence,
-            sourceSessionId: candidate.sessionId,
-            ...(candidate.turnId ? { sourceTurnId: candidate.turnId } : {}),
-            metadata: { consolidation: true, consolidationRunKind: "weekly" },
-          },
-          "memory-consolidation-job",
+        if (summary.status === "completed") {
+          nextCursor = after;
+          for (const trace of traces) {
+            if (isQualifyingTrace(trace) && eligible.has(trace.sessionId) && !processedTurnIds.has(trace.turnId)) break;
+            nextCursor = { finishedAt: trace.finishedAt ?? trace.startedAt, turnId: trace.turnId };
+          }
+          summary.nextWatermark = nextCursor.finishedAt;
+        }
+      } finally {
+        await this.workSource.commitProgress(
+          workspaceId,
+          claim.revision,
+          leaseOwner,
+          nextCursor,
+          (this.deps.now?.() ?? new Date()).toISOString(),
+          sourceExclusions,
         );
-        seenInsights.push(tokens);
-        summary.proposed += 1;
       }
-    }
-
-    // Advance the watermark only when the run made real progress: either
-    // there was nothing to process, or at least one session drafted cleanly.
-    // A run where every sampled session failed retries the same window.
-    const madeProgress =
-      sessions.length === 0 || summary.sessionsFailed < summary.sessionsSampled || summary.status !== "completed";
-    if (summary.status === "completed" && madeProgress && traces.length > 0) {
-      const nextWatermark = computeProcessedTraceWatermark(traces, processedSessionIds, watermark);
-      await this.deps.setWatermark(nextWatermark);
-      summary.nextWatermark = nextWatermark;
-    } else if (summary.status === "completed" && traces.length === 0) {
-      summary.nextWatermark = watermark;
+      if (summary.status !== "completed") break;
     }
 
     await this.deps.publishRealtime("system", "memory", {
@@ -230,20 +315,12 @@ export class MemoryConsolidationService {
 
   private async draftSessionCandidates(
     sessionId: string,
+    workspaceId: string,
     watermark: string,
     traces: readonly ChatTurnTraceRecord[],
   ): Promise<DraftedCandidate[]> {
-    const events = await this.deps.readTranscriptOrEmpty(sessionId);
-    const userMessageIds = new Set(traces.map((trace) => trace.userMessageId));
-    const assistantMessageIds = new Set(traces.map((trace) => trace.assistantMessageId));
-    const sourceEvents = events.filter(
-      (event) =>
-        event.sessionId === sessionId &&
-        ((event.type === "message.user" && userMessageIds.has(event.eventId)) ||
-          (event.type === "message.assistant" && assistantMessageIds.has(event.eventId))),
-    );
-    const digest = buildTranscriptDigest(sourceEvents);
-    if (digest.length < MIN_DIGEST_CHARS) {
+    const { digest, binding } = await this.workSource.readDraftSource(workspaceId, sessionId, traces);
+    if (!digest.trim()) {
       return [];
     }
     // A multi-turn digest only establishes session-level provenance for its drafts.
@@ -261,11 +338,12 @@ export class MemoryConsolidationService {
         max_tokens: 900,
       },
       createUtilityModelUsageAttribution({
-        operationId: `memory-consolidation:${encodeURIComponent(watermark)}:${encodeURIComponent(sessionId)}`,
+        operationId: `memory-consolidation:${encodeURIComponent(watermark)}:${encodeURIComponent(sessionId)}:${binding?.sourceHash ?? createHash("sha256").update(digest).digest("hex")}`,
         utilityKind: "memory_candidate_consolidation",
         requestedProviderId: defaults.providerId,
         requestedModelId: defaults.model,
         lineage: {
+          workspaceId,
           sessionId,
           ...(turnId ? { turnId } : {}),
           agentId: "memory-consolidator",
@@ -275,11 +353,36 @@ export class MemoryConsolidationService {
     const rawContent = completion.choices?.[0]
       ? (completion.choices[0] as { message?: { content?: string } }).message?.content
       : undefined;
-    return parseDraftedCandidates(typeof rawContent === "string" ? rawContent : "", sessionId, turnId);
+    return parseDraftedCandidates(typeof rawContent === "string" ? rawContent : "", sessionId, turnId).map(
+      (candidate) => ({
+        ...candidate,
+        ...(binding ? { sourceBinding: binding } : {}),
+      }),
+    );
+  }
+
+  private async learningEnabled(): Promise<boolean> {
+    return (
+      (await this.deps.isFeatureEnabled("memoryConsolidationV1Enabled")) &&
+      (await this.deps.isFeatureEnabled("memoryLifecycleAdminV1Enabled")) &&
+      !(await this.deps.isFeatureEnabled("autonomyV1Disabled"))
+    );
+  }
+
+  private reportRunIssue(input: { event: string; message: string; context: Record<string, unknown> }): void {
+    this.deps.recordDevDiagnostic?.({ level: "warn", category: "memory", ...input });
   }
 }
 
 function isQualifyingTrace(trace: ChatTurnTraceRecord): boolean {
+  if (
+    trace.status !== "completed" ||
+    trace.completion?.status !== "complete" ||
+    !Number.isFinite(trace.completion.providerCallCount) ||
+    (trace.completion.providerCallCount ?? 0) < 1
+  )
+    return false;
+  if (trace.memoryMode === "off") return false;
   if (!trace.assistantMessageId) {
     return false;
   }
@@ -305,58 +408,12 @@ function pickSessions(
   }
   return Array.from(bySession.entries())
     .map(([sessionId, sessionTraces]) => ({ sessionId, traces: sessionTraces }))
-    .sort((a, b) => b.traces.length - a.traces.length)
+    .sort((a, b) =>
+      (a.traces[0]?.finishedAt ?? a.traces[0]?.startedAt ?? "").localeCompare(
+        b.traces[0]?.finishedAt ?? b.traces[0]?.startedAt ?? "",
+      ),
+    )
     .slice(0, limit);
-}
-
-function computeProcessedTraceWatermark(
-  traces: ChatTurnTraceRecord[],
-  processedSessionIds: ReadonlySet<string>,
-  currentWatermark: string,
-): string {
-  let nextWatermark = currentWatermark;
-  for (const trace of traces) {
-    if (isQualifyingTrace(trace) && !processedSessionIds.has(trace.sessionId)) {
-      if (nextWatermark >= trace.startedAt) {
-        return currentWatermark;
-      }
-      break;
-    }
-    if (trace.startedAt > nextWatermark) {
-      nextWatermark = trace.startedAt;
-    }
-  }
-  return nextWatermark;
-}
-
-function buildTranscriptDigest(events: TranscriptEvent[]): string {
-  const lines: string[] = [];
-  let total = 0;
-  for (const event of events.slice(-MAX_DIGEST_EVENTS)) {
-    const text = extractEventText(event.payload);
-    if (!text) {
-      continue;
-    }
-    const role = event.type === "message.user" ? "user" : "assistant";
-    const line = `${role}: ${text.slice(0, MAX_DIGEST_EVENT_CHARS)}`;
-    if (total + line.length > MAX_DIGEST_TOTAL_CHARS) {
-      break;
-    }
-    lines.push(line);
-    total += line.length;
-  }
-  return lines.join("\n");
-}
-
-function extractEventText(payload: Record<string, unknown>): string | undefined {
-  const message = payload.message;
-  const messageContent = message && typeof message === "object" && "content" in message ? message.content : message;
-  for (const value of [messageContent, payload.text, payload.content]) {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
 }
 
 export function parseDraftedCandidates(content: string, sessionId: string, turnId?: string): DraftedCandidate[] {

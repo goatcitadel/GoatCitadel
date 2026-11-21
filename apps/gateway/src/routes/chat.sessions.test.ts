@@ -171,6 +171,7 @@ describe("chat session routes", () => {
         cancelOnNextReply: true,
       },
       "operator",
+      undefined,
     );
 
     const cancelledTimer = await app.inject({

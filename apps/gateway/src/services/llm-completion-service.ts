@@ -83,6 +83,10 @@ export async function createChatCompletion(
   attributionInput: ModelUsageAttributionContext = {},
 ): Promise<ChatCompletionResponse> {
   const completionStartedAt = Date.now();
+  const contextUsageBinding = {
+    operationId: attributionInput.operationId?.trim() || `completion:${randomUUID()}`,
+    dispatchGeneration: attributionInput.dispatchGeneration?.trim() || randomUUID(),
+  };
   const completionDeadline = createChatCompletionDeadline(request.timeoutMs);
   host.recordDevDiagnostic({
     level: "debug",
@@ -208,6 +212,7 @@ export async function createChatCompletion(
   assertRequiredRuntimeTarget(request, hookableRequest);
   await host.persistContextManifestForCompletionRequest({
     request: hookableRequest,
+    usageBinding: contextUsageBinding,
     memoryContext,
     memoryContextPlacement,
   });
@@ -239,7 +244,7 @@ export async function createChatCompletion(
   const primaryModel = hookableRequest.model ?? primaryProvider?.defaultModel ?? runtime.activeModel;
   const primaryApiStyle = host.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
   const usageAttribution = createCompletionUsageAttribution({
-    input: attributionInput,
+    input: { ...attributionInput, ...contextUsageBinding },
     defaultCallKind: "chat_initial",
     workspaceId: chatHookWorkspaceId,
     sessionId: memoryInput?.sessionId,
@@ -668,6 +673,10 @@ export async function* createChatCompletionStream(
   attributionInput: ModelUsageAttributionContext = {},
 ): AsyncGenerator<Record<string, unknown>> {
   const completionStartedAt = Date.now();
+  const contextUsageBinding = {
+    operationId: attributionInput.operationId?.trim() || `completion:${randomUUID()}`,
+    dispatchGeneration: attributionInput.dispatchGeneration?.trim() || randomUUID(),
+  };
   const completionDeadline = createChatCompletionDeadline(request.timeoutMs);
   const idleWatchdogDisabled = host.config.assistant.features?.streamIdleWatchdogV1Disabled === true;
   const configuredIdleTimeoutMs = host.config.assistant.streamIdleTimeoutMs;
@@ -738,6 +747,7 @@ export async function* createChatCompletionStream(
   }
   await host.persistContextManifestForCompletionRequest({
     request: withContext,
+    usageBinding: contextUsageBinding,
     memoryContext,
     memoryContextPlacement,
   });
@@ -772,7 +782,7 @@ export async function* createChatCompletionStream(
     configuredIdleTimeoutMs === undefined && primaryProviderId === "ollama" && isLoopbackUrl(primaryProvider?.baseUrl);
   const primaryApiStyle = host.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
   const usageAttribution = createCompletionUsageAttribution({
-    input: attributionInput,
+    input: { ...attributionInput, ...contextUsageBinding },
     defaultCallKind: "chat_initial",
     workspaceId: chatHookWorkspaceId,
     sessionId: memoryInput?.sessionId,

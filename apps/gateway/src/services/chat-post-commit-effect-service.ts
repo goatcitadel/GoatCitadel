@@ -7,6 +7,8 @@ import {
   type OperatorProfileFact,
   type TraceMemoryCandidateInput,
   type TraceMemoryCandidateRecord,
+  type BackgroundLearningReadiness,
+  type LearningReviewSource,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GeneralChatPostCommitDurableEffectExecutionInput } from "./chat-durable-run-service.js";
@@ -56,6 +58,16 @@ interface ChatPostCommitEffectServiceBaseDeps {
   readonly storage: ChatPostCommitEffectStoragePort;
   readonly commitmentClassifier: CommitmentClassifierService;
   readonly backgroundReview: BackgroundReviewService;
+  resolveBackgroundLearningReadiness(input: {
+    workspaceId: string;
+    sessionId: string;
+  }): Promise<BackgroundLearningReadiness>;
+  enqueueLearningReview?(
+    input: Omit<LearningReviewSource, "sourceHash"> & { kind?: "review" | "maintenance"; due: boolean },
+  ): Promise<{ jobId?: string; disposition: "queued" | "deduplicated" | "disabled" }>;
+  evaluateGovernedMemoryMaintenance?(
+    input: Omit<LearningReviewSource, "sourceHash">,
+  ): Promise<{ status: "skipped" | "queued_for_review"; jobId?: string; reasonCode?: string }>;
   /** Existing governed review owner. This files proposals; it never promotes them. */
   proposeTraceMemoryCandidate(
     input: TraceMemoryCandidateInput,
@@ -99,7 +111,7 @@ type EligibilityAwareEffectInput = GeneralChatPostCommitDurableEffectExecutionIn
  * Canonical downstream owner for deterministic `chat.post_commit.effect`
  * children. Background review may file evidence-only trace candidates through
  * the existing governed memory review owner, but never promotes them or writes
- * OperatorProfile state. Maintenance is production-dark. Commitments remain a
+ * OperatorProfile state. Maintenance queues review-only work. Commitments remain a
  * stateful domain path and every mutation is fenced by the explicit D2 authority
  * seam when it is configured.
  */
@@ -168,9 +180,9 @@ export class ChatPostCommitEffectService {
     context.signal?.throwIfAborted();
     return readGeneralChatPostCommitStageResult(
       (
-        await commitGeneralChatPostCommitStage(
-          this.deps.storage,
+        await this.commitStage(
           identity,
+          context,
           async () => {
             const persisted = await this.deps.commitmentClassifier.persistTurnCommitments(
               {
@@ -190,7 +202,7 @@ export class ChatPostCommitEffectService {
               result: { status: "classified", persistedCount: persisted.length },
             };
           },
-          this.stageCommitOptions(context, true),
+          "terminal",
         )
       ).receipt,
     );
@@ -226,25 +238,65 @@ export class ChatPostCommitEffectService {
     if (input.delegatedChild) {
       return await this.commitResult(evidenceIdentity, context, { status: "skipped", reason: "delegated_child" });
     }
+    const readiness = await this.readLearningReadiness(input);
+    if (!readiness.canExtractMemory && !readiness.canDraftSkill) {
+      return await this.commitResult(evidenceIdentity, context, { status: "skipped", reason: "learning_not_ready" });
+    }
 
     const counter =
       existingCounter ??
       (
-        await commitGeneralChatPostCommitStage(
-          this.deps.storage,
+        await this.commitStage(
           counterIdentity,
+          context,
           async () => {
             const due = await this.advanceBackgroundReviewCounter(input.workspaceId);
             return { value: due, result: { due } };
           },
-          this.stageCommitOptions(context, false),
+          "intermediate",
         )
       ).receipt;
     if (counter.disposition === "late_blocked") {
       return readGeneralChatPostCommitStageResult(counter);
     }
+    if (this.deps.enqueueLearningReview) {
+      const current = await this.readLearningReadiness(input);
+      if (!current.canExtractMemory && !current.canDraftSkill)
+        return await this.commitResult(evidenceIdentity, context, { status: "skipped", reason: "learning_not_ready" });
+      const authority = this.resolveAuthority(context);
+      if (!authority) throw new Error("Queued learning requires canonical parent authority.");
+      const queued = await this.commitStage(
+        evidenceIdentity,
+        context,
+        async () => {
+          const result = await this.deps.enqueueLearningReview!({
+            workspaceId: input.workspaceId,
+            sessionId: input.sessionId,
+            sourceTurnId: input.turnId,
+            parentRunId: context.parentRunId,
+            effectExecutionId: context.effectRunId,
+            postCommitGenerationId: context.generationId,
+            sessionIncarnationId: authority.parent.sessionIncarnationId,
+            controllerGeneration: authority.parent.controllerGeneration,
+            due: counter.result.due === true,
+          });
+          return {
+            value: undefined,
+            result: result.jobId
+              ? { status: "queued", jobId: result.jobId }
+              : { status: "skipped", reason: "learning_not_ready" },
+          };
+        },
+        "terminal",
+      );
+      return readGeneralChatPostCommitStageResult(queued.receipt);
+    }
     if (counter.result.due !== true) {
       return await this.commitResult(evidenceIdentity, context, { status: "skipped", reason: "counter_not_due" });
+    }
+    const currentReadiness = await this.readLearningReadiness(input);
+    if (!currentReadiness.canExtractMemory && !currentReadiness.canDraftSkill) {
+      return await this.commitResult(evidenceIdentity, context, { status: "skipped", reason: "learning_not_ready" });
     }
 
     const lineage = {
@@ -253,26 +305,26 @@ export class ChatPostCommitEffectService {
       sourceTurnId: input.turnId,
       effectExecutionId: context.effectRunId,
     };
-    const facts = await this.deps.backgroundReview.extractTurnMemoryFacts(
-      input.userText,
-      input.assistantText,
-      context.signal,
-      lineage,
-    );
+    const facts = currentReadiness.canExtractMemory
+      ? await this.deps.backgroundReview.extractTurnMemoryFacts(
+          input.userText,
+          input.assistantText,
+          context.signal,
+          lineage,
+        )
+      : [];
     context.signal?.throwIfAborted();
-    const suggestion = await this.deps.backgroundReview.suggestTurnSkill(
-      input.userText,
-      input.assistantText,
-      context.signal,
-      lineage,
-    );
+    const skillReadiness = await this.readLearningReadiness(input);
+    const suggestion = skillReadiness.canDraftSkill
+      ? await this.deps.backgroundReview.suggestTurnSkill(input.userText, input.assistantText, context.signal, lineage)
+      : { shouldAuthor: false };
     context.signal?.throwIfAborted();
 
     const memoryEvidenceFingerprints = buildBackgroundReviewMemoryEvidenceFingerprints(facts);
     const skillEvidenceFingerprint = buildBackgroundReviewSkillEvidenceFingerprint(suggestion);
-    const evidenceCommit = await commitGeneralChatPostCommitStage(
-      this.deps.storage,
+    const evidenceCommit = await this.commitStage(
       evidenceIdentity,
+      context,
       async () => {
         const reviewCandidates = await this.proposeOperatorProfileReviewCandidates(input, context, facts);
         return {
@@ -290,7 +342,7 @@ export class ChatPostCommitEffectService {
           },
         };
       },
-      this.stageCommitOptions(context, true),
+      "terminal",
     );
     const result = readGeneralChatPostCommitStageResult(evidenceCommit.receipt);
     await this.publishBackgroundReviewEvidenceIfRecorded(input, context, result, evidenceCommit.receipt.completedAt);
@@ -314,14 +366,40 @@ export class ChatPostCommitEffectService {
     if (!eligibility.eligible) {
       return await this.commitResult(identity, context, eligibility.result);
     }
-    const result = input.delegatedChild
-      ? { status: "skipped", reason: "delegated_child" }
-      : {
-          status: "production_dark",
-          reason: "governed_memory_promotion_not_implemented",
-          enqueueDisposition: "not_enqueued",
+    if (input.delegatedChild)
+      return await this.commitResult(identity, context, { status: "skipped", reason: "delegated_child" });
+    if (
+      !this.deps.evaluateGovernedMemoryMaintenance ||
+      !(await this.readLearningReadiness(input)).canEvaluateMaintenance
+    )
+      return await this.commitResult(identity, context, { status: "skipped", reason: "learning_not_ready" });
+    const authority = this.resolveAuthority(context);
+    if (!authority) throw new Error("Governed maintenance requires canonical parent authority.");
+    const committed = await this.commitStage(
+      identity,
+      context,
+      async () => {
+        const result = await this.deps.evaluateGovernedMemoryMaintenance!({
+          workspaceId: input.workspaceId,
+          sessionId: input.sessionId,
+          sourceTurnId: input.turnId,
+          parentRunId: context.parentRunId,
+          effectExecutionId: context.effectRunId,
+          postCommitGenerationId: context.generationId,
+          sessionIncarnationId: authority.parent.sessionIncarnationId,
+          controllerGeneration: authority.parent.controllerGeneration,
+        });
+        return {
+          value: undefined,
+          result:
+            result.status === "queued_for_review" && result.jobId
+              ? { status: result.status, jobId: result.jobId }
+              : { status: "skipped", reason: result.reasonCode ?? "learning_not_ready" },
         };
-    return await this.commitResult(identity, context, result);
+      },
+      "terminal",
+    );
+    return readGeneralChatPostCommitStageResult(committed.receipt);
   }
 
   private async resolveEligibleHumanTurn(
@@ -440,14 +518,7 @@ export class ChatPostCommitEffectService {
     result: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     return readGeneralChatPostCommitStageResult(
-      (
-        await commitGeneralChatPostCommitStage(
-          this.deps.storage,
-          identity,
-          async () => ({ value: undefined, result }),
-          this.stageCommitOptions(context, true),
-        )
-      ).receipt,
+      (await this.commitStage(identity, context, async () => ({ value: undefined, result }), "terminal")).receipt,
     );
   }
 
@@ -457,16 +528,35 @@ export class ChatPostCommitEffectService {
   ): Promise<Record<string, unknown>> {
     return readGeneralChatPostCommitStageResult(
       (
-        await commitGeneralChatPostCommitStage(
-          this.deps.storage,
+        await this.commitStage(
           identity,
+          context,
           async () => {
             throw new Error("late-blocked Chat post-commit stages must never apply domain content");
           },
-          { ...this.stageCommitOptions(context, true), forcedDisposition: "late_blocked" },
+          "late_blocked",
         )
       ).receipt,
     );
+  }
+
+  private async commitStage<TValue>(
+    identity: GeneralChatPostCommitStageIdentity,
+    context: GeneralChatPostCommitEffectExecutionContext,
+    apply: () => Promise<{ value: TValue; result: Record<string, unknown> }>,
+    settlement: "intermediate" | "terminal" | "late_blocked",
+  ) {
+    const options = this.stageCommitOptions(context, settlement !== "intermediate");
+    if (settlement === "late_blocked") options.forcedDisposition = "late_blocked";
+    return await commitGeneralChatPostCommitStage(this.deps.storage, identity, apply, options);
+  }
+
+  private async readLearningReadiness(input: { workspaceId: string; sessionId: string }) {
+    // Readiness needs only identity. Keep transcript data out of the policy port.
+    return await this.deps.resolveBackgroundLearningReadiness({
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+    });
   }
 
   private stageCommitOptions(
@@ -474,6 +564,7 @@ export class ChatPostCommitEffectService {
     terminal: boolean,
   ): GeneralChatPostCommitStageCommitOptions {
     const authority = this.resolveAuthority(context);
+    const denyOnlyBlocked = async () => await this.deps.isAutonomyDisabled();
     return authority
       ? {
           authority: {
@@ -483,9 +574,9 @@ export class ChatPostCommitEffectService {
             port: this.deps.effectAuthority!.atomicStage,
             terminal,
           },
-          denyOnlyBlocked: async () => await this.deps.isAutonomyDisabled(),
+          denyOnlyBlocked,
         }
-      : { denyOnlyBlocked: async () => await this.deps.isAutonomyDisabled() };
+      : { denyOnlyBlocked };
   }
 
   private resolveAuthority(

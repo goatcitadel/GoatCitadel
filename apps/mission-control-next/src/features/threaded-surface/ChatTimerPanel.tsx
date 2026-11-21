@@ -1,4 +1,5 @@
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
+import { describeChatTimerStatus } from "@goatcitadel/contracts";
 import {
   Button,
   Dialog,
@@ -9,6 +10,7 @@ import {
   DialogTitle,
   Textarea,
 } from "@goatcitadel/mission-control-shared/components/ui";
+import "./styles/chat-timer.css";
 
 type PanelState = NonNullable<MissionThreadedActiveSessionSurfaceProps["chatTimerPanel"]>;
 
@@ -19,20 +21,28 @@ export function ChatTimerPanel({ panel }: { panel: PanelState }) {
         <DialogHeader>
           <DialogTitle>Set a Chat timer</DialogTitle>
           <DialogDescription id="chat-timer-description">
-            This durable reminder appends a system notice and never invokes a provider or model.
+            {panel.delayMs
+              ? "The countdown starts when you confirm. Choose where to receive the reminder."
+              : "The reminder appears in this Chat. Choose a notification rule to control delivery elsewhere."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="mc-next-chat-timer__form">
-          <label>
-            <span>Due date and time</span>
-            <input
-              type="datetime-local"
-              value={panel.dueAt}
-              onChange={(event) => panel.onDueAtChange(event.currentTarget.value)}
-              required
-            />
-          </label>
+          {panel.delayMs ? (
+            <p className="mc-next-chat-timer__wide">
+              <strong>Duration</strong> · {formatTimerDelay(panel.delayMs)}
+            </p>
+          ) : (
+            <label>
+              <span>Due date and time</span>
+              <input
+                type="datetime-local"
+                value={panel.dueAt}
+                onChange={(event) => panel.onDueAtChange(event.currentTarget.value)}
+                required
+              />
+            </label>
+          )}
           <label>
             <span>Timezone</span>
             <input
@@ -54,12 +64,12 @@ export function ChatTimerPanel({ panel }: { panel: PanelState }) {
             />
           </label>
           <label className="mc-next-chat-timer__wide">
-            <span>Notification rule</span>
+            <span>Destination</span>
             <select
               value={panel.notificationRuleId}
               onChange={(event) => panel.onNotificationRuleChange(event.currentTarget.value)}
             >
-              <option value="">All matching timer rules</option>
+              <option value="">This Chat</option>
               {panel.rules.map((rule) => (
                 <option key={rule.ruleId} value={rule.ruleId}>
                   {rule.label}
@@ -86,8 +96,8 @@ export function ChatTimerPanel({ panel }: { panel: PanelState }) {
                 <div>
                   <strong>{timer.message}</strong>
                   <span>
-                    {timer.status} · {new Date(timer.dueAt).toLocaleString(undefined, { timeZone: timer.timezone })} ·{" "}
-                    {timer.timezone}
+                    {describeChatTimerStatus(timer)} ·{" "}
+                    {new Date(timer.dueAt).toLocaleString(undefined, { timeZone: timer.timezone })} · {timer.timezone}
                   </span>
                 </div>
                 {timer.status === "active" ? (
@@ -114,10 +124,20 @@ export function ChatTimerPanel({ panel }: { panel: PanelState }) {
             onClick={panel.onCreate}
             disabled={panel.busy || !panel.dueAt || !panel.timezone.trim() || !panel.message.trim()}
           >
-            {panel.busy ? "Creating…" : "Create timer"}
+            {panel.busy ? "Saving…" : "Create timer"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
+}
+
+function formatTimerDelay(delayMs: number): string {
+  const [amount, unit] =
+    delayMs % 3_600_000 === 0
+      ? [delayMs / 3_600_000, "hour"]
+      : delayMs % 60_000 === 0
+        ? [delayMs / 60_000, "minute"]
+        : [delayMs / 1_000, "second"];
+  return `${amount} ${unit}${amount === 1 ? "" : "s"}`;
 }

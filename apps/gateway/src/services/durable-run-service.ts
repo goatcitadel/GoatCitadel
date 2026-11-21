@@ -727,11 +727,13 @@ export class DurableRunService {
       backgroundTasks: Set<Promise<void>>;
       workflowRegistry: Pick<
         DurableWorkflowExecutorRegistry,
-        "executeWorkflow" | "isWorkflowRecoverable" | "markWorkflowUnrecoverable"
+        "executeWorkflow" | "isWorkflowRecoverable" | "markWorkflowUnrecoverable" | "isWorkflowReadyToClaim"
       >;
       onRunFailed?: (run: DurableRunRecord, message: string) => Promise<void> | void;
       /** Runs inside the cancellation transaction, after the Chat trace is fenced. */
       onChatTurnCancelled?: (sessionId: string, turnId: string, actorId: string) => Promise<void>;
+      /** Runs after exact canonical finalizer settlement and admission release. */
+      onChatTurnFinalizersSettled?: (run: DurableRunRecord) => Promise<unknown>;
       reconcileWaitingChatDelegations?: () => Promise<void>;
       reconcileWaitingChatFanouts?: () => Promise<void>;
       /** Wakes orchestration runs parked on a phase child that has already settled. */
@@ -3154,6 +3156,7 @@ export class DurableRunService {
       ) {
         await this.settleSystemHeartbeatOccurrenceIfPresent(run, admission);
         if (retryExhaustion) await this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
+        await this.notifyChatTurnFinalizersSettled(run);
         return;
       }
       throw new Error(`Durable Chat parent ${run.runId} admission was closed by conflicting authority.`);
@@ -3182,6 +3185,18 @@ export class DurableRunService {
     });
     await this.settleSystemHeartbeatOccurrenceIfPresent(run, admission);
     if (retryExhaustion) await this.projectChatRetryExhaustionDeadLetter(run, retryExhaustion);
+    await this.notifyChatTurnFinalizersSettled(run);
+  }
+
+  private async notifyChatTurnFinalizersSettled(run: DurableRunRecord): Promise<void> {
+    try {
+      await this.deps?.onChatTurnFinalizersSettled?.(run);
+    } catch (error) {
+      this.resolveLogger().warn(
+        { runId: run.runId, error: boundedRecoveryError(error) },
+        "Chat occurrence settlement notification deferred to canonical recovery",
+      );
+    }
   }
 
   private async settleSystemHeartbeatOccurrenceIfPresent(
@@ -5697,7 +5712,13 @@ export class DurableRunService {
         continue;
       }
       try {
-        this.assertExactAdmittedChatRetryAuthority(await this.ctx.storage.durableRuns.getRun(runId));
+        const candidate = await this.ctx.storage.durableRuns.getRun(runId);
+        this.assertExactAdmittedChatRetryAuthority(candidate);
+        if (
+          this.deps?.workflowRegistry.isWorkflowReadyToClaim &&
+          !(await this.deps.workflowRegistry.isWorkflowReadyToClaim(candidate))
+        )
+          continue;
       } catch (error) {
         await this.reportDurableRunRecoveryFailure(runId, error);
         continue;

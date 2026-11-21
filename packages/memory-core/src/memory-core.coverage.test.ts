@@ -99,7 +99,7 @@ describe("memory candidate collection", () => {
     ]);
   });
 
-  it("splits files into bounded chunks and respects the file candidate cap", () => {
+  it("splits files into bounded chunks and shares the capped slots across files", () => {
     const collected = collectMemoryCandidates(
       [
         {
@@ -120,7 +120,7 @@ describe("memory candidate collection", () => {
 
     expect(collected.map((item) => `${item.candidateId}:${item.text}`)).toEqual([
       "f:notes.md#0:alpha beta",
-      "f:notes.md#1:gamma del",
+      "f:ignored.md#0:ignored",
     ]);
 
     expect(

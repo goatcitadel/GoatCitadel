@@ -6,6 +6,14 @@ import type { DatabaseClient, DatabaseOnlineBackupOptions } from "./db.js";
 export * from "./async-db.js";
 export * from "./async-storage.js";
 import { SessionRepository } from "./session-repo.js";
+import { MemoryRecallRepository } from "./memory-recall-repo.js";
+import { MemoryNoteRepository } from "./memory-note-repo.js";
+export * from "./memory-recall-repo.js";
+export * from "./memory-recall-vector-index.js";
+import { BackgroundLearningJobRepository } from "./background-learning-job-repo.js";
+export * from "./background-learning-job-repo.js";
+import { ImprovementWatchEvidenceRepository } from "./improvement-watch-evidence-repo.js";
+export * from "./improvement-watch-evidence-repo.js";
 import { IdempotencyRepository } from "./idempotency-repo.js";
 import { MutationIdempotencyRepository } from "./mutation-idempotency-repo.js";
 import { TranscriptLog } from "./transcript-log.js";
@@ -207,6 +215,8 @@ import { ChatFanoutInvocationRepository } from "./chat-fanout-invocation-repo.js
 import { ChatMessageRepository } from "./chat-message-repo.js";
 import { ChatThreadKnowledgeAttachmentRepository } from "./chat-thread-knowledge-attachment-repo.js";
 import { SystemSettingsRepository } from "./system-settings-repo.js";
+import { MemoryConsolidationProgressRepository } from "./memory-consolidation-progress-repo.js";
+import { MemoryLearningRepository } from "./memory-learning-repo.js";
 import { ManagedSourceInstallRepository } from "./managed-source-install-repo.js";
 import { ProductSourceUpdateRepository } from "./product-source-update-repo.js";
 import { ResearchRunRepository } from "./research-run-repo.js";
@@ -482,6 +492,12 @@ export class Storage {
   public readonly chatFanoutInvocations: ChatFanoutInvocationRepository;
   public readonly chatThreadKnowledgeAttachments: ChatThreadKnowledgeAttachmentRepository;
   public readonly systemSettings: SystemSettingsRepository;
+  public readonly memoryConsolidationProgress: MemoryConsolidationProgressRepository;
+  public readonly backgroundLearningJobs: BackgroundLearningJobRepository;
+  public readonly improvementWatchEvidence: ImprovementWatchEvidenceRepository;
+  public readonly memoryLearnings: MemoryLearningRepository;
+  public readonly memoryRecall: MemoryRecallRepository;
+  public readonly memoryNotes: MemoryNoteRepository;
   public readonly researchRuns: ResearchRunRepository;
   public readonly researchSources: ResearchSourceRepository;
   public readonly promptPacks: PromptPackRepository;
@@ -679,6 +695,10 @@ export class Storage {
     this.chatFanoutInvocations = new ChatFanoutInvocationRepository(this.db);
     this.chatThreadKnowledgeAttachments = new ChatThreadKnowledgeAttachmentRepository(this.db);
     this.systemSettings = new SystemSettingsRepository(this.db, this.integrationConnections);
+    this.memoryConsolidationProgress = new MemoryConsolidationProgressRepository(this.systemSettings, this.db);
+    this.memoryLearnings = new MemoryLearningRepository(this.db);
+    this.memoryRecall = new MemoryRecallRepository(this.db);
+    this.memoryNotes = new MemoryNoteRepository(this.db);
     this.researchRuns = new ResearchRunRepository(this.db);
     this.researchSources = new ResearchSourceRepository(this.db);
     this.promptPacks = new PromptPackRepository(this.db);
@@ -698,6 +718,13 @@ export class Storage {
     this.memoryQualityIssues = new MemoryQualityIssueRepository(this.db);
     this.memoryItemEnumeration = new MemoryItemEnumerationRepository(this.db);
     this.durableRuns = new DurableRunRepository(this.db, { quarantine: this.stateValidationQuarantine });
+    this.backgroundLearningJobs = new BackgroundLearningJobRepository(
+      this.db,
+      this.systemSettings,
+      this.durableRuns,
+      this.costLedger,
+    );
+    this.improvementWatchEvidence = new ImprovementWatchEvidenceRepository(this.db);
     this.gatewaySql = new GatewaySqlRepository(this.db);
     this.assembly = new AssemblyRepository(this.db);
     this.transcriptOutbox = new TranscriptOutboxRepository(this.db);
@@ -1190,6 +1217,7 @@ export * from "./workspace-hook-repo.js";
 export * from "./capability-scope-repo.js";
 export * from "./hook-run-repo.js";
 export * from "./memory-maintenance-repo.js";
+export * from "./memory-note-repo.js";
 export * from "./memory-item-enumeration-repo.js";
 export * from "./durable-run-repo.js";
 export * from "./safe-json.js";
@@ -1225,3 +1253,5 @@ export { parseJsonObject, parseJsonArray, parseStringRecord } from "./state-vali
 export { StateValidationQuarantineRepository } from "./state-validation-quarantine-repo.js";
 export type { StoredQuarantineEntry } from "./state-validation-quarantine-repo.js";
 export * from "./postgres/index.js";
+export * from "./memory-consolidation-progress-repo.js";
+export * from "./memory-learning-repo.js";

@@ -8,6 +8,7 @@ export interface LlmDispatchRoute {
   readonly apiStyle: string;
   readonly configuredContextWindowTokens?: number;
   readonly credential: ModelUsageCredentialLineage;
+  readonly localTransport?: boolean;
   readonly pricing?: ModelUsagePricingLineage;
 }
 
@@ -17,13 +18,22 @@ export interface LlmDispatchGuardInput {
   readonly route: LlmDispatchRoute;
   readonly transportAttemptIndex: number;
   readonly effectiveOutputTokenCap?: number;
+  readonly requestInputBytes?: number;
 }
 
 export type LlmDispatchGuard = (input: LlmDispatchGuardInput) => Promise<void>;
 
-const LINEAGE_KEYS = ["workspaceId", "sessionId", "turnId", "durableRunId", "taskId", "workerId",
-  "contextIntentHash", "parentOperationId"] as const;
-export type LlmDispatchLineage = Readonly<Pick<ModelUsageAttributionContext, typeof LINEAGE_KEYS[number]>>;
+const LINEAGE_KEYS = [
+  "workspaceId",
+  "sessionId",
+  "turnId",
+  "durableRunId",
+  "taskId",
+  "workerId",
+  "contextIntentHash",
+  "parentOperationId",
+] as const;
+export type LlmDispatchLineage = Readonly<Pick<ModelUsageAttributionContext, (typeof LINEAGE_KEYS)[number]>>;
 
 /** Execution-authority failures are never provider retries or fallback signals. */
 export class LlmDispatchGuardRejectedError extends Error {
@@ -44,7 +54,11 @@ export class LlmDispatchGuardScope {
 
   /** Server-owned execution lineage is inherited by every model attempt. Child
    * calls keep their own operation identities but cannot move charges elsewhere. */
-  public runWithLineage<T>(lineage: LlmDispatchLineage, guard: LlmDispatchGuard, operation: () => Promise<T>): Promise<T> {
+  public runWithLineage<T>(
+    lineage: LlmDispatchLineage,
+    guard: LlmDispatchGuard,
+    operation: () => Promise<T>,
+  ): Promise<T> {
     if (Object.keys(lineage).some((key) => !LINEAGE_KEYS.some((allowed) => allowed === key)))
       throw new LlmDispatchGuardRejectedError(new Error("Unknown governed model lineage field."));
     for (const value of Object.values(lineage)) {
@@ -63,7 +77,9 @@ export class LlmDispatchGuardScope {
       const expected = lineage[key];
       if (expected === undefined) continue;
       if (attribution[key] !== undefined && attribution[key] !== expected)
-        throw new LlmDispatchGuardRejectedError(new Error("Model usage conflicts with its governed execution lineage."));
+        throw new LlmDispatchGuardRejectedError(
+          new Error("Model usage conflicts with its governed execution lineage."),
+        );
       result[key] = expected;
     }
     return result;
@@ -80,14 +96,16 @@ export class LlmDispatchGuardScope {
     let iterator: AsyncGenerator<T, TReturn, TNext> | undefined;
     let closed = false;
     const invoke = <TResult>(work: () => Promise<TResult>) =>
-      this.lineageScope.run(lineage ?? {}, () => this.scope.run(bound, async () => {
-        try {
-          return await work();
-        } catch (error) {
-          closed = true;
-          throw error;
-        }
-      }));
+      this.lineageScope.run(lineage ?? {}, () =>
+        this.scope.run(bound, async () => {
+          try {
+            return await work();
+          } catch (error) {
+            closed = true;
+            throw error;
+          }
+        }),
+      );
     return {
       [Symbol.asyncIterator]() {
         return this;

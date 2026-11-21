@@ -19,6 +19,7 @@ export type OperatorProfileFactKind = "preference" | "goal" | "constraint" | "fa
 
 /** A single durable fact about the operator. */
 export interface OperatorProfileFact {
+  claim?: import("./memory-claims.js").MemoryClaim;
   kind: OperatorProfileFactKind;
   /** The fact text. Never contains secrets (gate-blocked). */
   content: string;

@@ -75,6 +75,8 @@ export interface SkillEvaluationOperatorTruth {
 }
 
 export interface SkillEvaluationRunRecord {
+  /** Static instruction coverage, bound to this immutable candidate; not task-success evidence. */
+  candidateBinding?: CandidateSkillEvaluationBinding;
   runId: string;
   skillId: string;
   skillName: string;
@@ -95,6 +97,15 @@ export interface SkillEvaluationRunRecord {
   ledgerSignalId?: string;
   warnings: string[];
   operatorTruth: SkillEvaluationOperatorTruth;
+}
+
+export interface CandidateSkillEvaluationBinding {
+  candidateId: string;
+  versionId: string;
+  revision: number;
+  instructionSha256: string;
+  manifestSha256: string;
+  sourceFingerprint: string;
 }
 
 export interface SkillEvaluationPreviewRequest {

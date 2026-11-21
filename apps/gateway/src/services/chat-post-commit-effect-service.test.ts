@@ -723,7 +723,7 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
     expect(metadataText).not.toContain("RAW LEGACY STAGE MARKDOWN");
   });
 
-  it("keeps post-turn memory maintenance production-dark with no enqueue or maintenance call", async () => {
+  it("skips post-turn maintenance without a governed owner and never uses the legacy scheduler", async () => {
     const storage = createStorage();
     seedEffectRun(storage, "effect-maintenance", "memory_maintenance", "worker-current");
     const noteSuccessfulRootTurnSync = vi.fn();
@@ -736,8 +736,8 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
     const execution = context("effect-maintenance", "worker-current");
 
     await expect(service.execute(maintenanceInput(), execution)).resolves.toMatchObject({
-      status: "production_dark",
-      enqueueDisposition: "not_enqueued",
+      status: "skipped",
+      reason: "learning_not_ready",
     });
     await service.execute(maintenanceInput(), execution);
 
@@ -745,6 +745,32 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
     expect(requestDurableRunProcessing).not.toHaveBeenCalled();
     expect(storage.memoryMaintenance.listRuns("workspace-1")).toEqual([]);
     expect(storage.durableRuns.listRuns(20).filter((run) => run.workflowKey === "memory.maintenance")).toEqual([]);
+  });
+
+  it("queues governed maintenance once, using only exact frozen source identities", async () => {
+    const storage = createStorage();
+    seedEffectRun(storage, "effect-governed-maintenance", "memory_maintenance", "worker-current");
+    const jobId = `blj-${"a".repeat(40)}`;
+    const evaluate = vi.fn(async () => ({ status: "queued_for_review" as const, jobId }));
+    const service = createService(storage, {
+      authority: authorityHarness([]).port,
+      evaluateGovernedMemoryMaintenance: evaluate,
+    });
+    const execution = context("effect-governed-maintenance", "worker-current");
+    const input = maintenanceInput();
+    const result = await service.execute(input, execution);
+    expect(result).toMatchObject({ status: "queued_for_review", jobId });
+    expect(await service.execute(input, execution)).toEqual(result);
+    expect(evaluate).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      sourceTurnId: input.turnId,
+      parentRunId: execution.parentRunId,
+      effectExecutionId: execution.effectRunId,
+      postCommitGenerationId: execution.generationId,
+      sessionIncarnationId: execution.postCommitAuthority.parent.sessionIncarnationId,
+      controllerGeneration: execution.postCommitAuthority.parent.controllerGeneration,
+    });
   });
 });
 
@@ -784,6 +810,7 @@ function createService(
     authority?: ChatPostCommitEffectAuthorityPort;
     commitmentClassifier?: CommitmentClassifierService;
     backgroundReview?: BackgroundReviewService;
+    evaluateGovernedMemoryMaintenance?: ChatPostCommitEffectServiceDeps["evaluateGovernedMemoryMaintenance"];
     proposeTraceMemoryCandidate?: ChatPostCommitEffectServiceDeps["proposeTraceMemoryCandidate"];
     isAutonomyDisabled?: () => boolean;
     publishRealtime?: ChatPostCommitEffectServiceDeps["publishRealtime"];
@@ -805,6 +832,18 @@ function createService(
         extractTurnMemoryFacts: vi.fn(async () => []),
         suggestTurnSkill: vi.fn(async () => ({ shouldAuthor: false })),
       } as unknown as BackgroundReviewService),
+    resolveBackgroundLearningReadiness: async () => ({
+      source: { state: "ready" },
+      provider: { state: "ready" },
+      budget: { state: "ready" },
+      memory: { state: "ready" },
+      skill: { state: "ready" },
+      maintenance: { state: "ready" },
+      canExtractMemory: true,
+      canDraftSkill: true,
+      canEvaluateMaintenance: true,
+    }),
+    evaluateGovernedMemoryMaintenance: overrides.evaluateGovernedMemoryMaintenance,
     proposeTraceMemoryCandidate:
       overrides.proposeTraceMemoryCandidate ?? vi.fn(async (_input) => ({ candidateId: "trace-review-default" })),
     ...(overrides.authority ? { effectAuthority: overrides.authority } : {}),

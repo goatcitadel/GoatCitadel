@@ -1558,6 +1558,7 @@ export interface ChatExecutionPlanRecord {
 }
 
 export interface ChatConversationSummaryRecord {
+  continuityLedger?: import("./chat-continuity.js").ChatContinuityLedgerV1;
   summaryId: string;
   sessionId: string;
   branchHeadTurnId: string;

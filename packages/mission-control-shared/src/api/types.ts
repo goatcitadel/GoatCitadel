@@ -442,6 +442,8 @@ export interface RuntimeSettingsResponse {
   environment: string;
   deploymentProfile: "local_dev" | "trusted_local" | "remote_hardened";
   toolApprovalMode: "approve_all" | "approve_risky" | "bypass";
+  automaticBackgroundUsdCap?: number;
+  automaticBackground?: import("@goatcitadel/contracts").AutomaticBackgroundSettings;
   budgetMode: "saver" | "balanced" | "power";
   workspaceDir: string;
   /** The https address the internet uses to reach this installation. Absent when the operator has not set one. */
@@ -610,7 +612,11 @@ export interface RuntimeSettingsResponse {
     flashAttention?: boolean;
     status: LlamaCppRuntimeStatus;
   };
+  featurePreferences?: import("@goatcitadel/contracts").FeaturePreferenceMetadata;
   features: {
+    attachedContextToolsV1Enabled?: boolean;
+    conversationForksV1Enabled?: boolean;
+    notificationRoutingV1Enabled?: boolean;
     durableKernelV1Enabled: boolean;
     memoryMaintenanceV1Enabled: boolean;
     replayOverridesV1Enabled: boolean;
@@ -675,6 +681,8 @@ export interface RuntimeSettingsResponse {
     productSourceEvolutionV1Enabled?: boolean;
     channelVoiceReplyV1Enabled?: boolean;
     memoryConsolidationV1Enabled?: boolean;
+    memoryCorpusRecallV1Enabled?: boolean;
+    backgroundSkillDraftsV1Enabled?: boolean;
     cronEvidenceV1Enabled?: boolean;
     utilityModelRoutingV1Enabled?: boolean;
     chatTurnInterruptionRecoveryV1Disabled?: boolean;

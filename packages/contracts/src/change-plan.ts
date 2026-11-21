@@ -1,5 +1,7 @@
 /* eslint-disable max-lines -- Every Change Plan kind's request type and validator stays in this one audited contract boundary. */
 import type { ChatThinkingLevel } from "./chat.js";
+import type { FeaturePreferenceReview } from "./shipped-feature-defaults.js";
+import { SHIPPED_FEATURE_FLAGS, SHIPPED_FEATURE_SWITCHABILITY, isShippedFeatureFlag } from "./shipped-feature-flags.js";
 import { CHAT_RESTORATION_FEATURE_FLAGS } from "./chat-feature-references.js";
 import { LLM_API_STYLES, LLM_PROVIDER_AUTH_MODES } from "./llm.js";
 import type { LlmApiStyle, LlmProviderAuthMode, LlmProviderCapabilities, LlmProviderGoogleCloudConfig } from "./llm.js";
@@ -189,6 +191,8 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAGS = [
   "productSourceEvolutionV1Enabled",
   "chatTurnInterruptionRecoveryV1Disabled",
   "chatThinkingStreamV1Enabled",
+  "chatContextBudgetVisibilityV1Enabled",
+  "chatAsyncClarificationV1Enabled",
   "unifiedComposerPaletteV1Enabled",
   "attachedContextToolsV1Enabled",
   "chatSessionStatusV1Enabled",
@@ -200,6 +204,8 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAGS = [
   "utilityModelRoutingV1Enabled",
   "cronEvidenceV1Enabled",
   "memoryConsolidationV1Enabled",
+  "memoryCorpusRecallV1Enabled",
+  "backgroundSkillDraftsV1Enabled",
   "channelVoiceInboundV1Enabled",
   "channelVoiceReplyV1Enabled",
   "externalSideEffectReplayJobsV1Disabled",
@@ -262,6 +268,7 @@ export interface ChangePlanLlamaCppConfiguration {
 
 export type ChangePlanRuntimeConfigurationOperation =
   | { readonly operation: "tool_approval_mode"; readonly mode: "approve_all" | "approve_risky" | "bypass" }
+  | { readonly operation: "automatic_background_budget"; readonly limitUsd: number }
   | { readonly operation: "budget_mode"; readonly mode: "saver" | "balanced" | "power" }
   | { readonly operation: "deployment_profile"; readonly profile: "local_dev" | "trusted_local" | "remote_hardened" }
   | { readonly operation: "read_access_policy"; readonly mode: "roots_only" | "approval_required" | "full_disk" }
@@ -291,6 +298,7 @@ export type ChangePlanRuntimeConfigurationOperation =
       readonly autoStart?: boolean;
     }
   | RuntimeWriteAccessOperation
+  | ({ readonly operation: "feature_preference_review" } & FeaturePreferenceReview)
   | {
       readonly operation: "feature_flags";
       readonly flags: Readonly<Partial<Record<ChangePlanRuntimeFeatureFlag, boolean>>>;
@@ -824,6 +832,13 @@ function isRuntimeConfigurationOperation(value: unknown): value is ChangePlanRun
         hasOnlyKeys(value, ["operation", "mode"]) &&
         ["approve_all", "approve_risky", "bypass"].includes(String(value.mode))
       );
+    case "automatic_background_budget":
+      return (
+        hasOnlyKeys(value, ["operation", "limitUsd"]) &&
+        typeof value.limitUsd === "number" &&
+        Number.isFinite(value.limitUsd) &&
+        value.limitUsd >= 0
+      );
     case "budget_mode":
       return hasOnlyKeys(value, ["operation", "mode"]) && ["saver", "balanced", "power"].includes(String(value.mode));
     case "deployment_profile":
@@ -891,6 +906,20 @@ function isRuntimeConfigurationOperation(value: unknown): value is ChangePlanRun
         hasOnlyKeys(value, ["operation", "flag", "enabled"]) &&
         (CHANGE_PLAN_RUNTIME_FEATURE_FLAGS as readonly string[]).includes(String(value.flag)) &&
         typeof value.enabled === "boolean"
+      );
+    case "feature_preference_review":
+      return (
+        hasOnlyKeys(value, ["operation", "flags", "decision", "fingerprint"]) &&
+        typeof value.fingerprint === "string" &&
+        /^[a-f0-9]{64}$/u.test(value.fingerprint) &&
+        (value.decision === "inherit" || value.decision === "off") &&
+        Array.isArray(value.flags) &&
+        value.flags.length > 0 &&
+        value.flags.length <= SHIPPED_FEATURE_FLAGS.length &&
+        new Set(value.flags).size === value.flags.length &&
+        value.flags.every(
+          (flag) => typeof flag === "string" && isShippedFeatureFlag(flag) && SHIPPED_FEATURE_SWITCHABILITY[flag],
+        )
       );
     case "feature_flags":
       return (

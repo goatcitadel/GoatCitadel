@@ -1,3 +1,4 @@
+import { buildNaturalMemoryReviewInstruction, isNaturalMemoryReviewOnlyTurn } from "./memory-intent-service.js";
 import {
   prepareChatRoutedContextAdmission,
   upsertChatRoutedContextSystemInstruction,
@@ -81,7 +82,11 @@ import {
   withoutUnofferedCodeModeTools,
   type BasePromptCatalogScope,
 } from "./base-prompt-capability-catalog.js";
-import { buildCodeModeRequestTurnShape, loadCodeModeRequestEligibility } from "./code-mode-request-eligibility.js";
+import {
+  buildCodeModeRequestTurnShape,
+  isCodeModeRequestTurnShapeEligible,
+  loadCodeModeRequestEligibility,
+} from "./code-mode-request-eligibility.js";
 import { buildOrchestrationPlan } from "../orchestration/router.js";
 import type {
   OrchestrationPlan as ModeOrchestrationPlan,
@@ -300,7 +305,10 @@ export interface ChatTurnPrepHost {
    * prompt as `memoryDigest`. Optional + best-effort: returns `undefined` when
    * there is nothing to inject, and is only consulted when the base prompt is on.
    */
-  composeFrozenOperatorProfileDigest?(workspaceId: string): Promise<string | undefined>;
+  composeFrozenOperatorProfileDigest?(
+    workspaceId: string,
+    options?: { includeLearnings?: boolean },
+  ): Promise<string | undefined>;
   /**
    * Callable tool/skill catalog for the base prompt's "what you can do" index
    * (P0-#2). Previously the base prompt was built with an empty toolset, so the
@@ -320,6 +328,7 @@ export interface ChatTurnPrepHost {
   resolveChatTurnEffectiveRoute?(
     sessionId: string,
     input: ChatSendMessageRequest,
+    systemHeartbeat?: boolean,
   ): Promise<ResolvedChatRouteDescriptor>;
   resolveChatTurnCapabilityProfile?(input: {
     sessionId: string;
@@ -394,6 +403,8 @@ export interface PreparedAgentChatTurn {
   featureAdmission?: { references: ChatTurnFeatureReferences; referenceSha256: string };
   /** Original admitted content used to validate a durable continuation against its profile. */
   capabilityProfileContent?: string;
+  /** Server-derived downscope: the lifecycle owns this preference-only review. */
+  naturalMemoryReviewOnly?: boolean;
   capabilityCatalogSnapshot?: CapabilityCatalogSnapshotRecord;
   /** Exact immutable routed-context bytes admitted for this turn. */
   routedContextSnapshot?: ChatRoutedContextSnapshotRecord;
@@ -628,6 +639,8 @@ export async function prepareAgentChatTurn(
     capabilityProfileContent?: string;
     /** Canonical non-consent settlement needs no retrieval or model compaction. */
     skipProviderPreparation?: boolean;
+    /** Server configuration snapshot for review-only memory writes. */
+    naturalMemoryReviewConfigured?: boolean;
     /** Exact server-only posture; never accepted from a client request. */
     serverOnlyPosture?: SystemHeartbeatTurnPrepPosture;
   },
@@ -1007,7 +1020,7 @@ export async function prepareAgentChatTurn(
   }
   const effectiveProviderRoute = boundCapabilityProfile
     ? undefined
-    : admitChatRouteWard(await host.resolveChatTurnEffectiveRoute?.(sessionId, input));
+    : admitChatRouteWard(await host.resolveChatTurnEffectiveRoute?.(sessionId, input, Boolean(systemHeartbeatPosture)));
   let featureAdmission =
     !boundCapabilityProfile && options?.turnAdmission
       ? await host.resolveChatFeatureAdmission?.({
@@ -1120,17 +1133,40 @@ export async function prepareAgentChatTurn(
       ? await host.buildDefaultChatPersonalityOverlay()
       : undefined;
   // The runner offers code_mode.request by the same rule; the prompt and attachment hints must not name it otherwise.
+  const interactiveTurn = buildCodeModeRequestTurnShape({
+    mode: effectiveMode,
+    parentDelegationStepId: userMessage.parentDelegationStepId ?? input.parentDelegationStepId,
+    permissionProfileId: input.permissionProfileId,
+    serverOnlyPosture: systemHeartbeatPosture,
+    authActorSource: input.authActorSource,
+    // Autonomous enqueue passes its policy context on the request, past this signature's type.
+    policyContext: (input as ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext }).policyContext,
+  });
   const codeModeRequestEligible = await loadCodeModeRequestEligibility(
-    buildCodeModeRequestTurnShape({
-      mode: effectiveMode,
-      parentDelegationStepId: userMessage.parentDelegationStepId ?? input.parentDelegationStepId,
-      permissionProfileId: input.permissionProfileId,
-      serverOnlyPosture: systemHeartbeatPosture,
-      authActorSource: input.authActorSource,
-      // Autonomous enqueue passes its policy context on the request, past this signature's type.
-      policyContext: (input as ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext }).policyContext,
-    }),
+    interactiveTurn,
     host.getCodeModeReadiness ? () => host.getCodeModeReadiness!() : undefined,
+  );
+  const naturalMemoryReviewEligible =
+    !systemHeartbeatPosture &&
+    session.kind === "dm" &&
+    sessionMeta.origin === "operator" &&
+    !userMessage.parentDelegationStepId &&
+    !input.parentDelegationStepId &&
+    (normalized.memoryMode ?? prefs.memoryMode) !== "off" &&
+    options?.naturalMemoryReviewConfigured === true &&
+    (await isFeatureEnabled("memoryLifecycleAdminV1Enabled"));
+  const naturalMemoryReviewInstruction =
+    !options?.skipProviderPreparation && naturalMemoryReviewEligible
+      ? buildNaturalMemoryReviewInstruction({
+          content: userMessage.content,
+          sourceAuthority: userMessage.sourceAuthority ?? "unknown",
+          sourceMessageId: userMessage.messageId,
+        })
+      : undefined;
+  const naturalMemoryReviewOnly = Boolean(
+    naturalMemoryReviewEligible &&
+    userMessage.sourceAuthority === "operator" &&
+    isNaturalMemoryReviewOnlyTurn(userMessage.content),
   );
   let baseAgentInstruction: ChatCompletionRequest["messages"][number]["content"] | undefined;
   if (baseSystemPromptEnabled) {
@@ -1141,9 +1177,12 @@ export async function prepareAgentChatTurn(
     // the base prompt's volatile tail without busting the P0-A cache prefix.
     // Best-effort: never let a profile read break turn preparation.
     let memoryDigest: string | undefined;
-    if (!quickWebTurn) {
+    if (!quickWebTurn && session.kind === "dm") {
       try {
-        memoryDigest = await host.composeFrozenOperatorProfileDigest?.(workspaceId);
+        memoryDigest =
+          (normalized.memoryMode ?? prefs.memoryMode) === "off"
+            ? await host.composeFrozenOperatorProfileDigest?.(workspaceId, { includeLearnings: false })
+            : await host.composeFrozenOperatorProfileDigest?.(workspaceId);
       } catch {
         memoryDigest = undefined;
       }
@@ -1165,6 +1204,13 @@ export async function prepareAgentChatTurn(
         promptCapabilityCatalog = { toolNames: [] };
       }
     }
+    if (naturalMemoryReviewOnly)
+      promptCapabilityCatalog = {
+        ...promptCapabilityCatalog,
+        toolNames: promptCapabilityCatalog.toolNames.filter(
+          (name) => name !== "memory.write" && name !== "memory.upsert",
+        ),
+      };
     baseAgentInstruction = renderBaseAgentSystemPromptBlocks(
       buildBaseAgentSystemPrompt({
         mode: effectiveMode,
@@ -1193,6 +1239,8 @@ export async function prepareAgentChatTurn(
           missingRequiredProjectBinding,
         }),
         webMode: normalized.webMode ?? prefs.webMode,
+        chatTimersEnabled:
+          isCodeModeRequestTurnShapeEligible(interactiveTurn) && (await isFeatureEnabled("chatTimersV1Enabled")),
         ...(memoryDigest ? { memoryDigest } : {}),
       }),
     );
@@ -1219,6 +1267,7 @@ export async function prepareAgentChatTurn(
       ? "Code mode requires a bound project before execution-heavy work. Until a project is attached, stay in planning and review posture, and do not imply that repository-bound edits or filesystem inspection were executed."
       : undefined,
     options?.extraSystemInstruction,
+    naturalMemoryReviewInstruction,
   );
 
   const hasExplicitParentTurnId = Object.prototype.hasOwnProperty.call(options ?? {}, "parentTurnId");
@@ -1497,6 +1546,7 @@ export async function prepareAgentChatTurn(
     ...(capabilityProfile ? { capabilityProfile } : {}),
     ...(featureAdmission ? { featureAdmission } : {}),
     ...(capabilityProfileContent ? { capabilityProfileContent } : {}),
+    ...(naturalMemoryReviewOnly ? { naturalMemoryReviewOnly: true } : {}),
     ...(routedContextSnapshot ? { routedContextSnapshot } : {}),
   };
   if (!systemHeartbeatPosture) {

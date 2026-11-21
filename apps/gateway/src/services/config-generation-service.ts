@@ -5,6 +5,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   AssistantConfigInputSchema,
+  CHANGE_PLAN_RUNTIME_FEATURE_FLAGS,
+  isShippedFeatureFlag,
   BudgetConfigSchema,
   ConflictError,
   LlmConfigFileSchema,
@@ -81,6 +83,8 @@ export interface ConfigGenerationCommitInput<T> {
 export interface ConfigGenerationRuntimeOwnerRecoveryIntent {
   version: 1;
   meshArtifact?: MeshRuntimeArtifactSnapshot;
+  preserveFeatureOverrides?: true;
+  previousFeatureOverrides?: import("./gateway/feature-flags.js").StoredFeatureFlags;
   providerSecretEffects?: ConfigGenerationProviderSecretEffect[];
 }
 
@@ -480,6 +484,12 @@ export class ConfigGenerationService {
     const rootDir = path.dirname(this.configDir);
     try {
       runtimeOwnerRecoveryIntent = await input.captureRuntimeOwnerRecoveryIntent?.(candidate.runtime);
+      if (
+        !nextPayload.assistant.featurePreferenceOverrides &&
+        JSON.stringify(nextPayload.assistant.features) === JSON.stringify(previousPayload.assistant.features)
+      ) {
+        runtimeOwnerRecoveryIntent = { version: 1, ...runtimeOwnerRecoveryIntent, preserveFeatureOverrides: true };
+      }
       gatewayTokenRotation = startupCredential?.stageRotation?.(generationId);
       await this.writeTransactionMarker("committed", nextPayload, { runtimeOwnerRecoveryIntent, gatewayTokenRotation });
     } catch (decisionError) {
@@ -488,7 +498,9 @@ export class ConfigGenerationService {
         await this.publishCanonical(rollbackPayload);
         this.activePayload = rollbackPayload;
         if (startupCredential?.stageRotation) discardGatewayTokenRotation(rootDir, generationId);
-        await this.writeTransactionMarker("committed", rollbackPayload);
+        await this.writeTransactionMarker("committed", rollbackPayload, {
+          rollbackRuntimeOwnerRecoveryIntent: { version: 1, preserveFeatureOverrides: true },
+        });
         restoreStartupCredential?.();
         await this.retainLastGood(rollbackPayload);
         await this.tryPublishMirrors(rollbackPayload);
@@ -1112,6 +1124,21 @@ function assertRuntimeOwnerRecoveryIntent(
 ): asserts value is ConfigGenerationRuntimeOwnerRecoveryIntent {
   if (!isRecord(value) || value.version !== 1) {
     throw new ValidationError({ message: `Invalid runtime owner recovery intent: ${source}` });
+  }
+  if (value.preserveFeatureOverrides !== undefined && value.preserveFeatureOverrides !== true) {
+    throw new ValidationError({ message: `Invalid feature preference recovery marker: ${source}` });
+  }
+  if (value.previousFeatureOverrides !== undefined) {
+    if (
+      !isRecord(value.previousFeatureOverrides) ||
+      !Object.entries(value.previousFeatureOverrides).every(([key, entry]) =>
+        key === "reviewed"
+          ? Array.isArray(entry) && entry.every((flag) => typeof flag === "string" && isShippedFeatureFlag(flag))
+          : (CHANGE_PLAN_RUNTIME_FEATURE_FLAGS as readonly string[]).includes(key) && typeof entry === "boolean",
+      )
+    ) {
+      throw new ValidationError({ message: `Invalid feature preference recovery intent: ${source}` });
+    }
   }
   if (value.providerSecretEffects !== undefined) {
     if (!Array.isArray(value.providerSecretEffects)) {

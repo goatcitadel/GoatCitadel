@@ -1,18 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChatThreadResponse, ChatTimerRecord } from "@goatcitadel/contracts";
+import { describeChatTimerStatus, type ChatThreadResponse, type ChatTimerRecord } from "@goatcitadel/contracts";
 import {
   cancelChatTimer,
   createChatTimer,
   fetchChatTimers,
   fetchNotificationRules,
+  fetchNotificationTargets,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { toDateTimeLocalValue, zonedDateTimeToIso } from "./chat-timer-form";
+import { toDateTimeLocalValue, zonedDateTimeToIso, type ChatTimerDraft } from "./chat-timer-form";
+
+import { createAttemptKey } from "@goatcitadel/mission-control-shared/api/mutation-attempts";
+import {
+  getGatewayCallerScopeRevision,
+  getGatewayAccessRevision,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 
 interface ChatTimerPanelState {
   open: boolean;
   busy: boolean;
   error: string | null;
   dueAt: string;
+  delayMs?: number;
   timezone: string;
   message: string;
   notificationRuleId: string;
@@ -43,7 +52,11 @@ export function useChatTimerPanel(input: {
   pushLocalNotice: (content: string, tone?: "success") => void;
 }) {
   const { selectedSessionId, workspaceId, enabled, eventStreamState, thread, pushLocalNotice } = input;
-  const scope = JSON.stringify([workspaceId, selectedSessionId, enabled]);
+  const caller = getGatewayCallerScopeRevision(),
+    access = getGatewayAccessRevision(),
+    gateway = getGatewayApiBaseUrl();
+  const scope = JSON.stringify([workspaceId, selectedSessionId, enabled, caller, access, gateway]);
+  const confirmation = useRef<{ identity: string; key: string; dueAt: string } | null>(null);
   const owner = useRef({ scope, generation: 0 });
   if (owner.current.scope !== scope) owner.current = { scope, generation: owner.current.generation + 1 };
   const generation = owner.current.generation;
@@ -54,7 +67,15 @@ export function useChatTimerPanel(input: {
   const [, refreshPending] = useState(0);
   const [snapshot, setSnapshot] = useState({ generation, value: INITIAL_STATE });
   const panel = snapshot.generation === generation ? snapshot.value : INITIAL_STATE;
-  const isCurrent = useCallback(() => mounted.current && owner.current.generation === generation, [generation]);
+  const isCurrent = useCallback(
+    () =>
+      mounted.current &&
+      owner.current.generation === generation &&
+      caller === getGatewayCallerScopeRevision() &&
+      access === getGatewayAccessRevision() &&
+      gateway === getGatewayApiBaseUrl(),
+    [generation, caller, access, gateway],
+  );
   const setPanel = useCallback(
     (change: (value: ChatTimerPanelState) => ChatTimerPanelState) => {
       if (!isCurrent()) return;
@@ -87,15 +108,23 @@ export function useChatTimerPanel(input: {
     const ticket = ++readTicket.current;
     const current = () => isCurrent() && ticket === readTicket.current;
     try {
-      const [timersResult, rulesResult] = await Promise.allSettled([
+      const [timersResult, rulesResult, targetsResult] = await Promise.allSettled([
         fetchChatTimers(selectedSessionId),
         fetchNotificationRules(workspaceId),
+        fetchNotificationTargets(workspaceId),
       ]);
       if (!current()) return;
       if (timersResult.status === "rejected") throw timersResult.reason;
       if (!timersResult.value.items.every(matchesOwner))
         throw new Error("The Gateway returned timers for a different Chat scope.");
       const rules = rulesResult.status === "fulfilled" ? rulesResult.value.items : [];
+      const targets = new Set(
+        targetsResult.status === "fulfilled"
+          ? targetsResult.value.items
+              .filter((target) => target.workspaceId === workspaceId && target.lifecycleState === "active")
+              .map((target) => target.targetId)
+          : [],
+      );
       setPanel((current) => ({
         ...current,
         timers: timersResult.value.items,
@@ -104,7 +133,9 @@ export function useChatTimerPanel(input: {
             (rule) =>
               rule.workspaceId === workspaceId &&
               rule.lifecycleState === "active" &&
-              rule.eventTypes.includes("timer.due"),
+              rule.eventTypes.includes("timer.due") &&
+              rule.targetIds.length > 0 &&
+              rule.targetIds.every((id) => targets.has(id)),
           )
           .map((rule) => ({ ruleId: rule.ruleId, label: rule.label })),
         error: null,
@@ -119,21 +150,26 @@ export function useChatTimerPanel(input: {
     }
   }, [enabled, isCurrent, matchesOwner, selectedSessionId, setPanel, workspaceId]);
 
-  const open = useCallback(() => {
-    if (!enabled || !selectedSessionId || !isCurrent()) return;
-    editorGeneration.current += 1;
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-    setPanel((current) => ({
-      ...current,
-      open: true,
-      error: null,
-      dueAt: toDateTimeLocalValue(new Date(Date.now() + 10 * 60_000)),
-      timezone,
-      message: "",
-      notificationRuleId: "",
-      cancelOnNextReply: false,
-    }));
-  }, [enabled, isCurrent, selectedSessionId, setPanel]);
+  const open = useCallback(
+    (draft?: ChatTimerDraft) => {
+      if (!enabled || !selectedSessionId || !isCurrent()) return;
+      editorGeneration.current += 1;
+      confirmation.current = null;
+      const timezone = draft?.timezone ?? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+      setPanel((current) => ({
+        ...current,
+        open: true,
+        error: null,
+        dueAt: draft?.localDueAt ?? toDateTimeLocalValue(new Date(Date.now() + 10 * 60_000)),
+        delayMs: draft?.delayMs,
+        timezone,
+        message: draft?.message ?? "",
+        notificationRuleId: "",
+        cancelOnNextReply: false,
+      }));
+    },
+    [enabled, isCurrent, selectedSessionId, setPanel],
+  );
 
   const beginMutation = useCallback(() => {
     if (!enabled || !selectedSessionId || !isCurrent() || pendingScopes.current.has(scope)) return undefined;
@@ -157,14 +193,38 @@ export function useChatTimerPanel(input: {
       const timezone = panel.timezone.trim(),
         message = panel.message.trim(),
         notificationRuleId = panel.notificationRuleId.trim();
-      const dueAt = zonedDateTimeToIso(panel.dueAt, timezone);
-      const result = await createChatTimer(selectedSessionId, {
-        dueAt,
+      const deliveryRule = notificationRuleId || null;
+      const identity = JSON.stringify([
+        scope,
+        panel.delayMs,
+        panel.dueAt,
         timezone,
         message,
-        ...(notificationRuleId ? { notificationRuleId } : {}),
-        cancelOnNextReply: panel.cancelOnNextReply,
-      });
+        deliveryRule,
+        panel.cancelOnNextReply,
+      ]);
+      if (confirmation.current?.identity !== identity) {
+        if (!message || message.length > 4000) throw new Error("Enter a reminder message.");
+        if (deliveryRule && !panel.rules.some((rule) => rule.ruleId === deliveryRule))
+          throw new Error("That destination is unavailable. Choose a ready notification rule or This Chat.");
+        new Intl.DateTimeFormat("en", { timeZone: timezone });
+        const dueAt = panel.delayMs
+          ? new Date(Date.now() + panel.delayMs).toISOString()
+          : zonedDateTimeToIso(panel.dueAt, timezone);
+        confirmation.current = { identity, dueAt, key: createAttemptKey() };
+      }
+      const { dueAt, key } = confirmation.current;
+      const result = await createChatTimer(
+        selectedSessionId,
+        {
+          dueAt,
+          timezone,
+          message,
+          notificationRuleId: deliveryRule,
+          cancelOnNextReply: panel.cancelOnNextReply,
+        },
+        key,
+      );
       if (!operation.current()) return;
       if (!matchesOwner(result.item)) throw new Error("The Gateway returned a timer for a different Chat scope.");
       if (
@@ -172,12 +232,17 @@ export function useChatTimerPanel(input: {
         result.item.timezone !== timezone ||
         result.item.message !== message ||
         result.item.cancelOnNextReply !== panel.cancelOnNextReply ||
-        (result.item.notificationRuleId ?? "") !== notificationRuleId
+        result.item.notificationRuleId !== deliveryRule
       ) {
         throw new Error("The Gateway did not confirm the reviewed timer. Refresh session timers before trying again.");
       }
       setPanel((current) => ({ ...current, busy: false, open: false }));
-      pushLocalNotice("Chat timer created. It will fire without invoking a model.", "success");
+      pushLocalNotice(
+        result.item.status === "active"
+          ? "Reminder saved. The Gateway will post it in this Chat when due."
+          : `Reminder saved. ${describeChatTimerStatus(result.item)}.`,
+        "success",
+      );
     } catch (error) {
       if (!operation.current()) return;
       setPanel((current) => ({
@@ -188,7 +253,7 @@ export function useChatTimerPanel(input: {
     } finally {
       operation.finish();
     }
-  }, [beginMutation, matchesOwner, panel, pushLocalNotice, selectedSessionId, setPanel]);
+  }, [beginMutation, matchesOwner, panel, pushLocalNotice, scope, selectedSessionId, setPanel]);
 
   const cancel = useCallback(
     async (timerId: string, revision: number) => {

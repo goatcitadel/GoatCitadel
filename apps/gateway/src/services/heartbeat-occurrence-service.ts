@@ -78,7 +78,7 @@ export interface HeartbeatOccurrenceServiceDeps {
     SessionControlRuntimeOwner,
     "admitSystemHeartbeatOccurrence" | "recoverSystemHeartbeatOccurrence"
   >;
-  canEnqueueHeartbeat(): Promise<boolean>;
+  canEnqueueHeartbeat(sessionId: string): Promise<boolean>;
   enqueuePreclaimedHeartbeat(input: EnqueuePreclaimedHeartbeatInput): Promise<boolean>;
   getDurableRun(runId: string): Promise<DurableRunRecord>;
   recoverDurableRun(runId: string): Promise<void>;
@@ -102,7 +102,7 @@ export class HeartbeatOccurrenceService {
   public constructor(private readonly deps: HeartbeatOccurrenceServiceDeps) {}
 
   public async claimAndEnqueue(input: ClaimAndEnqueueHeartbeatInput): Promise<HeartbeatDatabaseAdmissionOutcome> {
-    if (!(await this.deps.canEnqueueHeartbeat())) {
+    if (!(await this.deps.canEnqueueHeartbeat(input.sessionId))) {
       return { disposition: "database_parked", reason: "execution_disabled" };
     }
     const plan = buildHeartbeatOccurrencePlan(input);
@@ -353,7 +353,7 @@ export class HeartbeatOccurrenceService {
     // A disabled restart must not leave a pre-bind heartbeat holding the active
     // turn slot. Atomically close only this exact request-runtime admission and
     // retain the already-consumed cadence evidence on its abandoned occurrence.
-    if (!(await this.deps.canEnqueueHeartbeat())) {
+    if (!(await this.deps.canEnqueueHeartbeat(occurrence.sessionId))) {
       const parked = await this.deps.storage.sessionMutationAdmissions.abandonAdmittedHeartbeatForExecutionDisabled({
         workspaceId: occurrence.workspaceId,
         sessionId: occurrence.sessionId,

@@ -1210,8 +1210,9 @@ describe("ChatTranscript", () => {
     expect(container.textContent).toContain("Reviewing the answer");
     expect(container.textContent).not.toContain("Responding");
     // The single transcript live region says so once, when the review starts.
-    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe("Reviewing the answer.");
-    expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(1);
+    const announcements = container.querySelectorAll('[aria-label="Messages"] > [role="status"]');
+    expect(announcements).toHaveLength(1);
+    expect(announcements[0]?.textContent).toBe("Reviewing the answer.");
   });
 
   it("keeps per-turn progress notes as plain text beside the single transcript live region", async () => {
@@ -1235,7 +1236,7 @@ describe("ChatTranscript", () => {
     );
     expect(notes.map((node) => node.textContent)).toEqual(["Cancelled", "Preparing response…"]);
     for (const note of notes) expect(note.hasAttribute("role")).toBe(false);
-    expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[aria-label="Messages"] > [role="status"]')).toHaveLength(1);
   });
 
   it("explains an empty thread without inventing a message", async () => {

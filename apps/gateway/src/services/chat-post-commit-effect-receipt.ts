@@ -420,6 +420,11 @@ const SAFE_SKIP_REASONS = new Set([
   "eval_integrity",
   "frozen_eligibility_invalid",
   "non_human_session",
+  "learning_not_ready",
+  "maintenance_not_operational",
+  "maintenance_policy_disabled",
+  "maintenance_not_due",
+  "maintenance_ineligible_source",
 ]);
 
 function sanitizeStageReceipt(
@@ -452,6 +457,8 @@ function sanitizeStageResult(
     case "background_counter":
       return typeof result.due === "boolean" ? { due: result.due } : redactedReplayResult();
     case "background_evidence": {
+      if (result.status === "queued" && typeof result.jobId === "string" && /^blj-[a-f0-9]{40}$/u.test(result.jobId))
+        return { status: "queued", jobId: result.jobId, promotionDisposition: "governed_review_required" };
       if (result.status !== "evidence_recorded" || !Array.isArray(result.memoryEvidenceFingerprints)) {
         return redactedReplayResult();
       }
@@ -494,6 +501,12 @@ function sanitizeStageResult(
       };
     }
     case "memory_maintenance_evaluation":
+      if (
+        result.status === "queued_for_review" &&
+        typeof result.jobId === "string" &&
+        /^blj-[a-f0-9]{40}$/u.test(result.jobId)
+      )
+        return { status: "queued_for_review", jobId: result.jobId, promotionDisposition: "governed_review_required" };
       return result.status === "production_dark"
         ? {
             status: "production_dark",

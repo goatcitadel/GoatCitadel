@@ -423,6 +423,36 @@ export class ChatTurnTraceRepository {
   }
 
   /** Completed turn traces across all sessions, oldest first — used by background consolidation watermark scans. */
+  public listCompletedTracePage(input: {
+    workspaceId: string;
+    after: { finishedAt: string; turnId: string };
+    through: string;
+    limit: number;
+  }): ChatTurnTraceRecord[] {
+    if (!input.workspaceId.trim()) throw new TypeError("A completed-trace page requires a workspace.");
+    const rows = toChatTurnTraceRows(
+      this.db
+        .prepare(
+          `
+      SELECT t.* FROM chat_turn_traces t
+      JOIN chat_session_meta m ON m.session_id = t.session_id
+      WHERE m.workspace_id = @workspaceId AND m.lifecycle_status = 'active' AND m.origin = 'operator'
+        AND t.status = 'completed' AND COALESCE(t.finished_at, t.started_at) <= @through
+        AND (COALESCE(t.finished_at, t.started_at) > @finishedAt
+          OR (COALESCE(t.finished_at, t.started_at) = @finishedAt AND t.turn_id > @turnId))
+      ORDER BY COALESCE(t.finished_at, t.started_at) ASC, t.turn_id ASC LIMIT @limit
+    `,
+        )
+        .all({
+          workspaceId: input.workspaceId,
+          ...input.after,
+          through: input.through,
+          limit: Math.max(1, Math.min(1000, Math.floor(input.limit))),
+        }),
+    );
+    return rows.map(mapRow);
+  }
+
   public listCompletedSince(
     sinceIso: string,
     limit = 200,

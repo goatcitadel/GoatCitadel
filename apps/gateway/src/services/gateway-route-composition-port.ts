@@ -59,6 +59,7 @@ import type { CapabilityScopeResolver } from "./capability-scope-resolver.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type { ConfigGenerationHealthSnapshot } from "./config-generation-service.js";
 import type { ChatChangePlanCompatibilityService } from "./chat-change-plan-compatibility-service.js";
+import type { EvolutionControlPlaneService } from "./evolution-control-plane-service.js";
 import type {
   DeleteProviderSecretInput,
   ProviderSecretMutationResponse,
@@ -69,6 +70,15 @@ type RouteDependencyMethod<
   TDomain extends keyof GatewayRouteServiceDependencies,
   TMethod extends keyof GatewayRouteServiceDependencies[TDomain],
 > = GatewayRouteServiceDependencies[TDomain][TMethod];
+
+interface ChatAssistantRoutePort {
+  changePlans: Pick<ChatChangePlanCompatibilityService, "create" | "list" | "confirm" | "cancel">;
+  setupPlans: Pick<EvolutionControlPlaneService, "get" | "create" | "cancel" | "findReplay" | "findByIdempotencyKey">;
+  readLearningReadiness(input: {
+    workspaceId: string;
+    sessionId: string;
+  }): Promise<import("@goatcitadel/contracts").BackgroundLearningReadiness>;
+}
 
 export interface GatewayRouteCompositionPort {
   revalidateChatRoutedContextSnapshot(
@@ -89,7 +99,9 @@ export interface GatewayRouteCompositionPort {
   readonly capabilityScopeResolver: CapabilityScopeResolver;
   readonly capabilitySystemService: CapabilitySystemService;
   readonly chatCompactionBreakerActionService: ChatCompactionBreakerActionService;
-  readonly chatChangePlanCompatibilityService: ChatChangePlanCompatibilityService;
+  /** Narrow plan owner used by explicit Chat setup and recovery. Calls resolve
+   * the service after Gateway's early composition phase has completed. */
+  readonly chatAssistant: ChatAssistantRoutePort;
   readonly chatProactiveService: ChatProactiveService;
   readonly chatProjectService: ChatProjectService;
   readonly chatSessionStatusService: ChatSessionStatusService;
@@ -285,6 +297,7 @@ export type GatewayRouteCompositionPrivateDependencies = Pick<
   | "chatCompactionBreakerActionService"
   | "chatMessageRouteRuntimeHost"
   | "chatProjectService"
+  | "chatAssistant"
   | "chatTurnRuntime"
   | "databaseCutoverService"
   | "devDiagnostics"
@@ -327,7 +340,7 @@ export function createGatewayRouteCompositionPort(
     capabilityScopeResolver: privateDependencies.capabilityScopeResolver,
     capabilitySystemService: privateDependencies.capabilitySystemService,
     chatCompactionBreakerActionService: privateDependencies.chatCompactionBreakerActionService,
-    chatChangePlanCompatibilityService: gateway.chatChangePlanCompatibilityService,
+    chatAssistant: privateDependencies.chatAssistant,
     chatMessageRouteRuntimeHost: privateDependencies.chatMessageRouteRuntimeHost,
     chatProjectService: privateDependencies.chatProjectService,
     chatSessionStatusService: gateway.chatSessionStatusService,

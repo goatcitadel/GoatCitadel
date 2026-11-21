@@ -9,6 +9,7 @@ export type SettingsApprovalOwner =
   | "provider-management"
   | "guided-model"
   | "tool-approval"
+  | "automatic-background-budget"
   | "budget-mode"
   | "filesystem-write-access"
   | "claude-cli-tool-bridge"
@@ -90,6 +91,7 @@ export function settingsApprovalOwnerBinding(
       "managed-runtime",
       "llama-setup",
       "tool-approval",
+      "automatic-background-budget",
       "budget-mode",
       "firecrawl",
       "search-engine-order",
@@ -104,17 +106,19 @@ export function settingsApprovalOwnerBinding(
           ? "llama_cpp_configuration"
           : owner === "tool-approval"
             ? "tool_approval_mode"
-            : owner === "budget-mode"
-              ? "budget_mode"
-              : owner === "firecrawl"
-                ? "web_firecrawl_configuration"
-                : owner === "search-engine-order"
-                  ? "web_search_configuration"
-                  : owner === "public-web-address"
-                    ? "public_web_address_configuration"
-                    : owner === "browser-errand-approvals"
-                      ? "browser_errand_approval_conversation"
-                      : "llama_cpp_setup";
+            : owner === "automatic-background-budget"
+              ? "automatic_background_budget"
+              : owner === "budget-mode"
+                ? "budget_mode"
+                : owner === "firecrawl"
+                  ? "web_firecrawl_configuration"
+                  : owner === "search-engine-order"
+                    ? "web_search_configuration"
+                    : owner === "public-web-address"
+                      ? "public_web_address_configuration"
+                      : owner === "browser-errand-approvals"
+                        ? "browser_errand_approval_conversation"
+                        : "llama_cpp_setup";
     expectedWorkspace = owner === "llama-setup" ? workspaceId : "default";
     matches =
       plan.kind === "runtime_configuration" &&
@@ -179,9 +183,10 @@ export function settingsApprovalOwnerBinding(
     const flag = change?.operation === "feature_flag" ? change.flag : undefined;
     matches =
       plan.kind === "runtime_configuration" &&
-      isFeatureSwitchFlag(flag) &&
+      ((isFeatureSwitchFlag(flag) && plan.target.resourceId === `feature:${flag}`) ||
+        (change?.operation === "feature_preference_review" &&
+          plan.target.resourceId === "feature_preference_review")) &&
       plan.target.ownerId === "runtime_settings" &&
-      plan.target.resourceId === `feature:${flag}` &&
       plan.adapter.adapterId === "runtime-configuration" &&
       plan.adapter.version === 2 &&
       plan.scope === "runtime";

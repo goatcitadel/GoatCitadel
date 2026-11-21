@@ -1,4 +1,10 @@
 import { composeChatArtifactRenderDependencies } from "./gateway-route-composition-artifact-renders.js";
+import { createAssistantReadinessForGateway } from "./assistant-readiness-composition.js";
+import { ChatAssistantSupportRouteService } from "./chat-assistant-support-route-service.js";
+import { createFollowThroughForGateway } from "./follow-through-composition.js";
+import { createChatLearningReceiptForGateway } from "./chat-learning-receipt-composition.js";
+import { createChatContinuationForGateway } from "./chat-continuation-composition.js";
+import { createFollowThroughSetupForGateway } from "./follow-through-setup-composition.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { CHAT_ROUTED_CONTEXT_TOOL_NAMES, ConflictError, NotFoundError } from "@goatcitadel/contracts";
@@ -44,6 +50,16 @@ import type { GatewayRouteServiceDependencies } from "./gateway-route-services.j
 import type { ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { createChatThreadKnowledgeDependenciesForGateway } from "./gateway-route-composition-shared.js";
+
+export function composeChatAssistantSupport(gateway: GatewayRouteCompositionPort): ChatAssistantSupportRouteService {
+  return new ChatAssistantSupportRouteService({
+    assistantReadiness: createAssistantReadinessForGateway(gateway),
+    followThrough: createFollowThroughForGateway(gateway),
+    learningReceipt: createChatLearningReceiptForGateway(gateway),
+    continuations: createChatContinuationForGateway(gateway, gateway.chatAssistant.setupPlans),
+    followThroughSetup: createFollowThroughSetupForGateway(gateway),
+  });
+}
 
 export function composeChatRouteDependencies(
   gateway: GatewayRouteCompositionPort,
@@ -281,11 +297,11 @@ export function composeChatRouteDependencies(
     },
     createChatSideChat: (sessionId, input) =>
       chatSessionService.createChatSideChat(ChatSessionDependencies, sessionId, input),
-    createChatTimer: async (sessionId, input, actorId) => {
+    createChatTimer: async (sessionId, input, actorId, attempt?: { key: string; replayOnly: boolean }) => {
       if (!(await gateway.isFeatureEnabled("chatTimersV1Enabled"))) {
         throw new NotFoundError({ entity: "Chat timer", id: sessionId });
       }
-      return gateway.chatTimerService.create(sessionId, input, actorId);
+      return gateway.chatTimerService.create(sessionId, input, actorId, attempt);
     },
     createChatSession: async (input) => {
       const { citadelId, ...sessionInput } = input ?? {};
@@ -777,12 +793,12 @@ export function composeChatRouteDependencies(
     chatSessions,
     chatSupport: {
       changePlans: {
-        create: (sessionId, input) => gateway.chatChangePlanCompatibilityService.create(sessionId, input),
-        list: (sessionId, limit) => gateway.chatChangePlanCompatibilityService.list(sessionId, limit),
+        create: (sessionId, input) => gateway.chatAssistant.changePlans.create(sessionId, input),
+        list: (sessionId, limit) => gateway.chatAssistant.changePlans.list(sessionId, limit),
         confirm: (sessionId, planId, expectedRevision) =>
-          gateway.chatChangePlanCompatibilityService.confirm(sessionId, planId, expectedRevision),
+          gateway.chatAssistant.changePlans.confirm(sessionId, planId, expectedRevision),
         cancel: (sessionId, planId, expectedRevision) =>
-          gateway.chatChangePlanCompatibilityService.cancel(sessionId, planId, expectedRevision),
+          gateway.chatAssistant.changePlans.cancel(sessionId, planId, expectedRevision),
       },
       commands: {
         listChatCommandCatalog: () => chatCommandService.listChatCommandCatalog(),

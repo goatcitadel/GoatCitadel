@@ -1,4 +1,5 @@
 import type { MemoryWriteAuthority, MemoryWriteGateDecision } from "@goatcitadel/contracts";
+import { redactSecretText } from "@goatcitadel/contracts";
 
 export interface MemoryWriteGateEvaluateInput {
   authority: MemoryWriteAuthority;
@@ -8,14 +9,11 @@ export interface MemoryWriteGateEvaluateInput {
   createdAt?: string;
 }
 
-const SECRET_PATTERN =
-  /(?:api[_-]?key|secret|password|token|credential|sk-[a-z0-9_-]{16,}|ghp_[a-z0-9_]{16,}|xox[baprs]-[a-z0-9-]{16,})/i;
-
 export class MemoryWriteGateService {
   public evaluate(input: MemoryWriteGateEvaluateInput): MemoryWriteGateDecision {
     const reasons: string[] = [];
     const contradictionHints = findContradictionHints(input.content, input.existingClaims ?? []);
-    const containsSecret = SECRET_PATTERN.test(input.content);
+    const containsSecret = redactSecretText(input.content.normalize("NFKC"), { env: process.env }).redactionCount > 0;
     let decision: MemoryWriteGateDecision["decision"];
     let redactionStatus: MemoryWriteGateDecision["redactionStatus"] = "none";
 

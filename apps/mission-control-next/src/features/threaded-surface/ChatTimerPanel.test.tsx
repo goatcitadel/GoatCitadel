@@ -16,6 +16,7 @@ vi.mock("@goatcitadel/mission-control-shared/components/ui", () => ({
 }));
 
 import { ChatTimerPanel } from "./ChatTimerPanel";
+import { describeChatTimerStatus, type ChatTimerRecord } from "@goatcitadel/contracts";
 
 function text(renderer: ReactTestRenderer): string {
   return collectText(renderer.root);
@@ -26,6 +27,15 @@ function collectText(node: ReactTestInstance): string {
 }
 
 describe("ChatTimerPanel", () => {
+  it.each([
+    ["unknown_after_send", "Fired in this Chat · notification delivery unknown"],
+    ["failed", "Fired in this Chat · notification delivery failed"],
+    ["delivered", "Fired in this Chat · notification delivered"],
+  ] as const)("separates a fired reminder from %s external delivery", (notificationDeliveryStatus, expected) => {
+    const timer = { status: "fired", notificationRuleId: "rule", notificationDeliveryStatus } as ChatTimerRecord;
+    expect(describeChatTimerStatus(timer)).toBe(expected);
+  });
+
   it("shows provider-free confirmation controls and active timer cancellation", () => {
     const onCreate = vi.fn();
     const onCancelTimer = vi.fn();
@@ -68,7 +78,7 @@ describe("ChatTimerPanel", () => {
         }}
       />,
     );
-    expect(text(renderer)).toContain("never invokes a provider or model");
+    expect(text(renderer)).toContain("Choose a notification rule to control delivery elsewhere.");
     expect(text(renderer)).toContain("Cancel only after my next message commits successfully");
     const dueAt = new Date("2026-07-29T00:30:00.000Z");
     const timezone = "America/Los_Angeles";

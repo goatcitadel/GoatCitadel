@@ -1,4 +1,5 @@
 import { WorkScheduleInspector } from "./WorkScheduleInspector";
+import { WorkFollowThrough } from "./WorkFollowThrough";
 import { WorkScheduleCreateForm, type CreateScheduleAction } from "./WorkScheduleCreateForm";
 
 import { SchedulerReviewQueue } from "./SchedulerReviewQueue";
@@ -37,6 +38,7 @@ export function WorkSchedules() {
   const { activeWorkspaceId } = useUiPreferences();
   const location = typeof window === "undefined" ? { search: "", hash: "" } : readCockpitLocation();
   const recoveryParams = new URLSearchParams(location.search);
+  const conversationId = recoveryParams.get("sessionId");
   recoveryParams.set("workspaceId", activeWorkspaceId ?? "default");
   recoveryParams.delete("shell");
   recoveryParams.delete("shellScope");
@@ -277,6 +279,13 @@ export function WorkSchedules() {
       />
       {message ? (
         <WorkScheduleNotice message={message} runHref={runLink?.notice === message ? runLink.href : undefined} />
+      ) : null}
+      {conversationId ? (
+        <WorkFollowThrough
+          key={JSON.stringify([activeWorkspaceId, conversationId])}
+          sessionId={conversationId}
+          workspaceId={activeWorkspaceId ?? "default"}
+        />
       ) : null}
       {createOpen ? (
         <WorkScheduleCreateForm

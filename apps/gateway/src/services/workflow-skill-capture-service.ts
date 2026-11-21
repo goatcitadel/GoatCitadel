@@ -6,7 +6,6 @@ import {
   ValidationError,
   WORKFLOW_SKILL_CAPTURE_MARKER,
   canonicalJsonString,
-  redactSecretText,
   type CapabilityArtifactRecord,
   type CandidateSkillVersionRecord,
   type ToolPolicyActorContext,
@@ -17,7 +16,10 @@ import {
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { writeImmutableBundle } from "./candidate-skill-artifacts.js";
-import { validateSkillContent } from "./skill-content-validation.js";
+import {
+  sanitizeWorkflowSkillText as sanitize,
+  validateWorkflowSkillDraft,
+} from "./workflow-skill-draft-validation.js";
 import { readWorkflowCaptureDurableAuthor } from "./workflow-skill-capture-authority.js";
 
 type CaptureActor = { actorId?: string; authActorSource?: ToolPolicyActorContext["authActorSource"] };
@@ -101,25 +103,7 @@ export class WorkflowSkillCaptureService {
     )
       throw new ConflictError({ message: "The capture request changed. Prepare a new draft using Save as skill." });
     const markdown = draft.assistantContent.trim().replace(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```$/u, "$1");
-    if (sanitize(markdown) !== markdown)
-      throw new ValidationError({
-        message:
-          "Skill draft contains private values or machine-specific paths. Replace them with named inputs and review the revised draft.",
-      });
-    const validation = validateSkillContent({ skillMarkdown: markdown });
-    const missing = [
-      "When to use",
-      "Inputs",
-      "Instructions",
-      "Failure handling",
-      "Output",
-      "Verification",
-      "Boundaries",
-    ].filter((section) => !new RegExp(`^## ${section}\\s*$`, "imu").test(markdown));
-    if (!validation.valid || missing.length)
-      throw new ValidationError({
-        message: `Skill draft needs revision: ${[...validation.errors, ...missing.map((item) => `missing ${item} section`)].join("; ")}`,
-      });
+    const validation = validateWorkflowSkillDraft(markdown);
     const candidateId =
       seed.targetCandidateId ?? `workflow-${sha256(`${source.workspaceId}\0${input.draftTurnId}`).slice(0, 24)}`;
     const versionId = `workflow-version-${sha256(`${candidateId}\0${input.draftTurnId}\0${input.reviewedContentSha256}`).slice(0, 32)}`;
@@ -320,12 +304,15 @@ export class WorkflowSkillCaptureService {
     }
     // Historical profile hashes remain unchanged. Current profile-free turns
     // bind to their original admitted durable request, including its messages.
-    const durableAuthor = !profile && trace.durable?.runId
-      ? await readWorkflowCaptureDurableAuthor(this.deps.storage, meta.workspaceId, trace, user)
-      : undefined;
+    const durableAuthor =
+      !profile && trace.durable?.runId
+        ? await readWorkflowCaptureDurableAuthor(this.deps.storage, meta.workspaceId, trace, user)
+        : undefined;
     const authenticatedActorId = profile?.identity.authActorId ?? durableAuthor?.actorId;
     if (!authenticatedActorId) {
-      throw new ConflictError({ message: "The workflow's authenticated author is unavailable. Capture a new completed turn." });
+      throw new ConflictError({
+        message: "The workflow's authenticated author is unavailable. Capture a new completed turn.",
+      });
     }
     const toolRuns = await this.deps.storage.chatToolRuns.listByTurn(turnId);
     if (
@@ -437,11 +424,4 @@ function buildPrompt(
   ]
     .filter(Boolean)
     .join("\n\n");
-}
-
-function sanitize(value: string): string {
-  return redactSecretText(value)
-    .value.replace(/\b[A-Z]:[\\/][^\s<>"']+/giu, "[workspace path]")
-    .replace(/(?:^|(?<=[\s(]))\/(?:home|Users|tmp|private\/tmp|var\/tmp|mnt)\/[^\s<>"']+/gmu, "[workspace path]")
-    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu, "[email]");
 }

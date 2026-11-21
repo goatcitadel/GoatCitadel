@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Storage } from "@goatcitadel/storage";
-import type { NotificationDispatchResult } from "@goatcitadel/contracts";
+import { HEARTBEAT_PERMISSION_PROFILE_ID, type NotificationDispatchResult } from "@goatcitadel/contracts";
 import { ChatTimerService } from "./chat-timer-service.js";
 
 const openStorage: Storage[] = [];
@@ -26,6 +26,124 @@ function harness(ownerId = "worker-a", dispatch = vi.fn(async () => dispatchResu
 }
 
 describe("ChatTimerService", () => {
+  it("previews one scoped operator reminder without a write, then refuses invalid or autonomous previews", async () => {
+    const { storage, service, dispatch } = harness();
+    storage.chatMessages.upsert({
+      messageId: "msg",
+      sessionId: "session-1",
+      role: "user",
+      actorId: "operator",
+      actorType: "user",
+      sourceAuthority: "operator",
+      content: "Remind me tomorrow",
+      timestamp: new Date().toISOString(),
+    });
+    storage.chatTurnTraces.create({
+      turnId: "turn",
+      userMessageId: "msg",
+      sessionId: "session-1",
+      mode: "chat",
+      memoryMode: "off",
+      webMode: "off",
+      thinkingLevel: "off",
+    });
+    const localDueAt = new Date(Date.now() + 86_400_000).toISOString().slice(0, 16);
+    const args = { localDueAt, timezone: "UTC" };
+    const request = {
+      agentId: "assistant",
+      toolName: "chat.reminder.preview",
+      sessionId: "session-1",
+      workspaceId: "workspace-1",
+      turnId: "turn",
+      surface: "chat" as const,
+      args,
+    };
+    await expect(service.preview(request)).resolves.toEqual({ ...args, message: "" });
+    await expect(
+      service.preview({
+        ...request,
+        args: { ...args, localDueAt: "2026-03-08T02:30", timezone: "America/Los_Angeles" },
+      }),
+    ).rejects.toThrow(/does not exist/);
+    await expect(service.preview({ ...request, workspaceId: "workspace-2" })).rejects.toThrow(/scope/);
+    await expect(service.preview({ ...request, args: { ...args, notificationRuleId: "other" } })).rejects.toThrow();
+    await expect(
+      service.preview({ ...request, permissionProfileId: HEARTBEAT_PERMISSION_PROFILE_ID }),
+    ).rejects.toThrow();
+    expect(await service.list("session-1")).toEqual([]);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("recovers the same canonical receipt after a lost response and never re-creates a committed attempt", async () => {
+    const { service, publishRealtime } = harness();
+    const input = {
+      dueAt: new Date(Date.now() + 60_000).toISOString(),
+      timezone: "UTC",
+      message: "One reminder",
+      notificationRuleId: null,
+    };
+    const first = { key: "one-confirmation", replayOnly: false };
+    const replay = { ...first, replayOnly: true };
+    const saved = await service.create("session-1", input, "operator", first);
+    await expect(service.create("session-1", input, "operator", replay)).resolves.toEqual(saved);
+    await expect(service.create("session-1", { ...input, message: "different" }, "operator", first)).rejects.toThrow(
+      /differs/,
+    );
+    await expect(service.create("session-2", input, "operator", replay)).rejects.toThrow(/not found/);
+    expect(await service.list("session-1")).toHaveLength(1);
+    expect(publishRealtime).toHaveBeenCalledOnce();
+  });
+
+  it("persists Chat-only delivery and never invokes notification rules", async () => {
+    const { storage, service, dispatch } = harness();
+    const timer = await service.create(
+      "session-1",
+      {
+        dueAt: new Date(Date.now() + 15_000).toISOString(),
+        timezone: "UTC",
+        message: "Only in Chat",
+        notificationRuleId: null,
+      },
+      "operator",
+    );
+    expect(timer.notificationRuleId).toBeNull();
+    const persisted = storage.chatTimers.create({
+      timerId: "chat-only-due",
+      sessionId: timer.sessionId,
+      workspaceId: timer.workspaceId,
+      dueAt: "2020-01-01T00:00:00.000Z",
+      timezone: timer.timezone,
+      message: timer.message,
+      notificationRuleId: timer.notificationRuleId,
+      cancelOnNextReply: false,
+      createdBy: "operator",
+    });
+    expect(persisted.notificationRuleId).toBeNull();
+    expect(await service.runDue()).toMatchObject({ fired: 1, failed: 0 });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(storage.chatMessages.get("timer-notice-chat-only-due")?.content).toBe("Only in Chat");
+  });
+
+  it("delivers a short synthetic timer once, without firing before its due time", async () => {
+    const { storage, service, dispatch } = harness();
+    const timer = await service.create(
+      "session-1",
+      { dueAt: new Date(Date.now() + 6_000).toISOString(), timezone: "UTC", message: "Synthetic timer proof" },
+      "synthetic-operator",
+    );
+    expect((await service.runDue()).claimed).toBe(0);
+    expect(dispatch).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 6_100));
+    expect(await service.runDue()).toEqual({ claimed: 1, fired: 1, failed: 0 });
+    expect(storage.chatMessages.get(`timer-notice-${timer.timerId}`)?.content).toBe("Synthetic timer proof");
+    expect((await service.list("session-1"))[0]).toMatchObject({
+      status: "fired",
+      notificationDeliveryStatus: "no_targets",
+    });
+    expect((await service.runDue()).claimed).toBe(0);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  }, 60_000);
+
   it("validates bounds and rejects a notification rule from another workspace", async () => {
     const { storage, service } = harness();
     await expect(

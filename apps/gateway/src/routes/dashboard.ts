@@ -1,3 +1,4 @@
+import { SHIPPED_FEATURE_FLAGS } from "@goatcitadel/contracts";
 import type { FastifyPluginAsync } from "fastify";
 import { readSkillRemovalCleanup } from "./skill-removal-cleanup-health.js";
 import { z } from "zod";
@@ -127,6 +128,7 @@ export const updateSettingsSchema = z.object({
   deploymentProfile: z.enum(["local_dev", "trusted_local", "remote_hardened"]).optional(),
   toolApprovalMode: z.enum(["approve_all", "approve_risky", "bypass"]).optional(),
   defaultToolProfile: z.never().optional(),
+  automaticBackgroundUsdCap: z.number().nonnegative().optional(),
   budgetMode: z.enum(["saver", "balanced", "power"]).optional(),
   readAccessMode: z.enum(["roots_only", "approval_required", "full_disk"]).optional(),
   outsideRootWriteMode: z.enum(["deny", "approval_required"]).optional(),
@@ -235,6 +237,14 @@ export const updateSettingsSchema = z.object({
       flashAttention: z.boolean().nullable().optional(),
     })
     .optional(),
+  featureReview: z
+    .object({
+      fingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+      decision: z.enum(["inherit", "off"]),
+      flags: z.array(z.enum(SHIPPED_FEATURE_FLAGS)).min(1).max(SHIPPED_FEATURE_FLAGS.length),
+    })
+    .strict()
+    .optional(),
   features: z
     .object({
       durableKernelV1Enabled: z.boolean().optional(),
@@ -303,6 +313,8 @@ export const updateSettingsSchema = z.object({
       utilityModelRoutingV1Enabled: z.boolean().optional(),
       cronEvidenceV1Enabled: z.boolean().optional(),
       memoryConsolidationV1Enabled: z.boolean().optional(),
+      memoryCorpusRecallV1Enabled: z.boolean().optional(),
+      backgroundSkillDraftsV1Enabled: z.boolean().optional(),
       // signalInboundV1Enabled is retired: old clients may still send it, and this
       // non-strict object strips unknown keys, so it is ignored rather than rejected.
       channelVoiceInboundV1Enabled: z.boolean().optional(),
@@ -801,6 +813,14 @@ export const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
       const governedRequest = settingsChangePlanRequest(parsed.data as SettingsChangePlanInput);
       const evolution = fastify.services.evolution;
       const evolutionEnabled = Boolean(evolution && (await evolution.isEnabled()));
+      if (parsed.data.automaticBackgroundUsdCap !== undefined && (!governedRequest || !evolutionEnabled)) {
+        throw new SemanticValidationError(
+          "Change the automatic background budget through an enabled Settings Change Plan.",
+        );
+      }
+      if (parsed.data.featureReview && (!governedRequest || !evolutionEnabled)) {
+        throw new SemanticValidationError("Review feature preferences through an enabled Settings Change Plan.");
+      }
       if (governedRequest && evolution && evolutionEnabled) {
         const actor = {
           workspaceId: "default",

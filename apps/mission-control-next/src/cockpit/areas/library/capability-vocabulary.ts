@@ -83,6 +83,7 @@ const VERSION_SOURCE: Record<CandidateSkillVersionRecord["sourceKind"], string> 
   upstream_hub: "From an upstream hub",
   capability_pack: "From a capability pack",
   workflow_capture: "Captured from a workflow",
+  background_workflow: "Drafted from completed work",
 };
 export const versionSourceLabel = (value: string) => lookup(VERSION_SOURCE, value, "Source unknown");
 

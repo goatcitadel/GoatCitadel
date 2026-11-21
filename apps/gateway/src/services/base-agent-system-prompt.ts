@@ -90,6 +90,7 @@ export interface BuildBaseAgentSystemPromptInput {
   memoryDigest?: string;
   /** The turn's web mode. `deep` adds the Deep research contract to the volatile tail. */
   webMode?: ChatWebMode;
+  chatTimersEnabled?: boolean;
   /**
    * Set when this turn sends the provider no tools, naming why. The catalog and skills are then left out,
    * because naming tools the turn cannot call makes models write the calls as text. Unset: tools are callable.
@@ -421,6 +422,17 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
   }
   const writeAndRunSection = toolsCallable ? buildWriteAndRunPolicySection(toolset) : undefined;
   if (writeAndRunSection) tailSections.push(writeAndRunSection);
+  if (input.chatTimersEnabled === true) {
+    const reviewInstruction =
+      toolsCallable && toolset.toolNames.includes("chat.reminder.preview")
+        ? "For a named date or time, call chat.reminder.preview to present Review reminder in this Chat. Resolve the local date and timezone, asking if ambiguous. Missing reminder text can be entered at review."
+        : "The operator can open /timer in this Chat, enter the due date, timezone and reminder message, then select Create timer. The local confirmation also works when model tools are off.";
+    tailSections.push(
+      "## Chat reminders\nFor a one-off reminder, use the built-in Chat timer. " +
+        reviewInstruction +
+        " The preview schedules nothing. Do not claim a timer was created until its saved result confirms it. The Gateway must be running to deliver the reminder and processes overdue timers when it resumes. The notice appears in this Chat. The operator can choose from ready notification rules at confirmation. Do not promise external delivery without delivery evidence. Keep any separate requested action in view. Reminding the operator about someone else does not authorize contacting them.",
+    );
+  }
   if (toolsCallable && toolset.toolNames.includes("code_mode.request")) {
     tailSections.push(CODE_MODE_REQUEST_PROMPT_SECTION);
   }

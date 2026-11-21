@@ -52,6 +52,7 @@ import {
   type ChatProjectsRouteService,
 } from "./chat-projects-route-service.js";
 import { ChatSupportRouteService, type ChatSupportRouteDependencies } from "./chat-support-route-service.js";
+import type { ChatAssistantSupportRouteService } from "./chat-assistant-support-route-service.js";
 import {
   createChatSessionsRouteService,
   type ChatSessionsRoutePort,
@@ -345,6 +346,7 @@ export interface GatewayRouteServices {
   chatProjects: ChatProjectsRouteService;
   chatSessions: ChatSessionsRouteService;
   chatSupport: ChatSupportRouteService;
+  chatAssistantSupport: ChatAssistantSupportRouteService;
   chatTools: ChatToolsRouteService;
   channelSetup: ChannelSetupRouteService;
   comms: CommsRouteService;
@@ -516,7 +518,9 @@ export interface GatewayRouteServiceDependencies {
   workspaces: WorkspacesRoutePort;
 }
 
-export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies): GatewayRouteServices {
+export function createGatewayRouteServices(
+  deps: GatewayRouteServiceDependencies,
+): Omit<GatewayRouteServices, "chatAssistantSupport"> {
   return {
     scripts: deps.scripts,
     a2a: new A2ARouteService(deps.a2a),

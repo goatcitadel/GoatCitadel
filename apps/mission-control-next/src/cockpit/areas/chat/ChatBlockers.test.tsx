@@ -21,6 +21,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchApprovals: api.fetchApprovals,
+  fetchApprovalReplay: api.fetchApprovalReplay,
   resolveApproval: api.resolveApproval,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/chat", async (importOriginal) => ({
@@ -160,11 +161,7 @@ describe("Chat blockers", () => {
       expect(target.searchParams.has("shellScope")).toBe(false);
       expect(target.hash).toBe("#receipt");
     }
-    await vi.waitFor(() =>
-      expect(
-        [...container.querySelectorAll("button")].find((button) => button.textContent === "Review danger approval"),
-      ).toBeDefined(),
-    );
+    await vi.waitFor(() => expect(findButton("Review danger approval")).toBeDefined(), { timeout: 5_000 });
     const review = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Review danger approval",
     );
@@ -498,7 +495,7 @@ it("offers Ask again once the record read after the local deadline says expired 
     await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined(), { timeout: 5000 });
     expect(api.fetchApproval.mock.calls.length).toBeGreaterThan(readsBefore);
     expect(container.textContent).toContain(
-      "The action did not run. Ask again to put your request back in the message box.",
+      "This approval expired. Ask again to put your request back in the message box.",
     );
     expect(findButton("Approve once")).toBeUndefined();
     await act(async () => findButton("Ask again")!.click());
@@ -604,7 +601,7 @@ it("shows the confirmed expired block when the late read says expired (U-CH-031)
   try {
     await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
     expect(container.textContent).toContain("Approval expired");
-    expect(container.textContent).toContain("The action did not run.");
+    expect(container.textContent).toContain("This approval expired.");
   } finally {
     composer.remove();
   }
@@ -635,7 +632,7 @@ it("keeps Ask again when the record read says the sweep expired it (U-CH-031)", 
     await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
     expect(container.textContent).toContain("Approval expired");
     expect(container.textContent).not.toContain("Approval decided");
-    expect(container.textContent).toContain("The action did not run. Ask again to put your request back");
+    expect(container.textContent).toContain("This approval expired. Ask again to put your request back");
     await act(async () => findButton("Ask again")!.click());
     expect(onDraftChange).toHaveBeenCalledExactlyOnceWith("Create the note");
   } finally {
@@ -647,7 +644,7 @@ it("does not promise Ask again when no linked turn is found (U-CH-031)", async (
   api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
   const composer = await renderExpired({ thread: { turns: [] }, draft: "" });
   try {
-    await vi.waitFor(() => expect(container.textContent).toContain("The action did not run."));
+    await vi.waitFor(() => expect(container.textContent).toContain("This approval expired."));
     expect(findButton("Ask again")).toBeUndefined();
     expect(container.textContent).not.toContain("Ask again to put");
   } finally {

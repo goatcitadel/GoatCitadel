@@ -28,6 +28,11 @@ import { ZodError, type ZodType } from "zod";
 import { materializeConfigFilesFromExamples } from "./config-files.js";
 import { buildRuntimeWriteProtection, resolveOperatorWriteRoots } from "./config-operator-write-roots.js";
 import { syncUnifiedConfig } from "./config-sync-lib.js";
+import {
+  configurationFeatureFlags,
+  resolveGatewayFeatureFlags,
+  type FeatureConfigSources,
+} from "./services/gateway/feature-flags.js";
 import { AUTO_NATIVE_BIN_DIR } from "./postgres-runtime-config.js";
 import { isVerboseLoggingEnabled } from "./runtime-ux.js";
 import { recoverLastGoodConfigGeneration } from "./services/config-generation-service.js";
@@ -79,6 +84,7 @@ export interface AssistantConfig {
   budgets: {
     dailyUsdWarning: number;
     dailyUsdHardCap: number;
+    automaticBackgroundUsdCap?: number;
     sessionTokenHardCap: number;
   };
 }
@@ -112,9 +118,9 @@ export interface FeatureFlagsConfig {
   plannerFanoutV1Disabled?: boolean;
   /** R3-8 model-callable `agent.fanout` spawn tool (fan-out part 2). */
   subagentFanoutV1Disabled?: boolean;
-  /** Default-disabled Chat-native durable fan-out aggregate (no legacy fallback). */
+  /** Chat-native durable fan-out aggregate. */
   durableChatFanoutV1Enabled?: boolean;
-  /** Feature-specific Chat admission restorations remain opt-in. */
+  /** Allows the operator to select a backup provider for Chat. */
   chatProviderFallbackV1Enabled?: boolean;
   chatSkillInstructionsV1Enabled?: boolean;
   boundedToolExposureV1Enabled?: boolean;
@@ -135,7 +141,7 @@ export interface FeatureFlagsConfig {
   claudeCliToolBridgeEnabled?: boolean;
   /** Lets a bridged Claude Code CLI tool step park its process and resume it. On by default since its live proof; inert while the bridge is off. */
   claudeCliWarmContinuationEnabled?: boolean;
-  /** Browser errands: Chat drives GoatCitadel's own visible Chrome window on this PC. Off by default; refused under remote_hardened. */
+  /** Browser errands: Chat drives GoatCitadel's own visible Chrome window on this PC. Refused under remote_hardened. */
   browserErrandsEnabled?: boolean;
   /** Gateway-owned governed Change Plan authority. Default-on after foundation proof, with an explicit kill switch. */
   evolutionControlPlaneV1Enabled?: boolean;
@@ -147,16 +153,9 @@ export interface FeatureFlagsConfig {
   improvementModelEvaluationV1Enabled?: boolean;
   /** Managed-source staging and live source evolution remain explicit opt-in. */
   productSourceEvolutionV1Enabled?: boolean;
-  /**
-   * Thinking display: gates the gateway emitting `thinking_delta` stream chunks
-   * carrying the model's reasoning/thinking text. Absent/false (default) ⇒
-   * byte-identical behavior to today (no chunk is even constructed). `true`
-   * streams one chunk per provider reasoning chunk (falling back to one chunk
-   * from the terminal message when a pass streamed none) so the client's
-   * collapsible ChatThinkingSection can render.
-   */
+  /** Streams reasoning chunks for providers that expose them. */
   chatThinkingStreamV1Enabled?: boolean;
-  /** On-demand, read-only context estimates in session.status; default off. */
+  /** On-demand, read-only context estimates in session.status. */
   chatContextBudgetVisibilityV1Enabled?: boolean;
   chatAsyncClarificationV1Enabled?: boolean;
   /** Unified Chat composer palette for slash commands and contextual resources. */
@@ -170,11 +169,7 @@ export interface FeatureFlagsConfig {
   chatTimersV1Enabled?: boolean;
   typedRunVariablesV1Enabled?: boolean;
   documentEditingV1Enabled?: boolean;
-  /**
-   * Competitive-gap program phase B2b: TTS voice replies to audio-capable
-   * channels (Telegram voice notes in v1). Absent/false (default) ⇒ the reply
-   * path never synthesizes audio and behavior is byte-identical to today.
-   */
+  /** Makes voice replies available on configured audio-capable channels. */
   channelVoiceReplyV1Enabled?: boolean;
   /**
    * Inbound channel voice ingestion (competitive-gap phase B2a): Telegram voice
@@ -190,21 +185,21 @@ export interface FeatureFlagsConfig {
   /**
    * Weekly governed memory consolidation: mines completed run traces and
    * PROPOSES memory candidates into the operator review queue (never
-   * auto-applied; also halted by autonomyV1Disabled). Absent/false (default)
-   * ⇒ the consolidation job never runs.
+   * auto-applied; also halted by autonomyV1Disabled).
    */
   memoryConsolidationV1Enabled?: boolean;
+  /** Indexed recall across the canonically scoped saved-memory corpus. */
+  memoryCorpusRecallV1Enabled?: boolean;
+  backgroundSkillDraftsV1Enabled?: boolean;
   /**
    * Records a signed `cron_job_executed` evidence envelope for every cron run
    * (success and failure) and pins the envelope id on the job record.
-   * Absent/false (default) ⇒ cron runs record no evidence, exactly as today.
    */
   cronEvidenceV1Enabled?: boolean;
   /**
    * Routes background LLM calls (improvement scans, judges, classifiers, prompt
    * packs) to the configured cheap utility-model slot (`llm.utilityProviderId` /
-   * `llm.utilityModel`). Absent/false (default) ⇒ background calls keep today's
-   * model selection exactly.
+   * `llm.utilityModel`).
    */
   utilityModelRoutingV1Enabled?: boolean;
   /**
@@ -492,6 +487,7 @@ export interface BudgetConfig {
 }
 
 export interface GatewayRuntimeConfig {
+  featureSources?: FeatureConfigSources;
   assistant: AssistantConfig;
   toolPolicy: ToolPolicyConfig;
   budgets: BudgetConfig;
@@ -595,7 +591,18 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
   const budgets = parseAndValidate(budgetsRaw, BudgetConfigSchema, budgetsPath) as BudgetConfig;
   const llm = parseAndValidate(llmRaw, LlmConfigFileSchema, llmPath) as LlmConfigFile;
 
-  applyEnvironmentOverrides(assistant);
+  const featureSources: FeatureConfigSources = {
+    profile: { ...assistantInput.features } as Partial<FeatureFlagsConfig>,
+    environment: {},
+    capabilities: structuredClone(assistantInput.capabilities) as FeatureConfigSources["capabilities"],
+    canonicalStore: assistantInput.featurePreferenceOverrides && {
+      ...assistantInput.featurePreferenceOverrides.flags,
+      reviewed: assistantInput.featurePreferenceOverrides.reviewed,
+    },
+  };
+  applyEnvironmentOverrides(assistant, featureSources.environment);
+  featureSources.sandboxRequired = assistant.capabilities.codeModeSandbox.required;
+  assistant.features = configurationFeatureFlags(featureSources);
 
   toolPolicy.tools.approvalMode = assistant.toolApprovalMode ?? toolPolicy.tools.approvalMode;
   toolPolicy.sandbox.writeJailRoots = resolveSandboxRoots(rootDir, toolPolicy.sandbox.writeJailRoots, "writeJailRoots");
@@ -609,6 +616,7 @@ export async function loadGatewayConfig(rootDir: string): Promise<GatewayRuntime
   );
 
   const result: GatewayRuntimeConfig = {
+    featureSources,
     assistant,
     toolPolicy,
     budgets,
@@ -674,7 +682,7 @@ function parseAndValidate<T>(raw: string, schema: ZodType<T>, filePath: string):
   }
 }
 
-function applyEnvironmentOverrides(assistant: AssistantConfig): void {
+function applyEnvironmentOverrides(assistant: AssistantConfig, featureEnvironment: Partial<FeatureFlagsConfig>): void {
   const deploymentProfile = process.env.GOATCITADEL_DEPLOYMENT_PROFILE?.trim();
   if (
     deploymentProfile === "local_dev" ||
@@ -909,6 +917,8 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["productSourceEvolutionV1Enabled", process.env.GOATCITADEL_FEATURE_PRODUCT_SOURCE_EVOLUTION_V1_ENABLED],
     ["channelVoiceReplyV1Enabled", process.env.GOATCITADEL_FEATURE_CHANNEL_VOICE_REPLY_V1_ENABLED],
     ["memoryConsolidationV1Enabled", process.env.GOATCITADEL_FEATURE_MEMORY_CONSOLIDATION_V1_ENABLED],
+    ["memoryCorpusRecallV1Enabled", process.env.GOATCITADEL_FEATURE_MEMORY_CORPUS_RECALL_V1_ENABLED],
+    ["backgroundSkillDraftsV1Enabled", process.env.GOATCITADEL_FEATURE_BACKGROUND_SKILL_DRAFTS_V1_ENABLED],
     ["cronEvidenceV1Enabled", process.env.GOATCITADEL_FEATURE_CRON_EVIDENCE_V1_ENABLED],
     ["utilityModelRoutingV1Enabled", process.env.GOATCITADEL_FEATURE_UTILITY_MODEL_ROUTING_V1_ENABLED],
     [
@@ -925,6 +935,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
       continue;
     }
     assistant.features[flag] = raw === "1" || raw.toLowerCase() === "true";
+    featureEnvironment[flag] = assistant.features[flag];
   }
 
   const sqliteCacheSizeKb = parseIntEnv(process.env.GOATCITADEL_SQLITE_CACHE_SIZE_KB);
@@ -1118,6 +1129,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   if (bestEffortSandboxEnabled !== undefined) {
     assistant.capabilities.codeModeSandbox.bestEffortHostEnabled = bestEffortSandboxEnabled;
     assistant.features.codeModeHostSandboxEnabled = bestEffortSandboxEnabled;
+    featureEnvironment.codeModeHostSandboxEnabled = bestEffortSandboxEnabled;
   }
   const codeModeDockerBackendEnabled = parseBooleanEnv(process.env.GOATCITADEL_CODE_MODE_DOCKER_BACKEND_ENABLED);
   if (codeModeDockerBackendEnabled !== undefined) {
@@ -1246,7 +1258,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       codeModeSandbox: {
         mode: "best_effort_host",
         required: capabilitiesInput.codeModeSandbox?.required ?? true,
-        bestEffortHostEnabled: capabilitiesInput.codeModeSandbox?.bestEffortHostEnabled ?? false,
+        bestEffortHostEnabled: capabilitiesInput.codeModeSandbox?.bestEffortHostEnabled ?? true,
       },
       codeModeDockerBackend: {
         enabled: capabilitiesInput.codeModeDockerBackend?.enabled ?? false,
@@ -1469,121 +1481,15 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       maxAttemptsDefault: Math.max(1, Math.floor(durableInput.maxAttemptsDefault ?? 3)),
       workflowTimeoutMs: clampInt(durableInput.workflowTimeoutMs, 5 * 60_000, 10_000, 30 * 60_000),
     },
-    features: {
-      durableKernelV1Enabled: true,
-      replayOverridesV1Enabled: featuresInput.replayOverridesV1Enabled ?? false,
-      memoryLifecycleAdminV1Enabled: featuresInput.memoryLifecycleAdminV1Enabled ?? true,
-      memoryLifecycleAutoForgetEnabled: featuresInput.memoryLifecycleAutoForgetEnabled ?? true,
-      memoryMaintenanceV1Enabled: featuresInput.memoryMaintenanceV1Enabled ?? false,
-      connectorDiagnosticsV1Enabled: featuresInput.connectorDiagnosticsV1Enabled ?? false,
-      computerUseGuardrailsV1Enabled: featuresInput.computerUseGuardrailsV1Enabled ?? true,
-      cronReviewQueueV1Enabled: featuresInput.cronReviewQueueV1Enabled ?? false,
-      replayRegressionV1Enabled: featuresInput.replayRegressionV1Enabled ?? false,
-      codeModeV1Enabled: featuresInput.codeModeV1Enabled ?? false,
-      codeModeHostSandboxEnabled:
-        featuresInput.codeModeHostSandboxEnabled ?? capabilitiesInput.codeModeSandbox?.bestEffortHostEnabled ?? false,
-      improvementLedgerV1Enabled: featuresInput.improvementLedgerV1Enabled ?? false,
-      improvementActivationV1Enabled: featuresInput.improvementActivationV1Enabled ?? false,
-      promptRetuneCampaignV1Enabled: featuresInput.promptRetuneCampaignV1Enabled ?? false,
-      structuredReviewV2Enabled: featuresInput.structuredReviewV2Enabled ?? false,
-      delegationScopeExpansionV1Enabled: featuresInput.delegationScopeExpansionV1Enabled ?? false,
-      engineeringLearningsV1Enabled: featuresInput.engineeringLearningsV1Enabled ?? false,
-      coworkRuntimeQualityV1Disabled: featuresInput.coworkRuntimeQualityV1Disabled ?? false,
-      // Kill switch for S1 (live terminal-synthesizer token streaming). `*Disabled`
-      // + `?? false` means the feature is ON by default unless explicitly disabled.
-      orchestrationFinalStreamingV1Disabled: featuresInput.orchestrationFinalStreamingV1Disabled ?? false,
-      // Intentional: autonomy (proactive turns) is ON by default. This is a
-      // `*Disabled` master kill switch — `?? false` means "not disabled" unless
-      // an operator explicitly sets it. Do NOT flip this default.
-      autonomyV1Disabled: featuresInput.autonomyV1Disabled ?? false,
-      // Thinking display: default OFF. `?? false` means the gateway never
-      // constructs/emits a thinking_delta chunk unless an operator opts in — with
-      // this flag left at its default, runtime behavior is byte-identical to today.
-      chatThinkingStreamV1Enabled: featuresInput.chatThinkingStreamV1Enabled ?? false,
-      chatContextBudgetVisibilityV1Enabled: featuresInput.chatContextBudgetVisibilityV1Enabled ?? false,
-      // Graduated (#345): optional `user_input.request` is on by default; operators opt out with an
-      // explicit false in config, env, or stored settings.
-      chatAsyncClarificationV1Enabled: featuresInput.chatAsyncClarificationV1Enabled ?? true,
-      // Server-authored rollout gate. The focused palette proof is green; operators
-      // can still disable the surface explicitly while retaining legacy paths.
-      unifiedComposerPaletteV1Enabled: featuresInput.unifiedComposerPaletteV1Enabled ?? true,
-      // Server-authored rollout gate. Snapshot authority, bounds, replay, and
-      // capability exposure proofs are green; operators may still disable it.
-      attachedContextToolsV1Enabled: featuresInput.attachedContextToolsV1Enabled ?? true,
-      // Server-authored rollout gate. Operator and model projections share one
-      // canonical status service and fail unavailable when evidence is absent.
-      chatSessionStatusV1Enabled: featuresInput.chatSessionStatusV1Enabled ?? true,
-      conversationForksV1Enabled: featuresInput.conversationForksV1Enabled ?? true,
-      notificationRoutingV1Enabled: featuresInput.notificationRoutingV1Enabled ?? true,
-      chatTimersV1Enabled: featuresInput.chatTimersV1Enabled ?? true,
-      typedRunVariablesV1Enabled: featuresInput.typedRunVariablesV1Enabled ?? true,
-      documentEditingV1Enabled: featuresInput.documentEditingV1Enabled ?? true,
-      // Channel voice inbound (B2a): default ON after the channel parity proof is green.
-      // Telegram/WhatsApp/Slack/Discord voice is transcribed through the local
-      // media voice pipeline; operators can disable it with an explicit false (stored or env).
-      channelVoiceInboundV1Enabled: featuresInput.channelVoiceInboundV1Enabled ?? true,
-      // Round-3 kill switches: planner triviality-skip + speed-model drafting,
-      // all-read-only tool-batch parallelism, per-chunk stream idle watchdog,
-      // and planner-declared fan-out. `*Disabled` + `?? false` ⇒ ON by default.
-      plannerFastPathV1Disabled: featuresInput.plannerFastPathV1Disabled ?? false,
-      parallelToolExecutionV1Disabled: featuresInput.parallelToolExecutionV1Disabled ?? false,
-      streamIdleWatchdogV1Disabled: featuresInput.streamIdleWatchdogV1Disabled ?? false,
-      plannerFanoutV1Disabled: featuresInput.plannerFanoutV1Disabled ?? false,
-      subagentFanoutV1Disabled: featuresInput.subagentFanoutV1Disabled ?? false,
-      durableChatFanoutV1Enabled: featuresInput.durableChatFanoutV1Enabled ?? false,
-      chatProviderFallbackV1Enabled: featuresInput.chatProviderFallbackV1Enabled ?? false,
-      chatSkillInstructionsV1Enabled: featuresInput.chatSkillInstructionsV1Enabled ?? false,
-      boundedToolExposureV1Enabled: featuresInput.boundedToolExposureV1Enabled ?? false,
-      scheduledChatTurnsV1Enabled: featuresInput.scheduledChatTurnsV1Enabled ?? false,
-      // Default ON: selected Chat sources reach the model (still only with durable execution and an explicit
-      // per-message selection). Operators can disable it with an explicit false (stored or env).
-      chatExplicitContextV1Enabled: featuresInput.chatExplicitContextV1Enabled ?? true,
-      chatAutomaticFanoutV1Enabled: featuresInput.chatAutomaticFanoutV1Enabled ?? false,
-      chatDelegationControlsV1Enabled: featuresInput.chatDelegationControlsV1Enabled ?? false,
-      proactiveHeartbeatTurnsV1Enabled: featuresInput.proactiveHeartbeatTurnsV1Enabled ?? false,
-      commitmentScheduledTurnsV1Enabled: featuresInput.commitmentScheduledTurnsV1Enabled ?? false,
-      chatMeshCapabilitiesV1Enabled: featuresInput.chatMeshCapabilitiesV1Enabled ?? false,
-      chatRemotePlacementV1Enabled: featuresInput.chatRemotePlacementV1Enabled ?? false,
-      chatExplicitContextBranchesV1Enabled: featuresInput.chatExplicitContextBranchesV1Enabled ?? true,
-      chatWorkspaceSnapshotV1Enabled: featuresInput.chatWorkspaceSnapshotV1Enabled ?? true,
-      chatModelCouncilV1Enabled: featuresInput.chatModelCouncilV1Enabled ?? true,
-      chatWorkPassportV1Enabled: featuresInput.chatWorkPassportV1Enabled ?? true,
-      chatRequesterMcpV1Enabled: featuresInput.chatRequesterMcpV1Enabled ?? false,
-      chatStaticMcpV1Enabled: featuresInput.chatStaticMcpV1Enabled ?? false,
-      claudeCliToolBridgeEnabled: featuresInput.claudeCliToolBridgeEnabled ?? true,
-      claudeCliWarmContinuationEnabled: featuresInput.claudeCliWarmContinuationEnabled ?? true,
-      browserErrandsEnabled: featuresInput.browserErrandsEnabled ?? false,
-      evolutionControlPlaneV1Enabled: featuresInput.evolutionControlPlaneV1Enabled ?? true,
-      settingsApprovalSkipEnabled: featuresInput.settingsApprovalSkipEnabled ?? false,
-      improvementLocalObservationV1Enabled: featuresInput.improvementLocalObservationV1Enabled ?? true,
-      improvementModelEvaluationV1Enabled: featuresInput.improvementModelEvaluationV1Enabled ?? false,
-      productSourceEvolutionV1Enabled: featuresInput.productSourceEvolutionV1Enabled ?? false,
-      // B2b TTS voice replies: default OFF. `?? false` means the channel reply
-      // path never synthesizes audio unless an operator opts in — with the flag
-      // left at its default, runtime behavior is byte-identical to today.
-      channelVoiceReplyV1Enabled: featuresInput.channelVoiceReplyV1Enabled ?? false,
-      // Opt-in weekly memory consolidation. `?? false` keeps the job inert
-      // until an operator enables it.
-      memoryConsolidationV1Enabled: featuresInput.memoryConsolidationV1Enabled ?? false,
-      // Opt-in signed evidence for cron runs. `?? false` keeps cron behavior
-      // byte-identical until an operator enables it.
-      cronEvidenceV1Enabled: featuresInput.cronEvidenceV1Enabled ?? false,
-      // Opt-in utility-model tier for background LLM calls. `?? false` keeps
-      // background model selection byte-identical until an operator enables it.
-      utilityModelRoutingV1Enabled: featuresInput.utilityModelRoutingV1Enabled ?? false,
-      // Kill switch for the boot-time chat-turn interruption reconciler.
-      // `?? false` keeps the reconciler active unless an operator disables it.
-      chatTurnInterruptionRecoveryV1Disabled: featuresInput.chatTurnInterruptionRecoveryV1Disabled ?? false,
-      // Kill switch for the production Activepieces `trigger_webhook` replay
-      // job. `?? false` keeps the replay hook wired (ON by default) unless an
-      // operator disables it; disabled ⇒ byte-identical to before this hook
-      // existed (replay stays `job_unavailable`).
-      externalSideEffectReplayJobsV1Disabled: featuresInput.externalSideEffectReplayJobsV1Disabled ?? false,
-    },
+    features: resolveGatewayFeatureFlags(featuresInput, {
+      codeModeV1Enabled: capabilitiesInput.codeModeSandbox?.required === false ? false : undefined,
+      codeModeHostSandboxEnabled: capabilitiesInput.codeModeSandbox?.bestEffortHostEnabled,
+    }),
     streamIdleTimeoutMs: clampOptionalInt(input.streamIdleTimeoutMs, undefined, 5_000, 3_600_000),
     budgets: {
       dailyUsdWarning: input.budgets?.dailyUsdWarning ?? 10,
       dailyUsdHardCap: input.budgets?.dailyUsdHardCap ?? 50,
+      automaticBackgroundUsdCap: input.budgets?.automaticBackgroundUsdCap ?? 0.25,
       sessionTokenHardCap: input.budgets?.sessionTokenHardCap ?? 120000,
     },
   };

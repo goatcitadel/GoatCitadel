@@ -15,10 +15,33 @@ function buildTrace(
     userMessageId: `${input.turnId}-user`,
     assistantMessageId: `${input.turnId}-assistant`,
     status: "completed",
+    completion: { status: "complete", repaired: false, providerCallCount: 1 },
     startedAt: "2026-07-01T00:00:00.000Z",
     ...input,
   } as ChatTurnTraceRecord;
 }
+
+it("never mines a completed turn whose memory mode was explicitly off", async () => {
+  const harness = createHarness({
+    listCompletedTracePage: async () => [buildTrace({ turnId: "t1", sessionId: "s1", memoryMode: "off" })],
+  });
+  expect((await harness.service.runConsolidation()).proposed).toBe(0);
+  expect(harness.deps.createChatCompletion).not.toHaveBeenCalled();
+});
+
+it.each([
+  undefined,
+  { status: "truncated", repaired: false, providerCallCount: 1 },
+  { status: "complete", repaired: false, providerCallCount: 0 },
+])("skips sparse or incomplete traces without canonical completion evidence: %s", async (completion) => {
+  const harness = createHarness({
+    listCompletedTracePage: async () => [
+      buildTrace({ turnId: "t1", sessionId: "s1", completion: completion as ChatTurnTraceRecord["completion"] }),
+    ],
+  });
+  expect((await harness.service.runConsolidation()).proposed).toBe(0);
+  expect(harness.deps.createChatCompletion).not.toHaveBeenCalled();
+});
 
 function buildEvents(
   sessionId: string,
@@ -68,7 +91,7 @@ function createHarness(overrides: Partial<MemoryConsolidationDeps> = {}) {
   const deps: MemoryConsolidationDeps = {
     isFeatureEnabled: async (flag) =>
       flag === "memoryConsolidationV1Enabled" || flag === "memoryLifecycleAdminV1Enabled",
-    listCompletedTurnTracesSince: async () => [buildTrace({ turnId: "t1", sessionId: "s1" })],
+    listCompletedTracePage: async () => [buildTrace({ turnId: "t1", sessionId: "s1" })],
     readTranscriptOrEmpty: async (sessionId) => buildEvents(sessionId),
     createChatCompletion: vi.fn(async () => ({
       choices: [{ message: { content: DRAFT_JSON } }],
@@ -78,19 +101,132 @@ function createHarness(overrides: Partial<MemoryConsolidationDeps> = {}) {
       proposed.push({ insight: input.proposedInsight, actorId });
       return { candidateId: "c1" } as never;
     }),
-    listExistingInsightsForDedup: async () => [],
-    getWatermark: async () => "2026-06-24T00:00:00.000Z",
-    setWatermark: async (iso) => {
-      watermarks.push(iso);
-    },
+    listExistingInsightsForDedup: vi.fn(async () => []),
     publishRealtime: vi.fn(async () => undefined),
     now: () => new Date("2026-07-05T10:00:00.000Z"),
+    listWorkspaceIds: async () => ["workspace-a"],
+    resolveEligibleSourceSession: async () => ({ workspaceId: "workspace-a" }),
+    readProgress: async () => ({ revision: 0, cursor: { finishedAt: "2026-06-24T00:00:00.000Z", turnId: "" } }),
+    claimProgress: async (_workspaceId: string, revision: number, leaseOwner: string) => ({
+      revision: revision + 1,
+      leaseOwner,
+    }),
+    commitProgress: async (
+      _workspaceId: string,
+      _revision: number,
+      _leaseOwner: string,
+      cursor?: { finishedAt: string },
+    ) => {
+      if (cursor && cursor.finishedAt > "2026-06-24T00:00:00.000Z") watermarks.push(cursor.finishedAt);
+    },
     ...overrides,
   };
   return { service: new MemoryConsolidationService(deps), deps, proposed, watermarks };
 }
 
 describe("MemoryConsolidationService", () => {
+  it("binds canonical source hashes and withholds a proposal if source bytes change during drafting", async () => {
+    let hash = "a".repeat(64);
+    const h = createHarness({
+      readCanonicalSource: async (input) => ({ sourceHash: hash, events: buildEvents(input.sessionId) }),
+    });
+    await h.service.runConsolidation();
+    expect(vi.mocked(h.deps.proposeTraceMemoryCandidate).mock.calls[0]![0].metadata).toMatchObject({
+      consolidationSource: { workspaceId: "workspace-a", sessionId: "s1", turnIds: ["t1"], sourceHash: hash },
+    });
+    const changed = createHarness({
+      readCanonicalSource: async (input) => ({ sourceHash: hash, events: buildEvents(input.sessionId) }),
+      createChatCompletion: async () => {
+        hash = "b".repeat(64);
+        return { choices: [{ message: { role: "assistant", content: DRAFT_JSON } }] } as never;
+      },
+    });
+    expect((await changed.service.runConsolidation()).proposed).toBe(0);
+    expect(changed.watermarks).toEqual([]);
+  });
+  it("does not send actual credential-bearing transcript messages to a review provider", async () => {
+    const { service, deps } = createHarness({
+      readTranscriptOrEmpty: async (sessionId) =>
+        buildEvents(
+          sessionId,
+          "t1",
+          "A completed synthetic project status note. ".repeat(6) +
+            "Authorization: Bearer synthetic-test-only-abcdefghijklmnopqrstuvwxyz123456789",
+        ),
+    });
+    await service.runConsolidation();
+    expect(deps.createChatCompletion).not.toHaveBeenCalled();
+    expect(deps.proposeTraceMemoryCandidate).not.toHaveBeenCalled();
+  });
+
+  it("allows identical lessons in different canonical workspaces", async () => {
+    const { service, deps } = createHarness({
+      listWorkspaceIds: async () => ["A", "B"],
+      listCompletedTracePage: async ({ workspaceId }) => [buildTrace({ turnId: "t1", sessionId: workspaceId })],
+      resolveEligibleSourceSession: async (sessionId) => ({ workspaceId: sessionId }),
+    });
+    const result = await service.runConsolidation();
+    expect(result.proposed).toBe(2);
+    expect(vi.mocked(deps.proposeTraceMemoryCandidate).mock.calls.map(([input]) => input.workspaceId)).toEqual([
+      "A",
+      "B",
+    ]);
+  });
+
+  it("keeps a failed prefix retryable while a different workspace makes progress", async () => {
+    const progress: Array<{ workspaceId: string; cursor?: { turnId: string } }> = [];
+    const { service } = createHarness({
+      listWorkspaceIds: async () => ["A", "B"],
+      listCompletedTracePage: async ({ workspaceId }) => [buildTrace({ turnId: "t1", sessionId: workspaceId })],
+      resolveEligibleSourceSession: async (sessionId) => ({ workspaceId: sessionId }),
+      readTranscriptOrEmpty: async (sessionId) => {
+        if (sessionId === "A") throw new Error("transient unavailable");
+        return buildEvents(sessionId);
+      },
+      commitProgress: async (workspaceId, _revision, _owner, cursor) => {
+        progress.push({ workspaceId, cursor });
+      },
+    });
+    const result = await service.runConsolidation();
+    expect(result.sessionsFailed).toBe(1);
+    expect(result.proposed).toBe(1);
+    expect(progress).toEqual([
+      { workspaceId: "A", cursor: { finishedAt: "2026-06-24T00:00:00.000Z", turnId: "" } },
+      { workspaceId: "B", cursor: { finishedAt: "2026-07-01T00:00:00.000Z", turnId: "t1" } },
+    ]);
+  });
+
+  it("binds proposals and dedupe to the canonical non-default workspace", async () => {
+    const { service, deps } = createHarness();
+    await service.runConsolidation();
+    expect(deps.proposeTraceMemoryCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "workspace-a", sourceSessionId: "s1" }),
+      "memory-consolidation-job",
+    );
+    expect(deps.listExistingInsightsForDedup).toHaveBeenCalledWith("workspace-a");
+  });
+
+  it("does not read transcripts or call a provider when canonical ownership is missing", async () => {
+    const readTranscriptOrEmpty = vi.fn(async (sessionId: string) => buildEvents(sessionId));
+    const { service, deps, proposed } = createHarness({
+      readTranscriptOrEmpty,
+      ...{ resolveEligibleSourceSession: async () => undefined },
+    });
+    await service.runConsolidation();
+    expect(readTranscriptOrEmpty).not.toHaveBeenCalled();
+    expect(deps.createChatCompletion).not.toHaveBeenCalled();
+    expect(proposed).toEqual([]);
+  });
+
+  it("does not propose if source ownership changes while drafting", async () => {
+    let reads = 0;
+    const { service, deps } = createHarness({
+      ...{ resolveEligibleSourceSession: async () => ({ workspaceId: ++reads === 1 ? "workspace-a" : "foreign" }) },
+    });
+    await service.runConsolidation();
+    expect(deps.proposeTraceMemoryCandidate).not.toHaveBeenCalled();
+  });
+
   it("mines qualifying traces, drafts, and proposes approval-gated candidates", async () => {
     const { service, deps, proposed, watermarks } = createHarness();
     const summary = await service.runConsolidation();
@@ -107,7 +243,7 @@ describe("MemoryConsolidationService", () => {
 
   it("uses only messages from qualifying turns and cites their session when the digest spans turns", async () => {
     const { service, deps } = createHarness({
-      listCompletedTurnTracesSince: async () => [
+      listCompletedTracePage: async () => [
         buildTrace({ turnId: "t1", sessionId: "s1" }),
         buildTrace({ turnId: "t2", sessionId: "s1" }),
         buildTrace({
@@ -142,7 +278,7 @@ describe("MemoryConsolidationService", () => {
 
   it("does not advance the watermark past unsampled qualifying sessions", async () => {
     const { service, watermarks } = createHarness({
-      listCompletedTurnTracesSince: async () => [
+      listCompletedTracePage: async () => [
         buildTrace({ turnId: "t1", sessionId: "s1", startedAt: "2026-07-01T00:00:01.000Z" }),
         buildTrace({ turnId: "t2", sessionId: "s2", startedAt: "2026-07-01T00:00:02.000Z" }),
         buildTrace({ turnId: "t3", sessionId: "s3", startedAt: "2026-07-01T00:00:03.000Z" }),
@@ -180,7 +316,7 @@ describe("MemoryConsolidationService", () => {
 
   it("skips still_failed reflection turns and filters low-confidence drafts", async () => {
     const { service, proposed } = createHarness({
-      listCompletedTurnTracesSince: async () => [
+      listCompletedTracePage: async () => [
         buildTrace({
           turnId: "t1",
           sessionId: "s1",

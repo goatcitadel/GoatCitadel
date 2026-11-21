@@ -18,6 +18,47 @@ function createRepoWithDb(): { repo: HookRunRepository; db: ReturnType<typeof cr
 }
 
 describe("HookRunRepository", () => {
+  it("pages completed server hook events by exact workspace, hook and cursor before applying the limit", () => {
+    const { repo } = createRepoWithDb(),
+      at = "2026-11-19T10:00:00.000Z",
+      next = "2026-11-19T10:01:00.000Z";
+    const seed = (hookId: string, workspaceId: string, time: string, key: string) =>
+      repo.create(
+        {
+          hookId,
+          workspaceId,
+          trigger: "subagent.end",
+          entityType: "chat_subagent",
+          entityId: "child",
+          mode: "observe",
+          status: "completed",
+          idempotencyKey: key,
+          attemptCount: 1,
+          requestPayload: { parentSessionId: "s" },
+          completedAt: time,
+        },
+        time,
+      );
+    const first = seed("h", "w", at, "first"),
+      second = seed("h", "w", next, "second");
+    for (let i = 0; i < 25; i++) seed("other", "foreign", at, `foreign-${i}`);
+    const page = repo.listCompletedForFollowThrough({ workspaceId: "w", hookId: "h", notBefore: at, limit: 1 });
+    assert.deepEqual(
+      page.map((row) => row.runId),
+      [first.runId],
+    );
+    const rest = repo.listCompletedForFollowThrough({
+      workspaceId: "w",
+      hookId: "h",
+      notBefore: at,
+      after: { completedAt: first.completedAt!, runId: first.runId },
+      limit: 20,
+    });
+    assert.deepEqual(
+      rest.map((row) => row.runId),
+      [second.runId],
+    );
+  });
   it("creates, updates, links, and lists hook delivery runs", () => {
     const { repo, db } = createRepoWithDb();
 

@@ -95,6 +95,14 @@ export class AgentCommitmentRepository {
         creator_receipt_json = excluded.creator_receipt_json,
         creator_receipt_sha256 = excluded.creator_receipt_sha256
       WHERE agent_commitments.scheduled_run_id IS NULL
+        AND (excluded.status <> 'proposed' OR agent_commitments.status = 'proposed')
+        AND (agent_commitments.kind <> excluded.kind
+          OR agent_commitments.due_at <> excluded.due_at
+          OR agent_commitments.confidence <> excluded.confidence
+          OR agent_commitments.suggested_text <> excluded.suggested_text
+          OR agent_commitments.workspace_id <> excluded.workspace_id
+          OR COALESCE(agent_commitments.creator_receipt_json, '') <> COALESCE(excluded.creator_receipt_json, '')
+          OR COALESCE(agent_commitments.creator_receipt_sha256, '') <> COALESCE(excluded.creator_receipt_sha256, ''))
     `);
     this.getStmt = db.prepare(`
       SELECT * FROM agent_commitments WHERE commitment_id = ?
@@ -195,8 +203,10 @@ export class AgentCommitmentRepository {
       const observed = this.get(input.commitmentId);
       if (!observed) throw new ConflictError({ message: "Commitment no longer exists." });
       // Share the session admission lock before taking the commitment row lock.
-      if (this.db.dialect === "postgres") this.db.prepare("SELECT pg_advisory_xact_lock(hashtextextended(@sessionId, 411))")
-        .get({ sessionId: observed.sessionId });
+      if (this.db.dialect === "postgres")
+        this.db
+          .prepare("SELECT pg_advisory_xact_lock(hashtextextended(@sessionId, 411))")
+          .get({ sessionId: observed.sessionId });
       // A no-op update obtains the PostgreSQL row lock before rereading; SQLite already holds the write lock.
       this.db.prepare("UPDATE agent_commitments SET status = status WHERE commitment_id = ?").run(input.commitmentId);
       const row = this.get(input.commitmentId);
@@ -217,11 +227,15 @@ export class AgentCommitmentRepository {
       const now = nowRow!.now_iso;
       if (row.status !== "pending" || row.revision !== input.expectedRevision || row.dueAt > now)
         throw new ConflictError({ message: "Commitment revision is stale or not due." });
-      const active = this.db.prepare(`SELECT 1 FROM agent_commitments c JOIN cron_runs r ON r.run_id = c.scheduled_run_id
+      const active = this.db
+        .prepare(
+          `SELECT 1 FROM agent_commitments c JOIN cron_runs r ON r.run_id = c.scheduled_run_id
         WHERE c.session_id = @sessionId AND c.workspace_id = @workspaceId
-          AND r.status IN ('admitting', 'admitted', 'running', 'waiting') LIMIT 1`)
+          AND r.status IN ('admitting', 'admitted', 'running', 'waiting') LIMIT 1`,
+        )
         .get({ sessionId: row.sessionId, workspaceId: row.workspaceId });
-      if (active) throw new ConflictError({ message: "Another commitment occurrence is already active for this session." });
+      if (active)
+        throw new ConflictError({ message: "Another commitment occurrence is already active for this session." });
       const creator = this.readCurrentCreator(row);
       const materialSha256 = commitmentSha256(commitmentMaterial(row));
       const suffix = commitmentSha256({ commitmentId: row.commitmentId }).slice(0, 40);
@@ -368,6 +382,39 @@ export class AgentCommitmentRepository {
    */
   public hasOpenBySession(sessionId: string): boolean {
     return this.hasOpenBySessionStmt.get({ sessionId }) !== undefined;
+  }
+
+  /** Exact operator review of inferred material. Claimed occurrences belong to cron, never this transition. */
+  public decideSuggestion(input: {
+    commitmentId: string;
+    sessionId: string;
+    workspaceId: string;
+    expectedRevision: number;
+    decision: "accept" | "dismiss";
+  }): AgentCommitmentRecord {
+    return this.db.transaction("immediate", () => {
+      const status = input.decision === "accept" ? "pending" : "dismissed";
+      const allowed = input.decision === "accept" ? "status = 'proposed'" : "status IN ('proposed','pending')";
+      const changed = this.db
+        .prepare(
+          `UPDATE agent_commitments SET status=@status,revision=revision+1
+        WHERE commitment_id=@commitmentId AND session_id=@sessionId AND workspace_id=@workspaceId
+          AND revision=@expectedRevision AND scheduled_run_id IS NULL AND ${allowed}`,
+        )
+        .run({
+          commitmentId: input.commitmentId,
+          sessionId: input.sessionId,
+          workspaceId: input.workspaceId,
+          expectedRevision: input.expectedRevision,
+          status,
+        });
+      if (changed.changes !== 1)
+        throw new ConflictError({
+          message:
+            "This follow-up changed or already entered execution. Refresh its canonical outcome before deciding.",
+        });
+      return this.get(input.commitmentId)!;
+    });
   }
 
   /** Transition a still-pending commitment to async delivery-pending. Returns true if updated. */

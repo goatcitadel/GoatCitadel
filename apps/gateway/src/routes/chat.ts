@@ -13,8 +13,15 @@ import { registerChatMiscRoutes } from "./chat.misc.js";
 import { registerChatCompactionBreakerActionRoutes } from "./chat.compaction-breaker-actions.js";
 import { registerChatChangePlanRoutes } from "./chat.change-plans.js";
 import { registerWorkflowSkillCaptureRoutes } from "./chat.skill-capture.js";
+import { registerChatAssistantReadinessRoutes } from "./chat.assistant-readiness.js";
+import { registerChatFollowThroughRoutes } from "./chat.follow-through.js";
+import { registerChatLearningReceiptRoutes } from "./chat.learning-receipt.js";
+import { registerChatContinuationRoutes } from "./chat.continuations.js";
+import { registerChatFollowThroughSetupRoutes } from "./chat.follow-through-setup.js";
 
 export const chatRoutes: FastifyPluginAsync = async (fastify) => {
+  registerChatContinuationRoutes(fastify);
+  registerChatFollowThroughSetupRoutes(fastify);
   registerChatProjectRoutes(fastify);
   registerChatSessionRoutes(fastify);
   registerChatMessagingRoutes(fastify);
@@ -24,6 +31,9 @@ export const chatRoutes: FastifyPluginAsync = async (fastify) => {
   registerChatFanoutRoutes(fastify);
   registerChatChangePlanRoutes(fastify);
   registerWorkflowSkillCaptureRoutes(fastify);
+  registerChatAssistantReadinessRoutes(fastify);
+  registerChatFollowThroughRoutes(fastify);
+  registerChatLearningReceiptRoutes(fastify);
   registerChatMiscRoutes(fastify);
   await registerChatCompactionBreakerActionRoutes(fastify);
   registerChatToolRoutes(fastify);

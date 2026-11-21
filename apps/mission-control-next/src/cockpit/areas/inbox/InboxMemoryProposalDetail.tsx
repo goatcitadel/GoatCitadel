@@ -77,7 +77,10 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
       }
       mutationAttempted = true;
       if (review.action === "promote") {
-        const learning = await promoteTraceMemoryCandidate(candidateId);
+        const learning = await promoteTraceMemoryCandidate(candidateId, {
+          workspaceId,
+          expectedReviewHash: review.candidate.reviewHash ?? "",
+        });
         if (
           learning.workspaceId !== workspaceId ||
           learning.status !== "trusted" ||
@@ -88,7 +91,10 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
         }
         setNotice("Promoted to workspace memory. Use Open Memory to see the saved learning.");
       } else {
-        const rejected = await rejectTraceMemoryCandidate(candidateId);
+        const rejected = await rejectTraceMemoryCandidate(candidateId, {
+          workspaceId,
+          expectedReviewHash: review.candidate.reviewHash ?? "",
+        });
         if (
           rejected.candidateId !== candidateId ||
           rejected.workspaceId !== workspaceId ||
@@ -140,13 +146,9 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
         </p>
       ) : null}
       {view.phase === "loading" ? (
-        <p role="status" className="text-fg-muted">
-          Loading the current proposal…
-        </p>
+        <p className="text-fg-muted">Loading the current proposal…</p>
       ) : checking ? (
-        <p role="status" className="text-fg-muted">
-          {CHECKING_FOR_CHANGES}
-        </p>
+        <p className="text-fg-muted">{CHECKING_FOR_CHANGES}</p>
       ) : null}
       {query.isError ? (
         <p role="alert" className="text-status-failed">
@@ -162,6 +164,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
       {candidate && candidate.workspaceId === workspaceId ? (
         <>
           <p className="text-fg-secondary">Proposed insight: {candidate.proposedInsight}</p>
+          {candidate.promotionEligibility?.reason ? <p>{candidate.promotionEligibility.reason}</p> : null}
           <p className="text-xs text-fg-muted">
             Type: {memoryCandidateTypeLabels[candidate.candidateType] ?? "Other"} · Source:{" "}
             {memoryCandidateAuthorityLabels[candidate.authority] ?? "Unknown source"} ·{" "}
@@ -178,14 +181,11 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
           </p>
         </>
       ) : null}
-      {scopeChanged ? (
+      {scopeChanged || (candidate && candidate.workspaceId !== workspaceId) ? (
         <p role="alert" className="text-fg-secondary">
-          The selected workspace changed. Open this item again in the current Inbox.
-        </p>
-      ) : null}
-      {candidate && candidate.workspaceId !== workspaceId ? (
-        <p role="alert" className="text-fg-secondary">
-          The current proposal belongs to another workspace. No decision is available here.
+          {scopeChanged
+            ? "The selected workspace changed. Open this item again in the current Inbox."
+            : "The current proposal belongs to another workspace. No decision is available here."}
         </p>
       ) : null}
       {eligible && !completed && !outcomeUncertain ? (
@@ -193,7 +193,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
           <Button
             size="sm"
             variant="primary"
-            disabled={pending || checking}
+            disabled={pending || checking || candidate?.promotionEligibility?.allowed === false}
             onClick={() => void resolve({ candidate: candidate!, action: "promote" })}
           >
             Promote to memory
@@ -207,11 +207,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
           </Button>
         </div>
       ) : null}
-      {pending ? (
-        <p role="status" className="text-fg-muted">
-          Checking the current proposal and recording the decision…
-        </p>
-      ) : null}
+      {pending ? <p className="text-fg-muted">Checking the current proposal and recording the decision…</p> : null}
       {notice ? (
         <p role="status" className="text-status-done">
           {notice}

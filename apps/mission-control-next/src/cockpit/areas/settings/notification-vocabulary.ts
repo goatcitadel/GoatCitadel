@@ -28,6 +28,7 @@ export const NOTIFICATION_EVENT_TYPE_LABELS: Record<NotificationEventType, strin
   "user_input.requested": "A question is waiting for you",
   "durable.attention_required": "A run needs attention",
   "timer.due": "A timer is due",
+  "heartbeat.attention": "A background check needs attention",
   "scheduled_turn.completed": "A scheduled message ran",
   "scheduled_turn.failed": "A scheduled message failed",
 };

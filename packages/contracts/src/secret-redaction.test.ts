@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { redactSecretText, redactStructuredSecrets } from "./secret-redaction.js";
 
 describe("redactSecretText", () => {
+  it("redacts an explicitly stated personal password without rejecting security vocabulary", () => {
+    const result = redactSecretText("my password is synthetic-OnlyForTests-49819!");
+    expect(result.value).toBe("my password is [REDACTED]");
+    expect(result.redactionCount).toBeGreaterThan(0);
+    expect(redactSecretText("Prefer low token usage and OS keychain credential rotation.").redactionCount).toBe(0);
+  });
+
   it("redacts common provider, channel, and authorization secrets", () => {
     const result = redactSecretText(
       [

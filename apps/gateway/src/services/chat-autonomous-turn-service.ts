@@ -21,6 +21,7 @@ import type {
   CronRunExecutionToken,
   DurableRunRecord,
   PermissionProfileRecord,
+  PermissionProfileSnapshotRecord,
   TaskRecord,
   ToolPolicyActorContext,
   ChatTurnFeatureReferences,
@@ -172,6 +173,7 @@ export interface ChatAutonomousTurnDeps {
     }>
   >;
   getSessionIdleSeconds: HeartbeatTickDeps["getSessionIdleSeconds"];
+  canEnrollHeartbeat?(sessionId: string): Promise<boolean>;
   hasRunningTurn(sessionId: string): Promise<boolean>;
   claimAndEnqueueHeartbeat(input: {
     workspaceId: string;
@@ -371,7 +373,7 @@ export async function runCronAgentTurn(
  */
 export async function runCommitmentSweep(deps: ChatAutonomousTurnDeps): Promise<void> {
   if (
-    (await deps.isFeatureEnabled("autonomyV1Disabled")) ||
+    !(await isAutonomyAllowed(deps)) ||
     !(await deps.isFeatureEnabled("durableKernelV1Enabled")) ||
     !(await deps.isFeatureEnabled("commitmentScheduledTurnsV1Enabled"))
   ) {
@@ -379,7 +381,7 @@ export async function runCommitmentSweep(deps: ChatAutonomousTurnDeps): Promise<
   }
   await deps.storage.agentCommitments.reconcileScheduled();
   await runCommitmentSweepCore({
-    isAutonomyEnabled: async () => !(await deps.isFeatureEnabled("autonomyV1Disabled")),
+    isAutonomyEnabled: () => isAutonomyAllowed(deps),
     listDueCommitments: async (nowIso, limit) => await deps.storage.agentCommitments.listDue(nowIso, limit),
     getSessionAutonomyPrefs: (sessionId) => deps.getSessionAutonomyPrefs(sessionId),
     deliverCommitment: async (commitment) => {
@@ -439,7 +441,7 @@ export async function resolveCommitmentDeliveryChannel(
  */
 export async function runHeartbeatSweep(deps: ChatAutonomousTurnDeps): Promise<void> {
   if (
-    (await deps.isFeatureEnabled("autonomyV1Disabled")) ||
+    !(await isAutonomyAllowed(deps)) ||
     !(await deps.isFeatureEnabled("durableKernelV1Enabled")) ||
     !(await deps.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled"))
   ) {
@@ -461,20 +463,25 @@ export async function runHeartbeatSweep(deps: ChatAutonomousTurnDeps): Promise<v
   }
 }
 
+async function isAutonomyAllowed(deps: Pick<ChatAutonomousTurnDeps, "isFeatureEnabled">): Promise<boolean> {
+  return !(await deps.isFeatureEnabled("autonomyV1Disabled"));
+}
+
 function buildHeartbeatTickDeps(
   deps: ChatAutonomousTurnDeps,
   sessions: Array<{ sessionId: string; lastActivityAt: string }>,
   now: Date,
 ): HeartbeatTickDeps {
   return {
-    isAutonomyEnabled: async () => !(await deps.isFeatureEnabled("autonomyV1Disabled")),
+    isAutonomyEnabled: () => isAutonomyAllowed(deps),
     // One bounded cursor page is processed immediately. The pure tick's
     // historical 300-row default must not truncate this page.
     listSessions: () => sessions,
     sessionLimit: Math.max(1, sessions.length),
     now: () => now,
     getSessionAutonomyPrefs: (sessionId) => deps.getSessionAutonomyPrefs(sessionId),
-    isHeartbeatEligibleSession: async (sessionId) => await isHeartbeatEligibleSession(deps, sessionId),
+    isHeartbeatEligibleSession: async (sessionId) =>
+      (await isHeartbeatEligibleSession(deps, sessionId)) && ((await deps.canEnrollHeartbeat?.(sessionId)) ?? true),
     getSessionIdleSeconds: (sessionId) => deps.getSessionIdleSeconds(sessionId),
     hasRunningTurn: (sessionId) => deps.hasRunningTurn(sessionId),
     enqueueHeartbeatTurn: async ({ sessionId, prompt }) => {
@@ -728,7 +735,7 @@ async function resolveScheduledAgentTurnPolicy(
   }
 
   const workspaceId = (await deps.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID;
-  let creatorProfile: PermissionProfileRecord;
+  let creatorProfile: PermissionProfileSnapshotRecord;
   try {
     creatorProfile = await deps.storage.permissionProfiles.getProfile(creatorProfileId);
   } catch (error) {
@@ -746,6 +753,12 @@ async function resolveScheduledAgentTurnPolicy(
     };
   }
   const creatorActorId = createdBy.operatorId?.trim() || createdBy.authActorId?.trim();
+  if (createdBy.permissionProfileRevision && creatorProfile.revision !== createdBy.permissionProfileRevision)
+    return {
+      profilePosture: "creator_profile_invalid",
+      failClosedReason:
+        "The selected schedule permission profile changed after review. Review a fresh schedule before allowing more agentic work.",
+    };
   if (!permissionProfileAppliesToCreator({ profile: creatorProfile, creatorActorId, workspaceId })) {
     return {
       profilePosture: "creator_profile_scope_mismatch",

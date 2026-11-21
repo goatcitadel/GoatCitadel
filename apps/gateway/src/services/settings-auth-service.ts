@@ -13,6 +13,13 @@
  * Pattern reference: comms-service.ts, memory-facade-service.ts.
  */
 
+import { DEFAULT_AUTOMATIC_BACKGROUND_DAILY_USD } from "./automatic-background-budget.js";
+import {
+  configurationFeatureFlags,
+  featurePreferenceMetadata,
+  resolveGatewayFeatureFlags,
+  updateFeaturePreferences,
+} from "./gateway/feature-flags.js";
 import { isFirecrawlBaseUrlAllowlisted } from "./runtime-browser-backend-defaults.js";
 import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
@@ -224,11 +231,20 @@ export async function getSettings(deps: SettingsRuntimeDependencies): Promise<Ru
       assistant.durable ?? { enabled: false, executionEnabled: false },
       features,
     ),
+    ...(config.featureSources
+      ? {
+          featurePreferences: featurePreferenceMetadata(
+            config.featureSources,
+            config.featureSources.canonicalStore ?? {},
+          ),
+        }
+      : {}),
     revision: deps.readSettingsRevision?.() ?? 1,
     environment: assistant.environment,
     deploymentProfile: assistant.deploymentProfile,
     toolApprovalMode: toolPolicy.tools.approvalMode ?? assistant.toolApprovalMode ?? "approve_risky",
     budgetMode: config.budgets.mode,
+    automaticBackgroundUsdCap: assistant.budgets?.automaticBackgroundUsdCap ?? DEFAULT_AUTOMATIC_BACKGROUND_DAILY_USD,
     workspaceDir: assistant.workspaceDir,
     ...(assistant.publicWebAddress ? { publicWebAddress: assistant.publicWebAddress } : {}),
     browserErrands: projectBrowserErrandSettings(assistant),
@@ -320,6 +336,7 @@ export interface UpdateSettingsInput {
   expectedRevision?: number;
   deploymentProfile?: DeploymentProfile;
   toolApprovalMode?: ToolApprovalMode;
+  automaticBackgroundUsdCap?: number;
   budgetMode?: "saver" | "balanced" | "power";
   readAccessMode?: FilesystemReadAccessMode;
   /** Whether writes outside every write root may raise an approval. */
@@ -420,6 +437,7 @@ export interface UpdateSettingsInput {
     ubatchSize?: number | null;
     flashAttention?: boolean | null;
   };
+  featureReview?: import("@goatcitadel/contracts").FeaturePreferenceReview;
   features?: Partial<RuntimeSettings["features"]>;
 }
 
@@ -474,6 +492,7 @@ export async function buildSettingsCandidate(
 ): Promise<SettingsConfigCandidate> {
   assertProviderConfigMutationIsSecretFree(rawInput);
 
+  let candidateFeatures = structuredClone(await deps.readFeatureFlags());
   const candidateConfig = structuredClone(deps.config);
   // Candidate construction is an internal persistence path, not a public DTO.
   const currentLlm = deps.llmService.snapshotRuntimeConfigForPersistence();
@@ -481,7 +500,16 @@ export async function buildSettingsCandidate(
     networkAllowlist: candidateConfig.toolPolicy.sandbox.networkAllowlist,
     enforceNetworkAllowlist: true,
   });
-  let candidateFeatures = structuredClone(await deps.readFeatureFlags());
+  const sources = candidateConfig.featureSources;
+  if (sources && (rawInput.features || rawInput.featureReview)) {
+    sources.canonicalStore = updateFeaturePreferences(
+      sources,
+      sources.canonicalStore ?? {},
+      rawInput.features,
+      rawInput.featureReview,
+    );
+    candidateFeatures = resolveGatewayFeatureFlags(sources.canonicalStore, configurationFeatureFlags(sources));
+  }
   const noopNpuStatus = () => deps.npuSidecar.getStatus();
   const noopLlamaStatus = () => deps.llamaCppRuntime.getStatus();
   const candidateDeps: SettingsRuntimeDependencies = {
@@ -571,6 +599,12 @@ export async function updateSettings(
     });
   }
 
+  if (input.automaticBackgroundUsdCap !== undefined) {
+    if (!Number.isFinite(input.automaticBackgroundUsdCap) || input.automaticBackgroundUsdCap < 0) {
+      throw new ValidationError({ message: "Enter a finite daily amount of zero dollars or more." });
+    }
+    deps.config.assistant.budgets.automaticBackgroundUsdCap = input.automaticBackgroundUsdCap;
+  }
   if (input.budgetMode) {
     deps.config.budgets.mode = input.budgetMode;
   }

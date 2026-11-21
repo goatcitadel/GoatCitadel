@@ -193,7 +193,7 @@ const createChatTimerSchema = z
     dueAt: z.string().datetime({ offset: true }),
     timezone: z.string().trim().min(1).max(128),
     message: z.string().trim().min(1).max(4_000),
-    notificationRuleId: z.string().trim().min(1).max(256).optional(),
+    notificationRuleId: z.string().trim().min(1).max(256).nullable().optional(),
     cancelOnNextReply: z.boolean().optional(),
   })
   .strict();
@@ -624,9 +624,14 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
         params.data.sessionId,
         body.data,
         request.authActorId || "operator",
+        request.idempotencyKey
+          ? { key: request.idempotencyKey, replayOnly: request.mutationIdempotencyOutcome === "committed" }
+          : undefined,
       );
+      await markMutationCommitted(request);
       return reply.code(201).send({ item });
     } catch (error) {
+      await markMutationCommittedFromError(request, error);
       return sendRouteError(reply, error, request.log);
     }
   });

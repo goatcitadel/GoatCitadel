@@ -29,7 +29,10 @@ export function buildQueryHash(prompt: string, queryEmbedding?: number[]): strin
 
 export function buildSourcesHash(candidates: RankedMemoryCandidate[]): string {
   const payload = candidates
-    .map((candidate) => `${candidate.candidateId}|${candidate.timestamp ?? ""}|${candidate.rankScore.toFixed(5)}`)
+    .map(
+      (candidate) =>
+        `${candidate.candidateId}|${candidate.timestamp ?? ""}|${candidate.sourceHash ?? hashText(candidate.text)}|${candidate.rankScore.toFixed(5)}`,
+    )
     .join("\n");
   return hashText(payload);
 }

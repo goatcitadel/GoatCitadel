@@ -6,6 +6,7 @@ export const NOTIFICATION_EVENT_TYPES = [
   "user_input.requested",
   "durable.attention_required",
   "timer.due",
+  "heartbeat.attention",
   "scheduled_turn.completed",
   "scheduled_turn.failed",
 ] as const;

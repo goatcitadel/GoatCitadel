@@ -1,6 +1,12 @@
 import { CHAT_ARTIFACT_RENDER_RECEIPTS_SQLITE_SQL } from "./chat-artifact-render-schema.js";
 import { CHAT_APPROVAL_MODE_SCHEMA_SQL } from "./chat-approval-mode-schema.js";
 import { MANAGED_PROJECT_FILE_SCHEMA_SQL } from "./managed-project-file-schema.js";
+import { upgradeMemoryClaimsSchema } from "./memory-claims-schema.js";
+import { upgradeMemoryRecallSchema } from "./memory-recall-schema.js";
+import { upgradeBackgroundLearningQueueIndexes } from "./background-learning-schema.js";
+import { upgradeImprovementWatchEvidence } from "./improvement-watch-schema.js";
+import { upgradePromptPackWatchBindings } from "./prompt-pack-watch-schema.js";
+import { upgradeMemoryNoteOrigins } from "./memory-note-schema.js";
 import { APPROVAL_EXECUTION_LINKAGE_SQLITE_SQL } from "./approval-execution-linkage-migration.js";
 import { MODEL_COMPARISON_CLAIM_SCHEMA_SQL } from "./model-comparison-claim-schema.js";
 import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_SQLITE_SQL } from "./approval-execution-linkage-index-repair.js";
@@ -7579,6 +7585,14 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         name: "skill_hub_remove_operation_kind",
         up: upgradeSkillHubOperationKindsSqlite,
       },
+      { version: 282, name: "scoped_memory_claim_identity", up: upgradeMemoryClaimsSchema },
+      { version: 283, name: "indexed_memory_corpus", up: upgradeMemoryRecallSchema },
+      { version: 284, name: "background_learning_queue_indexes", up: upgradeBackgroundLearningQueueIndexes },
+      { version: 285, name: "improvement_watch_evidence", up: upgradeImprovementWatchEvidence },
+      { version: 286, name: "prompt_pack_pre_work_watch_bindings", up: upgradePromptPackWatchBindings },
+      { version: 287, name: "canonical_memory_note_origins", up: upgradeMemoryNoteOrigins },
+      // SQLite already owns the learning index and column definitions.
+      { version: 288, name: "learning_schema_convergence", up: () => undefined },
     ],
   },
 ];

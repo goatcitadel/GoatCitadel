@@ -307,6 +307,7 @@ export type ImprovementCandidateStatus =
 export type ImprovementEvaluationStatus = "queued" | "running" | "passed" | "failed";
 
 export type ImprovementEvaluationKind =
+  | "static_preflight"
   | "repair_replay_validation"
   | "prompt_lab_regression"
   | "prompt_lab_benchmark"
@@ -314,7 +315,34 @@ export type ImprovementEvaluationKind =
 
 export type ImprovementActivationStatus = "pending" | "active" | "paused" | "rolled_back" | "failed";
 
-export type ImprovementActivationWatchStatus = "watching" | "stable" | "alerting" | "paused" | "failed";
+export type ImprovementActivationWatchStatus =
+  | "watching"
+  | "stable"
+  | "insufficient_evidence"
+  | "alerting"
+  | "paused"
+  | "failed";
+
+/** Operational evidence only; this does not establish comparative task improvement. */
+export function evaluateImprovementWatch(input: {
+  deadlineReached: boolean;
+  positiveSignalCount: number;
+  requiredPositiveSignals: number;
+  regressionCount: number;
+}): "watching" | "stable" | "insufficient_evidence" | "alerting" {
+  if (
+    !Number.isSafeInteger(input.requiredPositiveSignals) ||
+    input.requiredPositiveSignals <= 0 ||
+    !Number.isSafeInteger(input.positiveSignalCount) ||
+    input.positiveSignalCount < 0 ||
+    !Number.isSafeInteger(input.regressionCount) ||
+    input.regressionCount < 0
+  )
+    throw new TypeError("Improvement watches require bounded nonnegative evidence and a positive target.");
+  if (input.regressionCount > 0) return "alerting";
+  if (input.positiveSignalCount >= input.requiredPositiveSignals) return "stable";
+  return input.deadlineReached ? "insufficient_evidence" : "watching";
+}
 
 export type ImprovementActorType = "system" | "operator" | "service" | "approval";
 
@@ -414,6 +442,13 @@ export interface ImprovementEvaluationRecord {
   completedByActorType?: ImprovementActorType;
 }
 
+/** The old built-in evaluator also checked eligibility without running a candidate. */
+export function isStaticImprovementEvaluation(
+  evaluation: Pick<ImprovementEvaluationRecord, "evaluatorKind" | "evaluatorVersion">,
+): boolean {
+  return evaluation.evaluatorKind === "static_preflight" || evaluation.evaluatorVersion === "improvement-ledger-v1.1.1";
+}
+
 export interface ImprovementActivationRecord {
   activationId: string;
   candidateId: string;
@@ -429,6 +464,8 @@ export interface ImprovementActivationRecord {
   watchEndsAt?: string;
   watchSignalTarget: number;
   watchSignalCount: number;
+  positiveSignalCount?: number;
+  watchEvidenceStatus?: "observed" | "pending" | "legacy_unverified" | "partial";
   regressionCount: number;
   createdAt: string;
   updatedAt: string;

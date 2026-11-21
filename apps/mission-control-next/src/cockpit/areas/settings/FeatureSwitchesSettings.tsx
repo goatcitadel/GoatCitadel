@@ -1,3 +1,4 @@
+import { FeaturePreferenceReviewControl } from "./FeaturePreferenceReviewControl";
 import { useEffect } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import type { ChangePlanRecord } from "@goatcitadel/contracts";
@@ -5,6 +6,7 @@ import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { Switch } from "../../ui/Switch";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useGovernedRuntimeSetting } from "./use-governed-runtime-setting";
@@ -22,7 +24,7 @@ import {
 
 const onOff = (value: boolean) => (value ? "On" : "Off");
 
-/** The Features section of Settings › Advanced: one governed switch per feature that ships turned off. */
+/** The Features section of Settings › Advanced: installation-wide features and governed upgrade decisions. */
 export function FeatureSwitchesSettings() {
   const { hash } = useCockpitRoute();
   // A "Turn it on" link from another screen arrives at the top of Advanced; bring its switch into view. The sections
@@ -66,9 +68,9 @@ export function FeatureSwitchesSettings() {
             Features
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
-            These features are off unless you turn them on here, and each row shows its current state. Each switch turns
-            one on or off for the whole installation. Saving one is a Settings change, so it waits for your approval
-            unless you&apos;ve chosen to apply Settings changes without asking.
+            Each row shows the feature's current state. Each switch turns one on or off for the whole installation.
+            Saving one is a Settings change, so it waits for your approval unless you&apos;ve chosen to apply Settings
+            changes without asking.
           </p>
         </div>
       </div>
@@ -77,6 +79,9 @@ export function FeatureSwitchesSettings() {
         <Button size="sm" className="mt-3" disabled={settings.isFetching} onClick={() => void settings.refetch()}>
           Try again
         </Button>
+      ) : null}
+      {settings.data?.featurePreferences?.upgradeReview.length ? (
+        <FeaturePreferenceReviewControl settings={settings} flags={settings.data.featurePreferences.upgradeReview} />
       ) : null}
       {FEATURE_SWITCHES.map((definition) => (
         <FeatureSwitchControl key={definition.flag} definition={definition} settings={settings} />
@@ -128,7 +133,18 @@ export function FeatureSwitchControl({
       <p id={descriptionId} className="mt-1 text-sm text-fg-secondary">
         {description}
       </p>
-      <p className="mt-1 text-xs text-fg-muted">Used in: {usedIn}</p>
+      <p className="mt-1 text-xs text-fg-muted">
+        Used in: {usedIn}
+        {definition.setup ? (
+          <>
+            {" "}
+            ·{" "}
+            <NativeOwnerLink href={definition.setup.href} scope={flag}>
+              {definition.setup.label}
+            </NativeOwnerLink>
+          </>
+        ) : null}
+      </p>
       <GovernedSettingLoadState
         governed={governed}
         loading="Loading features…"
@@ -137,7 +153,10 @@ export function FeatureSwitchControl({
       />
       {ready ? (
         <>
-          <p className="mt-3 text-xs text-fg-muted">Current: {onOff(current)}</p>
+          <p className="mt-3 text-xs text-fg-muted">
+            Current:{" "}
+            {current && query.data?.featurePreferences?.sources[flag] === "default" ? "On by default" : onOff(current)}
+          </p>
           <div className="mt-3">
             <Switch
               checked={draft.value}

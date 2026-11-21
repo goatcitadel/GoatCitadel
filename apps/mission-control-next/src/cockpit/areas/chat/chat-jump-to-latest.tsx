@@ -49,12 +49,14 @@ export function JumpToLatestButton({
   onJump: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onJump}
-      className="absolute bottom-3 right-3 z-10 rounded-md border border-accent bg-overlay px-3 py-2 text-sm text-accent shadow-overlay"
-    >
-      {jumpLabel(waiting, unread)}
-    </button>
+    <div className="flex shrink-0 justify-end border-t border-line-subtle px-3 py-1">
+      <button
+        type="button"
+        onClick={onJump}
+        className="absolute bottom-3 right-3 z-10 rounded-md border border-accent bg-overlay px-3 py-2 text-sm text-accent shadow-overlay"
+      >
+        {jumpLabel(waiting, unread)}
+      </button>
+    </div>
   );
 }

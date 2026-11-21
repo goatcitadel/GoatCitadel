@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
+  canonicalJsonString,
   ConflictError,
   NotFoundError,
-  PayloadTooLargeError,
   ValidationError,
   isCronRunTerminalStatus,
   type CronJobAction,
@@ -17,11 +17,27 @@ import {
   type CronRunTerminalStatus,
   type CronRunTrigger,
 } from "@goatcitadel/contracts";
+import {
+  isPlainRecord,
+  normalizeAction,
+  normalizeActiveStatus,
+  normalizeBoundedJson,
+  normalizeCronEventSource,
+  normalizeInteger,
+  normalizeLimit,
+  normalizeOptional,
+  normalizePhase,
+  normalizeReconciliationStatus,
+  normalizeRequired,
+  normalizeStatus,
+  normalizeTerminalStatus,
+  normalizeTimestamp,
+  normalizeTrigger,
+  parseActionConfig,
+  parseStoredObject,
+} from "./cron-run-validation.js";
 import type { DatabaseClient } from "./db.js";
 
-const CRON_RUN_MAX_JSON_BYTES = 64 * 1024;
-const CRON_RUN_MAX_JSON_DEPTH = 24;
-const CRON_RUN_MAX_JSON_KEYS = 512;
 const ACTIVE_STATUSES = "'admitting', 'admitted', 'running', 'waiting'";
 
 interface CronRunRow {
@@ -140,6 +156,7 @@ export class CronRunRepository {
           updated_at = @now
       WHERE job_id = @jobId
         AND execution_generation = @expectedGeneration
+        AND revision = @expectedRevision
         AND active_run_id IS NULL
     `);
     this.insertStmt = db.prepare(`
@@ -300,17 +317,49 @@ export class CronRunRepository {
     const trigger = normalizeTrigger(input.trigger ?? "scheduled_due");
     const runId = normalizeOptional(input.runId, "runId") ?? randomUUID();
     const normalizedNow = normalizeTimestamp(now ?? this.readDatabaseNow(), "now");
+    const eventSource = normalizeCronEventSource(input.eventSource);
+    const operatorAction = input.operatorAction;
+    if (
+      operatorAction &&
+      (!operatorAction.actorId?.trim() ||
+        operatorAction.actorId.length > 256 ||
+        !/^[A-Za-z0-9_-]{16,100}$/u.test(operatorAction.operationId) ||
+        !Number.isSafeInteger(operatorAction.expectedExecutionGeneration) ||
+        operatorAction.expectedExecutionGeneration < 0 ||
+        operatorAction.expectedExecutionGeneration !== input.expectedExecutionGeneration ||
+        input.expectedJobRevision === undefined ||
+        trigger !== "manual" ||
+        eventSource)
+    )
+      throw new ConflictError({ message: "Invalid reviewed operator occurrence identity." });
+    const replay = (duplicate: CronRunRecord): CronRunBeginResult => {
+      if (
+        canonicalJsonString(duplicate.actionSnapshot.operatorAction ?? null) !==
+          canonicalJsonString(operatorAction ?? null) ||
+        (operatorAction && duplicate.jobRevision !== input.expectedJobRevision) ||
+        (input.expectedExecutionGeneration !== undefined &&
+          duplicate.executionGeneration !== input.expectedExecutionGeneration + 1)
+      )
+        throw new ConflictError({ message: "This run identity belongs to a different reviewed execution." });
+      if (
+        canonicalJsonString(duplicate.actionSnapshot.eventSource ?? null) !==
+          canonicalJsonString(eventSource ?? null) ||
+        (eventSource && duplicate.jobRevision !== input.expectedJobRevision)
+      )
+        throw new ConflictError({
+          message: "This event identity was already admitted with different bytes or a different reviewed job.",
+        });
+      if (duplicate.scheduledFor !== scheduledFor || duplicate.trigger !== trigger) {
+        throw new ConflictError({
+          message: "Cron admission key was reused for a different scheduled occurrence.",
+          details: { jobId, admissionKey, runId: duplicate.runId },
+        });
+      }
+      return { outcome: "duplicate", run: duplicate };
+    };
     return this.db.transaction("immediate", () => {
       const duplicate = this.getByAdmission(jobId, admissionKey);
-      if (duplicate) {
-        if (duplicate.scheduledFor !== scheduledFor || duplicate.trigger !== trigger) {
-          throw new ConflictError({
-            message: "Cron admission key was reused for a different scheduled occurrence.",
-            details: { jobId, admissionKey, runId: duplicate.runId },
-          });
-        }
-        return { outcome: "duplicate", run: duplicate };
-      }
+      if (duplicate) return replay(duplicate);
       const runIdCollision = this.get(runId);
       if (runIdCollision) {
         throw new ConflictError({
@@ -320,7 +369,42 @@ export class CronRunRepository {
         });
       }
 
-      const job = this.readJob(jobId);
+      const job = this.readJob(jobId, true);
+      // Another PostgreSQL transaction may have committed this exact occurrence
+      // while this worker waited for the job lock. Re-read its idempotency owner
+      // before interpreting the newly populated active-run pointer as overlap.
+      const raced = this.getByAdmission(jobId, admissionKey);
+      if (raced) return replay(raced);
+      const revision = normalizeInteger(job.revision, "revision", 1);
+      if (
+        input.expectedJobRevision !== undefined &&
+        normalizeInteger(input.expectedJobRevision, "expectedJobRevision", 1) !== revision
+      )
+        throw new ConflictError({ message: "This schedule changed after review. Refresh before running it." });
+      const expectedGeneration = normalizeInteger(job.execution_generation, "execution_generation", 0);
+      if (
+        input.expectedExecutionGeneration !== undefined &&
+        normalizeInteger(input.expectedExecutionGeneration, "expectedExecutionGeneration", 0) !== expectedGeneration
+      )
+        throw new ConflictError({
+          message:
+            "Another occurrence was admitted after this execution was reviewed. Refresh before requesting new work.",
+        });
+      const actionConfig = parseActionConfig(job.action_config_json);
+      if (eventSource) {
+        const agentTurn = isPlainRecord(actionConfig?.agentTurn) ? actionConfig.agentTurn : undefined;
+        const config = isPlainRecord(agentTurn?.eventWake) ? agentTurn.eventWake : undefined;
+        if (
+          job.action !== "agent_turn" ||
+          input.expectedJobRevision === undefined ||
+          !config ||
+          config.eventType !== eventSource.eventType ||
+          config.workspaceId !== eventSource.workspaceId ||
+          config.hookId !== eventSource.sourceConnectionId ||
+          admissionKey !== `event:${eventSource.eventId}`
+        )
+          throw new ConflictError({ message: "The event no longer matches this reviewed job's trigger." });
+      }
       if (job.active_run_id) {
         const activeRun = this.get(job.active_run_id);
         if (!activeRun) {
@@ -332,13 +416,15 @@ export class CronRunRepository {
         return { outcome: "blocked", activeRun };
       }
 
-      const expectedGeneration = normalizeInteger(job.execution_generation, "execution_generation", 0);
       const historicalGeneration = this.readHistoricalMaxGeneration(jobId);
+      if (input.expectedExecutionGeneration !== undefined && historicalGeneration > expectedGeneration)
+        throw new ConflictError({ message: "This schedule's execution history requires reconciliation." });
       const executionGeneration = Math.max(expectedGeneration, historicalGeneration) + 1;
       const reserved = this.reserveJobGenerationStmt.run({
         jobId,
         runId,
         expectedGeneration,
+        expectedRevision: revision,
         executionGeneration,
         now: normalizedNow,
       });
@@ -357,7 +443,9 @@ export class CronRunRepository {
       const actionSnapshotJson = normalizeBoundedJson(
         {
           action: job.action,
-          actionConfig: parseActionConfig(job.action_config_json),
+          actionConfig,
+          ...(operatorAction ? { operatorAction: { ...operatorAction } } : {}),
+          ...(eventSource ? { eventSource } : {}),
           // Admission-time scope; omitted for global jobs so their snapshots are unchanged.
           ...(typeof job.citadel_id === "string" && job.citadel_id ? { citadelId: job.citadel_id } : {}),
         },
@@ -652,8 +740,14 @@ export class CronRunRepository {
     });
   }
 
-  private readJob(jobId: string): CronJobExecutionRow {
-    const row = this.getJobStmt.get(jobId) as CronJobExecutionRow | undefined;
+  private readJob(jobId: string, lock = false): CronJobExecutionRow {
+    const row = (
+      lock && this.db.dialect === "postgres"
+        ? this.db.prepare(
+            "SELECT job_id,revision,action,action_config_json,execution_generation,active_run_id,citadel_id FROM cron_jobs WHERE job_id=? FOR UPDATE",
+          )
+        : this.getJobStmt
+    ).get(jobId) as CronJobExecutionRow | undefined;
     if (!row) {
       throw new NotFoundError({ entity: "Cron job", id: jobId });
     }
@@ -848,186 +942,4 @@ function staleGenerationError(token: CronRunExecutionToken): ConflictError {
       executionGeneration: token.executionGeneration,
     },
   });
-}
-
-function parseActionConfig(value: string | null): Record<string, unknown> | null {
-  if (value === null) {
-    return null;
-  }
-  return parseStoredObject(value, "action_config_json", "cron_job");
-}
-
-function parseStoredObject(value: string, field: string, id: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch (error) {
-    throw new TypeError(`${field} for ${id} is invalid JSON`, { cause: error });
-  }
-  if (!isPlainRecord(parsed)) {
-    throw new TypeError(`${field} for ${id} must contain a JSON object`);
-  }
-  return parsed;
-}
-
-function normalizeBoundedJson(value: Record<string, unknown>, field: string): string {
-  const seen = new WeakSet<object>();
-  let keyCount = 0;
-  const visit = (item: unknown, depth: number): unknown => {
-    if (depth > CRON_RUN_MAX_JSON_DEPTH) {
-      throw new PayloadTooLargeError(`${field} exceeds the maximum nesting depth.`);
-    }
-    if (item === null || typeof item === "string" || typeof item === "boolean") return item;
-    if (typeof item === "number") {
-      if (!Number.isFinite(item)) throw new ValidationError({ field, message: `${field} numbers must be finite.` });
-      return item;
-    }
-    if (typeof item !== "object") {
-      throw new ValidationError({ field, message: `${field} must contain only JSON values.` });
-    }
-    if (seen.has(item)) throw new ValidationError({ field, message: `${field} must not contain cycles.` });
-    seen.add(item);
-    try {
-      if (Array.isArray(item)) return item.map((entry) => visit(entry, depth + 1));
-      if (!isPlainRecord(item)) throw new ValidationError({ field, message: `${field} objects must be plain.` });
-      const normalized: Record<string, unknown> = {};
-      for (const key of Object.keys(item).sort()) {
-        keyCount += 1;
-        if (keyCount > CRON_RUN_MAX_JSON_KEYS) throw new PayloadTooLargeError(`${field} contains too many keys.`);
-        normalized[key] = visit(item[key], depth + 1);
-      }
-      return normalized;
-    } finally {
-      seen.delete(item);
-    }
-  };
-  const json = JSON.stringify(visit(value, 0));
-  const bytes = Buffer.byteLength(json, "utf8");
-  if (bytes > CRON_RUN_MAX_JSON_BYTES) {
-    throw new PayloadTooLargeError(`${field} is ${bytes} bytes; maximum is ${CRON_RUN_MAX_JSON_BYTES}.`, {
-      field,
-      bytes,
-      maxBytes: CRON_RUN_MAX_JSON_BYTES,
-    });
-  }
-  return json;
-}
-
-function normalizeTrigger(value: unknown): CronRunTrigger {
-  if (value !== "scheduled_due" && value !== "manual" && value !== "forced") {
-    throw new ValidationError({ field: "trigger" });
-  }
-  return value;
-}
-
-function normalizeStatus(value: unknown): CronRunStatus {
-  if (
-    value === "admitting" ||
-    value === "admitted" ||
-    value === "running" ||
-    value === "waiting" ||
-    value === "completed" ||
-    value === "failed" ||
-    value === "cancelled" ||
-    value === "dead_lettered" ||
-    value === "manual_reconciliation_required"
-  ) {
-    return value;
-  }
-  throw new TypeError(`cron_runs status is not supported: ${String(value)}`);
-}
-
-function normalizeActiveStatus(value: unknown): CronRunActiveStatus {
-  const status = normalizeStatus(value);
-  if (!isCronRunTerminalStatus(status)) {
-    return status;
-  }
-  throw new ValidationError({ field: "status", message: "Active cron run status is required." });
-}
-
-function normalizeTerminalStatus(value: unknown): CronRunTerminalStatus {
-  const status = normalizeStatus(value);
-  if (isCronRunTerminalStatus(status)) {
-    return status;
-  }
-  throw new ValidationError({ field: "status", message: "Terminal cron run status is required." });
-}
-
-function normalizeReconciliationStatus(
-  value: unknown,
-): Exclude<CronRunTerminalStatus, "manual_reconciliation_required"> {
-  const status = normalizeTerminalStatus(value);
-  if (status !== "manual_reconciliation_required") {
-    return status;
-  }
-  throw new ValidationError({ field: "status", message: "Reconciliation must resolve to a final terminal status." });
-}
-
-function normalizePhase(value: unknown): CronRunPhase {
-  if (
-    value === "child_admission" ||
-    value === "chat_execution" ||
-    value === "autonomous_post_commit" ||
-    value === "delivery" ||
-    value === "settlement"
-  ) {
-    return value;
-  }
-  throw new ValidationError({ field: "phase", message: "Cron run phase is not supported." });
-}
-
-function normalizeAction(value: unknown): CronJobAction {
-  if (
-    value === "task" ||
-    value === "improvement" ||
-    value === "curator" ||
-    value === "backup" ||
-    value === "memory_flush" ||
-    value === "memory_consolidation" ||
-    value === "cost_report" ||
-    value === "update_review" ||
-    value === "watchdog" ||
-    value === "no_agent" ||
-    value === "agent_turn"
-  ) {
-    return value;
-  }
-  throw new TypeError(`cron_runs action is not supported: ${String(value)}`);
-}
-
-function normalizeRequired(value: string, field: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new ValidationError({ code: "FIELD_REQUIRED", field });
-  return normalized;
-}
-
-function normalizeOptional(value: string | undefined, field: string): string | undefined {
-  return value === undefined ? undefined : normalizeRequired(value, field);
-}
-
-function normalizeTimestamp(value: string, field: string): string {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) throw new ValidationError({ field, message: `${field} must be a valid timestamp.` });
-  return new Date(timestamp).toISOString();
-}
-
-function normalizeInteger(value: number | string, field: string, minimum: number): number {
-  const normalized = Number(value);
-  if (!Number.isSafeInteger(normalized) || normalized < minimum) {
-    throw new TypeError(`${field} must be a safe integer greater than or equal to ${minimum}.`);
-  }
-  return normalized;
-}
-
-function normalizeLimit(limit: number): number {
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
-    throw new ValidationError({ field: "limit", message: "limit must be an integer from 1 through 1000." });
-  }
-  return limit;
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
 }

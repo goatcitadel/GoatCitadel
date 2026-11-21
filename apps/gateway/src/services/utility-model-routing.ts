@@ -99,7 +99,7 @@ export function resolveBackgroundJobModelDefaults(runtime: ModelRoutingRuntime):
 }
 
 export interface BackgroundJobModelResolverDeps {
-  getUtilityModelOverride(): Promise<UtilityModelOverride | undefined>;
+  resolvePreferredModel(): Promise<UtilityModelOverride | undefined>;
   /**
    * Runs any probe-backed readiness check so "not checked yet" is not read as "not ready". It never runs
    * for the Claude Code CLI, which background jobs skip before probing. The implementation records bounded evidence for a check that throws; the job is skipped either way.
@@ -117,9 +117,9 @@ export interface BackgroundJobModelResolverDeps {
 export async function resolveBackgroundJobModel(
   deps: BackgroundJobModelResolverDeps,
 ): Promise<UtilityModelOverride | undefined> {
-  const override = await deps.getUtilityModelOverride();
-  if (override) {
-    return override;
+  const preferred = await deps.resolvePreferredModel();
+  if (preferred) {
+    return preferred;
   }
   // Read twice on purpose: the provider's style before the probe, its readiness only after it.
   const readRuntime = () => deps.getRuntimeConfig();

@@ -28,3 +28,12 @@ export function ChatClampedUserMessage({ text, children }: { text: string; child
     </>
   );
 }
+const TURN_NAME_WORDS = 8;
+
+/** Names a turn by its position and the start of its prompt so the transcript's articles are distinguishable. */
+export function turnAccessibleName(prompt: string, position?: number): string {
+  const words = prompt.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  const start = words.slice(0, TURN_NAME_WORDS).join(" ") + (words.length > TURN_NAME_WORDS ? "…" : "");
+  const label = position ? `Message ${position}` : "Message";
+  return start ? `${label}: ${start}` : label;
+}

@@ -221,7 +221,11 @@ export function nextGuidedRun(
 }
 
 /** "Fri 17 Oct, 09:00" on the wall clock in `zone`. */
-export function formatInZone(instant: Date, zone: string): string {
+export function formatInZone(
+  instant: Date,
+  zone: string,
+  options: Pick<Intl.DateTimeFormatOptions, "year"> = {},
+): string {
   return new Intl.DateTimeFormat(undefined, {
     timeZone: zone,
     weekday: "short",
@@ -230,5 +234,6 @@ export function formatInZone(instant: Date, zone: string): string {
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
+    ...options,
   }).format(instant);
 }

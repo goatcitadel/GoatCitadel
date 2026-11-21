@@ -182,6 +182,9 @@ export interface ToolExecutorRuntimeHooks {
    */
   acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease;
   prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch;
+  searchMemory?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
+  prepareMemoryWrite?: (request: ToolInvokeRequest) => Promise<NonNullable<ToolInvokeRequest["memoryWriteBinding"]>>;
+  writeMemory?: import("./tool-executor/knowledge-executor.js").KnowledgeExecutorDeps["writeMemory"];
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void | Promise<void>;
   /** Resolve protected official-search credentials at execution time, before environment fallback. */
   resolveCredential?: ResolveOfficialSearchCredential;
@@ -258,6 +261,7 @@ export interface ToolExecutorRuntimeHooks {
   runBrowserErrand?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
   /** Gateway-owned canonical status projection used by the model-safe `session.status` tool. */
   getChatSessionStatus?: (sessionId: string) => Promise<ChatSessionStatusModelProjection>;
+  previewChatReminder?: (request: ToolInvokeRequest) => Promise<import("@goatcitadel/contracts").ChatReminderPreview>;
   assertOptionalUserInputAvailable?: () => Promise<void>;
   /** Gateway-owned governed attention request; operator-authored rules select external targets. */
   requestNotification?: (request: ToolInvokeRequest, input: NotifyRequest) => Promise<Record<string, unknown>>;
@@ -359,6 +363,8 @@ const executeKnowledgeFamily = (
   runtimeHooks: ToolExecutorRuntimeHooks,
 ) =>
   executeKnowledgeTool(request, config, storage, {
+    ...(runtimeHooks.searchMemory ? { searchMemory: runtimeHooks.searchMemory } : {}),
+    ...(runtimeHooks.writeMemory ? { writeMemory: runtimeHooks.writeMemory } : {}),
     ...(runtimeHooks.acquireLocalEmbeddingLease
       ? { acquireLocalEmbeddingLease: runtimeHooks.acquireLocalEmbeddingLease }
       : {}),
@@ -581,6 +587,9 @@ export async function executeTool(
       if (!runtimeHooks.readSkill) throw new Error("Governed skill reading is unavailable in this runtime.");
       return finalizeToolResult(await runtimeHooks.readSkill(request));
     }
+    case "chat.reminder.preview":
+      if (!runtimeHooks.previewChatReminder) throw new Error("Chat reminder review is unavailable.");
+      return finalizeToolResult({ reminderPreview: await runtimeHooks.previewChatReminder(request) });
     case "session.status":
       return finalizeToolResult(
         runtimeHooks.getChatSessionStatus

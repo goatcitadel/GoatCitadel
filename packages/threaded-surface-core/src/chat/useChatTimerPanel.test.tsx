@@ -6,6 +6,7 @@ import { useChatTimerPanel } from "./useChatTimerPanel";
 const api = vi.hoisted(() => ({
   fetchChatTimers: vi.fn(),
   fetchNotificationRules: vi.fn(),
+  fetchNotificationTargets: vi.fn(),
   createChatTimer: vi.fn(),
   cancelChatTimer: vi.fn(),
 }));
@@ -41,6 +42,7 @@ const timer = (sessionId = "one", extra = {}) => ({
   timezone: "UTC",
   message: "Reminder",
   cancelOnNextReply: false,
+  notificationRuleId: null,
   status: "active",
   createdBy: "operator",
   createdAt: "2026-09-30T00:00:00Z",
@@ -61,6 +63,7 @@ beforeEach(async () => {
   vi.resetAllMocks();
   api.fetchChatTimers.mockResolvedValue({ items: [] });
   api.fetchNotificationRules.mockResolvedValue({ items: [] });
+  api.fetchNotificationTargets.mockResolvedValue({ items: [] });
   await act(async () => {
     renderer = create(<Harness />);
   });
@@ -164,10 +167,49 @@ describe("Chat timer async ownership", () => {
     await act(async () => current.chatTimerPanel!.onCreate());
     expect(api.createChatTimer).toHaveBeenCalledWith(
       "one",
-      expect.objectContaining({ message: "Reminder", timezone: "UTC" }),
+      expect.objectContaining({ message: "Reminder", timezone: "UTC", notificationRuleId: null }),
+      expect.any(String),
     );
     expect(notice).toHaveBeenCalledOnce();
   });
+  it("retries the exact reviewed duration, destination and attempt key after a lost response", async () => {
+    const rule = {
+      workspaceId: "workspace",
+      lifecycleState: "active",
+      eventTypes: ["timer.due"],
+      targetIds: ["active"],
+    };
+    api.fetchNotificationRules.mockResolvedValue({
+      items: [
+        { ...rule, ruleId: "ready", label: "Kitchen speaker" },
+        { ...rule, ruleId: "missing", label: "Unconfigured", targetIds: ["missing"] },
+      ],
+    });
+    api.fetchNotificationTargets.mockResolvedValue({
+      items: [{ workspaceId: "workspace", lifecycleState: "active", targetId: "active" }],
+    });
+    await act(async () => current.openChatTimerPanel({ delayMs: 1_200_000, message: "" }));
+    expect(current.chatTimerPanel!.rules).toEqual([{ ruleId: "ready", label: "Kitchen speaker" }]);
+    await act(async () => {
+      current.chatTimerPanel!.onMessageChange("Tea");
+      current.chatTimerPanel!.onNotificationRuleChange("ready");
+    });
+    api.createChatTimer
+      .mockRejectedValueOnce(new Error("Connection lost"))
+      .mockImplementationOnce(async (_session, draft) => ({ item: timer("one", draft) }));
+    await act(async () => current.chatTimerPanel!.onCreate());
+    expect(current.chatTimerPanel!.open).toBe(true);
+    await act(async () => current.chatTimerPanel!.onCreate());
+    const [first, retry] = api.createChatTimer.mock.calls;
+    expect(first).toEqual([
+      "one",
+      expect.objectContaining({ message: "Tea", notificationRuleId: "ready" }),
+      expect.any(String),
+    ]);
+    expect(retry).toEqual(first);
+    expect(current.chatTimerPanel!.open).toBe(false);
+  });
+
   it("cancels only the exact active revision and refreshes its recorded outcome", async () => {
     api.fetchChatTimers.mockResolvedValueOnce({ items: [timer()] });
     api.cancelChatTimer.mockResolvedValue({ item: timer("one", { revision: 2, status: "cancelled" }) });

@@ -1,8 +1,9 @@
 import { ChatConversationStarters } from "./ChatConversationStarters";
-import { CHAT_ATTACHMENT_PROMPT_PREVIEW_CHARS, chatAttachmentPromptIsPartial } from "@goatcitadel/contracts";
-import { lazy, memo, Suspense, type RefObject } from "react";
+import { lazy, memo, type RefObject } from "react";
 import { canRetryTurn } from "@goatcitadel/mission-control-shared/components/chat/chat-display-helpers";
 import {
+  CHAT_ATTACHMENT_PROMPT_PREVIEW_CHARS,
+  chatAttachmentPromptIsPartial,
   getChatTurnRecoveryActionSummary,
   isChatTurnTerminalStatus,
   type ChatCapabilityUpgradeSuggestion,
@@ -25,8 +26,14 @@ import type {
 import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBlockers } from "./ChatBlockers";
 import { DeferredChatCapabilitySuggestionLine } from "./DeferredChatCapabilitySuggestionLine";
-import { DeferredCodeModeRequestCard, DeferredBrowserErrandCards, DeferredChatLeaf } from "./DeferredChatLeaves";
-import { ChatClampedUserMessage } from "./ChatClampedUserMessage";
+import {
+  DeferredCodeModeRequestCard,
+  DeferredBrowserErrandCards,
+  DeferredChatLeaf,
+  DeferredChatLearningDisclosure,
+  DeferredChatChangePlanReceipt,
+} from "./DeferredChatLeaves";
+import { ChatClampedUserMessage, turnAccessibleName } from "./ChatClampedUserMessage";
 import { ChatRunCard } from "./ChatRunCard";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatTranscriptNotices } from "./ChatTranscriptNotices";
@@ -34,17 +41,13 @@ import { ChatTurnDetails } from "./ChatTurnDetails";
 import { turnReadsDraft, type TurnActions } from "./use-turn-actions";
 import { useTurnSkillCapture } from "./use-turn-skill-capture";
 
-const ChatChangePlanCard = lazy(async () => ({
-  default: (await import("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard")).ChatChangePlanCard,
-}));
 const ChatContinueAction = lazy(async () => ({ default: (await import("./ChatContinueAction")).ChatContinueAction }));
 const ChatTurnFailureCard = lazy(async () => ({
   default: (await import("./ChatTurnFailureCard")).ChatTurnFailureCard,
 }));
 const ChatTurnThinking = lazy(async () => ({ default: (await import("./ChatTurnAnnotations")).ChatTurnThinking }));
 const TurnReceipt = lazy(async () => ({ default: (await import("./ChatTurnAnnotations")).TurnReceipt }));
-
-const TURN_NAME_WORDS = 8;
+const ChatReminderReview = lazy(async () => ({ default: (await import("./ChatReminderReview")).ChatReminderReview }));
 
 const RUN_DETAILS_HINT = "Use Run details under More, below this message.";
 
@@ -57,14 +60,6 @@ function recoveryHint(turn: ChatThreadTurnRecord, resendable: boolean): string {
   const recommended = turn.trace.failure?.recommendedAction;
   if (recommended) return getChatTurnRecoveryActionSummary(recommended);
   return canRetryTurn(turn) ? "Use Retry, or Run details under More, below this message." : RUN_DETAILS_HINT;
-}
-
-/** Names a turn by its position and the start of its prompt so the transcript's articles are distinguishable. */
-function turnAccessibleName(prompt: string, position?: number): string {
-  const words = prompt.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
-  const start = words.slice(0, TURN_NAME_WORDS).join(" ") + (words.length > TURN_NAME_WORDS ? "…" : "");
-  const label = position ? `Message ${position}` : "Message";
-  return start ? `${label}: ${start}` : label;
 }
 
 /**
@@ -189,7 +184,7 @@ export const Turn = memo(function Turn({
               label="Thought process"
               identity={turn.turnId}
               fallback={
-                <p role="status" className="mb-2 text-xs text-fg-muted">
+                <p className="mb-2 text-xs text-fg-muted">
                   {!assistantText && (streaming || !isChatTurnTerminalStatus(turn.trace.status))
                     ? "Thinking…"
                     : "Loading thought process…"}
@@ -303,6 +298,12 @@ export const Turn = memo(function Turn({
         />
       ) : null}
       {skillCapture.control}
+      <DeferredChatLearningDisclosure
+        turn={turn}
+        workspaceId={actions.workspaceId}
+        streaming={streaming}
+        readOnly={actions.historicalReadOnly}
+      />
     </article>
   );
 });
@@ -396,15 +397,22 @@ export function ChatTranscriptFooter({ context }: { context?: TranscriptFooterCo
         />
         <ChatTranscriptNotices notices={props.notices} selectedSessionId={props.selectedSessionId} />
         {receipt && !receipt.dismissed ? (
-          <Suspense
-            fallback={
-              <p aria-busy="true" className="min-h-24">
-                Loading change-plan receipt…
-              </p>
-            }
-          >
-            <ChatChangePlanCard {...receipt} />
-          </Suspense>
+          <DeferredChatChangePlanReceipt
+            receipt={receipt}
+            sessionId={props.selectedSessionId ?? undefined}
+            pendingApprovalId={props.pendingApproval?.approvalId}
+            draftControls={props}
+            onUpdated={props.onRefreshThread}
+          />
+        ) : null}
+        {props.onReviewReminder &&
+        !props.historicalReadOnly &&
+        latestTurn &&
+        latestTurn.trace.sessionId === props.selectedSessionId &&
+        latestTurn.toolRuns.some((run) => run.toolName === "chat.reminder.preview" && run.status === "executed") ? (
+          <DeferredChatLeaf label="Reminder review" identity={latestTurn.turnId} loadingVisible={false}>
+            <ChatReminderReview turn={latestTurn} onReview={props.onReviewReminder} />
+          </DeferredChatLeaf>
         ) : null}
         <ChatBlockers key={props.selectedSessionId} props={props} latestTurn={latestTurn} />
         {props.streamError && latestTurn?.trace.status !== "failed" && latestTurn?.trace.status !== "partial" ? (

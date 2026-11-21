@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { evaluateComputerUseSafety, evaluateDeploymentProfileToolAccess } from "../browser-runtime-guardrails.js";
 import { projectPublicSecretValue } from "../services/public-secret-projection.js";
+import { sendRouteError } from "./_error-handler.js";
 
 const bodySchema = z.object({
   toolName: z.string().min(1),
@@ -114,15 +115,19 @@ export const toolsInvokeRoute: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: (error as Error).message });
     }
 
-    const result = await fastify.services.toolsInvoke.invokeTool({
-      ...requestInput,
-      consentContext: {
-        ...(requestInput.consentContext ?? {}),
-        operatorId: request.authActorId,
-        source: requestInput.consentContext?.source ?? "ui",
-      },
-      policyContext,
-    });
-    return reply.send(projectPublicSecretValue(result));
+    try {
+      const result = await fastify.services.toolsInvoke.invokeTool({
+        ...requestInput,
+        consentContext: {
+          ...(requestInput.consentContext ?? {}),
+          operatorId: request.authActorId,
+          source: requestInput.consentContext?.source ?? "ui",
+        },
+        policyContext,
+      });
+      return reply.send(projectPublicSecretValue(result));
+    } catch (error) {
+      return sendRouteError(reply, error, request.log);
+    }
   });
 };

@@ -18,9 +18,7 @@ export function composeDistilledContext(input: ComposeContextInput): {
     sections.push(`Summary:\n${input.payload.summary.trim()}`);
   }
   if (input.payload.facts.length > 0) {
-    const facts = input.payload.facts
-      .map((fact) => `- ${fact.text} [${fact.citationIds.join(", ")}]`)
-      .join("\n");
+    const facts = input.payload.facts.map((fact) => `- ${fact.text} [${fact.citationIds.join(", ")}]`).join("\n");
     sections.push(`Facts:\n${facts}`);
   }
   if (input.payload.risks.length > 0) {
@@ -61,6 +59,7 @@ export function composeFallbackContext(
       candidateId: candidate.candidateId,
       sourceType: candidate.sourceType,
       sourceRef: candidate.sourceRef,
+      ...(candidate.sourceHash ? { sourceHash: candidate.sourceHash } : {}),
       snippet: candidate.text.slice(0, 180),
       score: Number(candidate.rankScore.toFixed(3)),
     });

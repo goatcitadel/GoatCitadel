@@ -5,6 +5,7 @@ import {
   inferProviderForModelId,
   providerAllowsForeignModelIds,
   providerRecognizesModelId,
+  type ChatSendMessageRequest,
   type RoutingDecisionSnapshot,
   type RoutingPreflightRequest,
   type RoutingPreflightResult,
@@ -243,6 +244,44 @@ function classifyRuntime(provider: RuntimeProvider | undefined): RoutingPrefligh
     return "unknown";
   }
   return isLocalChatProviderUrl(provider.baseUrl) ? "local" : "cloud";
+}
+
+export function projectChatSendRoutingInput(request: ChatSendMessageRequest): RoutingPreflightRequest {
+  const routeDecision = request.routeDecision;
+  const replayManualSelection = routeDecision?.selectionSource === "manual";
+  const replaySessionSelection = routeDecision?.selectionSource === "session";
+  const routePrefsOverride = replaySessionSelection
+    ? {
+        ...(request.prefsOverride ?? {}),
+        providerId: routeDecision?.requestedProviderId,
+        model: routeDecision?.requestedModel,
+      }
+    : request.prefsOverride;
+  return {
+    action: "send",
+    content: request.content,
+    providerId: routeDecision
+      ? replayManualSelection
+        ? routeDecision.requestedProviderId
+        : undefined
+      : request.providerId,
+    model: routeDecision ? (replayManualSelection ? routeDecision.requestedModel : undefined) : request.model,
+    mode: request.mode,
+    webMode: request.webMode,
+    memoryMode: request.memoryMode,
+    thinkingLevel: request.thinkingLevel,
+    speedMode: request.speedMode,
+    subagentPolicy: request.subagentPolicy,
+    prefsOverride: routePrefsOverride,
+    permissionProfileId: request.permissionProfileId,
+    localOperatorOverrideId: request.localOperatorOverrideId,
+    policyRunId: request.policyRunId,
+    policyTaskId: request.policyTaskId,
+    fullWebAccess: request.fullWebAccess,
+    operatorId: request.operatorId,
+    authActorId: request.authActorId,
+    authActorSource: request.authActorSource,
+  };
 }
 
 export async function resolveChatRouteDescriptor(

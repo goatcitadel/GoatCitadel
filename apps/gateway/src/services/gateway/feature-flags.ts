@@ -1,204 +1,162 @@
+import { createHash } from "node:crypto";
+import {
+  CHANGE_PLAN_RUNTIME_FEATURE_FLAGS,
+  LEGACY_FALSE_FEATURE_FLAGS,
+  SHIPPED_FEATURE_CONTROLS,
+  SHIPPED_FEATURE_FLAGS,
+  ValidationError,
+  isShippedFeatureFlag,
+  type FeaturePreferenceMetadata,
+  type FeaturePreferenceReview,
+  type ShippedFeatureFlag,
+} from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./runtime-settings.js";
 
 export type GatewayFeatureFlags = RuntimeSettings["features"];
+export type StoredFeatureFlags = Partial<GatewayFeatureFlags> & { reviewed?: ShippedFeatureFlag[] };
+
+/** Read earlier row formats without promoting removed fields into a config generation. */
+export function readStoredFeatureFlags(raw: StoredFeatureFlags | undefined): StoredFeatureFlags {
+  const flags: StoredFeatureFlags = {};
+  for (const flag of CHANGE_PLAN_RUNTIME_FEATURE_FLAGS) {
+    const value = raw?.[flag];
+    if (typeof value === "boolean") flags[flag] = value;
+  }
+  if (Array.isArray(raw?.reviewed)) {
+    const reviewed = raw.reviewed.filter((flag) => typeof flag === "string" && isShippedFeatureFlag(flag));
+    if (reviewed.length) flags.reviewed = [...new Set(reviewed)];
+  }
+  return flags;
+}
+
+/** Policy and profile inputs used to resolve preferences against an explicit stored snapshot. */
+interface FeaturePreferenceSources {
+  profile: Partial<GatewayFeatureFlags>;
+  environment: Partial<GatewayFeatureFlags>;
+  capabilities?: Record<string, unknown> & {
+    codeModeSandbox?: { bestEffortHostEnabled?: boolean; required?: boolean };
+  };
+  sandboxRequired?: boolean;
+  previousOperatorChoices?: Partial<Record<ShippedFeatureFlag, boolean>>;
+}
+
+/** Separately retains the configured canonical snapshot for Gateway startup and recovery. */
+export interface FeatureConfigSources extends FeaturePreferenceSources {
+  canonicalStore?: StoredFeatureFlags;
+}
+
+export function resolveGatewayFeatureFlags(
+  stored: Partial<GatewayFeatureFlags> | undefined,
+  fromConfig: Partial<GatewayFeatureFlags>,
+): GatewayFeatureFlags {
+  return Object.fromEntries(
+    CHANGE_PLAN_RUNTIME_FEATURE_FLAGS.map((flag) => [
+      flag,
+      flag === "durableKernelV1Enabled" || (stored?.[flag] ?? fromConfig[flag] ?? isShippedFeatureFlag(flag)),
+    ]),
+  ) as unknown as GatewayFeatureFlags;
+}
 
 export function buildUpdatedFeatureFlags(
   current: GatewayFeatureFlags,
   patch: Partial<GatewayFeatureFlags>,
 ): GatewayFeatureFlags {
-  return {
-    durableKernelV1Enabled: true,
-    replayOverridesV1Enabled: patch.replayOverridesV1Enabled ?? current.replayOverridesV1Enabled,
-    memoryLifecycleAdminV1Enabled: patch.memoryLifecycleAdminV1Enabled ?? current.memoryLifecycleAdminV1Enabled,
-    memoryLifecycleAutoForgetEnabled:
-      patch.memoryLifecycleAutoForgetEnabled ?? current.memoryLifecycleAutoForgetEnabled,
-    memoryMaintenanceV1Enabled: patch.memoryMaintenanceV1Enabled ?? current.memoryMaintenanceV1Enabled,
-    connectorDiagnosticsV1Enabled: patch.connectorDiagnosticsV1Enabled ?? current.connectorDiagnosticsV1Enabled,
-    computerUseGuardrailsV1Enabled: patch.computerUseGuardrailsV1Enabled ?? current.computerUseGuardrailsV1Enabled,
-    cronReviewQueueV1Enabled: patch.cronReviewQueueV1Enabled ?? current.cronReviewQueueV1Enabled,
-    replayRegressionV1Enabled: patch.replayRegressionV1Enabled ?? current.replayRegressionV1Enabled,
-    codeModeV1Enabled: patch.codeModeV1Enabled ?? current.codeModeV1Enabled,
-    codeModeHostSandboxEnabled: patch.codeModeHostSandboxEnabled ?? current.codeModeHostSandboxEnabled ?? false,
-    improvementLedgerV1Enabled: patch.improvementLedgerV1Enabled ?? current.improvementLedgerV1Enabled,
-    improvementActivationV1Enabled: patch.improvementActivationV1Enabled ?? current.improvementActivationV1Enabled,
-    promptRetuneCampaignV1Enabled: patch.promptRetuneCampaignV1Enabled ?? current.promptRetuneCampaignV1Enabled,
-    structuredReviewV2Enabled: patch.structuredReviewV2Enabled ?? current.structuredReviewV2Enabled,
-    delegationScopeExpansionV1Enabled:
-      patch.delegationScopeExpansionV1Enabled ?? current.delegationScopeExpansionV1Enabled,
-    engineeringLearningsV1Enabled: patch.engineeringLearningsV1Enabled ?? current.engineeringLearningsV1Enabled,
-    // Optional flags must be carried through: updateFeatureFlags does a full
-    // system_settings write, so omitting them would silently wipe stored values.
-    coworkRuntimeQualityV1Disabled: patch.coworkRuntimeQualityV1Disabled ?? current.coworkRuntimeQualityV1Disabled,
-    orchestrationFinalStreamingV1Disabled:
-      patch.orchestrationFinalStreamingV1Disabled ?? current.orchestrationFinalStreamingV1Disabled,
-    autonomyV1Disabled: patch.autonomyV1Disabled ?? current.autonomyV1Disabled,
-    chatThinkingStreamV1Enabled: patch.chatThinkingStreamV1Enabled ?? current.chatThinkingStreamV1Enabled,
-    chatContextBudgetVisibilityV1Enabled:
-      patch.chatContextBudgetVisibilityV1Enabled ?? current.chatContextBudgetVisibilityV1Enabled,
-    chatAsyncClarificationV1Enabled: patch.chatAsyncClarificationV1Enabled ?? current.chatAsyncClarificationV1Enabled,
-    unifiedComposerPaletteV1Enabled: patch.unifiedComposerPaletteV1Enabled ?? current.unifiedComposerPaletteV1Enabled,
-    attachedContextToolsV1Enabled: patch.attachedContextToolsV1Enabled ?? current.attachedContextToolsV1Enabled,
-    chatSessionStatusV1Enabled: patch.chatSessionStatusV1Enabled ?? current.chatSessionStatusV1Enabled,
-    conversationForksV1Enabled: patch.conversationForksV1Enabled ?? current.conversationForksV1Enabled,
-    notificationRoutingV1Enabled: patch.notificationRoutingV1Enabled ?? current.notificationRoutingV1Enabled,
-    chatTimersV1Enabled: patch.chatTimersV1Enabled ?? current.chatTimersV1Enabled,
-    typedRunVariablesV1Enabled: patch.typedRunVariablesV1Enabled ?? current.typedRunVariablesV1Enabled,
-    documentEditingV1Enabled: patch.documentEditingV1Enabled ?? current.documentEditingV1Enabled,
-    channelVoiceInboundV1Enabled: patch.channelVoiceInboundV1Enabled ?? current.channelVoiceInboundV1Enabled,
-    plannerFastPathV1Disabled: patch.plannerFastPathV1Disabled ?? current.plannerFastPathV1Disabled,
-    parallelToolExecutionV1Disabled: patch.parallelToolExecutionV1Disabled ?? current.parallelToolExecutionV1Disabled,
-    streamIdleWatchdogV1Disabled: patch.streamIdleWatchdogV1Disabled ?? current.streamIdleWatchdogV1Disabled,
-    plannerFanoutV1Disabled: patch.plannerFanoutV1Disabled ?? current.plannerFanoutV1Disabled,
-    subagentFanoutV1Disabled: patch.subagentFanoutV1Disabled ?? current.subagentFanoutV1Disabled,
-    durableChatFanoutV1Enabled: patch.durableChatFanoutV1Enabled ?? current.durableChatFanoutV1Enabled,
-    chatProviderFallbackV1Enabled:
-      patch.chatProviderFallbackV1Enabled ?? current.chatProviderFallbackV1Enabled ?? false,
-    chatSkillInstructionsV1Enabled:
-      patch.chatSkillInstructionsV1Enabled ?? current.chatSkillInstructionsV1Enabled ?? false,
-    boundedToolExposureV1Enabled: patch.boundedToolExposureV1Enabled ?? current.boundedToolExposureV1Enabled ?? false,
-    scheduledChatTurnsV1Enabled: patch.scheduledChatTurnsV1Enabled ?? current.scheduledChatTurnsV1Enabled ?? false,
-    chatExplicitContextV1Enabled: patch.chatExplicitContextV1Enabled ?? current.chatExplicitContextV1Enabled ?? false,
-    chatAutomaticFanoutV1Enabled: patch.chatAutomaticFanoutV1Enabled ?? current.chatAutomaticFanoutV1Enabled ?? false,
-    chatDelegationControlsV1Enabled:
-      patch.chatDelegationControlsV1Enabled ?? current.chatDelegationControlsV1Enabled ?? false,
-    proactiveHeartbeatTurnsV1Enabled:
-      patch.proactiveHeartbeatTurnsV1Enabled ?? current.proactiveHeartbeatTurnsV1Enabled ?? false,
-    commitmentScheduledTurnsV1Enabled:
-      patch.commitmentScheduledTurnsV1Enabled ?? current.commitmentScheduledTurnsV1Enabled ?? false,
-    chatMeshCapabilitiesV1Enabled:
-      patch.chatMeshCapabilitiesV1Enabled ?? current.chatMeshCapabilitiesV1Enabled ?? false,
-    chatRemotePlacementV1Enabled: patch.chatRemotePlacementV1Enabled ?? current.chatRemotePlacementV1Enabled ?? false,
-    chatExplicitContextBranchesV1Enabled:
-      patch.chatExplicitContextBranchesV1Enabled ?? current.chatExplicitContextBranchesV1Enabled ?? true,
-    chatWorkspaceSnapshotV1Enabled:
-      patch.chatWorkspaceSnapshotV1Enabled ?? current.chatWorkspaceSnapshotV1Enabled ?? true,
-    chatModelCouncilV1Enabled: patch.chatModelCouncilV1Enabled ?? current.chatModelCouncilV1Enabled ?? true,
-    chatWorkPassportV1Enabled: patch.chatWorkPassportV1Enabled ?? current.chatWorkPassportV1Enabled ?? true,
-    chatRequesterMcpV1Enabled: patch.chatRequesterMcpV1Enabled ?? current.chatRequesterMcpV1Enabled ?? false,
-    chatStaticMcpV1Enabled: patch.chatStaticMcpV1Enabled ?? current.chatStaticMcpV1Enabled ?? false,
-    claudeCliToolBridgeEnabled: patch.claudeCliToolBridgeEnabled ?? current.claudeCliToolBridgeEnabled ?? true,
-    claudeCliWarmContinuationEnabled:
-      patch.claudeCliWarmContinuationEnabled ?? current.claudeCliWarmContinuationEnabled ?? true,
-    browserErrandsEnabled: patch.browserErrandsEnabled ?? current.browserErrandsEnabled ?? false,
-    evolutionControlPlaneV1Enabled: patch.evolutionControlPlaneV1Enabled ?? current.evolutionControlPlaneV1Enabled,
-    settingsApprovalSkipEnabled: patch.settingsApprovalSkipEnabled ?? current.settingsApprovalSkipEnabled ?? false,
-    improvementLocalObservationV1Enabled:
-      patch.improvementLocalObservationV1Enabled ?? current.improvementLocalObservationV1Enabled,
-    improvementModelEvaluationV1Enabled:
-      patch.improvementModelEvaluationV1Enabled ?? current.improvementModelEvaluationV1Enabled,
-    productSourceEvolutionV1Enabled: patch.productSourceEvolutionV1Enabled ?? current.productSourceEvolutionV1Enabled,
-    channelVoiceReplyV1Enabled: patch.channelVoiceReplyV1Enabled ?? current.channelVoiceReplyV1Enabled,
-    memoryConsolidationV1Enabled: patch.memoryConsolidationV1Enabled ?? current.memoryConsolidationV1Enabled,
-    cronEvidenceV1Enabled: patch.cronEvidenceV1Enabled ?? current.cronEvidenceV1Enabled,
-    utilityModelRoutingV1Enabled: patch.utilityModelRoutingV1Enabled ?? current.utilityModelRoutingV1Enabled,
-    chatTurnInterruptionRecoveryV1Disabled:
-      patch.chatTurnInterruptionRecoveryV1Disabled ?? current.chatTurnInterruptionRecoveryV1Disabled,
-    externalSideEffectReplayJobsV1Disabled:
-      patch.externalSideEffectReplayJobsV1Disabled ?? current.externalSideEffectReplayJobsV1Disabled,
-  };
+  return resolveGatewayFeatureFlags(patch, current);
 }
 
-export function resolveGatewayFeatureFlags(
-  stored: Partial<GatewayFeatureFlags> | undefined,
-  fromConfig: GatewayFeatureFlags,
-): GatewayFeatureFlags {
-  return {
-    durableKernelV1Enabled: true,
-    replayOverridesV1Enabled: stored?.replayOverridesV1Enabled ?? fromConfig.replayOverridesV1Enabled,
-    memoryLifecycleAdminV1Enabled: stored?.memoryLifecycleAdminV1Enabled ?? fromConfig.memoryLifecycleAdminV1Enabled,
-    memoryLifecycleAutoForgetEnabled:
-      stored?.memoryLifecycleAutoForgetEnabled ?? fromConfig.memoryLifecycleAutoForgetEnabled ?? true,
-    memoryMaintenanceV1Enabled: stored?.memoryMaintenanceV1Enabled ?? fromConfig.memoryMaintenanceV1Enabled,
-    connectorDiagnosticsV1Enabled: stored?.connectorDiagnosticsV1Enabled ?? fromConfig.connectorDiagnosticsV1Enabled,
-    computerUseGuardrailsV1Enabled: stored?.computerUseGuardrailsV1Enabled ?? fromConfig.computerUseGuardrailsV1Enabled,
-    cronReviewQueueV1Enabled: stored?.cronReviewQueueV1Enabled ?? fromConfig.cronReviewQueueV1Enabled,
-    replayRegressionV1Enabled: stored?.replayRegressionV1Enabled ?? fromConfig.replayRegressionV1Enabled,
-    codeModeV1Enabled: stored?.codeModeV1Enabled ?? fromConfig.codeModeV1Enabled,
-    codeModeHostSandboxEnabled: stored?.codeModeHostSandboxEnabled ?? fromConfig.codeModeHostSandboxEnabled ?? false,
-    improvementLedgerV1Enabled: stored?.improvementLedgerV1Enabled ?? fromConfig.improvementLedgerV1Enabled,
-    improvementActivationV1Enabled: stored?.improvementActivationV1Enabled ?? fromConfig.improvementActivationV1Enabled,
-    promptRetuneCampaignV1Enabled: stored?.promptRetuneCampaignV1Enabled ?? fromConfig.promptRetuneCampaignV1Enabled,
-    structuredReviewV2Enabled: stored?.structuredReviewV2Enabled ?? fromConfig.structuredReviewV2Enabled,
-    delegationScopeExpansionV1Enabled:
-      stored?.delegationScopeExpansionV1Enabled ?? fromConfig.delegationScopeExpansionV1Enabled,
-    engineeringLearningsV1Enabled: stored?.engineeringLearningsV1Enabled ?? fromConfig.engineeringLearningsV1Enabled,
-    coworkRuntimeQualityV1Disabled: stored?.coworkRuntimeQualityV1Disabled ?? fromConfig.coworkRuntimeQualityV1Disabled,
-    orchestrationFinalStreamingV1Disabled:
-      stored?.orchestrationFinalStreamingV1Disabled ?? fromConfig.orchestrationFinalStreamingV1Disabled,
-    autonomyV1Disabled: stored?.autonomyV1Disabled ?? fromConfig.autonomyV1Disabled,
-    chatThinkingStreamV1Enabled: stored?.chatThinkingStreamV1Enabled ?? fromConfig.chatThinkingStreamV1Enabled,
-    chatContextBudgetVisibilityV1Enabled:
-      stored?.chatContextBudgetVisibilityV1Enabled ?? fromConfig.chatContextBudgetVisibilityV1Enabled ?? false,
-    chatAsyncClarificationV1Enabled:
-      stored?.chatAsyncClarificationV1Enabled ?? fromConfig.chatAsyncClarificationV1Enabled ?? true,
-    unifiedComposerPaletteV1Enabled:
-      stored?.unifiedComposerPaletteV1Enabled ?? fromConfig.unifiedComposerPaletteV1Enabled,
-    attachedContextToolsV1Enabled: stored?.attachedContextToolsV1Enabled ?? fromConfig.attachedContextToolsV1Enabled,
-    chatSessionStatusV1Enabled: stored?.chatSessionStatusV1Enabled ?? fromConfig.chatSessionStatusV1Enabled,
-    conversationForksV1Enabled: stored?.conversationForksV1Enabled ?? fromConfig.conversationForksV1Enabled,
-    notificationRoutingV1Enabled: stored?.notificationRoutingV1Enabled ?? fromConfig.notificationRoutingV1Enabled,
-    chatTimersV1Enabled: stored?.chatTimersV1Enabled ?? fromConfig.chatTimersV1Enabled,
-    typedRunVariablesV1Enabled: stored?.typedRunVariablesV1Enabled ?? fromConfig.typedRunVariablesV1Enabled,
-    documentEditingV1Enabled: stored?.documentEditingV1Enabled ?? fromConfig.documentEditingV1Enabled,
-    channelVoiceInboundV1Enabled: stored?.channelVoiceInboundV1Enabled ?? fromConfig.channelVoiceInboundV1Enabled,
-    plannerFastPathV1Disabled: stored?.plannerFastPathV1Disabled ?? fromConfig.plannerFastPathV1Disabled,
-    parallelToolExecutionV1Disabled:
-      stored?.parallelToolExecutionV1Disabled ?? fromConfig.parallelToolExecutionV1Disabled,
-    streamIdleWatchdogV1Disabled: stored?.streamIdleWatchdogV1Disabled ?? fromConfig.streamIdleWatchdogV1Disabled,
-    plannerFanoutV1Disabled: stored?.plannerFanoutV1Disabled ?? fromConfig.plannerFanoutV1Disabled,
-    subagentFanoutV1Disabled: stored?.subagentFanoutV1Disabled ?? fromConfig.subagentFanoutV1Disabled,
-    durableChatFanoutV1Enabled: stored?.durableChatFanoutV1Enabled ?? fromConfig.durableChatFanoutV1Enabled ?? false,
-    chatProviderFallbackV1Enabled:
-      stored?.chatProviderFallbackV1Enabled ?? fromConfig.chatProviderFallbackV1Enabled ?? false,
-    chatSkillInstructionsV1Enabled:
-      stored?.chatSkillInstructionsV1Enabled ?? fromConfig.chatSkillInstructionsV1Enabled ?? false,
-    boundedToolExposureV1Enabled:
-      stored?.boundedToolExposureV1Enabled ?? fromConfig.boundedToolExposureV1Enabled ?? false,
-    scheduledChatTurnsV1Enabled: stored?.scheduledChatTurnsV1Enabled ?? fromConfig.scheduledChatTurnsV1Enabled ?? false,
-    chatExplicitContextV1Enabled:
-      stored?.chatExplicitContextV1Enabled ?? fromConfig.chatExplicitContextV1Enabled ?? false,
-    chatAutomaticFanoutV1Enabled:
-      stored?.chatAutomaticFanoutV1Enabled ?? fromConfig.chatAutomaticFanoutV1Enabled ?? false,
-    chatDelegationControlsV1Enabled:
-      stored?.chatDelegationControlsV1Enabled ?? fromConfig.chatDelegationControlsV1Enabled ?? false,
-    proactiveHeartbeatTurnsV1Enabled:
-      stored?.proactiveHeartbeatTurnsV1Enabled ?? fromConfig.proactiveHeartbeatTurnsV1Enabled ?? false,
-    commitmentScheduledTurnsV1Enabled:
-      stored?.commitmentScheduledTurnsV1Enabled ?? fromConfig.commitmentScheduledTurnsV1Enabled ?? false,
-    chatMeshCapabilitiesV1Enabled:
-      stored?.chatMeshCapabilitiesV1Enabled ?? fromConfig.chatMeshCapabilitiesV1Enabled ?? false,
-    chatRemotePlacementV1Enabled:
-      stored?.chatRemotePlacementV1Enabled ?? fromConfig.chatRemotePlacementV1Enabled ?? false,
-    chatExplicitContextBranchesV1Enabled:
-      stored?.chatExplicitContextBranchesV1Enabled ?? fromConfig.chatExplicitContextBranchesV1Enabled ?? true,
-    chatWorkspaceSnapshotV1Enabled:
-      stored?.chatWorkspaceSnapshotV1Enabled ?? fromConfig.chatWorkspaceSnapshotV1Enabled ?? true,
-    chatModelCouncilV1Enabled: stored?.chatModelCouncilV1Enabled ?? fromConfig.chatModelCouncilV1Enabled ?? true,
-    chatWorkPassportV1Enabled: stored?.chatWorkPassportV1Enabled ?? fromConfig.chatWorkPassportV1Enabled ?? true,
-    chatRequesterMcpV1Enabled: stored?.chatRequesterMcpV1Enabled ?? fromConfig.chatRequesterMcpV1Enabled ?? false,
-    chatStaticMcpV1Enabled: stored?.chatStaticMcpV1Enabled ?? fromConfig.chatStaticMcpV1Enabled ?? false,
-    claudeCliToolBridgeEnabled: stored?.claudeCliToolBridgeEnabled ?? fromConfig.claudeCliToolBridgeEnabled ?? true,
-    claudeCliWarmContinuationEnabled:
-      stored?.claudeCliWarmContinuationEnabled ?? fromConfig.claudeCliWarmContinuationEnabled ?? true,
-    browserErrandsEnabled: stored?.browserErrandsEnabled ?? fromConfig.browserErrandsEnabled ?? false,
-    evolutionControlPlaneV1Enabled:
-      stored?.evolutionControlPlaneV1Enabled ?? fromConfig.evolutionControlPlaneV1Enabled ?? true,
-    settingsApprovalSkipEnabled: stored?.settingsApprovalSkipEnabled ?? fromConfig.settingsApprovalSkipEnabled ?? false,
-    improvementLocalObservationV1Enabled:
-      stored?.improvementLocalObservationV1Enabled ?? fromConfig.improvementLocalObservationV1Enabled ?? true,
-    improvementModelEvaluationV1Enabled:
-      stored?.improvementModelEvaluationV1Enabled ?? fromConfig.improvementModelEvaluationV1Enabled ?? false,
-    productSourceEvolutionV1Enabled:
-      stored?.productSourceEvolutionV1Enabled ?? fromConfig.productSourceEvolutionV1Enabled ?? false,
-    channelVoiceReplyV1Enabled: stored?.channelVoiceReplyV1Enabled ?? fromConfig.channelVoiceReplyV1Enabled,
-    memoryConsolidationV1Enabled: stored?.memoryConsolidationV1Enabled ?? fromConfig.memoryConsolidationV1Enabled,
-    cronEvidenceV1Enabled: stored?.cronEvidenceV1Enabled ?? fromConfig.cronEvidenceV1Enabled,
-    utilityModelRoutingV1Enabled: stored?.utilityModelRoutingV1Enabled ?? fromConfig.utilityModelRoutingV1Enabled,
-    chatTurnInterruptionRecoveryV1Disabled:
-      stored?.chatTurnInterruptionRecoveryV1Disabled ?? fromConfig.chatTurnInterruptionRecoveryV1Disabled,
-    externalSideEffectReplayJobsV1Disabled:
-      stored?.externalSideEffectReplayJobsV1Disabled ?? fromConfig.externalSideEffectReplayJobsV1Disabled,
-  };
+export function configurationFeatureFlags(sources: FeaturePreferenceSources): GatewayFeatureFlags {
+  return resolveGatewayFeatureFlags(sources.environment, {
+    // An inherited availability default must never opt an advisory-only host into executing code.
+    codeModeV1Enabled: sources.sandboxRequired === false ? false : undefined,
+    codeModeHostSandboxEnabled: sources.capabilities?.codeModeSandbox?.bestEffortHostEnabled,
+    ...sources.profile,
+  });
+}
+
+export function featurePreferenceMetadata(
+  sources: FeaturePreferenceSources,
+  stored: StoredFeatureFlags,
+): FeaturePreferenceMetadata {
+  const result: FeaturePreferenceMetadata = { sources: {}, upgradeReview: [], upgradeFingerprint: "" };
+  const held = [];
+  for (const flag of SHIPPED_FEATURE_FLAGS) {
+    const fileValue =
+      sources.profile[flag] ??
+      (flag === "codeModeHostSandboxEnabled"
+        ? sources.capabilities?.codeModeSandbox?.bestEffortHostEnabled
+        : undefined);
+    const env = sources.environment[flag];
+    const runtime = stored[flag];
+    const value = runtime ?? env ?? fileValue;
+    const source =
+      runtime !== undefined
+        ? "operator"
+        : env !== undefined
+          ? "environment"
+          : fileValue !== undefined
+            ? "profile"
+            : "default";
+    if (
+      value === false &&
+      source !== "environment" &&
+      LEGACY_FALSE_FEATURE_FLAGS.has(flag) &&
+      !stored.reviewed?.includes(flag) &&
+      sources.previousOperatorChoices?.[flag] !== false
+    ) {
+      result.sources[flag] = "legacy";
+      result.upgradeReview.push(flag);
+      held.push([
+        flag,
+        runtime,
+        env,
+        fileValue,
+        flag === "codeModeHostSandboxEnabled" && sources.capabilities?.codeModeSandbox?.bestEffortHostEnabled,
+      ]);
+    } else {
+      result.sources[flag] = source;
+    }
+  }
+  result.upgradeFingerprint = createHash("sha256").update(JSON.stringify(held)).digest("hex");
+  return result;
+}
+
+export function updateFeaturePreferences(
+  sources: FeaturePreferenceSources,
+  stored: StoredFeatureFlags,
+  patch: Partial<GatewayFeatureFlags> = {},
+  review?: FeaturePreferenceReview,
+): StoredFeatureFlags {
+  const next: StoredFeatureFlags = { ...stored, ...patch };
+  const reviewed = new Set(stored.reviewed);
+  for (const flag of Object.keys(patch)) if (isShippedFeatureFlag(flag)) reviewed.add(flag);
+  if (review) {
+    const metadata = featurePreferenceMetadata(sources, stored);
+    if (
+      metadata.upgradeFingerprint !== review.fingerprint ||
+      !review.flags.length ||
+      review.flags.some((flag) => !metadata.upgradeReview.includes(flag) || !SHIPPED_FEATURE_CONTROLS[flag].switchable)
+    ) {
+      throw new ValidationError({
+        message: "Feature settings changed. Reload Settings and review the remaining features.",
+      });
+    }
+    for (const flag of review.flags) {
+      if (review.decision === "off") {
+        next[flag] = false;
+        reviewed.add(flag);
+      } else {
+        delete next[flag];
+        delete sources.profile[flag];
+        if (flag === "codeModeHostSandboxEnabled" && sources.capabilities?.codeModeSandbox) {
+          delete sources.capabilities.codeModeSandbox.bestEffortHostEnabled;
+        }
+        reviewed.delete(flag);
+      }
+    }
+  }
+  if (reviewed.size) next.reviewed = [...reviewed].sort();
+  else delete next.reviewed;
+  return next;
 }
 
 export function didDisengageAutonomyKillSwitch(current: GatewayFeatureFlags, next: GatewayFeatureFlags): boolean {

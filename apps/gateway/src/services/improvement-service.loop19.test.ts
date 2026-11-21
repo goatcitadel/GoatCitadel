@@ -13,6 +13,7 @@ import {
   readRetryRepairThreshold,
 } from "./improvement-tune-reads.js";
 import type { ServiceContext } from "./service-context.js";
+import { recordBoundPromptLabRegression } from "./prompt-pack-watch.test-support.js";
 
 interface Harness {
   rootDir: string;
@@ -446,12 +447,12 @@ describe("ImprovementService activation ledger coverage", () => {
     );
 
     for (let index = 0; index < 20; index += 1) {
-      await stableHarness.service.recordPromptLabRegressionCompletionSignal({
+      await recordBoundPromptLabRegression(stableHarness, stableActivation, {
         regressionRunId: `regression-neutral-${index}`,
         packId: "pack-routing",
         capability: "provider-balance",
-        scoreDelta: 0,
-        passDelta: 0,
+        scoreDelta: 0.1,
+        passDelta: 0.1,
         latencyDeltaMs: 0,
       });
     }
@@ -475,7 +476,7 @@ describe("ImprovementService activation ledger coverage", () => {
     );
     failingHarness.state.failRoutingRestore = true;
 
-    await failingHarness.service.recordPromptLabRegressionCompletionSignal({
+    await recordBoundPromptLabRegression(failingHarness, failingActivation, {
       regressionRunId: "regression-negative-rollback",
       packId: "pack-routing",
       capability: "provider-balance-rollback",
@@ -507,7 +508,7 @@ describe("ImprovementService activation ledger coverage", () => {
     expect(skillResult?.candidate).toMatchObject({ kind: "skill_revision", status: "ready_for_approval" });
     expect(
       (await harness.service.getImprovementCandidateDetail(skillResult!.candidate!.candidateId)).latestEvaluation,
-    ).toMatchObject({ evaluatorKind: "skill_eval_scorecard" });
+    ).toMatchObject({ evaluatorKind: "static_preflight" });
     await expect(
       harness.service.requestImprovementActivation(skillResult!.candidate!.candidateId, "operator-1"),
     ).rejects.toThrow(/capability proposals/);

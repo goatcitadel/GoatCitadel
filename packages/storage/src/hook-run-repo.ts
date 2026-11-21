@@ -203,6 +203,41 @@ export class HookRunRepository {
     return rows.map(mapHookRunRow);
   }
 
+  /** Canonical completed observer events only. Scope and cursor precede LIMIT;
+   * a foreign workspace's backlog cannot starve an explicitly bound job. */
+  public listCompletedForFollowThrough(input: {
+    workspaceId: string;
+    hookId: string;
+    notBefore: string;
+    after?: { completedAt: string; runId: string };
+    limit?: number;
+  }): HookRunRecord[] {
+    const limit = input.limit ?? 20;
+    if (
+      !input.workspaceId?.trim() ||
+      !input.hookId?.trim() ||
+      !Number.isFinite(Date.parse(input.notBefore)) ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 50 ||
+      (input.after && (!Number.isFinite(Date.parse(input.after.completedAt)) || !input.after.runId))
+    )
+      throw new TypeError("Invalid bounded follow-through event cursor.");
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM hook_runs WHERE workspace_id=@workspaceId AND hook_id=@hookId AND trigger='subagent.end' AND entity_type='chat_subagent' AND mode='observe' AND status='completed' AND completed_at IS NOT NULL AND created_at>=@notBefore AND (completed_at>@afterAt OR (completed_at=@afterAt AND run_id>@afterId)) ORDER BY completed_at ASC,run_id ASC LIMIT @limit`,
+      )
+      .all({
+        workspaceId: input.workspaceId,
+        hookId: input.hookId,
+        notBefore: input.notBefore,
+        afterAt: input.after?.completedAt ?? "",
+        afterId: input.after?.runId ?? "",
+        limit,
+      });
+    return toHookRunRows(rows).map(mapHookRunRow);
+  }
+
   public markAttempt(
     runId: string,
     input: {

@@ -1,3 +1,5 @@
+import { registerMemoryTraceCandidateRoutes } from "./memory-trace-candidate-routes.js";
+import { structuredSourceRefSchema } from "./memory-context-request-schemas.js";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { MEMORY_FORGET_MAX_ITEM_IDS } from "@goatcitadel/contracts";
@@ -33,10 +35,6 @@ const contextParamsSchema = z.object({
   contextId: z.string().trim().min(1),
 });
 
-const traceCandidateParamsSchema = z.object({
-  candidateId: z.string().trim().min(1),
-});
-
 const workspaceQuerySchema = z.object({
   workspaceId: z.string().trim().min(1).optional(),
   limit: z.coerce.number().int().positive().max(200).optional(),
@@ -59,11 +57,6 @@ const structuredStatusQuerySchema = z.enum(["active", "forgotten", "superseded",
 const structuredAuthoritySchema = z.enum(["operator", "agent_proposed", "trusted_lifecycle", "imported_skill"]);
 const learningStatusQuerySchema = z.enum(["proposed", "trusted", "superseded", "forgotten", "all"]);
 const learningTypeSchema = z.enum(["workflow", "bug_pattern", "operator_preference", "repo_fact", "tooling"]);
-const structuredSourceRefSchema = z.object({
-  sourceType: z.enum(["manual", "memory_item", "session", "run", "artifact", "summary", "turn", "external"]),
-  sourceRef: z.string().trim().min(1),
-  title: z.string().trim().min(1).optional(),
-});
 const memoryFeedbackKindSchema = z.enum(["stale", "missing", "irrelevant", "useful"]);
 const memoryFeedbackStatusQuerySchema = z.enum(["open", "reviewed", "dismissed", "all"]);
 const memoryFeedbackTargetKindSchema = z.enum([
@@ -76,16 +69,6 @@ const memoryFeedbackTargetKindSchema = z.enum([
   "learning",
   "trace_candidate",
 ]);
-const traceCandidateTypeSchema = z.enum([
-  "fact",
-  "decision",
-  "tool_outcome",
-  "operator_preference",
-  "repo_fact",
-  "workflow",
-]);
-const traceCandidateStatusQuerySchema = z.enum(["proposed", "rejected", "promoted", "all"]);
-
 const queryBooleanSchema = z.preprocess((value) => {
   if (typeof value !== "string") {
     return value;
@@ -185,33 +168,26 @@ const memoryQualityIssuePatchSchema = z.object({
   resolutionNote: z.string().trim().min(1).optional(),
 });
 
-const traceCandidateListQuerySchema = z.object({
-  workspaceId: z.string().trim().min(1).optional(),
-  status: traceCandidateStatusQuerySchema.optional(),
-  limit: z.coerce.number().int().positive().max(500).default(100),
-});
-
-const traceCandidateCreateSchema = z.object({
-  workspaceId: z.string().trim().min(1).optional(),
-  candidateType: traceCandidateTypeSchema.optional(),
-  sourceText: z.string().trim().min(1).optional(),
-  sourceSessionId: z.string().trim().min(1).optional(),
-  sourceMessageId: z.string().trim().min(1).optional(),
-  sourceRunId: z.string().trim().min(1).optional(),
-  sourceTurnId: z.string().trim().min(1).optional(),
-  toolCallId: z.string().trim().min(1).optional(),
-  proposedInsight: z.string().trim().min(1),
-  confidence: z.number().min(0).max(1).optional(),
-  sourceRefs: z.array(structuredSourceRefSchema).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-});
-
 const learningFileRefSchema = z.object({
   path: z.string().trim().min(1),
   contentHash: z.string().trim().min(1).optional(),
 });
 
 const learningCreateSchema = z.object({
+  claim: z
+    .object({
+      identity: z.object({
+        subject: z.string().trim().min(1).max(200),
+        predicate: z.string().trim().min(1).max(200),
+        scope: z.object({ kind: z.enum(["workspace", "project", "session"]), id: z.string().trim().min(1).max(300) }),
+        cardinality: z.enum(["scalar", "set"]),
+      }),
+      value: z.string().trim().min(1).max(2000),
+    })
+    .optional(),
+  correctionTarget: z
+    .object({ sourceRef: z.string().trim().min(1), expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/) })
+    .optional(),
   workspaceId: z.string().trim().min(1).optional(),
   key: z.string().trim().min(1),
   type: learningTypeSchema.optional(),
@@ -634,58 +610,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  fastify.get("/api/v1/memory/trace-candidates", operatorOnly, async (request, reply) => {
-    const parsed = traceCandidateListQuerySchema.safeParse(request.query);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
-    try {
-      return reply.send({ items: await memory.listTraceCandidates(parsed.data) });
-    } catch (error) {
-      return sendRouteError(reply, error, request.log);
-    }
-  });
-
-  fastify.get("/api/v1/memory/trace-candidates/:candidateId", operatorOnly, async (request, reply) => {
-    const params = traceCandidateParamsSchema.safeParse(request.params);
-    const query = traceCandidateListQuerySchema.pick({ workspaceId: true }).safeParse(request.query ?? {});
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid trace candidate read." });
-    try {
-      return reply.send(await memory.getTraceCandidate(params.data.candidateId, query.data.workspaceId));
-    } catch (error) {
-      return sendRouteError(reply, error, request.log);
-    }
-  });
-
-  fastify.post("/api/v1/memory/trace-candidates", operatorOnly, async (request, reply) => {
-    const parsed = traceCandidateCreateSchema.safeParse(request.body ?? {});
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
-    try {
-      return reply.code(202).send(await memory.proposeTraceCandidate(parsed.data, resolveActorId(request)));
-    } catch (error) {
-      return sendRouteError(reply, error, request.log);
-    }
-  });
-
-  for (const action of ["promote", "reject"] as const) {
-    fastify.post(`/api/v1/memory/trace-candidates/:candidateId/${action}`, operatorOnly, async (request, reply) => {
-      const parsed = traceCandidateParamsSchema.safeParse(request.params);
-      if (!parsed.success) {
-        return reply.code(400).send({ error: parsed.error.flatten() });
-      }
-      try {
-        const candidate =
-          action === "promote"
-            ? await memory.promoteTraceCandidate(parsed.data.candidateId, resolveActorId(request))
-            : await memory.rejectTraceCandidate(parsed.data.candidateId, resolveActorId(request));
-        return reply.send(candidate);
-      } catch (error) {
-        return sendRouteError(reply, error, request.log);
-      }
-    });
-  }
+  registerMemoryTraceCandidateRoutes(fastify);
 
   fastify.get("/api/v1/memory/items", operatorOnly, async (request, reply) => {
     const parsed = listItemsQuerySchema.safeParse(request.query);

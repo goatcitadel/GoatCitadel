@@ -346,6 +346,14 @@ export interface ChatDelegationServiceHost {
     };
     chatSessionMeta: {
       ensure(sessionId: string): Promise<{ workspaceId?: string }>;
+      get?(sessionId: string): Promise<
+        | {
+            workspaceId: string;
+            lifecycleIntentId?: string;
+            lifecycleStatus?: string;
+          }
+        | undefined
+      >;
     };
     chatSessionProjects: {
       get(sessionId: string): Promise<{ projectId: string } | undefined>;
@@ -1127,6 +1135,41 @@ export class ChatDelegationService {
       observedAt: finishedAt,
     });
     await publishDelegationAggregateCommit(this.deps, aggregate);
+    // A parked child can finish after its original request observer returned.
+    // Reconciliation must emit the same terminal lifecycle observation as the
+    // immediate path. Repeating a converged settlement repairs a missing
+    // observation; the hook owner deduplicates its child/step/status identity.
+    if (parent.parentRunId && this.deps.onSubagentLifecycle) {
+      await publishDelegationPostCommitSafely("terminal child lifecycle observation", async () => {
+        const root = await this.deps.getDurableRun(parent.parentRunId!);
+        const authority =
+          root &&
+          readDurableChatTurnExecutionPayloadAuthority({
+            workflowKey: root.workflowKey,
+            durableRunId: root.runId,
+            payload: root.payload,
+          });
+        const meta = await this.deps.storage.chatSessionMeta.get?.(parent.sessionId);
+        if (
+          !authority ||
+          authority.sessionId !== parent.sessionId ||
+          meta?.workspaceId !== authority.workspaceId ||
+          meta.lifecycleIntentId !== authority.sessionIncarnationId ||
+          meta.lifecycleStatus !== "active"
+        )
+          return;
+        await this.deps.onSubagentLifecycle!({
+          phase: "end",
+          workspaceId: authority.workspaceId,
+          parentSessionId: parent.sessionId,
+          childSessionId: input.childSessionId,
+          delegationRunId: parent.runId,
+          stepId: step.stepId,
+          role: step.role,
+          status,
+        });
+      });
+    }
     return { outcome: materialized.outcome, status: aggregate.status };
   }
 
@@ -1719,7 +1762,6 @@ export class ChatDelegationService {
           stepId: step.stepId,
           role: step.role,
         });
-        registeredAgentSessionId = agentSessionId;
         childSessionId = agentSessionId;
         const persistedResumeStep =
           options.persistedResume?.stepId === step.stepId ? options.persistedResume : undefined;
@@ -1817,6 +1859,7 @@ export class ChatDelegationService {
             `Delegated child session ${agentSessionId} is already linked to task ${existingSubagent.taskId}.`,
           );
         }
+        registeredAgentSessionId = agentSessionId;
         const taskFirstMessage = buildSubagentTaskFirstMessage({
           role: step.role,
           objective: step.objective ?? objective,

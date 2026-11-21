@@ -18,6 +18,7 @@ describe("memory routes", () => {
     } as never);
     built.decorate("services", {
       memory: {
+        previewTraceCandidateReconciliation: async () => ({ items: [], limit: 50, mutationsPerformed: false }),
         ...gateway,
         runMaintenanceNow: gateway.runMaintenanceNow ?? gateway.runMemoryMaintenanceNow,
         getContext: gateway.getContext ?? gateway.getMemoryContext,
@@ -53,10 +54,17 @@ describe("memory routes", () => {
 
   it("binds quality scan provenance to the authenticated token actor, never body metadata", async () => {
     const runQualityScan = vi.fn(async () => ({ issues: [], issueCount: 0 }));
-    const built = buildApp({ runQualityScan }); app = built.app;
-    app.addHook("onRequest", async request => { request.authActorId = "token:0123456789abcdef"; });
+    const built = buildApp({ runQualityScan });
+    app = built.app;
+    app.addHook("onRequest", async (request) => {
+      request.authActorId = "token:0123456789abcdef";
+    });
     await app.register(memoryRoutes);
-    const result = await app.inject({ method: "POST", url: "/api/v1/memory/quality/scan", payload: { workspaceId: "workspace-a", actorId: "forged", metadata: { scannedBy: "forged" } } });
+    const result = await app.inject({
+      method: "POST",
+      url: "/api/v1/memory/quality/scan",
+      payload: { workspaceId: "workspace-a", actorId: "forged", metadata: { scannedBy: "forged" } },
+    });
     expect(result.statusCode).toBe(200);
     expect(built.requireOperatorAuth).toHaveBeenCalledTimes(1);
     expect(runQualityScan).toHaveBeenCalledExactlyOnceWith({ workspaceId: "workspace-a" }, "token:0123456789abcdef");
@@ -493,8 +501,9 @@ describe("memory routes", () => {
   });
 
   it("gates compose, context read, recall, qmd stats and retrieval status behind operator auth", async () => {
-    const requireOperatorAuth = vi.fn(async (_request: unknown, reply: { code: (n: number) => { send: (b: unknown) => unknown } }) =>
-      reply.code(403).send({ error: "operator only" }),
+    const requireOperatorAuth = vi.fn(
+      async (_request: unknown, reply: { code: (n: number) => { send: (b: unknown) => unknown } }) =>
+        reply.code(403).send({ error: "operator only" }),
     );
     const built = buildApp({}, requireOperatorAuth as never);
     app = built.app;
@@ -507,7 +516,11 @@ describe("memory routes", () => {
       ["GET", "/api/v1/memory/retrieval/status"],
     ];
     for (const [method, url] of probes) {
-      const response = await app.inject({ method: method as "GET" | "POST", url, payload: method === "POST" ? {} : undefined });
+      const response = await app.inject({
+        method: method as "GET" | "POST",
+        url,
+        payload: method === "POST" ? {} : undefined,
+      });
       expect(response.statusCode, url).toBe(403);
     }
     expect(requireOperatorAuth).toHaveBeenCalledTimes(probes.length);
@@ -643,10 +656,12 @@ describe("memory routes", () => {
     const promoteResponse = await app.inject({
       method: "POST",
       url: "/api/v1/memory/trace-candidates/trace-2/promote",
+      payload: { workspaceId: "default", expectedReviewHash: "a".repeat(64) },
     });
     const rejectResponse = await app.inject({
       method: "POST",
       url: "/api/v1/memory/trace-candidates/trace-3/reject",
+      payload: { workspaceId: "default", expectedReviewHash: "b".repeat(64) },
     });
 
     expect(recallResponse.statusCode).toBe(200);
@@ -694,8 +709,14 @@ describe("memory routes", () => {
       },
       expect.stringMatching(/^ip:/),
     );
-    expect(promoteTraceCandidate).toHaveBeenCalledWith("trace-2", expect.stringMatching(/^ip:/));
-    expect(rejectTraceCandidate).toHaveBeenCalledWith("trace-3", expect.stringMatching(/^ip:/));
+    expect(promoteTraceCandidate).toHaveBeenCalledWith("trace-2", expect.stringMatching(/^ip:/), {
+      workspaceId: "default",
+      expectedReviewHash: "a".repeat(64),
+    });
+    expect(rejectTraceCandidate).toHaveBeenCalledWith("trace-3", expect.stringMatching(/^ip:/), {
+      workspaceId: "default",
+      expectedReviewHash: "b".repeat(64),
+    });
   });
 
   it("accepts memory maintenance run-now on both the canonical and compatibility paths", async () => {

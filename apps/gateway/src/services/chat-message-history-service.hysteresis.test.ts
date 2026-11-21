@@ -109,7 +109,7 @@ describe("chat branch compaction hysteresis", () => {
     expect(repo.summaries).toHaveLength(2);
     expect(repo.states).toHaveLength(2);
     expect(repo.states.find((state) => state.boundaryTurnIds.length === 16)?.armed).toBe(false);
-    expect(extended.filter((message) => message.role === "system")).toHaveLength(2);
+    expect(extended.filter((message) => message.role === "system")).toHaveLength(1);
 
     await build(repo, state22, pathIds(22), DIMENSION_A);
     expect(repo.summaries).toHaveLength(2);
@@ -247,15 +247,15 @@ describe("chat branch compaction hysteresis", () => {
     expect(messages.find((entry) => Array.isArray(entry.content))).toBeTruthy();
   });
 
-  it("bounds durable boundaries at the storage contract without dropping the remaining long-session turns", async () => {
+  it("retains every original turn when the combined substantive continuity cannot fit the global budget", async () => {
     const repo = createInMemorySummaryRepo();
     const turnCount = 526;
 
     const messages = await build(repo, createBranchState(turnCount), pathIds(turnCount), DIMENSION_A);
 
-    expect(repo.states).toHaveLength(1);
-    expect(repo.states[0]?.boundaryTurnIds).toHaveLength(512);
-    for (let turn = 513; turn <= turnCount; turn += 1) {
+    expect(repo.states).toHaveLength(0);
+    expect(messages).toHaveLength(turnCount * 2);
+    for (let turn = 1; turn <= turnCount; turn += 1) {
       expect(messages.filter((entry) => String(entry.content).includes(`user ${turn} `))).toHaveLength(1);
       expect(messages.filter((entry) => String(entry.content).includes(`assistant ${turn} `))).toHaveLength(1);
     }
@@ -451,6 +451,7 @@ function message(messageId: string, role: ChatMessageRecord["role"], content: st
     role,
     actorType: role === "assistant" ? "agent" : "user",
     actorId: role === "assistant" ? "assistant" : "operator",
+    sourceAuthority: role === "assistant" ? "agent_proposed" : "operator",
     content,
     timestamp: "2026-07-13T00:00:00.000Z",
   };

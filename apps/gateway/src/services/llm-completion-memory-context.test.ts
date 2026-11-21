@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { PolicyViolationError, type ChatCompletionRequest } from "@goatcitadel/contracts";
-import { composeChatCompletionMemoryContext } from "./llm-completion-memory-context.js";
+import {
+  composeChatCompletionMemoryContext,
+  persistContextManifestForCompletionRequest,
+} from "./llm-completion-memory-context.js";
+import { buildMemoryContextSystemMessage } from "./llm-completion-helpers.js";
+import type { MemoryContextPack } from "@goatcitadel/contracts";
 import type { LlmCompletionHost } from "./llm-completion-host.js";
 import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 
@@ -33,6 +38,100 @@ function buildRequest(sessionId: string): ChatCompletionRequest {
     memory: { enabled: true, mode: "qmd", sessionId },
   } as ChatCompletionRequest;
 }
+
+it("freezes source identities with their dispatch binding and does not claim memory removed by a request hook", async () => {
+  const pack = {
+    contextId: "context",
+    contextText: "A reviewed preference",
+    scope: "chat",
+    citations: [
+      { candidateId: "m", sourceType: "memory_learning", sourceRef: "learning", sourceHash: "a".repeat(64), score: 1 },
+    ],
+    quality: { status: "generated" },
+    createdAt: "2026-11-19T00:00:00Z",
+    expiresAt: "2026-11-20T00:00:00Z",
+  } as MemoryContextPack;
+  const append = vi.fn();
+  const ensure = vi.fn().mockResolvedValue({ manifestId: "manifest" });
+  const contextManifests = { ensure, appendEntry: append };
+  const standingMemory = {
+    instruction: "Follow the reviewed preference",
+    sources: [{ learningId: "standing-learning", sourceHash: "b".repeat(64) }],
+  };
+  const skill = {
+    instruction: "Use the reviewed workspace skill",
+    sources: [{ skillId: "skill-a", instructionSha256: "c".repeat(64), treeSha256: "d".repeat(64) }],
+  };
+  const resolveStandingMemoryContext = vi.fn().mockResolvedValue(standingMemory);
+  const resolveSkillContext = vi.fn().mockResolvedValue(skill);
+  const usageBinding = { operationId: "operation", dispatchGeneration: "generation" };
+  const request = {
+    messages: [
+      { role: "system", content: standingMemory.instruction },
+      { role: "system", content: buildMemoryContextSystemMessage(pack) },
+      { role: "system", content: skill.instruction },
+      { role: "user", content: "Help" },
+    ],
+    memory: { turnId: "t", sessionId: "s" },
+  } as ChatCompletionRequest;
+  await persistContextManifestForCompletionRequest(
+    contextManifests,
+    { resolveStandingMemoryContext, resolveSkillContext },
+    { request, memoryContext: pack, usageBinding },
+  );
+  expect(resolveStandingMemoryContext).toHaveBeenCalledBefore(ensure);
+  expect(ensure).toHaveBeenCalledBefore(resolveSkillContext);
+  expect(resolveSkillContext).toHaveBeenCalledBefore(append);
+  expect(append).toHaveBeenCalledTimes(3);
+  expect(append).toHaveBeenNthCalledWith(
+    1,
+    expect.objectContaining({
+      kind: "system_message",
+      entryIndex: 0,
+      sourceRef: "system:0",
+      metadata: expect.objectContaining({
+        admittedMemories: [
+          {
+            sourceType: "memory_learning",
+            sourceRef: standingMemory.sources[0]!.learningId,
+            sourceHash: "b".repeat(64),
+          },
+        ],
+        usageBinding,
+      }),
+    }),
+  );
+  expect(append).toHaveBeenNthCalledWith(
+    2,
+    expect.objectContaining({
+      kind: "system_message",
+      entryIndex: 1,
+      sourceRef: "system:2",
+      metadata: expect.objectContaining({ admittedSkills: skill.sources, usageBinding }),
+    }),
+  );
+  expect(append).toHaveBeenNthCalledWith(
+    3,
+    expect.objectContaining({
+      kind: "memory_context",
+      entryIndex: 2,
+      metadata: expect.objectContaining({
+        sourceCitations: [{ sourceType: "memory_learning", sourceRef: "learning", sourceHash: "a".repeat(64) }],
+        usageBinding,
+      }),
+    }),
+  );
+  append.mockClear();
+  await persistContextManifestForCompletionRequest(
+    contextManifests,
+    {},
+    {
+      request: { ...request, messages: [{ role: "user", content: "Help" }] },
+      memoryContext: pack,
+    },
+  );
+  expect(append).not.toHaveBeenCalled();
+});
 
 describe("composeChatCompletionMemoryContext workspace scoping (Finding 1)", () => {
   it("forwards cancellation and server-owned utility lineage outside the memory request body", async () => {

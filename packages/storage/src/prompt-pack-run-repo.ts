@@ -5,9 +5,10 @@ import type {
   PromptPackDiagnosticMetadata,
   PromptPackRunIntegrityRecord,
   PromptPackRunRecord,
+  PromptPackImprovementWatchBinding,
   RunVariableEvidence,
 } from "@goatcitadel/contracts";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { NotFoundError, readPromptPackImprovementWatchBindings } from "@goatcitadel/contracts";
 
 interface PromptPackRunRow {
   run_id: string;
@@ -26,6 +27,7 @@ interface PromptPackRunRow {
   execution_style: PromptPackRunRecord["executionStyle"] | null;
   diagnostic_metadata_json: string | null;
   run_variables_json: string | null;
+  improvement_watch_bindings_json: string | null;
   response_text: string | null;
   final_response_text: string | null;
   final_response_signals_json: string | null;
@@ -54,12 +56,12 @@ export class PromptPackRunRepository {
         run_id, pack_id, test_id, session_id, status, provider_id, model,
         mode, tool_tier, tool_autonomy, web_mode, memory_mode, thinking_level,
         execution_style, diagnostic_metadata_json, run_variables_json, response_text, final_response_text, final_response_signals_json, derived_response_text, derived_response_signals_json,
-        trace_json, citations_json, integrity_json, error, started_at, finished_at
+        trace_json, citations_json, integrity_json, error, started_at, finished_at, improvement_watch_bindings_json
       ) VALUES (
         @runId, @packId, @testId, @sessionId, @status, @providerId, @model,
         @mode, @toolTier, @toolAutonomy, @webMode, @memoryMode, @thinkingLevel,
         @executionStyle, @diagnosticMetadataJson, @runVariablesJson, @responseText, @finalResponseText, @finalResponseSignalsJson, @derivedResponseText, @derivedResponseSignalsJson,
-        @traceJson, @citationsJson, @integrityJson, @error, @startedAt, @finishedAt
+        @traceJson, @citationsJson, @integrityJson, @error, @startedAt, @finishedAt, @improvementWatchBindingsJson
       )
     `);
     this.patchStmt = db.prepare(`
@@ -126,6 +128,7 @@ export class PromptPackRunRepository {
     executionStyle?: PromptPackRunRecord["executionStyle"];
     diagnosticMetadata?: PromptPackDiagnosticMetadata;
     runVariables?: RunVariableEvidence;
+    improvementWatchBindings?: PromptPackImprovementWatchBinding[];
     responseText?: string;
     finalResponseText?: string;
     finalResponseSignals?: string[];
@@ -138,6 +141,13 @@ export class PromptPackRunRepository {
     startedAt?: string;
     finishedAt?: string;
   }): PromptPackRunRecord {
+    const startedAt = input.startedAt ?? new Date().toISOString();
+    const bindings =
+      input.improvementWatchBindings === undefined
+        ? undefined
+        : readPromptPackImprovementWatchBindings(input.improvementWatchBindings, startedAt);
+    if (input.improvementWatchBindings !== undefined && !bindings)
+      throw new TypeError("Invalid pre-work improvement watch bindings.");
     this.insertStmt.run({
       runId: input.runId,
       packId: input.packId,
@@ -155,6 +165,7 @@ export class PromptPackRunRepository {
       executionStyle: input.executionStyle ?? null,
       diagnosticMetadataJson: input.diagnosticMetadata ? JSON.stringify(input.diagnosticMetadata) : null,
       runVariablesJson: input.runVariables ? JSON.stringify(input.runVariables) : null,
+      improvementWatchBindingsJson: bindings ? JSON.stringify(bindings) : null,
       responseText: input.responseText ?? null,
       finalResponseText: input.finalResponseText ?? null,
       finalResponseSignalsJson: input.finalResponseSignals ? JSON.stringify(input.finalResponseSignals) : null,
@@ -164,7 +175,7 @@ export class PromptPackRunRepository {
       citationsJson: input.citations ? JSON.stringify(input.citations) : null,
       integrityJson: input.integrity ? JSON.stringify(input.integrity) : null,
       error: input.error ?? null,
-      startedAt: input.startedAt ?? new Date().toISOString(),
+      startedAt,
       finishedAt: input.finishedAt ?? null,
     });
     return this.get(input.runId);
@@ -289,6 +300,12 @@ function mapRow(row: PromptPackRunRow): PromptPackRunRecord {
       : undefined,
     runVariables: row.run_variables_json
       ? safeJsonParse<RunVariableEvidence | undefined>(row.run_variables_json, undefined)
+      : undefined,
+    improvementWatchBindings: row.improvement_watch_bindings_json
+      ? readPromptPackImprovementWatchBindings(
+          safeJsonParse<unknown>(row.improvement_watch_bindings_json, undefined),
+          row.started_at,
+        )
       : undefined,
     responseText: row.response_text ?? undefined,
     finalResponseText: row.final_response_text ?? undefined,

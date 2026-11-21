@@ -112,13 +112,10 @@ describe("GatewayService durable feature flags", () => {
 
     expect(next.durableKernelV1Enabled).toBe(true);
     expect(next.replayRegressionV1Enabled).toBe(true);
-    expect(systemSettings.set).toHaveBeenLastCalledWith(
-      "feature_flags_v1",
-      expect.objectContaining({
-        durableKernelV1Enabled: true,
-        replayRegressionV1Enabled: true,
-      }),
-    );
+    expect(systemSettings.set).toHaveBeenLastCalledWith("feature_flags_v1", {
+      replayRegressionV1Enabled: true,
+      reviewed: ["replayRegressionV1Enabled"],
+    });
   });
 
   it("throws a typed disabled-feature error when a feature-gated runtime path is disabled", async () => {
@@ -128,7 +125,9 @@ describe("GatewayService durable feature flags", () => {
       GatewayService.prototype.requireFeatureEnabled.call(gateway, "memoryLifecycleAdminV1Enabled"),
     ).rejects.toThrow(FeatureDisabledError);
     await expect(gateway.requireFeatureEnabled("memoryLifecycleAdminV1Enabled")).rejects.toMatchObject({
-      code: "FEATURE_DISABLED", httpStatus: 409, details: { flag: "memoryLifecycleAdminV1Enabled" },
+      code: "FEATURE_DISABLED",
+      httpStatus: 409,
+      details: { flag: "memoryLifecycleAdminV1Enabled" },
     });
   });
 

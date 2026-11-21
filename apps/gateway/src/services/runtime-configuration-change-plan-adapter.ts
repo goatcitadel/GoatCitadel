@@ -91,6 +91,15 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
   public async prepare(context: EvolutionControlPlaneAdapterContext, request: ChangePlanRuntimeConfigurationRequest) {
     assertNotRetiredToolProfileChange(request);
     const settings = await this.deps.getSettings();
+    if (
+      request.change.operation === "feature_preference_review" &&
+      (request.change.fingerprint !== settings.featurePreferences?.upgradeFingerprint ||
+        request.change.flags.some((flag) => !settings.featurePreferences?.upgradeReview.includes(flag)))
+    ) {
+      throw new SemanticValidationError(
+        "Feature preferences changed. Refresh Settings and review the remaining features.",
+      );
+    }
     await this.validateOwnerSelection(request, settings, context.origin.workspaceId);
     if (isWebSearchCredentialChange(request)) {
       return prepareWebSearchCredential(context, request.change, settings, this.webSearchCredentials);
@@ -406,6 +415,8 @@ function settingsPatch(request: ChangePlanRuntimeConfigurationRequest): Omit<Upd
   switch (request.change.operation) {
     case "tool_approval_mode":
       return { toolApprovalMode: request.change.mode };
+    case "automatic_background_budget":
+      return { automaticBackgroundUsdCap: request.change.limitUsd };
     case "budget_mode":
       return { budgetMode: request.change.mode };
     case "deployment_profile":
@@ -454,6 +465,14 @@ function settingsPatch(request: ChangePlanRuntimeConfigurationRequest): Omit<Upd
       return { toolGroupChange: { groupId: request.change.groupId, enabled: request.change.enabled } };
     case "feature_flag":
       return { features: { [request.change.flag]: request.change.enabled } };
+    case "feature_preference_review":
+      return {
+        featureReview: {
+          flags: request.change.flags,
+          decision: request.change.decision,
+          fingerprint: request.change.fingerprint,
+        },
+      };
     case "feature_flags":
       return { features: { ...request.change.flags } };
   }
@@ -463,6 +482,8 @@ function matches(request: ChangePlanRuntimeConfigurationRequest, settings: Runti
   switch (request.change.operation) {
     case "tool_approval_mode":
       return settings.toolApprovalMode === request.change.mode;
+    case "automatic_background_budget":
+      return settings.automaticBackgroundUsdCap === request.change.limitUsd;
     case "budget_mode":
       return settings.budgetMode === request.change.mode;
     case "deployment_profile":
@@ -514,6 +535,15 @@ function matches(request: ChangePlanRuntimeConfigurationRequest, settings: Runti
       return matchesToolGroupChange(request.change, settings);
     case "feature_flag":
       return settings.features[request.change.flag] === request.change.enabled;
+    case "feature_preference_review": {
+      const review = request.change;
+      return review.flags.every((flag) => {
+        const source = settings.featurePreferences?.sources[flag];
+        return review.decision === "inherit"
+          ? source === "default" || source === "environment"
+          : source === "operator" && settings.features[flag] === false;
+      });
+    }
     case "feature_flags":
       return Object.entries(request.change.flags).every(
         ([flag, enabled]) => settings.features[flag as keyof RuntimeSettings["features"]] === enabled,
@@ -548,6 +578,17 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
         risk,
       };
     }
+    case "automatic_background_budget":
+      return {
+        title: "Set automatic background budget",
+        summary: `Change the daily cap from ${settings.automaticBackgroundUsdCap ?? 0.25} to ${request.change.limitUsd}.`,
+        completedSummary: `Automatic background budget is ${request.change.limitUsd} per UTC day.`,
+        impact:
+          request.change.limitUsd === 0
+            ? "Paid automatic background calls stop. Eligible local models remain available."
+            : "The Gateway applies this limit alongside installation-wide spending limits.",
+        risk: "caution" as const,
+      };
     case "budget_mode":
       return {
         title: "Change runtime budget mode",
@@ -687,6 +728,17 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
       return describeToolGroupChange(request.change);
     case "feature_flag":
       return describeFeatureFlagChange(request.change.flag, request.change.enabled);
+    case "feature_preference_review": {
+      const labels = request.change.flags.map(featureFlagName).join(", ");
+      const action = request.change.decision === "inherit" ? "Use new defaults" : "Keep off";
+      return {
+        title: action,
+        summary: `${action} for ${labels}.`,
+        completedSummary: `Feature preferences saved for ${labels}.`,
+        impact: "Applies to the reviewed installation settings.",
+        risk: "caution" as const,
+      };
+    }
     case "feature_flags": {
       const description = Object.entries(request.change.flags)
         .map(([flag, enabled]) => `${featureFlagName(flag)}: ${enabled ? "on" : "off"}`)

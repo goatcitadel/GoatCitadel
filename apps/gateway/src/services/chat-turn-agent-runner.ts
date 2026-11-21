@@ -156,6 +156,7 @@ import {
 } from "./chat-tool-families.js";
 import {
   buildCodeModeRequestTurnShape,
+  isCodeModeRequestTurnShapeEligible,
   isRestrictedAutonomousPermissionProfile,
   loadCodeModeRequestEligibility,
   type CodeModeRequestTurnFields,
@@ -670,7 +671,10 @@ interface CoworkContinuationProgressSnapshot {
 }
 
 /** Feature flags that decide whether a tool is offered to the model at all. */
-export type ChatToolExposureFlag = "delegationScopeExpansionV1Enabled" | "browserErrandsEnabled";
+export type ChatToolExposureFlag =
+  | "delegationScopeExpansionV1Enabled"
+  | "browserErrandsEnabled"
+  | "chatTimersV1Enabled";
 
 export interface ChatTurnAgentRunnerInput {
   sessionId: string;
@@ -729,6 +733,8 @@ export interface ChatTurnAgentRunnerInput {
   };
   /** Exact validated server-only posture for a storage-admitted heartbeat occurrence. */
   serverOnlyPosture?: Readonly<SystemHeartbeatTurnPrepPosture>;
+  /** Server-derived narrowing only; never grants memory-write authority. */
+  naturalMemoryReviewOnly?: boolean;
   /** Original admitted content when a durable continuation adds answered-prompt context. */
   capabilityProfileContent?: string;
   /** Stable provider/model/capability-selection dimension for compaction hysteresis. */
@@ -1365,12 +1371,15 @@ export class ChatTurnAgentRunner {
       nativeTools,
       meshTools,
     );
-    return await this.buildToolSchema(
-      { ...input, executionProfile },
-      intents,
-      admittedNativeTools,
-      admittedMeshTools,
-      discoveredToolNames,
+    return filterNaturalMemoryReviewTools(
+      input,
+      await this.buildToolSchema(
+        { ...input, executionProfile },
+        intents,
+        admittedNativeTools,
+        admittedMeshTools,
+        discoveredToolNames,
+      ),
     );
   }
 
@@ -1496,6 +1505,10 @@ export class ChatTurnAgentRunner {
 
   private async isOptionalUserInputEnabled(): Promise<boolean> {
     return (await this.deps.chatAsyncClarificationV1Enabled?.()) === true;
+  }
+
+  private async readToolExposureFlag(flag: ChatToolExposureFlag): Promise<boolean> {
+    return (await this.deps.toolExposureFlagEnabled?.(flag)) === true;
   }
 
   /** Whether this turn offers `code_mode.request`, by the rule turn preparation also applies to the base prompt. */
@@ -2497,20 +2510,33 @@ export class ChatTurnAgentRunner {
             )
           : await this.resolveCapabilityToolSchema(input);
     const routedContextToolSchema = await this.filterRoutedContextCapabilityToolSchema(input, admittedToolSchema);
-    const filteredToolSchema = await this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema);
+    const filteredToolSchema = filterNaturalMemoryReviewTools(
+      input,
+      await this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema),
+    );
+    const unavailableLiveTools = new Set<string>();
     if (
       !(await this.isOptionalUserInputEnabled()) ||
       input.parentDelegationStepId ||
       isRestrictedAutonomousPermissionProfile(input.permissionProfileId)
     ) {
-      const optionalModelName = filteredToolSchema.canonicalToModel.get("user_input.request");
-      filteredToolSchema.canonicalToModel.delete("user_input.request");
-      if (optionalModelName) filteredToolSchema.modelToCanonical.delete(optionalModelName);
-      filteredToolSchema.tools = filteredToolSchema.tools.filter(
-        (tool) => extractProviderToolName(tool) !== optionalModelName,
-      );
+      unavailableLiveTools.add("user_input.request");
+    }
+    if (
+      filteredToolSchema.canonicalToModel.has("chat.reminder.preview") &&
+      (!isCodeModeRequestTurnShapeEligible(buildCodeModeRequestTurnShape(input)) ||
+        !(await this.readToolExposureFlag("chatTimersV1Enabled")))
+    ) {
+      unavailableLiveTools.add("chat.reminder.preview");
+    }
+    for (const name of unavailableLiveTools) {
+      const modelName = filteredToolSchema.canonicalToModel.get(name);
+      if (!modelName) continue;
+      filteredToolSchema.canonicalToModel.delete(name);
+      filteredToolSchema.modelToCanonical.delete(modelName);
+      filteredToolSchema.tools = filteredToolSchema.tools.filter((tool) => extractProviderToolName(tool) !== modelName);
       filteredToolSchema.policyDecisions = filteredToolSchema.policyDecisions.filter(
-        (decision) => decision.toolName !== "user_input.request",
+        (decision) => decision.toolName !== name,
       );
     }
     const toolSchema: ResolvedChatTurnToolSchema = workflowSkillCapture
@@ -7011,8 +7037,7 @@ export class ChatTurnAgentRunner {
       !restrictedAutonomousProfile &&
       Boolean(this.toolAccessProbe) &&
       (await this.deps.boundedToolExposureV1Enabled?.()) === true;
-    const exposureFlag = (flag: ChatToolExposureFlag): Promise<boolean> =>
-      this.deps.toolExposureFlagEnabled?.(flag) ?? Promise.resolve(false);
+    const exposureFlag = (flag: ChatToolExposureFlag) => this.readToolExposureFlag(flag);
     const [
       subagentFanoutDisabled,
       durableChatFanoutEnabled,
@@ -7020,6 +7045,7 @@ export class ChatTurnAgentRunner {
       attachedContextToolsEnabled,
       delegationScopeExpansionEnabled,
       browserErrandsEnabled,
+      timersEnabled,
     ] = await Promise.all([
       this.deps.subagentFanoutV1Disabled?.() ?? Promise.resolve(false),
       this.deps.durableChatFanoutV1Enabled?.() ?? Promise.resolve(false),
@@ -7031,6 +7057,7 @@ export class ChatTurnAgentRunner {
       this.deps.attachedContextToolsV1Enabled?.() ?? Promise.resolve(false),
       exposureFlag("delegationScopeExpansionV1Enabled"),
       exposureFlag("browserErrandsEnabled"),
+      exposureFlag("chatTimersV1Enabled"),
     ]);
     // R3-8 `agent.fanout` exposure gate: only interactive Chat-normalized turns
     // whose session subagentPolicy explicitly allows automatic subagents may
@@ -7061,11 +7088,14 @@ export class ChatTurnAgentRunner {
     // Browser errands drive the operator's own window: interactive Chat turns only, never scheduled or delegated ones.
     const browserErrandEligible =
       browserErrandsEnabled && input.mode === "chat" && !input.parentDelegationStepId && !restrictedAutonomousProfile;
+    const reminderPreviewEligible =
+      timersEnabled && !quickWebProfile && isCodeModeRequestTurnShapeEligible(buildCodeModeRequestTurnShape(input));
     const codeModeRequestEligible = await this.isCodeModeRequestEligible(input);
     for (const tool of catalog) {
       if (CODE_MODE_ONLY_TOOL_NAMES.has(tool.toolName)) continue;
       if (tool.toolName === CODE_MODE_REQUEST_TOOL_NAME && !codeModeRequestEligible) continue;
       if (tool.toolName === BROWSER_ERRAND_TOOL_NAME && !browserErrandEligible) continue;
+      if (tool.toolName === "chat.reminder.preview" && !reminderPreviewEligible) continue;
       if ((tool.toolName === "capabilities.search" || tool.toolName === "skills.read") && !boundedExposure) continue;
       if (tool.toolName === "user_input.request" && !optionalInputToolEligible) continue;
       if (quickWebProfile && !QUICK_WEB_ALLOWED_TOOL_NAMES.has(tool.toolName)) {
@@ -7263,6 +7293,8 @@ export class ChatTurnAgentRunner {
     });
     // Explanation is read-only and independent of bounded discovery; all normal policy and profile gates still apply.
     if (!quickWebProfile) essentialToolNames.push("capabilities.explain");
+    if (reminderPreviewEligible && /\b(?:remind|reminder|timer)\b/iu.test(input.content))
+      essentialToolNames.push("chat.reminder.preview");
     if (boundedExposure) {
       essentialToolNames.push("capabilities.search", "skills.read");
       const essentials = new Set(essentialToolNames);
@@ -16636,4 +16668,16 @@ function isChatTurnAbortError(error: unknown, signal?: AbortSignal): boolean {
 
 function hasExecutedToolRun(toolRuns: ChatToolRunRecord[], toolName: string): boolean {
   return toolRuns.some((run) => run.toolName === toolName && run.status === "executed");
+}
+
+/** Narrow both schema and allow maps, including persisted profiles and discovery rebuilds. */
+function filterNaturalMemoryReviewTools(
+  input: Pick<ChatTurnAgentRunnerInput, "naturalMemoryReviewOnly">,
+  schema: ResolvedChatTurnToolSchema,
+): ResolvedChatTurnToolSchema {
+  if (!input.naturalMemoryReviewOnly) return schema;
+  // This server-derived posture admits only a preference acknowledgement. The
+  // lifecycle prepares and matches the proposal after success; a model search
+  // can otherwise add an unrelated approve_all gate before that review exists.
+  return { ...schema, tools: [], canonicalToModel: new Map(), modelToCanonical: new Map(), policyDecisions: [] };
 }

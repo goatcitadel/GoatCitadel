@@ -1,4 +1,6 @@
 import { verifyDurableAdmittedExplicitContextSnapshot } from "./chat-explicit-context-admission.js";
+import type { BackgroundLearningQueueService } from "./background-learning-queue-service.js";
+import { createDurableLearningReviewWorkflowExecutor } from "./durable-learning-review-workflow.js";
 import {
   loadDurableChatWorkerContext,
   injectDurableChatWorkerContext,
@@ -251,6 +253,12 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
    * notify, so heartbeats stay invisible unless they surface to the user.
    */
   cleanupSilentHeartbeatTurn?(input: SilentHeartbeatCleanupRequest): Promise<SilentHeartbeatCleanupResult>;
+  notifyHeartbeatAttention?(input: {
+    workspaceId: string;
+    sessionId: string;
+    turnId: string;
+    occurrenceId: string;
+  }): Promise<Record<string, unknown>>;
   reconcileAutonomousChatPostCommit?(runId: string): Promise<boolean>;
   reconcileGeneralChatPostCommit?(runId: string): Promise<boolean>;
   executeGeneralChatPostCommitDurableEffect(
@@ -326,6 +334,7 @@ export interface DurableWorkflowFinalizationContext {
 }
 
 export interface DurableWorkflowExecutor {
+  isReadyToClaim?(run: DurableRunRecord): Promise<boolean>;
   execute(run: DurableRunRecord, context?: DurableWorkflowExecutionContext): Promise<void>;
   isRecoverable?(run: DurableRunRecord): Promise<DurableWorkflowRecoverability> | DurableWorkflowRecoverability;
   markUnrecoverable?(
@@ -336,6 +345,7 @@ export interface DurableWorkflowExecutor {
 }
 
 export interface DurableWorkflowExecutorRegistry {
+  isWorkflowReadyToClaim?(run: DurableRunRecord): Promise<boolean>;
   executeWorkflow(run: DurableRunRecord, context?: DurableWorkflowExecutionContext): Promise<void>;
   isWorkflowRecoverable(run: DurableRunRecord): Promise<DurableWorkflowRecoverability>;
   markWorkflowUnrecoverable(
@@ -364,10 +374,13 @@ export type DurableChatTurnWorkflowHost = chatTurnDispatchService.ChatTurnDispat
     | "persistChatStreamChunk"
     | "enqueueAutonomousChannelDelivery"
     | "cleanupSilentHeartbeatTurn"
+    | "notifyHeartbeatAttention"
     | "reconcileAutonomousChatPostCommit"
     | "reconcileGeneralChatPostCommit"
   > & {
+    captureNaturalChatMemoryIntent?: MemoryLifecycleService["captureNaturalChatMemoryIntent"];
     runInChatApprovalScope?<T>(run: DurableRunRecord, work: () => Promise<T>): Promise<T>;
+    runAutomaticHeartbeat?<T>(sessionId: string, work: () => Promise<T>): Promise<T>;
     resolveRemoteWorkerChatExecution?(
       run: DurableRunRecord,
       prepared: PreparedAgentChatTurn,
@@ -421,6 +434,9 @@ type DurableCuratorTickWorkflowHost = DurableWorkflowCompletionHost & {
 };
 
 export interface DurableWorkflowExecutorHosts {
+  learningReview?: DurableWorkflowCompletionHost & {
+    backgroundLearningQueue: Pick<BackgroundLearningQueueService, "process" | "isReadyToClaim" | "releaseForRetry">;
+  };
   memoryMaintenance: DurableMemoryMaintenanceWorkflowHost;
   chatTurn: DurableChatTurnWorkflowHost;
   chatPostCommitEffect: DurableWorkflowExecutor;
@@ -944,6 +960,9 @@ export function createDurableWorkflowExecutorRegistry(
   const getExecutor = (run: DurableRunRecord): DurableWorkflowExecutor | undefined => executors[run.workflowKey];
 
   return {
+    async isWorkflowReadyToClaim(run: DurableRunRecord): Promise<boolean> {
+      return (await getExecutor(run)?.isReadyToClaim?.(run)) ?? true;
+    },
     async executeWorkflow(run: DurableRunRecord, context?: DurableWorkflowExecutionContext): Promise<void> {
       const executor = getExecutor(run);
       if (!executor) {
@@ -978,6 +997,7 @@ export function createDeferredDurableWorkflowExecutorRegistry(
   resolveRegistry: () => DurableWorkflowExecutorRegistry,
 ): DurableWorkflowExecutorRegistry {
   return {
+    isWorkflowReadyToClaim: async (run) => (await resolveRegistry().isWorkflowReadyToClaim?.(run)) ?? true,
     executeWorkflow: (run, context) => resolveRegistry().executeWorkflow(run, context),
     isWorkflowRecoverable: (run) => resolveRegistry().isWorkflowRecoverable(run),
     markWorkflowUnrecoverable: (run, reason, context) =>
@@ -988,7 +1008,17 @@ export function createDeferredDurableWorkflowExecutorRegistry(
 export function buildDurableWorkflowExecutors(
   hosts: DurableWorkflowExecutorHosts,
 ): Record<string, DurableWorkflowExecutor> {
+  const learningReview = hosts.learningReview;
   return {
+    ...(learningReview
+      ? {
+          "learning.review": createDurableLearningReviewWorkflowExecutor({
+            queue: learningReview.backgroundLearningQueue,
+            complete: (run, result) => completeDurableWorkflowRun(learningReview, run, result),
+            assertActive: throwIfDurableWorkflowAborted,
+          }),
+        }
+      : {}),
     "memory.maintenance": {
       execute: async (run, context) => {
         throwIfDurableWorkflowAborted(context);
@@ -2237,8 +2267,12 @@ export async function executeDurableChatTurnRun(
       },
     );
   };
-  if (host.runInChatApprovalScope) await host.runInChatApprovalScope(run, dispatch);
-  else await dispatch();
+  const runAutomaticHeartbeat = host.runAutomaticHeartbeat?.bind(host);
+  const dispatchWithBudget =
+    heartbeatIdentity && runAutomaticHeartbeat ? () => runAutomaticHeartbeat(payload.sessionId, dispatch) : dispatch;
+  const runInApprovalScope = host.runInChatApprovalScope?.bind(host);
+  if (runInApprovalScope) await runInApprovalScope(run, dispatchWithBudget);
+  else await dispatchWithBudget();
   await reconcileDurableChatPostCommit(host, run, payload);
 }
 
@@ -2562,15 +2596,10 @@ async function reconcileDurableChatPostCommit(
   run: DurableRunRecord,
   payload: DurableChatTurnExecutionPayload,
 ): Promise<void> {
-  if (typeof host.reconcileAutonomousChatPostCommit === "function") {
-    await host.reconcileAutonomousChatPostCommit(run.runId);
-  }
-  if (typeof host.reconcileGeneralChatPostCommit === "function") {
-    await host.reconcileGeneralChatPostCommit(run.runId);
-  }
-  if (typeof host.reconcileAutonomousChatPostCommit === "function") {
-    return;
-  }
+  const reconcileAutonomous = host.reconcileAutonomousChatPostCommit?.bind(host);
+  await reconcileAutonomous?.(run.runId);
+  await host.reconcileGeneralChatPostCommit?.(run.runId);
+  if (reconcileAutonomous) return;
   // Compatibility fallback for narrow hosts. Shipped Gateway hosts use the
   // durable marker reconciler so a crash cannot lose or duplicate delivery.
   await maybeEnqueueAutonomousDelivery(host, run, payload);
@@ -2886,8 +2915,26 @@ export async function executeGeneralChatPostCommit(
       });
     },
   );
-  await progress?.runEffect("learned_memory_user", () => undefined);
-  const learnedMemoryUser = "not_applicable" as const;
+  const captureNaturalChatMemoryIntent = host.captureNaturalChatMemoryIntent?.bind(host);
+  const learnedMemoryUser = await runEffect(
+    "learned_memory_user",
+    transcriptCompleted &&
+      !delegatedChild &&
+      !autonomous &&
+      userMessage?.sourceAuthority === "operator" &&
+      userMessage.actorType === "user" &&
+      Boolean(trace.guidance?.workspaceId?.trim()) &&
+      Boolean(captureNaturalChatMemoryIntent),
+    async () => {
+      await captureNaturalChatMemoryIntent!({
+        workspaceId: trace.guidance!.workspaceId!,
+        sessionId: payload.sessionId,
+        turnId: payload.turnId,
+        messageId: userMessage!.messageId,
+        content: userMessage!.content,
+      });
+    },
+  );
   await progress?.runEffect("learned_memory_assistant", () => undefined);
   const learnedMemoryAssistant = "not_applicable" as const;
   const commitmentsInput: GeneralChatPostCommitDurableEffectInput = {
@@ -3508,11 +3555,22 @@ export async function executeAutonomousChatPostCommit(
   }
   const heartbeatIdentity = readExactSystemHeartbeatExecutionIdentity(currentRun, payload);
   if (heartbeatIdentity) {
-    if (!readExactSystemHeartbeatExecutionDecision(currentRun, heartbeatIdentity)) {
+    const evidence = readExactSystemHeartbeatExecutionDecision(currentRun, heartbeatIdentity);
+    if (!evidence) {
       throw new Error(`System heartbeat ${currentRun.runId} is missing its exact decision evidence.`);
     }
+    const notifyAttention = host.notifyHeartbeatAttention?.bind(host);
+    const delivery =
+      evidence.decision.notify && notifyAttention
+        ? await notifyAttention({
+            workspaceId: payload.workspaceId,
+            sessionId: payload.sessionId,
+            turnId: payload.turnId,
+            occurrenceId: heartbeatIdentity.occurrenceId,
+          })
+        : { status: "skipped", reason: "system_heartbeat_inline_output" };
     return {
-      delivery: { status: "skipped", reason: "system_heartbeat_inline_output" },
+      delivery,
       heartbeatCleanup: { status: "not_required" },
     };
   }

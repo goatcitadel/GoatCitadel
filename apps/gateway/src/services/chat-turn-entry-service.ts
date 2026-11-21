@@ -929,6 +929,7 @@ async function runAgentSendChatMessageLlmPath(
       selectionSource: input.routeDecision?.selectionSource,
       signal: controller.signal,
       capabilityProfile: prepared.capabilityProfile,
+      naturalMemoryReviewOnly: prepared.naturalMemoryReviewOnly,
       featureAdmission: prepared.featureAdmission,
       capabilityProfileContent: prepared.capabilityProfileContent,
       compactionDimensionHash: prepared.compactionDimensionHash,
