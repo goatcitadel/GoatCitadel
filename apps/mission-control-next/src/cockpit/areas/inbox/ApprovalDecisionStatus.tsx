@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Button } from "../../ui/Button";
 
 export function ApprovalDecisionStatus({
@@ -7,9 +8,9 @@ export function ApprovalDecisionStatus({
   rechecking,
   checkAgain,
 }: {
-  message?: string | null;
+  message?: ReactNode;
   uncertain: boolean;
-  error?: string | null;
+  error?: ReactNode;
   rechecking: boolean;
   checkAgain: () => Promise<void>;
 }) {
