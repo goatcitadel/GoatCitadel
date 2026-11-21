@@ -157,10 +157,12 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
       />
       {savedLessons.length || learnings.isFetching || showLearningError ? (
         <Section title="Saved workspace lessons" description="Recent trusted lessons in this workspace.">
-          {learnings.isFetching ? <p role="status">Reading saved lessons…</p> : null}
+          {learnings.isFetching ? <p aria-busy="true">Reading saved lessons…</p> : null}
           {showLearningError && learningsFeatureOff ? <FeatureOffNotice flag={learningsFeatureOff} /> : null}
           {showLearningError && !learningsFeatureOff ? (
-            <Callout tone="error">Couldn’t read saved lessons. {describeApiError(learnings.error).summary}</Callout>
+            <Callout announce={false} tone="error">
+              Couldn’t read saved lessons. {describeApiError(learnings.error).summary}
+            </Callout>
           ) : null}
           {savedLessons.length ? (
             <ul className="min-w-0 divide-y divide-line-subtle">
@@ -175,12 +177,7 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
       ) : null}
       {noActiveMemoryItems ? (
         savedLessons.length ? (
-          <Section
-            title="Memory items"
-            actions={
-              <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-2">{emptyItemActions}</div>
-            }
-          >
+          <Section title="Memory items" actions={emptyItemActions}>
             <p className="text-sm text-fg-muted">No active memory items.</p>
           </Section>
         ) : (

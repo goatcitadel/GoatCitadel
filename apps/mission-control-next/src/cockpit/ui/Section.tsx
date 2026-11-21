@@ -44,7 +44,7 @@ export function Section({
           </Heading>
           {description ? <p className="mt-0.5 text-sm text-fg-secondary">{description}</p> : null}
         </div>
-        {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+        {actions ? <div className="flex max-w-full shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
       {children}
     </section>

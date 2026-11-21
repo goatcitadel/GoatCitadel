@@ -46,8 +46,8 @@ export function DeferredChatStreamErrorNotice({
       identity={sessionId ?? ""}
       fallback={
         <p
-          role="alert"
-          className={`${props.className ?? "mt-2"} rounded-md border border-status-failed p-2 text-sm text-fg-secondary`}
+          aria-busy="true"
+          className={`${props.className ?? "mt-2"} border-l-2 border-status-failed pl-2 text-sm text-fg-secondary`}
         >
           The request failed. Loading recovery options…
         </p>
