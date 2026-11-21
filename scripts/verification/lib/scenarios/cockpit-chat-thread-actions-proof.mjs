@@ -286,8 +286,7 @@ async function timerActions({ api, page, scope, writes, capture, viewport, provi
     .getByRole("region", { name: "Session timers", exact: true })
     .getByRole("article")
     .filter({ hasText: expected.message });
-  await row.waitFor();
-  assert.ok((await row.innerText()).includes("active"));
+  await row.getByText(/^Saved · /u).waitFor();
   const cancelRoute = `${route}/${encodeURIComponent(active.timerId)}`;
   const cancelResponse = page.waitForResponse(
     (response) => response.request().method() === "DELETE" && pathOf(response.url()) === cancelRoute,
@@ -312,8 +311,7 @@ async function timerActions({ api, page, scope, writes, capture, viewport, provi
     .getByRole("region", { name: "Session timers", exact: true })
     .getByRole("article")
     .filter({ hasText: expected.message });
-  await reloadedRow.waitFor();
-  assert.ok((await reloadedRow.innerText()).includes("cancelled"));
+  await reloadedRow.getByText(/^Cancelled · /u).waitFor();
   assert.equal(await reloadedRow.getByRole("button", { name: "Cancel", exact: true }).count(), 0);
   assert.deepEqual((await api(route)).items, [final]);
   assert.deepEqual(await api(threadRoute), before, "Timer create/cancel changed the Chat transcript.");
