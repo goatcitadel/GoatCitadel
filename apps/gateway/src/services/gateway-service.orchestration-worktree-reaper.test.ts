@@ -7,14 +7,10 @@ vi.mock("node:sqlite", () => ({
 
 import { GatewayService } from "./gateway-service.js";
 import type { BackgroundIntervalHandle } from "./background-scheduler.js";
+import type { OrchestrationWorktreeService } from "./orchestration-worktree-service.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 
-interface ReapResult {
-  dryRun: boolean;
-  scanned: number;
-  removed: string[];
-  skippedActive: string[];
-}
+type ReapResult = Awaited<ReturnType<OrchestrationWorktreeService["reapOrphaned"]>>;
 
 interface ReaperHarness {
   readonly gateway: GatewayService;
@@ -24,7 +20,7 @@ interface ReaperHarness {
 }
 
 function emptyReapResult(): ReapResult {
-  return { dryRun: false, scanned: 0, removed: [], skippedActive: [] };
+  return { dryRun: false, scanned: 0, removed: [], skippedActive: [], skippedDirty: [], skippedUnverified: [] };
 }
 
 function createReaperHarness(reapImpl: () => Promise<ReapResult> = async () => emptyReapResult()): ReaperHarness {
@@ -152,6 +148,7 @@ describe("GatewayService orchestration worktree reaper scheduler", () => {
   it("clears the reaper timers on gateway shutdown", async () => {
     const { gateway, reapOrphaned, closeWorktrees, backgroundTasks } = createReaperHarness();
     const closable = gateway as unknown as {
+      backgroundLearningQueueService: { close: () => void };
       mcpStdioSessions: { close: () => void };
       chatProactiveService: { stopScheduler: () => void };
       improvementService: { stopScheduler: () => void };
@@ -163,9 +160,11 @@ describe("GatewayService orchestration worktree reaper scheduler", () => {
       npuSidecar: { close: () => Promise<void> };
       llamaCppRuntime: { close: () => Promise<void> };
       llmService: { close: () => Promise<void> };
+      memoryCorpusSemanticService: { close: () => Promise<void> };
       storage: { close: () => void };
       orchestrationWorktreeReapScheduler?: BackgroundIntervalHandle;
     };
+    closable.backgroundLearningQueueService = { close: vi.fn() };
     closable.mcpStdioSessions = { close: vi.fn() };
     closable.chatProactiveService = { stopScheduler: vi.fn() };
     closable.improvementService = { stopScheduler: vi.fn() };
@@ -177,6 +176,7 @@ describe("GatewayService orchestration worktree reaper scheduler", () => {
     closable.npuSidecar = { close: vi.fn(async () => undefined) };
     closable.llamaCppRuntime = { close: vi.fn(async () => undefined) };
     closable.llmService = { close: vi.fn(async () => undefined) };
+    closable.memoryCorpusSemanticService = { close: vi.fn(async () => undefined) };
     closable.storage = { close: vi.fn() };
 
     (

@@ -199,6 +199,7 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
         deploymentProfile: "local_dev",
         defaultToolProfile: "minimal",
         durable: { enabled: true },
+        memory: { enabled: true },
         features: {
           durableKernelV1Enabled: true,
           replayOverridesV1Enabled: false,
@@ -527,7 +528,7 @@ describe("GatewayService Loop 13 chat facade forwarding", () => {
       gateway,
       "session-1",
       { content: "hello" },
-      { branchKind: "append" },
+      { branchKind: "append", naturalMemoryReviewConfigured: true },
     );
     expect(llmCompletionService.createChatCompletion).toHaveBeenCalledWith(gateway, { messages: [] }, {});
   });
@@ -1521,6 +1522,7 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       applyStoredFeatureFlags: vi.fn(),
       approvalEffectsService: { stopWorker: vi.fn() },
       assemblyService: { close: vi.fn(async () => undefined) },
+      backgroundLearningQueueService: { close: vi.fn() },
       chatProactiveService: { stopScheduler: vi.fn() },
       discordRuntimeService: { close: vi.fn(async () => undefined), sync: vi.fn(async () => undefined) },
       durableRunService: { stopWorker: vi.fn() },
@@ -1531,6 +1533,7 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       // close() reaps parked warm Claude Code CLI processes through LlmService.close().
       llmService: { close: vi.fn(async () => undefined) },
       mcpStdioSessions: { close: vi.fn() },
+      memoryCorpusSemanticService: { close: vi.fn(async () => undefined) },
       loadOnboardingMarker: vi.fn(async () => undefined),
       npuSidecar: { close: vi.fn(async () => undefined) },
       recordDevDiagnostic: vi.fn(),
@@ -1590,10 +1593,12 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
 
     gateway.backgroundTasks.add(Promise.resolve("done"));
     await GatewayService.prototype.close.call(gateway);
+    expect(gateway.backgroundLearningQueueService.close).toHaveBeenCalledOnce();
     expect(gateway.mcpStdioSessions.close).toHaveBeenCalledTimes(1);
     expect(gateway.chatProactiveService.stopScheduler).toHaveBeenCalled();
     expect(gateway.approvalEffectsService.stopWorker).toHaveBeenCalled();
     expect(gateway.llmService.close).toHaveBeenCalled();
+    expect(gateway.memoryCorpusSemanticService.close).toHaveBeenCalledOnce();
     expect(gateway.storage.close).toHaveBeenCalled();
     expect(gateway.closing).toBe(true);
   });

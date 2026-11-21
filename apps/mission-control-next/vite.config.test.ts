@@ -316,20 +316,55 @@ it.each(["src", "dist"])(
   "keeps optional external-source owners at their destination and mandatory %s Chat validation grouped",
   (directory) => {
     const prefix = "C:/repo/packages/";
+    const extension = directory === "src" ? "ts" : "js";
     const optional = [
-      prefix + "contracts/" + directory + "/external-sources.js",
-      prefix + "mission-control-shared/" + directory + "/api/external-sources.js",
+      `${prefix}contracts/${directory}/external-sources.${extension}`,
+      `${prefix}mission-control-shared/${directory}/api/external-sources.${extension}`,
     ];
-    const mandatory = [
-      prefix + "contracts/" + directory + "/external-source-chat.js",
-      prefix + "contracts/" + directory + "/external-source-validation.js",
-      prefix + "mission-control-shared/" + directory + "/api/external-source-chat.js",
-    ];
-    const modules = new Map<string, { isIncluded: boolean; importedIds: string[] }>([
-      ["C:/repo/src/cockpit-entry.tsx", { isIncluded: true, importedIds: ["discarded-barrel", ...mandatory] }],
+    const bindings = [
+      [`${prefix}contracts/${directory}/external-source-chat.${extension}`, "assertExternalSessionAttachment"],
+      [`${prefix}contracts/${directory}/external-source-validation.${extension}`, "normalizeInputText"],
+      [`${prefix}mission-control-shared/${directory}/api/external-source-chat.${extension}`, "requireIdentifier"],
+    ] as const;
+    const mandatory = bindings.map(([id]) => id);
+    const identifier = (name: string) => ({ type: "Identifier", name });
+    const modules = new Map<string, { isIncluded: boolean; importedIds: string[]; ast?: unknown }>([
+      [
+        "C:/repo/src/cockpit-entry.tsx",
+        {
+          isIncluded: true,
+          importedIds: ["discarded-barrel", ...mandatory],
+          ast: {
+            type: "Program",
+            body: bindings.map(([id, name]) => ({
+              type: "ImportDeclaration",
+              source: { type: "Literal", value: id },
+              specifiers: [{ type: "ImportSpecifier", imported: identifier(name), local: identifier(name) }],
+            })),
+          },
+        },
+      ],
       ["discarded-barrel", { isIncluded: false, importedIds: optional }],
-      ...[...optional, ...mandatory].map(
-        (id) => [id, { isIncluded: true, importedIds: [] }] as [string, { isIncluded: boolean; importedIds: string[] }],
+      ...optional.map((id) => [id, { isIncluded: true, importedIds: [] }] as const),
+      ...bindings.map(
+        ([id, name]) =>
+          [
+            id,
+            {
+              isIncluded: true,
+              importedIds: [],
+              ast: {
+                type: "Program",
+                body: [
+                  {
+                    type: "ExportNamedDeclaration",
+                    specifiers: [],
+                    declaration: { type: "FunctionDeclaration", id: identifier(name) },
+                  },
+                ],
+              },
+            },
+          ] as const,
       ),
     ]);
     const graph = { getModuleIds: () => modules.keys(), getModuleInfo: (id: string) => modules.get(id) ?? null };

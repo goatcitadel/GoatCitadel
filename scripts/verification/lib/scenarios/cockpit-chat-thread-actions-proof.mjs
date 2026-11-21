@@ -259,6 +259,7 @@ async function timerActions({ api, page, scope, writes, capture, viewport, provi
     timezone: "UTC",
     message: `Provider-free reminder ${scope.variant} ${scope.sessionId}`,
     cancelOnNextReply: false,
+    notificationRuleId: null,
   };
   await dialog.getByLabel("Due date and time", { exact: true }).fill(due);
   await dialog.getByRole("textbox", { name: "Timezone", exact: true }).fill("UTC");

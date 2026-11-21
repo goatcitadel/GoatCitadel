@@ -89,7 +89,9 @@ const mocks = vi.hoisted(() => ({
     return {
       createSkillEvaluationProposal: (runId: string) => deps.createCapabilityProposal({ runId }),
       getSkillEvaluationRun: (runId: string) => ({ runId, storage: deps.storage }),
-      listSkillEvaluationRuns: async (skillId: string) => [{ skillId, skills: await deps.listSkills() }],
+      listSkillEvaluationRuns: async (skillId: string) => [
+        { skillId, skills: [await deps.resolveSkillForEvaluation(skillId)] },
+      ],
       previewSkillEvaluation: (skillId: string, input: unknown) => ({ skillId, input, preview: true }),
       runSkillEvaluation: (skillId: string, input: unknown) => {
         deps.recordSkillEvaluationSignal({ skillId, input });

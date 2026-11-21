@@ -135,9 +135,9 @@ describe("automatic background dispatch budget", () => {
     expect(
       estimateAutomaticDispatchUsd({
         ...local,
+        localTransport: true,
         route: {
           ...local.route,
-          localTransport: true,
           credential: { ...local.route.credential, usagePool: "local" },
           pricing: undefined,
         },
@@ -146,7 +146,8 @@ describe("automatic background dispatch budget", () => {
     expect(() =>
       estimateAutomaticDispatchUsd({
         ...local,
-        route: { ...local.route, localTransport: false, credential: { ...local.route.credential, usagePool: "local" } },
+        localTransport: false,
+        route: { ...local.route, credential: { ...local.route.credential, usagePool: "local" } },
       }),
     ).toThrow("verified pricing");
   });

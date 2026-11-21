@@ -217,9 +217,10 @@ export function estimateAutomaticDispatchUsd({
   route,
   effectiveOutputTokenCap,
   requestInputBytes,
+  localTransport,
 }: LlmDispatchGuardInput): number {
   if (route.credential.usagePool === "local") {
-    if (route.localTransport) return 0;
+    if (localTransport) return 0;
     throw new AutomaticBackgroundBudgetError(
       "pricing_unavailable",
       "Automatic work needs verified pricing for a hosted model.",

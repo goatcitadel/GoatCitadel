@@ -8,7 +8,6 @@ export interface LlmDispatchRoute {
   readonly apiStyle: string;
   readonly configuredContextWindowTokens?: number;
   readonly credential: ModelUsageCredentialLineage;
-  readonly localTransport?: boolean;
   readonly pricing?: ModelUsagePricingLineage;
 }
 
@@ -19,6 +18,8 @@ export interface LlmDispatchGuardInput {
   readonly transportAttemptIndex: number;
   readonly effectiveOutputTokenCap?: number;
   readonly requestInputBytes?: number;
+  /** Whether this attempt uses a local endpoint without a proxy. */
+  readonly localTransport?: boolean;
 }
 
 export type LlmDispatchGuard = (input: LlmDispatchGuardInput) => Promise<void>;

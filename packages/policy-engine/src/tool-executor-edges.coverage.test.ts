@@ -494,48 +494,17 @@ describe("tool executor edge coverage", () => {
     expect((searched.items as Array<Record<string, unknown>>)[0]?.content).toContain("coverage");
   });
 
-  it("covers memory read cache hits and citation source filtering", async () => {
-    const repeatedDoc = {
-      docId: "doc-alpha",
-      title: "Alpha notes",
-      sourceRef: "memory://alpha",
-      metadata: { kind: "note" },
-    };
-    const listChunksByDocument = vi.fn((docId: string) =>
-      docId === "doc-alpha"
-        ? [
-            {
-              chunkId: "chunk-alpha",
-              content: "Alpha content matches the query.",
-            },
-          ]
-        : [
-            {
-              chunkId: "chunk-beta",
-              content: "Unrelated beta content.",
-            },
-          ],
-    );
+  it("leaves raw documents unread when scoped recall is unavailable and filters citation sources", async () => {
+    const listDocuments = vi.fn();
+    const listChunksByDocument = vi.fn();
     const storage = {
-      knowledge: {
-        listDocuments: vi.fn(() => [
-          repeatedDoc,
-          {
-            docId: "doc-beta",
-            title: "Beta notes",
-            sourceRef: "memory://beta",
-            metadata: {},
-          },
-          repeatedDoc,
-        ]),
-        listChunksByDocument,
-      },
+      knowledge: { listDocuments, listChunksByDocument },
     } as unknown as Storage & AsyncStorage;
 
     const memory = await executeTool(request("memory.read", { namespace: "user", query: "alpha" }), config, storage);
-    expect(memory).toMatchObject({ namespace: "user", query: "alpha" });
-    expect((memory.items as Array<Record<string, unknown>>).length).toBe(2);
-    expect(listChunksByDocument).toHaveBeenCalledTimes(2);
+    expect(memory).toMatchObject({ namespace: "user", query: "alpha", items: [], unavailable: true });
+    expect(listDocuments).not.toHaveBeenCalled();
+    expect(listChunksByDocument).not.toHaveBeenCalled();
 
     const citations = await executeTool(
       request("citations.build", {
@@ -1104,13 +1073,15 @@ describe("tool executor edge coverage", () => {
     expect(skippedNonCodeFile).toMatchObject({ count: 0 });
 
     const longDoc = `${"x".repeat(1300)} needle ${"y".repeat(1300)}`;
+    const memoryStorage = knowledgeStorage();
     await expect(
       executeTool(
         request("memory.write", { namespace: "long-doc", title: "Long Doc", content: longDoc }),
         config,
-        knowledgeStorage(),
+        memoryStorage,
       ),
-    ).resolves.toMatchObject({ chunksSaved: expect.any(Number) });
+    ).rejects.toThrow("The canonical memory lifecycle write owner is unavailable.");
+    expect(memoryStorage.knowledge.createDocument).not.toHaveBeenCalled();
 
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "tool-executor-full-disk-"));
     const outsideFile = path.join(outsideDir, "outside.txt");

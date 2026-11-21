@@ -879,12 +879,12 @@ describe("Postgres migration ledger compatibility", () => {
     // v227 adds twelve renderer receipt columns; its two foreign keys cascade cleanup.
     // v230/v231 add the four Auto mode and managed-file tables (25 columns, two indexes).
     // Keep independent drift tripwires for the complete current shape.
-    assert.equal(manifest.tables.length, 378);
+    assert.equal(manifest.tables.length, 382);
     assert.equal(
       manifest.tables.reduce((count, table) => count + table.columns.length, 0),
-      5_178,
+      5_222,
     );
-    assert.equal(manifest.indexes.length, 777);
+    assert.equal(manifest.indexes.length, 787);
     assert.deepEqual(
       manifest.tables
         .find((table) => table.name === "model_comparison_execution_claims")
@@ -1116,8 +1116,8 @@ describe("Postgres migration ledger compatibility", () => {
 
   it("covers every canonical IF NOT EXISTS table and index and fails closed on catalog issues", () => {
     const manifest = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    assert.equal(manifest.tables.length, 378);
-    assert.equal(manifest.indexes.length, 794);
+    assert.equal(manifest.tables.length, 382);
+    assert.equal(manifest.indexes.length, 804);
     assert.equal(
       manifest.tables.every((table) => table.columns.length > 0),
       true,

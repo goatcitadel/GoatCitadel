@@ -2976,7 +2976,7 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     }
   });
 
-  it("stores an empty pending request when an approval-gated request has a defensive array shape", async () => {
+  it("stores the bound pending request when an approval-gated input has a defensive array shape", async () => {
     const storage = createStorageStub();
     const engine = new ToolPolicyEngine(policyConfig, storage);
     const arrayBackedRequest = [] as unknown as ToolInvokeRequest;
@@ -2992,7 +2992,12 @@ describe("ToolPolicyEngine policy edge coverage", () => {
     });
     expect(storage.pendingApprovalActions.upsertPending).toHaveBeenCalledWith(
       expect.objectContaining({
-        request: {},
+        request: {
+          toolName: "shell.exec",
+          args: { command: "echo hello" },
+          agentId: "agent",
+          sessionId: "session",
+        },
       }),
     );
   });

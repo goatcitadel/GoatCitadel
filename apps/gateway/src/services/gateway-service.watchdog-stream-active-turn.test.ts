@@ -270,21 +270,26 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
     const runCommitmentSweep = vi.fn(async () => undefined);
     const runHeartbeatSweep = vi.fn(async () => undefined);
     const runDueEvaluation = vi.fn(async () => undefined);
+    const backfillPage = vi.fn(async () => undefined);
     const refreshEngineeringLearnings = vi.fn(async () => undefined);
     const drainDueChannelDeliveries = vi.fn(async () => []);
     const gateway = createGatewayHarness({
       closing: true,
+      config: { assistant: { memory: { enabled: true } } },
       curatorService: { maybeRunIdleCurator },
       inboundChannelEventService: { drain: drainInboundChannelEvents },
       runCommitmentSweep,
       runHeartbeatSweep,
       memoryLifecycleService: { runDueEvaluation },
+      isFeatureEnabled: vi.fn(async (flag: string) => flag === "memoryCorpusRecallV1Enabled"),
+      storage: { memoryRecall: { backfillPage } },
       engineeringLearningService: { refreshAll: refreshEngineeringLearnings },
       drainDueChannelDeliveries,
     });
 
     await (GatewayService.prototype as any).runMaintenanceSchedulerTick.call(gateway);
     expect(maybeRunIdleCurator).not.toHaveBeenCalled();
+    expect(backfillPage).not.toHaveBeenCalled();
 
     gateway.closing = false;
     await (GatewayService.prototype as any).runMaintenanceSchedulerTick.call(gateway);
@@ -294,6 +299,7 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
     expect(runCommitmentSweep).toHaveBeenCalledTimes(1);
     expect(runHeartbeatSweep).toHaveBeenCalledTimes(1);
     expect(runDueEvaluation).toHaveBeenCalledTimes(1);
+    expect(backfillPage).toHaveBeenCalledExactlyOnceWith({ limit: 200 });
     expect(refreshEngineeringLearnings).toHaveBeenCalledTimes(1);
     expect(drainDueChannelDeliveries).toHaveBeenCalledTimes(1);
   });
@@ -307,7 +313,14 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
           finishSweep = resolve;
         }),
     );
-    const gateway = createGatewayHarness({ cronAutomationService: { runDueTaskCronJobs } });
+    const listEventJobs = vi.fn(async () => []);
+    const gateway = createGatewayHarness({
+      cronAutomationService: { runDueTaskCronJobs },
+      storage: {
+        systemSettings: { get: vi.fn(async () => undefined) },
+        cronJobs: { listEventJobs },
+      },
+    });
     (gateway as any).startCronScheduler();
     try {
       await vi.advanceTimersByTimeAsync(4_999);
@@ -316,13 +329,16 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
       expect(runDueTaskCronJobs).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(5_000);
       expect(runDueTaskCronJobs).toHaveBeenCalledTimes(1);
+      expect(listEventJobs).not.toHaveBeenCalled();
       finishSweep();
       await vi.advanceTimersByTimeAsync(5_000);
       expect(runDueTaskCronJobs).toHaveBeenCalledTimes(2);
+      expect(listEventJobs).toHaveBeenCalledTimes(1);
       finishSweep();
       gateway.closing = true;
       await vi.advanceTimersByTimeAsync(5_000);
       expect(runDueTaskCronJobs).toHaveBeenCalledTimes(2);
+      expect(listEventJobs).toHaveBeenCalledTimes(2);
     } finally {
       (gateway as any).cronScheduler.stop();
       vi.useRealTimers();
@@ -395,16 +411,18 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
     expect(prewarmContext).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the completed turn as background-review provenance and skips delegated children", async () => {
-    const runBackgroundReview = vi.fn(async () => ({ ran: false }));
+  it("reconciles background review through the completed turn's durable run", async () => {
+    const reconcileGeneralChatPostCommit = vi.fn(async () => undefined);
+    const getTrace = vi.fn(async () =>
+      createTrace({
+        turnId: "turn-current",
+        status: "completed",
+        durable: { runId: "run-current", status: "completed" },
+      }),
+    );
     const gateway = createGatewayHarness({
-      backgroundReviewService: { runBackgroundReview },
-      isFeatureEnabled: vi.fn(() => false),
-      isReplayScratchSession: vi.fn(() => false),
-      advanceBackgroundReviewCounter: vi.fn(() => true),
-      storage: {
-        chatSessionMeta: { get: vi.fn(() => ({ origin: "human" })) },
-      },
+      durableRunService: { reconcileGeneralChatPostCommit },
+      storage: { chatTurnTraces: { get: getTrace } },
     });
     const baseInput = {
       sessionId: "session-1",
@@ -419,20 +437,30 @@ describe("GatewayService maintenance scheduler facade behavior", () => {
       turnId: "turn-child",
       delegatedChild: true,
     });
-    expect(runBackgroundReview).not.toHaveBeenCalled();
+    await GatewayService.prototype.scheduleBackgroundReviewIfDue.call(gateway, {
+      ...baseInput,
+      turnId: "turn-autonomous",
+      delegatedChild: false,
+      autonomous: true,
+    });
+    expect(getTrace).not.toHaveBeenCalled();
+    expect(reconcileGeneralChatPostCommit).not.toHaveBeenCalled();
+
+    await GatewayService.prototype.scheduleBackgroundReviewIfDue.call(gateway, {
+      ...baseInput,
+      sessionId: "session-other",
+      turnId: "turn-current",
+      delegatedChild: false,
+    });
+    expect(reconcileGeneralChatPostCommit).not.toHaveBeenCalled();
 
     await GatewayService.prototype.scheduleBackgroundReviewIfDue.call(gateway, {
       ...baseInput,
       turnId: "turn-current",
       delegatedChild: false,
     });
-    await Promise.allSettled([...gateway.backgroundTasks]);
-    expect(runBackgroundReview).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "session-1",
-        sourceTurnId: "turn-current",
-      }),
-    );
+    expect(getTrace.mock.calls).toEqual([["turn-current"], ["turn-current"]]);
+    expect(reconcileGeneralChatPostCommit).toHaveBeenCalledExactlyOnceWith("run-current");
   });
 });
 

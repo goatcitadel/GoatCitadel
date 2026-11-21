@@ -65,8 +65,8 @@ it("reads the original ask-always query after real approval and one execution, t
   const doc = f.sync.knowledge.createDocument({
     namespace: "decisions",
     title: "Canonical decision",
-    sourceType: "memory",
-    sourceRef: "memory:fixture",
+    sourceType: "text",
+    sourceRef: "text:fixture",
     metadata: {},
   });
   f.sync.knowledge.appendChunks(doc.docId, [{ content: "Use the existing local store" }]);
@@ -95,7 +95,7 @@ it("reads the original ask-always query after real approval and one execution, t
         {
           docId: doc.docId,
           snippet: "Use the existing local store",
-          attribution: { title: "Canonical decision", sourceRef: "memory:fixture" },
+          attribution: { title: "Canonical decision", sourceRef: "text:fixture" },
         },
       ],
     },
@@ -188,14 +188,14 @@ it("returns the actual document.docId after governed ingest and the original ind
 
 it("withholds separately protected file sources and carried source attribution under current ask-always policy", async () => {
   const f = fixture();
-  for (const sourceType of ["file", "memory"] as const) {
+  for (const sourceType of ["file", "text"] as const) {
     const doc = f.sync.knowledge.createDocument({
       namespace: "protected",
       title: "Protected",
       sourceType,
-      sourceRef: "C:/restricted/source.txt",
+      sourceRef: sourceType === "file" ? "C:/restricted/source.txt" : "text:carried-source",
       metadata:
-        sourceType === "memory"
+        sourceType === "text"
           ? { sourceAttribution: [{ sourceType: "file", sourceRef: "C:/restricted/carried.txt" }] }
           : {},
     });

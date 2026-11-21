@@ -580,6 +580,16 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
     true,
   );
 
+  const chat = await postJson<{ sessionId: string }>(
+    app,
+    "/api/v1/chat/sessions",
+    { title: "Smoke knowledge session" },
+    { "Idempotency-Key": smokeIdempotencyKey("smoke-knowledge-session-create") },
+  );
+  assert.equal(chat.statusCode, 201);
+  assert.ok(chat.body.sessionId);
+  const sessionId = chat.body.sessionId;
+
   const createGrant = await postJson<{ grantId: string }>(
     app,
     "/api/v1/tools/grants",
@@ -587,7 +597,7 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
       toolPattern: "memory.write",
       decision: "allow",
       scope: "session",
-      scopeRef: "smoke-knowledge-session",
+      scopeRef: sessionId,
       grantType: "persistent",
       createdBy: "smoke",
     },
@@ -609,7 +619,7 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
     {
       toolName: "memory.write",
       agentId: "architect",
-      sessionId: "smoke-knowledge-session",
+      sessionId,
       args: {
         namespace: "smoke",
         title: "entry",
@@ -636,7 +646,7 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
       namespace: "smoke",
       title: "smoke-note",
       content: "smoke tools expansion check",
-      sessionId: "smoke-knowledge-session",
+      sessionId,
       agentId: "architect",
     },
     {
@@ -674,7 +684,7 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
       toolPattern: "memory.search",
       decision: "allow",
       scope: "session",
-      scopeRef: "smoke-knowledge-session",
+      scopeRef: sessionId,
       grantType: "persistent",
       createdBy: "smoke",
     },
@@ -696,7 +706,7 @@ async function smokeNativeToolsExpansion(app: Awaited<ReturnType<typeof buildApp
     {
       namespace: "smoke",
       query: "tools expansion",
-      sessionId: "smoke-knowledge-session",
+      sessionId,
       agentId: "architect",
     },
     {

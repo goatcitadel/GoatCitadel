@@ -9,6 +9,7 @@ import { readLocalEnvVar } from "../env-file.js";
 import { GatewayService } from "./gateway-service.js";
 import { LlmService } from "./llm-service.js";
 import { buildSettingsCandidate, type SettingsConfigCandidate } from "./settings-auth-service.js";
+import { configurationFeatureFlags, type FeatureConfigSources } from "./gateway/feature-flags.js";
 import { updateLlmConfigWithTransportReceipt } from "./provider-transport-receipt.js";
 import { projectLlmConfigPublicValue } from "./provider-settings-public-projection.js";
 import { SecretStoreService } from "./secret-store-service.js";
@@ -466,21 +467,29 @@ describe("Gateway settings owner transaction", () => {
   });
 
   it("replaces stale feature system_settings exactly during committed forward recovery without waking autonomy", async () => {
-    const { initialConfig } = buildHarness();
-    const canonicalFeatures = {
-      ...structuredClone(initialConfig.assistant.features),
+    const canonicalStore = {
       autonomyV1Disabled: false,
+      chatSkillInstructionsV1Enabled: false,
     };
+    const featureSources: FeatureConfigSources = {
+      profile: { memoryMaintenanceV1Enabled: false },
+      environment: {},
+      canonicalStore,
+    };
+    const configuredFeatures = configurationFeatureFlags(featureSources);
     const staleFeatures = {
-      ...canonicalFeatures,
+      ...configuredFeatures,
       autonomyV1Disabled: true,
-      replayRegressionV1Enabled: !canonicalFeatures.replayRegressionV1Enabled,
+      scheduledChatTurnsV1Enabled: false,
     };
-    const set = vi.fn(async () => undefined);
+    const systemSettings = {
+      get: vi.fn(async () => ({ value: staleFeatures })),
+      set: vi.fn(async () => undefined),
+    };
     const resumeRunsWaitingForAutonomyKillSwitch = vi.fn();
     const runtime = {
-      config: { assistant: { features: structuredClone(canonicalFeatures) } },
-      storage: { systemSettings: { set } },
+      config: { assistant: { features: configuredFeatures }, featureSources },
+      storage: { systemSettings },
       configGenerationService: { isRuntimeOwnerReconciliationPending: () => true },
       featureFlagsCache: structuredClone(staleFeatures),
       featureFlagsCacheAtMs: 0,
@@ -493,8 +502,10 @@ describe("Gateway settings owner transaction", () => {
       }
     ).applyStartupFeatureFlags.call(runtime);
 
-    expect(set).toHaveBeenCalledOnce();
-    expect(set).toHaveBeenCalledWith("feature_flags_v1", canonicalFeatures);
+    expect(systemSettings.get).not.toHaveBeenCalled();
+    expect(systemSettings.set).toHaveBeenCalledOnce();
+    expect(systemSettings.set).toHaveBeenCalledWith("feature_flags_v1", canonicalStore);
+    const canonicalFeatures = { ...configuredFeatures, ...canonicalStore };
     expect(runtime.config.assistant.features).toEqual(canonicalFeatures);
     expect(runtime.featureFlagsCache).toEqual(canonicalFeatures);
     expect(resumeRunsWaitingForAutonomyKillSwitch).not.toHaveBeenCalled();

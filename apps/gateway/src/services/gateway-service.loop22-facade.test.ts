@@ -31,6 +31,7 @@ import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
   Object.assign(gateway, {
+    backgroundLearningQueueService: { close: vi.fn() },
     backgroundTasks: new Set<Promise<unknown>>(),
     closing: false,
     config: {
@@ -40,6 +41,7 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
         mesh: { nodeId: "node-loop22" },
       },
     },
+    memoryCorpusSemanticService: { close: vi.fn(async () => undefined) },
     recordDevDiagnostic: vi.fn(),
     runtimeReleaseTrustService: { close: vi.fn(async () => undefined), start: vi.fn() },
     sharedHostLifecycle: new SharedHostLifecycleService({ enabled: false }),
@@ -409,13 +411,13 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     let shutdown: Promise<void> | undefined;
     landShutdown(gateway, async () => {
       shutdown = GatewayService.prototype.close.call(gateway);
-      await durableWorker.stopped;
+      await Promise.race([durableWorker.stopped, shutdown]);
     });
 
     await GatewayService.prototype.startDeferredInit.call(gateway, new AbortController().signal);
     await shutdown;
 
-    const closeBeganAt = gateway.mcpStdioSessions.close.mock.invocationCallOrder[0];
+    const closeBeganAt = gateway.backgroundLearningQueueService.close.mock.invocationCallOrder[0];
     expect(closeBeganAt).toBeDefined();
     const starts = {
       proactiveScheduler: gateway.startProactiveScheduler,
@@ -477,6 +479,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
 
     await GatewayService.prototype.close.call(gateway);
 
+    expect(gateway.backgroundLearningQueueService.close).toHaveBeenCalledOnce();
     expect(gateway.mcpStdioSessions.close).toHaveBeenCalledOnce();
     expect(gateway.closing).toBe(true);
     expect(gateway.chatProactiveService.stopScheduler).toHaveBeenCalled();
@@ -492,6 +495,7 @@ describe("GatewayService loop 22 deferred lifecycle", () => {
     expect(gateway.npuSidecar.close).toHaveBeenCalled();
     expect(gateway.llamaCppRuntime.close).toHaveBeenCalled();
     expect(gateway.llmService.close).toHaveBeenCalled();
+    expect(gateway.memoryCorpusSemanticService.close).toHaveBeenCalledOnce();
     expect(gateway.orchestrationWorktreeService.close).toHaveBeenCalled();
     expect(gateway.storage.close).toHaveBeenCalled();
   });

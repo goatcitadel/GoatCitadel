@@ -65,14 +65,21 @@ afterEach(() => {
 });
 
 describe("cockpit Features switches", () => {
-  it("says the features are off unless turned on here, and that each row shows its state", async () => {
-    api.fetchSettings.mockResolvedValue({ revision: 4, features: { memoryLifecycleAdminV1Enabled: true } });
+  it("explains installation-wide switches and shows the states reported by the Gateway", async () => {
+    api.fetchSettings.mockResolvedValue({
+      revision: 4,
+      features: { memoryLifecycleAdminV1Enabled: true, cronReviewQueueV1Enabled: false },
+    });
     const { container, unmount } = await mount();
-    expect(container.textContent).toContain(
-      "These features are off unless you turn them on here, and each row shows its current state.",
-    );
-    expect(container.textContent).not.toContain("ship turned off");
-    unmount();
+    try {
+      expect(container.textContent).toContain("Each switch turns one on or off for the whole installation.");
+      await vi.waitFor(() => {
+        expect(container.querySelector("#feature-switch-memory-administration")?.textContent).toContain("Current: On");
+        expect(container.querySelector("#feature-switch-scheduler-review")?.textContent).toContain("Current: Off");
+      });
+    } finally {
+      unmount();
+    }
   });
 
   it("brings the switch a link names into view", async () => {
@@ -83,9 +90,13 @@ describe("cockpit Features switches", () => {
     Element.prototype.scrollIntoView = scroll;
     try {
       const { container, unmount } = await mount();
-      await vi.waitFor(() => expect(scroll).toHaveBeenCalled());
-      expect(scroll.mock.contexts[0]).toBe(container.querySelector("#feature-switch-scheduler-review"));
-      unmount();
+      try {
+        const row = container.querySelector("#feature-switch-scheduler-review");
+        expect(row).not.toBeNull();
+        await vi.waitFor(() => expect(scroll.mock.contexts).toContain(row));
+      } finally {
+        unmount();
+      }
     } finally {
       Element.prototype.scrollIntoView = original;
       window.history.replaceState(null, "", "/");

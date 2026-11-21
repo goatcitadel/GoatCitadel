@@ -28,6 +28,7 @@ import {
   LlmDispatchGuardScope,
   LlmDispatchGuardRejectedError,
   type LlmDispatchGuard,
+  type LlmDispatchGuardInput,
   type LlmDispatchLineage,
   type LlmDispatchRoute,
 } from "./llm-dispatch-guard.js";
@@ -1500,8 +1501,11 @@ export class LlmService {
         await this.authorizeModelUsageIntent(
           reservation?.eventId,
           input.attribution,
+          this.dispatchRoute(resolved, input.model),
+          input.transportAttemptIndex,
+          outputCapField?.value,
           {
-            ...this.dispatchRoute(input.resolved as ResolvedProvider, input.model),
+            ...(typeof requestInit.body === "string" ? { requestInputBytes: Buffer.byteLength(requestInit.body) } : {}),
             localTransport:
               !target.proxyOrigin &&
               isRouteLocalProvider({
@@ -1509,9 +1513,6 @@ export class LlmService {
                 baseUrl: target.url,
               }),
           },
-          input.transportAttemptIndex,
-          outputCapField?.value,
-          typeof requestInit.body === "string" ? Buffer.byteLength(requestInit.body) : undefined,
         );
         signal.throwIfAborted();
       }
@@ -2211,7 +2212,7 @@ export class LlmService {
     route: LlmDispatchRoute,
     transportAttemptIndex: number,
     effectiveOutputTokenCap?: number,
-    requestInputBytes?: number,
+    transport: Pick<LlmDispatchGuardInput, "requestInputBytes" | "localTransport"> = {},
   ): Promise<void> {
     const guard = this.dispatchGuardScope.get();
     if (!guard) return;
@@ -2223,7 +2224,7 @@ export class LlmService {
         route,
         transportAttemptIndex,
         effectiveOutputTokenCap,
-        ...(requestInputBytes === undefined ? {} : { requestInputBytes }),
+        ...transport,
       });
     } catch (error) {
       throw error instanceof LlmDispatchGuardRejectedError ? error : new LlmDispatchGuardRejectedError(error);

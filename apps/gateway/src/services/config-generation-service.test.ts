@@ -518,10 +518,11 @@ describe("ConfigGenerationService", () => {
     expect(runtime).toBe("power");
     expect(((await readActive(root)).budgets as { mode: string }).mode).toBe("balanced");
     expect(service.getHealthSnapshot()).toMatchObject({ revision: 3, transactionState: "committed" });
-    expect(service.getRollbackRuntimeOwnerRecoveryIntent()).toEqual(recoveryIntent);
+    const expectedRollbackIntent = { ...recoveryIntent, preserveFeatureOverrides: true };
+    expect(service.getRollbackRuntimeOwnerRecoveryIntent()).toEqual(expectedRollbackIntent);
     const restarted = new ConfigGenerationService(root);
     expect(restarted.isRuntimeOwnerReconciliationPending()).toBe(true);
-    expect(restarted.getRollbackRuntimeOwnerRecoveryIntent()).toEqual(recoveryIntent);
+    expect(restarted.getRollbackRuntimeOwnerRecoveryIntent()).toEqual(expectedRollbackIntent);
   });
 
   it("rewrites a stale candidate marker after rollback publication and retains exact owner undo intent", async () => {

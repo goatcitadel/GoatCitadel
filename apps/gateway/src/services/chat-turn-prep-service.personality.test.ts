@@ -779,6 +779,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
   it("injects the frozen operator-profile digest into the base prompt as the Memory section (P2-S4b)", async () => {
     const digest = "Operator profile (durable; persists across sessions):\n\nPreferences:\n- Prefers metric units.";
     const cowork = createHost("cowork", {}, [], digest);
+    vi.mocked(cowork.host.getSession).mockResolvedValue({ sessionId: "session-1", kind: "dm" } as never);
     await prepareAgentChatTurn(cowork.host, "session-1", { content: "hello" });
 
     expect(cowork.host.composeFrozenOperatorProfileDigest).toHaveBeenCalledWith("default");
@@ -786,6 +787,19 @@ describe("prepareAgentChatTurn personality overlay", () => {
     expect(cowork.readGuidance()).toContain("## Memory");
     expect(cowork.readGuidance()).toContain("Prefers metric units.");
   });
+
+  it.each(["group", "thread", undefined] as const)(
+    "keeps the private operator profile out of %s sessions",
+    async (kind) => {
+      const digest = "Operator profile digest.";
+      const harness = createHost("chat", {}, [], digest);
+      vi.mocked(harness.host.getSession).mockResolvedValue({ sessionId: "session-1", kind } as never);
+      await prepareAgentChatTurn(harness.host, "session-1", { content: "hello" });
+
+      expect(harness.host.composeFrozenOperatorProfileDigest).not.toHaveBeenCalled();
+      expect(harness.readGuidance()).not.toContain(digest);
+    },
+  );
 
   it("normalizes the prepared effective mode to Chat when the request omits mode", async () => {
     const harness = createHost("cowork");
@@ -978,6 +992,7 @@ describe("prepareAgentChatTurn personality overlay", () => {
   it("does not consult the operator profile when the base prompt is disabled", async () => {
     const digest = "Operator profile (durable; persists across sessions):\n\nPreferences:\n- Prefers metric units.";
     const cowork = createHost("cowork", {}, ["coworkRuntimeQualityV1Disabled"], digest);
+    vi.mocked(cowork.host.getSession).mockResolvedValue({ sessionId: "session-1", kind: "dm" } as never);
     await prepareAgentChatTurn(cowork.host, "session-1", { content: "hello" });
     expect(cowork.host.composeFrozenOperatorProfileDigest).not.toHaveBeenCalled();
   });

@@ -536,18 +536,33 @@ describe("loadGatewayConfig", () => {
       }
     });
 
-    it("stays off (decided default, #343) when neither the env var nor a stored value is present", async () => {
+    it("is on when neither the env var nor a stored value is present", async () => {
       const { rootDir } = await createConfigFixture();
       previous = process.env[ENV_KEY];
       delete process.env[ENV_KEY];
-      expect((await loadGatewayConfig(rootDir)).assistant.features.chatThinkingStreamV1Enabled).toBe(false);
+      expect((await loadGatewayConfig(rootDir)).assistant.features.chatThinkingStreamV1Enabled).toBe(true);
     });
 
-    it("turns on when the operator opts in through the env var", async () => {
+    it.each([true, false])("uses the explicit environment value %s", async (enabled) => {
       const { rootDir } = await createConfigFixture();
       previous = process.env[ENV_KEY];
-      process.env[ENV_KEY] = "true";
-      expect((await loadGatewayConfig(rootDir)).assistant.features.chatThinkingStreamV1Enabled).toBe(true);
+      process.env[ENV_KEY] = String(enabled);
+      expect((await loadGatewayConfig(rootDir)).assistant.features.chatThinkingStreamV1Enabled).toBe(enabled);
+    });
+
+    it("keeps a legacy profile value of false", async () => {
+      const { rootDir, configDir } = await createConfigFixture();
+      previous = process.env[ENV_KEY];
+      delete process.env[ENV_KEY];
+      const assistantPath = path.join(configDir, "assistant.config.json");
+      const assistantConfig = JSON.parse(await readFile(assistantPath, "utf8")) as {
+        features?: Record<string, unknown>;
+      };
+      await writeJson(assistantPath, {
+        ...assistantConfig,
+        features: { ...assistantConfig.features, chatThinkingStreamV1Enabled: false },
+      });
+      expect((await loadGatewayConfig(rootDir)).assistant.features.chatThinkingStreamV1Enabled).toBe(false);
     });
   });
 

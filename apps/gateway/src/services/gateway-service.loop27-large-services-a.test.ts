@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MemoryContextPack } from "@goatcitadel/contracts";
 
 vi.mock("node:sqlite", () => ({
   DatabaseSync: class DatabaseSync {},
@@ -6,6 +7,7 @@ vi.mock("node:sqlite", () => ({
 }));
 
 import { GatewayService } from "./gateway-service.js";
+import { insertMemoryContextMessage } from "./llm-completion-helpers.js";
 import { McpServerStore } from "./mcp-server-store.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 import { commsSend, type CommsHost } from "./comms-service.js";
@@ -132,10 +134,12 @@ afterEach(() => {
 describe("GatewayService loop 27 large service coverage", () => {
   it("records context manifests for non-memory system prompts and linked memory context", async () => {
     const { gateway } = createGatewayHarness();
-    const memoryContext = {
-      citations: [{ source: "memory" }],
+    const memoryContext: MemoryContextPack = {
+      citations: [{ candidateId: "candidate-1", sourceType: "memory_item", sourceRef: "memory-1", score: 1 }],
       contextId: "context-1",
       contextText: "Memory context body",
+      queryHash: "query-hash",
+      sourcesHash: "sources-hash",
       createdAt: "2026-05-15T00:00:00.000Z",
       distilledTokenEstimate: 5,
       expiresAt: "2026-05-15T01:00:00.000Z",
@@ -155,16 +159,8 @@ describe("GatewayService loop 27 large service coverage", () => {
       scope: "workspace",
     };
 
-    await GatewayService.prototype.persistContextManifestForCompletionRequest.call(gateway, {
-      memoryContext,
-      memoryContextPlacement: {
-        position: "before_final_user_message",
-        insertedIndex: 1,
-        finalUserMessageIndex: 1,
-        leadingSystemMessageCount: 1,
-        copyMode: "retrieved_non_authoritative",
-      },
-      request: {
+    const { request, placement } = insertMemoryContextMessage(
+      {
         memory: { sessionId: "session-1", taskId: "task-1", turnId: "turn-1" },
         messages: [
           { role: "system", content: "Operator guidance\nsecond line" },
@@ -172,7 +168,13 @@ describe("GatewayService loop 27 large service coverage", () => {
           { role: "system", content: "   " },
         ],
       },
-    } as never);
+      memoryContext,
+    );
+    await GatewayService.prototype.persistContextManifestForCompletionRequest.call(gateway, {
+      memoryContext,
+      memoryContextPlacement: placement,
+      request,
+    });
 
     expect(gateway.storage.contextManifests.ensure).toHaveBeenCalledWith({
       scope: "chat_turn",
@@ -215,8 +217,9 @@ describe("GatewayService loop 27 large service coverage", () => {
 
     await GatewayService.prototype.persistContextManifestForCompletionRequest.call(gateway, {
       request: { memory: { turnId: "   " }, messages: [{ role: "system", content: "ignored" }] },
-    } as never);
+    });
     expect(gateway.storage.contextManifests.ensure).toHaveBeenCalledTimes(1);
+    expect(gateway.storage.contextManifests.appendEntry).toHaveBeenCalledTimes(2);
   });
 
   it("consumes remote action tokens by hash and id while preserving expired-token evidence", async () => {

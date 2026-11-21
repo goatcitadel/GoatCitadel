@@ -43,6 +43,7 @@ export const TOOL_GROUPS: readonly ToolGroupDefinition[] = [
       "code_mode.request",
       "runtime.configure",
       "session.status",
+      "chat.reminder.preview",
       "session.search",
       "session.history",
       "user_input.request",

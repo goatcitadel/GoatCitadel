@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildUpdatedFeatureFlags, resolveGatewayFeatureFlags, type GatewayFeatureFlags } from "./feature-flags.js";
+import {
+  buildUpdatedFeatureFlags,
+  configurationFeatureFlags,
+  resolveGatewayFeatureFlags,
+  type GatewayFeatureFlags,
+} from "./feature-flags.js";
 
 describe("claudeCliToolBridgeEnabled feature flag", () => {
   const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
@@ -65,21 +70,26 @@ describe("claudeCliWarmContinuationEnabled feature flag", () => {
 });
 
 describe("codeModeHostSandboxEnabled feature flag", () => {
-  const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
+  const defaults = resolveGatewayFeatureFlags(undefined, {});
 
-  it("defaults to false and merges a patch", () => {
-    expect(defaults.codeModeHostSandboxEnabled).toBe(false);
-    expect(buildUpdatedFeatureFlags(defaults, {}).codeModeHostSandboxEnabled).toBe(false);
-    expect(buildUpdatedFeatureFlags(defaults, { codeModeHostSandboxEnabled: true }).codeModeHostSandboxEnabled).toBe(
-      true,
+  it("defaults on and supports an explicit opt-out", () => {
+    expect(defaults.codeModeHostSandboxEnabled).toBe(true);
+    expect(buildUpdatedFeatureFlags(defaults, {}).codeModeHostSandboxEnabled).toBe(true);
+    expect(buildUpdatedFeatureFlags(defaults, { codeModeHostSandboxEnabled: false }).codeModeHostSandboxEnabled).toBe(
+      false,
     );
   });
 
   it("prefers a stored value over the configured default", () => {
-    const configuredOn = { ...defaults, codeModeHostSandboxEnabled: true };
-    expect(resolveGatewayFeatureFlags(undefined, configuredOn).codeModeHostSandboxEnabled).toBe(true);
+    const configuredOff = { ...defaults, codeModeHostSandboxEnabled: false };
+    expect(resolveGatewayFeatureFlags(undefined, configuredOff).codeModeHostSandboxEnabled).toBe(false);
     expect(
-      resolveGatewayFeatureFlags({ codeModeHostSandboxEnabled: false }, configuredOn).codeModeHostSandboxEnabled,
-    ).toBe(false);
+      resolveGatewayFeatureFlags({ codeModeHostSandboxEnabled: true }, configuredOff).codeModeHostSandboxEnabled,
+    ).toBe(true);
+  });
+
+  it("keeps inherited Code Mode unavailable on an advisory-only host", () => {
+    const advisory = configurationFeatureFlags({ profile: {}, environment: {}, sandboxRequired: false });
+    expect(advisory.codeModeV1Enabled).toBe(false);
   });
 });

@@ -78,7 +78,12 @@ describe("route service facades", () => {
       method: "listMaintenanceRecommendations",
       args: ["workspace-1", 10],
     });
-    expect(service.acceptMaintenanceRecommendation("rec-1", { expectedRevision: "a".repeat(64), expectedPolicyRevision: "b".repeat(64) })).toEqual({
+    expect(
+      service.acceptMaintenanceRecommendation("rec-1", {
+        expectedRevision: "a".repeat(64),
+        expectedPolicyRevision: "b".repeat(64),
+      }),
+    ).toEqual({
       method: "acceptMaintenanceRecommendation",
       args: ["rec-1", { expectedRevision: "a".repeat(64), expectedPolicyRevision: "b".repeat(64) }],
     });
@@ -112,9 +117,10 @@ describe("route service facades", () => {
       method: "proposeTraceMemoryCandidate",
       args: [{ proposedInsight: "remember this" }, "agent"],
     });
-    expect(service.promoteTraceCandidate("trace-1", "operator")).toEqual({
+    const reviewedTrace = { workspaceId: "workspace-1", expectedReviewHash: "a".repeat(64) };
+    expect(service.promoteTraceCandidate("trace-1", "operator", reviewedTrace)).toEqual({
       method: "promoteTraceMemoryCandidate",
-      args: ["trace-1", "operator"],
+      args: ["trace-1", "operator", reviewedTrace],
     });
     expect(service.listItems({ workspaceId: "workspace-1" } as never)).toEqual({
       method: "listMemoryItemsPage",

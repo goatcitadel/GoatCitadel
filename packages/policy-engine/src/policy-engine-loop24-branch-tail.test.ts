@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import { executeBrowserTool } from "./browser-tools.js";
@@ -98,23 +98,20 @@ function createCommsStorage() {
 }
 
 describe("policy-engine loop 24 branch tails", () => {
-  it("covers memory title fallback and shell execution error variants", async () => {
+  it("passes a memory title to scoped recall and covers shell execution error variants", async () => {
     const root = createRoot();
     const config = createConfig(root);
     const storage = createKnowledgeStorage();
 
-    const memory = await executeTool(request("memory.read", { query: "fallback", limit: 5 }), config, storage);
-    expect(memory).toMatchObject({
+    const memoryResult = {
       namespace: "all",
       query: "fallback",
-      items: [
-        expect.objectContaining({
-          docId: "doc-title-only",
-          score: expect.any(Number),
-          snippet: "",
-        }),
-      ],
-    });
+      items: [{ docId: "doc-title-only", score: 1, snippet: "" }],
+    };
+    const searchMemory = vi.fn(async () => memoryResult);
+    const memoryRequest = request("memory.read", { title: "fallback", limit: 5 });
+    expect(await executeTool(memoryRequest, config, storage, { searchMemory })).toEqual(memoryResult);
+    expect(searchMemory).toHaveBeenCalledWith(memoryRequest);
 
     const failed = await executeTool(
       request("shell.exec", { command: `goatcitadel-missing-command-${randomUUID()}` }),

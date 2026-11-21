@@ -317,49 +317,22 @@ describe("policy-engine branch-tail coverage", () => {
 
   it("covers tool executor namespace, citation, and shell-risk approval tails", async () => {
     const storage = createStorage();
-    storage.knowledge.listDocuments = vi.fn(() => [
-      {
-        docId: "doc-loop8",
-        namespace: "team",
-        sourceType: "note",
-        sourceRef: "memory://loop8",
-        title: "Loop 8 Tail",
-        metadata: {},
-      },
-    ]) as never;
-    storage.knowledge.listChunksByDocument = vi.fn(() => [
-      {
-        chunkId: "chunk-loop8",
-        docId: "doc-loop8",
-        seq: 0,
-        content: "policy branch tail search text",
-      },
-    ]) as never;
-    storage.knowledge.listChunksByNamespace = vi.fn(() => [
-      {
-        chunkId: "chunk-loop8",
-        docId: "doc-loop8",
-        seq: 0,
-        content: "policy branch tail search text",
-      },
-    ]) as never;
+    const searchMemory = vi.fn(async () => ({
+      namespace: "team",
+      items: [{ docId: "doc-loop8", chunkId: "chunk-loop8" }],
+    }));
+    const readRequest = request("memory.read", { namespace: "team", limit: 0 });
+    const searchRequest = request("memory.search", { namespace: "team", query: "branch", limit: 0 });
 
-    expect(
-      await executeTool(request("memory.read", { namespace: "team", limit: 0 }), createConfig(), storage),
-    ).toMatchObject({
+    expect(await executeTool(readRequest, createConfig(), storage, { searchMemory })).toMatchObject({
       namespace: "team",
       items: [expect.objectContaining({ docId: "doc-loop8" })],
     });
-    expect(
-      await executeTool(
-        request("memory.search", { namespace: "team", query: "branch", limit: 0 }),
-        createConfig(),
-        storage,
-      ),
-    ).toMatchObject({
+    expect(await executeTool(searchRequest, createConfig(), storage, { searchMemory })).toMatchObject({
       namespace: "team",
       items: [expect.objectContaining({ chunkId: "chunk-loop8" })],
     });
+    expect(searchMemory.mock.calls).toEqual([[readRequest], [searchRequest]]);
     expect(
       await executeTool(request("citations.build", { sources: "not-array" }), createConfig(), storage),
     ).toMatchObject({

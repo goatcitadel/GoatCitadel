@@ -715,6 +715,31 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     ],
   },
   {
+    name: "chat.reminder.preview",
+    category: "session",
+    riskLevel: "safe",
+    readOnly: true,
+    requiresApproval: false,
+    description:
+      "Prepare one reminder for review in this Chat. The operator must confirm before it is saved. For a relative date, resolve the local date first.",
+    argSchema: {
+      type: "object",
+      properties: {
+        localDueAt: { type: "string", description: "Local date and time YYYY-MM-DDTHH:mm." },
+        timezone: { type: "string", description: "IANA timezone for the local time." },
+        message: {
+          type: "string",
+          maxLength: 4000,
+          description: "Reminder text. Omit when the operator will enter it during review.",
+        },
+      },
+      required: ["localDueAt", "timezone"],
+      additionalProperties: false,
+    },
+    recommendedContexts: ["chat"],
+    pack: "core",
+  },
+  {
     name: "session.status",
     category: "session",
     riskLevel: "safe",

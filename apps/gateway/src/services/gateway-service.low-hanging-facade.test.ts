@@ -2445,6 +2445,7 @@ describe("GatewayService low-hanging facade delegation", () => {
       getCachedModelAvailability: vi.fn(() => "unverified"),
     };
     gateway.storage = {
+      runImmediateTransaction: vi.fn(async (work: () => Promise<unknown>) => await work()),
       chatSessionPrefs: {
         patch: vi.fn((sessionId: string, patch: unknown) => ({ sessionId, ...originalPrefs, ...patch })),
       },
@@ -2557,6 +2558,7 @@ describe("GatewayService low-hanging facade delegation", () => {
       sessionId: "session-1",
       input: { proactiveMode: "off" },
     });
+    expect(gateway.storage.runImmediateTransaction).toHaveBeenCalledOnce();
     expect(
       (GatewayService.prototype as any).toProactivePolicy.call(gateway, "session-1", { proactiveMode: "review" }),
     ).toEqual({

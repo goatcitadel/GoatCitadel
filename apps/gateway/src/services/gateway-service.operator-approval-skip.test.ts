@@ -23,8 +23,9 @@ async function startGatewayFixture(): Promise<GatewayFixture> {
   const repoRoot = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..", "..");
   await fs.cp(path.join(repoRoot, "config"), path.join(tempRoot, "config"), { recursive: true });
   const config = await loadGatewayConfig(tempRoot);
-  config.assistant.features.settingsApprovalSkipEnabled = true;
-  return { tempRoot, gateway: new GatewayService(config), previousDriver };
+  const gateway = new GatewayService(config);
+  await gateway.updateFeatureFlags({ settingsApprovalSkipEnabled: true }, { resumeParkedRuns: false });
+  return { tempRoot, gateway, previousDriver };
 }
 
 async function stopGatewayFixture(fixture: GatewayFixture | undefined): Promise<void> {

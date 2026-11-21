@@ -181,7 +181,7 @@ describe("tool executor tail coverage", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://example.com/status", expect.objectContaining({ body: "{}" }));
   });
 
-  it("returns default namespaces and snippets for memory and embedding reads", async () => {
+  it("returns default namespaces for unavailable memory recall and generic embeddings", async () => {
     const root = createRoot();
     const config = createConfig(root);
     const storage = createKnowledgeStorage();
@@ -189,14 +189,12 @@ describe("tool executor tail coverage", () => {
     const memory = await executeTool(request("memory.read", { limit: 2 }), config, storage);
     expect(memory).toMatchObject({
       namespace: "all",
-      items: [
-        expect.objectContaining({ docId: "doc-empty", snippet: "" }),
-        expect.objectContaining({ docId: "doc-match", snippet: "coverage branch matching text" }),
-      ],
+      items: [],
+      unavailable: true,
     });
 
     const search = await executeTool(request("memory.search", { query: "coverage" }), config, storage);
-    expect(search).toMatchObject({ namespace: "all", query: "coverage" });
+    expect(search).toMatchObject({ namespace: "all", query: "coverage", items: [], unavailable: true });
 
     const indexed = await executeTool(request("embeddings.index", {}), config, storage);
     expect(indexed).toMatchObject({

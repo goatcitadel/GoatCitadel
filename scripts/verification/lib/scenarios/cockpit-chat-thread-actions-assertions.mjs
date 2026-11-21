@@ -103,8 +103,8 @@ export function assertTimerMutation({ receipt, owner, request, scope, expected, 
   assert.ok(owner.timerId);
   assert.ok(Number.isInteger(owner.revision) && owner.revision > 0);
   assert.equal(owner.status, previous ? "cancelled" : "active");
-  for (const field of ["dueAt", "timezone", "message", "cancelOnNextReply"]) assert.deepEqual(owner[field], expected[field]);
-  assert.equal(owner.notificationRuleId, undefined);
+  for (const field of ["dueAt", "timezone", "message", "cancelOnNextReply", "notificationRuleId"])
+    assert.deepEqual(owner[field], expected[field]);
   if (previous) {
     assert.equal(owner.timerId, previous.timerId);
     assert.ok(owner.revision > previous.revision);

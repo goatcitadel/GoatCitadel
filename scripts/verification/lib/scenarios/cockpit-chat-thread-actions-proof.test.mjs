@@ -90,7 +90,7 @@ describe("cockpit sibling selection proof", () => {
 
 const timerProof = (cancel = false) => {
   const scope = { workspaceId: "workspace", sessionId: "session" };
-  const expected = { dueAt: "2026-10-01T12:00:00.000Z", timezone: "UTC", message: "Disposable timer", cancelOnNextReply: false };
+  const expected = { dueAt: "2026-10-01T12:00:00.000Z", timezone: "UTC", message: "Disposable timer", cancelOnNextReply: false, notificationRuleId: null };
   const previous = { ...scope, ...expected, timerId: "timer", revision: 1, status: "active" };
   const owner = cancel ? { ...previous, revision: 2, status: "cancelled", cancelledAt: "2026-10-01T11:51:00.000Z" } : previous;
   return { receipt: { item: structuredClone(owner) }, owner, request: cancel ? { expectedRevision: 1 } : { ...expected },

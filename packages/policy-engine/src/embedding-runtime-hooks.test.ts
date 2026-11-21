@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { AsyncStorage, Storage } from "@goatcitadel/storage";
 import type { EmbeddingUsageDispatchInput, LocalEmbeddingLeaseRequest } from "./local-embeddings.js";
-import { executeTool } from "./tool-executor.js";
+import { executeTool, type ToolExecutorRuntimeHooks } from "./tool-executor.js";
 
 const policyConfig: ToolPolicyConfig = {
   profiles: { minimal: [] },
@@ -27,6 +27,19 @@ describe("embedding runtime hook propagation", () => {
   it("propagates the tool hook and signal across concurrent memory chunks", async () => {
     configureLlamaCpp();
     const storage = createKnowledgeStorage();
+    const writeMemory = vi.fn<NonNullable<ToolExecutorRuntimeHooks["writeMemory"]>>(async (_request, input) => {
+      const artifact = storage.knowledge.createDocumentWithChunks(
+        {
+          namespace: input.namespace,
+          sourceType: "memory",
+          sourceRef: "memory://concurrent-chunks",
+          title: input.title,
+          metadata: input.metadata,
+        },
+        input.chunks,
+      );
+      return { ...artifact, itemId: "item-concurrent-chunks", sourceHash: "fixture-source-hash" };
+    });
     const controller = new AbortController();
     const acquired: LocalEmbeddingLeaseRequest[] = [];
     let activeLeases = 0;
@@ -41,7 +54,7 @@ describe("embedding runtime hook propagation", () => {
     );
 
     const result = await executeTool(
-      request(
+      memoryWriteRequest(
         "memory.write",
         {
           namespace: "project",
@@ -53,6 +66,7 @@ describe("embedding runtime hook propagation", () => {
       policyConfig,
       storage,
       {
+        writeMemory,
         acquireLocalEmbeddingLease: async (leaseRequest) => {
           acquired.push(leaseRequest);
           activeLeases += 1;
@@ -68,6 +82,7 @@ describe("embedding runtime hook propagation", () => {
     );
 
     expect(result.chunksSaved).toBeGreaterThan(1);
+    expect(writeMemory).toHaveBeenCalledOnce();
     expect(acquired).toHaveLength(Number(result.chunksSaved));
     expect(acquired).toEqual(
       acquired.map(() =>
@@ -89,8 +104,9 @@ describe("embedding runtime hook propagation", () => {
     // (a cancelled turn) left a document with no chunks behind.
     configureLlamaCpp();
     const storage = createKnowledgeStorage();
+    const writeMemory = vi.fn<NonNullable<ToolExecutorRuntimeHooks["writeMemory"]>>();
 
-    for (const toolName of ["memory.write", "memory.upsert"]) {
+    for (const toolName of ["memory.write", "memory.upsert"] as const) {
       const controller = new AbortController();
       vi.stubGlobal(
         "fetch",
@@ -101,19 +117,20 @@ describe("embedding runtime hook propagation", () => {
       );
       await expect(
         executeTool(
-          request(
+          memoryWriteRequest(
             toolName,
             { namespace: "project", title: "Unlucky note", content: "x".repeat(3_000) },
             controller.signal,
           ),
           policyConfig,
           storage,
-          { acquireLocalEmbeddingLease: async () => ({ release: vi.fn() }) },
+          { writeMemory, acquireLocalEmbeddingLease: async () => ({ release: vi.fn() }) },
         ),
       ).rejects.toThrow();
     }
 
     expect(storage.knowledge.createDocument).not.toHaveBeenCalled();
+    expect(writeMemory).not.toHaveBeenCalled();
     expect(storage.knowledge.appendChunks).not.toHaveBeenCalled();
     expect(storage.knowledge.listDocuments()).toEqual([]);
   });
@@ -301,6 +318,25 @@ function request(toolName: string, args: Record<string, unknown>, signal?: Abort
     sessionId: "session",
     workspaceId: "workspace",
     ...(signal ? { signal } : {}),
+  };
+}
+
+function memoryWriteRequest(
+  toolName: "memory.write" | "memory.upsert",
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+): ToolInvokeRequest {
+  const invocation = request(toolName, args, signal);
+  return {
+    ...invocation,
+    memoryWriteBinding: {
+      workspaceId: "workspace",
+      sessionId: invocation.sessionId,
+      sessionIncarnation: "fixture-incarnation",
+      visibility: "workspace",
+      trustLevel: "trusted_workspace",
+      upsertKey: "fixture-upsert-key",
+    },
   };
 }
 
