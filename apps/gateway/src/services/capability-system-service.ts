@@ -1,4 +1,5 @@
 import { applyReleaseBoundSkillRetrust } from "./release-bound-skill-retrust-owner.js";
+import { assertBackgroundSkillEvaluationCurrent } from "./background-skill-candidate-evidence.js";
 import {
   assertReplayPinUnchanged,
   CODE_MODE_AIDER_REPLAY_SNAPSHOT_KEY,
@@ -12,7 +13,8 @@ import path from "node:path";
 import process from "node:process";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import * as ts from "typescript";
+import { createRequire } from "node:module";
+import type * as TypeScript from "typescript";
 import type {
   ApprovalCreateInput,
   ApprovalRequest,
@@ -4521,6 +4523,10 @@ export class CapabilitySystemService {
   }
 
   private async verifyCandidateVersionArtifacts(version: CandidateSkillVersionRecord): Promise<void> {
+    await assertBackgroundSkillEvaluationCurrent(
+      { storage: this.options.storage, rootDir: this.options.rootDir, candidateRoot: this.candidateRoot },
+      version,
+    );
     const artifacts = [
       { label: "Candidate manifest", artifact: version.manifestArtifact },
       { label: "Candidate instructions", artifact: version.instructionArtifact },
@@ -7124,7 +7130,14 @@ function buildCodeModeApprovalPayload(input: {
   };
 }
 
+const requireGuestCompiler = createRequire(import.meta.url);
+
+function loadGuestCompiler(): typeof TypeScript {
+  return requireGuestCompiler("typescript") as typeof TypeScript;
+}
+
 function validateGuestSource(source: string): void {
+  const ts = loadGuestCompiler();
   const sourceFile = ts.createSourceFile(
     "code-mode-source.ts",
     source,
@@ -7133,14 +7146,15 @@ function validateGuestSource(source: string): void {
     ts.ScriptKind.TSX,
   );
   const parseDiagnostics =
-    (sourceFile as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics ?? [];
+    (sourceFile as TypeScript.SourceFile & { parseDiagnostics?: readonly TypeScript.Diagnostic[] }).parseDiagnostics ??
+    [];
   const parseError = parseDiagnostics[0];
   if (parseError) {
     throw new ValidationError({
       message: `Code Mode source could not be parsed: ${ts.flattenDiagnosticMessageText(parseError.messageText, "\n")}`,
     });
   }
-  const forbiddenLabel = findForbiddenGuestSourceReference(sourceFile);
+  const forbiddenLabel = findForbiddenGuestSourceReference(ts, sourceFile);
   if (forbiddenLabel) {
     throw new ValidationError({
       message: `Code Mode source may not reference ${forbiddenLabel}.`,
@@ -7148,9 +7162,9 @@ function validateGuestSource(source: string): void {
   }
 }
 
-function findForbiddenGuestSourceReference(root: ts.Node): string | undefined {
+function findForbiddenGuestSourceReference(ts: typeof TypeScript, root: TypeScript.Node): string | undefined {
   let forbiddenLabel: string | undefined;
-  const visit = (node: ts.Node): void => {
+  const visit = (node: TypeScript.Node): void => {
     if (forbiddenLabel) {
       return;
     }
@@ -7159,16 +7173,16 @@ function findForbiddenGuestSourceReference(root: ts.Node): string | undefined {
       return;
     }
     if (ts.isCallExpression(node)) {
-      forbiddenLabel = readBlockedGuestSourceCallLabel(node.expression);
+      forbiddenLabel = readBlockedGuestSourceCallLabel(ts, node.expression);
       if (forbiddenLabel) {
         return;
       }
     }
-    if (ts.isPropertyAccessExpression(node) && isProcessGuestSourceExpression(node.expression)) {
+    if (ts.isPropertyAccessExpression(node) && isProcessGuestSourceExpression(ts, node.expression)) {
       forbiddenLabel = "process";
       return;
     }
-    if (ts.isIdentifier(node) && isBlockedGuestSourceIdentifierReference(node)) {
+    if (ts.isIdentifier(node) && isBlockedGuestSourceIdentifierReference(ts, node)) {
       forbiddenLabel = readBlockedGuestSourceIdentifierLabel(node.text);
       if (forbiddenLabel) {
         return;
@@ -7180,11 +7194,11 @@ function findForbiddenGuestSourceReference(root: ts.Node): string | undefined {
   return forbiddenLabel;
 }
 
-function readBlockedGuestSourceCallLabel(expression: ts.Expression): string | undefined {
+function readBlockedGuestSourceCallLabel(ts: typeof TypeScript, expression: TypeScript.Expression): string | undefined {
   if (expression.kind === ts.SyntaxKind.ImportKeyword) {
     return "dynamic import";
   }
-  if (isProcessGuestSourceExpression(expression)) {
+  if (isProcessGuestSourceExpression(ts, expression)) {
     return "process";
   }
   if (ts.isIdentifier(expression)) {
@@ -7212,17 +7226,17 @@ function readBlockedGuestSourceIdentifierLabel(text: string): string | undefined
   return undefined;
 }
 
-function isProcessGuestSourceExpression(expression: ts.Expression): boolean {
+function isProcessGuestSourceExpression(ts: typeof TypeScript, expression: TypeScript.Expression): boolean {
   if (ts.isIdentifier(expression)) {
     return expression.text === "process";
   }
   if (ts.isPropertyAccessExpression(expression)) {
-    return expression.name.text === "process" || isProcessGuestSourceExpression(expression.expression);
+    return expression.name.text === "process" || isProcessGuestSourceExpression(ts, expression.expression);
   }
   return false;
 }
 
-function isBlockedGuestSourceIdentifierReference(identifier: ts.Identifier): boolean {
+function isBlockedGuestSourceIdentifierReference(ts: typeof TypeScript, identifier: TypeScript.Identifier): boolean {
   const parent = identifier.parent;
   if (!parent) {
     return true;
@@ -7255,6 +7269,7 @@ function transpileGuestSource(language: CodeModeLanguage, source: string): strin
   if (language === "javascript") {
     return source;
   }
+  const ts = loadGuestCompiler();
   const transpiled = ts.transpileModule(source, {
     compilerOptions: {
       target: ts.ScriptTarget.ES2022,

@@ -1021,128 +1021,182 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     );
   });
 
-  it("runs replay regression comparisons and emits improvement signals for each capability delta", async () => {
-    const test = createTest("test-1", "TEST-C777");
-    const currentScore: PromptPackScoreRecord = {
-      ...createScore("score-current", "run-current", "2026-03-16T00:00:00.000Z", 1),
-      testId: test.testId,
-    };
-    const baselineScore: PromptPackScoreRecord = {
-      ...createScore("score-baseline", "run-baseline", "2026-03-15T00:00:00.000Z", 2),
-      testId: test.testId,
-    };
-    const regressionRows: Array<Record<string, unknown>> = [];
-    let regressionRun: Record<string, unknown> | undefined;
-    const publishRealtime = vi.fn();
-    const recordImprovementRegressionSignal = vi.fn();
-    const service = new PromptPackService(
-      {
-        storage: {
-          promptPacks: {
-            getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
-            listTests: () => [test],
+  it.each(["legacy", "current"])(
+    "runs %s replay comparisons and emits improvement signals for each real metric",
+    async (scoreKind) => {
+      const test = createTest("test-1", "TEST-C777");
+      const currentScore: PromptPackScoreRecord = {
+        ...createScore("score-current", "run-current", "2026-03-16T00:00:00.000Z", 1),
+        testId: test.testId,
+      };
+      const baselineScore: PromptPackScoreRecord = {
+        ...createScore("score-baseline", "run-baseline", "2026-03-15T00:00:00.000Z", 2),
+        testId: test.testId,
+      };
+      const regressionRows: Array<Record<string, unknown>> = [];
+      let regressionRun: Record<string, unknown> | undefined;
+      const publishRealtime = vi.fn();
+      const recordImprovementRegressionSignal = vi.fn();
+      const service = new PromptPackService(
+        {
+          storage: {
+            promptPacks: {
+              getPack: () => ({ packId: "pack-1", name: "Pack 1" }),
+              listTests: () => [test],
+            },
+            promptPackRuns: {
+              listByPack: () => [
+                {
+                  ...createRun("run-current", "completed", "2026-03-16T00:00:02.000Z"),
+                  testId: test.testId,
+                  providerId: "provider",
+                  model: "model",
+                },
+                {
+                  ...createRun("run-baseline", "completed", "2026-03-15T00:00:01.000Z"),
+                  testId: test.testId,
+                  providerId: "provider",
+                  model: "model",
+                },
+              ],
+            },
+            promptPackAutoScoresV2: {
+              listByPack: () =>
+                scoreKind === "current"
+                  ? [currentScore, baselineScore].map((score) => ({
+                      autoScoreId: score.scoreId,
+                      packId: score.packId,
+                      testId: score.testId,
+                      runId: score.runId,
+                      scoringSchemaVersion: "v2",
+                      scorerVersion: "scorer",
+                      judgeRubricVersion: "rubric",
+                      policyHash: "policy",
+                      scoreState: "auto_valid",
+                      judgeStatus: "valid",
+                      autoVerdict: score.totalScore >= 7 ? "pass" : "fail",
+                      finalScores: {
+                        taskSuccess: score.routingScore,
+                        honesty: score.honestyScore,
+                        executionQuality: score.handoffScore,
+                        robustness: score.robustnessScore,
+                        usability: score.usabilityScore,
+                      },
+                      applicability: {
+                        taskSuccess: true,
+                        honesty: true,
+                        executionQuality: true,
+                        robustness: true,
+                        usability: true,
+                      },
+                      createdAt: score.createdAt,
+                    }))
+                  : [],
+            },
+            promptPackScores: {
+              listByPack: () => (scoreKind === "legacy" ? [currentScore, baselineScore] : []),
+            },
           },
-          promptPackRuns: {
-            listByPack: () => [
-              { ...createRun("run-current", "completed", "2026-03-16T00:00:02.000Z"), testId: test.testId },
-              { ...createRun("run-baseline", "completed", "2026-03-15T00:00:01.000Z"), testId: test.testId },
-            ],
-          },
-          promptPackScores: {
-            listByPack: () => [currentScore, baselineScore],
-          },
+          gatewaySql: {
+            prepare: (sql: string) => ({
+              get: (runId: string) => {
+                if (sql.includes("FROM replay_regression_runs") && regressionRun?.regression_run_id === runId) {
+                  return regressionRun;
+                }
+                return undefined;
+              },
+              all: (runId: string) => {
+                if (sql.includes("FROM replay_regression_results")) {
+                  return regressionRows.filter((row) => row.regression_run_id === runId);
+                }
+                return [];
+              },
+              run: (params: Record<string, unknown>) => {
+                if (sql.includes("INSERT INTO replay_regression_runs")) {
+                  regressionRun = {
+                    regression_run_id: params.regressionRunId,
+                    pack_id: params.packId,
+                    status: "running",
+                    test_codes_json: params.testCodesJson,
+                    baseline_ref: params.baselineRef,
+                    summary_json: params.summaryJson,
+                    started_at: params.startedAt,
+                    finished_at: null,
+                    error_text: null,
+                  };
+                } else if (sql.includes("INSERT INTO replay_regression_results")) {
+                  regressionRows.push({
+                    result_id: params.resultId,
+                    regression_run_id: params.regressionRunId,
+                    test_code: params.testCode,
+                    capability: params.capability,
+                    score_delta: params.scoreDelta,
+                    pass_delta: params.passDelta,
+                    latency_delta_ms: params.latencyDeltaMs,
+                    created_at: params.createdAt,
+                  });
+                } else if (sql.includes("UPDATE replay_regression_runs")) {
+                  regressionRun = {
+                    ...regressionRun,
+                    status: "completed",
+                    summary_json: params.summaryJson,
+                    finished_at: params.finishedAt,
+                  };
+                }
+                return { changes: 1 };
+              },
+            }),
+          } as never,
+          config: {
+            assistant: {
+              durable: {
+                enabled: true,
+                executionEnabled: true,
+                chatAutoPromoteEnabled: true,
+              },
+            },
+          } as never,
+          normalizeWorkspaceId: () => "default",
+          isFeatureEnabled: () => true,
+          requireFeatureEnabled: () => undefined,
+          publishRealtime,
+        } as never,
+        {
+          createChatSession: vi.fn(),
+          agentSendChatMessage: vi.fn(),
+          createChatCompletion: vi.fn(),
+          getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+          getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
+          backgroundTasks: new Set(),
+          recordImprovementRegressionSignal,
         },
-        gatewaySql: {
-          prepare: (sql: string) => ({
-            get: (runId: string) => {
-              if (sql.includes("FROM replay_regression_runs") && regressionRun?.regression_run_id === runId) {
-                return regressionRun;
-              }
-              return undefined;
-            },
-            all: (runId: string) => {
-              if (sql.includes("FROM replay_regression_results")) {
-                return regressionRows.filter((row) => row.regression_run_id === runId);
-              }
-              return [];
-            },
-            run: (params: Record<string, unknown>) => {
-              if (sql.includes("INSERT INTO replay_regression_runs")) {
-                regressionRun = {
-                  regression_run_id: params.regressionRunId,
-                  pack_id: params.packId,
-                  status: "running",
-                  test_codes_json: params.testCodesJson,
-                  baseline_ref: params.baselineRef,
-                  summary_json: params.summaryJson,
-                  started_at: params.startedAt,
-                  finished_at: null,
-                  error_text: null,
-                };
-              } else if (sql.includes("INSERT INTO replay_regression_results")) {
-                regressionRows.push({
-                  result_id: params.resultId,
-                  regression_run_id: params.regressionRunId,
-                  test_code: params.testCode,
-                  capability: params.capability,
-                  score_delta: params.scoreDelta,
-                  pass_delta: params.passDelta,
-                  latency_delta_ms: params.latencyDeltaMs,
-                  created_at: params.createdAt,
-                });
-              } else if (sql.includes("UPDATE replay_regression_runs")) {
-                regressionRun = {
-                  ...regressionRun,
-                  status: "completed",
-                  summary_json: params.summaryJson,
-                  finished_at: params.finishedAt,
-                };
-              }
-              return { changes: 1 };
-            },
-          }),
-        } as never,
-        config: {
-          assistant: {
-            durable: {
-              enabled: true,
-              executionEnabled: true,
-              chatAutoPromoteEnabled: true,
-            },
-          },
-        } as never,
-        normalizeWorkspaceId: () => "default",
-        isFeatureEnabled: () => true,
-        requireFeatureEnabled: () => undefined,
-        publishRealtime,
-      } as never,
-      {
-        createChatSession: vi.fn(),
-        agentSendChatMessage: vi.fn(),
-        createChatCompletion: vi.fn(),
-        getPromptRunnerModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
-        getPromptJudgeModelDefaults: () => ({ providerId: "openai", model: "gpt-5.4" }),
-        backgroundTasks: new Set(),
-        recordImprovementRegressionSignal,
-      },
-    );
+      );
 
-    const { regressionRunId } = await service.runPromptPackReplayRegression("pack-1", {
-      testCodes: ["TEST-C777"],
-    });
-    const status = await service.getPromptPackReplayRegressionStatus(regressionRunId);
+      const { regressionRunId } = await service.runPromptPackReplayRegression("pack-1", {
+        testCodes: ["TEST-C777"],
+      });
+      const status = await service.getPromptPackReplayRegressionStatus(regressionRunId);
 
-    expect(status.run.status).toBe("completed");
-    expect(status.results).toHaveLength(5);
-    expect(status.results.every((result) => result.scoreDelta === -1)).toBe(true);
-    expect(status.results.every((result) => result.passDelta === -1)).toBe(true);
-    expect(recordImprovementRegressionSignal).toHaveBeenCalledTimes(5);
-    expect(publishRealtime).toHaveBeenCalledWith(
-      "prompt_pack_regression_completed",
-      "promptLab",
-      expect.objectContaining({ regressionRunId, packId: "pack-1", testCodes: ["TEST-C777"] }),
-    );
-  });
+      expect(status.run.status).toBe("completed");
+      expect(status.results).toHaveLength(5);
+      expect(status.results.every((result) => result.scoreDelta === -1)).toBe(true);
+      expect(status.results.every((result) => result.passDelta === -1)).toBe(true);
+      expect(recordImprovementRegressionSignal).toHaveBeenCalledTimes(5);
+      expect(recordImprovementRegressionSignal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          testCode: test.code,
+          currentRunId: "run-current",
+          baselineRunId: "run-baseline",
+          comparison: expect.objectContaining({ kind: scoreKind === "current" ? "auto_scored" : "legacy_v1" }),
+        }),
+      );
+      expect(publishRealtime).toHaveBeenCalledWith(
+        "prompt_pack_regression_completed",
+        "promptLab",
+        expect.objectContaining({ regressionRunId, packId: "pack-1", testCodes: ["TEST-C777"] }),
+      );
+    },
+  );
 
   it("builds prompt-pack capability trends and threshold breaches from v3 scores and run failures", async () => {
     const score: PromptPackAutoScoreRecord = {
@@ -1304,7 +1358,11 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
     );
   });
 
-  it("binds an existing prompt-pack session to the resolved project before tool execution", async () => {
+  it("binds an existing prompt-pack session to the resolved project before tool execution", async ({
+    onTestFinished,
+  }) => {
+    const fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "gc-prompt-project-binding-"));
+    onTestFinished(() => fsSync.rmSync(fixtureRoot, { recursive: true, force: true }));
     const assignProject = vi.fn();
     const createGrant = vi.fn();
     const createTtlGrant = vi.fn();
@@ -1435,7 +1493,7 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
           }),
         } as never,
         config: {
-          rootDir: "F:/code/personal-ai",
+          rootDir: fixtureRoot,
           assistant: {
             workspaceDir: "workspace",
             durable: {
@@ -1471,7 +1529,9 @@ describe("prompt-pack execution, benchmarks, and durable snapshots", () => {
       expect.objectContaining({
         toolPattern: "fs.read",
         constraints: expect.objectContaining({
-          allowedPaths: expect.arrayContaining(["F:\\code\\personal-ai\\workspace\\fixtures\\prompt-pack-workspace"]),
+          allowedPaths: expect.arrayContaining([
+            path.join(fixtureRoot, "workspace", "fixtures", "prompt-pack-workspace"),
+          ]),
         }),
       }),
       2 * 60 * 60 * 1000,

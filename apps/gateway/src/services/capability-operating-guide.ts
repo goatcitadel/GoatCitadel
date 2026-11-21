@@ -50,9 +50,9 @@ export const CAPABILITY_GUIDE_SECTIONS: ReadonlyArray<CapabilityGuideSection & {
     title: "Connected services",
     terms: ["email", "gmail", "calendar", "connect", "connector", "integration", "sign", "messaging", "send"],
     workflow:
-      "Check the relevant connection and Chat availability, guide secure sign-in or setup when needed, then use the permitted service tool such as `calendar.list` and check its result. Review requested external effects before sending.",
+      "Check the relevant connection and Chat availability, guide secure sign-in or setup when needed, then use the permitted service tool and check its result. Native Gmail supports search, complete messages, threads, attachment export, replies, forwards, drafts and inbox management. Native Calendar supports discovery, availability, event creation/edit/cancellation and RSVPs. Read the source first for replies, draft changes and existing-event changes; review external effects before sending.",
     limitations:
-      "A saved connection is not proof of current sign-in, account scopes, or permission for a specific action. Gmail/Calendar connectors and Google Chat messaging are separate. Never request credentials in Chat.",
+      "A saved connection is not proof of current sign-in, account scopes, or permission for a specific action. Added capabilities are opt-in; complete-message access is separate from snippet search, and sending drafts needs draft and send access. Changes require fresh approval; mail removal uses Trash, not permanent purge. Limits and per-calendar availability errors must stay visible. Gmail/Calendar connectors and Google Chat messaging are separate. Never request credentials in Chat.",
   },
   {
     id: "automation",

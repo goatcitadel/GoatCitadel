@@ -16,12 +16,18 @@ export function planSnapshot(plan?: ChangePlanRecord): string | undefined {
 
 export function continuationAction(plan: ChangePlanRecord | undefined, workspaceId: string) {
   const action = plan?.requiredAction;
+  const origin = plan?.origin;
+  const chatSetup =
+    origin?.surface === "chat" &&
+    Boolean(origin.sessionId?.trim()) &&
+    plan?.kind === "runtime_configuration" &&
+    plan.target?.ownerId === "runtime_settings";
   if (
     !plan ||
     !workspaceId.trim() ||
     plan.schemaVersion !== 1 ||
-    plan.origin?.surface !== "settings" ||
-    plan.origin.workspaceId !== workspaceId ||
+    (origin?.surface !== "settings" && !chatSetup) ||
+    origin?.workspaceId !== workspaceId ||
     plan.kind !== plan.request?.kind ||
     !plan.planId?.trim() ||
     !plan.intentHash?.trim() ||
@@ -73,6 +79,7 @@ export function requireSettingsApprovalBinding(plan: ChangePlanRecord, replay: A
     approval.kind !== "change_plan_effect" ||
     approval.linkage?.workspaceId !== plan.origin.workspaceId ||
     approval.linkage.actionType !== "change_plan_effect" ||
+    (plan.origin.surface === "chat" && approval.linkage.sessionId !== plan.origin.sessionId) ||
     !approval.payload ||
     canonicalJsonString(Object.fromEntries(Object.keys(expected).map((key) => [key, approval.payload[key]]))) !==
       canonicalJsonString(expected)
@@ -96,7 +103,8 @@ export function gatewayAuthApprovalChange(plan: ChangePlanRecord | undefined) {
   if (
     change?.operation === "gateway_auth_configuration" &&
     plan?.scope === "runtime" &&
-    plan.origin?.workspaceId === "default" &&
+    plan.origin?.surface === "settings" &&
+    plan.origin.workspaceId === "default" &&
     plan.target?.ownerId === "runtime_settings" &&
     plan.target.resourceId === change.operation &&
     Number.isSafeInteger(plan.target.expectedRevision) &&

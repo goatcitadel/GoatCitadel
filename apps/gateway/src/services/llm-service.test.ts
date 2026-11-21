@@ -2036,6 +2036,7 @@ describe("LlmService", () => {
         type: "function",
         name: "browser.search",
         description: "Search the web",
+        strict: false,
         parameters: {
           type: "object",
           properties: {
@@ -3745,6 +3746,69 @@ describe("LlmService", () => {
     await expect(service.pollOpenAICodexOAuthDeviceFlow("flow-1")).rejects.toThrow(
       /Unknown LLM provider: openai-codex/,
     );
+  });
+
+  it.each(["gpt-5.5", "gpt-6.2-sol"])("preserves non-strict tool schemas through Responses for %s", async (model) => {
+    const secretStore = createTrackedSecretStore({
+      "provider:openai-codex:oauth": JSON.stringify({
+        accessToken: "codex-access-token",
+        refreshToken: "codex-refresh-token",
+        expiresAt: Date.now() + 600_000,
+        updatedAt: Date.now(),
+      }),
+    });
+    const service = new LlmService(createCodexConfig(), process.env, { secretStore });
+    const parameters = {
+      type: "object",
+      properties: { sourceIds: { type: "array", items: { type: "string" }, uniqueItems: true } },
+    };
+    const tools = [
+      { type: "function", function: { name: "connect_google", parameters } },
+      { type: "function", name: "flat_tool", parameters },
+      {
+        type: "function",
+        function: {
+          name: "strict_tool",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+          strict: true,
+        },
+      },
+      { type: "web_search" },
+    ];
+    const originalTools = structuredClone(tools);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (_input, init) => {
+      const payload = JSON.parse(String(init?.body));
+      const sentTools =
+        payload.tools ?? payload.input.find((item: Record<string, unknown>) => item.type === "additional_tools").tools;
+      expect(sentTools[0]).toMatchObject({ name: "connect_google", strict: false, parameters });
+      expect(sentTools[1]).toMatchObject({ name: "flat_tool", strict: false, parameters });
+      expect(sentTools[2].strict).toBe(true);
+      expect(sentTools[3]).toEqual({ type: "web_search" });
+      return new Response(
+        'data: {"type":"response.output_text.delta","delta":"Hello"}\n\ndata: {"type":"response.completed","response":{"id":"resp_schema","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\ndata: [DONE]\n\n',
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      );
+    }) as typeof fetch;
+    try {
+      const request = {
+        providerId: "openai-codex",
+        model,
+        messages: [{ role: "user" as const, content: "Help connect Google" }],
+        tools,
+      };
+      await service.chatCompletions(request);
+      for await (const _chunk of service.chatCompletionsStream(request)) {
+        /* consume provider stream */
+      }
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      expect(tools).toEqual(originalTools);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("posts OpenAI Codex chat through Responses with OAuth bearer auth and Codex defaults", async () => {

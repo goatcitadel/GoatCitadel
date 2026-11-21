@@ -2,8 +2,16 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { assertPostgresMigrationIntegrity } from "./postgres/migrator.js";
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
+import { buildPostgresRuntimeSchemaSql } from "./postgres/runtime-schema.js";
 
 describe("protected Postgres migration integrity", () => {
+  it("derives the baseline schema SQL only when the migration reads it", () => {
+    const migration = POSTGRES_MIGRATIONS.find((entry) => entry.version === 2);
+    assert.ok(migration);
+    assert.equal(typeof Object.getOwnPropertyDescriptor(migration, "sql")?.get, "function");
+    assert.equal(migration.sql, buildPostgresRuntimeSchemaSql());
+  });
+
   it("recomputes every explicit digest from the generated migration statements", () => {
     const protectedMigrations = POSTGRES_MIGRATIONS.filter((migration) => migration.integritySha256 !== undefined);
     assert.ok(protectedMigrations.length > 0, "expected at least one integrity-protected migration");

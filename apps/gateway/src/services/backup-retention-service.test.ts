@@ -59,12 +59,18 @@ describe("BackupRetentionService", () => {
       issues: [],
     });
     const publishedEntriesBeforeInspection = await fs.readdir(backupDir);
-    await expect(service.inspectLatestBackupTrust()).resolves.toMatchObject({
-      backupId: "nightly-runtime-snapshot",
-      verified: true,
-      contractVerified: true,
-      issueCodes: [],
-    });
+    const copy = vi.spyOn(fs, "cp");
+    try {
+      await expect(service.inspectLatestBackupTrust()).resolves.toMatchObject({
+        backupId: "nightly-runtime-snapshot",
+        verified: true,
+        contractVerified: true,
+        issueCodes: [],
+      });
+      expect(copy).toHaveBeenCalledTimes(1);
+    } finally {
+      copy.mockRestore();
+    }
     await expect(fs.readdir(backupDir)).resolves.toEqual(publishedEntriesBeforeInspection);
 
     await fs.writeFile(path.join(created.outputPath, "payload", "data", "transcripts", "session.jsonl"), "tampered\n");

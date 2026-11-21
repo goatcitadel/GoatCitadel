@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  findProviderTemplate,
+  findProviderModelDefaults,
   type ChatCompletionReasoningEffort,
   type LlmModelDiscoverySource,
 } from "@goatcitadel/contracts";
@@ -122,7 +122,7 @@ function buildProviderCatalog(
 ): ProviderModelCatalogOption[] {
   return config.providers.map((provider) => {
     const cached = getValidProviderModelCacheEntry(cache, provider.providerId, now, { allowStale: true });
-    const template = findProviderTemplate(provider.providerId);
+    const template = findProviderModelDefaults(provider.providerId);
     const activeContext =
       provider.providerId === config.activeProviderId
         ? readOptionalNumber(config, "activeModelContextWindow")

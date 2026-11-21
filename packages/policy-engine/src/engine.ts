@@ -39,6 +39,7 @@ import {
   isOutsideRootWriteTool,
   isManagedProjectFileTool,
   isGoogleWorkspaceReadTool,
+  nativeGoogleAction,
   projectManagedFileToolArgs,
   projectManagedFileToolResult,
   redactStructuredSecrets,
@@ -1825,7 +1826,10 @@ export class ToolPolicyEngine {
     }
     // Code Mode always needs an explicit operator decision: no grant, MCP relief, profile or bypass mode clears it.
     const codeModeRequestRequiresApproval = request.toolName === CODE_MODE_REQUEST_TOOL_NAME;
-    if (codeModeRequestRequiresApproval || fixtureAllowed) {
+    const nativeGoogleReviewRequired =
+      Boolean(nativeGoogleAction(request.toolName)) ||
+      ["gmail.send", "calendar.create_event", "calendar.respond_event"].includes(request.toolName);
+    if (codeModeRequestRequiresApproval || fixtureAllowed || nativeGoogleReviewRequired) {
       requiresApproval = true;
     }
     const scheduledGoogleRead =
@@ -3488,17 +3492,21 @@ function isKnownMutatingToolName(toolName: string): boolean {
   return (
     toolName === "project.files.save" ||
     CAUTION_MUTATING_TOOL_NAMES.has(toolName) ||
+    nativeGoogleAction(toolName)?.readOnly === false ||
     /\.(send|react|unsend)$/u.test(toolName) ||
     toolName === "webhook.send" ||
-    toolName === "calendar.create_event"
+    toolName === "calendar.create_event" ||
+    toolName === "calendar.respond_event"
   );
 }
 
 function executorReportsConcreteExternalSideEffectBoundary(toolName: string): boolean {
   return (
+    nativeGoogleAction(toolName)?.readOnly === false ||
     toolName === "http.post" ||
     toolName === "webhook.send" ||
     toolName === "calendar.create_event" ||
+    toolName === "calendar.respond_event" ||
     /\.(send|react|unsend)$/u.test(toolName)
   );
 }

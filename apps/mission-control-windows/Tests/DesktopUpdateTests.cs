@@ -43,6 +43,10 @@ public class DesktopUpdateTests
         var candidate = DesktopUpdatePolicy.ReadRelease(release.RootElement, manifest.RootElement, "preview", "x64")!;
         Assert.IsTrue(DesktopUpdatePolicy.IsNewer(candidate, candidate.Version, new string('a', 40), 1));
         Assert.IsFalse(DesktopUpdatePolicy.IsNewer(candidate, candidate.Version, candidate.SourceCommit, 1));
+        Assert.IsFalse(DesktopUpdatePolicy.IsNewer(candidate, candidate.Version + "+reset.1", candidate.SourceCommit, 0));
+        Assert.IsFalse(DesktopUpdatePolicy.IsNewer(candidate, "0.9.1-beta.1+reset.1", new string('a', 40), 0));
+        Assert.IsTrue(DesktopUpdatePolicy.IsNewer(candidate with { Version = "0.9.2-beta.1" },
+            "0.9.1-beta.1+reset.1", new string('a', 40), 0));
         Assert.IsFalse(DesktopUpdatePolicy.IsNewer(candidate, "0.1.0-preview.9.1", new string('a', 40), 9));
     }
 
@@ -60,6 +64,22 @@ public class DesktopUpdateTests
     }
 
     [TestMethod]
+    public void UpdateHandoffRequiresTheInstalledExecutableAndConsumesTheResultOnce()
+    {
+        var desktop = Path.Join(_root, "app", "desktop", "GoatCitadel-Mission-Control-Windows.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(desktop)!);
+        File.WriteAllBytes(desktop, []);
+        Assert.AreEqual(_root, DesktopUpdateHandoff.ValidateInstalledHost(_root, desktop));
+        Assert.ThrowsException<InvalidOperationException>(() =>
+            DesktopUpdateHandoff.ValidateInstalledHost(_root, Path.Join(_root, "unrelated.exe")));
+
+        var receipt = Path.Join(_root, "runtime", "updates", "last-install-result.txt");
+        File.WriteAllText(receipt, "updated");
+        StringAssert.Contains(DesktopUpdateHandoff.TakeResult(_root), "updated and reopened");
+        Assert.IsNull(DesktopUpdateHandoff.TakeResult(_root));
+    }
+
+    [TestMethod]
     public async Task CheckDownloadAndRecheckPreserveVerifiedDownload()
     {
         using var service = CreateService();
@@ -69,10 +89,20 @@ public class DesktopUpdateTests
         Assert.AreEqual("downloaded", service.Status.Phase);
         var downloaded = await service.GetVerifiedDownloadAsync();
         CollectionAssert.AreEqual(Installer, File.ReadAllBytes(downloaded));
+        var offered = service.Status.AvailableRelease!;
+        string? launched = null;
+        await service.LaunchVerifiedDownloadAsync(offered, file => launched = file, CancellationToken.None);
+        Assert.AreEqual(downloaded, launched);
+        StringAssert.Contains(service.Status.Message, "Checksum verified.");
         await service.CheckAsync(true);
         Assert.AreEqual("downloaded", service.Status.Phase);
+        StringAssert.Contains(service.Status.Message, "Checksum verified.");
         File.WriteAllText(downloaded, "tampered");
         await Assert.ThrowsExceptionAsync<IOException>(() => service.GetVerifiedDownloadAsync());
+        launched = null;
+        await Assert.ThrowsExceptionAsync<IOException>(() => service.LaunchVerifiedDownloadAsync(
+            service.Status.AvailableRelease!, file => launched = file, CancellationToken.None));
+        Assert.IsNull(launched);
         await service.CheckAsync(true);
         Assert.AreEqual("available", service.Status.Phase);
         await service.DownloadAsync("preview-2-1");
@@ -228,6 +258,8 @@ public class DesktopUpdateTests
         string Request(object action) => JsonSerializer.Serialize(new {
             type = "goatcitadel.updates.request", requestId = Guid.NewGuid().ToString(), action });
         Assert.IsNotNull(DesktopUpdatePolicy.ReadRequest(origin, origin, Request("check")));
+        Assert.IsNotNull(DesktopUpdatePolicy.ReadRequest(origin, origin,
+            Request("install").Replace("}", ",\"releaseTag\":\"preview-2-1\"}")));
         foreach (var action in new object[] { "install", "execute", 123, false })
             Assert.IsNull(DesktopUpdatePolicy.ReadRequest(origin, origin, Request(action)));
         Assert.IsNull(DesktopUpdatePolicy.ReadRequest(origin, origin,

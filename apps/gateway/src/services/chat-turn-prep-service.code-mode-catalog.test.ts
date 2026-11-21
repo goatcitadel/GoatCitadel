@@ -132,6 +132,15 @@ async function prepare(
 }
 
 describe("prepareAgentChatTurn Code Mode tool catalog", () => {
+  it("grounds the native reminder recovery in the live timer feature flag", async () => {
+    for (const enabled of [true, false]) {
+      const harness = createHost(READY);
+      harness.host.isFeatureEnabled = vi.fn(async (flag) => flag === "chatTimersV1Enabled" && enabled);
+      await prepareAgentChatTurn(harness.host, "session-1", { content: "set a five-minute reminder" });
+      expect(harness.readGuidance().includes("/timer")).toBe(enabled);
+    }
+  });
+
   it("lists no Code Mode tool on a machine that cannot run the sandbox", async () => {
     const harness = await prepare(UNSUPPORTED, { authActorSource: "token" });
     const guidance = harness.readGuidance();
@@ -212,6 +221,12 @@ describe("code_mode.request eligibility parity between turn preparation and the 
     { name: "operator chat (no actor)", readiness: READY, request: {}, expected: true },
     { name: "operator turn-on path", readiness: OFF, request: { authActorSource: "loopback" }, expected: true },
     { name: "turn-on path without an operator", readiness: OFF, request: {}, expected: false },
+    {
+      name: "local Chat with authentication off",
+      readiness: OFF,
+      request: { authActorSource: "none" },
+      expected: false,
+    },
     { name: "turn-on path for an sse actor", readiness: OFF, request: { authActorSource: "sse" }, expected: false },
     {
       name: "operator actor only in the policy context",
@@ -294,6 +309,9 @@ describe("code_mode.request eligibility parity between turn preparation and the 
     const harness = await prepare(readiness, request);
     expect(harness.historyOptions.length).toBeGreaterThan(0);
     const prepEligible = harness.historyOptions[0]?.codeModeRequestEligible === true;
+    if (readiness === OFF && request.authActorSource === "none") {
+      expect(harness.readGuidance()).toContain("no authenticated operator who can approve");
+    }
     expect(harness.historyOptions.every((options) => options?.codeModeRequestEligible === prepEligible)).toBe(true);
 
     const runnerEligible = await runnerOffers(readiness, request);

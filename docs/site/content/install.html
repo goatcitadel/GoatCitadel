@@ -1,0 +1,74 @@
+<h2 id="windows">Windows installer</h2>
+<ol>
+  <li>
+    Download <code>GoatCitadel-Setup-windows-x64.exe</code> or <code>GoatCitadel-Setup-windows-arm64.exe</code> from the
+    <a href="https://github.com/goatcitadel/GoatCitadel/releases">release assets</a> for your architecture.
+  </li>
+  <li>
+    Compare the file's SHA-256 to the checksum published for that release. The release notes describe signing status and
+    any preview limitations.
+  </li>
+  <li>
+    Run the installer, launch GoatCitadel, and follow the <a href="../quickstart/#choose-a-model">first-run setup</a>.
+  </li>
+</ol>
+<figure class="code-block">
+  <figcaption>PowerShell · x64 checksum</figcaption>
+  <pre
+    tabindex="0"
+    aria-label="Check the Windows installer checksum"
+  ><code>Get-FileHash .\GoatCitadel-Setup-windows-x64.exe -Algorithm SHA256</code></pre>
+</figure>
+
+<h2 id="source">Run from source</h2>
+<p>
+  Use a source checkout for development. Install Git, Node.js 22 or later, and Corepack first. Use the pnpm version
+  pinned in the checkout's <code>package.json</code>.
+</p>
+<figure class="code-block">
+  <figcaption>Terminal</figcaption>
+  <pre
+    tabindex="0"
+    aria-label="Start GoatCitadel from source"
+  ><code>git clone https://github.com/goatcitadel/GoatCitadel.git
+cd GoatCitadel
+corepack enable
+pnpm install --frozen-lockfile
+pnpm config:sync
+pnpm dev</code></pre>
+</figure>
+<p>
+  The default source setup serves Mission Control on <code>localhost:5173</code> and Gateway health on
+  <code>127.0.0.1:8787/health</code>.
+</p>
+
+<h2 id="docker">Run with Docker Compose</h2>
+<p>
+  From a source checkout with the pnpm dependencies installed, generate Docker credentials and start Compose. Use these
+  commands for a fresh Compose environment. Preserve an existing <code>.env</code> and consult the setup guide when
+  upgrading.
+</p>
+<figure class="code-block">
+  <figcaption>PowerShell</figcaption>
+  <pre
+    tabindex="0"
+    aria-label="Start GoatCitadel with Docker Compose"
+  ><code>pnpm secrets:docker | Tee-Object -FilePath .env
+docker compose up --build</code></pre>
+</figure>
+<p>
+  Open <code>localhost:4173</code> for Mission Control. Compose binds its published ports to loopback by default. Review
+  authentication, allowed origins, and the bind address before sharing the deployment.
+</p>
+
+<h2 id="platform-support">Platform support</h2>
+<p>
+  Windows has packaged x64 and ARM64 installers. macOS ARM64 packaging and the Linux x64 release bundle are
+  experimental. Check the
+  <a href="https://github.com/goatcitadel/GoatCitadel/blob/main/docs/supported-platforms.md">platform support matrix</a>
+  and the
+  <a href="https://github.com/goatcitadel/GoatCitadel/blob/main/docs/INSTALL_SETUP_TESTING.md"
+    >install and setup guide</a
+  >
+  for requirements and release-specific details.
+</p>

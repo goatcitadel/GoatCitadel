@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   canonicalJsonString,
+  NATIVE_GOOGLE_ACTIONS,
   ConflictError,
   isManagedProjectFileTool,
   projectManagedFileToolResult,
@@ -55,6 +56,7 @@ const creates = new Set(["artifacts.create", "documents.create", "presentations.
 const edits = new Set(["fs.write", "fs.patch", "fs.copy"]);
 const deletions = new Set(["fs.delete", "fs.move", "fs.trash"]);
 const reviewed = new Set([
+  ...NATIVE_GOOGLE_ACTIONS.map((action) => action.name),
   "channel.send",
   "channel.react",
   "channel.unsend",
@@ -69,6 +71,7 @@ const reviewed = new Set([
   "telegram.react",
   "telegram.unsend",
   "calendar.create_event",
+  "calendar.respond_event",
   "notify.request",
 ]);
 

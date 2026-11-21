@@ -51,9 +51,15 @@ describe("useNotificationPresenceLease", () => {
     await act(async () => {
       renderer = create(createElement(Harness, { workspaceId: "presence-native-fixture" }));
     });
+    await vi.waitFor(() => expect(mocks.upsert).toHaveBeenCalledTimes(1));
     expect(generated).toHaveLength(1);
     expect(mocks.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: "presence-native-fixture", clientId, leaseId: generated[0], ttlMs: 90_000 }),
+      expect.objectContaining({
+        workspaceId: "presence-native-fixture",
+        clientId,
+        leaseId: generated[0],
+        ttlMs: 90_000,
+      }),
     );
     expect(generated[0]).not.toBe(clientId);
     expect(window.sessionStorage.getItem("goatcitadel.notification-client-id")).toBe(clientId);
@@ -63,7 +69,10 @@ describe("useNotificationPresenceLease", () => {
       renderer = undefined;
     });
     expect(mocks.upsert.mock.calls.at(-1)![0]).toMatchObject({
-      clientId, leaseId: generated[0], focused: false, visible: false,
+      clientId,
+      leaseId: generated[0],
+      focused: false,
+      visible: false,
     });
   });
 
@@ -131,6 +140,7 @@ describe("useNotificationPresenceLease", () => {
     await act(async () => {
       renderer = create(createElement(Harness, { workspaceId: "one" }));
     });
+    await vi.waitFor(() => expect(mocks.upsert).toHaveBeenCalledTimes(1));
     const first = mocks.upsert.mock.calls[0]![0];
     await act(async () => {
       renderer!.update(createElement(Harness, { workspaceId: "one", sessionId: "s1" }));
@@ -148,6 +158,37 @@ describe("useNotificationPresenceLease", () => {
     expect(mocks.upsert).toHaveBeenCalledTimes(3);
     expect(mocks.upsert.mock.calls[2]![0]).not.toHaveProperty("sessionId");
     expect(mocks.upsert.mock.calls.every(([input]) => input.focused && input.visible)).toBe(true);
+  });
+
+  it("publishes only the conversation-scoped lease when Chat restores its session at startup", async () => {
+    vi.useFakeTimers();
+    await act(async () => {
+      renderer = create(createElement(Harness, { workspaceId: "one" }));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(20);
+      renderer!.update(createElement(Harness, { workspaceId: "one", sessionId: "restored" }));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(mocks.upsert).toHaveBeenCalledTimes(1);
+    expect(mocks.upsert).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "restored" }));
+  });
+
+  it("does not publish a lease when the initial workspace is abandoned before its first write", async () => {
+    vi.useFakeTimers();
+    await act(async () => {
+      renderer = create(createElement(Harness, { workspaceId: "one" }));
+    });
+    await act(async () => {
+      renderer!.update(createElement(Harness, { workspaceId: "two", sessionId: "s2" }));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(mocks.upsert).toHaveBeenCalledTimes(1);
+    expect(mocks.upsert).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "two", sessionId: "s2" }));
   });
 
   it("serializes a slow initial lease write before adopting the selected conversation", async () => {

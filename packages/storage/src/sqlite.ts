@@ -92,6 +92,11 @@ import { upgradeRemoteWorkerCancellationSettlement } from "./remote-worker-cance
 import { MANAGED_SOURCE_INSTALL_SQL } from "./managed-source-install-repo.js";
 import { PRODUCT_SOURCE_UPDATE_SQLITE_SCHEMA_SQL } from "./product-source-update-repo.js";
 import {
+  createSqliteSchemaReference,
+  readPackagedSqliteSchemaShape,
+  type SqliteSchemaReference,
+} from "./sqlite/schema-reference.js";
+import {
   assertSqliteSchemaShape,
   readSqliteSchemaShape,
   type SqliteSchemaShapeManifest,
@@ -576,19 +581,28 @@ function migrate(db: DatabaseSync): void {
 }
 
 function validateCanonicalSqliteSchemaShape(db: DatabaseSync): void {
-  assertSqliteSchemaShape(readSqliteSchemaShape(db), getCanonicalSqliteSchemaShape());
+  assertSqliteSchemaShape(readSqliteSchemaShape(db), getCanonicalSqliteSchemaShape(db));
 }
 
-function getCanonicalSqliteSchemaShape(): SqliteSchemaShapeManifest {
+function getCanonicalSqliteSchemaShape(db: DatabaseSync): SqliteSchemaShapeManifest {
   if (cachedCanonicalSqliteSchemaShape) return cachedCanonicalSqliteSchemaShape;
+  cachedCanonicalSqliteSchemaShape =
+    readPackagedSqliteSchemaShape(db, SCHEMA_MIGRATIONS) ?? withCanonicalSqliteDatabase(readSqliteSchemaShape);
+  return cachedCanonicalSqliteSchemaShape;
+}
+
+export function buildPackagedSqliteSchemaReference(): SqliteSchemaReference {
+  return withCanonicalSqliteDatabase((db) => createSqliteSchemaReference(db, SCHEMA_MIGRATIONS));
+}
+
+function withCanonicalSqliteDatabase<T>(read: (db: DatabaseSync) => T): T {
   const canonical = new DatabaseSync(":memory:");
   try {
     // The reference is built independently from the target database. This is
     // what prevents a pre-existing IF NOT EXISTS object from blessing its own
     // corrupt shape on first startup.
     runSqliteMigrations(canonical, SCHEMA_MIGRATIONS);
-    cachedCanonicalSqliteSchemaShape = readSqliteSchemaShape(canonical);
-    return cachedCanonicalSqliteSchemaShape;
+    return read(canonical);
   } finally {
     canonical.close();
   }

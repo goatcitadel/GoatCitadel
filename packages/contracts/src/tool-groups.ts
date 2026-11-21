@@ -2,6 +2,7 @@
  * Built-in tool groups. The operator can switch every group except Core off in Capabilities › Tools; the switch
  * saves through the Settings save.
  */
+import { NATIVE_GOOGLE_ACTIONS } from "./google-workspace-actions.js";
 export type ToolGroupId =
   | "core"
   | "files"
@@ -166,9 +167,18 @@ export const TOOL_GROUPS: readonly ToolGroupDefinition[] = [
   {
     id: "email_and_calendar",
     label: "Email and calendar",
-    description: "Read and send email, and read and add calendar events.",
+    description:
+      "Read and manage email, send messages and drafts, and read or change calendar events with governed approvals.",
     switchable: true,
-    toolNames: ["gmail.read", "gmail.send", "smtp.send", "calendar.list", "calendar.create_event"],
+    toolNames: [
+      "gmail.read",
+      "gmail.send",
+      "smtp.send",
+      "calendar.list",
+      "calendar.create_event",
+      "calendar.respond_event",
+      ...NATIVE_GOOGLE_ACTIONS.map((action) => action.name),
+    ],
   },
   {
     id: "messaging",

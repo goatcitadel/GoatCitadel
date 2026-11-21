@@ -4,7 +4,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ChatThreadResponse, DurableChildWatcherRecord, DurableRunRecord } from "@goatcitadel/contracts";
-import { Storage } from "@goatcitadel/storage";
+import { Storage, createLocalAsyncStorage } from "@goatcitadel/storage";
+import { CronAutomationService } from "./services/gateway/cron-automation-service.js";
+import { HooksService } from "./services/hooks-service.js";
+import { SecretStoreService } from "./services/secret-store-service.js";
+import { runFollowThroughEventSweep } from "./services/follow-through-event-runtime.js";
 import { buildApp } from "./app.js";
 import { startFakeOpenAiCompatibleServer } from "./test/fake-openai-server.js";
 
@@ -32,7 +36,36 @@ for (const { pregrant, label } of [
         south = deferred();
       // Count primary streamed inference separately from ordinary post-commit
       // auxiliary calls, which can include the same retained child text.
-      const dispatches = { parent: 0, north: 0, south: 0 };
+      const dispatches = { parent: 0, north: 0, south: 0, followUp: 0 };
+      const eventOwner: { cron?: CronAutomationService } = {};
+      let eventJobId: string | undefined;
+      let eventHookId: string | undefined;
+      let eventStore: Storage | undefined;
+      if (pregrant) {
+        const secrets = new Map<string, string>();
+        vi.spyOn(SecretStoreService.prototype, "setSecret").mockImplementation((account, value) => {
+          expect(account.startsWith("hook-signing:")).toBe(true);
+          secrets.set(account, value);
+        });
+        vi.spyOn(SecretStoreService.prototype, "getSecret").mockImplementation((account) => secrets.get(account));
+        vi.spyOn(SecretStoreService.prototype, "deleteSecret").mockImplementation((account) => {
+          secrets.delete(account);
+        });
+        const createJob = CronAutomationService.prototype.createCronJob;
+        vi.spyOn(CronAutomationService.prototype, "createCronJob").mockImplementation(function (
+          this: CronAutomationService,
+          ...args
+        ) {
+          eventOwner.cron = this;
+          return createJob.apply(this, args);
+        });
+        // Only the external HTTP transport is synthetic. The hook producer,
+        // durable delivery record, source validation and scheduled execution are real.
+        vi.spyOn(
+          HooksService.prototype as unknown as { postWebhook: () => Promise<Record<string, never>> },
+          "postWebhook",
+        ).mockResolvedValue({});
+      }
       const observedRequests: Array<{
         stream: boolean;
         messages: Array<{ role: string; north: boolean; south: boolean }>;
@@ -65,7 +98,10 @@ for (const { pregrant, label } of [
             : undefined;
         let content = "",
           toolCalls;
-        if (child) {
+        if (lastUser.includes("FOLLOW_THROUGH_EVENT_CHECK")) {
+          if (body.stream) dispatches.followUp += 1;
+          content = "EVENT_FOLLOW_THROUGH_COMPLETE";
+        } else if (child) {
           if (body.stream) dispatches[child] += 1;
           await (child === "north" ? north.promise : south.promise);
           content = child === "north" ? "NORTH_RESULT_400" : "SOUTH_RESULT_600";
@@ -192,6 +228,9 @@ for (const { pregrant, label } of [
           GOATCITADEL_FEATURE_SUBAGENT_FANOUT_V1_DISABLED: "false",
           GOATCITADEL_FEATURE_DURABLE_CHAT_FANOUT_V1_ENABLED: "true",
           GOATCITADEL_FEATURE_CHAT_AUTOMATIC_FANOUT_V1_ENABLED: "true",
+          GOATCITADEL_FEATURE_SCHEDULED_CHAT_TURNS_V1_ENABLED: "true",
+          TZ: "UTC",
+          GOATCITADEL_DISABLE_SECRET_STORE: "true",
         }))
           vi.stubEnv(key, value);
         let sequence = 0;
@@ -255,6 +294,55 @@ for (const { pregrant, label } of [
             },
           });
           expect(toolGrant.statusCode, toolGrant.body).toBe(201);
+        }
+        if (pregrant) {
+          const hook = await app.inject({
+            method: "POST",
+            url: "/api/v1/workspaces/default/hooks",
+            headers: headers(),
+            payload: {
+              label: "Synthetic completed child observer",
+              trigger: "subagent.end",
+              mode: "observe",
+              enabled: true,
+              dataScope: "metadata",
+              action: {
+                type: "webhook",
+                webhook: { url: "https://events.example.test/completed", secret: "synthetic-event-signing-only" },
+              },
+            },
+          });
+          expect(hook.statusCode, hook.body).toBe(201);
+          eventHookId = hook.json().hookId;
+          const setup = await app.inject({
+            method: "GET",
+            url: `/api/v1/chat/sessions/${sessionId}/follow-through/setup?workspaceId=default`,
+            headers: headers(),
+          });
+          expect(setup.statusCode, setup.body).toBe(200);
+          const reviewed = setup.json();
+          expect(reviewed.blockedReasons).toEqual([]);
+          const scheduled = await app.inject({
+            method: "POST",
+            url: `/api/v1/chat/sessions/${sessionId}/follow-through/setup`,
+            headers: headers(),
+            payload: {
+              workspaceId: "default",
+              expectedSetupHash: reviewed.sourceHash,
+              operationId: "native-child-event-follow-through",
+              purpose: "FOLLOW_THROUGH_EVENT_CHECK: Summarize this completed synthetic child result.",
+              permissionProfileId: reviewed.profiles[0].profileId,
+              trigger: {
+                kind: "event",
+                hookId: eventHookId,
+                notBefore: new Date().toISOString(),
+                timezone: reviewed.quietHours.timezone,
+              },
+              delivery: { kind: "conversation" },
+            },
+          });
+          expect(scheduled.statusCode, scheduled.body).toBe(201);
+          eventJobId = scheduled.json().jobId;
         }
         const content =
           "Use agent.fanout once to compare two independently delegated short numeric findings. Wait for both children, verify their outputs, then provide the combined total.";
@@ -457,6 +545,64 @@ for (const { pregrant, label } of [
           expect(approval.statusCode, approval.body).toBe(200);
           expect(approval.json().status).toBe("approved");
         }
+        if (pregrant) {
+          await vi.waitFor(
+            async () => {
+              const hooks = await app!.inject({
+                method: "GET",
+                url: "/api/v1/workspaces/default/hooks/runs",
+                headers: headers(),
+              });
+              expect(
+                hooks
+                  .json()
+                  .items.filter(
+                    (run: { hookId: string; status: string }) =>
+                      run.hookId === eventHookId && run.status === "completed",
+                  ),
+                JSON.stringify(hooks.json()),
+              ).toHaveLength(2);
+            },
+            { timeout: 30000, interval: 100 },
+          );
+          eventStore = new Storage({
+            dbPath: app.gatewayConfig.dbPath,
+            transcriptsDir: path.join(root, "event-inspection-transcripts"),
+            auditDir: path.join(root, "event-inspection-audit"),
+          });
+          const runtime = {
+            storage: createLocalAsyncStorage(eventStore),
+            cron: eventOwner.cron!,
+            isEnabled: async () => true,
+            now: () => {
+              const at = new Date();
+              at.setUTCHours(18);
+              return at;
+            },
+          };
+          for (let occurrence = 1; occurrence <= 2; occurrence++) {
+            await runFollowThroughEventSweep(runtime);
+            await vi.waitFor(
+              async () => {
+                const current = await app!.inject({
+                  method: "GET",
+                  url: `/api/v1/cron/jobs/${eventJobId}`,
+                  headers: headers(),
+                });
+                const job = current.json().job ?? current.json();
+                expect(job.executionGeneration).toBe(occurrence);
+                expect(job.activeRunId).toBeUndefined();
+                expect(job.lastRunStatus).toBe("ok");
+              },
+              { timeout: 30000, interval: 100 },
+            );
+          }
+          const replay = await runFollowThroughEventSweep(runtime);
+          expect(replay.queued).toBe(0);
+          expect(dispatches.followUp).toBe(2);
+          eventStore.close();
+          eventStore = undefined;
+        }
         const dbPath = app.gatewayConfig.dbPath;
         await app.close();
         app = undefined;
@@ -465,6 +611,12 @@ for (const { pregrant, label } of [
           transcriptsDir: path.join(root, "inspection-transcripts"),
           auditDir: path.join(root, "inspection-audit"),
         });
+        if (eventJobId) {
+          const events = storage.cronRuns.listByJob(eventJobId);
+          expect(events).toHaveLength(2);
+          expect(new Set(events.map((run) => run.admissionKey)).size).toBe(2);
+          expect(events.every((run) => run.admissionKey.startsWith("event:") && run.status === "completed")).toBe(true);
+        }
         const invocation = storage.chatFanoutInvocations.findByParentAndTool(parentRunId, fanoutTool!.toolRunId);
         expect(invocation).toMatchObject({
           status: "completed",
@@ -487,6 +639,7 @@ for (const { pregrant, label } of [
         south.resolve();
         if (app) await cancelOwnedTurn?.();
         await pendingSend?.catch(() => undefined);
+        eventStore?.close();
         storage?.close();
         await app?.close();
         await provider.close();

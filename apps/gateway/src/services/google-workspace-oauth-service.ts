@@ -6,8 +6,9 @@ import {
   GOOGLE_WORKSPACE_CATALOG_ID,
   ValidationError,
   getGoogleWorkspaceCapability,
-  googleWorkspaceCapabilityForTool,
+  googleWorkspaceCapabilitiesForTool,
   googleWorkspaceScopesFor,
+  isNativeGoogleTool,
   isGoogleWorkspaceCapability,
   isGoogleWorkspaceCapabilityGranted,
   readEnabledGoogleWorkspaceCapabilities,
@@ -22,7 +23,7 @@ import {
   type ToolInvokeRequest,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
-import { GOOGLE_CONNECTION_ID_PATTERN, normalizeGoogleReadRequest } from "./google-workspace-read-request.js";
+import { GOOGLE_CONNECTION_ID_PATTERN, normalizeGoogleToolRequest } from "./google-workspace-read-request.js";
 import { McpOAuthPkceStore } from "./mcp-oauth-discovery.js";
 import { SecretStoreUnavailableError, isSecretStoreUnavailableLikeError } from "./secret-store-service.js";
 import { isPermittedIntegrationSecretEnvVarName } from "./gateway/integration-secret-envvar-guard.js";
@@ -365,23 +366,35 @@ export class GoogleWorkspaceOAuthService {
     return deleted;
   }
 
-  public async normalizeReadRequest(request: ToolInvokeRequest): Promise<ToolInvokeRequest> {
-    return normalizeGoogleReadRequest(
+  /** Bind each native action to the account that will be named in review and used at execution. */
+  public async normalizeToolRequest(request: ToolInvokeRequest): Promise<ToolInvokeRequest> {
+    if (!isNativeGoogleTool(request.toolName)) return request;
+    const { __gcSafety: _browserSafety, ...args } = request.args;
+    const bound = await normalizeGoogleToolRequest(
       {
         connections: this.connections,
         readConnection: (connectionId) => this.readConnection(connectionId),
-        readEligibleSignInId: (connection, capability) => {
-          const credential = this.keychainAvailable() ? this.readCredential(connection.connectionId) : undefined;
-          return credential &&
-            !credential.requiresReauth &&
-            credential.clientId === readClientId(connection.config) &&
-            isGoogleWorkspaceCapabilityGranted(capability, credential.grantedScopes)
-            ? googleSignInId(connection, credential)
-            : undefined;
-        },
+        readEligibleSignInId: (connection, capabilities) => this.readEligibleSignInId(connection, capabilities),
       },
-      request,
+      { ...request, args },
     );
+    if (request.googleReadSignInId && request.googleReadSignInId !== bound.googleReadSignInId) {
+      throw new ValidationError({ message: "This Google sign-in changed. Review the action again." });
+    }
+    return bound;
+  }
+
+  private readEligibleSignInId(
+    connection: IntegrationConnection,
+    capabilities: readonly GoogleWorkspaceCapability[],
+  ): string | undefined {
+    const credential = this.keychainAvailable() ? this.readCredential(connection.connectionId) : undefined;
+    return credential &&
+      !credential.requiresReauth &&
+      credential.clientId === readClientId(connection.config) &&
+      capabilities.every((capability) => isGoogleWorkspaceCapabilityGranted(capability, credential.grantedScopes))
+      ? googleSignInId(connection, credential)
+      : undefined;
   }
 
   /** The tool executor's hook: an access token for the capability that `toolName` needs. */
@@ -389,12 +402,11 @@ export class GoogleWorkspaceOAuthService {
     connectionId: string;
     toolName: string;
     signInId?: string;
+    args?: Record<string, unknown>;
   }): Promise<string> {
-    const capability = googleWorkspaceCapabilityForTool(input.toolName);
-    if (!capability) throw new Error(`blocked: ${input.toolName} is not a Google Workspace tool.`);
-    return input.signInId
-      ? await this.resolveCheckedAccessToken(input.connectionId, capability, false, input.signInId)
-      : await this.resolveAccessToken(input.connectionId, capability);
+    const capabilities = googleWorkspaceCapabilitiesForTool(input.toolName, input.args);
+    if (!capabilities.length) throw new Error(`blocked: ${input.toolName} is not a Google Workspace tool.`);
+    return this.resolveCheckedAccessToken(input.connectionId, capabilities, false, input.signInId);
   }
 
   /**
@@ -403,12 +415,12 @@ export class GoogleWorkspaceOAuthService {
    * records it before any provider request.
    */
   public async resolveAccessToken(connectionId: string, capability: GoogleWorkspaceCapability): Promise<string> {
-    return await this.resolveCheckedAccessToken(connectionId, capability, false);
+    return this.resolveCheckedAccessToken(connectionId, [capability], false);
   }
 
   private async resolveCheckedAccessToken(
     connectionId: string,
-    capability: GoogleWorkspaceCapability,
+    capabilities: readonly GoogleWorkspaceCapability[],
     renewed: boolean,
     expectedSignInId?: string,
   ): Promise<string> {
@@ -416,10 +428,12 @@ export class GoogleWorkspaceOAuthService {
     if (connection.catalogId !== GOOGLE_WORKSPACE_CATALOG_ID) {
       throw new Error("blocked: This connection is not a Google Workspace (Gmail and Calendar) connection.");
     }
-    const definition = getGoogleWorkspaceCapability(capability);
-    if (!readEnabledGoogleWorkspaceCapabilities(connection.config).includes(capability)) {
+    const enabled = readEnabledGoogleWorkspaceCapabilities(connection.config);
+    for (const capability of capabilities) {
+      if (enabled.includes(capability)) continue;
+      const { label } = getGoogleWorkspaceCapability(capability);
       throw new Error(
-        `blocked: ${definition.label} is turned off for this Google connection. Turn it on in ${SETTINGS_PATH} and connect Google again.`,
+        `blocked: ${label} is turned off for this Google connection. Turn it on in ${SETTINGS_PATH} and connect Google again.`,
       );
     }
     if (!this.keychainAvailable()) {
@@ -430,15 +444,15 @@ export class GoogleWorkspaceOAuthService {
       throw new Error(`blocked: Google sign-in is missing for this connection. Connect Google in ${SETTINGS_PATH}.`);
     }
     if (expectedSignInId && googleSignInId(connection, credential) !== expectedSignInId) {
-      throw new Error("blocked: This Google sign-in changed. Request the read again to review the current account.");
+      throw new Error("blocked: This Google sign-in changed. Request the action again to review the current account.");
     }
     if (credential.requiresReauth || credential.clientId !== readClientId(connection.config)) {
       throw new Error(`blocked: Google sign-in needs to be renewed. Reconnect Google in ${SETTINGS_PATH}.`);
     }
-    if (!isGoogleWorkspaceCapabilityGranted(capability, credential.grantedScopes)) {
-      throw new Error(
-        `blocked: Google did not grant ${definition.label} (${definition.scope}). Reconnect Google and allow it.`,
-      );
+    for (const capability of capabilities) {
+      if (isGoogleWorkspaceCapabilityGranted(capability, credential.grantedScopes)) continue;
+      const { label, scope } = getGoogleWorkspaceCapability(capability);
+      throw new Error(`blocked: Google did not grant ${label} (${scope}). Reconnect Google and allow it.`);
     }
     if (credential.expiresAt && credential.expiresAt > this.now() + REFRESH_SKEW_MS) {
       return credential.accessToken;
@@ -451,7 +465,7 @@ export class GoogleWorkspaceOAuthService {
     await this.refreshOnce(connection, credential);
     // Re-check this caller's capability, client and grant against whatever is stored now: a reconnect
     // during the refresh may have replaced the sign-in with different switches or scopes.
-    return await this.resolveCheckedAccessToken(connectionId, capability, true, expectedSignInId);
+    return this.resolveCheckedAccessToken(connectionId, capabilities, true, expectedSignInId);
   }
 
   /** Single flight per connection: concurrent tool calls share one refresh request. */

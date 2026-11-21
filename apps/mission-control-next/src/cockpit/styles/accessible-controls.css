@@ -55,6 +55,14 @@ html[data-shell="cockpit"] :focus-visible {
   outline: 2px solid var(--cockpit-accent) !important;
   outline-offset: 2px !important;
 }
+/* Draw the draft's focus ring around the shared composer frame so it clears the controls below. */
+html[data-shell="cockpit"] .cockpit-chat-composer:has(> .cockpit-chat-draft:focus-visible) {
+  outline: 2px solid var(--cockpit-accent);
+  outline-offset: -2px;
+}
+html[data-shell="cockpit"] .cockpit-chat-composer > .cockpit-chat-draft:focus-visible {
+  outline: none !important;
+}
 /* The page region takes focus by itself when the area changes (and from the skip link). It is a container with no
    action of its own, so it shows no ring; the next Tab lands on a real control. */
 html[data-shell="cockpit"] #main-content:focus-visible {
@@ -101,6 +109,7 @@ html[data-shell="cockpit"] .cockpit-menu-item:is([data-disabled], [aria-disabled
 }
 @media (forced-colors: active) {
   html[data-shell="cockpit"] :focus-visible,
+  html[data-shell="cockpit"] .cockpit-chat-composer:has(> .cockpit-chat-draft:focus-visible),
   html[data-shell="cockpit"] :is([data-highlighted], [cmdk-item][data-selected="true"]) {
     outline: 2px solid Highlight !important;
   }

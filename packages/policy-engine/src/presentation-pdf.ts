@@ -1,4 +1,3 @@
-import sharp from "sharp";
 import type { ArtifactDesignPlan } from "./artifact-design.js";
 import {
   PdfDocumentWriter,
@@ -212,6 +211,7 @@ async function embedVisuals(
   for (const [slideIndex, asset] of [...assets.entries()].sort(([left], [right]) => left - right)) {
     if (slideIndex < 0 || slideIndex > input.slides.length) continue;
     try {
+      const { default: sharp } = await import("sharp");
       const { data, info } = await sharp(Buffer.from(asset.bytesBase64, "base64"))
         .rotate()
         .resize({ width: MAX_IMAGE_EDGE, height: MAX_IMAGE_EDGE, fit: "inside", withoutEnlargement: true })

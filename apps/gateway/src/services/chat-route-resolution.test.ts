@@ -59,6 +59,7 @@ function createHost(input?: {
       },
     },
     llmService: {
+      withPublicCodexStatusSnapshot: vi.fn(async (read: () => unknown) => read()),
       getCachedModelAvailability: vi.fn((providerId: string, model: string) => {
         const models = input?.liveCatalog?.[providerId];
         return models
@@ -113,6 +114,7 @@ describe("chat-route-resolution", () => {
     await preflightChatRoute(host as never, "session-1", { action: "retry", turnId: "turn-1" });
     expect(host.requireChatTurnContext.mock.contexts).toEqual([host]);
     expect(host.requireChatTurnContext).toHaveBeenCalledWith("session-1", "turn-1");
+    expect(host.llmService.withPublicCodexStatusSnapshot.mock.contexts).toEqual([host.llmService]);
     expect(host.llmService.getRuntimeConfig.mock.contexts).toEqual([host.llmService]);
     expect(host.llmService.getCachedModelAvailability.mock.contexts).toEqual([host.llmService]);
     expect(refresh.mock.contexts).toEqual([host.llmService]);

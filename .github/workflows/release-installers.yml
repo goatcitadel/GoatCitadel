@@ -83,7 +83,7 @@ jobs:
         run: pnpm verify:desktop
 
       - name: Build Windows App SDK host
-        run: pnpm package:windows-host --target ${{ matrix.target }}
+        run: pnpm package:windows-host --target ${{ matrix.target }} ${{ matrix.target == 'windows-x64' && '--require-process-identity' || '' }}
 
       - name: Build unsigned Windows package identity input
         run: pnpm package:windows-msix --allow-unsigned
@@ -359,7 +359,7 @@ jobs:
           if ($manifest.signed -ne $true -or $manifest.sha256 -ne $identityHash) { throw "Signed identity manifest mismatch." }
 
       - name: Build Windows host output for signed executable
-        run: pnpm package:windows-host --target ${{ matrix.target }}
+        run: pnpm package:windows-host --target ${{ matrix.target }} ${{ matrix.target == 'windows-x64' && '--require-process-identity' || '' }}
 
       - name: Install admitted signed components
         shell: pwsh

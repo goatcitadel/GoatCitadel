@@ -18,7 +18,11 @@ import type {
 import { clampInt } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { buildBundledDockerContainerName } from "../bundled-postgres-runtime.js";
-import { isWindowsEquivalentBackupPath, verifyBackupAtPath } from "./gateway/backup-verify.js";
+import {
+  isWindowsEquivalentBackupPath,
+  verifyBackupAtPath,
+  verifyMaterializedBackupAtPath,
+} from "./gateway/backup-verify.js";
 import type { GatewayRuntimeConfig } from "../config.js";
 import { discoverNativePostgresTool } from "../native-postgres-discovery.js";
 import { AUTO_NATIVE_BIN_DIR, resolveGatewayPostgresConnectionString } from "../postgres-runtime-config.js";
@@ -353,7 +357,7 @@ export class BackupRetentionService {
         errorOnExist: true,
       });
       await assertStablePublishedBackupDirectory(publishedBackupPath, backupDir, selectedIdentity);
-      const verification = await verifyBackupAtPath(stagedBackupPath);
+      const verification = await verifyMaterializedBackupAtPath(stagedBackupPath, stagedBackupPath);
       return {
         observedAt,
         backupId: verification.backupId,

@@ -1,5 +1,11 @@
+import { NATIVE_GOOGLE_ACTIONS } from "@goatcitadel/contracts";
 const FIXED_OUTBOUND_HOSTS_BY_TOOL = new Map<string, string[]>([
+  ...NATIVE_GOOGLE_ACTIONS.map((action): [string, string[]] => [
+    action.name,
+    [action.name.startsWith("gmail.") ? "gmail.googleapis.com" : "www.googleapis.com"],
+  ]),
   ["calendar.create_event", ["www.googleapis.com"]],
+  ["calendar.respond_event", ["www.googleapis.com"]],
   ["calendar.list", ["www.googleapis.com"]],
   ["discord.react", ["discord.com"]],
   ["discord.send", ["discord.com"]],

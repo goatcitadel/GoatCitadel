@@ -1,0 +1,31 @@
+<h2 id="connect-a-cloud-provider">Connect a cloud provider</h2>
+<ol>
+  <li>Open <strong>Settings › Models</strong> and select a provider in the guided setup.</li>
+  <li>Follow the provider's supported sign-in or credential flow. Enter API keys in provider settings.</li>
+  <li>Choose a model for Chat and send a short prompt to verify that it replies.</li>
+</ol>
+<p>
+  Cloud providers receive the request and the context sent with it. Review the selected provider and model before
+  sending sensitive material.
+</p>
+
+<h2 id="connect-a-local-model">Connect a local model</h2>
+<p>
+  Start a supported local model runtime such as llama.cpp, Ollama, or LM Studio. In <strong>Settings › Models</strong>,
+  use <strong>Local AI</strong> or a compatible provider endpoint as appropriate. Use the base URL and model identifier
+  reported by your runtime.
+</p>
+<p>
+  The address must be reachable from the Gateway. If GoatCitadel runs in a container, the container's loopback address
+  refers to the container itself. See the
+  <a href="https://github.com/goatcitadel/GoatCitadel/blob/main/docs/LLAMA_CPP_SETUP.md">llama.cpp setup guide</a> for
+  the managed local setup.
+</p>
+
+<h2 id="check-the-selected-model">Check the selected model</h2>
+<p>
+  Check the Chat model selector before sending a request. Inspect the reply's available details to see which provider
+  and model actually ran. Review model routing and fallback in <strong>Settings › Models</strong> if it used a different
+  one.
+</p>
+<p>If no reply arrives, see <a href="../troubleshooting/#model-does-not-reply">Model does not reply</a>.</p>

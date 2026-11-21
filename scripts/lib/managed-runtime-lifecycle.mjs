@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_MAX_FILE_BYTES = 4096;
 const DEFAULT_LOCK_TIMEOUT_MS = 190_000;
@@ -10,6 +11,7 @@ const LOCK_HEARTBEAT_MS = 1_000;
 const LOCK_OWNER_READ_RETRIES = 4;
 const LOCK_OWNER_READ_RETRY_DELAY_MS = 25;
 const WINDOWS_POWERSHELL = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+const bundledWindowsProcessIdentity = resolveBundledWindowsProcessIdentity();
 
 let cachedCurrentProcessIdentity;
 let cachedLinuxBootId;
@@ -146,7 +148,7 @@ export function queryProcessCreationIdentity(pid) {
     return { status: "running", identity: cachedCurrentProcessIdentity };
   }
   if (process.platform === "win32") {
-    const current = queryWindowsProcessCreationIdentity(pid);
+    const current = queryWindowsProcessCreationIdentity(pid, { nativeExecutable: bundledWindowsProcessIdentity });
     if (pid === process.pid && current.status === "running") cachedCurrentProcessIdentity = current.identity;
     return current;
   }
@@ -166,6 +168,17 @@ export function queryProcessCreationIdentity(pid) {
 export function inspectProcessBinding({ rootPid, servingPid, maxDepth = 64 }) {
   if (![rootPid, servingPid].every((value) => Number.isSafeInteger(value) && value > 0)) {
     return { status: "missing" };
+  }
+  if (process.platform === "win32" && rootPid === servingPid && maxDepth > 0) {
+    // A service listening from its own PID needs only a live creation-time check.
+    const creation = queryProcessCreationIdentity(servingPid);
+    if (creation.status === "running") {
+      return { status: "verified", rootIdentity: creation.identity, servingIdentity: creation.identity, depth: 0 };
+    }
+    if (creation.status === "missing") {
+      return { status: "missing" };
+    }
+    // CIM can still resolve a process when the direct lookup is unavailable.
   }
   const ancestry = readProcessAncestry(servingPid, maxDepth, rootPid);
   if (ancestry.status !== "ok") {
@@ -560,9 +573,31 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function resolveBundledWindowsProcessIdentity() {
+  if (process.platform !== "win32") return undefined;
+  const embeddedNode = fileURLToPath(new URL("../../runtime/node/node.exe", import.meta.url));
+  if (path.resolve(process.execPath).toLowerCase() !== embeddedNode.toLowerCase()) return undefined;
+  const helper = fileURLToPath(new URL("../../desktop/GoatCitadel-Process-Identity.exe", import.meta.url));
+  try {
+    if (fs.lstatSync(helper).isFile() && fs.realpathSync.native(helper).toLowerCase() === helper.toLowerCase()) {
+      return helper;
+    }
+  } catch {
+    // Older bundles and unavailable helpers retain the PowerShell probe.
+  }
+  return undefined;
+}
+
 /** Same kernel creation time as the ancestry probe, without starting WMI for a single PID. */
-export function queryWindowsProcessCreationIdentity(pid, { spawn = spawnSync, exists = fs.existsSync } = {}) {
+export function queryWindowsProcessCreationIdentity(pid, { nativeExecutable, spawn = spawnSync, exists = fs.existsSync } = {}) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return { status: "missing" };
+  if (nativeExecutable && exists(nativeExecutable)) {
+    const result = spawn(nativeExecutable, [String(pid)], {
+      encoding: "utf8", windowsHide: true, timeout: 1_000, maxBuffer: 256,
+    });
+    const native = parseWindowsProcessIdentity(pid, result);
+    if (native.status !== "unavailable") return native;
+  }
   if (!exists(WINDOWS_POWERSHELL)) return { status: "unavailable" };
   const script = [
     "$ErrorActionPreference = 'Stop'",
@@ -577,7 +612,11 @@ export function queryWindowsProcessCreationIdentity(pid, { spawn = spawnSync, ex
   const result = spawn(WINDOWS_POWERSHELL, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
     encoding: "utf8", windowsHide: true, timeout: 5_000, maxBuffer: 64 * 1024,
   });
-  if (result.error || result.status !== 0) return { status: "unavailable" };
+  return parseWindowsProcessIdentity(pid, result);
+}
+
+function parseWindowsProcessIdentity(pid, result) {
+  if (result.error || result.status !== 0 || typeof result.stdout !== "string") return { status: "unavailable" };
   const output = result.stdout.trim();
   if (output === "missing") return { status: "missing" };
   const match = output.match(/^(\d+)\|(\d{1,20})$/u);

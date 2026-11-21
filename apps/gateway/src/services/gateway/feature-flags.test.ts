@@ -6,6 +6,23 @@ import {
   type GatewayFeatureFlags,
 } from "./feature-flags.js";
 
+describe("shipped assistant learning feature flags", () => {
+  const defaults = resolveGatewayFeatureFlags(undefined, {});
+
+  it.each([
+    ["background skill drafts", "backgroundSkillDraftsV1Enabled"],
+    ["indexed corpus recall", "memoryCorpusRecallV1Enabled"],
+  ] as const)("defaults %s on and respects independent changes", (_label, flag) => {
+    const disabled = { ...defaults, [flag]: false };
+    expect(defaults[flag]).toBe(true);
+    expect(resolveGatewayFeatureFlags(undefined, { [flag]: false })).toEqual(disabled);
+    expect(resolveGatewayFeatureFlags({ [flag]: false }, defaults)).toEqual(disabled);
+    expect(buildUpdatedFeatureFlags(defaults, { [flag]: false })).toEqual(disabled);
+    expect(resolveGatewayFeatureFlags({ [flag]: true }, disabled)).toEqual(defaults);
+    expect(buildUpdatedFeatureFlags(disabled, { [flag]: true })).toEqual(defaults);
+  });
+});
+
 describe("claudeCliToolBridgeEnabled feature flag", () => {
   const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
 

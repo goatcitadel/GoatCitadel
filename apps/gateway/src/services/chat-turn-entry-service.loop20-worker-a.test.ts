@@ -210,6 +210,7 @@ function createHost(turnRuntimeResult: Record<string, unknown> = {}) {
       closeTurnWrite: vi.fn(),
     },
     llmService: {
+      withPublicCodexStatusSnapshot: async <T>(read: () => T | Promise<T>) => read(),
       getRuntimeConfig: vi.fn(() => ({
         activeProviderId: "openai",
         activeModel: "gpt-5.4",

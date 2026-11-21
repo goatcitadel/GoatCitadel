@@ -111,7 +111,23 @@ public sealed partial class MainWindow : Window
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         _appWindow = AppWindow.GetFromWindowId(windowId);
-        _appWindow.Resize(new SizeInt32(InitialWidth, InitialHeight));
+        var workArea = DisplayArea.GetFromWindowId(windowId, DisplayAreaFallback.Nearest)?.WorkArea;
+        var minimumWidth = MinimumWidth;
+        var minimumHeight = MinimumHeight;
+        if (workArea is { Width: > 0, Height: > 0 } area
+            && (area.Width < InitialWidth || area.Height < InitialHeight))
+        {
+            var width = Math.Min(InitialWidth, area.Width);
+            var height = Math.Min(InitialHeight, area.Height);
+            _appWindow.MoveAndResize(new RectInt32(
+                area.X + (area.Width - width) / 2, area.Y + (area.Height - height) / 2, width, height));
+            minimumWidth = Math.Min(MinimumWidth, area.Width);
+            minimumHeight = Math.Min(MinimumHeight, area.Height);
+        }
+        else
+        {
+            _appWindow.Resize(new SizeInt32(InitialWidth, InitialHeight));
+        }
         _appWindow.Title = "GoatCitadel Mission Control";
         _appWindow.Closing += (_, args) =>
         {
@@ -136,9 +152,9 @@ public sealed partial class MainWindow : Window
             }
 
             var size = _appWindow.Size;
-            if (size.Width < MinimumWidth || size.Height < MinimumHeight)
+            if (size.Width < minimumWidth || size.Height < minimumHeight)
             {
-                _appWindow.Resize(new SizeInt32(Math.Max(size.Width, MinimumWidth), Math.Max(size.Height, MinimumHeight)));
+                _appWindow.Resize(new SizeInt32(Math.Max(size.Width, minimumWidth), Math.Max(size.Height, minimumHeight)));
             }
         };
     }

@@ -132,6 +132,23 @@ describe("explicit Settings approval continuation", () => {
     api.respond.mockReset().mockResolvedValue(receipt());
     settled.mockReset().mockResolvedValue(undefined);
   });
+  it.each(["recorded", "uncertain"] as const)(
+    "settles the %s card when its canonical plan completes without releasing its replay lock",
+    async (state) => {
+      if (state === "uncertain") api.respond.mockRejectedValueOnce(new Error("The response was lost"));
+      await mount();
+      await resume();
+      expect(control.state).toBe(state);
+      expect(control.visible).toBe(true);
+      await act(async () => renderer.update(<Harness reviewed={receipt()} />));
+      expect(control.visible).toBe(false);
+      expect(control.message).toBeUndefined();
+      await act(async () => renderer.update(<Harness reviewed={plan()} />));
+      expect(control.disabled).toBe(true);
+      expect(await resume()).toBe(false);
+      expect(api.respond).toHaveBeenCalledTimes(1);
+    },
+  );
   afterEach(async () => {
     await act(async () => renderer?.unmount());
   });
@@ -158,6 +175,29 @@ describe("explicit Settings approval continuation", () => {
     pending.approval.resolutionOutcome = undefined;
     return { reviewed, pending, approved };
   }
+
+  it("continues the exact approved Chat runtime setup without a second approval and retains its session scope", async () => {
+    const reviewed = {
+      ...plan(),
+      origin: { surface: "chat" as const, workspaceId: "default", sessionId: "session-one" },
+    };
+    api.plan.mockResolvedValue(reviewed);
+    const approved = replay();
+    api.approval.mockResolvedValue({
+      ...approved,
+      approval: { ...approved.approval, linkage: { ...approved.approval.linkage, sessionId: "session-one" } },
+    });
+    api.respond.mockResolvedValue({ ...receipt(), origin: reviewed.origin });
+    await mount(reviewed);
+    expect(api.respond).not.toHaveBeenCalled();
+    expect(await resume()).toBe(true);
+    expect(api.resolve).not.toHaveBeenCalled();
+    expect(api.respond).toHaveBeenCalledWith(
+      reviewed.planId,
+      { workspaceId: "default", sessionId: "session-one" },
+      expect.objectContaining({ expectedRevision: 3, actionNonce: "nonce-budget" }),
+    );
+  });
 
   it("approves and applies the reviewed Gateway sign-in change in one action", async () => {
     const { reviewed, pending, approved } = signInReview();
@@ -345,6 +385,22 @@ describe("explicit Settings approval continuation", () => {
     expect(control.visible).toBe(false);
     expect(await resume()).toBe(false);
     expect(api.plan).not.toHaveBeenCalled();
+    expect(api.respond).not.toHaveBeenCalled();
+  });
+
+  it("withholds Chat setup continuation when the approval names a different conversation", async () => {
+    const reviewed = {
+      ...plan(),
+      origin: { surface: "chat" as const, workspaceId: "default", sessionId: "session-one" },
+    };
+    const foreign = replay();
+    api.plan.mockResolvedValue(reviewed);
+    api.approval.mockResolvedValue({
+      ...foreign,
+      approval: { ...foreign.approval, linkage: { ...foreign.approval.linkage, sessionId: "session-two" } },
+    });
+    await mount(reviewed);
+    expect(await resume()).toBe(false);
     expect(api.respond).not.toHaveBeenCalled();
   });
 

@@ -10,6 +10,7 @@ export function DesktopUpdatesPanel() {
   const { act, busy, error, uncertain } = useDesktopUpdateActions(status);
   const actionBusy = busy || uncertain;
   const offered = status?.availableRelease;
+  const readyToInstall = status?.phase === "downloaded" && Boolean(status.downloadedPath);
   return (
     <section id="updates" aria-label="App updates">
       <NativeCard title="App updates" subtitle="Choose when to download and install a new version.">
@@ -74,8 +75,12 @@ export function DesktopUpdatesPanel() {
               </NativeButton>
               {offered ? (
                 <>
-                  <NativeButton type="button" disabled={actionBusy} onClick={() => void act("download")}>
-                    Download
+                  <NativeButton
+                    type="button"
+                    disabled={actionBusy}
+                    onClick={() => void act(readyToInstall ? "install" : "download")}
+                  >
+                    {readyToInstall ? "Update and restart" : "Download"}
                   </NativeButton>
                   <NativeButton type="button" disabled={actionBusy} onClick={() => void act("notes")}>
                     View release notes
@@ -91,12 +96,6 @@ export function DesktopUpdatesPanel() {
                 </NativeButton>
               ) : null}
             </SettingsButtonRow>
-            {status.downloadedPath ? (
-              <p>
-                Run the downloaded installer when your work is finished. The app will not install or restart
-                automatically.
-              </p>
-            ) : null}
           </>
         )}
         {error ? <p role="alert">{error}</p> : null}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   googleWorkspaceCapabilityForTool,
+  googleWorkspaceCapabilitiesForTool,
   googleWorkspaceScopesFor,
   isGoogleWorkspaceCapabilityGranted,
   readEnabledGoogleWorkspaceCapabilities,
@@ -8,11 +9,22 @@ import {
 } from "./google-workspace.js";
 
 describe("Google Workspace capabilities", () => {
+  it("keeps full reads opt-in and multi-capability writes cumulative", () => {
+    expect(googleWorkspaceCapabilityForTool("gmail.get_message")).toBe("gmail.content");
+    expect(readEnabledGoogleWorkspaceCapabilities({ gmailRead: true })).not.toContain("gmail.content");
+    expect(googleWorkspaceCapabilitiesForTool("gmail.send_draft")).toEqual(["gmail.send", "gmail.drafts"]);
+    expect(googleWorkspaceCapabilitiesForTool("calendar.respond_event", { calendarId: "shared@example.com" })).toEqual([
+      "calendar.write",
+      "calendar.discover",
+    ]);
+    expect(googleWorkspaceScopesFor(["gmail.read", "gmail.content"])).toHaveLength(1);
+  });
   it("maps each tool to one capability and each capability to one requested scope", () => {
     expect(googleWorkspaceCapabilityForTool("gmail.read")).toBe("gmail.read");
     expect(googleWorkspaceCapabilityForTool("gmail.send")).toBe("gmail.send");
     expect(googleWorkspaceCapabilityForTool("calendar.list")).toBe("calendar.read");
     expect(googleWorkspaceCapabilityForTool("calendar.create_event")).toBe("calendar.write");
+    expect(googleWorkspaceCapabilityForTool("calendar.respond_event")).toBe("calendar.write");
     expect(googleWorkspaceCapabilityForTool("slack.send")).toBeUndefined();
     expect(googleWorkspaceScopesFor(["calendar.write", "gmail.read"])).toEqual([
       "https://www.googleapis.com/auth/gmail.readonly",

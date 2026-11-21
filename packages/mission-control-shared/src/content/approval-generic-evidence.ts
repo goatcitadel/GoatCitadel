@@ -240,7 +240,19 @@ function collectApprovalEvidence(
             collector.exact,
             true,
           );
-        } else if (record.reviewKind === "knowledge.operation" && (key === "query" || key === "source")) {
+        } else if (record.reviewKind === "communications.operation" && key === "input") {
+          pushEvidenceBlock(
+            collector.changes,
+            collector.seenBlocks,
+            "Message: Reviewed action",
+            value,
+            collector.exact,
+            true,
+          );
+        } else if (
+          record.reviewKind === "knowledge.operation" &&
+          (key === "query" || key === "source" || key === "input")
+        ) {
           pushEvidenceBlock(
             collector.changes,
             collector.seenBlocks,

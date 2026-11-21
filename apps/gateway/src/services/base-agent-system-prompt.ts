@@ -180,7 +180,9 @@ function buildWriteAndRunPolicySection(toolset: BaseAgentPromptToolset): string 
     .join(" and ");
   const lines = [
     "## Writing and running code",
-    `This workspace's tool policy turns off ${off}, so you cannot create or change code files or run scripts in this turn. If the user asks for that, say so plainly first. Do not save code through document tools, and do not treat a test, lint or build tool as running their code: those only run the project's own package scripts.`,
+    toolset.toolNames.includes("code_mode.request")
+      ? `This workspace's tool policy turns off ${off}. Direct workspace file changes and shell commands are blocked where listed. The governed code_mode.request remains available for approved computation; it does not grant workspace writes or permission to bypass denied tools. Do not claim all code execution is unavailable. Do not save code through document tools or use test, lint or build tools to bypass these restrictions.`
+      : `This workspace's tool policy turns off ${off}, so you cannot create or change code files or run scripts in this turn. If the user asks for that, say so plainly first. Do not save code through document tools, and do not treat a test, lint or build tool as running their code: those only run the project's own package scripts.`,
   ];
   if (writesDenied && switchedOff.has("fs.write")) {
     lines.push(`To allow file writes, ${switchedOffRemedy("fs.write", held, unreadable)}`);
@@ -291,6 +293,7 @@ const TOOL_DOCTRINE_SECTION = [
   "- If a needed tool, skill, or integration is missing, say what can be staged, requested, or approved in this conversation. Do not tell the operator to paste/apply work in Code Mode or move to another mode.",
   "- If Brave or Parallel search is missing or has a rejected credential, call runtime.configure for the exact target. Never ask the operator to paste a credential into Chat; the Gateway will present a separate secure keychain form, verify it, and resume this turn.",
   "- When the operator asks to change GoatCitadel configuration, providers, channels, capabilities, repairs, or updates, call change.request with only an allowlisted typed intent. It creates an inspectable Change Plan and never confirms or applies the change; never include credentials, paths, patches, commands, or arbitrary setting keys.",
+  "- For a Google account, first clarify whether the operator means Gmail/Google Calendar or Google Chat messaging. Gmail and Google Calendar use the connector in Capabilities, not channel_connection or provider_connection. Offer [Set up Gmail and Google Calendar](/capabilities/connectors/advanced?shell=cockpit&addIntegration=automation.gmail#integration-connections) and guide the operator through its secure setup. Never invent a google or gmail channel kind; Google Chat messaging uses google-chat and does not connect a personal Gmail/Calendar account. Never ask for OAuth credentials in Chat.",
   "- Move deliberately toward the goal, then stop calling tools once you have what you need to answer.",
 ].join("\n");
 

@@ -1,3 +1,4 @@
+import { nativeGoogleAction } from "./google-workspace-actions.js";
 export type ToolRiskLevel = "safe" | "caution" | "danger" | "nuclear";
 
 export type ToolCategory =
@@ -36,8 +37,10 @@ const CAUTION_MUTATING_TOOL_NAMES = new Set([
 export function isKnownMutatingToolName(toolName: string): boolean {
   return (
     CAUTION_MUTATING_TOOL_NAMES.has(toolName) ||
+    nativeGoogleAction(toolName)?.readOnly === false ||
     /\.(send|react|unsend)$/u.test(toolName) ||
     toolName === "webhook.send" ||
-    toolName === "calendar.create_event"
+    toolName === "calendar.create_event" ||
+    toolName === "calendar.respond_event"
   );
 }

@@ -14,6 +14,16 @@ const forgetPreview = {
 
 const technical = { label: "Memory review record", content: "Subject Kind: memory_item\nSubject Id: memory-item-1" };
 
+it("keeps complete communications input in an expanded review block without truncation", () => {
+  const input = "To alice@example.com\nBcc hidden@example.com\n\n" + "message ".repeat(4000);
+  const evidence = buildApprovalReviewEvidenceModel({
+    reviewKind: "communications.operation",
+    toolName: "gmail.send",
+    input,
+  });
+  expect(evidence?.changes).toContainEqual({ label: "Message: Reviewed action", content: input });
+});
+
 describe("memory review evidence (U-LB-011)", () => {
   it.each([
     ["compact", buildApprovalEvidenceModel],

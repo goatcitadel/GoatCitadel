@@ -30,7 +30,7 @@ export interface ChatRouteResolutionDependencies {
   /** Ward storage is optional: without `citadels` no Citadel Ward applies to routing. */
   readonly storage: Pick<Storage, "chatSessionPrefs"> & RouteLocalWardDependencies["storage"];
   resolveSessionWorkspaceId?: RouteLocalWardDependencies["resolveSessionWorkspaceId"];
-  readonly llmService: Pick<LlmService, "getRuntimeConfig"> &
+  readonly llmService: Pick<LlmService, "getRuntimeConfig" | "withPublicCodexStatusSnapshot"> &
     Partial<
       Pick<LlmService, "getCachedModelAvailability" | "refreshModelCatalogInBackground" | "ensureProviderReadiness">
     >;
@@ -229,14 +229,16 @@ async function readRouteRuntimeConfig(
   prefs: ChatSessionPrefsRecord,
   input: RoutingPreflightRequest,
 ): Promise<LlmRuntimeConfig> {
-  const readRuntime = () => llmService.getRuntimeConfig({ includeKeychainForActiveProvider: true, useCache: true });
-  const runtime = readRuntime();
-  const provider = resolveRequestedProvider(runtime, prefs, input);
-  if (provider?.authMode !== "claude-code-cli-login") {
-    return runtime;
-  }
-  await llmService.ensureProviderReadiness?.(provider.providerId);
-  return readRuntime();
+  return llmService.withPublicCodexStatusSnapshot(async () => {
+    const readRuntime = () => llmService.getRuntimeConfig({ includeKeychainForActiveProvider: true, useCache: true });
+    const runtime = readRuntime();
+    const provider = resolveRequestedProvider(runtime, prefs, input);
+    if (provider?.authMode !== "claude-code-cli-login") {
+      return runtime;
+    }
+    await llmService.ensureProviderReadiness?.(provider.providerId);
+    return readRuntime();
+  });
 }
 
 function classifyRuntime(provider: RuntimeProvider | undefined): RoutingPreflightResult["runtimeClass"] {

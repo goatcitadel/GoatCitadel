@@ -22,7 +22,11 @@ export function projectChatStatus(live: LiveChat | null | undefined, session?: C
   const thread = live.thread;
   if (!thread) return session ? projectSessionActivity(session) : { label: "Status unavailable", tone: "neutral" };
   const latest = thread.turns.find((turn) => turn.turnId === thread.activeLeafTurnId) ?? thread.turns.at(-1);
-  if (!latest) return { label: "No messages yet", tone: "neutral" };
+  if (!latest) {
+    const notice = thread.systemNotices?.at(-1);
+    if (notice) return { label: notice.kind === "timer_due" ? "Timer due" : "Conversation updated", tone: "neutral" };
+    return { label: "No messages yet", tone: "neutral" };
+  }
   switch (latest.trace.status) {
     case "queued":
       return { label: "Queued", tone: "running" };

@@ -419,9 +419,14 @@ describe("cockpit text composer", () => {
   it("opens personality settings when no presence record is attached", async () => {
     const props = composerProps();
     const openModelOptions = async () =>
-      act(async () =>
-        container.querySelector<HTMLButtonElement>('button[aria-label$="Model and reasoning options"]')!.click(),
-      );
+      act(async () => {
+        const trigger = container.querySelector<HTMLButtonElement>(
+          'button[aria-label$="Model and reasoning options"]',
+        )!;
+        trigger.focus();
+        trigger.click();
+        await vi.dynamicImportSettled();
+      });
     const personalityButton = () =>
       document.body.querySelector<HTMLButtonElement>('button[aria-label$="Open personality settings"]');
     await act(async () => root.render(<ChatTextComposer props={props} />));

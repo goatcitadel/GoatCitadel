@@ -186,6 +186,7 @@
     "verify:agentic:harnesses": "node scripts/verification/run.mjs agentic-harnesses",
     "verify:agentic:proof": "node scripts/verification/run.mjs agentic-proof",
     "verify:agentic:parity": "node scripts/verification/run.mjs agentic-parity",
+    "verify:assistant:parity": "node scripts/verification/assistant-parity-proof.mjs",
     "verify:harness:availability": "node scripts/verification/run.mjs agentic-harness-availability",
     "verify:self-improvement:trust": "node scripts/verification/run.mjs agentic-self-improvement-trust",
     "verify:channels:runtime": "node scripts/verification/run.mjs agentic-channels-runtime",

@@ -41,6 +41,16 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS: Partial<
     label: "Memory administration",
     description: "When on, Library › Memory lists what GoatCitadel remembers and lets you edit, forget and review it.",
   },
+  memoryCorpusRecallV1Enabled: {
+    label: "Memory library search",
+    description:
+      "When on, Chat and memory tools can find older saved facts and approved lessons while respecting conversation and workspace access.",
+  },
+  backgroundSkillDraftsV1Enabled: {
+    label: "Background skill drafts",
+    description:
+      "When on, successful private conversations may produce inactive skill drafts for your review. Evaluation and activation remain separate decisions.",
+  },
   memoryMaintenanceV1Enabled: {
     label: "Memory maintenance",
     description:

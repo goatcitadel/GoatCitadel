@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { ConflictError, type LlmProviderOAuthStatus } from "@goatcitadel/contracts";
@@ -29,6 +30,32 @@ const OPENAI_CODEX_PROFILE_CLAIM = "https://api.openai.com/profile";
 export interface OpenAICodexOAuthStatus extends LlmProviderOAuthStatus {
   providerId: typeof OPENAI_CODEX_PROVIDER_ID;
   available: boolean;
+}
+
+interface PublicStatusSnapshot {
+  status?: OpenAICodexOAuthStatus;
+  pending?: Promise<OpenAICodexOAuthStatus>;
+}
+
+interface StartupStatusScope {
+  statuses?: WeakMap<OpenAICodexOAuthService, PublicStatusSnapshot>;
+  recordCredentialRead?: (durationMs: number) => void;
+}
+
+const startupStatusScope = new AsyncLocalStorage<StartupStatusScope>();
+
+/** Share the live public status within one read batch. Credential use stays with its owner. */
+export async function withCodexStartupStatusSnapshot<T>(
+  read: () => Promise<T>,
+  recordCredentialRead?: (durationMs: number) => void,
+): Promise<T> {
+  const scope: StartupStatusScope = { statuses: new WeakMap(), recordCredentialRead };
+  try {
+    return await startupStatusScope.run(scope, read);
+  } finally {
+    scope.statuses = undefined;
+    scope.recordCredentialRead = undefined;
+  }
 }
 
 export interface OpenAICodexDeviceStartResponse {
@@ -108,8 +135,62 @@ export class OpenAICodexOAuthService {
   }
 
   public getStatus(credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT, sameAccountOnly = false): OpenAICodexOAuthStatus {
-    const available = this.secretStore.isAvailable();
+    const snapshot =
+      credentialAccount === OPENAI_CODEX_OAUTH_ACCOUNT && !sameAccountOnly ? this.getPublicStatusSnapshot() : undefined;
+    if (snapshot?.status) return { ...snapshot.status };
+
+    const available = this.isKeychainAvailable();
     const credential = this.readCredential(credentialAccount);
+    const status = this.projectStatus(available, credential, sameAccountOnly);
+    if (snapshot) snapshot.status = { ...status };
+    return status;
+  }
+
+  /** Load the public status before entering the synchronous configuration projection. */
+  public withPublicStatusSnapshot<T>(read: () => T | Promise<T>): Promise<T> {
+    const project = async () => {
+      const snapshot = this.getPublicStatusSnapshot();
+      if (snapshot && !snapshot.status) {
+        const status = await (snapshot.pending ??= this.readPublicStatus());
+        snapshot.status ??= status;
+      }
+      return read();
+    };
+    return startupStatusScope.getStore()?.statuses ? project() : withCodexStartupStatusSnapshot(project);
+  }
+
+  private getPublicStatusSnapshot(): PublicStatusSnapshot | undefined {
+    const statuses = startupStatusScope.getStore()?.statuses;
+    if (!statuses) return undefined;
+    let snapshot = statuses.get(this);
+    if (!snapshot) {
+      snapshot = {};
+      statuses.set(this, snapshot);
+    }
+    return snapshot;
+  }
+
+  private async readPublicStatus(): Promise<OpenAICodexOAuthStatus> {
+    const available = this.isKeychainAvailable();
+    let credential: OpenAICodexOAuthCredential | undefined;
+    if (available) {
+      const started = performance.now();
+      try {
+        credential = parseCredential(await this.secretStore.getSecretAsync(OPENAI_CODEX_OAUTH_ACCOUNT));
+      } catch {
+        // Keep the same disconnected projection as the synchronous status reader.
+      } finally {
+        startupStatusScope.getStore()?.recordCredentialRead?.(performance.now() - started);
+      }
+    }
+    return this.projectStatus(available, credential);
+  }
+
+  private projectStatus(
+    available: boolean,
+    credential: OpenAICodexOAuthCredential | undefined,
+    sameAccountOnly = false,
+  ): OpenAICodexOAuthStatus {
     return {
       providerId: OPENAI_CODEX_PROVIDER_ID,
       available,
@@ -243,7 +324,7 @@ export class OpenAICodexOAuthService {
 
   public deleteCredential(credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT): OpenAICodexOAuthStatus {
     this.assertKeychainAvailable();
-    this.secretStore.deleteSecret(credentialAccount);
+    this.removeCredential(credentialAccount);
     return this.getStatus(credentialAccount);
   }
 
@@ -273,7 +354,7 @@ export class OpenAICodexOAuthService {
     // Write canonical state before removing staging custody. Reconciliation can
     // safely clean the duplicate if the process stops between these operations.
     this.saveCredential(credential, OPENAI_CODEX_OAUTH_ACCOUNT);
-    this.secretStore.deleteSecret(sourceAccount);
+    this.removeCredential(sourceAccount);
     return this.getStatus();
   }
 
@@ -282,7 +363,7 @@ export class OpenAICodexOAuthService {
       throw new ConflictError({ message: "Temporary OAuth cleanup cannot target the canonical credential owner." });
     }
     this.assertKeychainAvailable();
-    this.secretStore.deleteSecret(credentialAccount);
+    this.removeCredential(credentialAccount);
   }
 
   public close(): void {
@@ -381,20 +462,19 @@ export class OpenAICodexOAuthService {
     );
   }
 
+  private isKeychainAvailable(): boolean {
+    return this.secretStore.isAvailable();
+  }
+
   private assertKeychainAvailable(): void {
-    if (!this.secretStore.isAvailable()) {
+    if (!this.isKeychainAvailable()) {
       throw new SecretStoreUnavailableError("OS keychain backend is required for OpenAI Codex OAuth.");
     }
   }
 
   private readCredential(credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT): OpenAICodexOAuthCredential | undefined {
     try {
-      const raw = this.secretStore.getSecret(credentialAccount);
-      if (!raw) {
-        return undefined;
-      }
-      const parsed = parseJsonObject(raw);
-      return isOpenAICodexOAuthCredential(parsed) ? parsed : undefined;
+      return parseCredential(this.secretStore.getSecret(credentialAccount));
     } catch (error) {
       if (isSecretStoreUnavailableLikeError(error)) {
         return undefined;
@@ -405,6 +485,10 @@ export class OpenAICodexOAuthService {
 
   private saveCredential(credential: OpenAICodexOAuthCredential, credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT): void {
     this.secretStore.setSecret(credentialAccount, JSON.stringify(credential));
+  }
+
+  private removeCredential(credentialAccount: string): void {
+    this.secretStore.deleteSecret(credentialAccount);
   }
 
   private projectPendingFlow(flowId: string, flow: PendingDeviceFlow): OpenAICodexDeviceStartResponse {
@@ -640,6 +724,12 @@ function normalizeTokenLifetimeMs(value: unknown): number | undefined {
 function resolveNextPollDelayMs(intervalMs: number, deadlineMs: number): number {
   const remainingMs = Math.max(0, deadlineMs - Date.now());
   return Math.min(Math.max(intervalMs, OPENAI_CODEX_OAUTH_MIN_INTERVAL_MS), remainingMs);
+}
+
+function parseCredential(raw: string | undefined): OpenAICodexOAuthCredential | undefined {
+  if (!raw) return undefined;
+  const parsed = parseJsonObject(raw);
+  return isOpenAICodexOAuthCredential(parsed) ? parsed : undefined;
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | null {

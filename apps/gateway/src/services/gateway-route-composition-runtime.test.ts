@@ -560,6 +560,7 @@ function createGateway() {
     llamaCppSetupService: { get: vi.fn((workspaceId: string) => ({ workspaceId })) },
     llmService: {
       chatCompletions: vi.fn(async () => ({ choices: [{ message: { content: "{}" } }] })),
+      withPublicCodexStatusSnapshot: async (read: () => unknown) => read(),
     },
     memoryLifecycleService: { listRunContexts: vi.fn(() => [{ contextId: "ctx-1" }]) },
     meshService: { status: () => ({ mesh: "online" }) },

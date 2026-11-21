@@ -1,4 +1,4 @@
-import { findProviderTemplate, type LlmProviderRequestConfig } from "@goatcitadel/contracts";
+import { findProviderModelDefaults, type LlmProviderRequestConfig } from "@goatcitadel/contracts";
 import { previewLlmModels, type RuntimeSettingsResponse } from "../api/client";
 import { dedupeProviderModels } from "./provider-model-values.js";
 
@@ -35,7 +35,7 @@ export async function previewProviderModels(
       signal: options?.signal,
     },
   );
-  const template = findProviderTemplate(input.providerId);
+  const template = findProviderModelDefaults(input.providerId);
   return {
     items:
       response.source === "live"

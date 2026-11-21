@@ -19,6 +19,10 @@ Current shell posture for this map:
 - The final certificate is written only after signed installer hashes are known, so it is not embedded back into the installer. The release job instead publishes `*-verified.zip` Windows distributions containing the signed installer plus a fixed `release-evidence/` sidecar directory. Inno copies that directory to `app/release-evidence` when the installer is launched from the verified distribution. A standalone installer remains supported, but the running shell must report its release proof as unverified because the certificate-bound files are absent.
 - The default Cockpit navigation is `Chat / Inbox / Work / Capabilities / Library / Scripts / System / Settings`. Classic offers `Work / Projects / Library / Ops / Settings` for explicit rollback, where Work is Chat.
 
+## Assistant reliability implementation evidence
+
+The [assistant reliability acceptance index](review/assistant-parity-acceptance.md) records the 2026-11-19 implementation, focused regressions, isolated native Gateway and PostgreSQL journeys, rendered states, and pinned OpenClaw and Hermes observations. It distinguishes synthetic mechanism checks, observed local-model behavior, and open comparison and release checks. Signed installer and release evidence use the certificate workflow described above.
+
 ## Recovery Truth
 
 - Live admin restore is blocked at [apps/gateway/src/routes/admin.ts](../apps/gateway/src/routes/admin.ts).

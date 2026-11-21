@@ -139,7 +139,8 @@ public sealed partial class MainWindow
 
     private bool TryBeginProfileRecovery()
     {
-        if (_profileInstallRoot is null || _profileRecoveryOpen || _updateDialog is not null || _cleanedUp) return false;
+        if (_profileInstallRoot is null || _profileRecoveryOpen || _updateDialog is not null || _installUpdatePending || _cleanedUp)
+            return false;
         _profileRecoveryOpen = true;
         return true;
     }

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { Storage } from "happy-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
@@ -244,6 +245,7 @@ afterEach(async () => {
   host.remove();
   client.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 const shellRecord = () => ({
   ...makeRecord(),
@@ -650,6 +652,8 @@ it.each(["text", "choice", "secure"] as const)(
   },
 );
 it("consumes explicit current-document consent once without submitting inputs, deciding or writing draft storage", async () => {
+  vi.stubGlobal("localStorage", new Storage());
+  vi.stubGlobal("sessionStorage", new Storage());
   const reload = vi.spyOn(window.location, "reload").mockImplementation(() => undefined);
   await failedCode({ question: true, choice: true });
   await vi.waitFor(() => expect(host.querySelector('form[aria-label="Pending question"]')).not.toBeNull());

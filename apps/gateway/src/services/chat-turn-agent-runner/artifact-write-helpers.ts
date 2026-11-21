@@ -677,7 +677,10 @@ export function hasExecutedManagedProjectSave(toolRun: ChatToolRunRecord): boole
 export function getExecutedWorkspaceFileWriteReceipt(
   toolRun: ChatToolRunRecord,
 ): ExecutedWorkspaceFileWriteReceipt | undefined {
-  if (toolRun.status !== "executed" || !isWriteDestinationTool(toolRun.toolName)) {
+  if (
+    toolRun.status !== "executed" ||
+    (!isWriteDestinationTool(toolRun.toolName) && toolRun.toolName !== "gmail.download_attachment")
+  ) {
     return undefined;
   }
   const result = (toolRun.result ?? {}) as Record<string, unknown>;

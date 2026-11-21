@@ -50,10 +50,18 @@ export const gatewayPlugin = fp<GatewayPluginOptions>(async (fastify, options) =
   }
   setBootCheckpoint("storage-plugin:postgres-ready");
   const shouldStopBundledPostgres = shouldStopBundledPostgresOnClose();
-  const gateway = createGatewayRuntime(config, {
-    sharedHostLifecycle: fastify.sharedHostLifecycle,
-    ...(options.mcpRequesterResolvers ? { mcpRequesterResolvers: options.mcpRequesterResolvers } : {}),
-  });
+  const createRuntimePhase = startupPhases.open("create_runtime", { owner: "gateway.storage" });
+  let gateway: GatewayRuntimePort & GatewayAuthValidationPort;
+  try {
+    gateway = createGatewayRuntime(config, {
+      sharedHostLifecycle: fastify.sharedHostLifecycle,
+      ...(options.mcpRequesterResolvers ? { mcpRequesterResolvers: options.mcpRequesterResolvers } : {}),
+    });
+    createRuntimePhase.close();
+  } catch (error) {
+    createRuntimePhase.fail(formatStartupPhaseError(error));
+    throw error;
+  }
   gateway.attachDevDiagnosticsLogger(fastify.log);
   fastify.decorate("gatewayRuntime", gateway);
   fastify.decorate("gatewayAuth", gateway);

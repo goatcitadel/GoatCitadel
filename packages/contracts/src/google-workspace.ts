@@ -6,13 +6,32 @@
 
 export const GOOGLE_WORKSPACE_CATALOG_ID = "automation.gmail";
 
-export const GOOGLE_WORKSPACE_CAPABILITIES = ["gmail.read", "gmail.send", "calendar.read", "calendar.write"] as const;
+export const GOOGLE_WORKSPACE_CAPABILITIES = [
+  "gmail.read",
+  "gmail.send",
+  "calendar.read",
+  "calendar.write",
+  "gmail.content",
+  "gmail.manage",
+  "gmail.drafts",
+  "calendar.discover",
+  "calendar.availability",
+] as const;
 export type GoogleWorkspaceCapability = (typeof GOOGLE_WORKSPACE_CAPABILITIES)[number];
 
 export interface GoogleWorkspaceCapabilityDefinition {
   capability: GoogleWorkspaceCapability;
   /** Boolean connection-config key that turns the capability on. */
-  configKey: "gmailRead" | "gmailSend" | "calendarRead" | "calendarWrite";
+  configKey:
+    | "gmailRead"
+    | "gmailSend"
+    | "calendarRead"
+    | "calendarWrite"
+    | "gmailContentRead"
+    | "gmailManage"
+    | "gmailDrafts"
+    | "calendarDiscover"
+    | "calendarAvailability";
   /** The one Google scope requested for this capability. */
   scope: string;
   /** Scopes that also satisfy it when Google returns a broader grant. */
@@ -38,20 +57,20 @@ export const GOOGLE_WORKSPACE_CAPABILITY_DEFINITIONS: readonly GoogleWorkspaceCa
     configKey: "gmailRead",
     scope: GMAIL_READONLY,
     satisfiedBy: [GMAIL_READONLY, GMAIL_MODIFY, GMAIL_FULL],
-    label: "Read Gmail",
+    label: "Search Gmail",
     description: "Search messages and read their sender, subject, date and a short snippet.",
     write: false,
-    tools: ["gmail.read"],
+    tools: ["gmail.read", "gmail.list_labels"],
   },
   {
     capability: "gmail.send",
     configKey: "gmailSend",
     scope: GMAIL_SEND,
-    satisfiedBy: [GMAIL_SEND, GMAIL_MODIFY, GMAIL_FULL],
+    satisfiedBy: [GMAIL_SEND, GMAIL_MODIFY, GMAIL_FULL, "https://www.googleapis.com/auth/gmail.compose"],
     label: "Send Gmail",
     description: "Send mail as this account. Every send asks for your approval first.",
     write: true,
-    tools: ["gmail.send"],
+    tools: ["gmail.send", "gmail.reply", "gmail.forward", "gmail.send_draft"],
   },
   {
     capability: "calendar.read",
@@ -61,17 +80,81 @@ export const GOOGLE_WORKSPACE_CAPABILITY_DEFINITIONS: readonly GoogleWorkspaceCa
     label: "Read Calendar events",
     description: "List events in a time window.",
     write: false,
-    tools: ["calendar.list"],
+    tools: ["calendar.list", "calendar.get_event"],
   },
   {
     capability: "calendar.write",
     configKey: "calendarWrite",
     scope: CALENDAR_EVENTS,
     satisfiedBy: [CALENDAR_EVENTS, CALENDAR_FULL],
-    label: "Create Calendar events",
-    description: "Create events and invite attendees. Every event asks for your approval first.",
+    label: "Change Calendar events",
+    description: "Create, edit, reschedule or cancel events and submit RSVPs. Each change asks for approval.",
     write: true,
-    tools: ["calendar.create_event"],
+    tools: ["calendar.create_event", "calendar.respond_event", "calendar.update_event", "calendar.delete_event"],
+  },
+  {
+    capability: "gmail.content",
+    configKey: "gmailContentRead",
+    scope: GMAIL_READONLY,
+    satisfiedBy: [GMAIL_READONLY, GMAIL_MODIFY, GMAIL_FULL],
+    label: "Read complete Gmail messages",
+    description:
+      "Read complete messages, threads and attachments with separate approval. Existing snippet-search allowances do not cover this access.",
+    write: false,
+    tools: ["gmail.get_message", "gmail.get_thread", "gmail.download_attachment", "gmail.reply", "gmail.forward"],
+  },
+  {
+    capability: "gmail.manage",
+    configKey: "gmailManage",
+    scope: GMAIL_MODIFY,
+    satisfiedBy: [GMAIL_MODIFY, GMAIL_FULL],
+    label: "Manage Gmail inbox",
+    description:
+      "Archive, mark read/unread, change labels, and move mail to Trash or restore it. Each change asks for approval; mail is never permanently purged.",
+    write: true,
+    tools: ["gmail.modify_message", "gmail.create_label", "gmail.update_label"],
+  },
+  {
+    capability: "gmail.drafts",
+    configKey: "gmailDrafts",
+    scope: "https://www.googleapis.com/auth/gmail.compose",
+    satisfiedBy: ["https://www.googleapis.com/auth/gmail.compose", GMAIL_MODIFY, GMAIL_FULL],
+    label: "Manage Gmail drafts",
+    description:
+      "Read, create, edit and delete drafts with approval. Sending a draft also requires Send Gmail and its own approval.",
+    write: true,
+    tools: ["gmail.list_drafts", "gmail.get_draft", "gmail.save_draft", "gmail.delete_draft", "gmail.send_draft"],
+  },
+  {
+    capability: "calendar.discover",
+    configKey: "calendarDiscover",
+    scope: "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+    satisfiedBy: [
+      "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+      "https://www.googleapis.com/auth/calendar.calendarlist",
+      "https://www.googleapis.com/auth/calendar.readonly",
+      CALENDAR_FULL,
+    ],
+    label: "Discover calendars",
+    description: "List accessible calendars and verify the account identity needed for RSVPs on a secondary calendar.",
+    write: false,
+    tools: ["calendar.list_calendars"],
+  },
+  {
+    capability: "calendar.availability",
+    configKey: "calendarAvailability",
+    scope: "https://www.googleapis.com/auth/calendar.freebusy",
+    satisfiedBy: [
+      "https://www.googleapis.com/auth/calendar.freebusy",
+      "https://www.googleapis.com/auth/calendar.events.freebusy",
+      "https://www.googleapis.com/auth/calendar.readonly",
+      CALENDAR_FULL,
+    ],
+    label: "Check calendar availability",
+    description:
+      "Read busy windows on selected calendars. A calendar that cannot be checked is reported as unavailable, never free.",
+    write: false,
+    tools: ["calendar.free_busy"],
   },
 ];
 
@@ -88,6 +171,19 @@ export function isGoogleWorkspaceCapability(value: unknown): value is GoogleWork
 /** The capability a Gmail or Calendar tool needs, or undefined for any other tool. */
 export function googleWorkspaceCapabilityForTool(toolName: string): GoogleWorkspaceCapability | undefined {
   return GOOGLE_WORKSPACE_CAPABILITY_DEFINITIONS.find((item) => item.tools.includes(toolName))?.capability;
+}
+
+/** Cumulative requirements; broader OAuth scopes never turn another capability switch on. */
+export function googleWorkspaceCapabilitiesForTool(
+  toolName: string,
+  args: Record<string, unknown> = {},
+): GoogleWorkspaceCapability[] {
+  const capabilities = GOOGLE_WORKSPACE_CAPABILITY_DEFINITIONS.filter((item) => item.tools.includes(toolName)).map(
+    (item) => item.capability,
+  );
+  if (toolName === "calendar.respond_event" && args.calendarId && args.calendarId !== "primary")
+    capabilities.push("calendar.discover");
+  return capabilities;
 }
 
 /** Capabilities the connection config turns on. Only a literal `true` (or "true") counts. */
@@ -107,9 +203,13 @@ export function isGoogleWorkspaceCapabilityGranted(
 
 /** The exact scopes requested for a capability set, in a stable order and without duplicates. */
 export function googleWorkspaceScopesFor(capabilities: readonly GoogleWorkspaceCapability[]): string[] {
-  return GOOGLE_WORKSPACE_CAPABILITY_DEFINITIONS.filter((item) => capabilities.includes(item.capability)).map(
-    (item) => item.scope,
-  );
+  return [
+    ...new Set(
+      GOOGLE_WORKSPACE_CAPABILITY_DEFINITIONS.filter((item) => capabilities.includes(item.capability)).map(
+        (item) => item.scope,
+      ),
+    ),
+  ];
 }
 
 export interface GoogleWorkspaceCapabilityStatus {

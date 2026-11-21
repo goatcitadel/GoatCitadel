@@ -32,6 +32,33 @@ function createService(storage: Storage, options: { autonomyDisabled?: boolean }
 }
 
 describe("OperatorProfileService.ensureOperatorProfile", () => {
+  it("derives accepted standing lessons without writing profile copies and invalidates after forget", async () => {
+    let records = [
+      {
+        learningId: "lesson-one",
+        workspaceId: "A",
+        type: "operator_preference",
+        status: "trusted",
+        insight: "Prefer concise verdicts before details",
+        sourceHash: "a".repeat(64),
+        confidence: 0.9,
+      },
+    ];
+    const service = new OperatorProfileService({
+      storage: {
+        workspaces: { find: async () => undefined },
+        operatorProfiles: { getByWorkspace: async () => undefined },
+      } as never,
+      isFeatureEnabled: () => true,
+      readTrustedLearnings: async () => records as never,
+    });
+    const before = await service.composeFrozenProfileDigest("A");
+    expect(before).toContain("concise verdicts");
+    expect(before).toContain("memory_learning:lesson-one");
+    records = [];
+    expect(await service.composeFrozenProfileDigest("A")).toBeUndefined();
+  });
+
   it("creates a profile and stamps WorkspacePrefs.operatorProfileId on first use", async () => {
     const storage = await createStorage();
     const workspace = storage.workspaces.create({ name: "Acme" });

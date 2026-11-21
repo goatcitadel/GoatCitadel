@@ -1,0 +1,39 @@
+<h2 id="mission-control-cannot-connect">Mission Control cannot connect</h2>
+<p>
+  Check <strong>System › Health</strong> for the Gateway and database. For a source or default Compose setup, check the
+  local health endpoint from the machine running the Gateway:
+</p>
+<figure class="code-block">
+  <figcaption>PowerShell</figcaption>
+  <pre tabindex="0" aria-label="Check Gateway health"><code>Invoke-RestMethod http://127.0.0.1:8787/health</code></pre>
+</figure>
+<p>
+  If the Gateway responds and Mission Control still rejects the connection, check the configured Gateway address and
+  credentials under <strong>Settings › Access</strong>. See the
+  <a href="https://github.com/goatcitadel/GoatCitadel/blob/main/docs/INSTALL_SETUP_TESTING.md#troubleshooting"
+    >installation troubleshooting guide</a
+  >
+  for port conflicts and launcher issues.
+</p>
+
+<h2 id="model-does-not-reply">Model does not reply</h2>
+<ol>
+  <li>Confirm the chosen provider and model in the Chat composer.</li>
+  <li>Review sign-in, credentials, or the local endpoint in <strong>Settings › Models</strong>.</li>
+  <li>Check provider quota or budget if the error points there, then send a short test prompt.</li>
+</ol>
+<p>See <a href="../model-providers/">Model providers</a> for connection setup.</p>
+
+<h2 id="action-is-waiting">An action is waiting</h2>
+<p>
+  Check the conversation and <strong>Inbox</strong> for a pending approval. After deciding, open
+  <strong>Work</strong> or the linked run for the recorded outcome and any recovery step. See
+  <a href="../approvals/">Approvals</a>.
+</p>
+
+<h2 id="report-a-problem">Report a problem</h2>
+<p>
+  Include your GoatCitadel version, platform, the steps that triggered the problem, and the relevant error. Remove
+  credentials and personal data from logs before sharing them. Search for an existing report or open a
+  <a href="https://github.com/goatcitadel/GoatCitadel/issues">GitHub issue</a>.
+</p>

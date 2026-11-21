@@ -5361,15 +5361,24 @@ async function stabilizeMissionControlNextFileFixtureMtime(runtimeRoot, serializ
   await fs.utimes(fullPath, MISSION_CONTROL_NEXT_FILE_FIXTURE_MTIME, MISSION_CONTROL_NEXT_FILE_FIXTURE_MTIME);
 }
 
-async function installMissionControlNextBrowserState(browserContext, workspaceId, citadelId = "personal", options = {}) {
+export async function installMissionControlNextBrowserState(browserContext, workspaceId, citadelId = "personal", options = {}) {
+  // This synthetic profile is created after the checkout's requested dev reset.
+  // Mark the current epoch before seeding preferences so main.tsx does not erase
+  // the fixture's scope/auth state. The application's reset behavior is unchanged.
+  const devResetId = await fs.readFile(path.join(repoRoot, "runtime", "dev-reset-id"), "utf8")
+    .then(value => value.trim()).catch(error => { if (error?.code === "ENOENT") return ""; throw error; });
   await browserContext.addInitScript(
-    ({ activeWorkspaceId, activeCitadelId, showTechnicalDetails }) => {
+    ({ activeWorkspaceId, activeCitadelId, showTechnicalDetails, devResetId }) => {
+      if (devResetId) {
+        window.localStorage.setItem("goatcitadel.dev-reset.v1", devResetId);
+        window.sessionStorage.setItem("goatcitadel.dev-reset.v1", devResetId);
+      }
       window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", activeWorkspaceId);
       window.localStorage.setItem("goatcitadel.ui.citadel_id.v1", activeCitadelId);
       window.localStorage.setItem("goatcitadel.ui.mode.v1", "simple");
       window.localStorage.setItem("goatcitadel.ui.technical_details.v1", showTechnicalDetails ? "true" : "false");
     },
-    { activeWorkspaceId: workspaceId, activeCitadelId: citadelId, showTechnicalDetails: options.showTechnicalDetails === true },
+    { activeWorkspaceId: workspaceId, activeCitadelId: citadelId, showTechnicalDetails: options.showTechnicalDetails === true, devResetId },
   );
 }
 

@@ -56,6 +56,18 @@ function createDeps(storage: Storage): ChatSessionDependencies {
 }
 
 describe("chat session service", () => {
+  it("records operator provenance for a new Chat when origin is omitted, without relabeling system chats", async () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      const direct = await createChatSession(deps, { workspaceId: "default", title: "Direct operator chat" });
+      expect(storage.chatSessionMeta.get(direct.sessionId)?.origin).toBe("operator");
+      const system = await createChatSession(deps, { workspaceId: "default", title: "System chat", origin: "system" });
+      expect(storage.chatSessionMeta.get(system.sessionId)?.origin).toBe("system");
+    } finally {
+      cleanup();
+    }
+  });
   it("binds exact session hydration to one visible workspace record even when a large limit is requested", async () => {
     const { storage, cleanup } = createStorage();
     try {

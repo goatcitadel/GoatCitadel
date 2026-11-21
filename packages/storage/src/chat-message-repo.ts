@@ -1398,7 +1398,7 @@ function buildSearchSql(dialect: DatabaseClient["dialect"], scoped: boolean): st
       CROSS JOIN search_query
       WHERE m.content_search_vector @@ search_query.query
         AND meta.workspace_id = ?
-        AND (? <> 0 OR meta.include_in_history <> 0)${scoped ? " AND m.session_id = ?" : ""}
+        AND (? <> 0 OR meta.include_in_history <> 0)${scoped ? " AND m.session_id = ?" : " AND (meta.origin IS NULL OR meta.origin = 'operator')"}
       ORDER BY score ASC, m.timestamp DESC, m.seq DESC
       LIMIT ?
     `;
@@ -1423,7 +1423,7 @@ function buildSearchSql(dialect: DatabaseClient["dialect"], scoped: boolean): st
     INNER JOIN chat_session_meta AS meta ON meta.session_id = m.session_id
     WHERE chat_messages_fts MATCH ?
       AND meta.workspace_id = ?
-      AND (? <> 0 OR meta.include_in_history <> 0)${scoped ? " AND m.session_id = ?" : ""}
+      AND (? <> 0 OR meta.include_in_history <> 0)${scoped ? " AND m.session_id = ?" : " AND (meta.origin IS NULL OR meta.origin = 'operator')"}
     ORDER BY score ASC
     LIMIT ?
   `;

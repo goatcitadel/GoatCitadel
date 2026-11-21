@@ -156,11 +156,12 @@ import {
 } from "./chat-tool-families.js";
 import {
   buildCodeModeRequestTurnShape,
-  isCodeModeRequestTurnShapeEligible,
+  explainCodeModeSignIn,
   isRestrictedAutonomousPermissionProfile,
+  isCodeModeRequestTurnShapeEligible,
   loadCodeModeRequestEligibility,
-  type CodeModeRequestTurnFields,
 } from "./code-mode-request-eligibility.js";
+import { formatRecordedCodeModeResult, readStandaloneCodeModeSource } from "./code-mode-request-resume.js";
 import {
   buildAnswerRecoveryNudge,
   buildDegradedAnswerFooter,
@@ -1511,9 +1512,8 @@ export class ChatTurnAgentRunner {
     return (await this.deps.toolExposureFlagEnabled?.(flag)) === true;
   }
 
-  /** Whether this turn offers `code_mode.request`, by the rule turn preparation also applies to the base prompt. */
-  private async isCodeModeRequestEligible(input: CodeModeRequestTurnFields): Promise<boolean> {
-    return await loadCodeModeRequestEligibility(buildCodeModeRequestTurnShape(input), this.deps.getCodeModeReadiness);
+  private get codeModeReadinessReader(): ChatTurnAgentRunnerDeps["getCodeModeReadiness"] {
+    return this.deps.getCodeModeReadiness;
   }
 
   /** Reads the turn's optional-input mailbox under its write fence; undefined when no reader is wired. */
@@ -2374,6 +2374,42 @@ export class ChatTurnAgentRunner {
       trace,
     };
 
+    const codeModeTurn = buildCodeModeRequestTurnShape(input);
+    const standaloneCodeSource =
+      normalizationProfile === "live" && isCodeModeRequestTurnShapeEligible(codeModeTurn)
+        ? readStandaloneCodeModeSource(executionIntentContent)
+        : undefined;
+    const recordedCodeRuns = standaloneCodeSource ? await listProjectedToolRuns() : [];
+    const recordedCodeResult = standaloneCodeSource
+      ? formatRecordedCodeModeResult(standaloneCodeSource, recordedCodeRuns)
+      : undefined;
+    const directReply =
+      recordedCodeResult ??
+      (await explainCodeModeSignIn(codeModeTurn, executionIntentContent, this.codeModeReadinessReader));
+    if (directReply) {
+      throwIfChatTurnCancelled(input);
+      const completed = await this.patchTurnTrace(input, input.turnId, {
+        status: "completed",
+        completion: { status: "complete", repaired: false, providerCallCount: 0 },
+        finishedAt: new Date().toISOString(),
+      });
+      const messageId = input.outputMessageId ?? `assistant-${input.turnId}`;
+      yield {
+        type: "message_done",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        messageId,
+        content: directReply,
+      };
+      yield {
+        type: "trace_update",
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        trace: recordedCodeResult ? { ...completed, toolRuns: recordedCodeRuns } : completed,
+      };
+      yield { type: "done", sessionId: input.sessionId, turnId: input.turnId, messageId };
+      return;
+    }
     const conversationMessages = projectHistoryMessagesForModel(input.historyMessages);
     // Plan first runs nothing: no delegation is offered or started for it, the model just writes the plan.
     const confirmedDelegation = planFirstNoTools ? undefined : await this.deps.resolveConfirmedDelegation?.(input);
@@ -7088,9 +7124,10 @@ export class ChatTurnAgentRunner {
     // Browser errands drive the operator's own window: interactive Chat turns only, never scheduled or delegated ones.
     const browserErrandEligible =
       browserErrandsEnabled && input.mode === "chat" && !input.parentDelegationStepId && !restrictedAutonomousProfile;
+    const codeModeTurn = buildCodeModeRequestTurnShape(input);
     const reminderPreviewEligible =
-      timersEnabled && !quickWebProfile && isCodeModeRequestTurnShapeEligible(buildCodeModeRequestTurnShape(input));
-    const codeModeRequestEligible = await this.isCodeModeRequestEligible(input);
+      timersEnabled && !quickWebProfile && isCodeModeRequestTurnShapeEligible(codeModeTurn);
+    const codeModeRequestEligible = await loadCodeModeRequestEligibility(codeModeTurn, this.codeModeReadinessReader);
     for (const tool of catalog) {
       if (CODE_MODE_ONLY_TOOL_NAMES.has(tool.toolName)) continue;
       if (tool.toolName === CODE_MODE_REQUEST_TOOL_NAME && !codeModeRequestEligible) continue;

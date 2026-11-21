@@ -1758,19 +1758,23 @@ describe("tool executor channel failure coverage", () => {
       ),
       /requires Google sign-in/i,
     );
-    await expectFailed(
-      executeTool(
-        request("gmail.send", { connectionId: "gmail-send-missing-to", subject: "No recipient", bodyText: "Body" }),
-        commsConfig,
-        commsStorage({
-          connectionId: "gmail-send-missing-to",
-          key: "gmail",
-          config: {},
-        }),
-        googleSignIn(),
-      ),
-      /gmail\.send requires args\.to/i,
+    const dispatchesBeforeRecipientCheck = fetchMock.mock.calls.length;
+    const missingRecipient = await executeTool(
+      request("gmail.send", { connectionId: "gmail-send-missing-to", subject: "No recipient", bodyText: "Body" }),
+      commsConfig,
+      commsStorage({
+        connectionId: "gmail-send-missing-to",
+        key: "gmail",
+        config: {},
+      }),
+      googleSignIn(),
     );
+    expect(missingRecipient).toMatchObject({
+      status: "failed",
+      deliveryStatus: "blocked",
+      error: expect.stringMatching(/at least one recipient is required/i),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(dispatchesBeforeRecipientCheck);
     await expectFailed(
       executeTool(
         request("gmail.send", {
@@ -2299,7 +2303,7 @@ describe("tool executor channel failure coverage", () => {
     );
   });
 
-  it("covers Gmail and Calendar empty-provider-id fallbacks", async () => {
+  it("requires manual reconciliation when Gmail or Calendar returns no confirmation id", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);
@@ -2314,7 +2318,7 @@ describe("tool executor channel failure coverage", () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     const commsConfig = withAllowlist(config, "gmail.googleapis.com", "www.googleapis.com");
 
-    const gmailFallback = await executeTool(
+    const gmailResult = await executeTool(
       request("gmail.send", {
         connectionId: "gmail-fallback-id",
         to: ["ops@example.com"],
@@ -2329,10 +2333,14 @@ describe("tool executor channel failure coverage", () => {
       }),
       googleSignIn(),
     );
-    expect(gmailFallback).toMatchObject({ status: "sent" });
-    expect(String(gmailFallback.providerMessageId)).toMatch(/^gmail-/);
+    expect(gmailResult).toMatchObject({
+      status: "failed",
+      deliveryStatus: "manual_reconciliation_required",
+      error: expect.stringMatching(/Google confirmation id/i),
+    });
+    expect(gmailResult.providerMessageId).toBeUndefined();
 
-    const calendarFallback = await executeTool(
+    const calendarResult = await executeTool(
       request("calendar.create_event", {
         connectionId: "calendar-fallback-id",
         title: "Fallback",
@@ -2347,8 +2355,13 @@ describe("tool executor channel failure coverage", () => {
       }),
       googleSignIn(),
     );
-    expect(calendarFallback).toMatchObject({ status: "sent" });
-    expect(String(calendarFallback.providerMessageId)).toMatch(/^calendar-/);
+    expect(calendarResult).toMatchObject({
+      status: "failed",
+      deliveryStatus: "manual_reconciliation_required",
+      error: expect.stringMatching(/event confirmation id/i),
+    });
+    expect(calendarResult.providerMessageId).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 
