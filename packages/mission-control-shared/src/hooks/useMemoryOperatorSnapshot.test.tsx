@@ -804,6 +804,14 @@ describe("useMemoryOperatorSnapshot", () => {
   });
 
   it("routes patch_item pin operations through one pending batch approval", async () => {
+    apiMocks.fetchMemoryItems.mockResolvedValueOnce({
+      items: ["mem-1", "mem-2"].map((itemId) => ({
+        itemId,
+        namespace: "workspace.alpha",
+        pinned: false,
+        status: "active",
+      })),
+    });
     apiMocks.batchMutateMemoryItems.mockResolvedValueOnce(
       buildPendingApprovalEnvelope("approval-batch-pin", "batch_mutated", ["mem-1", "mem-2"]),
     );
@@ -811,7 +819,11 @@ describe("useMemoryOperatorSnapshot", () => {
     renderer = await mountHook((value) => {
       latest = value;
     });
-    const beforeItems = latest?.data?.memoryItems;
+    const beforeItems = structuredClone(latest?.data?.memoryItems);
+    expect(beforeItems?.map(({ itemId, pinned }) => ({ itemId, pinned }))).toEqual([
+      { itemId: "mem-1", pinned: false },
+      { itemId: "mem-2", pinned: false },
+    ]);
 
     let response: Awaited<ReturnType<HookValue["batchSetItemsPinned"]>> | undefined;
     await act(async () => {
@@ -1167,27 +1179,31 @@ describe("useMemoryOperatorSnapshot", () => {
       latest = value;
     });
 
-    const historySuccess = deferred<{ items: never[] }>();
+    const historySuccess = deferred<{ items: Array<{ changeId: string; changeType: string }> }>();
     apiMocks.fetchMemoryItemHistory.mockReturnValueOnce(historySuccess.promise);
     await act(async () => {
       latest?.setSelectedItemId("mem-late-success");
     });
+    expect(apiMocks.fetchMemoryItemHistory).toHaveBeenCalledWith("mem-late-success", 100);
     await act(async () => {
       latest?.setSelectedItemId(null);
     });
-    historySuccess.resolve({ items: [] });
+    historySuccess.resolve({ items: [{ changeId: "stale-change", changeType: "updated" }] });
     await flush();
+    expect(latest?.data?.memoryHistory).toEqual([]);
 
     const historyFailure = deferred<{ items: never[] }>();
     apiMocks.fetchMemoryItemHistory.mockReturnValueOnce(historyFailure.promise);
     await act(async () => {
       latest?.setSelectedItemId("mem-late-failure");
     });
+    expect(apiMocks.fetchMemoryItemHistory).toHaveBeenCalledWith("mem-late-failure", 100);
     await act(async () => {
       latest?.setSelectedItemId(null);
     });
     historyFailure.reject(new Error("late history failed"));
     await flush();
+    expect(latest?.data?.sectionErrors.memoryHistory).toBeNull();
   });
 
   it("does not refetch selected-run detail when a poll returns a contents-equal runs array", async () => {
@@ -1268,7 +1284,6 @@ describe("useMemoryOperatorSnapshot", () => {
   });
   it("loads only item essentials and defers history until requested", async () => {
     let value!: HookValue;
-    let renderer!: ReactTestRenderer;
     await act(async () => { renderer = create(<Harness options={{ view: "items", itemDetailsOpen: false }} onValue={(next) => { value = next; }} />); });
     await flush();
     expect(apiMocks.fetchMemoryItems).toHaveBeenCalledWith({ workspaceId: "default", limit: 500, status: "all" });
@@ -1276,26 +1291,23 @@ describe("useMemoryOperatorSnapshot", () => {
     expect(value.selectedItemId).toBeNull();
     await act(async () => { value.setSelectedItemId("mem-1"); });
     expect(apiMocks.fetchMemoryItemHistory).not.toHaveBeenCalled();
-    await act(async () => { renderer.update(<Harness options={{ view: "items", itemDetailsOpen: true }} onValue={(next) => { value = next; }} />); });
+    await act(async () => { renderer!.update(<Harness options={{ view: "items", itemDetailsOpen: true }} onValue={(next) => { value = next; }} />); });
     await flush();
     expect(apiMocks.fetchMemoryItemHistory).toHaveBeenCalledWith("mem-1", 100);
-    await act(async () => renderer.unmount());
   });
   it("uses the server query and rejects a superseded search response", async () => {
     const slow = deferred<any>();
     apiMocks.fetchMemoryItems.mockImplementation(({ query }) => query === "first" ? slow.promise : Promise.resolve({ items: [{ itemId: "outside-initial-200", title: "Second match" }] }));
     let value!: HookValue;
-    let renderer!: ReactTestRenderer;
     await act(async () => { renderer = create(<Harness options={{ view: "items", query: "first", itemDetailsOpen: false }} onValue={(next) => { value = next; }} />); });
     await flush();
-    await act(async () => { renderer.update(<Harness options={{ view: "items", query: "second", itemDetailsOpen: false }} onValue={(next) => { value = next; }} />); });
+    await act(async () => { renderer!.update(<Harness options={{ view: "items", query: "second", itemDetailsOpen: false }} onValue={(next) => { value = next; }} />); });
     await flush();
     expect(value.data?.memoryItems[0]?.itemId).toBe("outside-initial-200");
     await act(async () => { slow.resolve({ items: [{ itemId: "stale-first-result" }] }); });
     await flush();
     expect(value.data?.memoryItems[0]?.itemId).toBe("outside-initial-200");
     expect(apiMocks.fetchMemoryItems).toHaveBeenLastCalledWith({ workspaceId: "default", limit: 500, status: "all", query: "second" });
-    await act(async () => renderer.unmount());
   });
 
   it("loads beyond 500 without duplicate requests and stops at the canonical total", async () => {

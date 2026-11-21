@@ -5861,50 +5861,7 @@ describe("executeTool", () => {
 
   it("caches native ingested documents and searches attributed chunks", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    const documents: Array<Record<string, unknown>> = [];
-    const chunksByDocId = new Map<string, Array<Record<string, unknown>>>();
-    let documentSeq = 0;
-    let chunkSeq = 0;
-    const storage = {
-      knowledge: {
-        listDocuments: vi.fn((namespace?: string) =>
-          documents.filter((doc) => !namespace || doc.namespace === namespace),
-        ),
-        createDocument: vi.fn((input: Record<string, unknown>) => {
-          const doc = {
-            docId: `doc-${++documentSeq}`,
-            namespace: input.namespace,
-            sourceType: input.sourceType,
-            sourceRef: input.sourceRef,
-            title: input.title,
-            metadata: input.metadata ?? {},
-            createdAt: new Date().toISOString(),
-          };
-          documents.unshift(doc);
-          return doc;
-        }),
-        appendChunks: vi.fn((docId: string, entries: Array<Record<string, unknown>>) => {
-          const saved = entries.map((entry, index) => ({
-            chunkId: `chunk-${++chunkSeq}`,
-            docId,
-            seq: index,
-            content: entry.content,
-            embedding: entry.embedding,
-            tokenEstimate: 1,
-            createdAt: new Date().toISOString(),
-          }));
-          chunksByDocId.set(docId, saved);
-          return saved;
-        }),
-        listChunksByDocument: vi.fn((docId: string) => chunksByDocId.get(docId) ?? []),
-        listChunksByNamespace: vi.fn((namespace?: string) => {
-          const matchingDocIds = documents
-            .filter((doc) => !namespace || doc.namespace === namespace)
-            .map((doc) => String(doc.docId));
-          return matchingDocIds.flatMap((docId) => chunksByDocId.get(docId) ?? []);
-        }),
-      },
-    } as unknown as Storage & AsyncStorage;
+    const { storage } = createExecutorKnowledgeHarness();
 
     const ingestRequest: ToolInvokeRequest = {
       toolName: "docs.ingest",
@@ -5945,43 +5902,7 @@ describe("executeTool", () => {
 
   it("ingests URL documents through Firecrawl v2 scrape", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
-    const documents: Array<Record<string, unknown>> = [];
-    const chunksByDocId = new Map<string, Array<Record<string, unknown>>>();
-    let documentSeq = 0;
-    let chunkSeq = 0;
-    const storage = {
-      knowledge: {
-        listDocuments: vi.fn(() => documents),
-        createDocument: vi.fn((input: Record<string, unknown>) => {
-          const doc = {
-            docId: `doc-${++documentSeq}`,
-            namespace: input.namespace,
-            sourceType: input.sourceType,
-            sourceRef: input.sourceRef,
-            title: input.title,
-            metadata: input.metadata ?? {},
-            createdAt: new Date().toISOString(),
-          };
-          documents.unshift(doc);
-          return doc;
-        }),
-        appendChunks: vi.fn((docId: string, entries: Array<Record<string, unknown>>) => {
-          const saved = entries.map((entry, index) => ({
-            chunkId: `chunk-${++chunkSeq}`,
-            docId,
-            seq: index,
-            content: entry.content,
-            embedding: entry.embedding,
-            tokenEstimate: 1,
-            createdAt: new Date().toISOString(),
-          }));
-          chunksByDocId.set(docId, saved);
-          return saved;
-        }),
-        listChunksByDocument: vi.fn((docId: string) => chunksByDocId.get(docId) ?? []),
-        listChunksByNamespace: vi.fn(() => []),
-      },
-    } as unknown as Storage & AsyncStorage;
+    const { storage } = createExecutorKnowledgeHarness();
 
     vi.stubGlobal(
       "fetch",

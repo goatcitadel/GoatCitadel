@@ -615,7 +615,7 @@ describe("ingestion backend coverage", () => {
         new Response(
           JSON.stringify({
             data: {
-              html: "<main><h1>HTML only</h1></main>",
+              html: "<main><h1>HTML only</h1><style>.hidden{}</style><script>hidden()</script></main>",
               title: "Firecrawl Data Title",
             },
           }),
@@ -648,7 +648,7 @@ describe("ingestion backend coverage", () => {
         }),
       );
       expect(result.fetchResult).toMatchObject({
-        rawText: "<main><h1>HTML only</h1></main>",
+        normalizedText: "HTML only",
         title: "Firecrawl Data Title",
         contentType: "text/html",
       });
@@ -700,6 +700,34 @@ describe("ingestion backend coverage", () => {
       });
     } finally {
       globalThis.fetch = priorFetch;
+    }
+  });
+
+  it.each([
+    [503, { data: { markdown: "error body" } }, /HTTP 503/],
+    [200, { success: false, data: { markdown: "error body" } }, /successful scrape payload/],
+    [200, { success: true }, /successful scrape payload/],
+  ] as const)("rejects Firecrawl failure responses (%s) before persisting", async (status, payload, message) => {
+    const storage = createKnowledgeStorage();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } }),
+    );
+    try {
+      await expect(ingestDocumentViaBackend({
+        request: createRequest({
+          sourceType: "url",
+          source: "https://example.com/firecrawl",
+          namespace: "web",
+          backend: "firecrawl",
+          firecrawlBaseUrl: "https://firecrawl.example",
+        }),
+        storage,
+        networkAllowlist: ["firecrawl.example", "example.com"],
+        fetchUrl: vi.fn(),
+      })).rejects.toThrow(message);
+      expect(storage.knowledge.listDocuments("web")).toEqual([]);
+    } finally {
+      fetchMock.mockRestore();
     }
   });
 
@@ -927,6 +955,57 @@ describe("ingestion backend coverage", () => {
     expect(result.items[0]).toMatchObject({ content: "alpha beta" });
   });
 
+  it("returns the complete normalized document on a cache hit even when chunks are capped", async () => {
+    const storage = createKnowledgeStorage();
+    const body = "First part. ".repeat(100) + "End of the document.";
+    const fetchUrl = vi.fn(async () => ({ body, statusCode: 200, finalUrl: "https://example.com/cache" }));
+    const input = {
+      request: createRequest({
+        sourceType: "url",
+        source: "https://example.com/cache",
+        namespace: "web",
+        chunking: { targetChars: 300, maxChunks: 1 },
+      }),
+      storage,
+      fetchUrl,
+    };
+    const first = await ingestDocumentViaBackend(input);
+    const second = await ingestDocumentViaBackend(input);
+    expect(fetchUrl).toHaveBeenCalledTimes(1);
+    expect(first.chunks).toHaveLength(1);
+    expect(second.cached).toBe(true);
+    expect(second.document.text).toBe(body);
+    expect(second.document.metadata).toEqual(first.document.metadata);
+    expect(second.chunks).toEqual(first.chunks);
+  });
+
+  it.each([
+    { normalizedText: "Old document" },
+    { cacheExpiresAt: "bad-date", normalizedText: "Old document" },
+    { cacheExpiresAt: "2099-01-01T00:00:00.000Z" },
+  ])(
+    "refetches legacy records missing valid expiration or full text (%j)",
+    async (ingestion) => {
+      const storage = createKnowledgeStorage([{
+        docId: "old",
+        namespace: "web",
+        sourceType: "url",
+        sourceRef: "https://example.com/cache",
+        metadata: { ingestion },
+      }]);
+      const fetchUrl = vi.fn(async () => ({
+        body: "New document", statusCode: 200, finalUrl: "https://example.com/cache",
+      }));
+      const result = await ingestDocumentViaBackend({
+        request: createRequest({ sourceType: "url", source: "https://example.com/cache", namespace: "web" }),
+        storage,
+        fetchUrl,
+      });
+      expect(result.cached).toBe(false);
+      expect(result.document.text).toBe("New document");
+    },
+  );
+
   it("returns cached native documents when ingestion metadata omits backend", async () => {
     const storage = createKnowledgeStorage([
       {
@@ -938,6 +1017,8 @@ describe("ingestion backend coverage", () => {
         metadata: {
           ingestion: {
             fetchedAt: "2026-03-22T12:00:00.000Z",
+            cacheExpiresAt: "2099-01-01T00:00:00.000Z",
+            normalizedText: "cached text",
             parser: {
               parserId: "native-text-v1",
               format: "text",
@@ -1196,6 +1277,8 @@ describe("ingestion backend coverage", () => {
           ingestion: {
             backend: "native",
             fetchedAt: "2026-03-22T12:00:00.000Z",
+            cacheExpiresAt: "2099-01-01T00:00:00.000Z",
+            normalizedText: "legacy unsafe url instructions",
           },
         },
       },
@@ -1264,6 +1347,7 @@ describe("ingestion backend coverage", () => {
             backend: "native",
             fetchedAt: "2026-03-22T12:00:00.000Z",
             cacheExpiresAt: "2099-01-01T00:00:00.000Z",
+            normalizedText: "cached must not be returned",
           },
         },
       },
@@ -1311,6 +1395,7 @@ describe("ingestion backend coverage", () => {
             backend: "native",
             fetchedAt: "2026-03-22T12:00:00.000Z",
             cacheExpiresAt: "2099-01-01T00:00:00.000Z",
+            normalizedText: "cached must not be returned",
             finalSourceUrl: "https://redirect.example/final",
           },
         },
@@ -1395,6 +1480,14 @@ function createKnowledgeStorage(seedDocuments: Array<Record<string, unknown>> = 
         }));
         chunksByDocId.set(docId, [...(chunksByDocId.get(docId) ?? []), ...saved]);
         return saved;
+      }),
+      createDocumentWithChunks: vi.fn(function (
+        this: Storage["knowledge"],
+        input: Parameters<Storage["knowledge"]["createDocument"]>[0],
+        chunks: Parameters<Storage["knowledge"]["appendChunks"]>[1],
+      ) {
+        const document = this.createDocument(input);
+        return { document, chunks: this.appendChunks(document.docId, chunks) };
       }),
       listChunksByDocument: vi.fn((docId: string) => chunksByDocId.get(docId) ?? []),
       listChunksByNamespace: vi.fn((namespace?: string) => {

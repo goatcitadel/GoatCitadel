@@ -58,6 +58,32 @@ describe("cockpit independent Fork proof", () => {
     assert.throws(() => selectedPath({ activeLeafTurnId: "source-turn", turns: [{ ...original, parentTurnId: "missing" }] }));
     assert.throws(() => selectedPath({ activeLeafTurnId: "source-turn", turns: [{ ...original, parentTurnId: "source-turn" }] }));
   });
+  it("rejects disconnected and cyclic copies even when the fork thread agrees with the manifest", () => {
+    const proof = forkProof();
+    proof.sourceThread.turns.unshift({ turnId: "source-root" });
+    proof.sourceThread.turns[1].parentTurnId = "source-root";
+    proof.response.manifest.turnMappings.unshift({
+      sourceTurnId: "source-root", copiedTurnId: "copy-root",
+      sourceTraceHash: "a".repeat(64), copiedTraceHash: "b".repeat(64),
+    });
+    const leafMapping = proof.response.manifest.turnMappings[1];
+    leafMapping.sourceParentTurnId = "source-root";
+    leafMapping.copiedParentTurnId = "copy-root";
+    const leaf = proof.forkThread.turns[0];
+    leaf.parentTurnId = "copy-root";
+    proof.forkThread.turns.unshift({
+      turnId: "copy-root", toolRuns: [],
+      trace: { routing: { forkImport: { sourceSessionId: "source", sourceTurnId: "source-root", sourceTraceHash: "a".repeat(64) } } },
+    });
+    assert.doesNotThrow(() => assertIndependentFork(proof));
+
+    delete leaf.parentTurnId;
+    delete leafMapping.copiedParentTurnId;
+    assert.throws(() => assertIndependentFork(proof), /deep-equal/);
+    leaf.parentTurnId = leafMapping.copiedParentTurnId = "copy-root";
+    proof.forkThread.turns[0].parentTurnId = proof.response.manifest.turnMappings[0].copiedParentTurnId = "copy-turn";
+    assert.throws(() => assertIndependentFork(proof), /Cyclic Chat ancestry/);
+  });
 });
 
 const siblingProof = () => {

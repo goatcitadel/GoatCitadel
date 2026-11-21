@@ -38,7 +38,10 @@ export function assertIndependentFork({ sourceSession, sourceThread, sourceTurnI
   assert.deepEqual(manifest.turnMappings.map((item) => item.sourceTurnId), sourcePath.map((turn) => turn.turnId));
   assert.equal(forkThread.sessionId, session.sessionId);
   assert.equal(forkThread.turns.length, sourcePath.length);
-  assert.equal(new Set(manifest.turnMappings.map((item) => item.copiedTurnId)).size, sourcePath.length);
+  const copiedIds = manifest.turnMappings.map((item) => item.copiedTurnId);
+  assert.equal(new Set(copiedIds).size, sourcePath.length);
+  assert.deepEqual(selectedPath(forkThread).map((turn) => turn.turnId), copiedIds);
+  const copyBySourceId = new Map(manifest.turnMappings.map((item) => [item.sourceTurnId, item.copiedTurnId]));
   for (const mapping of manifest.turnMappings) {
     const original = sourcePath.find((turn) => turn.turnId === mapping.sourceTurnId);
     const copied = forkThread.turns.find((turn) => turn.turnId === mapping.copiedTurnId);
@@ -46,6 +49,7 @@ export function assertIndependentFork({ sourceSession, sourceThread, sourceTurnI
     assert.ok(!sourceThread.turns.some((turn) => turn.turnId === copied.turnId));
     assert.equal(copied.parentTurnId, mapping.copiedParentTurnId);
     assert.equal(mapping.sourceParentTurnId, original.parentTurnId);
+    assert.equal(copied.parentTurnId, copyBySourceId.get(original.parentTurnId));
     assert.equal(copied.trace.routing.forkImport.sourceSessionId, sourceSession.sessionId);
     assert.equal(copied.trace.routing.forkImport.sourceTurnId, original.turnId);
     assert.equal(copied.trace.routing.forkImport.sourceTraceHash, mapping.sourceTraceHash);
@@ -68,7 +72,6 @@ export function assertIndependentFork({ sourceSession, sourceThread, sourceTurnI
       assert.equal(message.contentHash, hash(before.content));
     }
   }
-  assert.equal(forkThread.activeLeafTurnId, manifest.turnMappings.at(-1).copiedTurnId);
 }
 
 const turnContent = ({ branch: _branch, ...turn }) => turn;

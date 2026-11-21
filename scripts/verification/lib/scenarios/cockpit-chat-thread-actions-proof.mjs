@@ -462,16 +462,21 @@ export async function runCockpitChatThreadActionsProof({
               artifacts: emptyArtifacts({ screenshots }),
             };
           } catch (error) {
-            if (page && !page.isClosed()) {
-              const folder = path.join(context.artifactRoot, "screenshots");
-              await mkdir(folder, { recursive: true });
-              const screenshot = path.join(folder, `ux-budgets-cockpit-chat-${name}-${variant}-failure.png`);
-              await page.screenshot({ path: screenshot, fullPage: false });
-              screenshots.push(relativeToRun(context, screenshot));
+            let failure = error instanceof Error ? (error.stack ?? error.message) : String(error);
+            try {
+              if (page && !page.isClosed()) {
+                const folder = path.join(context.artifactRoot, "screenshots");
+                await mkdir(folder, { recursive: true });
+                const screenshot = path.join(folder, `ux-budgets-cockpit-chat-${name}-${variant}-failure.png`);
+                await page.screenshot({ path: screenshot, fullPage: false });
+                screenshots.push(relativeToRun(context, screenshot));
+              }
+            } catch (captureError) {
+              failure += `\nFailure screenshot unavailable: ${String(captureError)}`;
             }
             return {
               status: "failed",
-              error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+              error: failure,
               artifacts: emptyArtifacts({ screenshots }),
             };
           } finally {

@@ -9,6 +9,7 @@ import { executeKnowledgeTool } from "./knowledge-executor.js";
 
 let root: string, storage: Storage, store: AsyncStorage;
 let workspaceA: string, workspaceB: string, privateDocId: string;
+let groupDocId: string, publicDocId: string;
 beforeEach(async () => {
   vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "pseudo");
   root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-private-knowledge-"));
@@ -31,7 +32,7 @@ beforeEach(async () => {
     [{ content: "PRIVATE_MEMORY_CANARY" }],
   );
   privateDocId = written.document.docId;
-  storage.knowledge.createDocumentWithChunks(
+  groupDocId = storage.knowledge.createDocumentWithChunks(
     {
       namespace: "shared",
       sourceType: "memory",
@@ -41,11 +42,11 @@ beforeEach(async () => {
       sessionId: "group-A",
     },
     [{ content: "PRIVATE_GROUP_CANARY" }],
-  );
-  storage.knowledge.createDocumentWithChunks(
+  ).document.docId;
+  publicDocId = storage.knowledge.createDocumentWithChunks(
     { namespace: "shared", sourceType: "text", sourceRef: "public-doc", title: "Public reference" },
     [{ content: "PUBLIC_REFERENCE_CANARY" }],
-  );
+  ).document.docId;
 }, 30_000);
 afterEach(async () => {
   storage?.close();
@@ -89,4 +90,6 @@ it("namespace-wide embedding repair also excludes private notes", async () => {
   const result = await invoke("embeddings.index", { namespace: "shared", force: true });
   expect(result).toMatchObject({ indexed: 1 });
   expect(storage.knowledge.listChunksByDocument(privateDocId)[0]!.embedding).toBeUndefined();
+  expect(storage.knowledge.listChunksByDocument(groupDocId)[0]!.embedding).toBeUndefined();
+  expect(storage.knowledge.listChunksByDocument(publicDocId)[0]!.embedding?.length).toBeGreaterThan(0);
 });

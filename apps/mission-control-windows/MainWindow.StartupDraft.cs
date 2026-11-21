@@ -150,8 +150,9 @@ public sealed partial class MainWindow
         if (message.ValueKind != JsonValueKind.Object || !message.TryGetProperty("type", out var type)
             || type.ValueKind != JsonValueKind.String || type.GetString() != StartupDraftHandoff.MessageType)
             return false;
-        if (!_startupDraftEnabled || _profileRecoveryChanging || _lastRuntime?.IsReady != true
-            || !StartupDraftHandoff.IsExpectedOrigin(source, sender.Source, _lastRuntime?.UiUrl)
+        var runtime = _lastRuntime;
+        if (!_startupDraftEnabled || _profileRecoveryChanging || runtime?.IsReady != true
+            || !StartupDraftHandoff.IsExpectedOrigin(source, sender.Source, runtime.UiUrl)
             || !message.TryGetProperty("version", out var version) || version.ValueKind != JsonValueKind.Number
             || !version.TryGetInt32(out var number) || number != 1
             || !StartupDraftHandoff.TryId(message, "context", out var context)

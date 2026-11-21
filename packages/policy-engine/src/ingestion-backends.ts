@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   ContextSourceAttribution,
   FetchResult,
@@ -82,17 +82,19 @@ export async function ingestDocumentViaBackend(input: {
   const cacheTtlSeconds =
     positiveInt(args.cacheTtlSeconds) ?? (sourceType === "url" ? DEFAULT_URL_CACHE_TTL_SECONDS : 0);
   const now = new Date();
-  const cachedDocument = await readCachedDocument({
-    storage: input.storage,
-    namespace,
-    sourceType,
-    source,
-    backend: backendName,
-    networkAllowlist: input.networkAllowlist ?? [],
-    sourceAllowlist: input.sourceAllowlist ?? [],
-    now,
-  });
-  if (cachedDocument && args.forceRefresh !== true) {
+  const cachedDocument = cacheTtlSeconds > 0 && args.forceRefresh !== true
+    ? await readCachedDocument({
+        storage: input.storage,
+        namespace,
+        sourceType,
+        source,
+        backend: backendName,
+        networkAllowlist: input.networkAllowlist ?? [],
+        sourceAllowlist: input.sourceAllowlist ?? [],
+        now,
+      })
+    : undefined;
+  if (cachedDocument) {
     return {
       backend: buildBackendDescriptor(backendName, cacheTtlSeconds),
       fetchResult: {
@@ -173,25 +175,19 @@ export async function ingestDocumentViaBackend(input: {
     positiveInt(chunking.overlapChars) ?? 180,
     positiveInt(chunking.maxChunks) ?? 400,
   );
-  const doc = await input.storage.knowledge.createDocument({
-    namespace,
-    sourceType,
-    sourceRef: source,
-    title,
-    metadata,
-  });
+  const ingestOperationId = `document-ingest:${randomUUID()}`;
+  const embeddingSignal = input.embeddingRuntime?.signal ?? input.request.signal;
   const canonicalUsageEventIds = new Set<string>();
   const embeddedChunks = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (content, chunkIndex) => {
-    const embeddingSignal = input.embeddingRuntime?.signal ?? input.request.signal;
     const generated = await generateEmbedding(content, undefined, undefined, {
       ...input.embeddingRuntime,
       purpose: "document_ingest",
       ...(embeddingSignal ? { signal: embeddingSignal } : {}),
       modelUsageAttribution: {
         ...input.embeddingRuntime?.modelUsageAttribution,
-        operationId: input.embeddingRuntime?.modelUsageAttribution?.operationId ?? `document-ingest:${doc.docId}`,
+        operationId: input.embeddingRuntime?.modelUsageAttribution?.operationId ?? ingestOperationId,
         dispatchGeneration:
-          input.embeddingRuntime?.modelUsageAttribution?.dispatchGeneration ?? `document-ingest:${doc.docId}`,
+          input.embeddingRuntime?.modelUsageAttribution?.dispatchGeneration ?? ingestOperationId,
         attemptIndex: (input.embeddingRuntime?.modelUsageAttribution?.attemptIndex ?? 0) + chunkIndex,
         workerId: input.embeddingRuntime?.modelUsageAttribution?.workerId ?? `chunk:${chunkIndex}`,
       },
@@ -206,7 +202,14 @@ export async function ingestDocumentViaBackend(input: {
       },
     };
   });
-  const savedChunks = await input.storage.knowledge.appendChunks(doc.docId, embeddedChunks);
+  embeddingSignal?.throwIfAborted();
+  const storedMetadata = cacheTtlSeconds > 0
+    ? { ...metadata, ingestion: { ...metadata.ingestion, normalizedText: fetched.normalizedText } }
+    : metadata;
+  const { chunks: savedChunks } = await input.storage.knowledge.createDocumentWithChunks(
+    { namespace, sourceType, sourceRef: source, title, metadata: storedMetadata },
+    embeddedChunks,
+  );
   return {
     backend: buildBackendDescriptor(backendName, cacheTtlSeconds),
     fetchResult: fetched,
@@ -406,8 +409,14 @@ async function fetchDocument(input: {
       });
     };
     const response = await fetchOnce();
-    const payload = (await response.json()) as Record<string, unknown>;
+    if (!response.ok) {
+      throw new Error(`Firecrawl request failed with HTTP ${response.status}.`);
+    }
+    const payload = record(await response.json());
     const data = record(payload.data);
+    if (payload.success === false || Object.keys(data).length === 0) {
+      throw new Error("Firecrawl did not return a successful scrape payload.");
+    }
     const metadata = record(data.metadata);
     // SECURITY (codex finding #11): Even though we validated the original
     // `source` URL, Firecrawl may report a different final URL after its
@@ -436,16 +445,18 @@ async function fetchDocument(input: {
         );
       }
     }
-    const markdown = optionalString(data.markdown) ?? optionalString(data.content) ?? optionalString(data.html) ?? "";
+    const markdown = optionalString(data.markdown) ?? optionalString(data.content);
+    const rawText = markdown ?? optionalString(data.html) ?? "";
+    const contentType = markdown === undefined ? "text/html" : "text/markdown";
     const title = optionalString(metadata.title) ?? optionalString(data.title) ?? optionalString(args.title);
     return {
       backend: input.backend,
       sourceType,
       sourceRef: reportedSourceUrl ?? source,
       title,
-      rawText: markdown,
-      normalizedText: normalizeText(markdown),
-      contentType: optionalString(data.markdown) || optionalString(data.content) ? "text/markdown" : "text/html",
+      rawText,
+      normalizedText: normalizeText(rawText, contentType),
+      contentType,
       statusCode: response.status,
       fetchedAt: new Date().toISOString(),
       fromCache: false,
@@ -493,12 +504,14 @@ async function readCachedDocument(input: {
     if (doc.sourceType !== input.sourceType || doc.sourceRef !== input.source) {
       continue;
     }
-    const ingestion = record(doc.metadata.ingestion);
+    const { normalizedText: text, ...ingestion } = record(doc.metadata.ingestion);
     if ((optionalString(ingestion.backend) ?? "native") !== input.backend) {
       continue;
     }
     const cacheExpiresAt = optionalString(ingestion.cacheExpiresAt);
-    if (cacheExpiresAt && new Date(cacheExpiresAt).getTime() <= input.now.getTime()) {
+    const expiresAtMs = Date.parse(cacheExpiresAt ?? "");
+    // Older rows lack the full text. Overlapping or capped chunks cannot reconstruct it.
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= input.now.getTime() || typeof text !== "string") {
       continue;
     }
     if (input.sourceType === "url" && (input.networkAllowlist.length > 0 || input.sourceAllowlist.length > 0)) {
@@ -545,8 +558,8 @@ async function readCachedDocument(input: {
     const trustLevel = resolveIngestionTrustLevel(doc.sourceType, ingestion.trustLevel);
     return {
       title: doc.title,
-      text: chunks.map((chunk) => chunk.content).join("\n\n"),
-      metadata: doc.metadata,
+      text,
+      metadata: { ...doc.metadata, ingestion },
       attribution: {
         sourceType: doc.sourceType,
         sourceRef: doc.sourceRef,

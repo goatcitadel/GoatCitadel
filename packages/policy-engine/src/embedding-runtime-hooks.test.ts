@@ -132,6 +132,7 @@ describe("embedding runtime hook propagation", () => {
     expect(storage.knowledge.createDocument).not.toHaveBeenCalled();
     expect(writeMemory).not.toHaveBeenCalled();
     expect(storage.knowledge.appendChunks).not.toHaveBeenCalled();
+    expect(await storage.knowledge.listDocuments("docs")).toEqual([]);
     expect(storage.knowledge.listDocuments()).toEqual([]);
   });
 
