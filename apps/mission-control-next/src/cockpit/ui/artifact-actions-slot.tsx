@@ -17,7 +17,7 @@ export function renderCockpitArtifactActions(artifact: ChatGeneratedArtifactReco
   const identity = `${artifact.artifactId}:${artifact.contentHash ?? artifact.version}`;
   return (
     <AreaErrorBoundary label="Artifact render actions" resetKey={identity}>
-      <Suspense fallback={<p role="status">Loading artifact actions…</p>}>
+      <Suspense fallback={<p aria-busy="true">Loading artifact actions…</p>}>
         <ArtifactRenderActions key={identity} artifact={artifact} />
       </Suspense>
     </AreaErrorBoundary>

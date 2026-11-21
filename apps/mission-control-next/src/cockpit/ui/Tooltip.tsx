@@ -146,7 +146,7 @@ export function Tooltip({ label, children }: { label: string; children: ReactNod
             onPointerLeave={(event) => {
               if (!(event.relatedTarget instanceof Node && anchor.contains(event.relatedTarget))) close();
             }}
-            className="fixed z-60 max-w-[min(24rem,calc(100vw-16px))] break-words rounded-sm bg-overlay px-2 py-1 text-xs text-fg shadow-overlay"
+            className="fixed z-60 max-w-tooltip break-words rounded-sm bg-overlay px-2 py-1 text-xs text-fg shadow-overlay"
           >
             {label}
           </span>,

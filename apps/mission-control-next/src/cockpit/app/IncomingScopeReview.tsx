@@ -35,7 +35,7 @@ export function IncomingScopeReview() {
       <AreaErrorBoundary label="Linked scope review" resetKey={destination}>
         <Suspense
           fallback={
-            <p role="status" className="min-w-0 flex-1 text-sm text-fg-secondary">
+            <p aria-busy="true" className="min-w-0 flex-1 text-sm text-fg-secondary">
               Loading linked scope review…
             </p>
           }

@@ -119,6 +119,10 @@ html[data-shell="cockpit"] body {
 /* Stacking scale (Tailwind z-* utilities), lowest first: z-40 scrims, z-50 dialogs and sheets (shared Classic
    dialogs sit at 50/51), z-60 popovers (menus, tooltips) so they open above any dialog, z-70 toasts. */
 
+@utility max-w-tooltip {
+  max-width: min(var(--container-sm), calc(100vw - 16px));
+}
+
 @keyframes pulse-live {
   0%,
   100% {

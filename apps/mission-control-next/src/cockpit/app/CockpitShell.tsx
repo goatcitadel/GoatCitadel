@@ -293,7 +293,7 @@ function CockpitShellContent({
       {Palette ? <Palette open={paletteOpen} onOpenChange={requestPalette} /> : null}
       {helpOpen !== null ? (
         <AreaErrorBoundary label="Keyboard shortcuts" resetKey={chatScope}>
-          <Suspense fallback={<p role="status">Loading keyboard shortcuts…</p>}>
+          <Suspense fallback={<p aria-busy="true">Loading keyboard shortcuts…</p>}>
             <ShortcutHelp open={helpOpen} onOpenChange={setHelpOpen} />
           </Suspense>
         </AreaErrorBoundary>

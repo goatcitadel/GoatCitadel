@@ -219,7 +219,7 @@ const ChatEmptyState = lazy(async () => ({ default: (await import("./ChatSetupVi
 const ChatSetupGate = lazy(async () => ({ default: (await import("./ChatSetupViews")).ChatSetupGate }));
 const loadingConversations = (
   <div className="flex min-h-0 flex-1 flex-col items-center justify-center-safe p-5 text-center">
-    <p role="status" className="text-sm text-fg-muted">
+    <p aria-busy="true" className="text-sm text-fg-muted">
       Loading conversations…
     </p>
   </div>

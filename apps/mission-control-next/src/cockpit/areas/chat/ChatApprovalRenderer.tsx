@@ -325,7 +325,7 @@ export function ChatApprovalRenderer({
                     </Button>
                   </div>
                 )}
-                {shouldLoad ? <p role="status">Loading approval controls…</p> : null}
+                {shouldLoad ? <p aria-busy="true">Loading approval controls…</p> : null}
                 <ApprovalDecisionHelp />
               </div>
             </ChatApprovalPausedFieldset>
