@@ -21,6 +21,8 @@ import {
 import { logger } from "@goatcitadel/gateway-core";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { CronSpecMutationOwner } from "./cron-config-generation-owner.js";
+import {selectPromptPackWatchBinding} from "./prompt-pack-watch-evidence.js";
+import {PROMPT_PACK_WATCH_CAPABILITIES,type PromptPackImprovementWatchBinding,type PromptPackComparisonEvidence} from "@goatcitadel/contracts";
 import { assertNoAssembledPromptInjection } from "./assembled-prompt-injection-guard.js";
 import { trackBackgroundTask } from "./background-scheduler.js";
 import {
@@ -212,7 +214,7 @@ const IMPROVEMENT_CANDIDATE_KINDS = new Set<ImprovementCandidateKind>([
 ]);
 const IMPROVEMENT_WATCH_SIGNAL_TARGET = 20;
 const IMPROVEMENT_SIGNAL_SCHEMA_VERSION = "1.1.1";
-const IMPROVEMENT_EVALUATOR_VERSION = "improvement-ledger-v1.1.1";
+const IMPROVEMENT_EVALUATOR_VERSION = "improvement-static-preflight-v1";
 const IMPROVEMENT_SIGNAL_METADATA_MAX_BYTES = 4 * 1024;
 const IMPROVEMENT_SIGNAL_EVIDENCE_REF_LIMIT = 8;
 
@@ -226,6 +228,8 @@ export interface ImprovementServiceContext {
     | "db"
     | "governanceJourneyEvents"
     | "improvementLifecycleOperations"
+    | "improvementWatchEvidence"
+    | "promptPackRuns"
     | "runImmediateTransaction"
     | "systemSettings"
   >;
@@ -382,6 +386,9 @@ interface ImprovementActivationRow {
   watch_ends_at: string | null;
   watch_signal_target: number;
   watch_signal_count: number;
+  positive_signal_count?:number;
+  watch_evidence_version?:number;
+  watch_evidence_complete?:number;
   regression_count: number;
   created_at: string;
   updated_at: string;
@@ -1500,6 +1507,13 @@ export class ImprovementService {
     });
   }
 
+  public async capturePromptLabWatchBindings(packId:string):Promise<PromptPackImprovementWatchBinding[]> {
+    if(!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))||!(await this.ctx.isFeatureEnabled("improvementActivationV1Enabled")))return [];
+    const workspaceId=this.ctx.normalizeWorkspaceId("prompt-lab"),capturedAt=new Date().toISOString();
+    const bindings=await Promise.all(PROMPT_PACK_WATCH_CAPABILITIES.map(capability=>this.ctx.storage.improvementWatchEvidence.captureForWork({workspaceId,capability,capturedAt,fingerprint:this.buildRoutingPolicyFingerprint({workspaceId,causeClass:capability,targetKey:`${packId}:${capability}`})})));
+    return bindings.flat();
+  }
+
   async recordPromptLabRegressionCompletionSignal(input: {
     regressionRunId: string;
     packId: string;
@@ -1508,46 +1522,51 @@ export class ImprovementService {
     passDelta: number;
     latencyDeltaMs: number;
     capability: string;
+    testCode?:string;
+    currentRunId?:string;
+    baselineRunId?:string;
+    comparison?:PromptPackComparisonEvidence;
+    /** @deprecated Ignored: only a canonical run's immutable pre-work binding is eligible. */
+    improvementWatchRevision?:{revisionId:string;changeHash:string};
   }): Promise<ImprovementSignalRecord | undefined> {
     if (!(await this.ctx.isFeatureEnabled("improvementLedgerV1Enabled"))) {
       return undefined;
     }
     const workspaceId = this.ctx.normalizeWorkspaceId("prompt-lab");
     const targetKey = `${input.packId}:${input.capability}`;
+    const fingerprint=this.buildRoutingPolicyFingerprint({workspaceId,causeClass:input.capability,targetKey});
+    const current=input.currentRunId ? await this.ctx.storage.promptPackRuns.get(input.currentRunId):undefined;
+    const baseline=input.baselineRunId ? await this.ctx.storage.promptPackRuns.get(input.baselineRunId):undefined;
+    const binding=input.comparison?.kind!=="legacy_v1" && current && baseline && current.packId===input.packId ? selectPromptPackWatchBinding({current,baseline,workspaceId,fingerprint,capability:input.capability}):undefined;
+    const workIdentity=current && baseline ? createHash("sha256").update(JSON.stringify([binding?.activationId ?? null,current.runId,baseline.runId,input.capability,input.comparison?.kind==="auto_scored" ? [input.comparison.currentScoreHash,input.comparison.baselineScoreHash]:null])).digest("hex"):undefined;
+    const eventIdentity=workIdentity ? `prompt-lab-work:${workIdentity}`:`${input.regressionRunId}:${input.testCode ?? "unknown"}:${input.capability}`;
     const negative = input.scoreDelta < 0 || input.passDelta < 0;
     return await this.recordImprovementSignal({
       sourceService: "prompt-pack-service",
       sourceType: "prompt_pack_regression",
       sourceId: input.regressionRunId,
-      sourceEventId: `${input.regressionRunId}:${input.capability}`,
-      idempotencyKey: `${input.regressionRunId}:${input.capability}`,
+      sourceEventId:eventIdentity,
+      idempotencyKey:eventIdentity,
       workspaceId,
       origin: "evaluation",
       signalClass: "evaluation",
       signalKind: "prompt_lab_regression_completed",
-      outcome: negative ? "negative" : "neutral",
+      outcome: negative ? "negative" : input.scoreDelta>0 || input.passDelta>0 ? "positive":"neutral",
       severity: negative ? "high" : "low",
-      fingerprint: this.buildRoutingPolicyFingerprint({
-        workspaceId,
-        causeClass: input.capability,
-        targetKey,
-        providerId: undefined,
-        model: undefined,
-      }),
+      fingerprint,
       scoreDelta: input.scoreDelta,
       latencyDeltaMs: input.latencyDeltaMs,
-      evidenceRefs: [
-        {
-          refType: "prompt_pack_run",
-          refId: input.regressionRunId,
-        },
-      ],
+      evidenceRefs: current && baseline ? [{refType:"prompt_pack_run",refId:current.runId},{refType:"prompt_pack_run",refId:baseline.runId}]:[],
       metadata: {
         packId: input.packId,
         targetKey,
         causeClass: input.capability,
         baselineRef: input.baselineRef,
         passDelta: input.passDelta,
+        testCode:input.testCode,
+        ...(input.comparison ? {comparison:input.comparison}:{}),
+        ...(current && baseline ? {observedWork:{currentRunId:current.runId,baselineRunId:baseline.runId,currentResponseSha256:current.integrity?.responseChecksumSha256,baselineResponseSha256:baseline.integrity?.responseChecksumSha256}}:{}),
+        ...(binding ? {improvementWatchRevision:binding}:{}),
       },
     });
   }
@@ -4599,8 +4618,9 @@ export class ImprovementService {
     if (!revision) {
       return;
     }
+    this.assertCandidateNotCorruptOrQuarantined(candidate,revision);
     const latest = await this.readLatestEvaluation(candidateId);
-    if (latest?.revisionId === revision.revisionId && latest.status === "passed") {
+    if (latest?.revisionId === revision.revisionId && latest.status === "passed" && latest.evaluatorVersion!=="improvement-ledger-v1.1.1") {
       if (candidate.status === "proposed" || candidate.status === "evaluating") {
         await this.updateCandidateStatus(candidateId, "ready_for_approval", "system", "system");
       }
@@ -4609,22 +4629,18 @@ export class ImprovementService {
     const now = new Date().toISOString();
     await this.updateCandidateStatus(candidateId, "evaluating", "system", "system");
     const supportingSignals = await this.listSignalsForCandidate(candidateId);
-    const evaluatorKind: ImprovementEvaluationKind =
-      candidate.kind === "repair_policy"
-        ? "repair_replay_validation"
-        : candidate.kind === "skill_revision"
-          ? "skill_eval_scorecard"
-          : "prompt_lab_regression";
+    const evaluatorKind: ImprovementEvaluationKind = "static_preflight";
     const metrics: Record<string, number> = {
       supportingSignalCount: candidate.supportingSignalCount,
       negativeSignalCount: candidate.negativeSignalCount,
+      comparativeEvaluationPerformed:0,
     };
     const latestSignal = supportingSignals[0];
     if (latestSignal?.scoreDelta !== undefined) {
-      metrics.scoreDelta = latestSignal.scoreDelta;
+      metrics.sourceScoreDelta = latestSignal.scoreDelta;
     }
     if (latestSignal?.latencyDeltaMs !== undefined) {
-      metrics.latencyDeltaMs = latestSignal.latencyDeltaMs;
+      metrics.sourceLatencyDeltaMs = latestSignal.latencyDeltaMs;
     }
     const evaluationId = randomUUID();
     await this.ctx.storage.db
@@ -4649,30 +4665,15 @@ export class ImprovementService {
         baselineRefJson: JSON.stringify({
           refType: "baseline",
           refId: candidate.targetKey,
+          metadata:{comparisonPerformed:false},
         } satisfies ImprovementRef),
         candidateRefJson: JSON.stringify(revision.candidateRef),
         evaluatorKind,
         evaluatorVersion: IMPROVEMENT_EVALUATOR_VERSION,
-        datasetOrPackRefJson:
-          candidate.kind === "routing_policy"
-            ? JSON.stringify({
-                refType: "prompt_pack",
-                refId: candidate.targetKey,
-              } satisfies ImprovementRef)
-            : candidate.kind === "skill_revision"
-              ? JSON.stringify({
-                  refType: "skill_evaluation_run",
-                  refId: latestSignal?.sourceId ?? candidate.targetKey,
-                } satisfies ImprovementRef)
-              : null,
+        datasetOrPackRefJson:null,
         changeHash: revision.changeHash,
         metricsJson: JSON.stringify(metrics),
-        resultSummary:
-          candidate.kind === "repair_policy"
-            ? "Repair policy candidate passed bounded replay validation."
-            : candidate.kind === "skill_revision"
-              ? "Skill revision candidate passed bounded skill evaluation."
-              : "Routing policy candidate passed Prompt Lab regression validation.",
+        resultSummary:"Recorded scope and revision checks passed. No candidate run or comparative performance test was performed.",
         createdAt: now,
         completedAt: now,
       });
@@ -5047,7 +5048,7 @@ export class ImprovementService {
       activation.watchEndsAt &&
       Date.parse(activation.watchEndsAt) <= Date.now()
     ) {
-      return await this.markActivationStable(activation.activationId);
+      return await this.reconcileWatchEvidence(activation.activationId);
     }
     return activation;
   }
@@ -5382,72 +5383,9 @@ export class ImprovementService {
   }
 
   private async applySignalToWatchWindows(signal: ImprovementSignalRecord): Promise<void> {
-    if (signal.origin !== "runtime" && signal.origin !== "evaluation") {
-      return;
-    }
-    const rows = toImprovementActivationRows(
-      await this.ctx.storage.db
-        .prepare(
-          `
-          SELECT a.*
-          FROM improvement_activations a
-          JOIN improvement_candidates c ON c.candidate_id = a.candidate_id
-          WHERE a.status = 'active'
-            AND a.watch_status = 'watching'
-            AND c.workspace_id = @workspaceId
-          ORDER BY a.created_at DESC
-        `,
-        )
-        .all({
-          workspaceId: signal.workspaceId,
-        }),
-    );
-    for (const row of rows) {
-      const activation = mapImprovementActivationRow(row);
-      const candidate = await this.readImprovementCandidate(activation.candidateId);
-      if (candidate.fingerprint !== signal.fingerprint) {
-        continue;
-      }
-      const watchSignalCount = activation.watchSignalCount + 1;
-      const regressionCount = activation.regressionCount + (signal.outcome === "negative" ? 1 : 0);
-      await this.ctx.storage.db
-        .prepare(
-          `
-          UPDATE improvement_activations
-          SET watch_signal_count = @watchSignalCount,
-              regression_count = @regressionCount,
-              updated_at = @updatedAt
-          WHERE activation_id = @activationId
-        `,
-        )
-        .run({
-          activationId: activation.activationId,
-          watchSignalCount,
-          regressionCount,
-          updatedAt: new Date().toISOString(),
-        });
-      if (signal.outcome === "negative" && activation.regressionCount === 0) {
-        const paused = await this.restoreActivationSnapshot(
-          await this.readImprovementActivation(activation.activationId),
-          "paused",
-          "system",
-          "system",
-        );
-        if (paused.status !== "paused") {
-          await this.ctx.publishRealtime("improvement_activation_pause_failed", "improvement", {
-            activationId: activation.activationId,
-            candidateId: activation.candidateId,
-            signalId: signal.signalId,
-          });
-        }
-        continue;
-      }
-      if (
-        watchSignalCount >= activation.watchSignalTarget ||
-        (activation.watchEndsAt && Date.parse(activation.watchEndsAt) <= Date.now())
-      ) {
-        await this.markActivationStable(activation.activationId);
-      }
+    if (signal.origin !== "runtime" && signal.origin !== "evaluation") return;
+    for (const activationId of await this.ctx.storage.improvementWatchEvidence.listForSignal(signal.signalId)) {
+      await this.reconcileWatchEvidence(activationId);
     }
   }
 
@@ -5489,12 +5427,7 @@ export class ImprovementService {
     );
     for (const row of rows) {
       const activation = mapImprovementActivationRow(row);
-      if (
-        activation.watchSignalCount >= activation.watchSignalTarget ||
-        (activation.watchEndsAt && Date.parse(activation.watchEndsAt) <= Date.now())
-      ) {
-        await this.markActivationStable(activation.activationId);
-      }
+      await this.reconcileWatchEvidence(activation.activationId);
     }
   }
 
@@ -5515,34 +5448,26 @@ export class ImprovementService {
     return row ? mapImprovementActivationRow(row) : undefined;
   }
 
-  private async markActivationStable(activationId: string): Promise<ImprovementActivationRecord> {
-    await this.ctx.storage.db
-      .prepare(
-        `
-        UPDATE improvement_activations
-        SET watch_status = 'stable',
-            stable_at = @stableAt,
-            updated_at = @updatedAt
-        WHERE activation_id = @activationId
-          AND status = 'active'
-          AND watch_status = 'watching'
-      `,
-      )
-      .run({
-        activationId,
-        stableAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    const stable = await this.readImprovementActivation(activationId);
-    await this.ctx.publishRealtime("improvement_activation_stable", "improvement", {
-      activationId,
-      candidateId: stable.candidateId,
-      revisionId: stable.revisionId,
-      approvalId: stable.approvalId,
-      status: stable.status,
-      watchStatus: stable.watchStatus,
+  private async reconcileWatchEvidence(activationId: string): Promise<ImprovementActivationRecord> {
+    const outcome = await this.ctx.storage.runImmediateTransaction(async () => {
+      const observed = await this.ctx.storage.improvementWatchEvidence.reconcile(activationId);
+      let pauseFailed=false;
+      if (observed.shouldRestore) {
+        // The evidence owner holds the activation row through this existing
+        // governed snapshot recovery. Concurrent delivery sees the settled state.
+        const activation = await this.readImprovementActivation(activationId);
+        if (activation.status === "active") pauseFailed=(await this.restoreActivationSnapshot(activation, "paused", "system", "system")).status!=="paused";
+      }
+      return {...observed,pauseFailed};
     });
-    return stable;
+    const current = await this.readImprovementActivation(activationId);
+    if(outcome.pauseFailed) await this.ctx.publishRealtime("improvement_activation_pause_failed","improvement",{activationId,candidateId:current.candidateId});
+    if (outcome.changed) await this.ctx.publishRealtime("improvement_activation_watch_updated", "improvement", {
+      activationId, candidateId:current.candidateId, revisionId:current.revisionId,
+      status:current.status, watchStatus:current.watchStatus,
+      positiveSignalCount:current.positiveSignalCount ?? 0, regressionCount:current.regressionCount,
+    });
+    return current;
   }
 
   private async markActivationFailed(
@@ -7246,11 +7171,13 @@ function mapImprovementActivationRow(row: ImprovementActivationRow): Improvement
       refId: row.activation_id,
     }),
     appliedChangeHash: row.applied_change_hash,
-    watchStatus: row.watch_status as ImprovementActivationRecord["watchStatus"],
+    watchStatus: row.watch_status === "stable" && (!row.watch_evidence_version || (row.positive_signal_count ?? 0)<row.watch_signal_target || row.watch_evidence_complete===0) ? "insufficient_evidence":row.watch_status as ImprovementActivationRecord["watchStatus"],
     watchStartedAt: row.watch_started_at ?? undefined,
     watchEndsAt: row.watch_ends_at ?? undefined,
     watchSignalTarget: row.watch_signal_target,
     watchSignalCount: row.watch_signal_count,
+    positiveSignalCount:row.positive_signal_count ?? 0,
+    watchEvidenceStatus:row.watch_status === "stable" && !row.watch_evidence_version ? "legacy_unverified":row.watch_evidence_complete===0 ? "partial":row.watch_evidence_version===1 ? "observed":"pending",
     regressionCount: row.regression_count,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

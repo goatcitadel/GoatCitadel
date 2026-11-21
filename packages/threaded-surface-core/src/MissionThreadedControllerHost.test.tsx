@@ -2246,6 +2246,7 @@ describe("MissionThreadedControllerHost", () => {
       latestSurfaceInput?.sessionRail.onSelectSession("session-1", { turnId: "turn-1" });
       latestSurfaceInput?.activeSessionSurfaceProps?.onRequestProviderChange("anthropic");
       latestSurfaceInput?.activeSessionSurfaceProps?.onRequestModelChange("claude-4");
+      await vi.dynamicImportSettled();
       latestSurfaceInput?.activeSessionSurfaceProps?.onOpenRunDetails("turn-1");
       latestSurfaceInput?.activeSessionSurfaceProps?.onAcknowledgeRouteBoundary();
       latestSurfaceInput?.activeSessionSurfaceProps?.onDraftChange("Draft body");

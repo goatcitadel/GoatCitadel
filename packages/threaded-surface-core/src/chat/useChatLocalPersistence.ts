@@ -1,3 +1,4 @@
+import { isPracticeGateway } from "@goatcitadel/mission-control-shared/api/gateway-transport";
 import { useEffect, useRef } from "react";
 import { getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 
@@ -23,7 +24,7 @@ export function createQueueStorageKey(workspaceId: string, sessionId: string | n
 }
 
 export function clearChatSessionLocalState(workspaceId: string, sessionId: string): void {
-  if (typeof window === "undefined") {
+  if (typeof window === "undefined" || isPracticeGateway()) {
     return;
   }
   try {
@@ -40,7 +41,7 @@ export function useDebouncedLocalStoragePersistence(key: string, value: string, 
   const pendingWriteRef = useRef<{ key: string; value: string } | null>(null);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
+    if (typeof window === "undefined" || isPracticeGateway()) {
       return;
     }
     if (pendingWriteRef.current && pendingWriteRef.current.key !== key) {
@@ -75,7 +76,7 @@ export function useDebouncedLocalStoragePersistence(key: string, value: string, 
 
   useEffect(() => {
     const flush = () => {
-      if (typeof window === "undefined") return;
+      if (typeof window === "undefined" || isPracticeGateway()) return;
       if (timerRef.current) {
         clearTimeout(timerRef.current);
         timerRef.current = null;

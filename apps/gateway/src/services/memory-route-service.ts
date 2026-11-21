@@ -34,8 +34,10 @@ type MemoryRoutePort = Pick<
   | "recordMemoryFeedback"
   | "patchMemoryQualityIssue"
   | "listTraceMemoryCandidates"
+  | "previewLegacyConsolidationReconciliation"
   | "getTraceMemoryCandidate"
   | "proposeTraceMemoryCandidate"
+  | "editTraceMemoryCandidate"
   | "promoteTraceMemoryCandidate"
   | "rejectTraceMemoryCandidate"
   | "recallMemory"
@@ -158,17 +160,21 @@ export class MemoryRouteService {
   public listTraceCandidates(input: Parameters<MemoryRoutePort["listTraceMemoryCandidates"]>[0]) {
     return this.memory.listTraceMemoryCandidates(input);
   }
+  public previewTraceCandidateReconciliation(input:Parameters<MemoryRoutePort["previewLegacyConsolidationReconciliation"]>[0]) {
+    return this.memory.previewLegacyConsolidationReconciliation(input);
+  }
 
   public proposeTraceCandidate(input: Parameters<MemoryRoutePort["proposeTraceMemoryCandidate"]>[0], actorId: string) {
     return this.memory.proposeTraceMemoryCandidate(input, actorId);
   }
 
-  public promoteTraceCandidate(candidateId: string, actorId: string) {
-    return this.memory.promoteTraceMemoryCandidate(candidateId, actorId);
+  public promoteTraceCandidate(candidateId: string, actorId: string,review?:Parameters<MemoryRoutePort["promoteTraceMemoryCandidate"]>[2]) {
+    return this.memory.promoteTraceMemoryCandidate(candidateId, actorId,review);
   }
+  public editTraceCandidate(candidateId:string,input:Parameters<MemoryRoutePort["editTraceMemoryCandidate"]>[1],actorId:string){return this.memory.editTraceMemoryCandidate(candidateId,input,actorId);}
 
-  public rejectTraceCandidate(candidateId: string, actorId: string) {
-    return this.memory.rejectTraceMemoryCandidate(candidateId, actorId);
+  public rejectTraceCandidate(candidateId: string, actorId: string,review?:Parameters<MemoryRoutePort["rejectTraceMemoryCandidate"]>[2]) {
+    return this.memory.rejectTraceMemoryCandidate(candidateId, actorId,review);
   }
 
   public listItems(input: Parameters<MemoryRoutePort["listMemoryItemsPage"]>[0]) {

@@ -46,6 +46,8 @@ const EXPECTED_PATCH_TOGGLEABLE: Record<keyof FeatureFlagsConfig, true> = {
   plannerFanoutV1Disabled: true,
   subagentFanoutV1Disabled: true,
   memoryConsolidationV1Enabled: true,
+  memoryCorpusRecallV1Enabled: true,
+  backgroundSkillDraftsV1Enabled: true,
   cronEvidenceV1Enabled: true,
   utilityModelRoutingV1Enabled: true,
   chatTurnInterruptionRecoveryV1Disabled: true,

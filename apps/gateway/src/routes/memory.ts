@@ -186,6 +186,7 @@ const memoryQualityIssuePatchSchema = z.object({
 });
 
 const traceCandidateListQuerySchema = z.object({
+  reconciliationCursor:z.string().min(1).max(1024).optional(),
   workspaceId: z.string().trim().min(1).optional(),
   status: traceCandidateStatusQuerySchema.optional(),
   limit: z.coerce.number().int().positive().max(500).default(100),
@@ -212,6 +213,13 @@ const learningFileRefSchema = z.object({
 });
 
 const learningCreateSchema = z.object({
+  claim: z.object({
+    identity: z.object({ subject: z.string().trim().min(1).max(200), predicate: z.string().trim().min(1).max(200),
+      scope: z.object({ kind: z.enum(["workspace", "project", "session"]), id: z.string().trim().min(1).max(300) }),
+      cardinality: z.enum(["scalar", "set"]) }),
+    value: z.string().trim().min(1).max(2000),
+  }).optional(),
+  correctionTarget: z.object({ sourceRef: z.string().trim().min(1), expectedSourceHash: z.string().regex(/^[a-f0-9]{64}$/) }).optional(),
   workspaceId: z.string().trim().min(1).optional(),
   key: z.string().trim().min(1),
   type: learningTypeSchema.optional(),
@@ -640,7 +648,8 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
     try {
-      return reply.send({ items: await memory.listTraceCandidates(parsed.data) });
+      const [items,reconciliationPreview]=await Promise.all([memory.listTraceCandidates(parsed.data),memory.previewTraceCandidateReconciliation({workspaceId:parsed.data.workspaceId,cursor:parsed.data.reconciliationCursor})]);
+      return reply.send({items,reconciliationPreview});
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -669,17 +678,24 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  fastify.patch("/api/v1/memory/trace-candidates/:candidateId",operatorOnly,async(request,reply)=>{
+    const params=traceCandidateParamsSchema.safeParse(request.params),input=z.object({workspaceId:z.string().trim().min(1).max(256),expectedReviewHash:z.string().regex(/^[a-f0-9]{64}$/u),proposedInsight:z.string().trim().min(1).max(1000)}).strict().safeParse(request.body);
+    if(!params.success || !input.success)return reply.code(400).send({error:"Refresh and review the exact memory proposal before editing."});
+    try{return reply.send(await memory.editTraceCandidate(params.data.candidateId,input.data,resolveActorId(request)));}catch(error){return sendRouteError(reply,error,request.log);}
+  });
+
   for (const action of ["promote", "reject"] as const) {
     fastify.post(`/api/v1/memory/trace-candidates/:candidateId/${action}`, operatorOnly, async (request, reply) => {
       const parsed = traceCandidateParamsSchema.safeParse(request.params);
-      if (!parsed.success) {
-        return reply.code(400).send({ error: parsed.error.flatten() });
+      const review=z.object({workspaceId:z.string().trim().min(1).max(256),expectedReviewHash:z.string().regex(/^[a-f0-9]{64}$/u)}).strict().safeParse(request.body);
+      if (!parsed.success || !review.success) {
+        return reply.code(400).send({ error: "Refresh the exact memory proposal before deciding." });
       }
       try {
         const candidate =
           action === "promote"
-            ? await memory.promoteTraceCandidate(parsed.data.candidateId, resolveActorId(request))
-            : await memory.rejectTraceCandidate(parsed.data.candidateId, resolveActorId(request));
+            ? await memory.promoteTraceCandidate(parsed.data.candidateId, resolveActorId(request),review.data)
+            : await memory.rejectTraceCandidate(parsed.data.candidateId, resolveActorId(request),review.data);
         return reply.send(candidate);
       } catch (error) {
         return sendRouteError(reply, error, request.log);

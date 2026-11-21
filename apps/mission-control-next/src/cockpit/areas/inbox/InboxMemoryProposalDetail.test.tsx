@@ -32,6 +32,7 @@ const item: OperatorInboxItem = {
 };
 const candidate: TraceMemoryCandidateRecord = {
   candidateId: "candidate-a",
+  reviewHash:"a".repeat(64),
   workspaceId: "workspace-a",
   candidateType: "repo_fact",
   status: "proposed",
@@ -157,7 +158,7 @@ describe("Inbox memory proposal review", () => {
     await settle();
     // Open, the decision's re-read, then the decided record is reset and read once more.
     expect(api.fetchTraceMemoryCandidate).toHaveBeenCalledTimes(3);
-    expect(api.promoteTraceMemoryCandidate).toHaveBeenCalledWith("candidate-a");
+    expect(api.promoteTraceMemoryCandidate).toHaveBeenCalledWith("candidate-a",{workspaceId:"workspace-a",expectedReviewHash:"a".repeat(64)});
     expect(container.textContent).toContain("Promoted to workspace memory");
     const memoryLink = [...container.querySelectorAll("a")].find((link) => link.textContent === "Open Memory");
     expect(memoryLink?.getAttribute("href")).toContain("/library/memory");
@@ -208,7 +209,7 @@ describe("Inbox memory proposal review", () => {
     await act(async () => button("Reject proposal").click());
     expect(document.body.querySelector("[role=dialog]")).toBeNull();
     await settle();
-    expect(api.rejectTraceMemoryCandidate).toHaveBeenCalledWith("candidate-a");
+    expect(api.rejectTraceMemoryCandidate).toHaveBeenCalledWith("candidate-a",{workspaceId:"workspace-a",expectedReviewHash:"a".repeat(64)});
     expect(container.textContent).toContain("Proposal rejected.");
   });
 

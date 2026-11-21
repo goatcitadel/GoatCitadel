@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { isChatTurnTerminalStatus, type ChatThreadTurnRecord, type ChatToolRunRecord } from "@goatcitadel/contracts";
-import { getChatToolRunDiagnostics } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
+import { hasChatToolFailureSignal } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-failure";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 const ChatOpenCodeEvidence = lazy(async () => ({
   default: (await import("./ChatOpenCodeEvidence")).ChatOpenCodeEvidence,
@@ -94,6 +94,7 @@ function safeSourceHref(value: string): string | null {
 
 export function ChatTurnDetails({
   turn,
+  inlineApprovalId,
   answerContent = turn.assistantMessage?.content,
   streaming,
   readOnly,
@@ -102,6 +103,7 @@ export function ChatTurnDetails({
   latest = true,
 }: {
   turn: ChatThreadTurnRecord;
+  inlineApprovalId?: string;
   answerContent?: string;
   streaming: boolean;
   readOnly: boolean;
@@ -150,15 +152,26 @@ export function ChatTurnDetails({
       (tool) => isCodeModeRequest(tool) && (tool.status === "approval_required" || tool.status === "started"),
     );
   const onlyCodeModeCard = !streaming && turn.toolRuns.length === 1 && turn.toolRuns.every(isCodeModeRequest);
+  // The restored turn can arrive before its separate approval record. Its linked
+  // approval still owns the decision. Keep that tool's detailed activity on
+  // demand and keep opening the disclosure for other actionable failures.
+  const isInlineApproval = (tool: ChatToolRunRecord) =>
+    latest &&
+    Boolean(tool.approvalId) &&
+    (inlineApprovalId === undefined || tool.approvalId === inlineApprovalId) &&
+    tool.status === "approval_required";
+  const parkedOnInlineApproval =
+    !streaming && turn.trace.status === "waiting_for_approval" && turn.toolRuns.some(isInlineApproval);
   // A completed turn that read other pages already worked around a page it could not open and says so in its
   // answer, so those rows stay folded below it instead of pushing the answer away from the composer.
   const turnCompleted = !turnLive && turn.trace.status === "completed";
   const toolDisclosure = useAutoOpenDisclosure(
-    (turnLive && !parkedOnCodeModeCard && !onlyCodeModeCard) ||
+    (turnLive && !parkedOnCodeModeCard && !onlyCodeModeCard && !parkedOnInlineApproval) ||
       turn.toolRuns.some(
         (tool) =>
           !isCodeModeRequest(tool) &&
-          (tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal) &&
+          !(parkedOnInlineApproval && isInlineApproval(tool)) &&
+          (tool.status !== "executed" || hasChatToolFailureSignal(tool)) &&
           !(turnCompleted && isRecoveredWebRead(tool, turn.toolRuns)),
       ),
     { closeWhenSettled: true },

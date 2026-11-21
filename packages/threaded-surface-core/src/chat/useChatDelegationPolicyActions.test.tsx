@@ -7,18 +7,8 @@ import type {
   ChatSessionRecord,
   ChatThreadResponse,
 } from "@goatcitadel/contracts";
-import {
-  applyDelegationStatusChunk,
-  applyDelegationStepChunk,
-  applyDelegationStreamFailure,
-  createSeedDelegationSteps,
-  inferDelegationRunStatus,
-  resolveDelegationMode,
-  resolveDelegationRoute,
-  resolveSelectedTurn,
-  shouldHydrateTraceDelegationRun,
-  useChatDelegationPolicyActions,
-} from "./useChatDelegationPolicyActions";
+import { createSeedDelegationSteps, resolveDelegationMode, resolveDelegationRoute, resolveSelectedTurn, shouldHydrateTraceDelegationRun, useChatDelegationPolicyActions } from "./useChatDelegationPolicyActions";
+import { applyDelegationStatusChunk, applyDelegationStepChunk, applyDelegationStreamFailure, inferDelegationRunStatus } from "./delegation-stream-projection";
 import { useChatDelegatedScopeControls, type ThreadedDelegatedScopeControls } from "./useChatDelegatedScopeControls";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

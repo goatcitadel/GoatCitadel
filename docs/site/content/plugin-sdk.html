@@ -1,0 +1,42 @@
+<h2 id="plugin-manifest">Plugin manifest</h2>
+<p>
+  A GoatCitadel plugin is a declarative bundle. Put <code>goatcitadel-plugin.json</code> at the root of the plugin
+  folder. List its pieces in the manifest and keep their paths inside the folder.
+</p>
+<ul>
+  <li><strong>Skill</strong> · instructions in a folder containing <code>SKILL.md</code>.</li>
+  <li><strong>Connector</strong> · a reference to a supported connector template.</li>
+  <li><strong>Tool group hold</strong> · holds a tool group off for the life of the install.</li>
+  <li><strong>Hook</strong> · observes a supported event.</li>
+  <li><strong>Prompt pack</strong> · a Markdown file.</li>
+</ul>
+<p>
+  Use the schema and restrictions in the
+  <a href="https://github.com/goatcitadel/GoatCitadel/blob/main/docs/PLUGIN_SDK_CONTRACT.md">Extensions SDK contract</a
+  >.
+</p>
+
+<h2 id="validate-the-bundle">Validate the bundle</h2>
+<p>
+  The published <code>@goatcitadel/extensions-sdk</code> 1.0.0 package provides effective-tool snapshot helpers. The
+  workspace's 2.0.0 adds <code>parsePluginManifest</code>, <code>loadPluginManifest</code>, and the preflight command.
+  Use a workspace build of 2.0.0 for the new tooling.
+</p>
+<figure class="code-block">
+  <figcaption>Terminal · workspace SDK</figcaption>
+  <pre
+    tabindex="0"
+    aria-label="Validate a plugin folder"
+  ><code>goatcitadel-plugin-preflight &lt;plugin-folder&gt;</code></pre>
+</figure>
+<p>
+  With the workspace command on your path, pass the plugin folder. A successful check reports the plugin ID and the
+  manifest hash.
+</p>
+
+<h2 id="review-and-install">Review and install</h2>
+<p>
+  Open <strong>Capabilities › Plugins</strong> to inspect the bundle and review its Change Plan. Check the trust label,
+  <strong>Built in</strong> or <strong>Unverified</strong>, and the requested pieces before applying it. Keep
+  authorization for activated skills and connected accounts scoped to your intended use.
+</p>

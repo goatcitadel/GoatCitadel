@@ -66,7 +66,7 @@ export function FeatureSwitchesSettings() {
             Features
           </h3>
           <p className="mt-1 text-sm text-fg-secondary">
-            These features are off unless you turn them on here, and each row shows its current state. Each switch turns
+            Each row shows the feature's current state. Each switch turns
             one on or off for the whole installation. Saving one is a Settings change, so it waits for your approval
             unless you&apos;ve chosen to apply Settings changes without asking.
           </p>

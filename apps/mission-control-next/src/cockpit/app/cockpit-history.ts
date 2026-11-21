@@ -1,3 +1,4 @@
+import { practiceLocation, setPracticeLocation } from "../../features/tutorial/practice-location";
 import { resolveCockpitCompatibility } from "./cockpit-compatibility";
 import { SHELL_HISTORY_POSITION, SHELL_NAVIGATION_EVENTS } from "../../app/shell-transition";
 import { buildConnectorSetupRouteHomes, buildSettingsRouteHomes } from "../areas/settings/settings-route-homes";
@@ -97,11 +98,16 @@ export function commitCockpitNavigation(
   if (!isCurrent()) return false;
   const destination = cockpitHref(href);
   if (!destination) return false;
-  const current = window.location.pathname + window.location.search + window.location.hash;
+  const { pathname, search, hash } = readCockpitLocation();
+  const current = pathname + search + hash;
   const actual = new URL(current, "http://cockpit.invalid");
   actual.searchParams.set("shell", "cockpit");
   if (actual.pathname + actual.search + actual.hash === destination) return false;
   if (afterCockpitSheetsClose(() => commitCockpitNavigation(href, options, isCurrent))) return true;
+  if (practiceLocation()) {
+    setPracticeLocation(destination);
+    return true;
+  }
   // A replaced entry keeps its state, position included. A pushed entry is numbered after the shown one.
   if (options?.replace) window.history.replaceState(window.history.state, "", destination);
   else window.history.pushState({ [SHELL_HISTORY_POSITION]: nextCockpitPosition() }, "", destination);

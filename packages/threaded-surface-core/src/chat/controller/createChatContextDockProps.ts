@@ -326,7 +326,7 @@ export function createChatContextDockProps({
           onPrefPatch: async (patch) => {
             if (blockHistoricalMutation()) return;
             if (patch.providerId !== undefined || patch.model !== undefined || patch.thinkingLevel !== undefined) {
-              requestThreadModelPatch(patch);
+              await requestThreadModelPatch(patch);
               return;
             }
             await handlePrefPatch(patch);

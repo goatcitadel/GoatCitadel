@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approvalTargetLine } from "./approval-target";
+import { approvalTargetLine } from "./approval-target.js";
 
 const cp = (point: number) => String.fromCodePoint(point);
 const shell = (command: string) => approvalTargetLine("shell.exec", { toolName: "shell.exec", command });

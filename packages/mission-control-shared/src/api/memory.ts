@@ -51,6 +51,9 @@ import type {
   MemoryWriteInput,
   ToolInvokeResult,
   TraceMemoryCandidateInput,
+  TraceMemoryCandidateDecisionInput,
+  TraceMemoryCandidateEditInput,
+  MemoryTraceReconciliationPreview,
   TraceMemoryCandidateRecord,
   TraceMemoryCandidateStatus,
 } from "@goatcitadel/contracts";
@@ -293,15 +296,17 @@ export async function patchMemoryQualityIssue(
 }
 
 export async function fetchTraceMemoryCandidates(input?: {
+  reconciliationCursor?:string;
   workspaceId?: string;
   status?: TraceMemoryCandidateStatus | "all";
   limit?: number;
-}): Promise<{ items: TraceMemoryCandidateRecord[] }> {
+}): Promise<{ items: TraceMemoryCandidateRecord[];reconciliationPreview?:MemoryTraceReconciliationPreview }> {
   const params = new URLSearchParams();
   if (input?.workspaceId) params.set("workspaceId", input.workspaceId);
+  if(input?.reconciliationCursor)params.set("reconciliationCursor",input.reconciliationCursor);
   if (input?.status) params.set("status", input.status);
   params.set("limit", String(Math.max(1, Math.min(input?.limit ?? 100, 500))));
-  return request<{ items: TraceMemoryCandidateRecord[] }>(`/api/v1/memory/trace-candidates?${params.toString()}`);
+  return request<{ items: TraceMemoryCandidateRecord[];reconciliationPreview?:MemoryTraceReconciliationPreview }>(`/api/v1/memory/trace-candidates?${params.toString()}`);
 }
 
 /** One trace-memory proposal by id, within its workspace. */
@@ -325,16 +330,21 @@ export async function proposeTraceMemoryCandidate(
   });
 }
 
-export async function promoteTraceMemoryCandidate(candidateId: string): Promise<MemoryLearningRecord> {
+export function editTraceMemoryCandidate(candidateId:string,input:TraceMemoryCandidateEditInput){return request<TraceMemoryCandidateRecord>(`/api/v1/memory/trace-candidates/${encodeURIComponent(candidateId)}`,{method:"PATCH",body:JSON.stringify(input)});}
+
+export async function promoteTraceMemoryCandidate(candidateId: string,review:TraceMemoryCandidateDecisionInput): Promise<MemoryLearningRecord> {
+  if(!review.expectedReviewHash)throw new Error("Refresh the memory proposal before deciding.");
   return request<MemoryLearningRecord>(`/api/v1/memory/trace-candidates/${encodeURIComponent(candidateId)}/promote`, {
     method: "POST",
+    body:JSON.stringify(review),
   });
 }
 
-export async function rejectTraceMemoryCandidate(candidateId: string): Promise<TraceMemoryCandidateRecord> {
+export async function rejectTraceMemoryCandidate(candidateId: string,review:TraceMemoryCandidateDecisionInput): Promise<TraceMemoryCandidateRecord> {
+  if(!review.expectedReviewHash)throw new Error("Refresh the memory proposal before deciding.");
   return request<TraceMemoryCandidateRecord>(
     `/api/v1/memory/trace-candidates/${encodeURIComponent(candidateId)}/reject`,
-    { method: "POST" },
+    { method: "POST",body:JSON.stringify(review) },
   );
 }
 

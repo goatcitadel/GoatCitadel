@@ -18,6 +18,7 @@ describe("memory routes", () => {
     } as never);
     built.decorate("services", {
       memory: {
+        previewTraceCandidateReconciliation:async()=>({items:[],limit:50,mutationsPerformed:false}),
         ...gateway,
         runMaintenanceNow: gateway.runMaintenanceNow ?? gateway.runMemoryMaintenanceNow,
         getContext: gateway.getContext ?? gateway.getMemoryContext,
@@ -643,10 +644,12 @@ describe("memory routes", () => {
     const promoteResponse = await app.inject({
       method: "POST",
       url: "/api/v1/memory/trace-candidates/trace-2/promote",
+      payload:{workspaceId:"default",expectedReviewHash:"a".repeat(64)},
     });
     const rejectResponse = await app.inject({
       method: "POST",
       url: "/api/v1/memory/trace-candidates/trace-3/reject",
+      payload:{workspaceId:"default",expectedReviewHash:"b".repeat(64)},
     });
 
     expect(recallResponse.statusCode).toBe(200);
@@ -694,8 +697,8 @@ describe("memory routes", () => {
       },
       expect.stringMatching(/^ip:/),
     );
-    expect(promoteTraceCandidate).toHaveBeenCalledWith("trace-2", expect.stringMatching(/^ip:/));
-    expect(rejectTraceCandidate).toHaveBeenCalledWith("trace-3", expect.stringMatching(/^ip:/));
+    expect(promoteTraceCandidate).toHaveBeenCalledWith("trace-2", expect.stringMatching(/^ip:/),{workspaceId:"default",expectedReviewHash:"a".repeat(64)});
+    expect(rejectTraceCandidate).toHaveBeenCalledWith("trace-3", expect.stringMatching(/^ip:/),{workspaceId:"default",expectedReviewHash:"b".repeat(64)});
   });
 
   it("accepts memory maintenance run-now on both the canonical and compatibility paths", async () => {

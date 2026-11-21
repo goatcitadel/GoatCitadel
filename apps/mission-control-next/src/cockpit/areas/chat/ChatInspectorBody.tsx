@@ -13,14 +13,7 @@ import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/com
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { ChatInspectorTabStrip } from "./ChatInspectorTabStrip";
-import {
-  presentMemoryMode,
-  presentPlanningMode,
-  presentRoutedContextKind,
-  presentRoutedDisposition,
-  presentToolAutonomy,
-  presentWebMode,
-} from "./chat-vocabulary";
+import { presentMemoryMode, presentPlanningMode, presentRoutedContextKind, presentRoutedDisposition, presentToolAutonomy, presentWebMode } from "./chat-optional-vocabulary";
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
 import { ThreadedDocumentsPanel } from "../../../features/threaded-surface/ThreadedDocumentsPanel";
 import { ThreadedContextConflictNotices } from "../../../features/threaded-surface/ThreadedContextConflictNotices";

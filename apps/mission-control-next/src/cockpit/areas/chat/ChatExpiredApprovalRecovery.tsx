@@ -2,11 +2,11 @@ import { useId, useRef, useState } from "react";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { Button } from "../../ui/Button";
 
-type DraftControls = Partial<
+export type DraftControls = Partial<
   Pick<MissionThreadedActiveSessionSurfaceProps, "composerRef" | "thread" | "onDraftChange" | "draft">
 >;
 
-export function ChatExpiredApprovalRecovery({ props, turnId }: { props: DraftControls; turnId?: string }) {
+export function ChatExpiredApprovalRecovery({ props, turnId, allowAskAgain=true, notice="This approval expired." }: { props: DraftControls; turnId?: string;allowAskAgain?:boolean;notice?:string }) {
   const [askBlocked, setAskBlocked] = useState(false);
   // The text Ask again itself put in the box: it is the request, not something the operator typed.
   const restored = useRef<string | undefined>(undefined);
@@ -29,13 +29,13 @@ export function ChatExpiredApprovalRecovery({ props, turnId }: { props: DraftCon
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2">
       <p>
-        The action did not run.
-        {originalRequest ? " Ask again to put your request back in the message box." : ""}
+        {notice}
+        {originalRequest && allowAskAgain ? " Ask again to put your request back in the message box." : ""}
         {askBlocked && draftHasText ? (
           <span id={blockedNoteId}> Your message box already has text. Clear it to ask again.</span>
         ) : null}
       </p>
-      {originalRequest ? (
+      {originalRequest && allowAskAgain ? (
         <Button
           type="button"
           size="sm"

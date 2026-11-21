@@ -29,6 +29,23 @@ function baseInput(overrides: Partial<AgentCommitmentUpsertInput> = {}): AgentCo
 }
 
 describe("AgentCommitmentRepository", () => {
+  it("does not revise an unchanged inferred suggestion or invalidate its open review",()=>{
+    const repo=createRepo(),input=baseInput({status:"proposed"});
+    const first=repo.upsertByDedupe(input),second=repo.upsertByDedupe({...input,commitmentId:"ignored-duplicate"});
+    assert.equal(second.commitmentId,first.commitmentId);assert.equal(second.revision,first.revision);
+    const changed=repo.upsertByDedupe({...input,suggestedText:"Check the revised outcome"});assert.equal(changed.revision,first.revision!+1);
+  });
+  it("keeps inferred suggestions outside delivery until one exact review, and fences stale or foreign decisions", () => {
+    const repo=createRepo();
+    const suggestion=repo.upsertByDedupe(baseInput({commitmentId:"suggestion",status:"proposed"}));
+    assert.equal(repo.listDue("2030-01-01T00:00:00Z").length,0);
+    assert.throws(()=>repo.decideSuggestion({commitmentId:"suggestion",sessionId:"foreign",workspaceId:"default",expectedRevision:suggestion.revision!,decision:"accept"}));
+    const accepted=repo.decideSuggestion({commitmentId:"suggestion",sessionId:"session-1",workspaceId:"default",expectedRevision:suggestion.revision!,decision:"accept"});
+    assert.equal(accepted.status,"pending");assert.equal(repo.listDue("2030-01-01T00:00:00Z").length,1);
+    assert.throws(()=>repo.decideSuggestion({commitmentId:"suggestion",sessionId:"session-1",workspaceId:"default",expectedRevision:suggestion.revision!,decision:"accept"}));
+    repo.upsertByDedupe(baseInput({commitmentId:"replacement",status:"proposed",suggestedText:"Changed after acceptance"}));
+    assert.equal(repo.get("suggestion")?.suggestedText,accepted.suggestedText);
+  });
   it("inserts a commitment and reads it back", () => {
     const repo = createRepo();
     const created = repo.upsertByDedupe(baseInput({ commitmentId: "c1" }), "2026-06-22T00:00:00.000Z");

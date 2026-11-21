@@ -19,6 +19,10 @@ Current shell posture for this map:
 - The final certificate is written only after signed installer hashes are known, so it is not embedded back into the installer. The release job instead publishes `*-verified.zip` Windows distributions containing the signed installer plus a fixed `release-evidence/` sidecar directory. Inno copies that directory to `app/release-evidence` when the installer is launched from the verified distribution. A standalone installer remains supported, but the running shell must report its release proof as unverified because the certificate-bound files are absent.
 - The current operator IA is `Work / Projects / Library / Ops / Settings`, where Work is Chat; `Work / Observe / Tune` is legacy release taxonomy, not the current shell navigation.
 
+## Assistant reliability implementation evidence
+
+The [assistant reliability acceptance index](review/assistant-parity-acceptance.md) records the 2026-11-19 source implementation, focused regressions, isolated native Gateway/PostgreSQL journeys, rendered states and pinned OpenClaw/Hermes observations. It distinguishes synthetic mechanism proof, actual local-model behavior, incomplete comparisons and unrun release checks. These uncommitted source changes have not been installed or deployed by this task; this index grants no release-certificate or product-wide parity status.
+
 ## Recovery Truth
 
 - Live admin restore is blocked at [apps/gateway/src/routes/admin.ts](../apps/gateway/src/routes/admin.ts).

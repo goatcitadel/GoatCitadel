@@ -855,10 +855,13 @@ export function useMemoryOperatorSnapshot(workspaceId = "default", options: { vi
       setBusyKey(`trace:${candidateId}:${action}`);
       setNotice(null);
       try {
+        const candidate=data.traceMemoryCandidates.find(item=>item.candidateId===candidateId);
+        if(!candidate?.reviewHash)throw new Error("Refresh the exact memory proposal before deciding.");
+        const review={workspaceId:candidate.workspaceId,expectedReviewHash:candidate.reviewHash};
         if (action === "promote") {
-          await promoteTraceMemoryCandidate(candidateId);
+          await promoteTraceMemoryCandidate(candidateId,review);
         } else {
-          await rejectTraceMemoryCandidate(candidateId);
+          await rejectTraceMemoryCandidate(candidateId,review);
         }
         await reload();
         setNotice({
@@ -871,7 +874,7 @@ export function useMemoryOperatorSnapshot(workspaceId = "default", options: { vi
         setBusyKey(null);
       }
     },
-    [data?.memoryAdminState, reload],
+    [data?.memoryAdminState, data?.traceMemoryCandidates, reload],
   );
 
   return {

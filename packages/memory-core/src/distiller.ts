@@ -82,7 +82,7 @@ export function parseDistillerJson(raw: string): ParsedDistillation {
 }
 
 function parseSourceType(value: string): MemoryCitation["sourceType"] {
-  if (value === "file" || value === "memory_item") {
+  if (value === "file" || value === "memory_item" || value === "memory_learning" || value === "knowledge_chunk") {
     return value;
   }
   return "transcript";

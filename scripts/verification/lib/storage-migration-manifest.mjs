@@ -120,11 +120,9 @@ export function extractPostgresMigrationRegistry(source, options = {}) {
     const context = `POSTGRES_MIGRATIONS migration ${index}`;
     const version = readStaticVersionProperty(properties, context);
     const name = readStaticStringProperty(properties, "name", context);
-    const sqlExpression = requirePropertyAssignmentInitializer(
-      requireExplicitProperty(properties, "sql", context),
-      "sql",
-      context,
-    );
+    const sqlProperty = requireExplicitProperty(properties, "sql", context);
+    const lazyV2Sql = version === 2 ? getLazyPostgresV2Sql(sqlProperty) : undefined;
+    const sqlExpression = lazyV2Sql ?? requirePropertyAssignmentInitializer(sqlProperty, "sql", context);
     const integrityProperty = properties.get("integritySha256");
     const batchedStatementsProperty = properties.get("batchedStatements");
     let runtimeIntegritySha256;
@@ -163,7 +161,7 @@ export function extractPostgresMigrationRegistry(source, options = {}) {
     const record = {
       version,
       name,
-      definitionSha256: hashDefinitionNode(node),
+      definitionSha256: hashDefinitionNode(lazyV2Sql ? normalizeLazyPostgresV2Definition(node, sqlProperty, lazyV2Sql) : node),
     };
     const resolvedSqlPayload = resolveStaticStringExpression(sqlExpression, sourceFile);
     if (resolvedSqlPayload !== null) {
@@ -329,7 +327,7 @@ export function findStorageMigrationSemanticOwnershipErrors({
     }
 
     const v2 = findMigrationNodeByVersion(postgresMigrationNodes, 2);
-    const v2Sql = v2 ? getPropertyInitializer(v2.properties, "sql") : undefined;
+    const v2Sql = v2 ? getLazyPostgresV2Sql(v2.properties.get("sql")) ?? getPropertyInitializer(v2.properties, "sql") : undefined;
     if (!v2Sql || !isZeroArgumentIdentifierCall(v2Sql, "buildPostgresRuntimeSchemaSql")) {
       errors.push(
         "Postgres v2 canonical runtime schema must be owned by a direct buildPostgresRuntimeSchemaSql() AST call.",
@@ -960,6 +958,23 @@ function requirePropertyAssignmentInitializer(property, propertyName, context) {
 function getPropertyInitializer(properties, propertyName) {
   const property = properties.get(propertyName);
   return property && ts.isPropertyAssignment(property) ? property.initializer : undefined;
+}
+
+function getLazyPostgresV2Sql(property) {
+  if (!property || !ts.isGetAccessorDeclaration(property) || property.parameters.length !== 0) return undefined;
+  const statements = property.body?.statements;
+  if (statements?.length !== 1 || !ts.isReturnStatement(statements[0])) return undefined;
+  const expression = statements[0].expression;
+  return expression && isZeroArgumentIdentifierCall(expression, "buildPostgresRuntimeSchemaSql") ? expression : undefined;
+}
+
+function normalizeLazyPostgresV2Definition(node, sqlProperty, expression) {
+  // Hash the original direct-call definition when only evaluation timing changes.
+  const source = node.getSourceFile();
+  const prefix = source.text.slice(node.getStart(source), sqlProperty.getStart(source));
+  const suffix = source.text.slice(sqlProperty.end, node.end);
+  const normalized = parseTypeScriptSource(`(${prefix}sql: ${expression.getText()}${suffix})`, source.fileName);
+  return unwrapExpression(normalized.statements[0].expression);
 }
 
 function unwrapExpression(expression) {

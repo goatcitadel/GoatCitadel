@@ -3,6 +3,7 @@ import path from "node:path";
 import { sha256 } from "./agent-comparison.mjs";
 import { EXECUTION_BINDING_FIELDS } from "./agent-comparison-permissions.mjs";
 import { FEATURE_ACCEPTANCE_TASKS } from "./agent-comparison-acceptance-fixtures.mjs";
+import { assistantNativeTasks } from "./assistant-parity/native-tasks.mjs";
 import { readComparisonJson } from "./agent-comparison-session.mjs";
 import { readFeatureAcceptanceAvailability } from "./agent-comparison-acceptance-profile.mjs";
 
@@ -20,7 +21,9 @@ const digest = (value) => typeof value === "string" && /^[a-f0-9]{64}$/u.test(va
  * hooks must implement the product's real owners; absent hooks are unsupported.
  * This runner does not fabricate a native product receipt from a model answer. */
 export async function runFeatureAcceptance({ taskId, session, source, actions, signal }) {
-  const task = FEATURE_ACCEPTANCE_TASKS.find((entry) => entry.id === taskId);
+  const task =
+    FEATURE_ACCEPTANCE_TASKS.find((entry) => entry.id === taskId) ??
+    assistantNativeTasks().find((entry) => entry.id === taskId);
   const records = [];
   const nativeReceipts = [];
   const stop = new AbortController();

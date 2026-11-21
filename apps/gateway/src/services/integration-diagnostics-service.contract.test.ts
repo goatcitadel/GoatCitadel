@@ -657,7 +657,7 @@ describe("integration-diagnostics-service contract behavior", () => {
       expect.objectContaining({
         key: "capabilities",
         status: "pass",
-        message: "Turned on: Read Gmail, Create Calendar events.",
+        message: "Turned on: Search Gmail, Change Calendar events.",
       }),
     ]);
     const legacy = buildIntegrationConnectionChecks(

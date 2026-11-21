@@ -21,11 +21,11 @@ function buildConfig(): LlmConfigFile {
   };
 }
 
-function buildService(): LlmService {
+function buildService(secretStore = createNoopSecretStore()): LlmService {
   return new LlmService(buildConfig(), process.env, {
     networkAllowlist: ["openrouter.ai"],
     enforceNetworkAllowlist: false,
-    secretStore: createNoopSecretStore(),
+    secretStore,
   });
 }
 
@@ -60,6 +60,47 @@ const OPENROUTER_MODELS_FIXTURE = {
 describe("LlmService model discovery metadata extraction", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("waits for a saved provider key asynchronously before requesting the model catalog", async () => {
+    let resolveCredential!: (key: string) => void;
+    const credential = new Promise<string>((resolve) => { resolveCredential = resolve; });
+    const store = Object.assign(createNoopSecretStore(), {
+      getProviderApiKey: vi.fn(() => "sync-fixture-key"),
+      getProviderApiKeyAsync: vi.fn(() => credential),
+    });
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) =>
+      Response.json(OPENROUTER_MODELS_FIXTURE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const discovery = buildService(store).listModelsWithSource("openrouter");
+    try {
+      expect(store.getProviderApiKey).not.toHaveBeenCalled();
+      expect(store.getProviderApiKeyAsync).toHaveBeenCalledWith("openrouter");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      resolveCredential("async-fixture-key");
+      await discovery;
+    }
+    expect(new Headers(fetchMock.mock.calls[0]?.[1].headers).get("authorization")).toBe("Bearer async-fixture-key");
+  });
+
+  it("rejects model discovery when the provider changes during the keychain read", async () => {
+    let resolveCredential!: (key: string) => void;
+    const credential = new Promise<string>((resolve) => { resolveCredential = resolve; });
+    const store = Object.assign(createNoopSecretStore(), { getProviderApiKeyAsync: () => credential });
+    const fetchMock = vi.fn(async () => Response.json(OPENROUTER_MODELS_FIXTURE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const service = buildService(store);
+    const discovery = service.listModelsWithSource("openrouter");
+    const config = buildConfig();
+    config.providers[0]!.baseUrl = "https://openrouter.ai/changed/v1";
+    service.replaceRuntimeConfig(config);
+    resolveCredential("changed-provider-fixture-key");
+
+    await expect(discovery).rejects.toMatchObject({ code: "STATE_CONFLICT" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("extracts label, context window, and output cap from an OpenRouter-shaped /models payload", async () => {

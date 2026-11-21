@@ -7,6 +7,8 @@ import {
   calculateLabeledRetrievalRelevance,
   indexRetrievalBenchmarkLabels,
 } from "./memory-retrieval-quality.js";
+import {validateGovernedMemoryPlan,prepareGovernedMemoryPlan} from "./governed-memory-plan.js";
+import type {GovernedMemoryMaintenancePlan,TraceMemoryCandidateDecisionInput,TraceMemoryCandidateEditInput,MemoryTraceReconciliationPreview} from "@goatcitadel/contracts";
 /* eslint-disable max-lines -- MemoryLifecycleService centralizes memory lifecycle writes, write-gate evidence, and structured memory governance until repository ownership is split. */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
@@ -113,8 +115,14 @@ import {
   type BrowserContentGuardResult,
 } from "@goatcitadel/contracts";
 import type { AsyncGatewaySqlRepository, AsyncStorage } from "@goatcitadel/storage";
+import { normalizeMemoryClaim } from "@goatcitadel/contracts";
+import type { MemorySourceInput } from "@goatcitadel/memory-core";
+import { logger } from "@goatcitadel/gateway-core";
+import {classifyMemoryIntent,identifyReviewMemoryProperty,type MemoryIntentResult} from "./memory-intent-service.js";
+import type { MemoryCorpusSearchRequest, MemoryCorpusSearchResult, RecallHit, MemoryRecallSourceType, ToolInvokeRequest } from "@goatcitadel/contracts";
 import {
   assertWritePathInJail,
+  prepareMemoryToolWrite,
   scanBrowserContentGuard,
   type AcquireLocalEmbeddingLease,
   type PrepareEmbeddingUsageDispatch,
@@ -268,6 +276,16 @@ export interface MemoryLifecycleApprovalAuthorityHost {
 }
 
 export interface MemoryLifecycleDependencies {
+  readonly noteRepository?: Pick<AsyncStorage["memoryNotes"],"prepareWrite"|"write">;
+  validateQueuedLearningCandidate?(candidate:TraceMemoryCandidateRecord):Promise<boolean>;
+  validateConsolidationCandidate?(candidate:TraceMemoryCandidateRecord):Promise<boolean>;
+  readonly recallRepository?: Pick<AsyncStorage["memoryRecall"], "searchEligibleCorpus" | "getEligibleSources">;
+  isMemoryRecallEnabled?: () => boolean;
+  isCorpusRecallEnabled?:()=>Promise<boolean>;
+  augmentCorpusRecall?: (input:MemoryCorpusSearchRequest,result:MemoryCorpusSearchResult) => Promise<MemoryCorpusSearchResult>;
+  readonly learnings?: Pick<AsyncStorage["memoryLearnings"], "list" | "get" | "insert" | "supersede" | "findClaim" | "readOperatorSource">;
+  readonly recallStorage?: Pick<AsyncStorage, "sessions" | "chatSessionMeta" | "chatSessionProjects" | "chatProjects"> & Partial<Pick<AsyncStorage,"chatTurnTraces">>;
+  isLearningRecallEnabled?: () => Promise<boolean>;
   readonly context: MemoryContextService;
   readonly learned: ChatLearnedMemoryService;
   readonly maintenance: MemoryMaintenanceService;
@@ -303,12 +321,119 @@ export class MemoryLifecycleService {
 
   private readonly itemPagination: MemoryItemPaginationService;
 
+  /** Realtime is an operator signal; a delivery outage never turns a committed mutation into a retryable failure. */
+  private async publishMemorySignal(channel:string,topic:string,payload:Record<string,unknown>):Promise<void> {
+    try {await this.deps.admin.publishRealtime(channel,topic,payload);}
+    catch {logger.warn("Memory state saved; realtime notification unavailable",{eventType:typeof payload.type === "string" ? payload.type : "memory_update"});}
+  }
+
   public constructor(private readonly deps: MemoryLifecycleDependencies) {
     this.itemPagination = new MemoryItemPaginationService({
       repository: deps.admin.memoryItemEnumeration,
       mapRow: (row) => mapMemoryItemRow(deps.admin, row),
       requireEnabled: () => deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled"),
     });
+  }
+
+  public async collectTrustedRecallSources(input: { workspaceId: string; sessionId: string }): Promise<MemorySourceInput[]> {
+    if (!this.deps.learnings || !this.deps.recallStorage || !(await this.deps.isLearningRecallEnabled?.())) return [];
+    const storage = this.deps.recallStorage;
+    let session;
+    try { session = await storage.sessions.getBySessionId(input.sessionId); }
+    catch (error) { if (error instanceof NotFoundError) return []; throw error; }
+    const meta = await storage.chatSessionMeta.get(input.sessionId);
+    if (session.sessionId !== input.sessionId || session.kind !== "dm" || !meta || meta.workspaceId !== input.workspaceId || meta.lifecycleStatus !== "active") return [];
+    const assignment = await storage.chatSessionProjects.get(input.sessionId);
+    const project = assignment ? await storage.chatProjects.find(assignment.projectId) : undefined;
+    const records = await this.deps.learnings.list({ workspaceId: meta.workspaceId, status: "trusted", limit: 2000 });
+    return records.filter(record => {
+      if (record.authority !== "operator" && record.authority !== "trusted_lifecycle") return false;
+      const scope = record.claim?.identity.scope;
+      if (scope?.kind === "session" && scope.id !== input.sessionId) return false;
+      if (scope?.kind === "project" && (scope.id !== project?.projectId || project.workspaceId !== meta.workspaceId || project.lifecycleStatus !== "active")) return false;
+      return (this.deps.writeGate ?? new MemoryWriteGateService()).evaluate({ authority: "trusted_lifecycle", content: record.insight }).decision !== "blocked";
+    }).map(record => ({ type: "memory_learning", learningId: record.learningId, sourceHash: record.sourceHash!, title: record.key,
+      content: record.insight, updatedAt: record.updatedAt, retrievalHints: [record.type, record.claim?.identity.predicate ?? ""] }));
+  }
+
+  public async searchEligibleCorpus(input: MemoryCorpusSearchRequest): Promise<MemoryCorpusSearchResult> {
+    if (!this.deps.recallRepository || this.deps.isMemoryRecallEnabled?.() === false || await this.deps.isCorpusRecallEnabled?.() === false) return { hits: [], coverage: {
+      generation: 0, indexedCount: 0, unindexedCount: 0, lexicalStatus: "unavailable", semanticStatus: "unavailable", reason: "Memory recall is unavailable." } };
+    const learningEnabled = await this.deps.isLearningRecallEnabled?.() === true;
+    const sourceTypes = (input.sourceTypes ?? ["memory_item", "memory_learning", "knowledge_chunk"])
+      .filter(kind => kind !== "memory_learning" || learningEnabled);
+    const lexical = await this.deps.recallRepository.searchEligibleCorpus({ ...input, sourceTypes });
+    const result = this.deps.augmentCorpusRecall ? await this.deps.augmentCorpusRecall({...input,sourceTypes},lexical) : lexical;
+    return { ...result, hits: this.filterRecallSecrets(result.hits) };
+  }
+
+  public async validateRecallSources(input: {workspaceId:string; sessionId:string; sources:Array<{sourceType:MemoryRecallSourceType; sourceRef:string}>}): Promise<RecallHit[]> {
+    if (!this.deps.recallRepository || this.deps.isMemoryRecallEnabled?.() === false) return [];
+    const learningEnabled = await this.deps.isLearningRecallEnabled?.() === true;
+    const sources = input.sources.filter(source => source.sourceType !== "memory_learning" || learningEnabled);
+    return this.filterRecallSecrets(await this.deps.recallRepository.getEligibleSources({ ...input, sources }));
+  }
+
+  private filterRecallSecrets(hits:RecallHit[]): RecallHit[] {
+    const gate = this.deps.writeGate ?? new MemoryWriteGateService();
+    return hits.filter(hit => gate.evaluate({authority:"trusted_lifecycle", content: `${hit.title}\n${hit.snippet}`}).decision !== "blocked");
+  }
+
+  public async prepareMemoryMaintenancePlan(input:{jobId:string;workspaceId:string;sources:GovernedMemoryMaintenancePlan["sources"];proposedInsight:string;preference:boolean}):Promise<GovernedMemoryMaintenancePlan> {
+    if(!this.deps.learnings)throw new ConflictError({message:"The canonical maintenance memory owner is unavailable."});
+    const hint=input.preference ? identifyReviewMemoryProperty(input.proposedInsight) : undefined;
+    const claim=hint ? {identity:{subject:hint.subject,predicate:hint.predicate,cardinality:hint.cardinality,scope:{kind:"workspace" as const,id:input.workspaceId}},value:hint.value}:undefined;
+    const records=claim ? await this.deps.learnings.findClaim(input.workspaceId,claim):[];
+    return prepareGovernedMemoryPlan({jobId:input.jobId,workspaceId:input.workspaceId,sources:input.sources,proposedInsight:input.proposedInsight,...(claim ? {claim}:{})},records);
+  }
+
+  public async prepareMemoryWriteTool(request:ToolInvokeRequest):Promise<NonNullable<ToolInvokeRequest["memoryWriteBinding"]>> {
+    if (!this.deps.noteRepository || this.deps.isMemoryRecallEnabled?.() === false || !(await this.deps.resolveLearnedMemoryPolicy(request.sessionId)).allowWrite)
+      throw new ConflictError({message:"The canonical memory lifecycle write owner is unavailable for this session."});
+    const material=prepareMemoryToolWrite(request);
+    return this.deps.noteRepository.prepareWrite({sessionId:request.sessionId,workspaceId:request.workspaceId,
+      namespace:material.namespace,title:material.title,trustLevel:material.trustLevel,upsert:request.toolName==="memory.upsert",
+      ...(typeof request.args.expectedItemId==="string" ? {expectedItemId:request.args.expectedItemId} : {}),
+      ...(typeof request.args.expectedSourceHash==="string" ? {expectedSourceHash:request.args.expectedSourceHash} : {})});
+  }
+
+  public async writeMemoryTool(request:ToolInvokeRequest,input:Omit<import("@goatcitadel/storage").WriteMemoryNoteInput,"binding"|"actorId">) {
+    if (!request.memoryWriteBinding || !this.deps.noteRepository || this.deps.isMemoryRecallEnabled?.() === false || !(await this.deps.resolveLearnedMemoryPolicy(request.sessionId)).allowWrite)
+      throw new ConflictError({message:"The reviewed memory write is unavailable for this session."});
+    const material=prepareMemoryToolWrite(request);
+    if (input.namespace!==material.namespace || input.title!==material.title || input.content!==material.content ||
+        JSON.stringify(input.metadata)!==JSON.stringify(material.metadata) || input.upsert!==(request.toolName==="memory.upsert"))
+      throw new ConflictError({message:"Memory material changed after review."});
+    return this.deps.noteRepository.write({...input,binding:request.memoryWriteBinding,actorId:request.agentId});
+  }
+
+  public async readMemoryTool(request:ToolInvokeRequest):Promise<Record<string,unknown>> {
+    const meta = await this.deps.recallStorage?.chatSessionMeta.get(request.sessionId);
+    if (!meta || (request.workspaceId !== undefined && request.workspaceId !== meta.workspaceId)) {
+      return {items:[],unavailable:true,reason:"The calling session has no matching memory workspace."};
+    }
+    const args = request.args;
+    const query = [args.query, args.title, args.key].find(value => typeof value === "string") as string | undefined;
+    if (request.toolName === "memory.search" && !query?.trim()) throw new Error("memory.search requires a query");
+    const limit = Math.max(1, Math.min(request.toolName === "memory.read" ? 50 : 100, Number.isFinite(args.limit) ? Math.floor(Number(args.limit)) : request.toolName === "memory.read" ? 5 : 12));
+    const result = await this.searchEligibleCorpus({workspaceId:meta.workspaceId,sessionId:request.sessionId,query:query?.slice(0,8000) ?? "",
+      namespace:typeof args.namespace === "string" ? args.namespace : undefined,limit});
+    const current = await this.validateRecallSources({workspaceId:meta.workspaceId,sessionId:request.sessionId,sources:result.hits});
+    const currentHashes = new Map(current.map(hit => [`${hit.sourceType}:${hit.sourceRef}`,hit.sourceHash]));
+    return {namespace:args.namespace ?? "all",query:query ?? "",coverage:result.coverage,
+      ...(result.coverage.lexicalStatus === "unavailable" ? {unavailable:true} : {}),
+      items:result.hits.filter(hit => currentHashes.get(`${hit.sourceType}:${hit.sourceRef}`) === hit.sourceHash).slice(0,limit).map(hit => ({
+        sourceType:hit.sourceType, sourceRef:hit.sourceRef, sourceHash:hit.sourceHash,
+        ...(hit.docId ? {docId:hit.docId,chunkId:hit.sourceRef} : {}),title:hit.title,snippet:hit.snippet.slice(0,1200),score:hit.lexicalScore,
+        attribution:{sourceType:"memory",sourceRef:hit.documentSourceRef ?? hit.sourceRef,title:hit.title,trustLevel:hit.trustLevel ?? "trusted_workspace"},
+      }))};
+  }
+
+  public async collectTrustedStandingLearnings(workspaceId: string): Promise<MemoryLearningRecord[]> {
+    if (!workspaceId.trim() || !this.deps.learnings || !(await this.deps.isLearningRecallEnabled?.())) return [];
+    return (await this.deps.learnings.list({ workspaceId, status: "trusted", limit: 2000 })).filter(record =>
+      record.type === "operator_preference" && (record.authority === "operator" || record.authority === "trusted_lifecycle") &&
+      (!record.claim || (record.claim.identity.scope.kind === "workspace" && record.claim.identity.scope.id === workspaceId)));
   }
 
   private getGovernedLifecycleRepository(): MemoryGovernedLifecycleRepository {
@@ -630,7 +755,7 @@ export class MemoryLifecycleService {
     });
     input.hooks.afterCommit?.();
     if (committed.created) {
-      await this.deps.admin.publishRealtime("system", "memory", {
+      await this.publishMemorySignal("system", "memory", {
         type: "memory_mutation_approval_requested",
         approvalId,
         action: input.binding.action,
@@ -886,6 +1011,7 @@ export class MemoryLifecycleService {
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
       limit: normalizeStructuredLimit(input.limit),
     };
+    if (this.deps.learnings) return await this.deps.learnings.list({ ...input, workspaceId: String(params.workspaceId), limit: Number(params.limit) });
     if (input.status && input.status !== "all") {
       clauses.push("status = @status");
       params.status = input.status;
@@ -931,6 +1057,15 @@ export class MemoryLifecycleService {
   ): Promise<{ previous: MemoryLearningRecord; next: MemoryLearningRecord }> {
     await this.ensureLearningSchema();
     const previous = await this.requireMemoryLearning(learningId);
+    if (this.deps.learnings) {
+      if (input.workspaceId && input.workspaceId !== previous.workspaceId) throw new ConflictError({ message: "A correction cannot move memory to a different workspace." });
+      if (input.authority === "agent_proposed" || (input.correctionTarget && input.correctionTarget.sourceRef !== learningId)) throw new ConflictError({ message: "A correction requires the exact reviewed target." });
+      const next = await this.insertMemoryLearning({ ...input, workspaceId: previous.workspaceId, key: input.key || previous.key, claim: input.claim ?? previous.claim }, actorId, "trusted", {
+        supersedeTarget: { learningId, expectedSourceHash: input.correctionTarget?.expectedSourceHash ?? previous.sourceHash! },
+      });
+      await this.publishMemorySignal("system", "memory", { type: "memory_learning_superseded", learningId, supersededById: next.learningId, workspaceId: previous.workspaceId });
+      return { previous: (await this.requireMemoryLearning(learningId)), next };
+    }
     // Atomic supersession with explicit correction provenance: the successor
     // insert and the predecessor's superseded_by linkage commit together.
     const next = await this.runStructuredMemoryTransaction(async () => {
@@ -960,7 +1095,7 @@ export class MemoryLifecycleService {
       );
     });
     await this.publishMemoryLearningCreated(next);
-    await this.deps.admin.publishRealtime("system", "memory", {
+    await this.publishMemorySignal("system", "memory", {
       type: "memory_learning_superseded",
       learningId,
       supersededById: next.learningId,
@@ -985,7 +1120,7 @@ export class MemoryLifecycleService {
     `,
       )
       .run({ learningId, updatedAt: now });
-    await this.deps.admin.publishRealtime("system", "memory", {
+    await this.publishMemorySignal("system", "memory", {
       type: "memory_learning_forgotten",
       learningId,
       actorId,
@@ -1139,7 +1274,7 @@ export class MemoryLifecycleService {
         },
       );
     });
-    await this.deps.admin.publishRealtime("system", "memory", {
+    await this.publishMemorySignal("system", "memory", {
       type: "memory_entity_created",
       entityId: entity.id,
       workspaceId: entity.workspaceId,
@@ -1193,7 +1328,7 @@ export class MemoryLifecycleService {
         },
       );
     });
-    await this.deps.admin.publishRealtime("system", "memory", {
+    await this.publishMemorySignal("system", "memory", {
       type: "memory_entity_forgotten",
       entityId,
       workspaceId: current.workspaceId,
@@ -1324,7 +1459,7 @@ export class MemoryLifecycleService {
         },
       );
     });
-    await this.deps.admin.publishRealtime("system", "memory", {
+    await this.publishMemorySignal("system", "memory", {
       type: "memory_relation_created",
       relationId: relation.id,
       workspaceId: relation.workspaceId,
@@ -1471,7 +1606,7 @@ export class MemoryLifecycleService {
         },
       );
     });
-    await this.deps.admin.publishRealtime("system", "memory", {
+    await this.publishMemorySignal("system", "memory", {
       type: "memory_decision_created",
       decisionId: decision.id,
       workspaceId: decision.workspaceId,
@@ -1532,7 +1667,7 @@ export class MemoryLifecycleService {
         },
       );
     });
-    await this.deps.admin.publishRealtime("system", "memory", {
+    await this.publishMemorySignal("system", "memory", {
       type: "memory_decision_retrospective_added",
       decisionId,
       workspaceId: current.workspaceId,
@@ -1568,7 +1703,7 @@ export class MemoryLifecycleService {
         { workspaceId: current.workspaceId },
       );
     });
-    await this.deps.admin.publishRealtime("system", "memory", {
+    await this.publishMemorySignal("system", "memory", {
       type: "memory_decision_forgotten",
       decisionId,
       workspaceId: current.workspaceId,
@@ -1896,7 +2031,7 @@ export class MemoryLifecycleService {
         return updated;
       });
       forgottenItems.push(forgotten);
-      await this.deps.admin.publishRealtime("system", "memory", {
+      await this.publishMemorySignal("system", "memory", {
         type: "memory_item_forgotten",
         itemId: forgotten.itemId,
         namespace: forgotten.namespace,
@@ -2145,7 +2280,7 @@ export class MemoryLifecycleService {
       return { item: updated, changed: true };
     });
     if (transactionResult.changed) {
-      await this.deps.admin.publishRealtime("system", "memory", {
+      await this.publishMemorySignal("system", "memory", {
         type: "memory_item_updated",
         itemId: transactionResult.item.itemId,
         namespace: transactionResult.item.namespace,
@@ -2445,7 +2580,7 @@ export class MemoryLifecycleService {
     hooks.afterCommit?.();
     if (transactionResult.changed) {
       for (const item of transactionResult.items) {
-        await this.deps.admin.publishRealtime("system", "memory", {
+        await this.publishMemorySignal("system", "memory", {
           type: "memory_item_forgotten",
           itemId: item.itemId,
           namespace: item.namespace,
@@ -2716,7 +2851,7 @@ export class MemoryLifecycleService {
       })),
     });
     if (transactionResult.changed) {
-      await this.deps.admin.publishRealtime("system", "memory", {
+      await this.publishMemorySignal("system", "memory", {
         type: "memory_batch_mutation_applied",
         actionId,
         operationKind: ledger.operationKind,
@@ -2926,7 +3061,7 @@ export class MemoryLifecycleService {
         createdAt: now,
         updatedAt: now,
       });
-    await this.deps.admin.publishRealtime("system", "memory", {
+    await this.publishMemorySignal("system", "memory", {
       type: "memory_feedback_recorded",
       feedbackId: feedback.feedbackId,
       kind: feedback.kind,
@@ -3114,7 +3249,7 @@ export class MemoryLifecycleService {
     }
 
     if (!input.dryRun) {
-      await this.deps.admin.publishRealtime("system", "memory", {
+      await this.publishMemorySignal("system", "memory", {
         type: "memory_quality_scan_completed",
         workspaceId,
         issueCount: issues.length,
@@ -3146,7 +3281,7 @@ export class MemoryLifecycleService {
       status: normalizeMemoryQualityIssueStatus(input.status),
       resolutionNote: optionalTrimmedText(input.resolutionNote),
     });
-    await this.deps.admin.publishRealtime("system", "memory", {
+    await this.publishMemorySignal("system", "memory", {
       type: "memory_quality_issue_updated",
       issueId: record.issueId,
       status: record.status,
@@ -3202,10 +3337,22 @@ export class MemoryLifecycleService {
     return rows.map((row) => mapTraceMemoryCandidateRow(this.deps.admin, row));
   }
 
+  public async listTraceMemoryCandidatesForTurn(input:{workspaceId:string;sessionId:string;turnId:string;messageIds:string[]}):Promise<{items:TraceMemoryCandidateRecord[];truncated:boolean}>{
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");await this.ensureTraceCandidateSchema();
+    const json=this.deps.admin.gatewaySql.dialect==="postgres";
+    const metadataTurn=json ? "metadata_json::jsonb->>'sourceTurnId'":"json_extract(metadata_json,'$.sourceTurnId')";
+    const metadataSession=json ? "metadata_json::jsonb->>'sourceSessionId'":"json_extract(metadata_json,'$.sourceSessionId')";
+    const metadataMessage=json ? "metadata_json::jsonb->>'sourceMessageId'":"json_extract(metadata_json,'$.sourceMessageId')";
+    const sourceRef=json ? "EXISTS(SELECT 1 FROM jsonb_array_elements(source_refs_json::jsonb) ref WHERE ref->>'sourceType'='turn' AND ref->>'sourceRef'=@turnId)":"EXISTS(SELECT 1 FROM json_each(source_refs_json) ref WHERE json_extract(ref.value,'$.sourceType')='turn' AND json_extract(ref.value,'$.sourceRef')=@turnId)";
+    const rows=await this.deps.admin.gatewaySql.prepare(`SELECT * FROM memory_trace_candidates WHERE workspace_id=@workspaceId AND (${metadataSession} IS NULL OR ${metadataSession}=@sessionId) AND (${metadataTurn}=@turnId OR ${metadataMessage} IN (@userMessageId,@assistantMessageId) OR ${sourceRef}) ORDER BY updated_at DESC,candidate_id DESC LIMIT 51`).all<TraceMemoryCandidateRow>({workspaceId:input.workspaceId,sessionId:input.sessionId,turnId:input.turnId,userMessageId:input.messageIds[0] ?? "",assistantMessageId:input.messageIds[1] ?? ""});
+    return {items:rows.slice(0,50).map(row=>mapTraceMemoryCandidateRow(this.deps.admin,row)),truncated:rows.length>50};
+  }
+
   public async proposeTraceMemoryCandidate(
     input: TraceMemoryCandidateInput,
     actorId = "agent",
     authority: TraceMemoryCandidateAuthority = "agent_proposed",
+    options:{deferEmbedding?:boolean;deferNotification?:boolean} = {},
   ): Promise<TraceMemoryCandidateRecord> {
     await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     await this.ensureTraceCandidateSchema();
@@ -3231,6 +3378,7 @@ export class MemoryLifecycleService {
       candidateType,
       proposedInsight,
       authority,
+      metadata: input.metadata,
     });
     const existing = await this.deps.admin.gatewaySql
       .prepare("SELECT * FROM memory_trace_candidates WHERE dedupe_key = ?")
@@ -3240,12 +3388,13 @@ export class MemoryLifecycleService {
     }
     const now = new Date().toISOString();
     const candidateId = `trace-${dedupeKey.slice(0, 40)}`;
-    const metadata = await withMemoryEmbeddingMetadata(
-      {
+    const baseMetadata = {
         ...(input.metadata ?? {}),
         ...(input.sourceSessionId ? { sourceSessionId: input.sourceSessionId } : {}),
         ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),
-      },
+      };
+    const metadata = options.deferEmbedding ? {...baseMetadata,embeddingStatus:"deferred_until_review"} : await withMemoryEmbeddingMetadata(
+      baseMetadata,
       buildStructuredMemoryEmbeddingText([proposedInsight, sourceText]),
       undefined,
       this.memoryEmbeddingRuntimeOptions({
@@ -3326,7 +3475,7 @@ export class MemoryLifecycleService {
             : persistedCandidate.proposedInsight.slice(0, 240),
       },
     });
-    await this.deps.admin.publishRealtime("system", "memory", {
+    if(!options.deferNotification)await this.publishMemorySignal("system", "memory", {
       type: "memory_trace_candidate_proposed",
       candidateId: persistedCandidate.candidateId,
       candidateType: persistedCandidate.candidateType,
@@ -3334,10 +3483,79 @@ export class MemoryLifecycleService {
     return persistedCandidate;
   }
 
-  public async promoteTraceMemoryCandidate(candidateId: string, actorId = "operator"): Promise<MemoryLearningRecord> {
+  public async previewLegacyConsolidationReconciliation(input:{workspaceId?:string;limit?:number;cursor?:string}={}):Promise<MemoryTraceReconciliationPreview> {
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");await this.ensureTraceCandidateSchema();
+    const workspaceId=normalizeStructuredWorkspaceId(input.workspaceId),limit=Math.max(1,Math.min(50,Math.floor(input.limit ?? 50)));
+    let after:{updatedAt:string;candidateId:string}|undefined;
+    if(input.cursor){
+      try{const parsed=JSON.parse(Buffer.from(input.cursor,"base64url").toString("utf8")) as Record<string,unknown>;
+        if(parsed.workspaceId!==workspaceId || typeof parsed.updatedAt!=="string" || !Number.isFinite(Date.parse(parsed.updatedAt)) || typeof parsed.candidateId!=="string" || !parsed.candidateId || parsed.candidateId.length>256)throw new Error("scope");
+        after={updatedAt:parsed.updatedAt,candidateId:parsed.candidateId};
+      }catch{throw new ValidationError({message:"The memory reconciliation cursor is invalid for this workspace."});}
+    }
+    const rows=await this.deps.admin.gatewaySql.prepare(`SELECT * FROM memory_trace_candidates WHERE workspace_id=@workspaceId AND status='proposed'
+      ${after ? "AND (updated_at<@updatedAt OR (updated_at=@updatedAt AND candidate_id<@candidateId))":""} ORDER BY updated_at DESC,candidate_id DESC LIMIT @limit`).all<TraceMemoryCandidateRow>({workspaceId,limit:limit+1,...(after ?? {})});
+    const candidates=rows.slice(0,limit).map(row=>mapTraceMemoryCandidateRow(this.deps.admin,row));
+    const items=[];
+    for(const candidate of candidates) {
+      if(candidate.metadata?.consolidation!==true || candidate.metadata?.consolidationSource) continue;
+      const meta=candidate.sourceSessionId ? await this.deps.recallStorage?.chatSessionMeta.get(candidate.sourceSessionId):undefined;
+      items.push({candidateId:candidate.candidateId,workspaceId:candidate.workspaceId,sourceSessionId:candidate.sourceSessionId,
+        reasons:["source_hash_missing",...(!meta ? ["source_unavailable"]:meta.workspaceId!==candidate.workspaceId ? ["source_workspace_mismatch"]:[])],
+        nextAction:"reject_and_regenerate" as const});
+    }
+    const last=candidates.at(-1),more=rows.length>limit;
+    return {items,limit,scanned:candidates.length,coverage:more ? "partial":"complete",...(more && last ? {nextCursor:Buffer.from(JSON.stringify({workspaceId,updatedAt:last.updatedAt,candidateId:last.candidateId})).toString("base64url")}:{}),mutationsPerformed:false};
+  }
+
+  public async editTraceMemoryCandidate(candidateId:string,input:TraceMemoryCandidateEditInput,actorId:string):Promise<TraceMemoryCandidateRecord>{
+    await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");await this.ensureTraceCandidateSchema();
+    const candidate=await this.requireTraceMemoryCandidate(candidateId);this.assertTraceCandidateReview(candidate,input);
+    if(!candidate.editEligibility?.allowed)throw new ValidationError({message:candidate.editEligibility?.reason ?? "This proposal cannot be edited. Review its source and create a fresh proposal."});
+    const proposedInsight=normalizeTraceCandidateText(input.proposedInsight,"proposedInsight",1000);
+    await this.assertTraceCandidateContentAllowed(proposedInsight,candidate.workspaceId);
+    let attemptedDedupeKey: string | undefined;
+    let result: TraceMemoryCandidateRecord;
+    try {
+      result=await this.runStructuredMemoryTransaction(async()=>{
+      if(candidate.metadata?.source==="background_learning_queue" && !(await this.deps.validateQueuedLearningCandidate?.(candidate)))throw new ConflictError({message:"The queued source changed. Generate a fresh proposal."});
+      if(candidate.metadata?.consolidation===true && !(await this.deps.validateConsolidationCandidate?.(candidate)))throw new ConflictError({message:"The consolidation source changed. Generate a fresh proposal."});
+      const locked=await this.requireTraceMemoryCandidate(candidateId,true);this.assertTraceCandidateReview(locked,input);
+      if(locked.status!=="proposed" || !locked.editEligibility?.allowed)throw new ConflictError({message:"The proposal changed after review."});
+      const now=new Date().toISOString(),metadata:Record<string,unknown>={...locked.metadata,operatorEdit:{actorId,editedAt:now,previousReviewHash:input.expectedReviewHash},embeddingStatus:"deferred_until_review"};
+      delete (metadata as Record<string,unknown>).embedding;delete (metadata as Record<string,unknown>).embeddingMetadata;delete (metadata as Record<string,unknown>).modelUsageEventIds;
+      if(metadata.governedMemoryPlan)metadata.governedMemoryPlan={...(metadata.governedMemoryPlan as GovernedMemoryMaintenancePlan),proposedInsight};
+      const dedupeKey=buildTraceMemoryCandidateDedupeKey({workspaceId:locked.workspaceId,sourceSessionId:locked.sourceSessionId,sourceMessageId:locked.sourceMessageId,candidateType:locked.candidateType,proposedInsight,authority:locked.authority,metadata});
+      attemptedDedupeKey = dedupeKey;
+      const duplicate=await this.deps.admin.gatewaySql.prepare("SELECT candidate_id FROM memory_trace_candidates WHERE dedupe_key=? AND candidate_id<>?").get(dedupeKey,candidateId);
+      if(duplicate)throw new ConflictError({message:"An exact proposal already exists. Review that proposal instead."});
+      await this.deps.admin.gatewaySql.prepare("UPDATE memory_trace_candidates SET proposed_insight=@proposedInsight,metadata_json=@metadataJson,dedupe_key=@dedupeKey,actor_id=@actorId,updated_at=@now WHERE candidate_id=@candidateId AND status='proposed'").run({proposedInsight,metadataJson:JSON.stringify(metadata),dedupeKey,actorId,now,candidateId});
+      return this.requireTraceMemoryCandidate(candidateId);
+      });
+    } catch (error) {
+      const code = error && typeof error === "object" ? (error as {code?: unknown}).code : undefined;
+      // The legacy PostgreSQL sync bridge retains the constraint's message,
+      // but does not retain SQLSTATE. Match only this owner's exact index.
+      const dedupeCollision = ["23505", "SQLITE_CONSTRAINT_UNIQUE", "SQLITE_CONSTRAINT"].includes(String(code)) ||
+        (error instanceof Error && /duplicate key value violates unique constraint "idx_memory_trace_candidates_dedupe_key"|UNIQUE constraint failed: memory_trace_candidates\.dedupe_key(?:\s|$)/u.test(error.message));
+      if (attemptedDedupeKey && dedupeCollision) {
+        // The initial duplicate read cannot lock a missing unique key on
+        // PostgreSQL. Translate only a confirmed collision after rollback.
+        const duplicate = await this.deps.admin.gatewaySql.prepare(
+          "SELECT candidate_id FROM memory_trace_candidates WHERE dedupe_key=? AND candidate_id<>?",
+        ).get(attemptedDedupeKey, candidateId).catch(() => undefined);
+        if (duplicate) throw new ConflictError({message: "An exact proposal already exists. Review that proposal instead."});
+      }
+      throw error;
+    }
+    await this.publishMemorySignal("system","memory",{type:"memory_trace_candidate_edited",candidateId});return result;
+  }
+
+  public async promoteTraceMemoryCandidate(candidateId: string, actorId = "operator",review?:TraceMemoryCandidateDecisionInput): Promise<MemoryLearningRecord> {
     await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     await this.ensureTraceCandidateSchema();
     const candidate = await this.requireTraceMemoryCandidate(candidateId);
+    this.assertTraceCandidateReview(candidate,review);
     if (candidate.status !== "proposed") {
       throw new ValidationError({ message: "Only proposed trace memory candidates can be promoted." });
     }
@@ -3345,6 +3563,18 @@ export class MemoryLifecycleService {
     // linkage commit together, so a crash can never leave a candidate that
     // reads as promoted without its learning (or vice versa).
     const learning = await this.runStructuredMemoryTransaction(async () => {
+      // Canonical source locks precede the candidate claim, matching the writer.
+      if(candidate.metadata?.source === "background_learning_queue" && !(await this.deps.validateQueuedLearningCandidate?.(candidate)))
+        throw new ConflictError({message:"The queued learning source changed or cannot be verified. Review fresh source work before saving it."});
+      if(candidate.metadata?.consolidation === true && !(await this.deps.validateConsolidationCandidate?.(candidate)))
+        throw new ConflictError({message:"This consolidation proposal needs source reconciliation. Reject it and generate a fresh, scoped proposal."});
+      if(["explicit_save","correction","inferred_candidate"].includes(String(candidate.metadata?.memoryIntent))) {
+        const source=candidate.sourceMessageId && candidate.sourceSessionId ? await this.deps.learnings?.readOperatorSource({workspaceId:candidate.workspaceId,sessionId:candidate.sourceSessionId,messageId:candidate.sourceMessageId}):undefined;
+        if(!source || source.sourceHash!==candidate.metadata?.sourceMessageHash)throw new ConflictError({message:"The source of this memory suggestion changed. Review a fresh suggestion."});
+      }
+      const locked=await this.requireTraceMemoryCandidate(candidateId,true);
+      if(locked.reviewHash!==candidate.reviewHash)throw new ConflictError({message:"This memory proposal changed after review. Refresh before deciding."});
+      this.assertTraceCandidateReview(locked,review);
       const learningId = randomUUID();
       const claimed = await this.deps.admin.gatewaySql
         .prepare(`
@@ -3359,6 +3589,44 @@ export class MemoryLifecycleService {
       // The CAS holds this row until commit on both supported backends. Use
       // its current scoped content, never the snapshot read before admission.
       const current = await this.requireTraceMemoryCandidate(candidateId);
+      if(current.metadata?.consolidation === true && !(await this.deps.validateConsolidationCandidate?.(current)))
+        throw new ConflictError({message:"This consolidation proposal needs source reconciliation. Review a fresh, scoped proposal."});
+      if(current.metadata?.source === "background_learning_queue" && !(await this.deps.validateQueuedLearningCandidate?.(current))) {
+        throw new ConflictError({message:"The queued learning source changed or cannot be verified. Review fresh source work before saving it."});
+      }
+      const intentKind = current.metadata?.memoryIntent;
+      const isNaturalIntent = ["explicit_save","correction","inferred_candidate"].includes(String(intentKind));
+      let naturalClaim = isNaturalIntent && current.metadata?.claim ? normalizeMemoryClaim(current.metadata.claim as never) : undefined;
+      let supersedeTarget:{learningId:string;expectedSourceHash:string}|undefined;
+      if (isNaturalIntent) {
+        const canonical = current.sourceMessageId && current.sourceSessionId ? await this.deps.learnings?.readOperatorSource({workspaceId:current.workspaceId,sessionId:current.sourceSessionId,messageId:current.sourceMessageId}) : undefined;
+        if (!canonical || canonical.sourceHash !== current.metadata?.sourceMessageHash) {
+          throw new ConflictError({message:"The source of this memory suggestion changed. Review a fresh suggestion."});
+        }
+        if (intentKind === "correction") {
+          const target = current.metadata?.correctionTarget as {sourceRef?:unknown;expectedSourceHash?:unknown}|undefined;
+          if (!naturalClaim || typeof target?.sourceRef !== "string" || typeof target.expectedSourceHash !== "string" || !/^[a-f0-9]{64}$/u.test(target.expectedSourceHash)) {
+            throw new ConflictError({message:"Choose the exact saved preference this correction should replace."});
+          }
+          supersedeTarget = {learningId:target.sourceRef,expectedSourceHash:target.expectedSourceHash};
+        }
+      }
+      let promotedSourceRefs=current.sourceRefs;
+      if(current.metadata?.governedMemoryPlan) {
+        const plan=current.metadata.governedMemoryPlan as GovernedMemoryMaintenancePlan;
+        if(current.metadata.source!=="background_learning_queue" || plan.workspaceId!==current.workspaceId || plan.jobId!==current.metadata.learningJobId || plan.proposedInsight!==current.proposedInsight || canonicalJsonString(plan.sources)!==canonicalJsonString(current.metadata.learningReviewSources))
+          throw new ConflictError({message:"The reviewed maintenance plan changed."});
+        const targets=[];
+        if(!Array.isArray(plan.targets) || plan.targets.length>1) throw new ValidationError({message:"Review one exact memory replacement at a time."});
+        for(const target of Array.isArray(plan.targets) ? plan.targets:[]) {
+          const record=await this.deps.learnings?.get(target.learningId);
+          if(record) targets.push(record);
+        }
+        const validated=validateGovernedMemoryPlan(plan,targets);
+        naturalClaim=validated.claim;
+        supersedeTarget=validated.supersedeTarget;
+        if(plan.operation==="merge")promotedSourceRefs=[...new Map([...current.sourceRefs,...targets.flatMap(target=>target.sourceRefs)].map(ref=>[canonicalJsonString(ref),ref])).values()];
+      }
       const key = readRecordString(current.metadata ?? {}, "key") ?? `trace.${current.candidateType}.${current.candidateId}`;
       return await this.insertMemoryLearning(
         {
@@ -3367,16 +3635,17 @@ export class MemoryLifecycleService {
           type: mapTraceCandidateToLearningType(current.candidateType),
           insight: current.proposedInsight,
           confidence: current.confidence,
-          sourceRefs: current.sourceRefs,
+          sourceRefs: promotedSourceRefs,
           authority: "operator",
+          ...(naturalClaim ? {claim:naturalClaim} : {}),
         },
         actorId,
         "trusted",
-        { learningId, publication: "deferred" },
+        { learningId, publication: "deferred",...(supersedeTarget ? {supersedeTarget} : {}) },
       );
     });
     await this.publishMemoryLearningCreated(learning);
-    await this.deps.admin.publishRealtime("system", "memory", {
+    await this.publishMemorySignal("system", "memory", {
       type: "memory_trace_candidate_promoted",
       candidateId,
       learningId: learning.learningId,
@@ -3387,9 +3656,19 @@ export class MemoryLifecycleService {
   public async rejectTraceMemoryCandidate(
     candidateId: string,
     actorId = "operator",
+    review?:TraceMemoryCandidateDecisionInput,
+    options:{deferNotification?:boolean}={},
   ): Promise<TraceMemoryCandidateRecord> {
     await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     await this.ensureTraceCandidateSchema();
+    if(review){
+      const result=await this.runStructuredMemoryTransaction(async()=>{
+        const locked=await this.requireTraceMemoryCandidate(candidateId,true);this.assertTraceCandidateReview(locked,review);
+        return this.rejectTraceMemoryCandidate(candidateId,actorId,undefined,{deferNotification:true});
+      });
+      await this.publishMemorySignal("system","memory",{type:"memory_trace_candidate_rejected",candidateId});
+      return result;
+    }
     const candidate = await this.requireTraceMemoryCandidate(candidateId);
     if (candidate.status === "promoted") {
       throw new ValidationError({ message: "Promoted trace memory candidates cannot be rejected." });
@@ -3406,7 +3685,7 @@ export class MemoryLifecycleService {
       if (rejected.changes !== 1) {
         throw new ConflictError({ message: "Trace memory candidate changed before rejection." });
       }
-      await this.deps.admin.publishRealtime("system", "memory", {
+      if(!options.deferNotification)await this.publishMemorySignal("system", "memory", {
         type: "memory_trace_candidate_rejected",
         candidateId,
       });
@@ -3574,6 +3853,30 @@ export class MemoryLifecycleService {
     };
   }
 
+  /** Proposal-only consumer for the canonical completed Chat post-commit stage. */
+  public async captureNaturalChatMemoryIntent(input: {
+    workspaceId: string;
+    sessionId: string;
+    turnId: string;
+    messageId: string;
+    content: string;
+  }): Promise<void> {
+    const storage = this.deps.recallStorage;
+    if (!storage?.chatTurnTraces || !this.deps.learnings || !(await this.deps.isLearningRecallEnabled?.())) return;
+    if (!(await this.deps.resolveLearnedMemoryPolicy(input.sessionId)).allowWrite) return;
+    const trace = await storage.chatTurnTraces.get(input.turnId);
+    if (trace.sessionId !== input.sessionId || trace.userMessageId !== input.messageId || trace.status !== "completed" || trace.completion?.status !== "complete") return;
+    const source = await this.deps.learnings.readOperatorSource({workspaceId:input.workspaceId,sessionId:input.sessionId,messageId:input.messageId});
+    if (source?.sourceHash !== createHash("sha256").update(input.content).digest("hex")) return;
+    const intent = classifyMemoryIntent({content:input.content,sourceAuthority:"operator",sourceMessageId:input.messageId});
+    if (!intent.proposals.length) return;
+    if ((await this.scanBrowserContentGuardForMemory(input.content,{workspaceId:input.workspaceId,sessionId:input.sessionId,sourceRef:input.messageId})).blocked) return;
+    if (this.deps.writeGate?.evaluate({authority:"operator",content:input.content,existingClaims:[]}).decision === "blocked") return;
+    await this.proposeNaturalMemoryIntents({workspaceId:input.workspaceId,sessionId:input.sessionId,sourceRef:input.messageId,content:input.content,intent}, {deferNotification:true});
+    // The parent publishes its retained thread invalidation after commit.
+    // Neither embeddings nor realtime publication runs inside this transaction.
+  }
+
   public async extractLearnedMemory(
     sessionId: string,
     content: string,
@@ -3696,10 +3999,38 @@ export class MemoryLifecycleService {
       return;
     }
 
+    const intent = classifyMemoryIntent({content,sourceAuthority,sourceMessageId:source.sourceRef});
+    if (sourceAuthority === "operator" && intent.truncated) await this.deps.evidence?.createEnvelope({eventKind:"memory_write",workspaceId,sessionId,memoryLineage:[source.sourceRef],
+      metadata:{memoryIntentDisposition:"deferred_remainder",captureWindowChars:8000,omittedChars:Math.max(0,content.length-8000),sourceMessageId:source.sourceRef}});
+    if (intent.proposals.length && workspaceId && this.deps.recallStorage && await this.deps.isLearningRecallEnabled?.()) {
+      const session = await this.deps.recallStorage.sessions.getBySessionId(sessionId);
+      const meta = await this.deps.recallStorage.chatSessionMeta.get(sessionId);
+      if (session.kind === "dm" && meta?.workspaceId === workspaceId && meta.lifecycleStatus === "active" && meta.origin === "operator") {
+        await this.proposeNaturalMemoryIntents({workspaceId,sessionId,sourceRef:source.sourceRef,content,intent});
+      }
+    }
     if (gateDecision && gateDecision.decision !== "allowed") {
       return;
     }
-    await this.deps.learned.extractAndPersistLearnedMemory(sessionId, content, source);
+    await this.deps.learned.extractAndPersistLearnedMemory(sessionId, content, {...source,authority:sourceAuthority,workspaceId});
+  }
+
+  private async proposeNaturalMemoryIntents(input:{workspaceId:string;sessionId:string;sourceRef:string;content:string;intent:MemoryIntentResult},options:{deferNotification?:boolean}={}):Promise<void> {
+    const sourceHash = createHash("sha256").update(input.content).digest("hex");
+    if ((await this.deps.learnings?.readOperatorSource({workspaceId:input.workspaceId,sessionId:input.sessionId,messageId:input.sourceRef}))?.sourceHash !== sourceHash) return;
+    for (const proposal of input.intent.proposals) {
+      const claim = proposal.claimHint ? normalizeMemoryClaim({identity:{subject:proposal.claimHint.subject,predicate:proposal.claimHint.predicate,
+        scope:{kind:"workspace",id:input.workspaceId},cardinality:proposal.claimHint.cardinality},value:proposal.claimHint.value}) : undefined;
+      const targets = claim && this.deps.learnings ? await this.deps.learnings.findClaim(input.workspaceId,claim) : [];
+      const correctionTarget = proposal.kind === "correction" && targets.length === 1 && targets[0]?.sourceHash
+        ? {sourceRef:targets[0].learningId,expectedSourceHash:targets[0].sourceHash} : undefined;
+      await this.proposeTraceMemoryCandidate({workspaceId:input.workspaceId,candidateType:mapLearnedItemTypeToTraceCandidateType(proposal.itemType),
+        sourceSessionId:input.sessionId,sourceMessageId:input.sourceRef,sourceText:input.content.slice(0,8000),proposedInsight:proposal.content,confidence:0.9,
+        sourceRefs:[{sourceType:"session",sourceRef:input.sessionId},{sourceType:"manual",sourceRef:input.sourceRef}],metadata:{memoryIntent:proposal.kind,
+          sourceMessageHash:sourceHash,...(claim ? {claim} : {}),
+          ...(correctionTarget ? {correctionTarget} : proposal.kind === "correction" ? {clarification:"Which saved preference should this replace?",targetCount:targets.length} : {}),
+          ...(input.intent.truncated ? {truncated:true,remainderDisposition:"deferred"} : {})}},"chat-memory-intent","agent_proposed",{deferEmbedding:true,...options});
+    }
   }
 
   public async listSessionLearnedMemory(
@@ -3847,6 +4178,11 @@ export class MemoryLifecycleService {
   }
 
   private async requireMemoryLearning(learningId: string): Promise<MemoryLearningRecord> {
+    if (this.deps.learnings) {
+      const record = await this.deps.learnings.get(learningId);
+      if (!record) throw new NotFoundError({ entity: "Memory learning", id: learningId });
+      return record;
+    }
     const row = await this.deps.admin.gatewaySql
       .prepare("SELECT * FROM memory_learnings WHERE learning_id = ?")
       .get<MemoryLearningRow>(learningId);
@@ -3860,7 +4196,7 @@ export class MemoryLifecycleService {
     input: MemoryLearningInput,
     actorId: string,
     status: MemoryLearningStatus,
-    options: { learningId?: string; publication?: "immediate" | "deferred"; schema?: "ready" } = {},
+    options: { learningId?: string; publication?: "immediate" | "deferred"; schema?: "ready"; supersedeTarget?: { learningId: string; expectedSourceHash: string } } = {},
   ): Promise<MemoryLearningRecord> {
     await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
     // Supersession has already prepared the schema outside its row transaction.
@@ -3868,6 +4204,7 @@ export class MemoryLifecycleService {
     const now = new Date().toISOString();
     const authority = normalizeAuthority(input.authority ?? (status === "proposed" ? "agent_proposed" : "operator"));
     const learning: MemoryLearningRecord = {
+      ...(input.claim ? { claim: normalizeMemoryClaim(input.claim) } : {}),
       learningId: options.learningId ?? randomUUID(),
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
       key: requireTrimmedText(input.key, "key"),
@@ -3886,6 +4223,16 @@ export class MemoryLifecycleService {
       serializeLearningForGate(learning),
       learning.workspaceId,
     );
+    if (this.deps.learnings) {
+      if (!options.supersedeTarget && learning.status === "trusted" && learning.claim?.identity.cardinality === "scalar" &&
+          (await this.deps.learnings.findClaim(learning.workspaceId, learning.claim)).length > 0) learning.status = "proposed";
+      const stored = options.supersedeTarget
+        ? (await this.deps.learnings.supersede({ ...options.supersedeTarget, next: learning })).next
+        : await this.deps.learnings.insert(learning);
+      if (options.publication !== "deferred") await this.publishMemoryLearningCreated(stored);
+      return stored;
+    }
+    if (learning.claim || options.supersedeTarget) throw new Error("Structured claim persistence is unavailable.");
     await this.deps.admin.gatewaySql
       .prepare(
         `
@@ -3917,7 +4264,7 @@ export class MemoryLifecycleService {
   }
 
   private async publishMemoryLearningCreated(learning: MemoryLearningRecord): Promise<void> {
-    await this.deps.admin.publishRealtime("system", "memory", {
+    await this.publishMemorySignal("system", "memory", {
       type: "memory_learning_created",
       learningId: learning.learningId,
       status: learning.status,
@@ -4105,9 +4452,13 @@ export class MemoryLifecycleService {
     }
   }
 
-  private async requireTraceMemoryCandidate(candidateId: string): Promise<TraceMemoryCandidateRecord> {
+  private assertTraceCandidateReview(candidate:TraceMemoryCandidateRecord,review?:TraceMemoryCandidateDecisionInput):void {
+    if(review && (candidate.workspaceId!==review.workspaceId || candidate.reviewHash!==review.expectedReviewHash))throw new ConflictError({message:"This memory proposal changed after review. Refresh before deciding."});
+  }
+
+  private async requireTraceMemoryCandidate(candidateId: string,lock=false): Promise<TraceMemoryCandidateRecord> {
     const row = await this.deps.admin.gatewaySql
-      .prepare("SELECT * FROM memory_trace_candidates WHERE candidate_id = ?")
+      .prepare(`SELECT * FROM memory_trace_candidates WHERE candidate_id = ?${lock && this.deps.admin.gatewaySql.dialect==="postgres" ? " FOR UPDATE":""}`)
       .get<TraceMemoryCandidateRow>(candidateId);
     if (!row) {
       throw new NotFoundError({ entity: "memory_trace_candidate", id: candidateId });
@@ -4521,7 +4872,14 @@ function mapTraceMemoryCandidateRow(
   row: TraceMemoryCandidateRow,
 ): TraceMemoryCandidateRecord {
   const metadata = parseMemoryJson<Record<string, unknown>>(host, row.metadata_json, {});
+  const editReason=row.status!=="proposed" ? "Only an inactive proposal can be edited.":metadata.claim || metadata.memoryIntent || (metadata.governedMemoryPlan && (metadata.governedMemoryPlan as GovernedMemoryMaintenancePlan).operation!=="add") ? "This proposal binds a preference or replacement target. Reject it and state the corrected preference in Chat for a fresh scoped review.":metadata.consolidation===true && !metadata.consolidationSource ? "This older proposal needs source reconciliation. Reject it and generate a fresh proposal.":undefined;
+  const correctionTarget=metadata.correctionTarget as {sourceRef?:unknown;expectedSourceHash?:unknown}|undefined;
+  const targetBound=typeof correctionTarget?.sourceRef==="string" && Boolean(correctionTarget.sourceRef.trim()) && typeof correctionTarget.expectedSourceHash==="string" && /^[a-f0-9]{64}$/iu.test(correctionTarget.expectedSourceHash);
+  const promotionReason=row.status!=="proposed" ? "This proposal has already been reviewed.":(metadata.governedMemoryPlan as GovernedMemoryMaintenancePlan|undefined)?.clarificationRequired ?? (metadata.memoryIntent==="correction" && !targetBound ? "Which saved preference should this replace? Name the preference in Chat to prepare a fresh correction.":undefined);
   return {
+    reviewHash:createHash("sha256").update(canonicalJsonString(row)).digest("hex"),
+    editEligibility:{allowed:!editReason,...(editReason ? {reason:editReason}:{})},
+    promotionEligibility:{allowed:!promotionReason,...(promotionReason ? {reason:promotionReason}:{})},
     candidateId: row.candidate_id,
     workspaceId: row.workspace_id,
     candidateType: normalizeTraceCandidateType(row.candidate_type),
@@ -5261,6 +5619,7 @@ function buildTraceMemoryCandidateDedupeKey(input: {
   candidateType: TraceMemoryCandidateType;
   proposedInsight: string;
   authority: TraceMemoryCandidateAuthority;
+  metadata?: Record<string, unknown>;
 }): string {
   const normalizedContentHash = createHash("sha256")
     .update(input.proposedInsight.toLowerCase().replace(/\s+/gu, " ").trim())
@@ -5274,6 +5633,13 @@ function buildTraceMemoryCandidateDedupeKey(input: {
         input.candidateType,
         normalizedContentHash,
         input.authority,
+        ...(input.metadata?.source === "background_learning_queue" ? [
+          `queued:${createHash("sha256").update(canonicalJsonString({
+            jobId: input.metadata.learningJobId,
+            sources: input.metadata.learningReviewSources,
+            plan: input.metadata.governedMemoryPlan ?? null,
+          })).digest("hex")}`,
+        ] : []),
       ].join("|"),
     )
     .digest("hex");

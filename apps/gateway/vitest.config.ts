@@ -9,6 +9,10 @@ export default defineConfig({
   resolve: {
     alias: [
       {
+        find: "@goatcitadel/contracts/approval-target",
+        replacement: path.resolve(configDir, "../../packages/contracts/src/approval-target.ts"),
+      },
+      {
         find: "@goatcitadel/contracts/startup-reads",
         replacement: path.resolve(configDir, "../../packages/contracts/src/gateway-startup-reads.ts"),
       },

@@ -55,6 +55,9 @@ export async function runUxBudgetsLane(context, options = {}, deps) {
       processLogPrefix: options.processLogPrefix,
       gatewayEnvOmit: options.secretEnvKeys,
       uiEnvOmit: options.secretEnvKeys,
+      // Measure the shipped production build’s diagnostics default. Other
+      // usability lanes explicitly exercise the instrumented client.
+      uiEnv: options.performanceOnly ? { VITE_GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "" } : undefined,
       gatewayEnv: {
         GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER: "true",
         GOATCITADEL_AUTH_MODE: "token",

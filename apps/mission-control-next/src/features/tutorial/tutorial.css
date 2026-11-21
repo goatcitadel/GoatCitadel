@@ -1,0 +1,260 @@
+:root {
+  --tutorial-dock: 42px;
+}
+#root {
+  margin-top: var(--tutorial-dock);
+}
+#root div.h-dvh:has(> a[href="#main-content"]) {
+  height: calc(100dvh - var(--tutorial-dock));
+}
+.tutorial-toolbar {
+  position: fixed;
+  inset: 0 0 auto;
+  height: var(--tutorial-dock);
+  z-index: 80;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 15px;
+  border-bottom: 1px solid var(--cockpit-border);
+  background: var(--cockpit-sunken, var(--cockpit-canvas));
+  color: var(--cockpit-text);
+  font-size: 13px;
+}
+.tutorial-toolbar strong {
+  font-weight: 650;
+}
+.tutorial-toolbar small {
+  color: var(--cockpit-text-muted);
+  margin-left: 8px;
+}
+.tutorial-toolbar-actions {
+  display: flex;
+  gap: 2px;
+}
+.tutorial-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--cockpit-border-strong);
+  border-radius: 7px;
+  padding: 6px 10px;
+  min-height: 34px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cockpit-text);
+  background: var(--cockpit-raised);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tutorial-button:hover:not(:disabled) {
+  border-color: var(--cockpit-accent);
+}
+.tutorial-button[data-primary] {
+  background: var(--cockpit-accent);
+  border-color: var(--cockpit-accent);
+  color: var(--cockpit-accent-ink);
+}
+.tutorial-button[data-quiet] {
+  background: transparent;
+  border-color: transparent;
+  color: var(--cockpit-text-secondary);
+}
+.tutorial-button:focus-visible {
+  outline: 2px solid var(--cockpit-accent);
+  outline-offset: 2px;
+}
+.tutorial-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.tutorial-button svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+.tutorial-spotlight {
+  z-index: 89;
+  position: fixed;
+  pointer-events: none;
+  border: 1px solid var(--cockpit-accent);
+  box-shadow: 0 0 0 160vmax color-mix(in srgb, var(--cockpit-canvas), transparent 42%);
+  border-radius: 10px;
+}
+html[data-theme="light"] .tutorial-spotlight {
+  box-shadow: 0 0 0 160vmax rgb(35 64 83 / 27%);
+}
+.tutorial-spotlight::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 8px;
+  opacity: 0;
+  border: 1px solid var(--cockpit-accent);
+}
+.tutorial-spotlight[data-move]::after {
+  animation: tutorial-ripple var(--motion-slow, 220ms) ease-out;
+}
+@keyframes tutorial-ripple {
+  from {
+    opacity: 0.8;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.02);
+  }
+}
+.tutorial-card,
+.tutorial-allowance-help {
+  position: fixed;
+  z-index: 91;
+  width: min(348px, calc(100vw - 20px));
+  background: var(--cockpit-overlay);
+  color: var(--cockpit-text);
+  border: 1px solid var(--cockpit-accent);
+  border-radius: 10px;
+  box-shadow: 0 9px 25px rgb(0 0 0 / 25%);
+  font-size: 13px;
+  pointer-events: auto;
+}
+.tutorial-card {
+  padding: 13px 14px;
+}
+.tutorial-card[data-intro] {
+  width: min(436px, calc(100vw - 20px));
+  padding: 18px;
+}
+.tutorial-card[hidden],
+.tutorial-spotlight[hidden],
+.tutorial-allowance-help[hidden] {
+  display: none;
+}
+.tutorial-card-top,
+.tutorial-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tutorial-card-top {
+  min-height: 26px;
+}
+.tutorial-card-top span {
+  color: var(--cockpit-accent);
+  font-size: 12px;
+  font-weight: 650;
+}
+.tutorial-card-top .tutorial-button {
+  min-height: 24px;
+  padding: 2px 3px;
+}
+.tutorial-card h2 {
+  font:
+    700 19px/1.22 "Hanken Grotesk Variable",
+    Geist,
+    system-ui,
+    sans-serif;
+  margin: 4px 0 6px;
+  letter-spacing: -0.02em;
+}
+.tutorial-card h2:focus {
+  outline: none;
+}
+.tutorial-card p,
+.tutorial-allowance-help p {
+  color: var(--cockpit-text-secondary);
+  line-height: 1.45;
+  margin: 6px 0 0;
+}
+.tutorial-card strong {
+  color: var(--cockpit-text);
+  font-weight: 670;
+}
+.tutorial-card-actions {
+  margin-top: 12px;
+}
+.tutorial-card-wave {
+  height: 2px;
+  inset: -1px 8px auto;
+  position: absolute;
+  border-radius: 12px;
+  background: var(--cockpit-accent);
+}
+.tutorial-card[data-docked] {
+  position: relative;
+  flex: 0 0 auto;
+  width: auto;
+  margin: 2px 10px 10px;
+  inset: auto;
+}
+.tutorial-allowance-help {
+  z-index: 95;
+  width: min(306px, calc(100vw - 20px));
+  padding: 11px 12px;
+  border-color: var(--cockpit-border-strong);
+}
+.tutorial-allowance-help[data-docked] {
+  position: absolute;
+  top: 52px !important;
+  bottom: auto;
+  left: 10px !important;
+  right: 10px;
+  width: auto;
+}
+.tutorial-allowance-help strong {
+  font-weight: 675;
+}
+.tutorial-allowance-help h3 {
+  margin: 0;
+  font-size: 14px;
+}
+[data-tutorial-disabled="true"] {
+  opacity: 0.53;
+  cursor: not-allowed;
+}
+[data-tutorial-highlighted="true"] {
+  outline: 1px solid var(--cockpit-accent);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+.tutorial-finished {
+  border-top-color: var(--cockpit-border);
+}
+@media (max-width: 650px) {
+  :root {
+    --tutorial-dock: 39px;
+  }
+  .tutorial-toolbar {
+    padding-inline: 7px;
+    gap: 4px;
+    font-size: 11px;
+  }
+  .tutorial-toolbar small {
+    display: none;
+  }
+  .tutorial-toolbar .tutorial-button {
+    padding: 4px 5px;
+    font-size: 11px;
+    min-height: 28px;
+  }
+  .tutorial-card {
+    width: min(365px, calc(100vw - 20px));
+    padding: 10px 11px;
+    font-size: 12px;
+  }
+  .tutorial-card h2 {
+    font-size: 17px;
+  }
+  .tutorial-card-actions {
+    margin-top: 8px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tutorial-spotlight[data-move]::after {
+    animation: none;
+  }
+}

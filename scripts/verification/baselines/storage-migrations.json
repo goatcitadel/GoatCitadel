@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 281,
+      "expectedCount": 287,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 281,
+      "expectedLastVersion": 287,
       "migrations": [
         {
           "version": 1,
@@ -1975,15 +1975,57 @@
           "groupName": "canonical",
           "definitionSha256": "a71c2f6c8e5bfe290929a3a0b2498c60a6c9bc3db3f4b5262b022a788222a43f",
           "implementationSha256": "d273e52bd1f13a12264ce95bb5ddb3d6ef2febc5bc827b8816f866d567780250"
+        },
+        {
+          "version": 282,
+          "name": "scoped_memory_claim_identity",
+          "groupName": "canonical",
+          "definitionSha256": "570013b823b1fef6b269f6fa2937ff69bbbb01e77f9d50b82ec27cf3b76c30cb",
+          "implementationSha256": "879afe60d0e636b42bc8f621eafba7212569e68a216748e5d151ff10897bad3c"
+        },
+        {
+          "version": 283,
+          "name": "indexed_memory_corpus",
+          "groupName": "canonical",
+          "definitionSha256": "12b5e2fb543b5eeb5d3b501d1a297c1b8e9a6704a6607a0b8b27a8b172b894e4",
+          "implementationSha256": "bcdbb938144bbff45c5093250be7c0872a3d0ac9100377645b49e1d6f93ea724"
+        },
+        {
+          "version": 284,
+          "name": "background_learning_queue_indexes",
+          "groupName": "canonical",
+          "definitionSha256": "40498ade6dbc1cce80ec8421f0b7cdc17f801ee802d407d532ca538c5cccb172",
+          "implementationSha256": "bb31c9bd6ba16fb813cf141aee5c29df07f1945b7271b6c297a88cbcff6849fb"
+        },
+        {
+          "version": 285,
+          "name": "improvement_watch_evidence",
+          "groupName": "canonical",
+          "definitionSha256": "5d6210db513712569dd2c441babc3cfa72d83a1aff2b745a745f12509903fb6b",
+          "implementationSha256": "4ed1fa23bc2b002a396a67e3be785f1af95bde2abca0845e85cb13f57db1b4e3"
+        },
+        {
+          "version": 286,
+          "name": "prompt_pack_pre_work_watch_bindings",
+          "groupName": "canonical",
+          "definitionSha256": "e5171cd35e8a4887911e53ac2f4d5ff266c43bfc2cc65bb83edb50daec981f80",
+          "implementationSha256": "96caf1b275d82d7873b9edfe3a2ba9df6a30ec72d18956bf7013b1cb7123fbd3"
+        },
+        {
+          "version": 287,
+          "name": "canonical_memory_note_origins",
+          "groupName": "canonical",
+          "definitionSha256": "eb3cae323bf16248b0973abc5bce37693ecc4468a03baeeda6b683b20f9912e3",
+          "implementationSha256": "74d42d9bb77658a6a220c12e75dc34ad0a9ef4842daf8a5926fd640949024176"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 234,
+      "expectedCount": 240,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 234,
+      "expectedLastVersion": 240,
       "migrations": [
         {
           "version": 1,
@@ -3399,6 +3441,42 @@
           "definitionSha256": "0a0815631e369091ef3b6f955c98a7424f8519ffdf0b0ead3a1929421cf4cee4",
           "sqlPayloadSha256": "5325628b9e3c182e9e86e7d8d2e56ab8385fbfb0eff108a4f8f4d740056ded5a",
           "runtimeIntegritySha256": "4788dec7bb53fe6b8d95e614e5b8763e4d703efd9dd156bb7998b398148b4291"
+        },
+        {
+          "version": 235,
+          "name": "scoped_memory_claim_identity",
+          "definitionSha256": "4f884ed92dd86e58fbc134680555ab91cc70444429bbe75120a671bb690e1d51",
+          "runtimeIntegritySha256": "fe7b2cf73addcc85f26c287249b87d118017c0360106e97642add709b90fb0b8"
+        },
+        {
+          "version": 236,
+          "name": "indexed_memory_corpus",
+          "definitionSha256": "30db7fa6ce3af24142e1c5a30c508e7f620119feecf5af9a1d358c366080e15e",
+          "runtimeIntegritySha256": "4e0430b60cb28c9ed38947feea118089f0ac33bed3fe46345a57f2a2e041c4b7"
+        },
+        {
+          "version": 237,
+          "name": "background_learning_queue_indexes",
+          "definitionSha256": "05a68529fa5beef0f2982ca57c880872217d81da5ea2b5bd7ef48a50309c6eb3",
+          "runtimeIntegritySha256": "e77f9eaaa94f760be556ade36417fb6f82059dda700e116f6b9be2fe28ab6375"
+        },
+        {
+          "version": 238,
+          "name": "improvement_watch_evidence",
+          "definitionSha256": "f2dccc844326f844c6999428be7c6d9821fd5f1990ca45c0bb1a6e0483ce6d56",
+          "runtimeIntegritySha256": "4e46eeb375471d267a9d711d8a24cc5cbdaf55c5f57c182911ae762cea73ad93"
+        },
+        {
+          "version": 239,
+          "name": "prompt_pack_pre_work_watch_bindings",
+          "definitionSha256": "396707b8eba335cfe1ebad63aec0152985bb64cd1fe1ffaa238efa64e2b75fde",
+          "runtimeIntegritySha256": "af2897925d73db45a555cbc11d42ee2083f713a817db24dfd51e8a1da376472a"
+        },
+        {
+          "version": 240,
+          "name": "canonical_memory_note_origins",
+          "definitionSha256": "72997deb730cc66c544903a84d94b571c89f2604dc42fbaa72992fa4a7e2b00c",
+          "runtimeIntegritySha256": "e255dd04052da91d5bd821781def4e6873c1623c3aa1a3f24487a867df95f955"
         }
       ]
     }

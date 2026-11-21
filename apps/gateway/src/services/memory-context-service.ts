@@ -1,7 +1,10 @@
+import { isExplicitMemoryRecallPrompt } from "./memory-context-utils.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   ConflictError,
+  redactSecretText,
+  redactStructuredSecrets,
   type MemoryContextAccessReceipt,
   type MemoryContextAssemblyReport,
   type MemoryContextComposeRequest,
@@ -10,6 +13,10 @@ import {
   type MemoryQmdStatsResponse,
   type MemoryRelationScope,
   type MemoryRetrievalStatusResponse,
+  type MemoryCorpusSearchRequest,
+  type MemoryCorpusSearchResult,
+  type RecallHit,
+  type MemoryRecallSourceType,
 } from "@goatcitadel/contracts";
 import {
   buildCacheKey,
@@ -89,6 +96,12 @@ interface PendingQueryEmbedding {
   settled: boolean;
 }
 
+interface MemoryCorpusReadPort {
+  enabled?:()=>Promise<boolean>;
+  search(input:MemoryCorpusSearchRequest):Promise<MemoryCorpusSearchResult>;
+  validate(input:{workspaceId:string;sessionId:string;sources:Array<{sourceType:MemoryRecallSourceType;sourceRef:string}>}):Promise<RecallHit[]>;
+}
+
 export class MemoryContextService {
   private readonly pendingQueryEmbeddings = new Map<string, PendingQueryEmbedding>();
   private readonly queryEmbeddingCache = new Map<
@@ -107,6 +120,8 @@ export class MemoryContextService {
     private readonly acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease,
     private readonly prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch,
     private readonly observeComposition?: (diagnostics: Readonly<MemoryContextCompositionDiagnostics>) => void,
+    private readonly collectTrustedLearnings?: (input: { workspaceId: string; sessionId: string }) => Promise<MemorySourceInput[]>,
+    private readonly corpusRead?: MemoryCorpusReadPort,
   ) {}
   public async compose(
     input: MemoryContextComposeRequest,
@@ -131,7 +146,7 @@ export class MemoryContextService {
     };
     try {
       const pack = await this.composeInternal(input, usageLineage, diagnostics);
-      const result = await this.degradeUnsafeMemoryContext(input, pack);
+      const result = await this.degradeUnsafeMemoryContext(input, await this.checkCurrentLearningSources(input, pack));
       diagnostics.outcome = "completed";
       diagnostics.contextStatus = result.quality.status;
       diagnostics.availableCandidateCount = result.quality.assembly?.availableCandidateCount;
@@ -173,7 +188,8 @@ export class MemoryContextService {
       diagnostics.timings.accessMs = elapsedMs(accessStarted);
     });
     const relationScope = accessReceipt.mode === "session_only" ? "self" : resolveMemoryRelationScope(input);
-    const shouldShortCircuit = !memoryConfig.enabled || !qmd.enabled || prompt.length < qmd.minPromptChars;
+    const explicitRecall = input.intent === "explicit_recall" || isExplicitMemoryRecallPrompt(prompt);
+    const shouldShortCircuit = !memoryConfig.enabled || !qmd.enabled || (!explicitRecall && prompt.length < qmd.minPromptChars);
     // Generate a query embedding for the prompt when the caller did not supply one,
     // so semantic-vector ranking can engage. Skipped on the short-circuit path
     // (disabled/short prompt never ranks, so the legacy behavior is preserved).
@@ -251,7 +267,8 @@ export class MemoryContextService {
     }
 
     const sourceStarted = performance.now();
-    const sources = await this.collectSources(input, accessReceipt).finally(() => {
+    const sources = await this.collectSources(input, accessReceipt, resolvedQueryEmbedding.providerIsReal && queryEmbedding
+      ? {values:queryEmbedding,profile:currentEmbeddingProfile()} : undefined).finally(() => {
       diagnostics.timings.sourceReadMs = elapsedMs(sourceStarted);
     });
     throwIfMemoryContextAborted(input.signal);
@@ -259,10 +276,12 @@ export class MemoryContextService {
     const availableCandidates = rankMemoryCandidates(
       prompt,
       collectMemoryCandidates(sources, {
+        maxCandidates:300,
         maxTranscriptEvents: qmd.maxTranscriptEvents,
-        maxFileCandidates: qmd.maxMemoryFiles,
-        maxMemoryItems: qmd.maxMemoryFiles,
+        maxFileCandidates: 300,
+        maxMemoryItems: 300,
         maxCharsPerCandidate: 1400,
+        query: prompt,
       }),
       {
         maxCandidates: 40,
@@ -855,6 +874,7 @@ export class MemoryContextService {
   private async collectSources(
     input: MemoryContextComposeRequest,
     accessReceipt: MemoryContextAccessReceipt,
+    queryEmbedding?:MemoryCorpusSearchRequest["queryEmbedding"],
   ): Promise<MemorySourceInput[]> {
     const sources: MemorySourceInput[] = [];
     const relationScope = accessReceipt.mode === "session_only" ? "self" : resolveMemoryRelationScope(input);
@@ -872,8 +892,16 @@ export class MemoryContextService {
     }
 
     throwIfMemoryContextAborted(input.signal);
-    for (const item of await this.collectMemoryItemSources(await this.resolveMemoryItemWorkspaceId(input))) {
-      sources.push(item);
+    if (this.corpusRead && await this.corpusRead.enabled?.() !== false) {
+      if (input.sessionId) {
+        const result = await this.corpusRead.search({workspaceId:await this.resolveMemoryItemWorkspaceId(input),sessionId:input.sessionId,query:input.prompt,limit:300,queryEmbedding});
+        sources.push(...result.hits.filter(isTrustedRecallHit).map(recallHitSource));
+      }
+    } else {
+      for (const item of await this.collectMemoryItemSources(input)) sources.push(item);
+      if (input.sessionId && this.collectTrustedLearnings) {
+        sources.push(...await this.collectTrustedLearnings({ workspaceId: await this.resolveMemoryItemWorkspaceId(input), sessionId: input.sessionId }));
+      }
     }
 
     throwIfMemoryContextAborted(input.signal);
@@ -917,19 +945,17 @@ export class MemoryContextService {
     return DEFAULT_MEMORY_WORKSPACE_ID;
   }
 
-  private async collectMemoryItemSources(workspaceId?: string): Promise<MemoryItemSource[]> {
+  private async collectMemoryItemSources(input:MemoryContextComposeRequest): Promise<MemoryItemSource[]> {
+    if (!input.sessionId || !this.storage.memoryRecall?.listEligibleMemoryItemSources) return [];
     try {
-      return (
-        await this.storage.memoryMaintenance.listActiveMemoryItems(
-          this.config.assistant.memory.qmd.maxMemoryFiles,
-          normalizeMemoryWorkspaceId(workspaceId),
-        )
-      ).map((item) => ({
+      const items=await this.storage.memoryRecall.listEligibleMemoryItemSources({workspaceId:await this.resolveMemoryItemWorkspaceId(input),sessionId:input.sessionId,limit:300});
+      return items.filter(isTrustedRecallHit).map((item) => ({
         type: "memory_item",
-        itemId: item.itemId,
-        namespace: item.namespace,
+        itemId: item.sourceRef,
+        sourceHash:item.sourceHash,
+        namespace: item.namespace ?? "memory",
         title: item.title,
-        content: item.content,
+        content: item.snippet,
         updatedAt: item.updatedAt,
         pinned: item.pinned,
         retrievalHints: extractMemoryRetrievalHints(item.metadata),
@@ -1009,10 +1035,51 @@ export class MemoryContextService {
     });
     return degraded;
   }
+
+  private async checkCurrentLearningSources(input: MemoryContextComposeRequest, pack: MemoryContextPack): Promise<MemoryContextPack> {
+    const citations = pack.citations.filter(citation => ["memory_item","memory_learning","knowledge_chunk"].includes(citation.sourceType) && Boolean(citation.sourceHash));
+    if (!citations.length) return pack;
+    const current = input.sessionId && this.corpusRead
+      ? (await this.corpusRead.validate({workspaceId:await this.resolveMemoryItemWorkspaceId(input),sessionId:input.sessionId,
+        sources:citations.map(citation => ({sourceType:citation.sourceType as MemoryRecallSourceType, sourceRef:citation.sourceRef}))})).map(recallHitSource)
+      : input.sessionId ? [
+        ...(this.storage.memoryRecall?.getEligibleSources ? (await this.storage.memoryRecall.getEligibleSources({workspaceId:await this.resolveMemoryItemWorkspaceId(input),sessionId:input.sessionId,
+          sources:citations.filter(citation=>citation.sourceType==="memory_item").map(citation=>({sourceType:"memory_item" as const,sourceRef:citation.sourceRef}))})).filter(isTrustedRecallHit).map(recallHitSource) : []),
+        ...(this.collectTrustedLearnings ? await this.collectTrustedLearnings({ workspaceId: await this.resolveMemoryItemWorkspaceId(input), sessionId: input.sessionId }) : [])] : [];
+    const hashes = new Map<string,string|undefined>();
+    for (const source of current) {
+      if (source.type === "memory_learning") hashes.set(`memory_learning:${source.learningId}`, source.sourceHash);
+      if (source.type === "memory_item") hashes.set(`memory_item:${source.itemId}`, source.sourceHash);
+      if (source.type === "knowledge_chunk") hashes.set(`knowledge_chunk:${source.chunkId}`, source.sourceHash);
+    }
+    if (citations.every(citation => citation.sourceHash && hashes.get(`${citation.sourceType}:${citation.sourceRef}`) === citation.sourceHash)) return pack;
+    const contextText = "Memory context withheld because an admitted learning changed or became unavailable during composition.";
+    return await this.storage.memoryContexts.upsert({
+      cacheKey: createHash("sha256").update(`${pack.contextId}|learning_source_changed|${JSON.stringify([...hashes])}`).digest("hex"),
+      scope: pack.scope, sessionId: pack.sessionId, taskId: pack.taskId, runId: pack.runId, phaseId: pack.phaseId,
+      queryHash: pack.queryHash, sourcesHash: buildSourcesHash([]), contextText, citations: [],
+      quality: { ...pack.quality, status: "fallback", reason: "learning_source_changed" },
+      originalTokenEstimate: pack.originalTokenEstimate, distilledTokenEstimate: Math.ceil(contextText.length / 4),
+      expiresAt: new Date().toISOString(),
+    });
+  }
 }
 
 function elapsedMs(startedAt: number): number {
   return Math.max(0, Math.round((performance.now() - startedAt) * 1000) / 1000);
+}
+
+function recallHitSource(hit:RecallHit):MemorySourceInput {
+  const common = {title:hit.title,content:hit.snippet,updatedAt:hit.updatedAt,sourceHash:hit.sourceHash,indexedSemanticScore:hit.semanticScore};
+  if (hit.sourceType === "memory_learning") return {type:"memory_learning",learningId:hit.sourceRef,...common};
+  if (hit.sourceType === "knowledge_chunk") return {type:"knowledge_chunk",chunkId:hit.sourceRef,...common};
+  return {type:"memory_item",itemId:hit.sourceRef,namespace:"memory",...common};
+}
+
+function isTrustedRecallHit(hit:RecallHit):boolean {
+  return hit.trustLevel!=="untrusted_external" && hit.trustLevel!=="mixed_untrusted" &&
+    redactSecretText(`${hit.title}\n${hit.snippet}`.normalize("NFKC"),{env:process.env}).redactionCount===0 &&
+    redactStructuredSecrets("metadata" in hit ? hit.metadata : {},{env:process.env}).redactionCount===0;
 }
 
 function refreshMemoryPackAssembly(pack: MemoryContextPack, assembly: MemoryContextAssemblyReport): MemoryContextPack {
@@ -1024,15 +1091,6 @@ function refreshMemoryPackAssembly(pack: MemoryContextPack, assembly: MemoryCont
       assembly,
     },
   };
-}
-
-// Finding 1: never return undefined — an undefined workspaceId makes
-// listActiveMemoryItems fall back to the unfiltered cross-workspace query. A
-// concrete workspace is resolved upstream (resolveMemoryItemWorkspaceId); this is
-// the final backstop.
-function normalizeMemoryWorkspaceId(workspaceId?: string): string {
-  const trimmed = workspaceId?.trim();
-  return trimmed || DEFAULT_MEMORY_WORKSPACE_ID;
 }
 
 async function readTranscriptOrEmpty(storage: Storage, sessionId: string) {

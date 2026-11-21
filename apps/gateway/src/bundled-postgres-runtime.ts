@@ -4,7 +4,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { PostgresDatabaseClient } from "@goatcitadel/storage";
 import { isBootTrackerVerbose, setBootCheckpoint } from "./boot-tracker.js";
 import type { GatewayRuntimeConfig } from "./config.js";
@@ -373,37 +373,41 @@ async function tryStartNativeBundledPostgres(
 
   setBootCheckpoint("native-pg:pg_ctl-start-running");
   try {
-    // `-W` (--no-wait): tells pg_ctl not to wait for the postmaster's ready
-    // signal — `waitForBundledPostgres` below does that via TCP, which is
-    // more reliable on Windows.
-    //
-    // stdio: "ignore" is critical here. With piped stdio, execFileSync on
-    // Windows waits for the stdio PIPES to close, not just for pg_ctl to
-    // exit. pg_ctl spawns postgres via cmd.exe and the daemonised postgres
-    // process INHERITS those pipe handles. The result was that even though
-    // pg_ctl returned in ~3 seconds and postgres logged "database system is
-    // ready to accept connections", execFileSync kept blocking for the full
-    // 120 s gateway-health window because postgres was still holding the
-    // inherited pipe handles open. Using "ignore" (or "inherit") avoids
-    // creating those pipes entirely. Any pg_ctl error output is still
-    // captured by postgres's own log file via the -l flag.
-    execFileSync(
-      commands.pgCtl,
-      [
-        "-D",
-        dataDir,
-        "-l",
-        logFile,
-        "start",
-        "-W",
-        "-o",
-        `-h 127.0.0.1 -p ${config.assistant.database.bundledPostgres.port}`,
-      ],
-      {
-        encoding: "utf8",
-        stdio: "ignore",
-      },
-    );
+    // Use -W so the launcher exits promptly. The Gateway probes database
+    // readiness separately and PostgreSQL writes diagnostics to its own log.
+    await new Promise<void>((resolve, reject) => {
+      const launcher = spawn(
+        commands.pgCtl,
+        [
+          "-D",
+          dataDir,
+          "-l",
+          logFile,
+          "start",
+          "-W",
+          "-o",
+          `-h 127.0.0.1 -p ${config.assistant.database.bundledPostgres.port}`,
+        ],
+        {
+          // Keep PostgreSQL out of the Gateway console's Ctrl+C broadcasts on
+          // Windows. A hidden window and ignored stdio alone do not detach it.
+          detached: process.platform === "win32",
+          // The postmaster can inherit pg_ctl's handles and keep pipes open.
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
+      launcher.once("error", reject);
+      launcher.once("exit", (code, signal) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(
+            new Error(signal ? `pg_ctl start was terminated by ${signal}` : `pg_ctl start exited with code ${code}`),
+          );
+        }
+      });
+    });
     setBootCheckpoint("native-pg:pg_ctl-start-returned-ok");
   } catch (error) {
     setBootCheckpoint(

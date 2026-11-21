@@ -1,4 +1,5 @@
 import { WorkScheduleInspector } from "./WorkScheduleInspector";
+import {WorkFollowThrough} from "./WorkFollowThrough";
 import { WorkScheduleCreateForm, type CreateScheduleAction } from "./WorkScheduleCreateForm";
 
 import { SchedulerReviewQueue } from "./SchedulerReviewQueue";
@@ -278,6 +279,7 @@ export function WorkSchedules() {
       {message ? (
         <WorkScheduleNotice message={message} runHref={runLink?.notice === message ? runLink.href : undefined} />
       ) : null}
+      {recoveryParams.get("sessionId") ? <WorkFollowThrough key={`${activeWorkspaceId}:${recoveryParams.get("sessionId")}`} sessionId={recoveryParams.get("sessionId")!} workspaceId={activeWorkspaceId ?? "default"}/>:null}
       {createOpen ? (
         <WorkScheduleCreateForm
           name={name}

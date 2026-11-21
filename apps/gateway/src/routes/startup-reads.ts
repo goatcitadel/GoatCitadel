@@ -1,10 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
 import { isStartupReadRequest, STARTUP_READ_BATCH_PATH, STARTUP_READ_BATCH_LIMIT, STARTUP_READ_BATCH_QUERY_LIMIT, STARTUP_READ_BATCH_BODY_LIMIT, type StartupReadResponse } from "@goatcitadel/contracts/startup-reads";
+import { withCodexStartupStatusSnapshot } from "../services/openai-codex-oauth-service.js";
 import { withRouteAccess } from "./route-access.js";
 const RESPONSE_HEADERS = ["content-type", "cache-control", "etag", "x-goatcitadel-correlation-id"] as const;
 /** A bounded GET transport; original route guards, owners and error handlers run for every entry. */
 export const startupReadRoutes: FastifyPluginAsync = async fastify => {
   fastify.get(STARTUP_READ_BATCH_PATH, withRouteAccess(fastify, "operator"), async (request, reply) => {
+    const batchStarted = performance.now();
     reply.header("cache-control", "private, no-store");
     const query = request.query as Record<string, unknown>;
     if (Object.keys(query).some(key => key !== "reads") || typeof query.reads !== "string" ||
@@ -15,13 +17,17 @@ export const startupReadRoutes: FastifyPluginAsync = async fastify => {
     const forwarded = Object.fromEntries(Object.entries(request.headers).filter(([key, value]) => value !== undefined &&
       !["content-length", "transfer-encoding", "connection", "upgrade", "keep-alive", "te", "trailer", "proxy-authorization", "proxy-authenticate"].includes(key)));
     const cookies: string[] = [];
-    const results: StartupReadResponse[] = await Promise.all(items.map(async item => {
+    const readTimings: string[] = [];
+    let credentialReadMs: number | undefined;
+    const results = await withCodexStartupStatusSnapshot(() => Promise.all(items.map(async (item, index): Promise<StartupReadResponse> => {
+      const readStarted = performance.now();
       const response = await fastify.inject({ method: "GET", url: item.path,
         // Preserve the actual peer and proxy chain; inject's loopback default must never grant authority.
         remoteAddress: request.raw.socket.remoteAddress ?? request.ip,
         headers: { ...forwarded, "x-goatcitadel-correlation-id": item.correlationId,
           ...(item.originSurface ? { "x-goatcitadel-origin-surface": item.originSurface } : {}) },
       });
+      readTimings[index] = `startup-read-${index};dur=${(performance.now() - readStarted).toFixed(1)}`;
       // Cookie material remains in HTTP custody, never in the JSON transport envelope.
       const setCookie = response.headers["set-cookie"];
       if (setCookie) cookies.push(...(Array.isArray(setCookie) ? setCookie : [setCookie]));
@@ -29,8 +35,10 @@ export const startupReadRoutes: FastifyPluginAsync = async fastify => {
       const headers: Record<string, string> = {};
       for (const key of RESPONSE_HEADERS) { const value = response.headers[key]; if (typeof value === "string") headers[key] = value; }
       return { status: response.statusCode, bodyText: response.payload, headers };
-    }));
+    })), (durationMs) => { credentialReadMs = durationMs; });
     if (cookies.length) reply.header("set-cookie", cookies);
+    if (credentialReadMs !== undefined) readTimings.push(`codex-keychain;dur=${credentialReadMs.toFixed(1)}`);
+    reply.header("server-timing", [`startup-batch;dur=${(performance.now() - batchStarted).toFixed(1)}`, ...readTimings].join(", "));
     return reply.send({ items: results });
   });
 };

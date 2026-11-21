@@ -1,6 +1,20 @@
+import { setTimeout as delay } from "node:timers/promises";
+
 const ATTACHMENT_MODES = new Set(["managed", "external_override"]);
 const MANAGED_PID_STATES = new Set(["missing", "invalid", "running", "stale", "reused", "unverified"]);
 const MANAGED_INSTANCE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const STARTUP_HEALTH_POLL_MS = 50;
+const STARTUP_HEALTH_PROBE_TIMEOUT_MS = 100;
+
+export async function waitForManagedEndpointHealth(checkHealth, recheckAt, { now = Date.now, wait = delay } = {}) {
+  let remainingMs = recheckAt - now();
+  while (remainingMs > 0) {
+    await wait(Math.min(STARTUP_HEALTH_POLL_MS, remainingMs));
+    remainingMs = recheckAt - now();
+    if (remainingMs > 0 && await checkHealth(Math.min(STARTUP_HEALTH_PROBE_TIMEOUT_MS, remainingMs))) return;
+    remainingMs = recheckAt - now();
+  }
+}
 
 export function resolveLauncherEndpoint({ defaultUrl, overrideValue }) {
   const normalizedDefaultUrl = normalizeEndpointUrl(defaultUrl, "defaultUrl");

@@ -2,13 +2,8 @@ import React from "react";
 import { act, create } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyComposerSuggestion, useChatComposerInteractions } from "./useChatComposerInteractions";
-import {
-  applyDelegationStreamFailure,
-  createSeedDelegationSteps,
-  inferDelegationRunStatus,
-  resolveDelegationRoute,
-  resolveSelectedTurn,
-} from "./useChatDelegationPolicyActions";
+import { createSeedDelegationSteps, resolveDelegationRoute, resolveSelectedTurn } from "./useChatDelegationPolicyActions";
+import { applyDelegationStreamFailure, inferDelegationRunStatus } from "./delegation-stream-projection";
 import { updateThreadFromStreamChunk } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

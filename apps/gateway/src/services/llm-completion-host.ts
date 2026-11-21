@@ -24,6 +24,7 @@ export interface LlmCompletionHost {
     request: ChatCompletionRequest;
     memoryContext?: MemoryContextPack;
     memoryContextPlacement?: MemoryContextPlacement;
+    usageBinding?:{operationId:string;dispatchGeneration:string};
   }): Promise<void>;
   recordLlmRuntimeMeasurement?(record: LlmRuntimeMeasurementRecord): void;
   resolveFallbackTargets(

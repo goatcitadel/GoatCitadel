@@ -18,6 +18,7 @@ import { PostgresDatabaseClient, runPostgresMigrations } from "@goatcitadel/stor
 import type { GatewayRuntimeConfig } from "../config.js";
 import { ensureBundledPostgresRuntime } from "../bundled-postgres-runtime.js";
 import { isBundledPostgresMode, resolveGatewayPostgresConnectionOptions } from "../postgres-runtime-config.js";
+import { SqliteHealthProbe } from "./sqlite-health-probe.js";
 
 export interface DatabaseCutoverServiceDeps {
   readonly config: GatewayRuntimeConfig;
@@ -82,6 +83,7 @@ const SQLITE_IMPORT_EXCLUDED_TABLES = new Set(["schema_migrations"]);
 
 export class DatabaseCutoverService {
   private readonly activeStorageDriver: "sqlite" | "postgres";
+  private readonly sqliteHealthProbe = new SqliteHealthProbe();
   private healthSnapshotInFlight?: Promise<DatabaseHealthSnapshot>;
 
   public constructor(private readonly deps: DatabaseCutoverServiceDeps) {
@@ -349,46 +351,14 @@ export class DatabaseCutoverService {
         };
       }
 
-      let database: DatabaseSync | undefined;
-      let migrationVersion: number | undefined;
-      let issue: string | undefined;
-      try {
-        database = new DatabaseSync(databasePath, { readOnly: true });
-        const probe = database.prepare("SELECT 1 AS ok").get() as { ok?: unknown } | undefined;
-        if (probe?.ok !== 1) {
-          throw new Error("SQLite readiness probe returned an unexpected result");
-        }
-        const migrationTable = database
-          .prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = 'schema_migrations' LIMIT 1")
-          .get();
-        if (migrationTable) {
-          const row = database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as
-            | { version?: number | bigint | null }
-            | undefined;
-          if (row?.version !== null && row?.version !== undefined) {
-            const normalizedVersion = Number(row.version);
-            if (!Number.isSafeInteger(normalizedVersion) || normalizedVersion < 0) {
-              throw new Error("SQLite migration version is invalid");
-            }
-            migrationVersion = normalizedVersion;
-          }
-        }
-      } catch {
-        issue = "SQLite database readiness probe failed.";
-      } finally {
-        try {
-          database?.close();
-        } catch {
-          issue = "SQLite database readiness probe failed.";
-        }
-      }
+      const { reachable, migrationVersion } = await this.sqliteHealthProbe.read(databasePath);
       return {
         driver,
         configured: true,
-        reachable: issue === undefined,
+        reachable,
         migrationVersion,
         latencyMs: Date.now() - startedAt,
-        issues: issue ? [issue] : [],
+        issues: reachable ? [] : ["SQLite database readiness probe failed."],
       };
     }
 

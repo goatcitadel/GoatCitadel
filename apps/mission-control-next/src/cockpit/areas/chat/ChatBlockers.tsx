@@ -1,5 +1,4 @@
 import { useChatSpecialistApproval } from "./use-chat-specialist-approval";
-import { ChatExpiredApprovalRecovery } from "./ChatExpiredApprovalRecovery";
 import { errandScreenshotAttachmentId, useChatApprovalFeedback } from "./use-chat-approval-feedback";
 import { RiskBadge } from "../../ui/RiskBadge";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
@@ -8,9 +7,9 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { isBackgroundChatUserInputPrompt, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { lazy, useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { AttachmentImage } from "../../ui/AttachmentImage";
 import { ChatApprovalRenderer } from "./ChatApprovalRenderer";
-import { ChatAllowanceReceipt } from "./ChatAllowances";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
 import { useGatewayUnavailable } from "../../app/gateway-unavailable-context";
 import { approvalExpiredUnresolved } from "../inbox/approval-settlement";
@@ -19,13 +18,18 @@ import { useApprovalDeadlineCheck } from "./use-approval-deadline-check";
 import { CHANGED_APPROVAL_RECORD } from "../inbox/inbox-approval-guard";
 import { DeferredChatLeaf } from "./DeferredChatLeaves";
 import { presentApprovalAction } from "./chat-vocabulary";
-import { approvalTargetLine } from "../inbox/approval-target";
 import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
 import { useReportWaitingDecision } from "./chat-jump-to-latest";
 const ChatPendingQuestion = lazy(async () => ({
   default: (await import("./ChatPendingQuestion")).ChatPendingQuestion,
+}));
+const ChatExpiredApprovalRecoveryControl = lazy(async () => ({
+  default: (await import("./ChatExpiredApprovalRecoveryControl")).ChatExpiredApprovalRecoveryControl,
+}));
+const ChatAllowanceReceipt = lazy(async () => ({
+  default: (await import("./ChatAllowances")).ChatAllowanceReceipt,
 }));
 
 const changedActionWarning = "This MCP action changed. Review the updated action before deciding.";
@@ -129,7 +133,15 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
     });
   // The persisted record outranks the retained prompt: once it is decided, the card reports the decision
   // instead of asking for one while Chat waits for the queue to clear it.
-  const targetLine = approvalTargetLine(reviewedApproval?.kind, reviewedApproval?.preview);
+  const legacyTarget = useQuery({
+    queryKey: ["chat", "legacy-approval-target", noticeScope, reviewedApproval?.approvalId, recordQuery.dataUpdatedAt],
+    enabled: Boolean(reviewedApproval && reviewedApproval.targetLabel === undefined),
+    queryFn: async () => {
+      const { approvalTargetLine } = await import("@goatcitadel/contracts/approval-target");
+      return approvalTargetLine(reviewedApproval?.kind, reviewedApproval?.preview) ?? null;
+    },
+  });
+  const targetLine = reviewedApproval?.targetLabel === undefined ? legacyTarget.data : reviewedApproval.targetLabel;
   const decided = reviewedApproval && reviewedApproval.status !== "pending" ? reviewedApproval : undefined;
 
   const expiry = decided ? null : approvalExpiryLabel(approval?.expiresAt);
@@ -176,13 +188,20 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
       </p>
       {otherTabNotice ? <p className="mt-3 text-sm text-fg-secondary">{otherTabNotice}</p> : null}
       {temporaryGrantNotice?.grant && props.selectedSessionId ? (
-        <ChatAllowanceReceipt
-          key={temporaryGrantNotice.grant.grantId}
-          workspaceId={workspaceId}
-          sessionId={props.selectedSessionId}
-          grant={temporaryGrantNotice.grant}
-          message={temporaryGrantNotice.message}
-        />
+        <DeferredChatLeaf
+          label="Temporary allowance"
+          identity={temporaryGrantNotice.grant.grantId}
+          loadingVisible
+          fallback={<p className="mt-3 text-sm text-fg-secondary">{temporaryGrantNotice.message}</p>}
+        >
+          <ChatAllowanceReceipt
+            key={temporaryGrantNotice.grant.grantId}
+            workspaceId={workspaceId}
+            sessionId={props.selectedSessionId}
+            grant={temporaryGrantNotice.grant}
+            message={temporaryGrantNotice.message}
+          />
+        </DeferredChatLeaf>
       ) : temporaryGrantNotice ? (
         <p className="mt-3 text-sm text-fg-secondary">{temporaryGrantNotice.message}</p>
       ) : null}
@@ -367,7 +386,21 @@ export function ChatBlockers({ props, latestTurn }: { props: Blockers; latestTur
               )}
             </div>
           ) : null}
-          {expired ? <ChatExpiredApprovalRecovery props={props} turnId={reviewedApproval?.linkage?.turnId} /> : null}
+          {expired && props.selectedSessionId ? (
+            <DeferredChatLeaf
+              label="Approval recovery"
+              identity={JSON.stringify([workspaceId, props.selectedSessionId, approval.approvalId])}
+            >
+              <ChatExpiredApprovalRecoveryControl
+                props={props}
+                turnId={reviewedApproval?.linkage?.turnId}
+                sessionId={props.selectedSessionId}
+                workspaceId={workspaceId}
+                approvalId={approval.approvalId}
+                onUpdated={props.onRefreshThread}
+              />
+            </DeferredChatLeaf>
+          ) : null}
           <NativeOwnerLink
             href={continuationHref("/inbox", approval.approvalId)}
             scope={noticeScope}

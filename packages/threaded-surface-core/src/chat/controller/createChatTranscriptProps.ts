@@ -13,7 +13,7 @@ import type { useChatSessionData } from "../useChatSessionData";
 import type { useChatSessionStatus } from "../useChatSessionStatus";
 import type { useChatSurfaceOrchestration } from "../useChatSurfaceOrchestration";
 import { useChatThreadController } from "../useChatThreadController";
-import { useChatTimerPanel } from "../useChatTimerPanel";
+import type { useChatTimerPanel } from "../useChatTimerPanel";
 import { useRunVariablePanel } from "../useRunVariablePanel";
 import type { useChatConversationContext } from "./useChatConversationContext";
 import type { useChatConversationFork } from "./useChatConversationFork";

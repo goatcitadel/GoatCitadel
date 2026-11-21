@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
-import { probeLiveCapabilityDispositions } from "./usability-capability-dispositions.mjs";
+import { probeLiveCapabilityDispositions, validateDeterministicCapabilityResult } from "./usability-capability-dispositions.mjs";
 
 function fixture({ revision = "a".repeat(64), archiveStatus = 200 } = {}) {
   const calls = [];
@@ -56,3 +56,31 @@ test("capability probe reports stale cleanup without fetching a new revision or 
   assert.equal(calls.filter(call => call.route.endsWith("/archive")).length, 1);
   assert.ok(calls.every(call => call.options.method === "POST"));
 });
+
+for (const capability of ["tool:memory.read", "tool:memory.search"]) {
+  const context = { fixture: { knowledgeDocId: "non-memory-doc" } };
+  const base = { namespace: "capability-probe", query: "CAPABILITY_KNOWLEDGE_NEEDLE_20260729", items: [] };
+  test(`${capability} records unavailable indexed recall without claiming document retrieval`, () => {
+    const summary = validateDeterministicCapabilityResult(capability, {
+      ...base, unavailable: true,
+      coverage: { lexicalStatus: "unavailable", reason: "Memory recall is unavailable." },
+    }, context);
+    assert.equal(summary.availability, "unavailable");
+    assert.equal(summary.admittedSources, 0);
+  });
+  test(`${capability} excludes a plain ingested document from an available memory corpus`, () => {
+    const summary = validateDeterministicCapabilityResult(capability, {
+      ...base, coverage: { lexicalStatus: "ready" },
+    }, context);
+    assert.equal(summary.nonMemoryDocumentExcluded, true);
+  });
+  test(`${capability} rejects leaked documents and contradictory unavailable receipts`, () => {
+    const leaked = { docId: "non-memory-doc", snippet: base.query, sourceHash: "a".repeat(64) };
+    assert.throws(() => validateDeterministicCapabilityResult(capability, {
+      ...base, items: [leaked], coverage: { lexicalStatus: "ready" },
+    }, context));
+    assert.throws(() => validateDeterministicCapabilityResult(capability, {
+      ...base, unavailable: true, coverage: { lexicalStatus: "ready" },
+    }, context));
+  });
+}

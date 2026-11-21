@@ -1,5 +1,5 @@
 import { useChatBindingDraftReceipt } from "./useChatBindingDraftReceipt";
-import { presentSpecialistCandidateStatus } from "./chat-vocabulary";
+import { presentSpecialistCandidateStatus } from "./chat-optional-vocabulary";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
 import {

@@ -1,9 +1,21 @@
 import { isDeepStrictEqual } from "node:util";
-import type { CodeModeRunArtifactPreview } from "@goatcitadel/contracts";
+import type { ChangePlanRecord, CodeModeRunArtifactPreview } from "@goatcitadel/contracts";
 import { projectPublicSecretValue } from "./public-secret-projection.js";
 
 export function projectCapabilityPublicValue<T>(value: T): T {
   return projectPublicSecretValue(value);
+}
+
+/** Only canonical server-created Change Plans issue these public action
+ * tokens. Preserve the exact token even if random bytes resemble a credential;
+ * all other fields still pass through the usual public secret projection. */
+export function projectCapabilityChangePlanOutcome<T extends {changePlan:ChangePlanRecord}>(value:T):T {
+  const projected=projectCapabilityPublicValue(value);
+  const action=value.changePlan.requiredAction;
+  if(action && projected.changePlan.requiredAction && /^[A-Za-z0-9_-]{43}$/u.test(action.actionNonce)) {
+    projected.changePlan={...projected.changePlan,requiredAction:{...projected.changePlan.requiredAction,actionNonce:action.actionNonce}};
+  }
+  return projected;
 }
 
 export function projectCapabilityToolSchemaForPublic<T>(value: T): T {

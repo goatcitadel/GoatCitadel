@@ -25,6 +25,7 @@ const copiedScripts = [
   "scripts/packaging/lib/package-renderers.mjs",
   "scripts/packaging/lib/desktop-artifact-provenance.mjs",
   "scripts/packaging/lib/release-payload-ownership.mjs",
+  "scripts/packaging/lib/stage-sqlite-schema-reference.mjs",
   "scripts/packaging/safe-cleanup.mjs",
   "scripts/lib/ui-target.mjs",
 ];

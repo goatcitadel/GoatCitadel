@@ -4,20 +4,20 @@ import type {
   LearnedMemoryItemRecord,
   LearnedMemoryItemType,
   LearnedMemoryUpdateInput,
+  MemoryClaim,
+  MemoryCorrectionTarget,
+  ChatMessageSourceAuthority,
 } from "@goatcitadel/contracts";
+import { redactSecretText } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { extractLearnedMemoryCandidates, shouldExtractLearnedMemoryContent } from "./learned-memory-utils.js";
 import { clampMemoryConfidence, decideLearnedMemoryWrite } from "./memory-lifecycle-policy.js";
+import {classifyMemoryIntent} from "./memory-intent-service.js";
 
 // ── pure helpers ─────────────────────────────────────────────────────
 
 function looksSensitive(value: string): boolean {
-  const normalized = value.toLowerCase();
-  return (
-    /api[_-]?key|token|secret|password|private[_-]?key|bearer\s+[a-z0-9._-]+/i.test(normalized) ||
-    /\bsk-[a-z0-9-]{8,}\b/i.test(normalized) ||
-    /\bghp_[a-z0-9]{10,}\b/i.test(normalized)
-  );
+  return redactSecretText(value.normalize("NFKC"), { env: process.env }).redactionCount > 0;
 }
 
 // ── service class ────────────────────────────────────────────────────
@@ -74,13 +74,7 @@ export class ChatLearnedMemoryService {
       content: nextContent,
       confidence: nextConfidence,
     });
-    return {
-      ...current,
-      status: nextStatus,
-      content: nextContent,
-      confidence: nextConfidence,
-      updatedAt: new Date().toISOString(),
-    };
+    return (await this.ctx.storage.learnedMemory.getItem(itemId))!;
   }
 
   async clearChatSessionLearnedMemory(sessionId: string): Promise<void> {
@@ -99,6 +93,8 @@ export class ChatLearnedMemoryService {
     source: {
       role: "user" | "assistant";
       sourceRef: string;
+      authority?:ChatMessageSourceAuthority;
+      workspaceId?:string;
       trace?: Pick<ChatTurnTraceRecord, "status" | "toolRuns">;
     },
   ): Promise<void> {
@@ -106,7 +102,16 @@ export class ChatLearnedMemoryService {
       return;
     }
     const repo = this.ctx.storage.learnedMemory;
-    const candidates = extractLearnedMemoryCandidates(content, source.role);
+    const intent = classifyMemoryIntent({content,sourceAuthority:source.authority ?? "unknown",sourceMessageId:source.sourceRef});
+    const naturalContents = new Set(intent.proposals.map(proposal => proposal.content.toLowerCase()));
+    const candidates:Array<{itemType:LearnedMemoryItemType;content:string;confidence:number;claim?:MemoryClaim;correctionRequested?:boolean}> =
+      extractLearnedMemoryCandidates(content, source.role).filter(candidate => !naturalContents.has(candidate.content.toLowerCase()));
+    for (const proposal of intent.proposals) {
+      if (proposal.kind === "inferred_candidate") continue;
+      candidates.push({itemType:proposal.itemType,content:proposal.content,confidence:0.9,correctionRequested:proposal.kind === "correction",
+        ...(proposal.claimHint && source.workspaceId ? {claim:{identity:{subject:proposal.claimHint.subject,predicate:proposal.claimHint.predicate,
+          cardinality:proposal.claimHint.cardinality,scope:{kind:"session",id:sessionId}},value:proposal.claimHint.value}} : {})});
+    }
     for (const candidate of candidates) {
       if (looksSensitive(candidate.content)) {
         await repo.insertItem({
@@ -127,6 +132,10 @@ export class ChatLearnedMemoryService {
         itemType: candidate.itemType,
         content: candidate.content,
         confidence: candidate.confidence,
+        claim:candidate.claim,
+        correctionRequested:candidate.correctionRequested,
+        workspaceId:source.workspaceId,
+        authority:source.authority,
         sourceKind: source.role,
         sourceRef: source.sourceRef,
         snippet: candidate.content.slice(0, 240),
@@ -144,13 +153,28 @@ export class ChatLearnedMemoryService {
     sourceKind: string;
     sourceRef: string;
     snippet: string;
+    workspaceId?:string;
+    claim?:MemoryClaim;
+    authority?:ChatMessageSourceAuthority;
+    correctionRequested?:boolean;
   }): Promise<void> {
     const repo = this.ctx.storage.learnedMemory;
-    const existing = await repo.findActiveByType(input.sessionId, input.itemType as LearnedMemoryItemType);
+    const existing = input.claim && input.workspaceId
+      ? await repo.findActiveClaim(input.sessionId,input.workspaceId,input.claim)
+      : await repo.findActiveByType(input.sessionId, input.itemType as LearnedMemoryItemType);
+    let correctionTarget:MemoryCorrectionTarget|undefined;
+    if (input.correctionRequested) {
+      if (!input.claim || existing.length !== 1 || !existing[0]?.sourceHash || input.authority !== "operator") return;
+      correctionTarget = {sourceRef:existing[0].itemId,expectedSourceHash:existing[0].sourceHash};
+    }
     const decision = decideLearnedMemoryWrite({
       content: input.content,
       confidence: input.confidence,
       existing,
+      workspaceId:input.workspaceId,
+      claim:input.claim,
+      authority:input.authority,
+      correctionTarget,
     });
     if (decision.action === "skip") {
       return;
@@ -162,6 +186,7 @@ export class ChatLearnedMemoryService {
     }
     if (decision.action === "record_conflict") {
       const incomingItem = await repo.insertItem({
+        claim:input.claim,
         sessionId: input.sessionId,
         itemType: input.itemType as LearnedMemoryItemType,
         content: input.content,
@@ -182,7 +207,9 @@ export class ChatLearnedMemoryService {
       return;
     }
     if (decision.action === "supersede") {
-      const next = await repo.insertItem({
+      if (!correctionTarget) return;
+      await repo.correctItem({itemId:decision.existingItemId,expectedSourceHash:correctionTarget.expectedSourceHash,replacement:{
+        claim:input.claim,
         sessionId: input.sessionId,
         itemType: input.itemType as LearnedMemoryItemType,
         content: input.content,
@@ -192,12 +219,12 @@ export class ChatLearnedMemoryService {
         sourceKind: input.sourceKind,
         sourceRef: input.sourceRef,
         snippet: input.snippet,
-      });
-      await repo.supersedeItem(decision.existingItemId, next.itemId);
+      }});
       return;
     }
 
     await repo.insertItem({
+      claim:input.claim,
       sessionId: input.sessionId,
       itemType: input.itemType as LearnedMemoryItemType,
       content: input.content,

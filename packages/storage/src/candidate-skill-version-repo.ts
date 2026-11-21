@@ -67,7 +67,7 @@ export class CandidateSkillVersionRepository {
     this.listApprovedInstructionsStmt = db.prepare(`
       SELECT * FROM candidate_skill_versions
       WHERE workspace_id = @workspaceId
-        AND source_kind IN ('workflow_capture', 'capability_pack')
+        AND source_kind IN ('workflow_capture', 'capability_pack', 'background_workflow')
         AND lifecycle_state IN ('approved', 'trusted')
         AND program_artifact_json IS NULL AND schema_artifact_json IS NULL
       ORDER BY updated_at DESC, version_id DESC
@@ -375,6 +375,7 @@ function validateCandidateRecord(input: CandidateSkillVersionRecord): void {
 }
 
 const CANDIDATE_SKILL_SOURCE_KINDS = new Set<CandidateSkillVersionRecord["sourceKind"]>([
+  "background_workflow",
   "capability_pack",
   "workflow_capture",
   "code_mode_generated",
@@ -385,6 +386,7 @@ const CANDIDATE_SKILL_SOURCE_KINDS = new Set<CandidateSkillVersionRecord["source
 ]);
 
 const GOVERNED_CANDIDATE_SKILL_SOURCE_KINDS = new Set<CandidateSkillVersionRecord["sourceKind"]>([
+  "background_workflow",
   "capability_pack",
   "workflow_capture",
   "learned_correction",

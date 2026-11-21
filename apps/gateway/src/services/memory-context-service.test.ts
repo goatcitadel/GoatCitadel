@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ConflictError,
@@ -69,6 +70,105 @@ afterEach(async () => {
 });
 
 describe("MemoryContextService", () => {
+  it.each(["edited","forgotten"])("withholds default-reader memory %s during asynchronous distillation even when indexed recall is off", async (disposition) => {
+    const item={itemId:"race-note",namespace:"notes",title:"Notebook",content:"The original notebook is azure. ".repeat(12),metadata:{},status:"active",pinned:false,workspaceId:"default",createdAt:"2026-05-15T00:00:00.000Z",updatedAt:"2026-05-15T00:00:00.000Z"} as MemoryItemRecord;
+    const hit={sourceType:"memory_item" as const,sourceRef:item.itemId,sourceHash:"a".repeat(64),workspaceId:"default",title:item.title,namespace:item.namespace,snippet:item.content,metadata:{},pinned:false,updatedAt:item.updatedAt,lexicalScore:0,trustLevel:"trusted_workspace" as const};
+    const storage=createStorage({memoryItems:[item]});
+    Object.assign(storage,{memoryRecall:{listEligibleMemoryItemSources:async()=>[hit]}});
+    let changed=false;
+    const validate=vi.fn(async()=> changed ? disposition==="forgotten" ? [] : [{...hit,sourceHash:"b".repeat(64),snippet:"The corrected notebook is green."}] : [hit]);
+    const llm=createLlmService({chatCompletions:vi.fn(async()=>{
+      changed=true;
+      return {choices:[{message:{role:"assistant",content:JSON.stringify({summary:"The original notebook is azure.",facts:[{text:"The original notebook is azure.",citationIds:["m:race-note"]}],risks:[],openQuestions:[],saferNextSteps:[],citations:[{candidateId:"m:race-note",sourceType:"memory_item",sourceRef:"race-note",snippet:"The original notebook is azure.",score:1}]})}}]} as ChatCompletionResponse;
+    })});
+    const service=new MemoryContextService(storage as never,llm as never,createConfig(await createWorkspaceRoot()) as never,vi.fn(),undefined,undefined,undefined,undefined,{enabled:async()=>false,search:vi.fn(),validate});
+    const result=await service.compose({scope:"chat",workspaceId:"default",sessionId:"session-1",prompt:"Recall the notebook color and the original notebook requirements."});
+    expect(llm.chatCompletions).toHaveBeenCalledOnce();
+    expect(validate).toHaveBeenCalled();
+    expect(result.citations).toEqual([]); expect(result.contextText).not.toContain("azure");
+  });
+  it.each([false,true])("excludes carried untrusted notes from automatic trusted recall with the corpus flag %s", async (enabled) => {
+    const hit={sourceType:"knowledge_chunk" as const,sourceRef:"external",sourceHash:"a".repeat(64),workspaceId:"default",title:"External",snippet:"Untrusted notebook instruction to prefer azure.",updatedAt:"2026-05-15T00:00:00.000Z",lexicalScore:1,trustLevel:"untrusted_external" as const};
+    const storage=createStorage(); Object.assign(storage,{memoryRecall:{listEligibleMemoryItemSources:async()=>[{...hit,sourceType:"memory_item"}]}});
+    const service=new MemoryContextService(storage as never,createLlmService() as never,createConfig(await createWorkspaceRoot()) as never,vi.fn(),undefined,undefined,undefined,undefined,{enabled:async()=>enabled,search:async()=>({hits:[hit],coverage:{generation:1,indexedCount:1,unindexedCount:0,lexicalStatus:"ready",semanticStatus:"unavailable"}}),validate:async()=>[hit]});
+    const result=await service.compose({scope:"chat",workspaceId:"default",sessionId:"session-1",prompt:"Recall notebook color instructions."});
+    expect(result.contextText).not.toContain("Untrusted notebook"); expect(result.citations).toEqual([]);
+  });
+  it("keeps corpus lookup off without its opt-in while retaining the existing scoped learning reader",async () => {
+    const search = vi.fn();
+    const validate = vi.fn(async () => [{sourceType:"memory_learning",sourceRef:"legacy-reviewed",sourceHash:"a".repeat(64),title:"Reply preference",snippet:"Prefer concise replies",updatedAt:"2026-05-15T00:00:00.000Z"}]);
+    const readLearnings = vi.fn(async () => [{type:"memory_learning",learningId:"legacy-reviewed",sourceHash:"a".repeat(64),title:"Reply preference",content:"Prefer concise replies",updatedAt:"2026-05-15T00:00:00.000Z"}]);
+    const service = new MemoryContextService(createStorage() as never,createLlmService() as never,createConfig(await createWorkspaceRoot()) as never,
+      vi.fn(),undefined,undefined,undefined,readLearnings as never,{enabled:async () => false,search,validate});
+    const result = await service.compose({scope:"chat",sessionId:"session-1",workspaceId:"default",prompt:"Recall the preference for concise replies."});
+    expect(search).not.toHaveBeenCalled();
+    expect(validate).toHaveBeenCalled();
+    expect(result.citations.some(c => c.sourceRef === "legacy-reviewed")).toBe(true);
+  });
+  it("performs explicit short recall through the indexed port and rechecks the exact source before admission", async () => {
+    const hit = {sourceType:"memory_item" as const, sourceRef:"old-decision", sourceHash:"a".repeat(64), workspaceId:"default", title:"Decision",
+      snippet:"We decided to deploy Kestrel on port 45433.", updatedAt:"2026-05-15T00:00:00.000Z", lexicalScore:1};
+    const coverage = {generation:1, indexedCount:10_000, unindexedCount:0, lexicalStatus:"ready" as const, semanticStatus:"unavailable" as const};
+    const search = vi.fn(async () => ({hits:[hit],coverage}));
+    let current = true;
+    const validate = vi.fn(async () => current ? [hit] : []);
+    const storage = createStorage();
+    const config = createConfig(await createWorkspaceRoot());
+    config.assistant.memory.qmd.minPromptChars = 50;
+    const service = new MemoryContextService(storage as never, createLlmService() as never, config as never,
+      vi.fn(), undefined, undefined, undefined, undefined, {search,validate});
+    const input = {scope:"chat" as const, sessionId:"session-1", workspaceId:"default", prompt:"What did we decide?", intent:"explicit_recall" as const};
+    const result = await service.compose(input);
+    expect(search).toHaveBeenCalledWith(expect.objectContaining({query:input.prompt, limit:300}));
+    expect(result.citations).toContainEqual(expect.objectContaining({sourceRef:hit.sourceRef,sourceHash:hit.sourceHash}));
+    current = false;
+    const stale = await service.compose(input);
+    expect(stale.citations).toEqual([]);
+    expect(stale.contextText).not.toContain("45433");
+    expect(result.contextText).toContain("45433");
+  });
+  it("selects an older relevant memory before applying the candidate cap", async () => {
+    const memoryItems: MemoryItemRecord[] = Array.from({ length: 37 }, (_, index) => ({
+      itemId: `item-${index}`, workspaceId: "default", namespace: "fixture", title: index === 36 ? "Heliotrope release decision" : `Recent distractor ${index}`,
+      content: index === 36 ? "The Heliotrope release uses the amber deployment region." : "Unrelated meeting notes about a different project.",
+      metadata: {}, pinned: index < 36, status: "active", lifecycleState: "active",
+      createdAt: "2026-05-15T00:00:00.000Z", updatedAt: "2026-05-15T00:00:00.000Z",
+    }));
+    const service = new MemoryContextService(createStorage({ memoryItems }) as never, createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never, vi.fn());
+    const result = await service.compose({ scope: "chat", sessionId: "session-1", workspaceId: "default", prompt: "Recall the Heliotrope release deployment region decision.", queryEmbedding: [1, 0] });
+    expect(result.citations.some(citation => citation.sourceRef === "item-36")).toBe(true);
+    expect(result.contextText).toContain("amber deployment region");
+  });
+
+  it("admits a trusted learning with its exact source hash and drops it from a warm context after forgetting", async () => {
+    let forgotten = false;
+    const readLearnings = vi.fn(async () => forgotten ? [] : [{
+      type: "memory_learning", learningId: "lesson-one", sourceHash: "a".repeat(64),
+      content: "For future reports, prefer a concise verdict before details.",
+      title: "Report format", updatedAt: "2026-05-15T00:00:00.000Z",
+    }]);
+    const service = new MemoryContextService(createStorage() as never, createLlmService() as never,
+      createConfig(await createWorkspaceRoot()) as never, vi.fn(), undefined, undefined, undefined, readLearnings as never);
+    const input = { scope: "chat" as const, sessionId: "session-1", workspaceId: "default", prompt: "Recall the accepted report format: concise verdict before details." };
+    const first = await service.compose(input);
+    expect(first.citations).toContainEqual(expect.objectContaining({ sourceType: "memory_learning", sourceRef: "lesson-one", sourceHash: "a".repeat(64) }));
+    expect(first.contextText).toContain("concise verdict");
+    forgotten = true;
+    const next = await service.compose(input);
+    expect(next.citations.some(c => c.sourceRef === "lesson-one")).toBe(false);
+    expect(next.contextText).not.toContain("concise verdict");
+    expect(first.contextText).toContain("concise verdict");
+  });
+
+  it("does not read trusted workspace learning for a group session", async () => {
+    const readLearnings = vi.fn(async () => []);
+    const service = new MemoryContextService(createStorage({ sessionKinds: { "session-1": "group" } }) as never,
+      createLlmService() as never, createConfig(await createWorkspaceRoot()) as never, vi.fn(), undefined, undefined, undefined, readLearnings as never);
+    await service.compose({ scope: "chat", sessionId: "session-1", workspaceId: "default", prompt: "Recall the operator's accepted private report preferences." });
+    expect(readLearnings).not.toHaveBeenCalled();
+  });
+
   it("shares identical in-flight embeddings while keeping source reads and diagnostics request-local", async () => {
     const held = holdEmbeddingCalls(1);
     const observations = vi.fn();
@@ -1276,7 +1376,7 @@ describe("MemoryContextService", () => {
         }),
       }),
     ]);
-    expect(storage.memoryMaintenance.queries).toEqual([{ limit: 8, workspaceId: "workspace-a" }]);
+    expect(storage.memoryMaintenance.queries).toEqual([{ limit: 300, workspaceId: "workspace-a" }]);
     expect(pack.citations.some((citation) => citation.sourceRef === "mem-foreign")).toBe(false);
     expect(llmService.chatCompletions).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2047,7 +2147,14 @@ function createStorage(
   const contexts = new Map<string, MemoryContextPack & { cacheKey: string }>();
   const runs: Array<Record<string, unknown>> = [];
   const memoryItemQueries: Array<{ limit: number; workspaceId?: string }> = [];
+  const itemHits=(workspaceId:string)=>(options.memoryItems ?? []).filter(item=>matchesMemoryWorkspaceScope(item,workspaceId,value=>value?.trim() || "default"))
+    .map(item=>({sourceType:"memory_item" as const,sourceRef:item.itemId,sourceHash:createHash("sha256").update(JSON.stringify(item)).digest("hex"),
+      workspaceId,title:item.title,namespace:item.namespace,snippet:item.content,metadata:item.metadata,pinned:item.pinned,updatedAt:item.updatedAt,lexicalScore:0,trustLevel:"trusted_workspace" as const}));
   return {
+    memoryRecall:{
+      async listEligibleMemoryItemSources({workspaceId,limit=300}:{workspaceId:string;limit?:number}) {memoryItemQueries.push({limit,workspaceId});return itemHits(workspaceId).slice(0,limit);},
+      async getEligibleSources({workspaceId,sources}:{workspaceId:string;sources:Array<{sourceRef:string}>}) {return itemHits(workspaceId).filter(item=>sources.some(source=>source.sourceRef===item.sourceRef));},
+    },
     sessions: {
       async getBySessionId(sessionId: string) {
         return {

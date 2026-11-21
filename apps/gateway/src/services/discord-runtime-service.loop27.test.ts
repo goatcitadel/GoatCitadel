@@ -92,18 +92,20 @@ const discordMock = vi.hoisted(() => {
   return { FakeClient, FakeSlashCommandBuilder };
 });
 
-vi.mock("discord.js", () => ({
-  Client: discordMock.FakeClient,
-  GatewayIntentBits: {
-    Guilds: 1,
-    GuildMessages: 2,
-    DirectMessages: 4,
-    MessageContent: 8,
-  },
-  Partials: {
-    Channel: "Channel",
-  },
-  SlashCommandBuilder: discordMock.FakeSlashCommandBuilder,
+vi.mock("./discord-sdk.js", () => ({
+  loadDiscordSdk: () => ({
+    Client: discordMock.FakeClient,
+    GatewayIntentBits: {
+      Guilds: 1,
+      GuildMessages: 2,
+      DirectMessages: 4,
+      MessageContent: 8,
+    },
+    Partials: {
+      Channel: "Channel",
+    },
+    SlashCommandBuilder: discordMock.FakeSlashCommandBuilder,
+  }),
 }));
 
 import { DiscordRuntimeService } from "./discord-runtime-service.js";

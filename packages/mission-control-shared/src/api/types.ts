@@ -675,6 +675,8 @@ export interface RuntimeSettingsResponse {
     productSourceEvolutionV1Enabled?: boolean;
     channelVoiceReplyV1Enabled?: boolean;
     memoryConsolidationV1Enabled?: boolean;
+    memoryCorpusRecallV1Enabled?: boolean;
+    backgroundSkillDraftsV1Enabled?: boolean;
     cronEvidenceV1Enabled?: boolean;
     utilityModelRoutingV1Enabled?: boolean;
     chatTurnInterruptionRecoveryV1Disabled?: boolean;

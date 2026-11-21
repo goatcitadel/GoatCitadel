@@ -23,7 +23,6 @@ import { useChatStreamPreferences } from "./chat/controller/useChatStreamPrefere
 import { useChatSubmissionComposition } from "./chat/controller/useChatSubmissionComposition";
 import { useChatSurfaceComposition } from "./chat/controller/useChatSurfaceComposition";
 import { useChatSurfaceNavigation } from "./chat/controller/useChatSurfaceNavigation";
-import { createThreadedWorkflowPanel } from "./chat/create-threaded-workflow-panel";
 import { useChatChangePlanState } from "./chat/useChatChangePlanState";
 import type { MissionThreadedControllerHostProps } from "./MissionThreadedControllerHost.types";
 export {
@@ -36,7 +35,7 @@ import type {
   ChatGeneratedArtifactRecord,
   ThreadKnowledgeRetrievalMode,
 } from "@goatcitadel/contracts";
-import { useCallback, useDeferredValue, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { type AgenticRunTreeResponse } from "@goatcitadel/mission-control-shared/api/agentic";
 
@@ -330,7 +329,7 @@ export function MissionThreadedControllerHost({
     setSelectedTurnId,
     setLocalNotices,
   });
-  useChatSessionRestoration({
+  const { draftHydrated } = useChatSessionRestoration({
     initialOutboundSessionCreationRef: coordination.initialOutboundSessionCreationRef,
     workspaceId,
     selection,
@@ -582,7 +581,29 @@ export function MissionThreadedControllerHost({
     onOpenStartHere,
   };
 
-  const workflowPanel = createThreadedWorkflowPanel({
+  const canOpenBuildEditor = Boolean(
+    session.threadController.selectedSession &&
+    (surfaceRuntime.surfaceState.isChatSurface || surfaceRuntime.surfaceState.isCodeSurface),
+  );
+  const loadWorkflowPanel = secondaryEvidenceEnabled === undefined || (workbenchRequested && canOpenBuildEditor);
+  const [workflowFactory, setWorkflowFactory] =
+    useState<typeof import("./chat/create-threaded-workflow-panel").createThreadedWorkflowPanel>();
+  const [buildEditorUnavailable, setBuildEditorUnavailable] = useState(false);
+  useEffect(() => {
+    if (!loadWorkflowPanel || workflowFactory) return;
+    let active = true;
+    setBuildEditorUnavailable(false);
+    void import("./chat/create-threaded-workflow-panel").then(
+      ({ createThreadedWorkflowPanel }) => {
+        if (active) setWorkflowFactory(() => createThreadedWorkflowPanel);
+      },
+      () => {
+        if (active) setBuildEditorUnavailable(true);
+      },
+    );
+    return () => { active = false; };
+  }, [loadWorkflowPanel, workflowFactory]);
+  const workflowPanel = workflowFactory?.({
     workspaceId,
     selectedSession: session.threadController.selectedSession,
     isCoworkSurface: surfaceRuntime.surfaceState.isCoworkSurface,
@@ -613,7 +634,7 @@ export function MissionThreadedControllerHost({
     handleRunCodeHelper: actions.codeLaunch.handleRunCodeHelper,
     onOpenApprovals,
     workbenchController: surfaceRuntime.workbenchController,
-  });
+  }) ?? null;
   const chatChangePlanReceipt = createChatChangePlanReceipt({
     thread: session.sessionData.thread,
     changePlanState,
@@ -627,8 +648,12 @@ export function MissionThreadedControllerHost({
     dockOpen: surfaceRuntime.workbenchController.dockOpen,
     onDockOpenChange: handleDockOpenChange,
     onWorkbenchOpenChange: setWorkbenchRequested,
+    canOpenBuildEditor,
+    buildEditorUnavailable,
     sessionRail: chatSessionRailPresentation.sessionRailData,
-    activeSessionSurfaceProps: activePresentation.activeSessionSurfaceProps,
+    activeSessionSurfaceProps: activePresentation.activeSessionSurfaceProps
+      ? { ...activePresentation.activeSessionSurfaceProps, draftHydrated }
+      : activePresentation.activeSessionSurfaceProps,
     emptyStateProps,
     ...createChatDropTargetProps({
       isDragActive,
@@ -723,6 +748,8 @@ export function MissionThreadedControllerHost({
         onOpenApprovals={onOpenApprovals}
       />
       {surfaceRuntime.workbenchController.workbenchRuntime}
+      {composer.multimodalRuntime}
+      {session.timerPanel.runtime}
       {frame}
     </>
   );

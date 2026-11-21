@@ -28,7 +28,10 @@ export function rankMemoryCandidates(
   const scored = candidates.map((candidate, index) => {
     const lexical = bm25[index] ?? 0;
     const semanticHint = semanticHintScore(terms, candidate.retrievalHints);
-    const embedding = embeddingSignal(
+    const indexedScore = candidate.indexedSemanticScore;
+    const embedding = options.embeddingProviderIsReal === true && typeof indexedScore === "number" && Number.isFinite(indexedScore) && indexedScore >= 0.65 && indexedScore <= 1
+      ? {score:Math.min(0.35,indexedScore-0.65),status:"used" as const}
+      : embeddingSignal(
       options.queryEmbedding,
       candidate.embedding,
       options.embeddingProviderIsReal === true,

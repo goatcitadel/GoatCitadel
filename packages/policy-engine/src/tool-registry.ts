@@ -84,6 +84,8 @@ const MEMORY_WRITE_ARG_SCHEMA = {
     },
     tags: { type: "array", items: { type: "string" }, description: "Optional tags." },
     metadata: { type: "object", description: "Optional extra fields stored with the note." },
+    expectedItemId: {type:"string",description:"For replacing an existing upsert: exact current item ID from memory.read/search."},
+    expectedSourceHash: {type:"string",description:"For replacing an existing upsert: exact current sourceHash from memory.read/search. Stale targets are refused."},
   },
   required: ["content"],
 } as const;

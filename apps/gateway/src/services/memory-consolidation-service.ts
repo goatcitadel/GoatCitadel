@@ -10,6 +10,14 @@ import type {
 } from "@goatcitadel/contracts";
 import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
+import { redactSecretText } from "@goatcitadel/contracts";
+import { createHash, randomUUID } from "node:crypto";
+import type {
+  ConsolidationCursor,
+  ConsolidationProgress,
+  ConsolidationSourceExclusion,
+  ConsolidationSourceInspection,
+} from "@goatcitadel/storage";
 
 // Governed background memory consolidation (competitive-gap program phase A3).
 //
@@ -30,15 +38,14 @@ export const MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY = "memory_consolidation_
 const DEFAULT_LOOKBACK_DAYS = 7;
 const MAX_TRACES_PER_RUN = 500;
 const MAX_SESSIONS_PER_RUN = 3;
+const MAX_SOURCE_WINDOWS_PER_RUN = 3;
 const MAX_CANDIDATES_PER_SESSION = 5;
 const MAX_CANDIDATES_PER_RUN = 10;
 const MAX_REFLECTION_ATTEMPTS = 3;
 const MIN_CANDIDATE_CONFIDENCE = 0.55;
 const SIMILARITY_SKIP_THRESHOLD = 0.6;
 const MAX_DIGEST_EVENTS = 40;
-const MAX_DIGEST_EVENT_CHARS = 400;
 const MAX_DIGEST_TOTAL_CHARS = 6_000;
-const MIN_DIGEST_CHARS = 200;
 export const EXISTING_LEARNINGS_DEDUP_LIMIT = 200;
 export const PENDING_CANDIDATES_DEDUP_LIMIT = 100;
 
@@ -64,8 +71,25 @@ export interface MemoryConsolidationDeps {
   isFeatureEnabled: (
     flag: "memoryConsolidationV1Enabled" | "autonomyV1Disabled" | "memoryLifecycleAdminV1Enabled",
   ) => Promise<boolean>;
-  listCompletedTurnTracesSince: (sinceIso: string, limit: number) => Promise<ChatTurnTraceRecord[]>;
+  listWorkspaceIds: () => Promise<string[]>;
+  resolveEligibleSourceSession: (sessionId: string) => Promise<{ workspaceId: string } | undefined>;
+  listCompletedTracePage: (input: {
+    workspaceId: string;
+    after: ConsolidationCursor;
+    through: string;
+    limit: number;
+  }) => Promise<ChatTurnTraceRecord[]>;
   readTranscriptOrEmpty: (sessionId: string) => Promise<TranscriptEvent[]>;
+  readCanonicalSource?(input: {
+    workspaceId: string;
+    sessionId: string;
+    turnIds: string[];
+  }): Promise<{ sourceHash: string; events: TranscriptEvent[] } | undefined>;
+  inspectCanonicalSource?(input: {
+    workspaceId: string;
+    sessionId: string;
+    turnIds: string[];
+  }): Promise<ConsolidationSourceInspection>;
   createChatCompletion: (
     request: ChatCompletionRequest,
     attribution: ModelUsageAttributionContext,
@@ -75,9 +99,22 @@ export interface MemoryConsolidationDeps {
     input: TraceMemoryCandidateInput,
     actorId: string,
   ) => Promise<TraceMemoryCandidateRecord>;
-  listExistingInsightsForDedup: () => Promise<string[]>;
-  getWatermark: () => Promise<string | undefined>;
-  setWatermark: (iso: string) => Promise<unknown>;
+  listExistingInsightsForDedup: (workspaceId: string) => Promise<string[]>;
+  readProgress: (workspaceId: string) => Promise<ConsolidationProgress>;
+  claimProgress: (
+    workspaceId: string,
+    expectedRevision: number,
+    leaseOwner: string,
+    now: string,
+  ) => Promise<ConsolidationProgress | undefined>;
+  commitProgress: (
+    workspaceId: string,
+    expectedRevision: number,
+    leaseOwner: string,
+    cursor: ConsolidationCursor | undefined,
+    now: string,
+    sourceExclusions?: ConsolidationSourceExclusion[],
+  ) => Promise<unknown>;
   publishRealtime: (eventType: string, source: string, payload?: Record<string, unknown>) => Promise<unknown>;
   recordDevDiagnostic?: (input: {
     level: "info" | "warn";
@@ -95,6 +132,8 @@ export interface MemoryConsolidationRunSummary {
   qualifyingTurns: number;
   sessionsSampled: number;
   sessionsFailed: number;
+  sourceWindowsSampled: number;
+  excludedTurns: number;
   drafted: number;
   deduplicated: number;
   proposed: number;
@@ -108,6 +147,7 @@ interface DraftedCandidate {
   confidence: number;
   sessionId: string;
   turnId?: string;
+  sourceBinding?: { workspaceId: string; sessionId: string; turnIds: string[]; sourceHash: string };
 }
 
 export class MemoryConsolidationService {
@@ -119,6 +159,8 @@ export class MemoryConsolidationService {
       qualifyingTurns: 0,
       sessionsSampled: 0,
       sessionsFailed: 0,
+      sourceWindowsSampled: 0,
+      excludedTurns: 0,
       drafted: 0,
       deduplicated: 0,
       proposed: 0,
@@ -135,90 +177,186 @@ export class MemoryConsolidationService {
       return { status: "skipped_kill_switch", ...empty };
     }
 
+    const summary: MemoryConsolidationRunSummary = { status: "completed", ...empty };
     const now = this.deps.now?.() ?? new Date();
-    const watermark =
-      (await this.deps.getWatermark()) ??
-      new Date(now.getTime() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    const traces = await this.deps.listCompletedTurnTracesSince(watermark, MAX_TRACES_PER_RUN);
-    const qualifying = traces.filter((trace) => isQualifyingTrace(trace));
-    const sessions = pickSessions(qualifying, MAX_SESSIONS_PER_RUN);
-
-    const summary: MemoryConsolidationRunSummary = {
-      status: "completed",
-      ...empty,
-      scannedTurns: traces.length,
-      qualifyingTurns: qualifying.length,
-      watermark,
-    };
-
-    const seenInsights = (await this.deps.listExistingInsightsForDedup()).map(tokenizeInsight);
-    const processedSessionIds = new Set<string>();
-    for (const session of sessions) {
-      // The autonomy kill switch may flip mid-run; re-check before every
-      // session so an engaged switch halts further proposals immediately.
-      if (await this.deps.isFeatureEnabled("autonomyV1Disabled")) {
-        summary.status = "skipped_kill_switch";
+    const workspaces = await Promise.all(
+      [...new Set(await this.deps.listWorkspaceIds())].map(async (workspaceId) => ({
+        workspaceId,
+        progress: await this.deps.readProgress(workspaceId),
+      })),
+    );
+    workspaces.sort(
+      (a, b) =>
+        (a.progress.lastAttemptAt ?? "").localeCompare(b.progress.lastAttemptAt ?? "") ||
+        a.workspaceId.localeCompare(b.workspaceId),
+    );
+    for (const { workspaceId, progress } of workspaces.slice(0, 20)) {
+      if (
+        summary.sessionsSampled >= MAX_SESSIONS_PER_RUN ||
+        summary.sourceWindowsSampled >= MAX_SOURCE_WINDOWS_PER_RUN ||
+        summary.proposed >= MAX_CANDIDATES_PER_RUN ||
+        summary.scannedTurns >= MAX_TRACES_PER_RUN
+      )
         break;
-      }
-      summary.sessionsSampled += 1;
-      let drafted: DraftedCandidate[];
+      const leaseOwner = randomUUID();
+      const claim = await this.deps.claimProgress(workspaceId, progress.revision, leaseOwner, now.toISOString());
+      if (!claim) continue;
+      let nextCursor = progress.cursor;
+      const sourceExclusions: ConsolidationSourceExclusion[] = [];
       try {
-        drafted = await this.draftSessionCandidates(session.sessionId, watermark, session.traces);
-      } catch (error) {
-        if (isAuthoritativeModelUsageAccountingError(error)) {
-          throw error;
-        }
-        summary.sessionsFailed += 1;
-        this.deps.recordDevDiagnostic?.({
-          level: "warn",
-          category: "memory",
-          event: "memory.consolidation.session_failed",
-          message: "Memory consolidation drafting failed for a session",
-          context: {
-            sessionId: session.sessionId,
-            error: error instanceof Error ? error.message : String(error),
-          },
+        const after = progress.cursor ?? {
+          finishedAt: new Date(now.getTime() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+          turnId: "",
+        };
+        summary.watermark ??= after.finishedAt;
+        const traces = await this.deps.listCompletedTracePage({
+          workspaceId,
+          after,
+          through: now.toISOString(),
+          limit: MAX_TRACES_PER_RUN - summary.scannedTurns,
         });
-        continue;
-      }
-      processedSessionIds.add(session.sessionId);
-      for (const candidate of drafted) {
-        if (summary.proposed >= MAX_CANDIDATES_PER_RUN) {
-          break;
+        const eligible = new Set<string>();
+        for (const sessionId of new Set(traces.map((trace) => trace.sessionId))) {
+          if ((await this.deps.resolveEligibleSourceSession(sessionId))?.workspaceId === workspaceId)
+            eligible.add(sessionId);
         }
-        summary.drafted += 1;
-        const tokens = tokenizeInsight(candidate.insight);
-        if (seenInsights.some((existing) => jaccardSimilarity(existing, tokens) >= SIMILARITY_SKIP_THRESHOLD)) {
-          summary.deduplicated += 1;
-          continue;
+        const qualifying = traces.filter((trace) => isQualifyingTrace(trace) && eligible.has(trace.sessionId));
+        const sessions = pickSessions(qualifying, MAX_SESSIONS_PER_RUN - summary.sessionsSampled);
+        summary.scannedTurns += traces.length;
+        summary.qualifyingTurns += qualifying.length;
+        const seenInsights = (await this.deps.listExistingInsightsForDedup(workspaceId)).map(tokenizeInsight);
+        const processedTurnIds = new Set<string>();
+        for (const session of sessions) {
+          if (summary.sourceWindowsSampled >= MAX_SOURCE_WINDOWS_PER_RUN || summary.proposed >= MAX_CANDIDATES_PER_RUN)
+            break;
+          // The autonomy kill switch may flip mid-run; re-check before every
+          // session so an engaged switch halts further proposals immediately.
+          if (!(await this.learningEnabled())) {
+            summary.status = (await this.deps.isFeatureEnabled("autonomyV1Disabled"))
+              ? "skipped_kill_switch"
+              : "disabled";
+            break;
+          }
+          summary.sessionsSampled += 1;
+          const prepared = await this.prepareSourceWindows(
+            session,
+            workspaceId,
+            MAX_SOURCE_WINDOWS_PER_RUN - summary.sourceWindowsSampled,
+            (exclusion) => {
+              sourceExclusions.push(exclusion);
+              processedTurnIds.add(exclusion.turnId);
+              summary.excludedTurns += 1;
+              this.deps.recordDevDiagnostic?.({
+                level: "warn",
+                category: "memory",
+                event: "memory.consolidation.source_excluded",
+                message:
+                  "A source turn was excluded from bounded consolidation; review it in Chat or prepare a smaller explicit memory.",
+                context: { workspaceId, ...exclusion },
+              });
+            },
+          ).catch(() => {
+            this.deps.recordDevDiagnostic?.({
+              level: "warn",
+              category: "memory",
+              event: "memory.consolidation.source_unavailable",
+              message: "Consolidation source could not be read; its checkpoint remains retryable.",
+              context: { workspaceId, sessionId: session.sessionId },
+            });
+            return { windows: [], unavailable: true };
+          });
+          if (prepared.unavailable) summary.sessionsFailed += 1;
+          for (const window of prepared.windows) {
+            summary.sourceWindowsSampled += 1;
+            let drafted: DraftedCandidate[];
+            try {
+              drafted = await this.draftSessionCandidates(session.sessionId, workspaceId, after.finishedAt, window);
+            } catch (error) {
+              if (isAuthoritativeModelUsageAccountingError(error)) {
+                throw error;
+              }
+              summary.sessionsFailed += 1;
+              this.deps.recordDevDiagnostic?.({
+                level: "warn",
+                category: "memory",
+                event: "memory.consolidation.session_failed",
+                message: "Memory consolidation drafting failed for a session",
+                context: {
+                  sessionId: session.sessionId,
+                  error: error instanceof Error ? error.message : String(error),
+                },
+              });
+              break;
+            }
+            let allCandidatesProcessed = true;
+            for (const candidate of drafted) {
+              if (summary.proposed >= MAX_CANDIDATES_PER_RUN) {
+                allCandidatesProcessed = false;
+                break;
+              }
+              if (
+                !(await this.learningEnabled()) ||
+                (await this.deps.resolveEligibleSourceSession(session.sessionId))?.workspaceId !== workspaceId
+              ) {
+                allCandidatesProcessed = false;
+                break;
+              }
+              summary.drafted += 1;
+              if (
+                candidate.sourceBinding &&
+                (await this.deps.readCanonicalSource?.(candidate.sourceBinding))?.sourceHash !==
+                  candidate.sourceBinding.sourceHash
+              ) {
+                allCandidatesProcessed = false;
+                break;
+              }
+              const tokens = tokenizeInsight(candidate.insight);
+              if (seenInsights.some((existing) => jaccardSimilarity(existing, tokens) >= SIMILARITY_SKIP_THRESHOLD)) {
+                summary.deduplicated += 1;
+                continue;
+              }
+              await this.deps.proposeTraceMemoryCandidate(
+                {
+                  workspaceId,
+                  candidateType: candidate.candidateType,
+                  proposedInsight: candidate.insight,
+                  confidence: candidate.confidence,
+                  sourceSessionId: candidate.sessionId,
+                  ...(candidate.turnId ? { sourceTurnId: candidate.turnId } : {}),
+                  metadata: {
+                    consolidation: true,
+                    consolidationRunKind: "weekly",
+                    ...(candidate.sourceBinding ? { consolidationSource: candidate.sourceBinding } : {}),
+                  },
+                },
+                "memory-consolidation-job",
+              );
+              seenInsights.push(tokens);
+              summary.proposed += 1;
+            }
+            if (allCandidatesProcessed) for (const trace of window) processedTurnIds.add(trace.turnId);
+            else break;
+          }
         }
-        await this.deps.proposeTraceMemoryCandidate(
-          {
-            candidateType: candidate.candidateType,
-            proposedInsight: candidate.insight,
-            confidence: candidate.confidence,
-            sourceSessionId: candidate.sessionId,
-            ...(candidate.turnId ? { sourceTurnId: candidate.turnId } : {}),
-            metadata: { consolidation: true, consolidationRunKind: "weekly" },
-          },
-          "memory-consolidation-job",
+        if (summary.status === "completed") {
+          nextCursor = after;
+          for (const trace of traces) {
+            if (isQualifyingTrace(trace) && eligible.has(trace.sessionId) && !processedTurnIds.has(trace.turnId)) break;
+            nextCursor = { finishedAt: trace.finishedAt ?? trace.startedAt, turnId: trace.turnId };
+          }
+          summary.nextWatermark = nextCursor.finishedAt;
+        }
+      } finally {
+        await this.deps.commitProgress(
+          workspaceId,
+          claim.revision,
+          leaseOwner,
+          nextCursor,
+          (this.deps.now?.() ?? new Date()).toISOString(),
+          sourceExclusions,
         );
-        seenInsights.push(tokens);
-        summary.proposed += 1;
       }
-    }
-
-    // Advance the watermark only when the run made real progress: either
-    // there was nothing to process, or at least one session drafted cleanly.
-    // A run where every sampled session failed retries the same window.
-    const madeProgress =
-      sessions.length === 0 || summary.sessionsFailed < summary.sessionsSampled || summary.status !== "completed";
-    if (summary.status === "completed" && madeProgress && traces.length > 0) {
-      const nextWatermark = computeProcessedTraceWatermark(traces, processedSessionIds, watermark);
-      await this.deps.setWatermark(nextWatermark);
-      summary.nextWatermark = nextWatermark;
-    } else if (summary.status === "completed" && traces.length === 0) {
-      summary.nextWatermark = watermark;
+      if (summary.status !== "completed") break;
     }
 
     await this.deps.publishRealtime("system", "memory", {
@@ -228,12 +366,96 @@ export class MemoryConsolidationService {
     return summary;
   }
 
+  private async prepareSourceWindows(
+    session: { sessionId: string; traces: ChatTurnTraceRecord[] },
+    workspaceId: string,
+    limit: number,
+    exclude: (exclusion: ConsolidationSourceExclusion) => void,
+  ): Promise<{ windows: ChatTurnTraceRecord[][]; unavailable: boolean }> {
+    const windows: ChatTurnTraceRecord[][] = [];
+    let current: ChatTurnTraceRecord[] = [],
+      chars = 0,
+      eventCount = 0,
+      unavailable = false;
+    const fallback =
+      this.deps.inspectCanonicalSource || this.deps.readCanonicalSource
+        ? undefined
+        : await this.deps.readTranscriptOrEmpty(session.sessionId);
+    for (const trace of session.traces) {
+      const input = { workspaceId, sessionId: session.sessionId, turnIds: [trace.turnId] };
+      let inspection: ConsolidationSourceInspection;
+      if (this.deps.inspectCanonicalSource) inspection = await this.deps.inspectCanonicalSource(input);
+      else if (this.deps.readCanonicalSource) {
+        const source = await this.deps.readCanonicalSource(input);
+        inspection = source ? { status: "ready", ...source } : { status: "unavailable" };
+      } else {
+        const events = (fallback ?? []).filter(
+          (event) =>
+            event.sessionId === session.sessionId &&
+            ((event.type === "message.user" && event.eventId === trace.userMessageId) ||
+              (event.type === "message.assistant" && event.eventId === trace.assistantMessageId)),
+        );
+        inspection = {
+          status: "ready",
+          events,
+          sourceHash: createHash("sha256").update(JSON.stringify(events)).digest("hex"),
+        };
+      }
+      if (inspection.status === "unavailable") {
+        unavailable = true;
+        break;
+      }
+      let digest = "",
+        reason: ConsolidationSourceExclusion["reason"] | undefined;
+      if (inspection.status === "excluded") reason = inspection.reason;
+      else {
+        try {
+          digest = buildTranscriptDigest(inspection.events);
+        } catch (error) {
+          if (error instanceof ConsolidationDigestExclusion) reason = error.reason;
+          else throw error;
+        }
+      }
+      if (reason) {
+        exclude({
+          sessionId: session.sessionId,
+          turnId: trace.turnId,
+          finishedAt: trace.finishedAt ?? trace.startedAt,
+          sourceHash: inspection.sourceHash,
+          reason,
+        });
+        continue;
+      }
+      const count = inspection.status === "ready" ? inspection.events.length : 0;
+      if (
+        current.length &&
+        (eventCount + count > MAX_DIGEST_EVENTS || chars + 1 + digest.length > MAX_DIGEST_TOTAL_CHARS)
+      ) {
+        windows.push(current);
+        current = [];
+        chars = 0;
+        eventCount = 0;
+        if (windows.length >= limit) return { windows, unavailable };
+      }
+      current.push(trace);
+      chars += (chars ? 1 : 0) + digest.length;
+      eventCount += count;
+    }
+    if (current.length && windows.length < limit) windows.push(current);
+    return { windows, unavailable };
+  }
+
   private async draftSessionCandidates(
     sessionId: string,
+    workspaceId: string,
     watermark: string,
     traces: readonly ChatTurnTraceRecord[],
   ): Promise<DraftedCandidate[]> {
-    const events = await this.deps.readTranscriptOrEmpty(sessionId);
+    const sourceInput = { workspaceId, sessionId, turnIds: traces.map((trace) => trace.turnId) };
+    const canonical = this.deps.readCanonicalSource ? await this.deps.readCanonicalSource(sourceInput) : undefined;
+    if (this.deps.readCanonicalSource && !canonical)
+      throw new Error("Canonical consolidation source is unavailable or changed.");
+    const events = canonical?.events ?? (await this.deps.readTranscriptOrEmpty(sessionId));
     const userMessageIds = new Set(traces.map((trace) => trace.userMessageId));
     const assistantMessageIds = new Set(traces.map((trace) => trace.assistantMessageId));
     const sourceEvents = events.filter(
@@ -243,7 +465,7 @@ export class MemoryConsolidationService {
           (event.type === "message.assistant" && assistantMessageIds.has(event.eventId))),
     );
     const digest = buildTranscriptDigest(sourceEvents);
-    if (digest.length < MIN_DIGEST_CHARS) {
+    if (!digest.trim()) {
       return [];
     }
     // A multi-turn digest only establishes session-level provenance for its drafts.
@@ -261,11 +483,12 @@ export class MemoryConsolidationService {
         max_tokens: 900,
       },
       createUtilityModelUsageAttribution({
-        operationId: `memory-consolidation:${encodeURIComponent(watermark)}:${encodeURIComponent(sessionId)}`,
+        operationId: `memory-consolidation:${encodeURIComponent(watermark)}:${encodeURIComponent(sessionId)}:${canonical?.sourceHash ?? createHash("sha256").update(digest).digest("hex")}`,
         utilityKind: "memory_candidate_consolidation",
         requestedProviderId: defaults.providerId,
         requestedModelId: defaults.model,
         lineage: {
+          workspaceId,
           sessionId,
           ...(turnId ? { turnId } : {}),
           agentId: "memory-consolidator",
@@ -275,11 +498,32 @@ export class MemoryConsolidationService {
     const rawContent = completion.choices?.[0]
       ? (completion.choices[0] as { message?: { content?: string } }).message?.content
       : undefined;
-    return parseDraftedCandidates(typeof rawContent === "string" ? rawContent : "", sessionId, turnId);
+    return parseDraftedCandidates(typeof rawContent === "string" ? rawContent : "", sessionId, turnId).map(
+      (candidate) => ({
+        ...candidate,
+        ...(canonical ? { sourceBinding: { ...sourceInput, sourceHash: canonical.sourceHash } } : {}),
+      }),
+    );
+  }
+
+  private async learningEnabled(): Promise<boolean> {
+    return (
+      (await this.deps.isFeatureEnabled("memoryConsolidationV1Enabled")) &&
+      (await this.deps.isFeatureEnabled("memoryLifecycleAdminV1Enabled")) &&
+      !(await this.deps.isFeatureEnabled("autonomyV1Disabled"))
+    );
   }
 }
 
 function isQualifyingTrace(trace: ChatTurnTraceRecord): boolean {
+  if (
+    trace.status !== "completed" ||
+    trace.completion?.status !== "complete" ||
+    !Number.isFinite(trace.completion.providerCallCount) ||
+    (trace.completion.providerCallCount ?? 0) < 1
+  )
+    return false;
+  if (trace.memoryMode === "off") return false;
   if (!trace.assistantMessageId) {
     return false;
   }
@@ -305,45 +549,38 @@ function pickSessions(
   }
   return Array.from(bySession.entries())
     .map(([sessionId, sessionTraces]) => ({ sessionId, traces: sessionTraces }))
-    .sort((a, b) => b.traces.length - a.traces.length)
+    .sort((a, b) =>
+      (a.traces[0]?.finishedAt ?? a.traces[0]?.startedAt ?? "").localeCompare(
+        b.traces[0]?.finishedAt ?? b.traces[0]?.startedAt ?? "",
+      ),
+    )
     .slice(0, limit);
 }
 
-function computeProcessedTraceWatermark(
-  traces: ChatTurnTraceRecord[],
-  processedSessionIds: ReadonlySet<string>,
-  currentWatermark: string,
-): string {
-  let nextWatermark = currentWatermark;
-  for (const trace of traces) {
-    if (isQualifyingTrace(trace) && !processedSessionIds.has(trace.sessionId)) {
-      if (nextWatermark >= trace.startedAt) {
-        return currentWatermark;
-      }
-      break;
-    }
-    if (trace.startedAt > nextWatermark) {
-      nextWatermark = trace.startedAt;
-    }
+class ConsolidationDigestExclusion extends Error {
+  public constructor(public readonly reason: "digest_size_limit" | "credential_values") {
+    super("Source is outside bounded consolidation: " + reason);
   }
-  return nextWatermark;
 }
 
 function buildTranscriptDigest(events: TranscriptEvent[]): string {
+  if (events.length > MAX_DIGEST_EVENTS) throw new ConsolidationDigestExclusion("digest_size_limit");
   const lines: string[] = [];
   let total = 0;
-  for (const event of events.slice(-MAX_DIGEST_EVENTS)) {
+  for (const event of events) {
     const text = extractEventText(event.payload);
     if (!text) {
       continue;
     }
     const role = event.type === "message.user" ? "user" : "assistant";
-    const line = `${role}: ${text.slice(0, MAX_DIGEST_EVENT_CHARS)}`;
-    if (total + line.length > MAX_DIGEST_TOTAL_CHARS) {
-      break;
-    }
+    const boundedText = text.normalize("NFKC");
+    if (redactSecretText(boundedText, { env: process.env }).redactionCount > 0)
+      throw new ConsolidationDigestExclusion("credential_values");
+    const line = `${role}: ${boundedText}`;
+    if (total + (lines.length ? 1 : 0) + line.length > MAX_DIGEST_TOTAL_CHARS)
+      throw new ConsolidationDigestExclusion("digest_size_limit");
     lines.push(line);
-    total += line.length;
+    total += (lines.length > 1 ? 1 : 0) + line.length;
   }
   return lines.join("\n");
 }

@@ -1,4 +1,5 @@
 import { verifyDurableAdmittedExplicitContextSnapshot } from "./chat-explicit-context-admission.js";
+import type {BackgroundLearningQueueService} from "./background-learning-queue-service.js";
 import {
   loadDurableChatWorkerContext,
   injectDurableChatWorkerContext,
@@ -326,6 +327,7 @@ export interface DurableWorkflowFinalizationContext {
 }
 
 export interface DurableWorkflowExecutor {
+  isReadyToClaim?(run:DurableRunRecord):Promise<boolean>;
   execute(run: DurableRunRecord, context?: DurableWorkflowExecutionContext): Promise<void>;
   isRecoverable?(run: DurableRunRecord): Promise<DurableWorkflowRecoverability> | DurableWorkflowRecoverability;
   markUnrecoverable?(
@@ -336,6 +338,7 @@ export interface DurableWorkflowExecutor {
 }
 
 export interface DurableWorkflowExecutorRegistry {
+  isWorkflowReadyToClaim?(run:DurableRunRecord):Promise<boolean>;
   executeWorkflow(run: DurableRunRecord, context?: DurableWorkflowExecutionContext): Promise<void>;
   isWorkflowRecoverable(run: DurableRunRecord): Promise<DurableWorkflowRecoverability>;
   markWorkflowUnrecoverable(
@@ -367,6 +370,7 @@ export type DurableChatTurnWorkflowHost = chatTurnDispatchService.ChatTurnDispat
     | "reconcileAutonomousChatPostCommit"
     | "reconcileGeneralChatPostCommit"
   > & {
+    captureNaturalChatMemoryIntent?: MemoryLifecycleService["captureNaturalChatMemoryIntent"];
     runInChatApprovalScope?<T>(run: DurableRunRecord, work: () => Promise<T>): Promise<T>;
     resolveRemoteWorkerChatExecution?(
       run: DurableRunRecord,
@@ -421,6 +425,7 @@ type DurableCuratorTickWorkflowHost = DurableWorkflowCompletionHost & {
 };
 
 export interface DurableWorkflowExecutorHosts {
+  learningReview?:DurableWorkflowCompletionHost&{backgroundLearningQueue:Pick<BackgroundLearningQueueService,"process"|"isReadyToClaim"|"releaseForRetry">};
   memoryMaintenance: DurableMemoryMaintenanceWorkflowHost;
   chatTurn: DurableChatTurnWorkflowHost;
   chatPostCommitEffect: DurableWorkflowExecutor;
@@ -944,6 +949,9 @@ export function createDurableWorkflowExecutorRegistry(
   const getExecutor = (run: DurableRunRecord): DurableWorkflowExecutor | undefined => executors[run.workflowKey];
 
   return {
+    async isWorkflowReadyToClaim(run:DurableRunRecord):Promise<boolean> {
+      return (await getExecutor(run)?.isReadyToClaim?.(run)) ?? true;
+    },
     async executeWorkflow(run: DurableRunRecord, context?: DurableWorkflowExecutionContext): Promise<void> {
       const executor = getExecutor(run);
       if (!executor) {
@@ -978,6 +986,7 @@ export function createDeferredDurableWorkflowExecutorRegistry(
   resolveRegistry: () => DurableWorkflowExecutorRegistry,
 ): DurableWorkflowExecutorRegistry {
   return {
+    isWorkflowReadyToClaim:async(run)=>await resolveRegistry().isWorkflowReadyToClaim?.(run) ?? true,
     executeWorkflow: (run, context) => resolveRegistry().executeWorkflow(run, context),
     isWorkflowRecoverable: (run) => resolveRegistry().isWorkflowRecoverable(run),
     markWorkflowUnrecoverable: (run, reason, context) =>
@@ -989,6 +998,16 @@ export function buildDurableWorkflowExecutors(
   hosts: DurableWorkflowExecutorHosts,
 ): Record<string, DurableWorkflowExecutor> {
   return {
+    ...(hosts.learningReview ? {"learning.review":{
+      isReadyToClaim:(run:DurableRunRecord)=>hosts.learningReview!.backgroundLearningQueue.isReadyToClaim(run),
+      execute:async(run:DurableRunRecord,context?:DurableWorkflowExecutionContext)=>{
+        throwIfDurableWorkflowAborted(context);
+        const result=await hosts.learningReview!.backgroundLearningQueue.process(run,context?.signal);
+        if(result.disposition === "complete") await completeDurableWorkflowRun(hosts.learningReview!,run,{...result,workflow:"learning.review",authority:"system_proposal_only"});
+        else await hosts.learningReview!.backgroundLearningQueue.releaseForRetry(run,result);
+      },
+      isRecoverable:(run:DurableRunRecord)=>({recoverable:run.payload.version === "learning.review.v1" && typeof run.payload.jobId === "string"}),
+    }}: {}),
     "memory.maintenance": {
       execute: async (run, context) => {
         throwIfDurableWorkflowAborted(context);
@@ -2886,8 +2905,19 @@ export async function executeGeneralChatPostCommit(
       });
     },
   );
-  await progress?.runEffect("learned_memory_user", () => undefined);
-  const learnedMemoryUser = "not_applicable" as const;
+  const learnedMemoryUser = await runEffect(
+    "learned_memory_user",
+    transcriptCompleted && !delegatedChild && !autonomous &&
+      userMessage?.sourceAuthority === "operator" && userMessage.actorType === "user" &&
+      Boolean(trace.guidance?.workspaceId?.trim()) && Boolean(host.captureNaturalChatMemoryIntent),
+    async () => {
+      await host.captureNaturalChatMemoryIntent!({
+        workspaceId: trace.guidance!.workspaceId!,
+        sessionId: payload.sessionId, turnId: payload.turnId,
+        messageId: userMessage!.messageId, content: userMessage!.content,
+      });
+    },
+  );
   await progress?.runEffect("learned_memory_assistant", () => undefined);
   const learnedMemoryAssistant = "not_applicable" as const;
   const commitmentsInput: GeneralChatPostCommitDurableEffectInput = {

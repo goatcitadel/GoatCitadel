@@ -494,7 +494,7 @@ describe("tool executor edge coverage", () => {
     expect((searched.items as Array<Record<string, unknown>>)[0]?.content).toContain("coverage");
   });
 
-  it("covers memory read cache hits and citation source filtering", async () => {
+  it("fails closed without the lifecycle reader and preserves citation source filtering", async () => {
     const repeatedDoc = {
       docId: "doc-alpha",
       title: "Alpha notes",
@@ -534,8 +534,8 @@ describe("tool executor edge coverage", () => {
 
     const memory = await executeTool(request("memory.read", { namespace: "user", query: "alpha" }), config, storage);
     expect(memory).toMatchObject({ namespace: "user", query: "alpha" });
-    expect((memory.items as Array<Record<string, unknown>>).length).toBe(2);
-    expect(listChunksByDocument).toHaveBeenCalledTimes(2);
+    expect(memory).toMatchObject({items:[],unavailable:true});
+    expect(listChunksByDocument).not.toHaveBeenCalled();
 
     const citations = await executeTool(
       request("citations.build", {
@@ -665,7 +665,7 @@ describe("tool executor edge coverage", () => {
       commsStorage({ connectionId: "gmail", key: "gmail", config: {} }),
       googleSignIn,
     );
-    expect(gmailRead).toMatchObject({
+    expect(gmailRead,JSON.stringify(gmailRead)).toMatchObject({
       status: "sent",
       providerMessageId: "gmail-read",
       contentTrust: "untrusted_external",
@@ -1108,7 +1108,7 @@ describe("tool executor edge coverage", () => {
         config,
         knowledgeStorage(),
       ),
-    ).resolves.toMatchObject({ chunksSaved: expect.any(Number) });
+    ).rejects.toThrow("lifecycle write owner");
 
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "tool-executor-full-disk-"));
     const outsideFile = path.join(outsideDir, "outside.txt");
@@ -1208,6 +1208,8 @@ function knowledgeStorage(): Storage & AsyncStorage {
   let chunkSeq = 0;
 
   return {
+    chatSessionMeta:{get:vi.fn(() => ({workspaceId:"default"}))},
+    sessions:{getBySessionId:vi.fn(() => ({kind:"dm"}))},
     knowledge: {
       listDocuments: vi.fn((namespace?: string) =>
         documents.filter((doc) => !namespace || doc.namespace === namespace),

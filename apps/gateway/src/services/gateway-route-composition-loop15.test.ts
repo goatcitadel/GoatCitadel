@@ -199,6 +199,7 @@ function createGateway() {
         apiKeySource: "env",
       })),
       getRuntimeConfig: fn((options: unknown) => ({ activeProviderId: "openai", options })),
+      withPublicCodexStatusSnapshot: async (read: () => unknown) => read(),
       listModelsWithSource: fn((providerId?: string) => [{ providerId, model: "gpt" }]),
       listProviders: fn(() => [{ providerId: "openai" }]),
       pollOpenAICodexOAuthDeviceFlow: fn((flowId: string) => ({ flowId, status: "pending" })),
@@ -310,7 +311,7 @@ describe("route composition loop 15 delegates", () => {
 
     await expect(systemDeps.settings.getSettings()).rejects.toThrow(fence);
     expect(() => systemDeps.settings.getAuthRuntimeSettings()).toThrow(fence);
-    expect(() => toolsDeps.llm.getLlmConfigWithDetails()).toThrow(fence);
+    await expect(toolsDeps.llm.getLlmConfigWithDetails()).rejects.toThrow(fence);
   });
 
   it("wires system route dependencies to runtime services and settings helpers", async () => {
@@ -436,7 +437,7 @@ describe("route composition loop 15 delegates", () => {
     });
     expect(gateway.llmService.generateImage).toHaveBeenCalledWith({ prompt: "ship" }, attribution);
     expect(deps.llm.getOpenAICodexOAuthStatus()).toEqual({ connected: true });
-    expect(deps.llm.getLlmConfigWithDetails()).toMatchObject({
+    expect(await deps.llm.getLlmConfigWithDetails()).toMatchObject({
       activeProviderId: "openai",
       providerConfigs: [{ providerId: "openai" }],
     });

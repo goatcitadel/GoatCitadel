@@ -348,7 +348,7 @@ describe("policy-engine branch-tail coverage", () => {
       await executeTool(request("memory.read", { namespace: "team", limit: 0 }), createConfig(), storage),
     ).toMatchObject({
       namespace: "team",
-      items: [expect.objectContaining({ docId: "doc-loop8" })],
+      items: [], unavailable:true,
     });
     expect(
       await executeTool(
@@ -358,7 +358,7 @@ describe("policy-engine branch-tail coverage", () => {
       ),
     ).toMatchObject({
       namespace: "team",
-      items: [expect.objectContaining({ chunkId: "chunk-loop8" })],
+      items: [], unavailable:true,
     });
     expect(
       await executeTool(request("citations.build", { sources: "not-array" }), createConfig(), storage),

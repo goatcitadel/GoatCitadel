@@ -8,6 +8,9 @@ type ComputeNextRunAt = (schedule: string, from: Date, endAt?: string) => string
  * Read-only: nothing is stored. The rule is passed in because it lives in the cron service that calls this.
  */
 export function withProjectedNextRun(job: CronJobRecord, now: Date, computeNextRunAt: ComputeNextRunAt): CronJobRecord {
+  if(job.actionConfig?.agentTurn?.eventWake)return {...job,nextRunAt:undefined,nextRunProjected:undefined};
+  const once=job.actionConfig?.agentTurn?.oneShot;
+  if(once)return {...job,nextRunAt:job.enabled ? once.at:undefined,nextRunProjected:job.enabled && job.nextRunAt!==once.at ? true:undefined};
   if (!job.enabled || job.nextRunAt || !job.schedule) return job;
   const nextRunAt = computeNextRunAt(job.schedule, now, job.endAt);
   return nextRunAt ? { ...job, nextRunAt, nextRunProjected: true } : job;

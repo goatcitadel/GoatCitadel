@@ -26,12 +26,14 @@ const noop = () => undefined;
 let renderer: ReactTestRenderer | undefined;
 let observed: {
   draft: string;
+  draftHydrated: boolean;
   setDraft: (text: string) => void;
   attachments: ChatAttachmentRecord[];
   setAttachments: (items: ChatAttachmentRecord[]) => void;
 };
 const originalWindow = globalThis.window;
 const values = new Map<string, string>();
+const renders: Array<{ session: string | null; draft: string; draftHydrated: boolean }> = [];
 function Harness({ workspace = "a", session = "s1" as string | null, unstable = 0 }) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachmentRecord[]>([]);
@@ -41,7 +43,7 @@ function Harness({ workspace = "a", session = "s1" as string | null, unstable = 
   if (setterHolder.current?.unstable !== unstable)
     setterHolder.current = { unstable, set: (value) => setAttachments(value) };
   const stableSetter = setterHolder.current.set;
-  useChatSessionRestoration({
+  const { draftHydrated } = useChatSessionRestoration({
     workspaceId: workspace,
     selection: { selectedSessionId: session },
     orchestration: { queuedOutbound: queue, setQueuedOutbound: setQueue },
@@ -61,11 +63,13 @@ function Harness({ workspace = "a", session = "s1" as string | null, unstable = 
     threadController: { selectedSession: null },
     setRenameTitle: noop,
   } as unknown as Parameters<typeof useChatSessionRestoration>[0]);
-  observed = { draft, setDraft, attachments, setAttachments };
+  observed = { draft, draftHydrated, setDraft, attachments, setAttachments };
+  renders.push({ session, draft, draftHydrated });
   return null;
 }
 beforeEach(() => {
   values.clear();
+  renders.length = 0;
   resetChatSessionCreationForTests();
   setGatewayCallerScope("actor-a");
   Object.defineProperty(globalThis, "window", {
@@ -87,6 +91,19 @@ afterEach(async () => {
 });
 
 const creationKey = (workspace = "a") => chatSessionCreationKey(getGatewayApiBaseUrl(), workspace);
+
+it("exposes the draft as hydrated only for the current conversation's restored text", async () => {
+  values.set(createDraftStorageKey("a", "s1"), "first draft");
+  values.set(createDraftStorageKey("a", "s2"), "second draft");
+  await act(async () => { renderer = create(<Harness />); });
+  expect(observed).toMatchObject({ draft: "first draft", draftHydrated: true });
+
+  await act(async () => renderer!.update(<Harness session="s2" />));
+  const nextRenders = renders.filter(render => render.session === "s2");
+  expect(nextRenders[0]).toMatchObject({ draft: "first draft", draftHydrated: false });
+  expect(nextRenders.filter(render => render.draftHydrated)).not.toHaveLength(0);
+  expect(nextRenders.filter(render => render.draftHydrated).every(render => render.draft === "second draft")).toBe(true);
+});
 
 async function pressNew(): Promise<ChatSessionCreation> {
   const attempt: ChatSessionCreation = { state: "pending", mode: "chat", message: "Creating" };

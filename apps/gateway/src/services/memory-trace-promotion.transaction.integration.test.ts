@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { ConflictError } from "@goatcitadel/contracts";
+import { ConflictError, type TraceMemoryCandidateRecord } from "@goatcitadel/contracts";
 import { createPostgresRemoteStorage, createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { acquireGatewayLivePostgresTestLease } from "../test/live-postgres-suite-lock.js";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
@@ -39,6 +39,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     let beforeTransaction: (() => Promise<void>) | undefined;
     let afterTransactionWork: (() => Promise<void>) | undefined;
     let beforeRejectWrite: (() => Promise<void>) | undefined;
+    let afterEditDedupeRead: (() => Promise<void>) | undefined;
     const emitted: Record<string, unknown>[] = [];
     const services: MemoryLifecycleService[] = [];
     let candidate: Awaited<ReturnType<MemoryLifecycleService["proposeTraceMemoryCandidate"]>>;
@@ -47,11 +48,18 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     function makeService(
       store: ReturnType<typeof createSqliteAsyncStorage>,
       publish?: (channel: string, topic: string, payload: Record<string, unknown>) => Promise<unknown>,
+      validateQueuedLearningCandidate?: (candidate: TraceMemoryCandidateRecord) => Promise<boolean>,
     ) {
       const sql = {
         dialect: store.gatewaySql.dialect,
         prepare: (statementSql: string) => {
           const statement = store.gatewaySql.prepare(statementSql);
+          if (statementSql.startsWith("SELECT candidate_id FROM memory_trace_candidates WHERE dedupe_key=")) return new Proxy(statement, {
+            get(target, member, receiver) {
+              if (member !== "get") return Reflect.get(target, member, receiver);
+              return async (...params: unknown[]) => { const result = await target.get(...params); await afterEditDedupeRead?.(); return result; };
+            },
+          });
           if (!/SET\s+status\s*=\s*'rejected'/u.test(statementSql)) return statement;
           return new Proxy(statement, {
             get(target, member, receiver) {
@@ -88,6 +96,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
         },
         resolveLearnedMemoryPolicy: async () => ({ allowWrite: true, reason: "allowed" }),
         readTranscriptOrEmpty: async () => [],
+        validateQueuedLearningCandidate,
       });
     }
 
@@ -130,6 +139,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
       beforeTransaction = undefined;
       afterTransactionWork = undefined;
       beforeRejectWrite = undefined;
+      afterEditDedupeRead = undefined;
       key = `trace.fixture.${randomUUID()}`;
       candidate = await services[0]!.proposeTraceMemoryCandidate({
         workspaceId: "default", candidateType: "fact", sourceText: `Synthetic trace ${key}`,
@@ -140,6 +150,80 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     });
 
     const learnings = () => stores[0]!.gatewaySql.prepare("SELECT learning_id FROM memory_learnings WHERE learning_key = ?").all<{ learning_id: string }>(key);
+
+    it("keeps queued review and maintenance generations distinct without losing their reviewed plan",async()=>{
+      const sources=[{workspaceId:"default",sessionId:"fixture-session",sourceTurnId:"fixture-turn",parentRunId:"fixture-run",effectExecutionId:"fixture-effect",postCommitGenerationId:"fixture-generation",sessionIncarnationId:"fixture-incarnation",controllerGeneration:1,sourceHash:"a".repeat(64)}];
+      const shared={workspaceId:"default",candidateType:"fact" as const,sourceSessionId:"fixture-session",sourceText:"Synthetic completed work.",proposedInsight:`One governed lesson ${key}.`};
+      const reviewInput={...shared,metadata:{source:"background_learning_queue",learningJobId:`blj-${"a".repeat(40)}`,learningReviewSources:sources}};
+      const maintenanceInput={...shared,metadata:{source:"background_learning_queue",learningJobId:`blj-${"b".repeat(40)}`,learningReviewSources:sources,governedMemoryPlan:{version:1,jobId:`blj-${"b".repeat(40)}`,workspaceId:"default",operation:"add",sources,proposedInsight:shared.proposedInsight,targets:[]}}};
+      const propose=(input:typeof reviewInput|typeof maintenanceInput)=>services[0]!.proposeTraceMemoryCandidate(input,"background-reviewer","agent_proposed",{deferEmbedding:true,deferNotification:true});
+      const review=await propose(reviewInput),maintenance=await propose(maintenanceInput);
+      expect(maintenance.candidateId).not.toBe(review.candidateId);
+      expect(maintenance.metadata?.governedMemoryPlan).toEqual(maintenanceInput.metadata.governedMemoryPlan);
+      expect((await propose(reviewInput)).candidateId).toBe(review.candidateId);
+      expect((await propose(maintenanceInput)).candidateId).toBe(maintenance.candidateId);
+      const editor=makeService(stores[0]!,undefined,async reviewed=>reviewed.metadata?.learningJobId===maintenanceInput.metadata.learningJobId && JSON.stringify(reviewed.metadata.learningReviewSources)===JSON.stringify(sources));
+      const edited=await editor.editTraceMemoryCandidate(maintenance.candidateId,{workspaceId:"default",expectedReviewHash:maintenance.reviewHash!,proposedInsight:`A different governed lesson ${key}.`},"operator");
+      const editedReplay=await propose({...maintenanceInput,proposedInsight:edited.proposedInsight,metadata:{...maintenanceInput.metadata,governedMemoryPlan:{...maintenanceInput.metadata.governedMemoryPlan,proposedInsight:edited.proposedInsight}}});
+      expect(editedReplay.candidateId).toBe(maintenance.candidateId);
+      expect(editedReplay.metadata?.learningJobId).toBe(maintenanceInput.metadata.learningJobId);
+    });
+
+    it("edits only an inactive exact reviewed proposal and requires a fresh decision for its new hash",async()=>{
+      const reviewed=await services[0]!.getTraceMemoryCandidate(candidate.candidateId,"default");
+      const edited=await services[0]!.editTraceMemoryCandidate(candidate.candidateId,{workspaceId:"default",expectedReviewHash:reviewed.reviewHash!,proposedInsight:"The operator's corrected factual lesson."},"operator");
+      expect(edited.status).toBe("proposed");expect(edited.reviewHash).not.toBe(reviewed.reviewHash);expect(await learnings()).toHaveLength(0);
+      await expect(services[0]!.promoteTraceMemoryCandidate(candidate.candidateId,"operator",{workspaceId:"default",expectedReviewHash:reviewed.reviewHash!})).rejects.toThrow(/changed.*review|review.*changed/i);
+      await expect(services[0]!.editTraceMemoryCandidate(candidate.candidateId,{workspaceId:"default",expectedReviewHash:edited.reviewHash!,proposedInsight:"OPENAI_API_KEY=sk-proj-synthetic-secret-1234567890"},"operator")).rejects.toThrow();
+    });
+
+    it("maps two independent edits converging on one unique proposal to one edit and one conflict", async () => {
+      const other = await services[0]!.proposeTraceMemoryCandidate({ workspaceId: "default", candidateType: "fact", sourceText: `Synthetic trace ${key}`, proposedInsight: `Another original insight ${key}.`, confidence:0.82, sourceRefs:[{sourceType:"run",sourceRef:"fixture-run"}], metadata:{key}}, "fixture-agent");
+      const reviewed = await Promise.all([candidate,other].map(item=>services[0]!.getTraceMemoryCandidate(item.candidateId,"default")));
+      const proposedInsight=`One exact edited insight ${key}.`;
+      let entered=0,release!:()=>void,bothReady!:()=>void;
+      const ready=new Promise<void>(resolve=>{bothReady=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;});
+      if(dialect==="postgres") afterEditDedupeRead=async()=>{if(++entered===2)bothReady();await gate;};
+      const settled=Promise.allSettled(services.map((service,index)=>service.editTraceMemoryCandidate(reviewed[index]!.candidateId,{workspaceId:"default",expectedReviewHash:reviewed[index]!.reviewHash!,proposedInsight},`editor-${index}`)));
+      if(dialect==="postgres") {try{await observeBarrier(ready,settled);}finally{release();}}
+      const results=await settled;afterEditDedupeRead=undefined;
+      expect(results.filter(result=>result.status==="fulfilled")).toHaveLength(1);
+      const failure=results.find(result=>result.status==="rejected");expect(failure?.status).toBe("rejected");if(failure?.status==="rejected")expect(failure.reason).toBeInstanceOf(ConflictError);
+      const current=await Promise.all(reviewed.map(item=>services[0]!.getTraceMemoryCandidate(item.candidateId,"default")));
+      expect(current.filter(item=>item.proposedInsight===proposedInsight)).toHaveLength(1);
+      const loser=results.findIndex(result=>result.status==="rejected");expect(current[loser]!.proposedInsight).toBe(reviewed[loser]!.proposedInsight);expect(current[loser]!.reviewHash).toBe(reviewed[loser]!.reviewHash);
+      expect(emitted.filter(item=>item.type==="memory_trace_candidate_edited")).toHaveLength(1);
+      expect(await learnings()).toHaveLength(0);
+    });
+
+    it("pages the read-only legacy reconciliation preview without hiding older candidates or changing scope",async()=>{
+      const ids=[];
+      for(let i=0;i<2;i++)ids.push((await services[0]!.proposeTraceMemoryCandidate({workspaceId:"default",candidateType:"fact",proposedInsight:`Legacy consolidation ${key} ${i}.`,sourceText:"Old source without canonical binding.",metadata:{consolidation:true}},"legacy-agent")).candidateId);
+      const found:string[]=[];let cursor:string|undefined;
+      for(let page=0;page<20;page++){
+        const preview=await services[0]!.previewLegacyConsolidationReconciliation({workspaceId:"default",limit:1,cursor});
+        expect(preview.mutationsPerformed).toBe(false);found.push(...preview.items.map(item=>item.candidateId));
+        if(!preview.nextCursor){expect(preview.coverage).toBe("complete");break;}cursor=preview.nextCursor;
+      }
+      expect(found).toEqual(expect.arrayContaining(ids));
+      expect((await services[0]!.getTraceMemoryCandidate(ids[0]!,"default")).status).toBe("proposed");
+    });
+
+    it("binds a decision to the exact reviewed candidate hash even if another writer edits its material",async()=>{
+      const reviewed=await services[0]!.getTraceMemoryCandidate(candidate.candidateId,"default");
+      expect(reviewed.reviewHash).toMatch(/^[a-f0-9]{64}$/);
+      await stores[1]!.gatewaySql.prepare("UPDATE memory_trace_candidates SET proposed_insight=? WHERE candidate_id=?").run("Different material after the review opened.",candidate.candidateId);
+      await expect(services[0]!.promoteTraceMemoryCandidate(candidate.candidateId,"operator",{workspaceId:"default",expectedReviewHash:reviewed.reviewHash!})).rejects.toThrow(/changed.*review|review.*changed/i);
+      expect(await learnings()).toHaveLength(0);
+    });
+
+    it("rejects background promotion when its frozen queued sources cannot be revalidated",async()=>{
+      const queued=await services[0]!.proposeTraceMemoryCandidate({workspaceId:"default",candidateType:"fact",sourceText:"Synthetic completed work.",
+        proposedInsight:`Queued-only memory proposal ${key}.`,metadata:{key,source:"background_learning_queue",learningJobId:`blj-${"a".repeat(40)}`,learningReviewSources:[]}},"background-reviewer","agent_proposed",{deferEmbedding:true});
+      await expect(services[0]!.promoteTraceMemoryCandidate(queued.candidateId,"operator")).rejects.toThrow(/queued.*source|source.*changed/i);
+      expect((await services[0]!.getTraceMemoryCandidate(queued.candidateId,"default")).status).toBe("proposed");
+      expect(await learnings()).toHaveLength(0);
+    });
 
     it("admits only one of two competing promotions after both initial reads complete", async () => {
       let entered = 0;

@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, open } from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { executeGoatComparisonTurn } from "./agent-comparison-goat-api.mjs";
 import { executeGoatComparisonSkillWorkflow } from "./agent-comparison-goat-workflow.mjs";
@@ -44,6 +45,62 @@ const retain = async (name, value) => {
 };
 const { buildApp } = await import(pathToFileURL(path.join(checkoutRoot, "apps/gateway/dist/app.js")));
 const app = await buildApp();
+async function readAdmittedSkills({ runId, sessionId, turnId, workspaceId }) {
+  const moduleAt = (filename) => import(pathToFileURL(path.join(checkoutRoot, filename)));
+  const [{ DurableRunRepository }, { SessionMutationAdmissionRepository }, contracts] = await Promise.all([
+    moduleAt("packages/storage/dist/durable-run-repo.js"),
+    moduleAt("packages/storage/dist/session-mutation-admission-repo.js"),
+    moduleAt("packages/contracts/dist/index.js"),
+  ]);
+  const database = new DatabaseSync(app.gatewayConfig.dbPath, { readOnly: true });
+  try {
+    const db = { dialect: "sqlite", prepare: database.prepare.bind(database) };
+    const run = new DurableRunRepository(db).getRun(runId);
+    const authority = contracts.readDurableChatTurnExecutionPayloadAuthority({
+      workflowKey: run.workflowKey,
+      durableRunId: runId,
+      payload: run.payload,
+    });
+    if (
+      run.status !== "completed" ||
+      !authority ||
+      authority.capabilityProfileId ||
+      authority.sessionId !== sessionId ||
+      authority.turnId !== turnId ||
+      authority.workspaceId !== workspaceId
+    ) {
+      throw new Error("The completed Chat run does not own the requested skill receipt.");
+    }
+    const repository = new SessionMutationAdmissionRepository(db);
+    const identity = {
+      admissionId: authority.admissionId,
+      sessionIncarnationId: authority.sessionIncarnationId,
+      aggregateRevision: authority.admissionAggregateRevision,
+      controllerGeneration: authority.admissionControllerGeneration,
+      materialSha256: authority.admissionMaterialSha256,
+      sessionId,
+      turnId,
+      workspaceId,
+    };
+    const feature = repository.findFeatureReferences(identity);
+    if (
+      feature?.referenceSha256 !== authority.featureReferenceSha256 ||
+      repository.findDurableRunBinding(identity)?.durableRunId !== runId
+    ) {
+      throw new Error("The Chat skill receipt does not match its admission and durable run.");
+    }
+    return {
+      runId,
+      sessionId,
+      turnId,
+      workspaceId,
+      referenceSha256: feature?.referenceSha256,
+      selection: feature?.references.selectedSkills ?? { trustedSkills: [], activatedSkills: [] },
+    };
+  } finally {
+    database.close();
+  }
+}
 // The supervisor inherits a checked real terminal for input and forwards this
 // bounded output pipe to that same operator terminal while retaining evidence.
 const consoleOutput = new PassThrough();
@@ -65,6 +122,7 @@ try {
     ...(skillWorkflow
       ? {
           cellDirectory: path.dirname(path.dirname(evidence)),
+          readAdmittedSkills,
           onReview: async (review) => {
             try {
               reviewConsole ??= createNativeComparisonReviewConsole({

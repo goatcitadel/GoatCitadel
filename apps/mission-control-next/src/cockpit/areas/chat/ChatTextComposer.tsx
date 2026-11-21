@@ -10,7 +10,7 @@ import {
   composerControlsProps,
   useComposerSources,
 } from "./ChatComposerTools";
-import { ChatModelOptionsButton, type ModelOptionsRequest } from "./ChatComposerControls";
+import { ChatModelOptionsButton, type ModelOptionsRequest } from "./ChatModelOptionsButton";
 import { ChatComposerModePills, ChatComposerPlusMenu } from "./ChatComposerPlusMenu";
 import { ComposerSuggestionsHint, composerDescribedBy } from "./ChatComposerSuggestionsHint";
 import { ChatComposerPalette } from "./ChatComposerPalette";
@@ -19,6 +19,7 @@ import { composerSubmitLabel } from "./composer-submit-label";
 import { ChatRunVariables } from "./ChatRunVariables";
 import { committedCommandDraft, composerSendBlock, type ComposerSendBlock } from "./composer-send-block";
 import { isImeEnter } from "./ime";
+import { useStartupDraftBridge, type StartupDraftContext } from "./startup-draft-bridge";
 import { useProjectSwitchReview } from "../../../features/threaded-surface/useProjectSwitchReview";
 import { useChatSelectionReview } from "./use-chat-owner-navigation";
 import { DeferredSessionControlBanner } from "./DeferredChatLeaves";
@@ -64,11 +65,13 @@ export function ChatTextComposer({
   onOpenSchedules,
   gatewayUnavailable = false,
   reasoningEfforts,
+  startupDraftContext,
 }: {
   props: ComposerProps;
   onOpenSchedules?: () => void;
   gatewayUnavailable?: boolean;
   reasoningEfforts?: ChatCompletionReasoningEffort[];
+  startupDraftContext?: StartupDraftContext;
 }) {
   const capture = getWorkflowSkillCaptureDisplay(props.draft);
   useAutoGrowTextarea(props.composerRef, props.draft, { minLines: 2, maxLines: 8 });
@@ -95,6 +98,13 @@ export function ChatTextComposer({
   };
   const controlsProps = composerControlsProps(props);
   const [composing, setComposing] = useState(false);
+  useStartupDraftBridge(
+    startupDraftContext,
+    !gatewayUnavailable && !channelConversation && !composing && !props.editingTurnId && !props.sending,
+    props.draft,
+    props.composerRef,
+    props.onDraftChange,
+  );
   const projectReview = useProjectSwitchReview(props, composing);
   const reviewTransition = useChatSelectionReview(projectReview.identity);
   const selectPaletteItem = (item: ComposerProps["commandSuggestions"][number]) => {
@@ -122,7 +132,7 @@ export function ChatTextComposer({
     !props.composerPalette?.globalOpen &&
     !props.pendingAttachments.length &&
     ((command === "/schedule" && Boolean(onOpenSchedules)) ||
-      (command === "/timer" && Boolean(props.chatTimerPanel)) ||
+      (command === "/timer" && (props.chatTimerAvailable ?? Boolean(props.chatTimerPanel))) ||
       (command === "/status" && Boolean(props.sessionStatusPanel)));
   const localReady =
     localCommand &&

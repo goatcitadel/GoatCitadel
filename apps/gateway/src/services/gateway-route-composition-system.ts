@@ -94,7 +94,9 @@ export function composeSystemRouteDependencies(
         return settingsAuthService.getAuthRuntimeSettings(settingsRuntimeDeps);
       },
       getPersonalityCatalog: () => personalityCatalogService.getCatalog(),
-      getSettings: async () => await settingsAuthService.getSettings(settingsRuntimeDeps),
+      getSettings: () => gateway.llmService.withPublicCodexStatusSnapshot(() =>
+        settingsAuthService.getSettings(settingsRuntimeDeps),
+      ),
       setDefaultPersonality: (id, expectedRevision) =>
         personalityCatalogService.setDefaultPersonality(id, expectedRevision),
       updatePersonality: (id, input) => personalityCatalogService.updatePersonality(id, input),

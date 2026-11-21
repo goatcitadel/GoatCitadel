@@ -25,6 +25,7 @@ import {
   pruneReleaseResidue,
   removeEmptyDirectories,
 } from "./lib/release-payload-ownership.mjs";
+import { stageSqliteSchemaReference } from "./lib/stage-sqlite-schema-reference.mjs";
 import { removeDirectorySafely } from "./safe-cleanup.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -180,6 +181,13 @@ async function main() {
     nodeVersion,
     destinationDir: runtimeNodeDir,
   });
+  if (
+    (process.platform === "win32" ? "windows" : process.platform) === targetInfo.platform &&
+    process.arch === targetInfo.arch &&
+    stageSqliteSchemaReference(gatewayDeployDir, path.join(runtimeNodeDir, targetInfo.nodeExecutableName))
+  ) {
+    console.log("Generated SQLite schema reference with the embedded runtime.");
+  }
   writeLaunchers(bundleRoot);
   copyFile(
     path.join(scriptDir, "runtime", "verify-stable-update.mjs"),

@@ -42,7 +42,7 @@ import {
 import { ChannelVoiceInboundService } from "./channel-voice-inbound-service.js";
 import { IntegrationDiagnosticsService } from "./integration-diagnostics-service.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
-import { ExternalConnectorCatalogService } from "./external-connector-catalog-service.js";
+import type { ExternalConnectorCatalogService } from "./external-connector-catalog-service.js";
 import {
   NotificationRoutingService,
   accountFromNotificationSecretRef,
@@ -81,10 +81,14 @@ export function composeIntegrationChannelRouteDependencies(
     resolveConnectionSecret: (config, directKey, envKey, catalogId, owner) =>
       gateway.resolveConnectionSecret(config, directKey, envKey, catalogId, owner),
   });
-  const externalConnectorCatalog = new ExternalConnectorCatalogService({
-    reviewStates: gateway.storage.externalConnectorReviewStates,
-    createCapabilityProposal: (input) => gateway.capabilitySystemService.createProposal(input),
-  });
+  let externalConnectorCatalog: Promise<ExternalConnectorCatalogService> | undefined;
+  const getExternalConnectorCatalog = () =>
+    externalConnectorCatalog ??= import("./external-connector-catalog-service.js").then(
+      ({ ExternalConnectorCatalogService }) => new ExternalConnectorCatalogService({
+        reviewStates: gateway.storage.externalConnectorReviewStates,
+        createCapabilityProposal: (input) => gateway.capabilitySystemService.createProposal(input),
+      }),
+    );
   const notificationRouting = createNotificationRoutingServiceForGateway(gateway);
   const channelSetupDeps = createChannelSetupHostForGateway(gateway, integrationDiagnostics, integrationChannel);
   // The one listener for WhatsApp setup drafts made on the Messaging page; the webhook port answers Meta through it.
@@ -171,15 +175,17 @@ export function composeIntegrationChannelRouteDependencies(
       integrationChannel.runIntegrationConnectionDiagnostics(connectionId),
   });
   const listIntegrationCatalog = async (kind?: IntegrationKind): Promise<IntegrationCatalogEntry[]> => {
-    const mapped: IntegrationCatalogEntry[] = [
-      ...INTEGRATION_CATALOG.map((entry) => ({
+    const mapped: IntegrationCatalogEntry[] = INTEGRATION_CATALOG
+      .filter((entry) => !kind || entry.kind === kind)
+      .map((entry) => ({
         ...entry,
         maturity: resolveIntegrationCatalogMaturity(entry),
         runtimeAvailability: resolveIntegrationCatalogRuntimeAvailability(entry),
-      })),
-      ...externalConnectorCatalog.listIntegrationCatalogEntries(),
-    ];
-    return kind ? mapped.filter((entry) => entry.kind === kind) : mapped;
+      }));
+    if (!kind || kind === "external_connector") {
+      mapped.push(...(await getExternalConnectorCatalog()).listIntegrationCatalogEntries());
+    }
+    return mapped;
   };
   const requireNotificationRouting = () => gateway.requireFeatureEnabled("notificationRoutingV1Enabled");
   const googleSignIn = gateway.googleWorkspaceOAuth;
@@ -203,10 +209,10 @@ export function composeIntegrationChannelRouteDependencies(
     completeGoogleWorkspaceOAuth: (connectionId, input) => googleSignIn.complete(connectionId, input),
     disconnectGoogleWorkspaceOAuth: (connectionId) => googleSignIn.disconnect(connectionId),
     getIntegrationFormSchema: async (catalogId) => readIntegrationFormSchema(catalogId),
-    getExternalConnectorAction: (sourceId, serviceId, actionId, workspaceId) =>
-      externalConnectorCatalog.getAction(sourceId, serviceId, actionId, workspaceId),
-    getExternalConnectorService: (sourceId, serviceId, workspaceId) =>
-      externalConnectorCatalog.getService(sourceId, serviceId, workspaceId),
+    getExternalConnectorAction: async (sourceId, serviceId, actionId, workspaceId) =>
+      (await getExternalConnectorCatalog()).getAction(sourceId, serviceId, actionId, workspaceId),
+    getExternalConnectorService: async (sourceId, serviceId, workspaceId) =>
+      (await getExternalConnectorCatalog()).getService(sourceId, serviceId, workspaceId),
     invokeIntegrationConnectionAction: (connectionId, actionId, input = {}) =>
       invokeIntegrationConnectionActionImpl(
         buildIntegrationActionHostForGateway(gateway),
@@ -223,8 +229,8 @@ export function composeIntegrationChannelRouteDependencies(
             limit: query.limit,
           })
         : gateway.storage.externalSideEffectRuns.listByWorkspace(query.workspaceId ?? "default", query.limit),
-    listExternalConnectorServices: (query) => externalConnectorCatalog.listServices(query),
-    listExternalConnectorSources: () => externalConnectorCatalog.listSources(),
+    listExternalConnectorServices: async (query) => (await getExternalConnectorCatalog()).listServices(query),
+    listExternalConnectorSources: async () => (await getExternalConnectorCatalog()).listSources(),
     listIntegrationCatalog,
     listIntegrationConnections: (kind, limit) => integrationChannel.listIntegrationConnections(kind, limit),
     listNotificationDeliveries: async (workspaceId, limit) => {
@@ -275,9 +281,10 @@ export function composeIntegrationChannelRouteDependencies(
     revokeDiscordPairing: (connectionId, pairingId) => integrationChannel.revokeDiscordPairing(connectionId, pairingId),
     runIntegrationConnectionDiagnostics: (connectionId) =>
       integrationChannel.runIntegrationConnectionDiagnostics(connectionId),
-    stageExternalConnectorAction: (sourceId, serviceId, actionId, input) =>
-      externalConnectorCatalog.stageAction({ sourceId, serviceId, actionId }, input),
-    updateExternalConnectorReviewState: (lookup, patch) => externalConnectorCatalog.updateReviewState(lookup, patch),
+    stageExternalConnectorAction: async (sourceId, serviceId, actionId, input) =>
+      (await getExternalConnectorCatalog()).stageAction({ sourceId, serviceId, actionId }, input),
+    updateExternalConnectorReviewState: async (lookup, patch) =>
+      (await getExternalConnectorCatalog()).updateReviewState(lookup, patch),
     updateIntegrationConnection: (connectionId, input, onCommitted) =>
       integrationChannel.updateIntegrationConnection(connectionId, input, onCommitted),
   });

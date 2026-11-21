@@ -71,6 +71,13 @@ describe("Gateway channel credential custody composition", () => {
 });
 
 describe("Gateway setup route owner composition", () => {
+  it("binds setup and recovery calls to the late-initialized plan owner without exposing the whole service",async()=>{
+    const unused=vi.fn(),readOwner=vi.fn();let owner:any;
+    const gateway=new Proxy({},{get:(_target,key)=>key==="evolutionControlPlaneService" ? (readOwner(),owner):unused}) as GatewayRouteCompositionHost;
+    const port=createGatewayRouteCompositionPort(gateway,new Proxy({},{get:()=>unused}) as GatewayRouteCompositionPrivateDependencies);
+    expect(readOwner).not.toHaveBeenCalled();owner={create:vi.fn(async(input)=>({planId:"p",input})),get:vi.fn(),cancel:vi.fn(),findReplay:vi.fn(),findByIdempotencyKey:vi.fn()};
+    expect(await port.chatSetupPlanOwner.create({request:"fixture"} as never)).toMatchObject({planId:"p"});expect(owner.create).toHaveBeenCalledTimes(1);expect(readOwner).toHaveBeenCalledTimes(1);expect(port).not.toHaveProperty("evolutionControlPlaneService");
+  });
   it("resolves the setup owner after early route-port construction without eagerly capturing an uninitialized service", () => {
     const unused = vi.fn();
     const owner: { setup?: LlamaCppSetupService } = {};

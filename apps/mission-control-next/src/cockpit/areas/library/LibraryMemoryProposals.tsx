@@ -35,9 +35,10 @@ function LibraryMemoryProposalsContent({
 }) {
   const operation = useLibraryOperation(JSON.stringify(["memory-proposals", workspaceId]));
   const client = useQueryClient();
+  const [reconciliationCursor,setReconciliationCursor]=useState<string>();
   const query = useQuery({
-    queryKey: ["library", "memory-proposals", workspaceId, operation.identity],
-    queryFn: () => fetchTraceMemoryCandidates({ workspaceId, limit: 100 }),
+    queryKey: ["library", "memory-proposals", workspaceId, operation.identity,reconciliationCursor],
+    queryFn: () => fetchTraceMemoryCandidates({ workspaceId, limit: 100,reconciliationCursor }),
     staleTime: 0,
   });
   const settings = useQuery({
@@ -74,7 +75,7 @@ function LibraryMemoryProposalsContent({
         },
         async (fresh) => {
           if (review.action === "promote") {
-            const result = await promoteTraceMemoryCandidate(fresh.candidateId);
+            const result = await promoteTraceMemoryCandidate(fresh.candidateId,{workspaceId,expectedReviewHash:fresh.reviewHash ?? ""});
             if (
               result.workspaceId !== workspaceId ||
               result.status !== "trusted" ||
@@ -83,7 +84,7 @@ function LibraryMemoryProposalsContent({
             )
               throw new Error("The learning receipt does not confirm this proposal.");
           } else {
-            const result = await rejectTraceMemoryCandidate(fresh.candidateId);
+            const result = await rejectTraceMemoryCandidate(fresh.candidateId,{workspaceId,expectedReviewHash:fresh.reviewHash ?? ""});
             if (
               result.workspaceId !== workspaceId ||
               result.candidateId !== fresh.candidateId ||
@@ -137,6 +138,8 @@ function LibraryMemoryProposalsContent({
       {operation.locked && operation.attempt?.message ? (
         <Callout tone="warning">{operation.attempt.message}</Callout>
       ) : null}
+      {query.data?.reconciliationPreview?.items.length ? <Callout tone="warning">Some older automatic proposals have no verifiable source binding. They stay inactive. Review each proposal, reject it, then generate a fresh one from current scoped work.</Callout>:null}
+      {query.data?.reconciliationPreview?.coverage==="partial" ? <div className="space-y-2"><p className="text-sm text-fg-muted">Older proposals remain to be checked. This preview has made no changes.</p><Button size="sm" disabled={query.isFetching} onClick={()=>setReconciliationCursor(query.data?.reconciliationPreview?.nextCursor)}>Check older proposals</Button></div>:null}
       {query.data && !proposals.length ? (
         <p className="text-sm text-fg-muted">No proposals waiting for review.</p>
       ) : null}
@@ -144,6 +147,7 @@ function LibraryMemoryProposalsContent({
         {proposals.map((item) => (
           <li key={item.candidateId} className="space-y-1 py-3">
             <p className="whitespace-pre-wrap break-words">{item.proposedInsight}</p>
+            {item.promotionEligibility?.reason ? <p role="status">{item.promotionEligibility.reason}</p>:null}
             <div className="flex flex-wrap items-center gap-1 text-sm text-fg-secondary">
               <StatusBadge status={presentProposalStatus(item.status)} />
               <span>
@@ -160,7 +164,7 @@ function LibraryMemoryProposalsContent({
                 {(["promote", "reject"] as const).map((action) => (
                   <Button
                     key={action}
-                    disabled={!enabled || query.isFetching || query.isError || busy}
+                    disabled={!enabled || query.isFetching || query.isError || busy || (action==="promote" && item.promotionEligibility?.allowed===false)}
                     onClick={() => {
                       if (operation.locked || !operation.current()) return;
                       setOutcome(undefined);
@@ -194,7 +198,7 @@ function LibraryMemoryProposalsContent({
           {outcome ? <Callout tone={outcome.error ? "error" : "info"}>{outcome.text}</Callout> : null}
           <Button
             variant="primary"
-            disabled={busy || operation.locked || Boolean(outcome) || !enabled || query.isFetching || query.isError}
+            disabled={busy || operation.locked || Boolean(outcome) || !enabled || query.isFetching || query.isError || (review?.action==="promote" && review.item.promotionEligibility?.allowed===false)}
             onClick={() => void confirm()}
           >
             {review?.action === "promote" ? "Confirm memory promotion" : "Confirm memory rejection"}

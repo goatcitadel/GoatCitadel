@@ -64,10 +64,13 @@ public sealed partial class MainWindow
 
     private void ReplaceWebView()
     {
+        ResetStartupDraftDestination();
         var layout = (Grid)Content;
         var oldView = MissionWebView;
         var index = layout.Children.IndexOf(oldView);
-        if (oldView.CoreWebView2 is { } core) core.WebMessageReceived -= MissionWebView_WebMessageReceived;
+        if (oldView.CoreWebView2 is { } core && _webMessageReceived is { } handler)
+            core.WebMessageReceived -= handler;
+        _webMessageReceived = null;
         MissionWebView = new WebView2
         {
             Visibility = Visibility.Collapsed,
@@ -160,6 +163,8 @@ public sealed partial class MainWindow
     private async Task SwitchProfileAsync(ProfileBackup? backup)
     {
         _profileRecoveryChanging = true;
+        ResetStartupDraftDestination(clearText: true);
+        StartupDraftBox.IsEnabled = false;
         var observation = _runtimeLifecycle.BeginStop();
         _deferredRoutes.MarkUnavailable();
         StopRuntimeStatusPolling();
@@ -193,6 +198,7 @@ public sealed partial class MainWindow
         {
             _runtimeLifecycle.TryCompleteStop(observation);
             _profileRecoveryChanging = false;
+            StartupDraftBox.IsEnabled = true;
             ProfileRecoveryButton.IsEnabled = true;
         }
         if (_cleanedUp) return;

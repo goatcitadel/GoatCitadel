@@ -22,6 +22,7 @@ import {
   parseManagedProcessMetadata,
   resolveLauncherEndpoint,
   safeEndpointOrigin,
+  waitForManagedEndpointHealth,
 } from "../scripts/lib/managed-runtime-ownership.mjs";
 import {
   GATEWAY_STARTUP_FAILURE_ENV,
@@ -871,8 +872,7 @@ async function inspectLauncherRuntimeOwnershipWithLocks(endpoints, timeoutMs) {
 }
 
 async function inspectLauncherEndpointOwnership(endpoint, timeoutMs, options = {}) {
-  const metadataRecord = readManagedProcessMetadata(endpoint.pidPath, endpoint.service);
-  let pidInfo = metadataRecord.info;
+  let { info: pidInfo, fingerprint } = readManagedProcessMetadata(endpoint.pidPath, endpoint.service);
   const health = await probeEndpointHealth(`${endpoint.url}${endpoint.healthPath}`, timeoutMs);
   let identityMatched = false;
   let processBinding;
@@ -892,24 +892,25 @@ async function inspectLauncherEndpointOwnership(endpoint, timeoutMs, options = {
       } else if (processBinding.rootIdentity !== pidInfo.processIdentity) {
         pidInfo = { ...pidInfo, state: "reused", reason: "process_identity_mismatch" };
       } else {
-        const servingIdentityMatched =
+        identityMatched =
           pidInfo.servingPid === health.managedProcessId &&
           pidInfo.servingProcessIdentity === processBinding.servingIdentity;
-        if (!servingIdentityMatched && options.bindServingIdentity === true) {
+        if (!identityMatched && options.bindServingIdentity === true) {
+          const serving = { servingPid: health.managedProcessId, servingProcessIdentity: processBinding.servingIdentity };
           const publish = atomicCompareAndPublishJson({
             filePath: endpoint.pidPath,
-            expectedFingerprint: metadataRecord.fingerprint,
-            value: managedMetadataValue(pidInfo, {
-              servingPid: health.managedProcessId,
-              servingProcessIdentity: processBinding.servingIdentity,
-            }),
+            expectedFingerprint: fingerprint,
+            value: managedMetadataValue(pidInfo, serving),
           });
-          if (publish.published) {
+          if (!publish.published) {
             return inspectLauncherEndpointOwnership(endpoint, timeoutMs, { bindServingIdentity: false });
           }
-          return inspectLauncherEndpointOwnership(endpoint, timeoutMs, { bindServingIdentity: false });
+          // The lifecycle lock and the publication readback tie this snapshot to the
+          // identity just verified. Launch still rechecks both endpoints before navigation.
+          pidInfo = { ...pidInfo, ...serving };
+          fingerprint = publish.fingerprint;
+          identityMatched = true;
         }
-        identityMatched = servingIdentityMatched;
       }
     } else if (!health.responded && pidInfo.servingPid && pidInfo.servingProcessIdentity) {
       // A temporary health failure must not make an otherwise exact managed
@@ -948,7 +949,7 @@ async function inspectLauncherEndpointOwnership(endpoint, timeoutMs, options = {
   return {
     endpoint,
     pidInfo,
-    metadataRecord: { ...metadataRecord, info: pidInfo },
+    metadataRecord: { info: pidInfo, fingerprint },
     health,
     processBinding,
     assessment: assessLauncherEndpointOwnership({
@@ -1969,7 +1970,16 @@ async function waitForLauncherEndpointDecision(endpoint, deadline) {
     if (remainingMs <= 0) {
       return { kind: "timeout", snapshot };
     }
-    await sleep(Math.min(1000, Math.max(100, remainingMs)));
+    if (snapshot.assessment.launchAction === "wait_managed") {
+      // The local health response wakes the full ownership check. Process identity
+      // is still verified before attaching or spawning, including on timeout.
+      await waitForManagedEndpointHealth(async (timeoutMs) => {
+        const health = await probeEndpointHealth(`${endpoint.url}${endpoint.healthPath}`, timeoutMs);
+        return health.healthy;
+      }, Math.min(deadline, Date.now() + 1_000));
+    } else {
+      await sleep(Math.min(1000, Math.max(100, remainingMs)));
+    }
     snapshot = await inspectLauncherEndpointOwnership(endpoint, Math.min(1500, Math.max(250, deadline - Date.now())), {
       bindServingIdentity: true,
     });

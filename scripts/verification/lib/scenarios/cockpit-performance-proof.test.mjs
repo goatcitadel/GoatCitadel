@@ -31,6 +31,33 @@ test("slow navigation cannot turn a late visible Chat into an accepted startup",
  } finally {for(const [key,value] of Object.entries(previous)){if(value===undefined)delete globalThis[key];else globalThis[key]=value;}}
 });
 
+test("startup trace records when the composer becomes editable separately from visible Chat", async () => {
+ const previous = { window: globalThis.window, document: globalThis.document, requestAnimationFrame: globalThis.requestAnimationFrame };
+ const callbacks = [];
+ try {
+  const visible = { getBoundingClientRect: () => ({ height: 40, width: 800 }) };
+  const composer = { ...visible, disabled: true };
+  globalThis.window = {};
+  globalThis.document = { querySelector: selector => selector.includes("cockpit-chat-draft") ? composer : visible };
+  globalThis.requestAnimationFrame = callback => callbacks.push(callback);
+  const page = { addInitScript: async (callback, input) => callback(input) };
+  await installChatStartupReadinessProbe(page, Number.MAX_SAFE_INTEGER);
+  callbacks.shift()();
+  assert.equal(window.cockpitChatStartupReady, true);
+  assert.ok(Number.isFinite(window.cockpitChatStartupTiming.chatVisibleMs));
+  assert.equal(window.cockpitChatStartupTiming.composerEditableMs, null);
+  composer.disabled = false;
+  callbacks.shift()();
+  assert.ok(window.cockpitChatStartupTiming.composerEditableMs >= window.cockpitChatStartupTiming.chatVisibleMs);
+  assert.equal(callbacks.length, 0);
+ } finally {
+  for (const [key, value] of Object.entries(previous)) {
+   if (value === undefined) delete globalThis[key];
+   else globalThis[key] = value;
+  }
+ }
+});
+
 
 test("elsewhere-turn setup creates a distinct governed conversation without changing the approval-gated fixture", async () => {
  const calls=[];const fixture={workspaceId:"workspace-proof",sessionId:"seeded-approval-chat"};

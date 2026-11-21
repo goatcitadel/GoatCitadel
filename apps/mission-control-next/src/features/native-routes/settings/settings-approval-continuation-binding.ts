@@ -20,7 +20,7 @@ export function continuationAction(plan: ChangePlanRecord | undefined, workspace
     !plan ||
     !workspaceId.trim() ||
     plan.schemaVersion !== 1 ||
-    plan.origin?.surface !== "settings" ||
+    !(plan.origin?.surface === "settings" || (plan.origin?.surface === "chat" && Boolean(plan.origin.sessionId?.trim()) && plan.kind === "runtime_configuration" && plan.target?.ownerId === "runtime_settings")) ||
     plan.origin.workspaceId !== workspaceId ||
     plan.kind !== plan.request?.kind ||
     !plan.planId?.trim() ||

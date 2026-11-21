@@ -21,6 +21,7 @@ import type {
   CronRunExecutionToken,
   DurableRunRecord,
   PermissionProfileRecord,
+  PermissionProfileSnapshotRecord,
   TaskRecord,
   ToolPolicyActorContext,
   ChatTurnFeatureReferences,
@@ -728,7 +729,7 @@ async function resolveScheduledAgentTurnPolicy(
   }
 
   const workspaceId = (await deps.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID;
-  let creatorProfile: PermissionProfileRecord;
+  let creatorProfile: PermissionProfileSnapshotRecord;
   try {
     creatorProfile = await deps.storage.permissionProfiles.getProfile(creatorProfileId);
   } catch (error) {
@@ -746,6 +747,7 @@ async function resolveScheduledAgentTurnPolicy(
     };
   }
   const creatorActorId = createdBy.operatorId?.trim() || createdBy.authActorId?.trim();
+  if(createdBy.permissionProfileRevision && creatorProfile.revision!==createdBy.permissionProfileRevision)return {profilePosture:"creator_profile_invalid",failClosedReason:"The selected schedule permission profile changed after review. Review a fresh schedule before allowing more agentic work."};
   if (!permissionProfileAppliesToCreator({ profile: creatorProfile, creatorActorId, workspaceId })) {
     return {
       profilePosture: "creator_profile_scope_mismatch",

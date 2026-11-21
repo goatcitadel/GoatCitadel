@@ -1,4 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { ConflictError, memoryClaimKey, normalizeMemoryClaim, type MemoryClaim } from "@goatcitadel/contracts";
+import { claimStorageFields, MemoryLearningRepository } from "./memory-learning-repo.js";
+import { safeJsonParse } from "./safe-json.js";
 import type { DatabaseClient } from "./db.js";
 import type {
   LearnedMemoryConflictRecord,
@@ -19,6 +22,7 @@ interface ItemRow {
   redacted: number;
   created_at: string;
   updated_at: string;
+  claim_json?: string | null;
 }
 
 interface ConflictRow {
@@ -37,6 +41,7 @@ interface ConflictRow {
 // ── input types ──────────────────────────────────────────────────────
 
 export interface InsertLearnedMemoryItemInput {
+  claim?: MemoryClaim;
   sessionId: string;
   itemType: LearnedMemoryItemType;
   content: string;
@@ -59,7 +64,9 @@ export interface InsertLearnedMemoryConflictInput {
 // ── helpers ──────────────────────────────────────────────────────────
 
 function mapItemRow(row: ItemRow): LearnedMemoryItemRecord {
-  return {
+  const claim = row.claim_json ? safeJsonParse<MemoryClaim | undefined>(row.claim_json, undefined) : undefined;
+  if (row.claim_json && !claim) throw new TypeError("Invalid stored learned-memory claim.");
+  const record: LearnedMemoryItemRecord = {
     itemId: row.item_id,
     sessionId: row.session_id,
     itemType: row.item_type,
@@ -70,7 +77,14 @@ function mapItemRow(row: ItemRow): LearnedMemoryItemRecord {
     redacted: row.redacted === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...(claim ? { claim: normalizeMemoryClaim(claim) } : {}),
   };
+  return { ...record, sourceHash: learnedMemorySourceHash(record) };
+}
+
+export function learnedMemorySourceHash(record: LearnedMemoryItemRecord): string {
+  return createHash("sha256").update(JSON.stringify([1, record.itemId, record.sessionId, record.itemType, record.content,
+    record.confidence, record.status, record.supersededByItemId ?? null, record.redacted, record.createdAt, record.updatedAt, record.claim ?? null])).digest("hex");
 }
 
 function mapConflictRow(row: ConflictRow): LearnedMemoryConflictRecord {
@@ -131,10 +145,12 @@ export class LearnedMemoryRepository {
     this.insertItemStmt = db.prepare(`
       INSERT INTO learned_memory_items (
         item_id, session_id, item_type, content, confidence, status,
-        superseded_by_item_id, redacted, disabled_reason, created_at, updated_at
+        superseded_by_item_id, redacted, disabled_reason, created_at, updated_at,
+        claim_json, claim_key, claim_scalar, claim_scope_kind, claim_scope_id
       ) VALUES (
         @itemId, @sessionId, @itemType, @content, @confidence, @status,
-        NULL, @redacted, NULL, @createdAt, @updatedAt
+        NULL, @redacted, NULL, @createdAt, @updatedAt,
+        @claimJson, @claimKey, @claimScalar, @claimScopeKind, @claimScopeId
       )
     `);
 
@@ -225,10 +241,27 @@ export class LearnedMemoryRepository {
     return rows.map(mapItemRow);
   }
 
+  findActiveClaim(sessionId:string,workspaceId:string,claim:MemoryClaim):LearnedMemoryItemRecord[] {
+    const meta = this.db.prepare("SELECT workspace_id FROM chat_session_meta WHERE session_id = ?").get<{workspace_id:string}>(sessionId);
+    if (meta?.workspace_id !== workspaceId) throw new ConflictError({message:"Memory claim workspace changed."});
+    return this.db.prepare("SELECT * FROM learned_memory_items WHERE session_id = ? AND claim_key = ? AND status = 'active' ORDER BY item_id LIMIT 2")
+      .all<ItemRow>(sessionId,memoryClaimKey(workspaceId,claim)).map(mapItemRow);
+  }
+
   // ── mutations ──────────────────────────────────────────────────────
 
   insertItem(input: InsertLearnedMemoryItemInput): LearnedMemoryItemRecord {
+    return this.db.transaction("immediate", () => this.insertItemAtomic(input));
+  }
+
+  private insertItemAtomic(input: InsertLearnedMemoryItemInput): LearnedMemoryItemRecord {
     assertEvidenceOnlyLearnedMemoryStatus(input.status);
+    let workspaceId: string | undefined;
+    if (input.claim) {
+      workspaceId = this.db.prepare("SELECT workspace_id FROM chat_session_meta WHERE session_id = ?").get<{workspace_id: string}>(input.sessionId)?.workspace_id;
+      if (!workspaceId || (input.claim.identity.scope.kind === "session" && input.claim.identity.scope.id !== input.sessionId)) throw new ConflictError({ message: "Claim ownership is missing or mismatched." });
+      new MemoryLearningRepository(this.db).assertClaimScope(workspaceId, input.claim);
+    }
     const now = new Date().toISOString();
     const itemId = randomUUID();
     const confidence = clamp01(input.confidence);
@@ -242,6 +275,7 @@ export class LearnedMemoryRepository {
       redacted: input.redacted ? 1 : 0,
       createdAt: now,
       updatedAt: now,
+      ...claimStorageFields(workspaceId ?? "", input.claim),
     });
     this.insertSourceStmt.run({
       sourceId: randomUUID(),
@@ -251,17 +285,22 @@ export class LearnedMemoryRepository {
       snippet: input.snippet,
       createdAt: now,
     });
-    return {
-      itemId,
-      sessionId: input.sessionId,
-      itemType: input.itemType,
-      content: input.content,
-      confidence,
-      status: input.status,
-      redacted: input.redacted,
-      createdAt: now,
-      updatedAt: now,
-    };
+    return this.getItem(itemId)!;
+  }
+
+  correctItem(input: { itemId: string; expectedSourceHash: string; replacement: InsertLearnedMemoryItemInput }): LearnedMemoryItemRecord {
+    return this.db.transaction("immediate", () => {
+      const row = this.db.prepare(`SELECT * FROM learned_memory_items WHERE item_id = ?${this.db.dialect === "postgres" ? " FOR UPDATE" : ""}`).get<ItemRow>(input.itemId);
+      const previous = row ? mapItemRow(row) : undefined;
+      if (!previous || previous.sourceHash !== input.expectedSourceHash || previous.status !== "active" || previous.sessionId !== input.replacement.sessionId || previous.redacted) throw new ConflictError({ message: "The reviewed learned-memory correction is stale." });
+      const meta = this.db.prepare("SELECT workspace_id FROM chat_session_meta WHERE session_id = ?").get<{ workspace_id: string }>(previous.sessionId);
+      if (previous.claim && (!input.replacement.claim || !meta ||
+        claimStorageFields(meta.workspace_id, previous.claim).claimKey !== claimStorageFields(meta.workspace_id, input.replacement.claim).claimKey)) throw new ConflictError({ message: "A correction must retain the target property." });
+      const next = this.insertItemAtomic({ ...input.replacement, status: "conflict" });
+      this.supersedeItem(previous.itemId, next.itemId);
+      this.updateItemFields(next.itemId, { status: "active", content: next.content, confidence: next.confidence });
+      return this.getItem(next.itemId)!;
+    });
   }
 
   updateItemFields(itemId: string, fields: { status: string; content: string; confidence: number }): void {
@@ -272,6 +311,7 @@ export class LearnedMemoryRepository {
     if (current?.redacted && fields.content !== current.content) {
       throw new TypeError("Learned memory content is redacted; redacted evidence never accepts new content.");
     }
+    if (current?.claim && fields.content !== current.content) throw new ConflictError({message:"A bound memory property requires an exact-source correction."});
     this.updateItemFieldsStmt.run({
       itemId,
       status: fields.status,

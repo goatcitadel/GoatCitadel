@@ -71,6 +71,7 @@ function composeSessionPreparation(
   | "assertTurnAdmissionWrite"
   | "buildLlmMessagesFromBranchPath"
   | "composeFrozenOperatorProfileDigest"
+  | "isNaturalMemoryReviewEnabled"
   | "ensureChatSessionModelDefaults"
   | "ensureChatSessionRuntimeGrants"
   | "getCodeModeReadiness"
@@ -101,7 +102,10 @@ function composeSessionPreparation(
     buildLlmMessagesFromBranchPath: (sessionId, pathTurnIds, currentUserMessage, options, state) =>
       source.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
     composeFrozenOperatorProfileDigest: source.composeFrozenOperatorProfileDigest
-      ? (workspaceId) => source.composeFrozenOperatorProfileDigest!(workspaceId)
+      ? (workspaceId,options) => options === undefined ? source.composeFrozenOperatorProfileDigest!(workspaceId) : source.composeFrozenOperatorProfileDigest!(workspaceId,options)
+      : undefined,
+    isNaturalMemoryReviewEnabled: source.isNaturalMemoryReviewEnabled
+      ? () => source.isNaturalMemoryReviewEnabled!()
       : undefined,
     ensureChatSessionModelDefaults: (sessionId, prefs) => source.ensureChatSessionModelDefaults(sessionId, prefs),
     ensureChatSessionRuntimeGrants: (sessionId) => source.ensureChatSessionRuntimeGrants(sessionId),

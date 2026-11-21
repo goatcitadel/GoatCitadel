@@ -61,6 +61,7 @@ export function composeFallbackContext(
       candidateId: candidate.candidateId,
       sourceType: candidate.sourceType,
       sourceRef: candidate.sourceRef,
+      ...(candidate.sourceHash ? { sourceHash: candidate.sourceHash } : {}),
       snippet: candidate.text.slice(0, 180),
       score: Number(candidate.rankScore.toFixed(3)),
     });

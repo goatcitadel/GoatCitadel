@@ -231,6 +231,27 @@ describe("a model choice is sent once, when the popover is closed", () => {
     await vi.waitFor(() => expect(dialog()).toBeNull());
     expect(input.onRequestModelChoice).toHaveBeenCalledExactlyOnceWith({ model: "fixture-xl" });
   });
+  it("closes for Personality navigation without applying the draft or restoring Chat focus", async () => {
+    const openSettings = vi.fn(() => {
+      window.history.pushState({}, "", "/settings/general#work-personality");
+      outside().focus();
+    });
+    const input = controls({ ...three, onRequestModelChoice: vi.fn(), onOpenPersonalitiesSettings: openSettings });
+    await render(input);
+    await open();
+    await change(model(), "fixture-xl");
+    const personality = dialog()!.querySelector<HTMLButtonElement>('button[aria-label$="Open personality settings"]')!;
+    await act(async () => {
+      personality.focus();
+      personality.click();
+    });
+    expect(openSettings).toHaveBeenCalledOnce();
+    expect(window.location.pathname).toBe("/settings/general");
+    await vi.waitFor(() => expect(dialog()).toBeNull());
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
+    expect(input.onRequestModelChoice).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(outside());
+  });
   it("says when the choice applies", async () => {
     await render(controls({ ...three, onRequestModelChoice: vi.fn() }));
     await open();

@@ -299,6 +299,7 @@ class FakeCronJobs {
 }
 
 class FakeCronRuns {
+  public getByAdmission(jobId:string,admissionKey:string):CronRunRecord|undefined{return [...this.rows.values()].find(run=>run.jobId===jobId && run.admissionKey===admissionKey);}
   private readonly rows = new Map<string, CronRunRecord>();
 
   public constructor(private readonly jobs: FakeCronJobs) {}
@@ -455,6 +456,7 @@ function createService(
     isFeatureEnabled?: boolean;
     handlers?: Partial<CronAutomationServiceDeps["runHandlers"]>;
     durableStatuses?: Record<string, DurableRunStatus>;
+    durableMetadata?:Record<string,Record<string,unknown>>;
     cronRuns?: FakeCronRuns;
     sharedHostLifecycle?: SharedHostLifecycleService;
     citadels?: CronCitadelReader;
@@ -489,6 +491,7 @@ function createService(
               cronJobId: owner.jobId,
               cronExecutionGeneration: owner.executionGeneration,
               cronAdmission: admission,
+              ...options.durableMetadata?.[runId],
             },
           };
         },
@@ -528,6 +531,14 @@ function createService(
 }
 
 describe("cron schedule helpers", () => {
+  it("event bindings never become clock ticks and a one-shot stays due after its selected instant",()=>{
+    const base=buildTaskJob({jobId:"follow-through",action:"agent_turn",schedule:"0 0 * * * UTC"});
+    const once={...base,actionConfig:{agentTurn:{prompt:"Check",oneShot:{at:"2026-11-19T10:30:00.000Z",timezone:"America/Los_Angeles"}}}};
+    expect(isExplicitCronJobDueNow(once,new Date("2026-11-19T10:29:00.000Z"))).toBe(false);
+    expect(isExplicitCronJobDueNow(once,new Date("2026-11-19T11:01:00.000Z"))).toBe(true);
+    const event={...base,schedule:"* * * * * UTC",actionConfig:{agentTurn:{prompt:"Check",sessionId:"s",eventWake:{version:1 as const,eventType:"subagent.end" as const,hookId:"hook",workspaceId:"default",sourceSessionId:"s",notBefore:"2026-11-19T00:00:00.000Z",timezone:"UTC"}}}};
+    expect(isExplicitCronJobDueNow(event,new Date("2026-11-19T11:01:00.000Z"))).toBe(false);
+  });
   it("normalizes ids, names, descriptions, end dates, and supported cron shapes", () => {
     expect(normalizeCronJobId(" JOB_01 ")).toBe("job_01");
     expect(() => normalizeCronJobId("no")).toThrow("Cron job id must be 3-64 chars");
@@ -2008,6 +2019,27 @@ describe("no_agent cron action", () => {
 });
 
 describe("agent_turn cron action", () => {
+  it("settles the exact finalized durable child immediately without waiting for a maintenance tick or launching it again",async()=>{
+    const jobs=new FakeCronJobs(),statuses:Record<string,DurableRunStatus>={"prompt-child":"running"},agentTurn=vi.fn(async()=>({mode:"agent_turn" as const,durableRunId:"prompt-child",sessionId:"s",turnId:"t",userMessageId:"u",assistantMessageId:"a"}));
+    const service=createService(new FakeDb(),vi.fn(),{cronJobs:jobs,durableStatuses:statuses,durableMetadata:{"prompt-child":{autonomousChatPostCommit:{delivery:{status:"skipped",reason:"delivery_not_configured"}}}},handlers:{agentTurn}});
+    await service.createCronJob({jobId:"prompt-settlement",name:"Prompt settlement",action:"agent_turn",schedule:"0 0 * * * UTC",actionConfig:{agentTurn:{prompt:"Check"}}});
+    const started=await service.runCronJobNow("prompt-settlement");expect(started.status).toBe("pending");
+    const child={runId:"prompt-child",metadata:{cronAdmission:{cronRunId:started.runId,jobId:"prompt-settlement",executionGeneration:1}}};
+    await expect(service.reconcileFinalizedChatChild({...child,metadata:{cronAdmission:{...child.metadata.cronAdmission,executionGeneration:2}}} as never)).rejects.toThrow();
+    expect((await service.getCronJob("prompt-settlement")).activeRunId).toBe(started.runId);
+    statuses["prompt-child"]="completed";await service.reconcileFinalizedChatChild(child as never);
+    expect(await service.getCronJob("prompt-settlement")).toMatchObject({activeRunId:undefined,lastRunId:started.runId,lastRunStatus:"ok"});
+    await service.reconcileFinalizedChatChild(child as never);expect(agentTurn).toHaveBeenCalledTimes(1);
+  });
+  it("settles one one-shot occurrence and does not rearm it on later ticks",async()=>{
+    const db=new FakeDb(),jobs=new FakeCronJobs(),statuses:Record<string,DurableRunStatus>={"once-child":"running"};
+    const agentTurn=vi.fn(async()=>({mode:"agent_turn" as const,durableRunId:"once-child",sessionId:"child",turnId:"child-turn",userMessageId:"user",assistantMessageId:"assistant"}));
+    const service=createService(db,vi.fn(),{cronJobs:jobs,durableStatuses:statuses,handlers:{agentTurn}});
+    await service.createCronJob({jobId:"once-job",name:"One check",action:"agent_turn",schedule:"0 0 * * * UTC",actionConfig:{agentTurn:{prompt:"Check",oneShot:{at:"2026-11-19T10:30:00.000Z",timezone:"America/Los_Angeles"}}}});
+    await service.runDueTaskCronJobs(new Date("2026-11-19T10:35:00.000Z"));expect(agentTurn).toHaveBeenCalledTimes(1);
+    statuses["once-child"]="completed";await service.runDueTaskCronJobs(new Date("2026-11-19T10:36:00.000Z"));
+    await service.runDueTaskCronJobs(new Date("2026-11-19T10:37:00.000Z"));expect(agentTurn).toHaveBeenCalledTimes(1);
+  });
   it("admits runCronJobNow under a canonical token without reporting enqueue as success", async () => {
     const db = new FakeDb();
     const cronJobs = new FakeCronJobs();

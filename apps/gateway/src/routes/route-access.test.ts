@@ -144,6 +144,9 @@ describe("route access manifest", () => {
     app.post("/api/v1/integrations/connections/:connectionId/:channel/inbound", async () => ({ ok: true }));
     app.post("/api/v1/integrations/connections/:connectionId/telegram/webhook", async () => ({ ok: true }));
     app.get("/api/v1/mutation-attempts/:idempotencyKey", async () => ({ ok: true }));
+    app.get("/api/v1/scripts", async () => ({ ok: true }));
+    app.patch("/api/v1/scripts/retention", async () => ({ ok: true }));
+    app.get("/api/v1/scripts/:id/preview", async () => ({ ok: true }));
     app.get("/api/v1/unclassified/new-surface", async () => ({ ok: true }));
     await app.ready();
 
@@ -165,6 +168,9 @@ describe("route access manifest", () => {
       "/api/v1/trust/policy-snapshot",
       "/api/v1/code-mode/runs",
       "/api/v1/mutation-attempts/:idempotencyKey",
+      "/api/v1/scripts",
+      "/api/v1/scripts/retention",
+      "/api/v1/scripts/:id/preview",
     ]) {
       expect(app.routeAccessManifest.find((entry) => entry.url === url)).toMatchObject({
         accessClass: "operator",

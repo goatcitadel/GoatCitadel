@@ -40,6 +40,7 @@ function createHarness(options: HarnessOptions = {}) {
       dedupeKey: string;
       suggestedText: string;
       createdBy?: AgentCommitmentRecord["createdBy"];
+      status?:AgentCommitmentRecord["status"];
     },
     now: string,
   ): AgentCommitmentRecord {
@@ -53,7 +54,7 @@ function createHarness(options: HarnessOptions = {}) {
       confidence: input.confidence,
       dedupeKey: input.dedupeKey,
       suggestedText: input.suggestedText,
-      status: "pending",
+      status: input.status ?? "pending",
       createdBy: input.createdBy ?? "classifier",
       createdAt: now,
     };
@@ -232,6 +233,7 @@ describe("CommitmentClassifierService.recordTurnCommitments", () => {
     expect(persisted.map((item) => item.dedupeKey)).toEqual(["keep-high", "keep-exact"]);
     expect(upserts.map((item) => item.dedupeKey)).toEqual(["keep-high", "keep-exact"]);
     expect(upserts.every((item) => item.createdBy === "classifier")).toBe(true);
+    expect(upserts.every((item) => item.status === "proposed")).toBe(true);
   });
 
   it("never persists secrets as suggested text or dedupe key", async () => {

@@ -7,6 +7,8 @@ import {
   type OperatorProfileFact,
   type TraceMemoryCandidateInput,
   type TraceMemoryCandidateRecord,
+  type BackgroundLearningReadiness,
+  type LearningReviewSource,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GeneralChatPostCommitDurableEffectExecutionInput } from "./chat-durable-run-service.js";
@@ -56,6 +58,9 @@ interface ChatPostCommitEffectServiceBaseDeps {
   readonly storage: ChatPostCommitEffectStoragePort;
   readonly commitmentClassifier: CommitmentClassifierService;
   readonly backgroundReview: BackgroundReviewService;
+  resolveBackgroundLearningReadiness(input:{workspaceId:string;sessionId:string}):Promise<BackgroundLearningReadiness>;
+  enqueueLearningReview?(input:Omit<LearningReviewSource,"sourceHash">&{kind?:"review"|"maintenance";due:boolean}):Promise<{jobId?:string;disposition:"queued"|"deduplicated"|"disabled"}>;
+  evaluateGovernedMemoryMaintenance?(input:Omit<LearningReviewSource,"sourceHash">):Promise<{status:"skipped"|"queued_for_review";jobId?:string;reasonCode?:string}>;
   /** Existing governed review owner. This files proposals; it never promotes them. */
   proposeTraceMemoryCandidate(
     input: TraceMemoryCandidateInput,
@@ -99,7 +104,7 @@ type EligibilityAwareEffectInput = GeneralChatPostCommitDurableEffectExecutionIn
  * Canonical downstream owner for deterministic `chat.post_commit.effect`
  * children. Background review may file evidence-only trace candidates through
  * the existing governed memory review owner, but never promotes them or writes
- * OperatorProfile state. Maintenance is production-dark. Commitments remain a
+ * OperatorProfile state. Maintenance queues review-only work. Commitments remain a
  * stateful domain path and every mutation is fenced by the explicit D2 authority
  * seam when it is configured.
  */
@@ -226,6 +231,10 @@ export class ChatPostCommitEffectService {
     if (input.delegatedChild) {
       return await this.commitResult(evidenceIdentity, context, { status: "skipped", reason: "delegated_child" });
     }
+    const readiness=await this.deps.resolveBackgroundLearningReadiness(input);
+    if (!readiness.canExtractMemory && !readiness.canDraftSkill) {
+      return await this.commitResult(evidenceIdentity,context,{status:"skipped",reason:"learning_not_ready"});
+    }
 
     const counter =
       existingCounter ??
@@ -243,8 +252,25 @@ export class ChatPostCommitEffectService {
     if (counter.disposition === "late_blocked") {
       return readGeneralChatPostCommitStageResult(counter);
     }
+    if(this.deps.enqueueLearningReview) {
+      const current=await this.deps.resolveBackgroundLearningReadiness(input);
+      if(!current.canExtractMemory && !current.canDraftSkill) return await this.commitResult(evidenceIdentity,context,{status:"skipped",reason:"learning_not_ready"});
+      const authority=this.resolveAuthority(context);
+      if(!authority) throw new Error("Queued learning requires canonical parent authority.");
+      const queued=await commitGeneralChatPostCommitStage(this.deps.storage,evidenceIdentity,async()=>{
+        const result=await this.deps.enqueueLearningReview!({workspaceId:input.workspaceId,sessionId:input.sessionId,sourceTurnId:input.turnId,
+          parentRunId:context.parentRunId,effectExecutionId:context.effectRunId,postCommitGenerationId:context.generationId,
+          sessionIncarnationId:authority.parent.sessionIncarnationId,controllerGeneration:authority.parent.controllerGeneration,due:counter.result.due === true});
+        return {value:undefined,result:result.jobId ? {status:"queued",jobId:result.jobId}:{status:"skipped",reason:"learning_not_ready"}};
+      },this.stageCommitOptions(context,true));
+      return readGeneralChatPostCommitStageResult(queued.receipt);
+    }
     if (counter.result.due !== true) {
       return await this.commitResult(evidenceIdentity, context, { status: "skipped", reason: "counter_not_due" });
+    }
+    const currentReadiness=await this.deps.resolveBackgroundLearningReadiness(input);
+    if (!currentReadiness.canExtractMemory && !currentReadiness.canDraftSkill) {
+      return await this.commitResult(evidenceIdentity,context,{status:"skipped",reason:"learning_not_ready"});
     }
 
     const lineage = {
@@ -253,19 +279,20 @@ export class ChatPostCommitEffectService {
       sourceTurnId: input.turnId,
       effectExecutionId: context.effectRunId,
     };
-    const facts = await this.deps.backgroundReview.extractTurnMemoryFacts(
+    const facts = currentReadiness.canExtractMemory ? await this.deps.backgroundReview.extractTurnMemoryFacts(
       input.userText,
       input.assistantText,
       context.signal,
       lineage,
-    );
+    ) : [];
     context.signal?.throwIfAborted();
-    const suggestion = await this.deps.backgroundReview.suggestTurnSkill(
+    const skillReadiness=await this.deps.resolveBackgroundLearningReadiness(input);
+    const suggestion = skillReadiness.canDraftSkill ? await this.deps.backgroundReview.suggestTurnSkill(
       input.userText,
       input.assistantText,
       context.signal,
       lineage,
-    );
+    ) : {shouldAuthor:false};
     context.signal?.throwIfAborted();
 
     const memoryEvidenceFingerprints = buildBackgroundReviewMemoryEvidenceFingerprints(facts);
@@ -314,14 +341,16 @@ export class ChatPostCommitEffectService {
     if (!eligibility.eligible) {
       return await this.commitResult(identity, context, eligibility.result);
     }
-    const result = input.delegatedChild
-      ? { status: "skipped", reason: "delegated_child" }
-      : {
-          status: "production_dark",
-          reason: "governed_memory_promotion_not_implemented",
-          enqueueDisposition: "not_enqueued",
-        };
-    return await this.commitResult(identity, context, result);
+    if(input.delegatedChild) return await this.commitResult(identity,context,{status:"skipped",reason:"delegated_child"});
+    if(!this.deps.evaluateGovernedMemoryMaintenance || !(await this.deps.resolveBackgroundLearningReadiness(input)).canEvaluateMaintenance)
+      return await this.commitResult(identity,context,{status:"skipped",reason:"learning_not_ready"});
+    const authority=this.resolveAuthority(context);
+    if(!authority) throw new Error("Governed maintenance requires canonical parent authority.");
+    const committed=await commitGeneralChatPostCommitStage(this.deps.storage,identity,async()=>{
+      const result=await this.deps.evaluateGovernedMemoryMaintenance!({workspaceId:input.workspaceId,sessionId:input.sessionId,sourceTurnId:input.turnId,parentRunId:context.parentRunId,effectExecutionId:context.effectRunId,postCommitGenerationId:context.generationId,sessionIncarnationId:authority.parent.sessionIncarnationId,controllerGeneration:authority.parent.controllerGeneration});
+      return {value:undefined,result:result.status === "queued_for_review" && result.jobId ? {status:result.status,jobId:result.jobId}:{status:"skipped",reason:result.reasonCode ?? "learning_not_ready"}};
+    },this.stageCommitOptions(context,true));
+    return readGeneralChatPostCommitStageResult(committed.receipt);
   }
 
   private async resolveEligibleHumanTurn(

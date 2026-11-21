@@ -1,3 +1,4 @@
+import type { StandingMemoryContext } from "./chat-learning-memory-manifest.js";
 /**
  * Operator profile service (P2-S4b).
  *
@@ -23,7 +24,8 @@
  * captured); secrets are blocked regardless of autonomy; auto-apply respects the
  * master autonomy kill switch (`autonomyV1Disabled`).
  */
-import type { MemoryWriteAuthority, OperatorProfileFact, OperatorProfileRecord } from "@goatcitadel/contracts";
+import type { MemoryLearningRecord, MemoryWriteAuthority, OperatorProfileFact, OperatorProfileRecord } from "@goatcitadel/contracts";
+import { memoryClaimKey } from "@goatcitadel/contracts";
 import {
   MAX_OPERATOR_PROFILE_FACT_LENGTH,
   MAX_OPERATOR_PROFILE_FACTS,
@@ -36,6 +38,7 @@ import { MemoryWriteGateService } from "./memory-write-gate-service.js";
 type OperatorProfileStorage = Pick<Storage, "operatorProfiles" | "workspaces">;
 
 export interface OperatorProfileServiceDeps {
+  readTrustedLearnings?: (workspaceId: string) => Promise<MemoryLearningRecord[]>;
   storage: OperatorProfileStorage;
   /** Reuse the master autonomy kill switch (`autonomyV1Disabled`). */
   isFeatureEnabled(flag: string): boolean | Promise<boolean>;
@@ -71,8 +74,9 @@ export interface ReplaceOperatorProfileFactsInput {
 }
 
 interface CachedDigest {
-  revision: number;
+  revision: string;
   digest: string;
+  sources: StandingMemoryContext["sources"];
 }
 
 export class OperatorProfileService {
@@ -80,6 +84,7 @@ export class OperatorProfileService {
   private readonly isFeatureEnabled: (flag: string) => boolean | Promise<boolean>;
   private readonly gate: MemoryWriteGateService;
   private readonly now: () => string;
+  private readonly readTrustedLearnings?: OperatorProfileServiceDeps["readTrustedLearnings"];
   /** Frozen-digest cache keyed by workspaceId → {revision, digest}. */
   private readonly digestCache = new Map<string, CachedDigest>();
 
@@ -88,6 +93,7 @@ export class OperatorProfileService {
     this.isFeatureEnabled = deps.isFeatureEnabled;
     this.gate = deps.memoryWriteGate ?? new MemoryWriteGateService();
     this.now = deps.now ?? (() => new Date().toISOString());
+    this.readTrustedLearnings = deps.readTrustedLearnings;
   }
 
   /**
@@ -133,21 +139,32 @@ export class OperatorProfileService {
    * only when the profile changes. Returns `undefined` when there is nothing
    * useful to inject (no summary and no facts). Secrets are always stripped.
    */
-  public async composeFrozenProfileDigest(workspaceId: string): Promise<string | undefined> {
+  public async composeFrozenProfileDigest(workspaceId: string, options: {includeLearnings?:boolean} = {}): Promise<string | undefined> {
+    return (await this.composeFrozenProfileContext(workspaceId,options))?.instruction;
+  }
+
+  public async composeFrozenProfileContext(workspaceId: string, options: {includeLearnings?:boolean} = {}): Promise<StandingMemoryContext | undefined> {
     const normalizedWorkspaceId = normalizeWorkspaceId(workspaceId);
-    const profile = await this.readProfile(normalizedWorkspaceId);
-    if (!profile) {
-      return undefined;
-    }
+    const storedProfile = await this.readProfile(normalizedWorkspaceId);
+    const learnings = (options.includeLearnings === false ? [] : await this.readTrustedLearnings?.(normalizedWorkspaceId) ?? []).filter(record => /^[a-f0-9]{64}$/u.test(record.sourceHash ?? "") && record.workspaceId === normalizedWorkspaceId && record.status === "trusted" && record.type === "operator_preference" &&
+      (!record.claim || record.claim.identity.scope.kind === "workspace"));
+    if (!storedProfile && !learnings.length) return undefined;
+    const claimed = new Set(learnings.filter(record => record.claim).map(record => memoryClaimKey(normalizedWorkspaceId, record.claim!)));
+    const profile: OperatorProfileRecord = { operatorProfileId: storedProfile?.operatorProfileId ?? "derived", workspaceId: normalizedWorkspaceId,
+      summary: storedProfile?.summary ?? "", revision: storedProfile?.revision ?? 0, createdAt: storedProfile?.createdAt ?? "", updatedAt: storedProfile?.updatedAt ?? "",
+      facts: [...learnings.map(record => ({ kind: "preference" as const, content: record.insight, confidence: record.confidence, sourceRef: `memory_learning:${record.learningId} sha256:${record.sourceHash}`, claim: record.claim })),
+        ...(storedProfile?.facts ?? []).filter(fact => !fact.claim || !claimed.has(memoryClaimKey(normalizedWorkspaceId, fact.claim)))] };
+    const revision = JSON.stringify([profile.revision, learnings.map(record => [record.learningId, record.sourceHash, record.insight])]);
 
     const cached = this.digestCache.get(normalizedWorkspaceId);
-    if (cached && cached.revision === profile.revision) {
-      return cached.digest || undefined;
+    if (cached && cached.revision === revision) {
+      return cached.digest ? {instruction:cached.digest,sources:cached.sources.map(source=>({...source}))} : undefined;
     }
 
     const digest = renderFrozenProfileDigest(profile, this.gate);
-    this.digestCache.set(normalizedWorkspaceId, { revision: profile.revision, digest });
-    return digest || undefined;
+    const sources=learnings.filter(record=>digest.includes(`[memory_learning:${record.learningId} sha256:${record.sourceHash}]`)).map(record=>({learningId:record.learningId,sourceHash:record.sourceHash!}));
+    this.digestCache.set(normalizedWorkspaceId, { revision, digest, sources });
+    return digest ? {instruction:digest,sources:sources.map(source=>({...source}))} : undefined;
   }
 
   /**
@@ -409,7 +426,7 @@ function renderFrozenProfileDigest(profile: OperatorProfileRecord, gate: MemoryW
     if (ofKind.length === 0) {
       continue;
     }
-    const lines = ofKind.map((fact) => `- ${clampText(fact.content.trim(), MAX_OPERATOR_PROFILE_FACT_LENGTH)}`);
+    const lines = ofKind.map((fact) => `- ${clampText(fact.content.trim(), MAX_OPERATOR_PROFILE_FACT_LENGTH)}${/^memory_learning:[a-zA-Z0-9_-]{1,100}(?: sha256:[a-f0-9]{64})?$/.test(fact.sourceRef ?? "") ? ` [${fact.sourceRef}]` : ""}`);
     sections.push(`${FACT_KIND_LABELS[kind]}:\n${lines.join("\n")}`);
   }
 

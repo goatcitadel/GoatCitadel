@@ -16,6 +16,7 @@ import type {
   ChatPostCommitEffectAuthorityContext,
 } from "./chat-post-commit-effect-receipt.js";
 import type { CommitmentClassifierService } from "./gateway/commitment-classifier-service.js";
+import type {BackgroundLearningReadiness} from "@goatcitadel/contracts";
 
 const roots: string[] = [];
 const storages: Storage[] = [];
@@ -30,6 +31,38 @@ afterEach(() => {
 });
 
 describe("ChatPostCommitEffectService D3 authority and safe disposition", () => {
+  it("queues each eligible source under its owner fence without performing extraction inline",async()=>{
+    const storage=createStorage();seedEffectRun(storage,"effect-learning-queue","background_review","worker-current");
+    const enqueueLearningReview=vi.fn(async()=>({jobId:`blj-${"a".repeat(40)}`,disposition:"queued" as const}));
+    const extractTurnMemoryFacts=vi.fn(async()=>[]),suggestTurnSkill=vi.fn(async()=>({shouldAuthor:false}));
+    const service=createService(storage,{authority:authorityHarness([],{readDurableRunVersion:id=>storage.durableRuns.getRun(id).version}).port,enqueueLearningReview,
+      backgroundReview:{extractTurnMemoryFacts,suggestTurnSkill} as unknown as BackgroundReviewService});
+    const execution=context("effect-learning-queue","worker-current");
+    expect(await service.execute(backgroundInput(),execution)).toMatchObject({status:"queued",jobId:`blj-${"a".repeat(40)}`});
+    expect(await service.execute(backgroundInput(),execution)).toMatchObject({status:"queued"});
+    expect(enqueueLearningReview).toHaveBeenCalledTimes(1);
+    expect(enqueueLearningReview).toHaveBeenCalledWith(expect.objectContaining({sourceTurnId:"turn-1",effectExecutionId:"effect-learning-queue",parentRunId:"parent-1",due:true}));
+    expect(extractTurnMemoryFacts).not.toHaveBeenCalled();expect(suggestTurnSkill).not.toHaveBeenCalled();
+  });
+  it("skips_all_model_calls_when_no_learning_destination_is_ready and does_not_advance_due_counter_while_disabled",async()=>{
+    const storage=createStorage(); seedEffectRun(storage,"effect-no-destination","background_review","worker-current");
+    const extractTurnMemoryFacts=vi.fn(async()=>[]),suggestTurnSkill=vi.fn(async()=>({shouldAuthor:false}));
+    const service=createService(storage,{authority:authorityHarness([],{readDurableRunVersion:runId=>storage.durableRuns.getRun(runId).version}).port,backgroundReview:{extractTurnMemoryFacts,suggestTurnSkill} as unknown as BackgroundReviewService,
+      resolveBackgroundLearningReadiness:async()=>({...readyLearning(),canExtractMemory:false,canDraftSkill:false,canEvaluateMaintenance:false})});
+    expect(await service.execute(backgroundInput(),context("effect-no-destination","worker-current"))).toMatchObject({status:"skipped",reason:"learning_not_ready"});
+    expect(extractTurnMemoryFacts).not.toHaveBeenCalled();expect(suggestTurnSkill).not.toHaveBeenCalled();
+    expect(storage.systemSettings.get(buildBackgroundReviewCounterSettingKey("workspace-1"))).toBeUndefined();
+  });
+
+  it("rechecks_readiness_before_dispatch_after_config_change",async()=>{
+    const storage=createStorage();seedEffectRun(storage,"effect-destination-flip","background_review","worker-current");
+    let checks=0;
+    const extractTurnMemoryFacts=vi.fn(async()=>[]),suggestTurnSkill=vi.fn(async()=>({shouldAuthor:false}));
+    const service=createService(storage,{authority:authorityHarness([],{readDurableRunVersion:runId=>storage.durableRuns.getRun(runId).version}).port,backgroundReview:{extractTurnMemoryFacts,suggestTurnSkill} as unknown as BackgroundReviewService,
+      resolveBackgroundLearningReadiness:async()=>({...readyLearning(),canExtractMemory:++checks===1,canDraftSkill:false,canEvaluateMaintenance:false})});
+    expect(await service.execute(backgroundInput(),context("effect-destination-flip","worker-current"))).toMatchObject({status:"skipped",reason:"learning_not_ready"});
+    expect(extractTurnMemoryFacts).not.toHaveBeenCalled();expect(suggestTurnSkill).not.toHaveBeenCalled();
+  });
   it("keeps commitments live, orders the session guard before the domain write, and fast-replays", async () => {
     const storage = createStorage();
     seedEffectRun(storage, "effect-commitment", "commitments", "worker-current");
@@ -696,25 +729,29 @@ describe("ChatPostCommitEffectService D3 authority and safe disposition", () => 
     expect(metadataText).not.toContain("RAW LEGACY STAGE MARKDOWN");
   });
 
-  it("keeps post-turn memory maintenance production-dark with no enqueue or maintenance call", async () => {
+  it("queues eligible maintenance once under its stage fence without the legacy artifact writer", async () => {
     const storage = createStorage();
     seedEffectRun(storage, "effect-maintenance", "memory_maintenance", "worker-current");
     const noteSuccessfulRootTurnSync = vi.fn();
     const requestDurableRunProcessing = vi.fn();
+    const evaluateGovernedMemoryMaintenance=vi.fn(async()=>({status:"queued_for_review" as const,jobId:`blj-${"a".repeat(40)}`}));
     const service = createService(storage, {
       authority: authorityHarness([]).port,
       legacyMemoryMaintenance: noteSuccessfulRootTurnSync,
       legacyRunRequest: requestDurableRunProcessing,
+      evaluateGovernedMemoryMaintenance,
+      resolveBackgroundLearningReadiness:async()=>({...readyLearning(),canEvaluateMaintenance:true}),
     });
     const execution = context("effect-maintenance", "worker-current");
 
     await expect(service.execute(maintenanceInput(), execution)).resolves.toMatchObject({
-      status: "production_dark",
-      enqueueDisposition: "not_enqueued",
+      status: "queued_for_review",
+      jobId:`blj-${"a".repeat(40)}`,
     });
     await service.execute(maintenanceInput(), execution);
 
     expect(noteSuccessfulRootTurnSync).not.toHaveBeenCalled();
+    expect(evaluateGovernedMemoryMaintenance).toHaveBeenCalledTimes(1);
     expect(requestDurableRunProcessing).not.toHaveBeenCalled();
     expect(storage.memoryMaintenance.listRuns("workspace-1")).toEqual([]);
     expect(storage.durableRuns.listRuns(20).filter((run) => run.workflowKey === "memory.maintenance")).toEqual([]);
@@ -760,6 +797,9 @@ function createService(
     proposeTraceMemoryCandidate?: ChatPostCommitEffectServiceDeps["proposeTraceMemoryCandidate"];
     isAutonomyDisabled?: () => boolean;
     publishRealtime?: ChatPostCommitEffectServiceDeps["publishRealtime"];
+    resolveBackgroundLearningReadiness?:(input:{workspaceId:string;sessionId:string})=>Promise<BackgroundLearningReadiness>;
+    enqueueLearningReview?:ChatPostCommitEffectServiceDeps["enqueueLearningReview"];
+    evaluateGovernedMemoryMaintenance?:(input:unknown)=>Promise<{status:"queued_for_review";jobId:string}>;
     legacyMemoryMaintenance?: ReturnType<typeof vi.fn>;
     legacyRunRequest?: ReturnType<typeof vi.fn>;
   } = {},
@@ -785,6 +825,9 @@ function createService(
     isAutonomyDisabled: async () => overrides.isAutonomyDisabled?.() ?? false,
     isReplayScratchSession: () => false,
     publishRealtime: overrides.publishRealtime ?? vi.fn(async () => undefined),
+    resolveBackgroundLearningReadiness:overrides.resolveBackgroundLearningReadiness ?? (async()=>readyLearning()),
+    ...(overrides.enqueueLearningReview ? {enqueueLearningReview:overrides.enqueueLearningReview}: {}),
+    ...(overrides.evaluateGovernedMemoryMaintenance ? {evaluateGovernedMemoryMaintenance:overrides.evaluateGovernedMemoryMaintenance}: {}),
     // Deliberately unsupported legacy dependencies: tests prove the service never calls them.
     memoryMaintenance: { noteSuccessfulRootTurnSync: overrides.legacyMemoryMaintenance },
     requestDurableRunProcessing: overrides.legacyRunRequest,
@@ -793,6 +836,10 @@ function createService(
     requestDurableRunProcessing?: ReturnType<typeof vi.fn>;
   };
   return new ChatPostCommitEffectService(deps);
+}
+
+function readyLearning():BackgroundLearningReadiness {
+  return {source:{state:"ready"},provider:{state:"ready"},budget:{state:"ready"},memory:{state:"ready"},skill:{state:"ready"},maintenance:{state:"disabled"},canExtractMemory:true,canDraftSkill:true,canEvaluateMaintenance:false};
 }
 
 function authorityHarness(

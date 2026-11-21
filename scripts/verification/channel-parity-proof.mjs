@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { existsSync } from "node:fs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const pnpm = process.platform === "win32" ? process.execPath : "pnpm";
-const pnpmPrefix =
-  process.platform === "win32"
-    ? [path.join(path.dirname(process.execPath), "node_modules", "corepack", "dist", "pnpm.js")]
-    : [];
+// Use the package manager that invoked this lane. Node distributions need not bundle Corepack.
+const pnpmEntrypoint = process.env.npm_execpath;
+if (process.platform === "win32" && (!pnpmEntrypoint || !existsSync(pnpmEntrypoint)))
+  throw new Error("Run this lane with pnpm verify:channels:parity so its installed pnpm entrypoint is available.");
+const pnpmPrefix = process.platform === "win32" ? [pnpmEntrypoint] : [];
 
 const policyAdapterPattern = [
   "getGoogleChatAccessToken",

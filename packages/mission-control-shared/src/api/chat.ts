@@ -7,10 +7,7 @@ import type {
   ChatCancelTurnResponse,
   ChatChangePlanRecord,
   ChatChangePlanRequest,
-  ChangePlanCreateInput,
   ChangePlanRecord,
-  ChangePlanRequest,
-  ChangePlanResponseInput,
   ChangePlanStatus,
   ChatDelegateAcceptRequest,
   ChatDelegateResponse,
@@ -46,9 +43,6 @@ import type {
   ChatSessionSearchMode,
   ChatSessionSearchResponse,
   ChatSessionStatusResponse,
-  ChatTimerListResponse,
-  ChatTimerMutationResponse,
-  CreateChatTimerInput,
   ChatSteerRequest,
   ChatSteerResponse,
   CrossProjectRecentsResponse,
@@ -73,7 +67,6 @@ export type { ChangePlanRecord } from "@goatcitadel/contracts";
 import { buildGatewayUrl, readGatewayAuthHeaders, request } from "./client-core.js";
 import { normalizeChatSurface, originSurfaceInit, type ChatRequestSurfaceOptions } from "./chat-request-surface.js";
 import { uploadHashHeaders } from "./upload-hash.js";
-import type { OpenAICodexDevicePollResponse, OpenAICodexDeviceStartResponse } from "./platform.js";
 export {
   fetchChatSessionWorkbench,
   fetchChatSessionWorkbenchTree,
@@ -476,33 +469,6 @@ export async function stopChatFanout(sessionId: string, invocationId: string): P
   return request<ChatFanoutStopResponse>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/fanouts/${encodeURIComponent(invocationId)}/stop`,
     { method: "POST", body: JSON.stringify({}) },
-  );
-}
-
-export async function fetchChatTimers(sessionId: string): Promise<ChatTimerListResponse> {
-  return request<ChatTimerListResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/timers`, {
-    cache: "no-store",
-  });
-}
-
-export async function createChatTimer(
-  sessionId: string,
-  input: CreateChatTimerInput,
-): Promise<ChatTimerMutationResponse> {
-  return request<ChatTimerMutationResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/timers`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export async function cancelChatTimer(
-  sessionId: string,
-  timerId: string,
-  expectedRevision: number,
-): Promise<ChatTimerMutationResponse> {
-  return request<ChatTimerMutationResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/timers/${encodeURIComponent(timerId)}`,
-    { method: "DELETE", body: JSON.stringify({ expectedRevision }) },
   );
 }
 
@@ -926,34 +892,6 @@ export interface ChangePlanClientContext {
   turnId?: string;
 }
 
-export interface CreateChangePlanClientInput extends ChangePlanClientContext {
-  /** The generic create route takes chat or settings only; Capabilities installs have their own route. */
-  surface?: Exclude<ChangePlanCreateInput["origin"]["surface"], "system" | "capabilities">;
-  request: ChangePlanRequest;
-  idempotencyKey?: string;
-}
-
-function changePlanActorBody(context: ChangePlanClientContext): ChangePlanClientContext {
-  return {
-    workspaceId: context.workspaceId,
-    ...(context.sessionId ? { sessionId: context.sessionId } : {}),
-    ...(context.turnId ? { turnId: context.turnId } : {}),
-  };
-}
-
-/** Canonical Evolution Control Plane resource API. */
-export async function createChangePlan(input: CreateChangePlanClientInput): Promise<ChangePlanRecord> {
-  return request<ChangePlanRecord>("/api/v1/change-plans", {
-    method: "POST",
-    body: JSON.stringify({
-      ...changePlanActorBody(input),
-      surface: input.surface ?? "chat",
-      request: input.request,
-      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
-    }),
-  });
-}
-
 export async function fetchChangePlans(
   context: ChangePlanClientContext,
   options?: { status?: ChangePlanStatus; limit?: number },
@@ -970,150 +908,6 @@ export async function fetchChangePlan(planId: string, context: ChangePlanClientC
   if (context.sessionId) query.set("sessionId", context.sessionId);
   if (context.turnId) query.set("turnId", context.turnId);
   return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}?${query.toString()}`);
-}
-
-export async function respondToChangePlan(
-  planId: string,
-  context: ChangePlanClientContext,
-  input: ChangePlanResponseInput,
-): Promise<ChangePlanRecord> {
-  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/responses`, {
-    method: "POST",
-    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
-  });
-}
-
-export async function confirmChangePlan(
-  planId: string,
-  context: ChangePlanClientContext,
-  input: { expectedRevision: number; actionNonce: string },
-): Promise<ChangePlanRecord> {
-  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/confirmations`, {
-    method: "POST",
-    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
-  });
-}
-
-export async function cancelChangePlan(
-  planId: string,
-  context: ChangePlanClientContext,
-  input: { expectedRevision: number; actionNonce: string },
-): Promise<ChangePlanRecord> {
-  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/cancellations`, {
-    method: "POST",
-    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
-  });
-}
-
-export async function requestChangePlanRollback(
-  planId: string,
-  context: ChangePlanClientContext,
-  expectedRevision: number,
-): Promise<ChangePlanRecord> {
-  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/rollback-requests`, {
-    method: "POST",
-    body: JSON.stringify({ ...changePlanActorBody(context), expectedRevision }),
-  });
-}
-
-export async function submitChangePlanProviderSecret(
-  planId: string,
-  context: ChangePlanClientContext,
-  input: { expectedRevision: number; actionId: string; actionNonce: string; apiKey: string },
-): Promise<ChangePlanRecord> {
-  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/provider-secret`, {
-    method: "POST",
-    cache: "no-store",
-    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
-  });
-}
-
-export async function submitChangePlanGatewayAuthCredential(
-  planId: string,
-  context: ChangePlanClientContext,
-  input: { expectedRevision: number; actionId: string; actionNonce: string; credential: string },
-): Promise<ChangePlanRecord> {
-  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/gateway-auth-credential`, {
-    method: "POST",
-    cache: "no-store",
-    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
-  });
-}
-
-export async function submitChangePlanChannelSecrets(
-  planId: string,
-  context: ChangePlanClientContext,
-  input: {
-    expectedRevision: number;
-    actionId: string;
-    actionNonce: string;
-    values: Readonly<Record<string, string>>;
-  },
-): Promise<ChangePlanRecord> {
-  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/channel-secrets`, {
-    method: "POST",
-    cache: "no-store",
-    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
-  });
-}
-
-export async function submitChangePlanManagedSourceSelection(
-  planId: string,
-  context: ChangePlanClientContext,
-  input: {
-    expectedRevision: number;
-    actionId: string;
-    actionNonce: string;
-    rootPath: string;
-  },
-): Promise<ChangePlanRecord> {
-  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/managed-source-selections`, {
-    method: "POST",
-    cache: "no-store",
-    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
-  });
-}
-
-export async function completeChangePlanProviderOAuth(
-  planId: string,
-  context: ChangePlanClientContext,
-  input: { expectedRevision: number; actionId: string; actionNonce: string },
-): Promise<ChangePlanRecord> {
-  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/provider-oauth-completions`, {
-    method: "POST",
-    cache: "no-store",
-    body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
-  });
-}
-
-export async function startChangePlanProviderOAuth(
-  planId: string,
-  context: ChangePlanClientContext,
-  input: { expectedRevision: number; actionId: string; actionNonce: string },
-): Promise<OpenAICodexDeviceStartResponse> {
-  return request<OpenAICodexDeviceStartResponse>(
-    `/api/v1/change-plans/${encodeURIComponent(planId)}/provider-oauth-starts`,
-    {
-      method: "POST",
-      cache: "no-store",
-      body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
-    },
-  );
-}
-
-export async function pollChangePlanProviderOAuth(
-  planId: string,
-  context: ChangePlanClientContext,
-  input: { expectedRevision: number; actionId: string; actionNonce: string; flowId: string },
-): Promise<OpenAICodexDevicePollResponse> {
-  return request<OpenAICodexDevicePollResponse>(
-    `/api/v1/change-plans/${encodeURIComponent(planId)}/provider-oauth-polls`,
-    {
-      method: "POST",
-      cache: "no-store",
-      body: JSON.stringify({ ...changePlanActorBody(context), ...input }),
-    },
-  );
 }
 
 export async function updateChatProactivePolicy(
@@ -1303,3 +1097,25 @@ export async function fetchCrossProjectRecentSessions(
   });
   return request<CrossProjectRecentsResponse>(`/api/v1/chat/sessions/recents?${query.toString()}`);
 }
+
+export {
+  fetchChatTimers,
+  createChatTimer,
+  cancelChatTimer,
+} from "./chat-timer-transport.js";
+
+export {
+  type CreateChangePlanClientInput,
+  createChangePlan,
+  respondToChangePlan,
+  confirmChangePlan,
+  cancelChangePlan,
+  requestChangePlanRollback,
+  submitChangePlanProviderSecret,
+  submitChangePlanGatewayAuthCredential,
+  submitChangePlanChannelSecrets,
+  submitChangePlanManagedSourceSelection,
+  completeChangePlanProviderOAuth,
+  startChangePlanProviderOAuth,
+  pollChangePlanProviderOAuth,
+} from "./change-plan-actions.js";

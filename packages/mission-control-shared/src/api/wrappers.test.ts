@@ -409,12 +409,13 @@ describe("shared API wrappers", () => {
       { method: "POST", body: JSON.stringify({ proposedInsight: "Review this." }) },
     );
     await expectCall(
-      memory.promoteTraceMemoryCandidate("trace/1"),
+      memory.promoteTraceMemoryCandidate("trace/1",{workspaceId:"default",expectedReviewHash:"a".repeat(64)}),
       "/api/v1/memory/trace-candidates/trace%2F1/promote",
-      { method: "POST" },
+      { method: "POST",body:JSON.stringify({workspaceId:"default",expectedReviewHash:"a".repeat(64)}) },
     );
-    await expectCall(memory.rejectTraceMemoryCandidate("trace/1"), "/api/v1/memory/trace-candidates/trace%2F1/reject", {
+    await expectCall(memory.rejectTraceMemoryCandidate("trace/1",{workspaceId:"default",expectedReviewHash:"a".repeat(64)}), "/api/v1/memory/trace-candidates/trace%2F1/reject", {
       method: "POST",
+      body:JSON.stringify({workspaceId:"default",expectedReviewHash:"a".repeat(64)}),
     });
     await expectCall(
       memory.forgetMemory({

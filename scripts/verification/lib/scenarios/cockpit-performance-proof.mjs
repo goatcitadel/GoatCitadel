@@ -20,18 +20,52 @@ export async function createCockpitPerformanceTurnSession({ stack, fixture, requ
  return sessionId;
 }
 
-/** Record first visible Chat against the navigation deadline, including slow DOMContentLoaded. */
+/** Time visible Chat and editable input separately, preserving the absolute readiness deadline. */
 export async function installChatStartupReadinessProbe(page, deadline) {
  await page.addInitScript(({ deadline }) => {
   window.cockpitChatStartupReady = false;
+  const timing = { chatVisibleMs: null, composerEditableMs: null };
+  window.cockpitChatStartupTiming = timing;
+  const traceDeadline = Date.now() + 10_000;
+  const hasSize = element => {
+   const rect = element?.getBoundingClientRect();
+   return Boolean(rect && rect.height > 0 && rect.width > 0);
+  };
   const check = () => {
-   if (Date.now() > deadline) return;
-   const bounds = document.querySelector('[aria-label="Messages"]')?.getBoundingClientRect();
-   if (bounds && bounds.height > 0 && bounds.width > 0) { window.cockpitChatStartupReady = true; return; }
-   globalThis.requestAnimationFrame(check);
+   const now = Date.now();
+   if (now > traceDeadline) return;
+   if (timing.chatVisibleMs === null && hasSize(document.querySelector('[aria-label="Messages"]'))) {
+    timing.chatVisibleMs = performance.now();
+    window.cockpitChatStartupReady = now <= deadline;
+   }
+   if (timing.composerEditableMs === null) {
+    const composer = document.querySelector("textarea#cockpit-chat-draft");
+    if (composer && !composer.disabled && !composer.readOnly && hasSize(composer)) {
+     timing.composerEditableMs = performance.now();
+    }
+   }
+   if (timing.chatVisibleMs === null || timing.composerEditableMs === null) globalThis.requestAnimationFrame(check);
   };
   globalThis.requestAnimationFrame(check);
  }, { deadline });
+}
+
+export async function readChatStartupTiming(page) {
+ return page.evaluate(() => {
+  const navigation = performance.getEntriesByType("navigation")[0];
+  const timing = window.cockpitChatStartupTiming;
+  const round = value => Number.isFinite(value) ? Math.round(value) : null;
+  const pageLoaded = navigation?.loadEventEnd > 0 ? navigation.loadEventEnd : null;
+  const composerEditable = timing?.composerEditableMs ?? null;
+  return {
+   documentReceivedMs: round(navigation?.responseEnd),
+   domContentLoadedMs: navigation?.domContentLoadedEventEnd > 0 ? round(navigation.domContentLoadedEventEnd) : null,
+   pageLoadedMs: round(pageLoaded),
+   chatVisibleMs: round(timing?.chatVisibleMs),
+   composerEditableMs: round(composerEditable),
+   pageLoadToComposerMs: pageLoaded !== null && composerEditable !== null ? round(composerEditable - pageLoaded) : null,
+  };
+ });
 }
 
 /** Counts every request except the established SSE exclusion, including dynamically loaded JavaScript. */
@@ -41,7 +75,7 @@ export async function runCockpitPerformanceProof({ context,browser,stack,fixture
   const browserContext=await browser.newContext({viewport:{width:1440,height:900},colorScheme:"light"});
   let measured = {expectedTheme:"dark"};
   const requests=[],scripts=new Map(),pending=[];
-  const startupReads=createStartupReadDiagnostics({fixture}), startupHandles=new WeakMap(), startupStatuses=new WeakMap();
+  const startupReads=createStartupReadDiagnostics({fixture}), startupHandles=new WeakMap(), startupResponses=new WeakMap();
   let startupDiagnosticWritten=false;
   let page, browserLog;
   const artifact=path.join(context.artifactRoot,"diagnostics",`cockpit-performance-${index+1}.json`);
@@ -69,8 +103,15 @@ export async function runCockpitPerformanceProof({ context,browser,stack,fixture
     // Count scripts begun during startup even when a slow response arrives after its window.
     if(request.resourceType()==="script"&&at<=3500)pending.push(request.response().then(async response=>{if(!response)throw new Error("Startup script failed to load");scripts.set(url.pathname,gzipSync(await response.body()).length);}));
    });
-   page.on("response",response=>{try{const request=response.request();if(startupHandles.has(request))startupStatuses.set(request,response.status());}catch{startupReads.markProjectionGap();}});
-   page.on("requestfinished",request=>{try{if(startupHandles.has(request))startupReads.finish(startupHandles.get(request),{at:performance.now()-started,status:startupStatuses.get(request)});}catch{startupReads.markProjectionGap();}});
+   page.on("response",response=>{
+    try {
+     const request = response.request();
+     if (startupHandles.has(request)) {
+      startupResponses.set(request, { status: response.status(), serverTiming: response.headers()["server-timing"] });
+     }
+    } catch { startupReads.markProjectionGap(); }
+   });
+   page.on("requestfinished",request=>{try{if(startupHandles.has(request))startupReads.finish(startupHandles.get(request),{at:performance.now()-started,...startupResponses.get(request)});}catch{startupReads.markProjectionGap();}});
    page.on("requestfailed",request=>{try{if(startupHandles.has(request))startupReads.finish(startupHandles.get(request),{at:performance.now()-started,failed:true});}catch{startupReads.markProjectionGap();}});
    started=performance.now();
    await installChatStartupReadinessProbe(page, Date.now()+3500);
@@ -79,7 +120,7 @@ export async function runCockpitPerformanceProof({ context,browser,stack,fixture
    const chatReadyWithinStartupWindow=await page.evaluate(()=>window.cockpitChatStartupReady===true);
    const frame=await page.evaluate(()=>window.cockpitPerformance);
    await Promise.all(pending);
-   measured={...measured,startupRequests:requests.filter(item=>item.at<=3500).length,initialJavaScriptGzipBytes:[...scripts.values()].reduce((sum,value)=>sum+value,0),cls:frame.cls,layoutShifts:frame.shifts,firstFrameTheme:frame.firstFrameTheme,firstFrameBackground:frame.firstFrameBackground,chatReadyWithinStartupWindow};
+   measured={...measured,startupRequests:requests.filter(item=>item.at<=3500).length,initialJavaScriptGzipBytes:[...scripts.values()].reduce((sum,value)=>sum+value,0),cls:frame.cls,layoutShifts:frame.shifts,firstFrameTheme:frame.firstFrameTheme,firstFrameBackground:frame.firstFrameBackground,chatReadyWithinStartupWindow,startupTiming:await readChatStartupTiming(page)};
    await save({passed:false,failures:["Measurement in progress"]});
    await page.waitForSelector('[aria-label="Messages"]');
    if (startupDiagnosticOnly) {
@@ -221,11 +262,15 @@ export function createStartupReadDiagnostics({ fixture = {}, maxQueryBytes = 700
    if (!retain) return null;
    events.push(event); return event.ordinal;
   },
-  finish(handle,{at,status,failed=false}) {
+  finish(handle,{at,status,failed=false,serverTiming}) {
    if (handle === null) return;
    const event=events.find(item=>item.ordinal===handle); if (!event) return;
    if (!Number.isFinite(at) || at < event.at || (!failed && (!Number.isInteger(status)||status<100||status>599))) { gap("invalid_timing"); return; }
    event.completedAt=at; event.status=failed?null:status; if (failed) event.failed=true;
+   if (event.kind === "batch" && typeof serverTiming === "string" &&
+     /^startup-batch;dur=\d{1,8}\.\d(?:, startup-read-(?:[0-9]|1[0-5]);dur=\d{1,8}\.\d){1,16}$/u.test(serverTiming)) {
+    event.serverTiming = serverTiming;
+   }
   },
   snapshot() {
    const retained=events.map(event=>({...event,descriptors:event.descriptors.map(descriptor=>({...descriptor,scope:{...descriptor.scope},settings:{...descriptor.settings}}))}));

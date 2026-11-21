@@ -46,10 +46,13 @@ public sealed partial class MainWindow : Window
     private bool _trayAvailable;
     private bool _webViewReady;
     private bool _webViewNavigationSucceeded;
+    private global::Windows.Foundation.TypedEventHandler<Microsoft.Web.WebView2.Core.CoreWebView2,
+        Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs>? _webMessageReceived;
 
     public MainWindow()
     {
         InitializeComponent();
+        InitializeStartupDraft();
 
         _launcherService = new LauncherService();
         _profileInstallRoot = ResolveProfileInstallRoot();
@@ -108,7 +111,23 @@ public sealed partial class MainWindow : Window
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
         _appWindow = AppWindow.GetFromWindowId(windowId);
-        _appWindow.Resize(new SizeInt32(InitialWidth, InitialHeight));
+        var workArea = DisplayArea.GetFromWindowId(windowId, DisplayAreaFallback.Nearest)?.WorkArea;
+        var minimumWidth = MinimumWidth;
+        var minimumHeight = MinimumHeight;
+        if (workArea is { Width: > 0, Height: > 0 } area
+            && (area.Width < InitialWidth || area.Height < InitialHeight))
+        {
+            var width = Math.Min(InitialWidth, area.Width);
+            var height = Math.Min(InitialHeight, area.Height);
+            _appWindow.MoveAndResize(new RectInt32(
+                area.X + (area.Width - width) / 2, area.Y + (area.Height - height) / 2, width, height));
+            minimumWidth = Math.Min(MinimumWidth, area.Width);
+            minimumHeight = Math.Min(MinimumHeight, area.Height);
+        }
+        else
+        {
+            _appWindow.Resize(new SizeInt32(InitialWidth, InitialHeight));
+        }
         _appWindow.Title = "GoatCitadel Mission Control";
         _appWindow.Closing += (_, args) =>
         {
@@ -133,9 +152,9 @@ public sealed partial class MainWindow : Window
             }
 
             var size = _appWindow.Size;
-            if (size.Width < MinimumWidth || size.Height < MinimumHeight)
+            if (size.Width < minimumWidth || size.Height < minimumHeight)
             {
-                _appWindow.Resize(new SizeInt32(Math.Max(size.Width, MinimumWidth), Math.Max(size.Height, MinimumHeight)));
+                _appWindow.Resize(new SizeInt32(Math.Max(size.Width, minimumWidth), Math.Max(size.Height, minimumHeight)));
             }
         };
     }
@@ -209,7 +228,11 @@ public sealed partial class MainWindow : Window
             if (_cleanedUp) return;
             _webViewDataFolder = userDataFolder;
             _startupDiagnostics?.RecordPhase("webview-initialized", browserVersion: environment.BrowserVersionString);
-            view.CoreWebView2.WebMessageReceived += MissionWebView_WebMessageReceived;
+            _webMessageReceived = (sender, args) =>
+            {
+                if (ReferenceEquals(view, MissionWebView)) MissionWebView_WebMessageReceived(sender, args);
+            };
+            view.CoreWebView2.WebMessageReceived += _webMessageReceived;
             view.CoreWebView2.NavigationStarting += (_, args) =>
             {
                 if (!ReferenceEquals(view, MissionWebView)) { args.Cancel = true; return; }
@@ -220,6 +243,7 @@ public sealed partial class MainWindow : Window
                     args.Cancel = true;
                     ShowToast(error);
                 }
+                else ResetStartupDraftDestination();
             };
             view.CoreWebView2.NavigationCompleted += (_, args) =>
             {
@@ -275,6 +299,7 @@ public sealed partial class MainWindow : Window
             }
             using var document = JsonDocument.Parse(args.WebMessageAsJson);
             var root = document.RootElement;
+            if (TryHandleStartupDraft(sender, args.Source, root)) return;
             if (root.ValueKind != JsonValueKind.Object
                 || !root.TryGetProperty("type", out var type)
                 || type.GetString() != "goatcitadel.evolution.pick_source"
@@ -815,14 +840,21 @@ public sealed partial class MainWindow : Window
         if (!_runtimeLifecycle.IsCurrent(observation)) return;
         _startupDiagnostics?.RecordPhase("runtime-failed", error);
         _deferredRoutes.MarkUnavailable();
-        // The launcher's own error is a raw exit message. When the Gateway recorded why it could not
-        // start, the status carries that reason; read it once and fall back to the launcher error.
-        var status = await TryReadStartupFailureStatusAsync(observation);
+        // The runtime can recover after the launch command has already failed.
+        var status = await TryReadLaunchRecoveryStatusAsync(observation);
         if (!_runtimeLifecycle.IsCurrent(observation)) return;
+        if (status is { IsReady: true })
+        {
+            await ShowReadyRuntimeAsync(status, observation);
+            return;
+        }
+
+        _lastRuntime = status;
         RenderRecovery(DesktopStartupCopy.LaunchFailureMessage(status, error.Message));
+        StartRuntimeStatusPolling();
     }
 
-    private async Task<DesktopRuntimeStatus?> TryReadStartupFailureStatusAsync(DesktopRuntimeObservation observation)
+    private async Task<DesktopRuntimeStatus?> TryReadLaunchRecoveryStatusAsync(DesktopRuntimeObservation observation)
     {
         try
         {
@@ -835,7 +867,7 @@ public sealed partial class MainWindow : Window
                 or UnauthorizedAccessException
                 or OperationCanceledException)
         {
-            // The status read only adds the recorded reason; without it the launcher error is shown.
+            // The recovery panel can still show the launch failure and poll again.
             return null;
         }
     }

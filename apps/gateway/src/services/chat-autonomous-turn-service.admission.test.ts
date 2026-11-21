@@ -553,6 +553,18 @@ async function finalizeRealAutonomousRun(
 }
 
 describe("deterministic autonomous Chat child admission", () => {
+  it("parks a reviewed schedule when its selected permission profile changed before execution",async()=>{
+    const config={prompt:"Review changed evidence",sessionId:"configured",createdBy:{operatorId:"fixture-operator",authActorId:"fixture-operator",permissionProfileId:"fixture-creator",permissionProfileRevision:"reviewed",depth:0}};
+    const occurrence={...CRON_TOKEN,status:"admitting",action:"agent_turn",createdAt:"2026-11-19T00:00:00Z",actionSnapshot:{action:"agent_turn",actionConfig:{agentTurn:config}}};
+    const job={jobId:CRON_TOKEN.jobId,activeRunId:CRON_TOKEN.runId,executionGeneration:CRON_TOKEN.executionGeneration,name:"Review",action:"agent_turn",enabled:true,schedule:"0 9 * * * UTC"} as CronJobRecord;
+    job.creatorAuthority=buildCronCreatorAuthority({...job,actionConfig:{agentTurn:config}},{actorId:"fixture-operator",source:"authenticated_operator"});
+    const {deps,prepareAgentChatTurn,createDurableRun}=buildDeps({
+      isFeatureEnabled:vi.fn(async flag=>flag==="durableKernelV1Enabled" || flag==="scheduledChatTurnsV1Enabled"),
+      storage:{cronRuns:{get:vi.fn(async()=>occurrence)},cronJobs:{get:vi.fn(async()=>job)},permissionProfiles:{getProfile:vi.fn(async()=>({...SCHEDULED_RESTRICTED_PROFILE,profileId:"fixture-creator",revision:"changed"}))}},
+    } as unknown as Partial<ChatAutonomousTurnDeps>);
+    const result=await runCronAgentTurn(deps,{job,config,runId:CRON_TOKEN.runId,cronRun:CRON_TOKEN});
+    expect(result).toMatchObject({mode:"inbox",profilePosture:"creator_profile_invalid"});expect(result.profileWarning).toContain("changed after review");expect(prepareAgentChatTurn).not.toHaveBeenCalled();expect(createDurableRun).not.toHaveBeenCalled();
+  });
   it.each([false, true])(
     "admits only enabled exact preclaimed heartbeat authority without creating a second admission (enabled %s)",
     async (enabled) => {

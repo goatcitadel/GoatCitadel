@@ -36,6 +36,7 @@ type Input = {
     | "threadController"
     | "sessionControls"
     | "sessionStatusEnabled"
+    | "chatTimersEnabled"
     | "timerPanel"
     | "typedRunVariablesEnabled"
     | "runVariables"
@@ -237,6 +238,7 @@ export function createChatActiveSessionPresentation({
           providerCatalog,
           selection,
         }),
+        chatTimerAvailable: session.chatTimersEnabled,
         ...createChatTranscriptProps({
           historicalTargetIsSelected: surfaceRuntime.historicalTargetIsSelected,
           historicalModeActive: surfaceRuntime.historicalModeActive,

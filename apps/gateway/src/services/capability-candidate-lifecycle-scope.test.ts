@@ -10,6 +10,19 @@ function fixture(patch: Partial<CandidateSkillVersionRecord> = {}) {
 }
 
 describe("canonical selected capability lifecycle scope", () => {
+  it("keeps a background draft in its immutable workspace without treating its learning job as Code Mode", async () => {
+    const f = fixture({ sourceKind: "background_workflow", lineageStatus: "governed", originatingRunId: "learning-review:job" });
+    f.readRun.mockRejectedValue(new Error("Not a Code Mode run"));
+    expect(await f.resolve()).toBe("workspace-capture");
+    expect(f.readRun).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, ""])("does not infer background draft scope %s from an unrelated Code run", async workspaceId => {
+    const f = fixture({ sourceKind: "background_workflow", workspaceId, originatingRunId: "learning-review:job" });
+    f.detail.originatingRun = {runId: "learning-review:job", workspaceId: "foreign"} as CodeModeRunRecord;
+    await expect(f.resolve()).rejects.toThrow("no recorded workspace");
+    expect(f.readRun).not.toHaveBeenCalled();
+  });
   it("uses the workflow version's original scope without fabricating a Code run", async () => {
     const f = fixture();
     expect(await f.resolve()).toBe("workspace-capture");

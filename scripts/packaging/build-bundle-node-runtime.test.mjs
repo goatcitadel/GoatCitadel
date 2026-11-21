@@ -5,6 +5,7 @@ import path from "node:path";
 import vm from "node:vm";
 import { test } from "node:test";
 import { requirePackagingTarget, nodeArchiveName, nodeArchiveRoot } from "./lib/packaging-targets.mjs";
+import { stageSqliteSchemaReference } from "./lib/stage-sqlite-schema-reference.mjs";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const filename = path.join(root, "scripts/packaging/build-bundle.mjs");
@@ -148,3 +149,28 @@ for (const row of [
   },
 ])
   test(row.name, () => fixture(row));
+
+test("SQLite schema reference is generated in the staged Gateway with the supplied Node runtime", (t) => {
+  const parent = fs.realpathSync(os.tmpdir());
+  const stage = fs.mkdtempSync(path.join(parent, "gc-sqlite-reference-"));
+  t.after(() => {
+    assert.equal(path.dirname(stage), parent);
+    assert.equal(fs.realpathSync(stage), stage);
+    fs.rmSync(stage, { recursive: true, force: true });
+  });
+  assert.equal(stageSqliteSchemaReference(stage, process.execPath), false);
+  const storage = path.join(stage, "node_modules", "@goatcitadel", "storage", "dist");
+  const target = path.join(storage, "sqlite", "packaged-schema-reference.json");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(path.join(storage, "package.json"), '{"type":"module"}');
+  fs.writeFileSync(path.join(path.dirname(target), "schema-reference.js"), "");
+  fs.writeFileSync(path.join(storage, "sqlite.js"), `
+    export function buildPackagedSqliteSchemaReference() {
+      return { compatibilityKey: "a".repeat(64), shapeSha256: "b".repeat(64),
+        shape: { entries: [{ name: "staged_shape" }] } };
+    }
+  `);
+  assert.equal(stageSqliteSchemaReference(stage, process.execPath), true);
+  const packagedSqliteSchemaReference = JSON.parse(fs.readFileSync(target, "utf8"));
+  assert.deepEqual(packagedSqliteSchemaReference.shape.entries, [{ name: "staged_shape" }]);
+});

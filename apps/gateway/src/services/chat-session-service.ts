@@ -659,7 +659,7 @@ export async function createChatSession(
   input: ChatSessionCreateInput = {},
 ): Promise<ChatSessionRecord> {
   const peer = `chat_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-  return await upsertChatSessionForPeer(deps, peer, input);
+  return await upsertChatSessionForPeer(deps, peer, {...input,origin:input.origin ?? "operator"});
 }
 
 /** Internal orchestration seam: the same stable key always resolves to one upserted child session. */

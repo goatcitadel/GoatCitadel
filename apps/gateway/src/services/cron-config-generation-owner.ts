@@ -21,7 +21,7 @@ import {
   type CompleteUnifiedConfigPayload,
 } from "./config-generation-service.js";
 import {
-  computeNextCronRunAt,
+  computeNextCronJobRunAt,
   isScheduledCronAction,
   normalizeCronContextFrom,
   normalizeCronEndAt,
@@ -558,7 +558,7 @@ function hasTelemetryFields(patch: CronJobRuntimeTelemetryPatch): boolean {
 
 function projectNextRunAt(spec: CronJobSpecInput): string | null {
   return isScheduledCronAction(spec.action)
-    ? (computeNextCronRunAt(spec.schedule, new Date(), spec.endAt) ?? null)
+    ? (computeNextCronJobRunAt(spec,new Date()) ?? null)
     : null;
 }
 

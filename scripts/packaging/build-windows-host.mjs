@@ -6,6 +6,8 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { assertDesktopArtifactProvenance } from "./lib/desktop-artifact-provenance.mjs";
+import { buildWindowsCredentialReader, WINDOWS_CREDENTIAL_READER_NAME } from "./lib/build-windows-credential-reader.mjs";
+import { buildWindowsProcessIdentity, WINDOWS_PROCESS_IDENTITY_NAME } from "./lib/build-windows-process-identity.mjs";
 import { PACKAGING_TARGETS, requirePackagingTarget } from "./lib/packaging-targets.mjs";
 import { removeDirectorySafely } from "./safe-cleanup.mjs";
 
@@ -49,6 +51,9 @@ const sourceModified = resolveSourceModified();
 await main();
 
 async function main() {
+  if (args.requireCredentialRead && targetInfo.arch !== "x64") {
+    throw new Error("The native credential read pilot supports Windows x64 only.");
+  }
   if (!targetInfo.windowsRid) {
     throw new Error(`Packaging target ${target} does not define a Windows runtime identifier.`);
   }
@@ -106,6 +111,13 @@ async function main() {
         "--output",
         sourceUpdateHelperDir,
       ]);
+      if (!buildWindowsProcessIdentity(outDir, targetInfo.tauriTriple)) {
+        if (args.requireProcessIdentity) {
+          throw new Error(`Rust target ${targetInfo.tauriTriple} is required for the native process identity helper.`);
+        }
+        console.warn("Rust target unavailable. This Windows host build will use the PowerShell process identity lookup.");
+      }
+      if (args.requireCredentialRead) buildWindowsCredentialReader(outDir);
     } finally {
       fs.rmSync(generatedManifestRoot, { recursive: true, force: true });
     }
@@ -116,6 +128,20 @@ async function main() {
   }
   if (!fs.existsSync(sourceUpdateHelperPath)) {
     throw new Error(`Product source update helper was not produced: ${sourceUpdateHelperPath}`);
+  }
+  if (args.requireProcessIdentity) {
+    const helperPath = path.join(outDir, WINDOWS_PROCESS_IDENTITY_NAME);
+    const helper = fs.lstatSync(helperPath, { throwIfNoEntry: false });
+    if (!helper?.isFile() || helper.size === 0) {
+      throw new Error(`Native process identity helper is missing or invalid: ${helperPath}`);
+    }
+  }
+  if (args.requireCredentialRead) {
+    const helperPath = path.join(outDir, WINDOWS_CREDENTIAL_READER_NAME);
+    const helper = fs.lstatSync(helperPath, { throwIfNoEntry: false });
+    if (!helper?.isFile() || helper.size === 0) {
+      throw new Error(`Native credential reader is missing or invalid: ${helperPath}`);
+    }
   }
   if (args.skipBuild) {
     assertDesktopArtifactProvenance(path.join(outDir, "desktop-manifest.json"), {
@@ -160,6 +186,14 @@ function parseArgs(argv) {
       parsed.skipBuild = true;
       continue;
     }
+    if (value === "--require-process-identity") {
+      parsed.requireProcessIdentity = true;
+      continue;
+    }
+    if (value === "--require-credential-read") {
+      parsed.requireCredentialRead = true;
+      continue;
+    }
     throw new Error(`Unknown argument: ${value}`);
   }
   return parsed;
@@ -167,7 +201,7 @@ function parseArgs(argv) {
 
 function printUsage() {
   console.log(
-    "Usage: node scripts/packaging/build-windows-host.mjs --target <windows-x64|windows-arm64> [--out-dir <dir>] [--configuration <Debug|Release>] [--msix-publisher <subject>] [--skip-build]",
+    "Usage: node scripts/packaging/build-windows-host.mjs --target <windows-x64|windows-arm64> [--out-dir <dir>] [--configuration <Debug|Release>] [--msix-publisher <subject>] [--skip-build] [--require-process-identity] [--require-credential-read]",
   );
 }
 

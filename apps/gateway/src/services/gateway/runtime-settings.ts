@@ -225,6 +225,8 @@ export interface RuntimeSettings {
     channelVoiceReplyV1Enabled?: boolean;
     /** Opt-in: weekly governed memory consolidation (propose-only, approval-gated). Absent/false ⇒ job never runs. */
     memoryConsolidationV1Enabled?: boolean;
+    memoryCorpusRecallV1Enabled?: boolean;
+    backgroundSkillDraftsV1Enabled?: boolean;
     /** Opt-in: signed cron_job_executed evidence envelope on every cron run. Absent/false ⇒ no cron evidence, as today. */
     cronEvidenceV1Enabled?: boolean;
     /** Opt-in: routes background LLM calls (improvement scans, judges, classifiers, prompt packs) to the cheap utility-model slot. Absent/false ⇒ today's selection. */

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { isPracticeGateway } from "@goatcitadel/mission-control-shared/api/gateway-transport";
 import { readArtifactDownload, saveLibraryDownload } from "./library-download";
 import { Button } from "../../ui/Button";
 import { Callout } from "../../ui/Callout";
@@ -17,6 +18,7 @@ export function LibraryArtifactDownload({
   workspaceId: string;
   citadelId: string;
 }) {
+  const practice = isPracticeGateway();
   const [busy, setBusy] = useState(false),
     [message, setMessage] = useState<{ error: boolean; text: string }>();
   const current = useRef(true),
@@ -28,7 +30,7 @@ export function LibraryArtifactDownload({
     };
   }, []);
   async function download() {
-    if (pending.current) return;
+    if (practice || pending.current) return;
     pending.current = true;
     setBusy(true);
     setMessage(undefined);
@@ -65,9 +67,12 @@ export function LibraryArtifactDownload({
           <dd>{artifact.supersedesArtifactId ?? "No previous artifact recorded"}</dd>
         </dl>
       </TechnicalDetails>
-      <Button disabled={busy} onClick={() => void download()}>
+      <Button disabled={practice || busy} onClick={() => void download()}>
         {busy ? "Verifying artifact…" : "Download artifact"}
       </Button>
+      {practice ? (
+        <p className="text-sm text-fg-secondary">Artifact downloads are available in your own workspace.</p>
+      ) : null}
       {message ? <Callout tone={message.error ? "error" : "info"}>{message.text}</Callout> : null}
     </div>
   );

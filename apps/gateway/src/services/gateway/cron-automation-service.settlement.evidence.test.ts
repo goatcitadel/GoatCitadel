@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { ScheduledChatProviderRouteError } from "../chat-feature-admission-service.js";
 import type { CronRunExecutionToken, DurableRunRecord, DurableRunStatus } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
 import { buildCronChatAdmissionIdentity } from "../chat-autonomous-turn-service.js";
@@ -287,6 +288,29 @@ describe("HX-204 canonical cron settlement evidence", () => {
         lastRunStatus: "ok",
         lastRunId: result.runId,
       });
+    } finally {
+      storage.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("settles an unverifiable scheduled provider before dispatch and skips it on recovery", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-cron-provider-"));
+    const storage = createStorage(root);
+    try {
+      seedAgentTurnJob(storage, "unverifiable-provider");
+      const handler = vi.fn(async () => {
+        throw new ScheduledChatProviderRouteError();
+      });
+      const service = createService(storage, handler);
+      await expect(service.runCronJobNow("unverifiable-provider")).rejects.toThrow(ScheduledChatProviderRouteError);
+      const runs = storage.cronRuns.listByJob("unverifiable-provider");
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({ status: "failed", phase: "settlement" });
+      expect(runs[0]?.childDurableRunId).toBeUndefined();
+      expect(storage.cronJobs.get("unverifiable-provider")?.activeRunId).toBeUndefined();
+      await service.recoverPendingAgentTurnCronRuns();
+      expect(handler).toHaveBeenCalledTimes(1);
     } finally {
       storage.close();
       fs.rmSync(root, { recursive: true, force: true });

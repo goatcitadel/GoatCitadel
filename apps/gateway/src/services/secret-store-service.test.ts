@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync, type ExecFileException } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   SecretStoreService,
@@ -10,11 +11,17 @@ import {
 import { encodeMcpCredentialReceipt } from "./mcp-credential-receipt.js";
 
 vi.mock("node:child_process", () => ({
+  execFile: vi.fn(),
   spawnSync: vi.fn(),
 }));
 
+const execFileMock = vi.mocked(execFile);
 const spawnSyncMock = vi.mocked(spawnSync);
+type KeychainReadCallback = (error: ExecFileException | null, stdout: string, stderr: string) => void;
+type NativeReadCallback = (error: ExecFileException | null, stdout: Buffer, stderr: Buffer) => void;
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+const originalExecPath = Object.getOwnPropertyDescriptor(process, "execPath")!;
+const originalArch = Object.getOwnPropertyDescriptor(process, "arch")!;
 const originalDisableSecretStore = process.env.GOATCITADEL_DISABLE_SECRET_STORE;
 
 beforeEach(() => {
@@ -24,7 +31,10 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  execFileMock.mockReset();
   spawnSyncMock.mockReset();
+  Object.defineProperty(process, "execPath", originalExecPath);
+  Object.defineProperty(process, "arch", originalArch);
   if (originalPlatform) {
     Object.defineProperty(process, "platform", originalPlatform);
   }
@@ -35,7 +45,103 @@ afterEach(() => {
   }
 });
 
+function enablePackagedNativeRead(): string {
+  setPlatform("win32");
+  Object.defineProperty(process, "arch", { ...originalArch, value: "x64" });
+  Object.defineProperty(process, "execPath", {
+    ...originalExecPath, value: fileURLToPath(new URL("../../../runtime/node/node.exe", import.meta.url)),
+  });
+  const profile = `goatcitadel.desktop.${"a".repeat(64)}.11111111-2222-4333-8444-555555555555`;
+  vi.stubEnv("GOATCITADEL_WINDOWS_PROFILE_RESOURCE", profile);
+  vi.stubEnv("GOATCITADEL_NATIVE_WINDOWS_CREDENTIAL_READ", "1");
+  return profile;
+}
+
 describe("SecretStoreService", () => {
+  it("reads the selected Windows vault without synchronously starting PowerShell", async () => {
+    setPlatform("win32");
+    const profile = `goatcitadel.desktop.${"a".repeat(64)}.11111111-2222-4333-8444-555555555555`;
+    vi.stubEnv("GOATCITADEL_WINDOWS_PROFILE_RESOURCE", profile);
+    vi.stubEnv("GOATCITADEL_AUTH_TOKEN", "fixture-parent-secret");
+    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never);
+    const service = new SecretStoreService();
+    const pending = service.getSecretAsync("provider:openai-codex:oauth");
+    expect(spawnSyncMock.mock.calls.map(([command]) => command)).toEqual(["where"]);
+    const [command, args, options, callback] = execFileMock.mock.calls[0]!;
+    expect(command).toBe("powershell");
+    expect(args?.at(-1)).toContain("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)");
+    expect(options).toMatchObject({ windowsHide: true, timeout: 10_000, maxBuffer: 64 * 1024, env: {
+      GOATCITADEL_SECRET_SERVICE: profile, GOATCITADEL_SECRET_ACCOUNT: "provider:openai-codex:oauth",
+    } });
+    expect(JSON.stringify(options)).not.toContain("fixture-parent-secret");
+    (callback as KeychainReadCallback)(null, "fixture-access\r\n", "");
+    await expect(pending).resolves.toBe("fixture-access");
+  });
+
+  it("uses the packaged native reader with only the selected lookup and preserves Unicode", async () => {
+    const profile = enablePackagedNativeRead();
+    vi.stubEnv("GOATCITADEL_AUTH_TOKEN", "fixture-parent-secret");
+    const account = "provider:openai-codex:oauth";
+    const pending = new SecretStoreService().getSecretAsync(account);
+    const [command, args, options, callback] = execFileMock.mock.calls[0]!;
+    expect(command).toBe(fileURLToPath(new URL("../../../desktop/GoatCitadel-Credential-Read.exe", import.meta.url)));
+    expect(args).toEqual([]);
+    expect(options).toMatchObject({ encoding: "buffer", timeout: 1000, windowsHide: true, env: {
+      GOATCITADEL_SECRET_SERVICE: profile, GOATCITADEL_SECRET_ACCOUNT: account,
+    } });
+    expect(JSON.stringify(options)).not.toContain("fixture-parent-secret");
+    (callback as NativeReadCallback)(null, Buffer.from("秘密 café"), Buffer.alloc(0));
+    await expect(pending).resolves.toBe("秘密 café");
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a confirmed native miss and falls back for an unavailable or malformed reader", async () => {
+    const profile = enablePackagedNativeRead();
+    const service = new SecretStoreService();
+    const missing = service.getSecretAsync("test:missing");
+    (execFileMock.mock.calls[0]![3] as NativeReadCallback)(Object.assign(new Error(), { code: 3 }), Buffer.alloc(0), Buffer.alloc(0));
+    await expect(missing).resolves.toBeUndefined();
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+
+    const unavailable = service.getSecretAsync("test:malformed");
+    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never);
+    (execFileMock.mock.calls[1]![3] as NativeReadCallback)(null, Buffer.from([0xff]), Buffer.alloc(0));
+    await vi.waitFor(() => expect(execFileMock).toHaveBeenCalledTimes(3));
+    const [command, , options, callback] = execFileMock.mock.calls[2]!;
+    expect(command).toBe("powershell");
+    expect(options).toMatchObject({ env: {
+      GOATCITADEL_SECRET_SERVICE: profile, GOATCITADEL_SECRET_ACCOUNT: "test:malformed",
+    } });
+    (callback as KeychainReadCallback)(null, "fallback fixture\r\n", "");
+    await expect(unavailable).resolves.toBe("fallback fixture");
+  });
+
+  it("respects explicit keychain disablement even when the packaged pilot is enabled", async () => {
+    enablePackagedNativeRead();
+    vi.stubEnv("GOATCITADEL_DISABLE_SECRET_STORE", "1");
+    await expect(new SecretStoreService().getSecretAsync("test:disabled")).rejects.toBeInstanceOf(SecretStoreUnavailableError);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("handles an absent Windows credential and redacts helper failures", async () => {
+    setPlatform("win32");
+    spawnSyncMock.mockReturnValueOnce({ status: 0 } as never);
+    const service = new SecretStoreService();
+    const missing = service.getSecretAsync("test:missing");
+    const absent = Object.assign(new Error("exit 3"), { code: 3 });
+    (execFileMock.mock.calls[0]![3] as KeychainReadCallback)(absent, "", "");
+    await expect(missing).resolves.toBeUndefined();
+
+    const failed = service.getSecretAsync("test:failure");
+    const failure = Object.assign(new Error("fixture-private-diagnostic"), { code: 2 });
+    (execFileMock.mock.calls[1]![3] as KeychainReadCallback)(failure, "fixture-private-output", "fixture-private-error");
+    await expect(failed).rejects.toMatchObject({
+      code: "SECRET_STORE_UNAVAILABLE", message: "Windows credential read failed.",
+    });
+    await expect(failed).rejects.not.toHaveProperty("cause");
+  });
+
   it("keeps Windows reads and custody checks inside the selected desktop profile", () => {
     setPlatform("win32");
     const profile = `goatcitadel.desktop.${"a".repeat(64)}.11111111-2222-4333-8444-555555555555`;

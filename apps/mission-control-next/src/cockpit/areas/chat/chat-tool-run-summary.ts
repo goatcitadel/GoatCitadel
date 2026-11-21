@@ -1,7 +1,7 @@
 // After hermes-agent's run-summary (https://github.com/nousresearch/hermes-agent, MIT, Copyright (c) 2025 Nous
 // Research), keyed to GoatCitadel's own tool names and argument shapes.
 import type { ChatToolRunRecord, ChatTurnLifecycleStatus } from "@goatcitadel/contracts";
-import { isFailedCodeModeRequest } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
+import { isFailedCodeModeRequest } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-failure";
 import { projectChatToolEffectTruth } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-effect-truth";
 import { summarizeShellCommand } from "./summarize-shell-command";
 

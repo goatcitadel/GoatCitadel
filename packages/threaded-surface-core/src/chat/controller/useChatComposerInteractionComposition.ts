@@ -3,7 +3,7 @@ import { useCallback, useMemo } from "react";
 import type { ComposerPaletteItem } from "../composer-palette";
 import { useChatComposerInteractions } from "../useChatComposerInteractions";
 import { useChatGoalActions } from "../useChatGoalActions";
-import { useChatMultimodalControls } from "../useChatMultimodalControls";
+import { useDeferredChatMultimodalControls } from "../useDeferredChatMultimodalControls";
 import { useChatComposerSendIntent } from "./useChatComposerSendIntent";
 import { useChatControllerCoordination } from "./useChatControllerCoordination";
 import { useChatErrorState } from "./useChatErrorState";
@@ -174,7 +174,7 @@ export function useChatComposerInteractionComposition({
         .find((turn) => Boolean(turn.assistantMessage?.content?.trim())) ?? null,
     [session.sessionData.thread?.turns],
   );
-  const multimodal = useChatMultimodalControls({
+  const { multimodal, multimodalRuntime } = useDeferredChatMultimodalControls({
     workspaceId, selectionRevisionRef: selection.selectedSessionRevisionRef,
     selectedSession: session.threadController.selectedSession,
     deferVoiceReadiness,
@@ -241,6 +241,7 @@ export function useChatComposerInteractionComposition({
     handleToggleDock,
     turnNavigation,
     multimodal,
+    multimodalRuntime,
     handleDismissError,
     sendIntent,
     goalActions,

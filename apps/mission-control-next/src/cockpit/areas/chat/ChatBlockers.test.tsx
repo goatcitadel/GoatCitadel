@@ -19,6 +19,14 @@ vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
   fetchApproval: api.fetchApproval,
   fetchApprovalReplay: api.fetchApprovalReplay,
 }));
+vi.mock("@goatcitadel/mission-control-shared/api/chat-continuation", () => ({
+  fetchChatContinuation: vi.fn(async () => ({
+    status: "blocked",
+    reason: "This operation requires a fresh request.",
+    nextAction: { kind: "ask_again", label: "Ask again" },
+  })),
+  prepareChatContinuation: vi.fn(),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchApprovals: api.fetchApprovals,
   resolveApproval: api.resolveApproval,
@@ -421,38 +429,42 @@ function blockerProps(overrides: Record<string, unknown> = {}) {
 const findButton = (label: string) =>
   [...container.querySelectorAll("button")].find((entry) => entry.textContent === label);
 
-it("names the file a document approval would write (U-CH-046)", async () => {
-  api.fetchApproval.mockResolvedValue({
-    approvalId: "approval/1",
-    kind: "documents.create",
-    status: "pending",
-    riskLevel: "caution",
-    payload: {},
-    preview: { toolName: "documents.create", path: "notes/ut14-note.txt" },
-    createdAt: "2026-10-01T00:00:00Z",
-  });
-  await act(async () =>
-    root.render(
-      <QueryClientProvider client={client}>
-        <ChatBlockers
-          props={blockerProps({
-            pendingApproval: {
-              approvalId: "approval/1",
-              kind: "documents.create",
-              toolName: "documents.create",
-              riskLevel: "caution",
-            },
-          })}
-        />
-      </QueryClientProvider>,
-    ),
-  );
-  await vi.waitFor(() =>
-    expect(container.querySelector('section[aria-label="Pending approval"]')?.textContent).toContain(
-      "Path: notes/ut14-note.txt",
-    ),
-  );
-});
+it.each([undefined, "Path: notes/ut14-note.txt"])(
+  "names the file a document approval would write with target label %s (U-CH-046)",
+  async (targetLabel) => {
+    api.fetchApproval.mockResolvedValue({
+      approvalId: "approval/1",
+      kind: "documents.create",
+      status: "pending",
+      riskLevel: "caution",
+      payload: {},
+      preview: { toolName: "documents.create", ...(targetLabel ? {} : { path: "notes/ut14-note.txt" }) },
+      targetLabel,
+      createdAt: "2026-10-01T00:00:00Z",
+    });
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChatBlockers
+            props={blockerProps({
+              pendingApproval: {
+                approvalId: "approval/1",
+                kind: "documents.create",
+                toolName: "documents.create",
+                riskLevel: "caution",
+              },
+            })}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(container.querySelector('section[aria-label="Pending approval"]')?.textContent).toContain(
+        "Path: notes/ut14-note.txt",
+      ),
+    );
+  },
+);
 
 it("offers Ask again once the record read after the local deadline says expired (U-CH-031)", async () => {
   const pendingRecord = {
@@ -498,7 +510,7 @@ it("offers Ask again once the record read after the local deadline says expired 
     await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined(), { timeout: 5000 });
     expect(api.fetchApproval.mock.calls.length).toBeGreaterThan(readsBefore);
     expect(container.textContent).toContain(
-      "The action did not run. Ask again to put your request back in the message box.",
+      "This approval expired. Ask again to put your request back in the message box.",
     );
     expect(findButton("Approve once")).toBeUndefined();
     await act(async () => findButton("Ask again")!.click());
@@ -604,7 +616,7 @@ it("shows the confirmed expired block when the late read says expired (U-CH-031)
   try {
     await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
     expect(container.textContent).toContain("Approval expired");
-    expect(container.textContent).toContain("The action did not run.");
+    expect(container.textContent).toContain("This approval expired.");
   } finally {
     composer.remove();
   }
@@ -635,7 +647,7 @@ it("keeps Ask again when the record read says the sweep expired it (U-CH-031)", 
     await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
     expect(container.textContent).toContain("Approval expired");
     expect(container.textContent).not.toContain("Approval decided");
-    expect(container.textContent).toContain("The action did not run. Ask again to put your request back");
+    expect(container.textContent).toContain("This approval expired. Ask again to put your request back");
     await act(async () => findButton("Ask again")!.click());
     expect(onDraftChange).toHaveBeenCalledExactlyOnceWith("Create the note");
   } finally {
@@ -647,7 +659,7 @@ it("does not promise Ask again when no linked turn is found (U-CH-031)", async (
   api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
   const composer = await renderExpired({ thread: { turns: [] }, draft: "" });
   try {
-    await vi.waitFor(() => expect(container.textContent).toContain("The action did not run."));
+    await vi.waitFor(() => expect(container.textContent).toContain("This approval expired."));
     expect(findButton("Ask again")).toBeUndefined();
     expect(container.textContent).not.toContain("Ask again to put");
   } finally {

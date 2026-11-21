@@ -3,9 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 import { CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS } from "@goatcitadel/contracts";
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 
-/** The features that are off unless turned on, and have a switch on Settings › Advanced, in the order that section lists them. */
+/** Features with a switch on Settings › Advanced, in that section's display order. */
 export const FEATURE_SWITCH_FLAGS = [
   "memoryLifecycleAdminV1Enabled",
+  "memoryCorpusRecallV1Enabled",
+  "backgroundSkillDraftsV1Enabled",
   "memoryMaintenanceV1Enabled",
   "chatSkillInstructionsV1Enabled",
   "chatStaticMcpV1Enabled",
@@ -31,6 +33,8 @@ export const FEATURE_SWITCHES_QUERY_KEY = ["system", "settings-feature-switches"
 
 const SLUGS: Record<FeatureSwitchFlag, string> = {
   memoryLifecycleAdminV1Enabled: "memory-administration",
+  memoryCorpusRecallV1Enabled:"indexed-memory-recall",
+  backgroundSkillDraftsV1Enabled:"background-skill-drafts",
   memoryMaintenanceV1Enabled: "memory-maintenance",
   chatSkillInstructionsV1Enabled: "skills-in-chat",
   chatStaticMcpV1Enabled: "connectors-in-chat",
@@ -44,6 +48,8 @@ const SLUGS: Record<FeatureSwitchFlag, string> = {
 
 const USED_IN: Record<FeatureSwitchFlag, string> = {
   memoryLifecycleAdminV1Enabled: "Library › Memory",
+  memoryCorpusRecallV1Enabled:"Chat and memory tools",
+  backgroundSkillDraftsV1Enabled:"Chat and Capabilities › Skills",
   memoryMaintenanceV1Enabled: "Library › Memory",
   chatSkillInstructionsV1Enabled: "Chat, and Capabilities › Skills",
   chatStaticMcpV1Enabled: "Chat, and Capabilities › Connectors",

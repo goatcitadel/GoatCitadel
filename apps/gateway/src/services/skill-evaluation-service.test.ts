@@ -3,6 +3,16 @@ import type { CapabilityProposalRecord, SkillEvaluationRunRecord, SkillListItem 
 import { SkillEvaluationService } from "./skill-evaluation-service.js";
 
 describe("SkillEvaluationService", () => {
+  it("evaluates an exact inactive candidate without scoring an invented mutation or claiming improvement",async()=>{
+    const storage=createStorage(),skill={...createSkill(),instructionBody:"Ask for required inputs. Check the document against requirements. Record evidence and stop outside scope."};
+    const binding={candidateId:"candidate",versionId:"version",revision:1,instructionSha256:"a".repeat(64),manifestSha256:"b".repeat(64),sourceFingerprint:"c".repeat(64)};
+    const signal=vi.fn();
+    const service=new SkillEvaluationService({storage,listSkills:()=>[],createCapabilityProposal:vi.fn(),recordSkillEvaluationSignal:signal,resolveCandidateSkillForEvaluation:async()=>({skill,binding})});
+    const result=await service.runSkillEvaluation("candidate-version:version",{scenarios:[{title:"Document",prompt:"Review an article",expectedOutcome:"Record evidence"},{title:"Different document",prompt:"Review a different guide",expectedOutcome:"Check requirements",tags:["held_out"]}],criteria:[{label:"Evidence",description:"Record evidence",requiredTerms:["evidence"]}]});
+    expect(result.run).toMatchObject({candidateBinding:binding,accepted:true,improvementDelta:0});
+    expect(result.run.mutation).toBeUndefined();expect(result.run.candidateResult).toBeUndefined();expect(signal).not.toHaveBeenCalled();
+    await expect(service.runSkillEvaluation("candidate-version:version",{scenarios:[{title:"Only one",prompt:"One",expectedOutcome:"One"}]})).rejects.toThrow("held-out");
+  });
   it("scores instruction behavior, accepts only improved mutations, and does not write skill files", async () => {
     const skill = createSkill();
     const storage = createStorage();

@@ -871,6 +871,8 @@ export const AssistantConfigInputSchema = z
         // PROPOSES memory candidates (approval-gated, never auto-applied).
         // Absent/false (default) ⇒ the consolidation job never runs.
         memoryConsolidationV1Enabled: z.boolean().optional(),
+        memoryCorpusRecallV1Enabled: z.boolean().optional(),
+        backgroundSkillDraftsV1Enabled: z.boolean().optional(),
         // Records a signed cron_job_executed evidence envelope for every cron
         // run and pins the envelope id on the job record. Absent/false
         // (default) ⇒ cron runs record no evidence, exactly as today.

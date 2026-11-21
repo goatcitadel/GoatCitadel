@@ -41,12 +41,13 @@ public static class DesktopUpdatePolicy
             if (root.GetProperty("type").GetString() != "goatcitadel.updates.request"
                 || !Guid.TryParse(root.GetProperty("requestId").GetString(), out var id)) return null;
             var action = root.GetProperty("action").GetString();
-            if (action is not ("status" or "check" or "download" or "reveal" or "notes" or "snooze" or "channel")) return null;
+            if (action is not ("status" or "check" or "download" or "install" or "reveal" or "notes" or "snooze" or "channel")) return null;
             var channel = root.TryGetProperty("channel", out var c) ? c.GetString() : null;
             var tag = root.TryGetProperty("releaseTag", out var t) ? t.GetString() : null;
             if (action == "channel" && channel is not ("stable" or "preview")) return null;
-            if (action == "download" && (tag is null || !Tag.IsMatch(tag) || tag.Contains("..", StringComparison.Ordinal))) return null;
-            // No renderer-supplied download URLs, paths or installer execution are supported.
+            if (action is ("download" or "install")
+                && (tag is null || !Tag.IsMatch(tag) || tag.Contains("..", StringComparison.Ordinal))) return null;
+            // The native host owns installer paths and confirms renderer install requests.
             if (root.EnumerateObject().Any(p => p.Name is not ("type" or "requestId" or "action" or "channel" or "releaseTag"))) return null;
             return new(id.ToString(), action!, channel, tag);
         }
@@ -125,8 +126,18 @@ public static class DesktopUpdatePolicy
 
     public static bool IsNewer(DesktopUpdateRelease candidate, string installedVersion, string? installedCommit, long installedSequence)
     {
-        if (candidate.SourceCommit == installedCommit && candidate.Version == installedVersion) return false;
-        if (candidate.Channel == "preview") return candidate.BuildSequence > installedSequence;
+        var installedReleaseVersion = installedVersion.Split('+')[0];
+        if (candidate.SourceCommit == installedCommit && candidate.Version == installedReleaseVersion) return false;
+        if (candidate.Channel == "preview")
+        {
+            // Older beta version labels lack a preview sequence. Their release numbers
+            // still give us enough information to avoid offering an older beta.
+            if (installedSequence == 0
+                && System.Version.TryParse(installedReleaseVersion.Split('-')[0], out var installedBase)
+                && System.Version.TryParse(candidate.Version.Split('-')[0], out var candidateBase)
+                && candidateBase < installedBase) return false;
+            return candidate.BuildSequence > installedSequence;
+        }
         return System.Version.TryParse(installedVersion.Split('-')[0], out var current)
             && System.Version.TryParse(candidate.Version, out var next)
             && (next > current || next == current && installedVersion.Contains('-'));

@@ -52,7 +52,7 @@ export function JumpToLatestButton({
     <button
       type="button"
       onClick={onJump}
-      className="absolute bottom-3 right-3 z-10 rounded-md border border-accent bg-overlay px-3 py-2 text-sm text-accent shadow-overlay"
+      className="min-h-11 max-w-full whitespace-normal rounded-md border border-accent bg-overlay px-3 py-2 text-left text-sm text-accent"
     >
       {jumpLabel(waiting, unread)}
     </button>

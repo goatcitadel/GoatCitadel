@@ -107,13 +107,7 @@ describe("policy-engine loop 24 branch tails", () => {
     expect(memory).toMatchObject({
       namespace: "all",
       query: "fallback",
-      items: [
-        expect.objectContaining({
-          docId: "doc-title-only",
-          score: expect.any(Number),
-          snippet: "",
-        }),
-      ],
+      items: [], unavailable:true,
     });
 
     const failed = await executeTool(

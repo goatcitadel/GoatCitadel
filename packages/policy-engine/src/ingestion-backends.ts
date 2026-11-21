@@ -244,10 +244,10 @@ export async function searchIngestedContext(input: {
   const namespace = input.namespace;
   const query = input.query.trim().toLowerCase();
   const limit = Math.max(1, Math.min(input.limit ?? 8, 50));
-  const docs = await input.storage.knowledge.listDocuments(namespace, 500);
+  const docs = await input.storage.knowledge.listDocuments(namespace, 500, { excludeMemory: true });
   const docById = new Map(docs.map((doc) => [doc.docId, doc] as const));
   const items: RetrievedContextChunk[] = [];
-  for (const chunk of await input.storage.knowledge.listChunksByNamespace(namespace, 2000)) {
+  for (const chunk of await input.storage.knowledge.listChunksByNamespace(namespace, 2000, { excludeMemory: true })) {
     const doc = docById.get(chunk.docId);
     if (!doc) {
       continue;

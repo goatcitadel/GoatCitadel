@@ -33,6 +33,8 @@ export interface TurnRuntimeRequest {
   providerId?: string;
   webMode: ChatWebMode;
   memoryMode: "auto" | "on" | "off";
+  /** Server-derived narrowing for preference-only lifecycle review; grants no tools. */
+  naturalMemoryReviewOnly?: boolean;
   retrievalMode: ChatRetrievalMode;
   thinkingLevel: ChatThinkingLevel;
   speedMode?: ChatSpeedMode;

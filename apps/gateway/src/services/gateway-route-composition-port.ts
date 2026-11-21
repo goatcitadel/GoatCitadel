@@ -59,6 +59,7 @@ import type { CapabilityScopeResolver } from "./capability-scope-resolver.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import type { ConfigGenerationHealthSnapshot } from "./config-generation-service.js";
 import type { ChatChangePlanCompatibilityService } from "./chat-change-plan-compatibility-service.js";
+import type { EvolutionControlPlaneService } from "./evolution-control-plane-service.js";
 import type {
   DeleteProviderSecretInput,
   ProviderSecretMutationResponse,
@@ -90,6 +91,9 @@ export interface GatewayRouteCompositionPort {
   readonly capabilitySystemService: CapabilitySystemService;
   readonly chatCompactionBreakerActionService: ChatCompactionBreakerActionService;
   readonly chatChangePlanCompatibilityService: ChatChangePlanCompatibilityService;
+  /** Narrow plan owner used by explicit Chat setup and recovery. Calls resolve
+   * the service after Gateway's early composition phase has completed. */
+  readonly chatSetupPlanOwner:Pick<EvolutionControlPlaneService,"get"|"create"|"cancel"|"findReplay"|"findByIdempotencyKey">;
   readonly chatProactiveService: ChatProactiveService;
   readonly chatProjectService: ChatProjectService;
   readonly chatSessionStatusService: ChatSessionStatusService;
@@ -232,6 +236,7 @@ export interface GatewayRouteCompositionPort {
   readConnectionConfigValue: IntegrationChannelServicePort["readConnectionConfigValue"];
   readDiscordPairings: IntegrationChannelServicePort["readDiscordPairings"];
   readFeatureFlags: settingsAuthService.SettingsRuntimeDependencies["readFeatureFlags"];
+  resolveBackgroundLearningReadiness(input:{workspaceId:string;sessionId:string},options?:{passive?:boolean}):Promise<import("@goatcitadel/contracts").BackgroundLearningReadiness>;
   readSettingsRevision: NonNullable<settingsAuthService.SettingsRuntimeDependencies["readSettingsRevision"]>;
   getConfigGenerationHealthSnapshot(): ConfigGenerationHealthSnapshot;
   saveProviderSecret(input: SaveProviderSecretInput): Promise<ProviderSecretMutationResponse>;
@@ -306,8 +311,8 @@ export type GatewayRouteCompositionPrivateDependencies = Pick<
 
 export type GatewayRouteCompositionHost = Omit<
   GatewayRouteCompositionPort,
-  keyof GatewayRouteCompositionPrivateDependencies
->;
+  keyof GatewayRouteCompositionPrivateDependencies | "chatSetupPlanOwner"
+>&{readonly evolutionControlPlaneService:EvolutionControlPlaneService};
 
 export function createGatewayRouteCompositionPort(
   gateway: GatewayRouteCompositionHost,
@@ -328,6 +333,13 @@ export function createGatewayRouteCompositionPort(
     capabilitySystemService: privateDependencies.capabilitySystemService,
     chatCompactionBreakerActionService: privateDependencies.chatCompactionBreakerActionService,
     chatChangePlanCompatibilityService: gateway.chatChangePlanCompatibilityService,
+    chatSetupPlanOwner:{
+      get:(...args)=>gateway.evolutionControlPlaneService.get(...args),
+      create:(...args)=>gateway.evolutionControlPlaneService.create(...args),
+      cancel:(...args)=>gateway.evolutionControlPlaneService.cancel(...args),
+      findReplay:(...args)=>gateway.evolutionControlPlaneService.findReplay(...args),
+      findByIdempotencyKey:(...args)=>gateway.evolutionControlPlaneService.findByIdempotencyKey(...args),
+    },
     chatMessageRouteRuntimeHost: privateDependencies.chatMessageRouteRuntimeHost,
     chatProjectService: privateDependencies.chatProjectService,
     chatSessionStatusService: gateway.chatSessionStatusService,
@@ -471,6 +483,7 @@ export function createGatewayRouteCompositionPort(
     readConnectionConfigValue: gateway.readConnectionConfigValue.bind(gateway),
     readDiscordPairings: gateway.readDiscordPairings.bind(gateway),
     readFeatureFlags: gateway.readFeatureFlags.bind(gateway),
+    resolveBackgroundLearningReadiness:gateway.resolveBackgroundLearningReadiness.bind(gateway),
     readSettingsRevision: gateway.readSettingsRevision.bind(gateway),
     getConfigGenerationHealthSnapshot: gateway.getConfigGenerationHealthSnapshot.bind(gateway),
     saveProviderSecret: gateway.saveProviderSecret.bind(gateway),

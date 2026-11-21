@@ -269,7 +269,8 @@ export interface CandidateSkillVersionRecord {
     | "history_workshop"
     | "upstream_hub"
     | "capability_pack"
-    | "workflow_capture";
+    | "workflow_capture"
+    | "background_workflow";
   /** Derived by storage for pre-161 records; governed records carry every required lineage field. */
   lineageStatus?: "legacy_missing" | "governed";
   workspaceId?: string;

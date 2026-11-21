@@ -181,6 +181,9 @@ export interface ToolExecutorRuntimeHooks {
    */
   acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease;
   prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch;
+  searchMemory?: (request:ToolInvokeRequest) => Promise<Record<string,unknown>>;
+  prepareMemoryWrite?: (request:ToolInvokeRequest) => Promise<NonNullable<ToolInvokeRequest["memoryWriteBinding"]>>;
+  writeMemory?: import("./tool-executor/knowledge-executor.js").KnowledgeExecutorDeps["writeMemory"];
   assertBrowserSessionAccess?: (check: BrowserSessionAccessCheck) => void | Promise<void>;
   /** Resolve protected official-search credentials at execution time, before environment fallback. */
   resolveCredential?: ResolveOfficialSearchCredential;
@@ -352,6 +355,8 @@ const executeKnowledgeFamily = (
   runtimeHooks: ToolExecutorRuntimeHooks,
 ) =>
   executeKnowledgeTool(request, config, storage, {
+    ...(runtimeHooks.searchMemory ? { searchMemory: runtimeHooks.searchMemory } : {}),
+    ...(runtimeHooks.writeMemory ? { writeMemory: runtimeHooks.writeMemory } : {}),
     ...(runtimeHooks.acquireLocalEmbeddingLease
       ? { acquireLocalEmbeddingLease: runtimeHooks.acquireLocalEmbeddingLease }
       : {}),

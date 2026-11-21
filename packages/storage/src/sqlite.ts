@@ -1,6 +1,12 @@
 import { CHAT_ARTIFACT_RENDER_RECEIPTS_SQLITE_SQL } from "./chat-artifact-render-schema.js";
 import { CHAT_APPROVAL_MODE_SCHEMA_SQL } from "./chat-approval-mode-schema.js";
 import { MANAGED_PROJECT_FILE_SCHEMA_SQL } from "./managed-project-file-schema.js";
+import { upgradeMemoryClaimsSchema } from "./memory-claims-schema.js";
+import { upgradeMemoryRecallSchema } from "./memory-recall-schema.js";
+import {upgradeBackgroundLearningQueueIndexes} from "./background-learning-schema.js";
+import {upgradeImprovementWatchEvidence} from "./improvement-watch-schema.js";
+import {upgradePromptPackWatchBindings} from "./prompt-pack-watch-schema.js";
+import {upgradeMemoryNoteOrigins} from "./memory-note-schema.js";
 import { APPROVAL_EXECUTION_LINKAGE_SQLITE_SQL } from "./approval-execution-linkage-migration.js";
 import { MODEL_COMPARISON_CLAIM_SCHEMA_SQL } from "./model-comparison-claim-schema.js";
 import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_SQLITE_SQL } from "./approval-execution-linkage-index-repair.js";
@@ -85,6 +91,11 @@ import { CITADEL_VAULT_KEYS_SQLITE_SQL, CITADEL_VAULT_SECRET_SCOPE_COLUMNS } fro
 import { upgradeRemoteWorkerCancellationSettlement } from "./remote-worker-cancellation-settlement-schema.js";
 import { MANAGED_SOURCE_INSTALL_SQL } from "./managed-source-install-repo.js";
 import { PRODUCT_SOURCE_UPDATE_SQLITE_SCHEMA_SQL } from "./product-source-update-repo.js";
+import {
+  createSqliteSchemaReference,
+  readPackagedSqliteSchemaShape,
+  type SqliteSchemaReference,
+} from "./sqlite/schema-reference.js";
 import {
   assertSqliteSchemaShape,
   readSqliteSchemaShape,
@@ -570,19 +581,26 @@ function migrate(db: DatabaseSync): void {
 }
 
 function validateCanonicalSqliteSchemaShape(db: DatabaseSync): void {
-  assertSqliteSchemaShape(readSqliteSchemaShape(db), getCanonicalSqliteSchemaShape());
+  assertSqliteSchemaShape(readSqliteSchemaShape(db), getCanonicalSqliteSchemaShape(db));
 }
 
-function getCanonicalSqliteSchemaShape(): SqliteSchemaShapeManifest {
+function getCanonicalSqliteSchemaShape(db: DatabaseSync): SqliteSchemaShapeManifest {
   if (cachedCanonicalSqliteSchemaShape) return cachedCanonicalSqliteSchemaShape;
+  cachedCanonicalSqliteSchemaShape = readPackagedSqliteSchemaShape(db, SCHEMA_MIGRATIONS)
+    ?? withCanonicalSqliteDatabase(readSqliteSchemaShape);
+  return cachedCanonicalSqliteSchemaShape;
+}
+
+export function buildPackagedSqliteSchemaReference(): SqliteSchemaReference {
+  return withCanonicalSqliteDatabase((db) => createSqliteSchemaReference(db, SCHEMA_MIGRATIONS));
+}
+
+function withCanonicalSqliteDatabase<T>(read: (db: DatabaseSync) => T): T {
+  // Build the reference independently so a malformed IF NOT EXISTS object cannot validate itself.
   const canonical = new DatabaseSync(":memory:");
   try {
-    // The reference is built independently from the target database. This is
-    // what prevents a pre-existing IF NOT EXISTS object from blessing its own
-    // corrupt shape on first startup.
     runSqliteMigrations(canonical, SCHEMA_MIGRATIONS);
-    cachedCanonicalSqliteSchemaShape = readSqliteSchemaShape(canonical);
-    return cachedCanonicalSqliteSchemaShape;
+    return read(canonical);
   } finally {
     canonical.close();
   }
@@ -7579,6 +7597,12 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         name: "skill_hub_remove_operation_kind",
         up: upgradeSkillHubOperationKindsSqlite,
       },
+      { version: 282, name: "scoped_memory_claim_identity", up: upgradeMemoryClaimsSchema },
+      { version: 283, name: "indexed_memory_corpus", up: upgradeMemoryRecallSchema },
+      { version: 284, name:"background_learning_queue_indexes", up:upgradeBackgroundLearningQueueIndexes },
+      { version: 285, name:"improvement_watch_evidence", up:upgradeImprovementWatchEvidence },
+      { version: 286, name:"prompt_pack_pre_work_watch_bindings", up:upgradePromptPackWatchBindings },
+      { version: 287, name:"canonical_memory_note_origins", up:upgradeMemoryNoteOrigins },
     ],
   },
 ];

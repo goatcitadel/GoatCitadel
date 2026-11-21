@@ -4,7 +4,7 @@ import type { useChatComposerInteractions } from "../useChatComposerInteractions
 import { useChatContextActions } from "../useChatContextActions";
 import type { useChatKnowledgeAttachments } from "../useChatKnowledgeAttachments";
 import { useChatModelChangePlans } from "../useChatModelChangePlans";
-import { useChatMultimodalControls } from "../useChatMultimodalControls";
+import type { useChatMultimodalControls } from "../useChatMultimodalControls";
 import { useChatPreferenceMutations } from "../useChatPreferenceMutations";
 import { useChatPresetActions } from "../useChatPresetActions";
 import type { useChatSurfaceOrchestration } from "../useChatSurfaceOrchestration";

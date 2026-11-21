@@ -59,6 +59,7 @@ export interface MemoryRetrievalMatchSignals {
 }
 
 export interface MemoryContextComposeRequest {
+  intent?: "automatic" | "explicit_recall";
   scope: MemoryContextScope;
   prompt: string;
   signal?: AbortSignal;
@@ -118,8 +119,9 @@ export interface MemoryCitationProvenance {
 
 export interface MemoryCitation {
   candidateId: string;
-  sourceType: "transcript" | "file" | "memory_item";
+  sourceType: "transcript" | "file" | "memory_item" | "memory_learning" | "knowledge_chunk";
   sourceRef: string;
+  sourceHash?: string;
   snippet?: string;
   score: number;
   provenance?: MemoryCitationProvenance;
@@ -465,6 +467,8 @@ export interface MemoryLearningFileRef {
 }
 
 export interface MemoryLearningRecord {
+  claim?: import("./memory-claims.js").MemoryClaim;
+  sourceHash?: string;
   learningId: string;
   workspaceId: string;
   key: string;
@@ -481,6 +485,8 @@ export interface MemoryLearningRecord {
 }
 
 export interface MemoryLearningInput {
+  claim?: import("./memory-claims.js").MemoryClaim;
+  correctionTarget?: import("./memory-claims.js").MemoryCorrectionTarget;
   workspaceId?: string;
   key: string;
   type?: MemoryLearningType;
@@ -634,6 +640,11 @@ export interface TraceMemoryCandidateInput {
 }
 
 export interface TraceMemoryCandidateRecord extends TraceMemoryCandidateInput {
+  /** Server-issued digest of the complete candidate row at review time. */
+  reviewHash?:string;
+  editEligibility?:{allowed:boolean;reason?:string};
+  /** Owner-projected review guidance; apply still rechecks source, target and policy. */
+  promotionEligibility?:{allowed:boolean;reason?:string};
   candidateId: string;
   workspaceId: string;
   candidateType: TraceMemoryCandidateType;
@@ -647,6 +658,13 @@ export interface TraceMemoryCandidateRecord extends TraceMemoryCandidateInput {
   promotedLearningId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TraceMemoryCandidateDecisionInput {workspaceId:string;expectedReviewHash:string;}
+export interface TraceMemoryCandidateEditInput extends TraceMemoryCandidateDecisionInput {proposedInsight:string;}
+export interface MemoryTraceReconciliationPreview {
+  items:{candidateId:string;workspaceId:string;sourceSessionId?:string;reasons:string[];nextAction:"reject_and_regenerate"}[];
+  limit:number;scanned:number;coverage:"partial"|"complete";nextCursor?:string;mutationsPerformed:false;
 }
 
 export type MemoryRecallMode = "targeted" | "summary" | "post_compaction_resume";

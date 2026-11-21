@@ -1,3 +1,4 @@
+import { completionSystemText, type StandingMemoryContext } from "./chat-learning-memory-manifest.js";
 import type {
   ChatCompletionRequest,
   MemoryContextPack,
@@ -70,11 +71,12 @@ export async function composeChatCompletionMemoryContext(
  * as the structured memory_context entry, not twice.
  */
 export async function persistContextManifestForCompletionRequest(
-  deps: { contextManifests: Storage["contextManifests"] },
+  deps: { contextManifests: Storage["contextManifests"];resolveStandingMemoryContext?:(request:ChatCompletionRequest)=>Promise<StandingMemoryContext|undefined>;resolveSkillContext?:(request:ChatCompletionRequest)=>Promise<{instruction:string;sources:{skillId:string;instructionSha256:string;treeSha256:string}[]}|undefined> },
   input: {
     request: ChatCompletionRequest;
     memoryContext?: MemoryContextPack;
     memoryContextPlacement?: MemoryContextPlacement;
+    usageBinding?:{operationId:string;dispatchGeneration:string};
   },
 ): Promise<void> {
   const turnId = input.request.memory?.turnId?.trim();
@@ -82,6 +84,7 @@ export async function persistContextManifestForCompletionRequest(
     return;
   }
 
+  const standingMemoryContext=await deps.resolveStandingMemoryContext?.(input.request);
   const manifest = await deps.contextManifests.ensure({
     scope: "chat_turn",
     turnId,
@@ -92,12 +95,13 @@ export async function persistContextManifestForCompletionRequest(
     ? buildMemoryContextSystemMessage(input.memoryContext)
     : undefined;
   let entryIndex = 0;
+  const skillContext=await deps.resolveSkillContext?.(input.request);
 
   for (const [messageIndex, message] of input.request.messages.entries()) {
-    if (message.role !== "system" || typeof message.content !== "string") {
+    if (message.role !== "system") {
       continue;
     }
-    const contentText = message.content.trim();
+    const contentText = completionSystemText(message.content).trim();
     if (!contentText) {
       continue;
     }
@@ -114,12 +118,15 @@ export async function persistContextManifestForCompletionRequest(
       metadata: {
         role: message.role,
         messageIndex,
+        ...(input.usageBinding ? {usageBinding:input.usageBinding}:{}),
+        ...(standingMemoryContext && contentText.includes(standingMemoryContext.instruction) ? {admittedMemories:standingMemoryContext.sources.map(source=>({sourceType:"memory_learning",sourceRef:source.learningId,sourceHash:source.sourceHash}))}:{}),
+        ...(skillContext?.instruction.trim()===contentText ? {admittedSkills:skillContext.sources}:{}),
       },
     });
     entryIndex += 1;
   }
 
-  if (!input.memoryContext) {
+  if (!input.memoryContext || !input.request.messages.some(message=>message.role==="system" && typeof message.content==="string" && message.content.trim()===memoryContextSystemMessage)) {
     return;
   }
 
@@ -135,6 +142,8 @@ export async function persistContextManifestForCompletionRequest(
       status: input.memoryContext.quality.status,
       reason: input.memoryContext.quality.reason,
       citationsCount: input.memoryContext.citations.length,
+      sourceCitations:input.memoryContext.citations.slice(0,40).map(citation=>({sourceType:citation.sourceType,sourceRef:citation.sourceRef,...(citation.sourceHash ? {sourceHash:citation.sourceHash}:{})})),
+      ...(input.usageBinding ? {usageBinding:input.usageBinding}:{}),
       originalTokenEstimate: input.memoryContext.originalTokenEstimate,
       distilledTokenEstimate: input.memoryContext.distilledTokenEstimate,
       assembly: input.memoryContext.quality.assembly,

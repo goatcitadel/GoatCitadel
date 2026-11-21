@@ -335,7 +335,7 @@ describe("cockpit text composer", () => {
   it("leaves the layout switch to the sidebar instead of a generic classic link under the composer", async () => {
     await act(async () => root.render(<ChatTextComposer props={composerProps()} />));
     const panel = await openPlusPanel();
-    expect(buttonIn(panel, "Commands and context")).toBeDefined();
+    await vi.waitFor(() => expect(buttonIn(panel, "Commands and context")).toBeDefined());
     const labels = [...container.querySelectorAll("button"), ...panel.querySelectorAll("button")].map((b) =>
       b.textContent?.trim(),
     );
@@ -389,9 +389,13 @@ describe("cockpit text composer", () => {
     await act(async () =>
       root.render(<ChatTextComposer props={composerProps({ onOpenPersonalitiesSettings: undefined })} />),
     );
-    expect(
-      (document.body.querySelector('button[aria-label$="Open personality settings"]') as HTMLButtonElement).disabled,
-    ).toBe(true);
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>('button[aria-label$="Model and reasoning options"]')?.click(),
+    );
+    await vi.waitFor(() =>
+      expect(document.body.querySelector<HTMLButtonElement>('button[aria-label$="Open personality settings"]')?.disabled)
+        .toBe(true),
+    );
   });
 
   it("keeps attached files sendable and blocks unresolved decisions or route changes", async () => {
@@ -619,7 +623,7 @@ describe("cockpit text composer", () => {
     const props = composerProps({
       draft: command,
       canSend: false,
-      chatTimerPanel: command === "/timer" ? ({ open: false } as ComposerProps["chatTimerPanel"]) : undefined,
+      chatTimerAvailable: command === "/timer",
       sessionStatusPanel: command === "/status" ? ({ open: false } as ComposerProps["sessionStatusPanel"]) : undefined,
       commandSuggestions: [{ key: command, command, description: "Local command", applyValue: command }],
     });

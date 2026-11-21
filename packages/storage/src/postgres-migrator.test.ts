@@ -878,13 +878,27 @@ describe("Postgres migration ledger compatibility", () => {
     // mobile_push_deliveries last_classification CHECK; v226 adds the two-column comparison claim table.
     // v227 adds twelve renderer receipt columns; its two foreign keys cascade cleanup.
     // v230/v231 add the four Auto mode and managed-file tables (25 columns, two indexes).
+    // v235-v240 add governed learning/claims, recall projections, queue indexes,
+    // observed watch counters and immutable pre-work run bindings. The current
+    // bootstrap also includes the canonical note provenance sidecar (one table,
+    // ten columns and one index); upgrade SQL
+    // remains append-only and independently verified by the lineage manifest.
     // Keep independent drift tripwires for the complete current shape.
-    assert.equal(manifest.tables.length, 378);
+    assert.equal(manifest.tables.length, 382);
     assert.equal(
       manifest.tables.reduce((count, table) => count + table.columns.length, 0),
-      5_178,
+      5_222,
     );
-    assert.equal(manifest.indexes.length, 777);
+    assert.equal(manifest.indexes.length, 787);
+    assert.deepEqual(manifest.tables.find(table=>table.name==="memory_item_origins")?.columns.map(column=>column.name),
+      ["item_id","workspace_id","source_session_id","source_created_at","source_lifecycle_id","source_incarnation","owner_session_id","trust_level","upsert_key","artifact_doc_id"]);
+    assert.deepEqual(manifest.tables.find((table) => table.name === "memory_recall_documents")?.columns.map((column) => column.name),
+      ["source_kind", "source_ref", "search_text"]);
+    assert.deepEqual(manifest.tables.find((table) => table.name === "memory_recall_state")?.columns.map((column) => column.name),
+      ["singleton", "generation"]);
+    assert.deepEqual(manifest.tables.find((table) => table.name === "memory_learnings")?.columns.map((column) => column.name), [
+      "learning_id", "workspace_id", "learning_key", "learning_type", "insight", "confidence", "status", "source_refs_json", "file_refs_json", "authority", "superseded_by_id", "created_at", "updated_at", "claim_json", "claim_key", "claim_scalar", "claim_scope_kind", "claim_scope_id",
+    ]);
     assert.deepEqual(
       manifest.tables
         .find((table) => table.name === "model_comparison_execution_claims")
@@ -1116,8 +1130,8 @@ describe("Postgres migration ledger compatibility", () => {
 
   it("covers every canonical IF NOT EXISTS table and index and fails closed on catalog issues", () => {
     const manifest = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    assert.equal(manifest.tables.length, 378);
-    assert.equal(manifest.indexes.length, 794);
+    assert.equal(manifest.tables.length, 382);
+    assert.equal(manifest.indexes.length, 804);
     assert.equal(
       manifest.tables.every((table) => table.columns.length > 0),
       true,

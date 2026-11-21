@@ -7,3 +7,4 @@ export * from "./citation-validator.js";
 export * from "./context-composer.js";
 export * from "./cache.js";
 export * from "./distiller.js";
+export * from "./memory-claim-policy.js";

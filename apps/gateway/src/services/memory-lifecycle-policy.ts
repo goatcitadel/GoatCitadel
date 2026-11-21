@@ -3,7 +3,11 @@ import type {
   MemoryMaintenanceRecommendationRecord,
   MemoryMaintenanceRecommendationKind,
   MemoryItemRecord,
+  MemoryClaim,
+  MemoryCorrectionTarget,
 } from "@goatcitadel/contracts";
+import { memoryClaimKey, normalizeMemoryClaim } from "@goatcitadel/contracts";
+import { classifyMemoryClaimChange } from "@goatcitadel/memory-core";
 
 export const DEFAULT_MEMORY_WORKSPACE_ID = "default";
 export const MEMORY_RECOMMENDATION_DEDUP_WINDOW_MS = 12 * 60 * 60 * 1000;
@@ -67,7 +71,11 @@ export type LearnedMemoryWriteDecision =
 export function decideLearnedMemoryWrite(input: {
   content: string;
   confidence: number;
-  existing: Array<Pick<LearnedMemoryItemRecord, "itemId" | "content" | "confidence">>;
+  workspaceId?: string;
+  claim?: MemoryClaim;
+  authority?: string;
+  correctionTarget?: MemoryCorrectionTarget;
+  existing: Array<Pick<LearnedMemoryItemRecord, "itemId" | "content" | "confidence" | "claim" | "sourceHash">>;
 }): LearnedMemoryWriteDecision {
   const normalized = normalizeMemoryLifecycleText(input.content);
   if (!normalized) {
@@ -75,7 +83,17 @@ export function decideLearnedMemoryWrite(input: {
   }
 
   const incomingConfidence = clampMemoryConfidence(input.confidence);
-  const duplicate = input.existing.find((item) => normalizeMemoryLifecycleText(item.content) === normalized);
+  if (input.claim && !input.workspaceId)
+    throw new TypeError("Claim comparison requires canonical workspace ownership.");
+  const duplicate =
+    !input.correctionTarget &&
+    input.existing.find(
+      (item) =>
+        normalizeMemoryLifecycleText(item.content) === normalized &&
+        (!input.claim ||
+          (item.claim &&
+            memoryClaimKey(input.workspaceId!, item.claim) === memoryClaimKey(input.workspaceId!, input.claim))),
+    );
   if (duplicate) {
     return {
       action: "merge_duplicate",
@@ -84,30 +102,47 @@ export function decideLearnedMemoryWrite(input: {
     };
   }
 
-  const current = input.existing[0];
-  if (!current) {
-    return {
-      action: "insert_active",
-      incomingConfidence,
-    };
-  }
-
-  const overlap = computeMemoryLifecycleTextOverlap(normalized, normalizeMemoryLifecycleText(current.content));
-  const existingConfidence = clampMemoryConfidence(current.confidence);
-  if (overlap < MEMORY_CONFLICT_OVERLAP_THRESHOLD) {
-    const confidenceDiff = Math.abs(incomingConfidence - existingConfidence);
-    if (confidenceDiff < MEMORY_CONFIDENCE_DIFF_THRESHOLD) {
+  if (input.claim) {
+    if (!input.workspaceId) throw new TypeError("Claim comparison requires canonical workspace ownership.");
+    const workspaceId = input.workspaceId;
+    const key = memoryClaimKey(workspaceId, input.claim);
+    const current = input.existing.filter((item) => item.claim && memoryClaimKey(workspaceId, item.claim) === key);
+    const change = classifyMemoryClaimChange({
+      incoming: {
+        workspaceId,
+        claim: input.claim,
+        authority: input.authority ?? "agent_proposed",
+        correctionTarget: input.correctionTarget,
+      },
+      current: current.map((item) => ({
+        sourceRef: item.itemId,
+        sourceHash: item.sourceHash ?? "",
+        workspaceId,
+        claim: item.claim,
+      })),
+    });
+    if (change === "ambiguous" || change === "correction") {
+      const target =
+        change === "correction"
+          ? current.find((item) => item.itemId === input.correctionTarget?.sourceRef)
+          : current[0];
+      if (!target) return { action: "skip" };
       return {
-        action: "record_conflict",
-        existingItemId: current.itemId,
+        action: change === "correction" ? "supersede" : "record_conflict",
+        existingItemId: target.itemId,
         incomingConfidence,
       };
     }
-    if (incomingConfidence > existingConfidence + MEMORY_CONFIDENCE_DIFF_THRESHOLD) {
+    if (change === "duplicate") {
+      const duplicate = current.find(
+        (item) =>
+          normalizeMemoryClaim(item.claim!).value.toLowerCase() ===
+          normalizeMemoryClaim(input.claim!).value.toLowerCase(),
+      )!;
       return {
-        action: "supersede",
-        existingItemId: current.itemId,
-        incomingConfidence,
+        action: "merge_duplicate",
+        itemId: duplicate.itemId,
+        nextConfidence: Math.max(incomingConfidence, duplicate.confidence),
       };
     }
   }

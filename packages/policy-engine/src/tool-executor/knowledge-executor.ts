@@ -6,8 +6,8 @@ import type {
   ToolInvokeRequest,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { clampInt } from "@goatcitadel/contracts";
-import type { AsyncStorage } from "@goatcitadel/storage";
+import { clampInt, redactSecretText, redactStructuredSecrets } from "@goatcitadel/contracts";
+import type { AsyncStorage, WriteMemoryNoteInput } from "@goatcitadel/storage";
 import { Buffer } from "node:buffer";
 import { mapWithConcurrency } from "../async-utils.js";
 import type { FirecrawlOperatorEndpoint } from "../firecrawl-endpoint.js";
@@ -50,6 +50,8 @@ const KNOWLEDGE_TOOL_NAMES = new Set([
 ]);
 
 export interface KnowledgeExecutorDeps {
+  searchMemory?: (request:ToolInvokeRequest) => Promise<Record<string,unknown>>;
+  writeMemory?: (request:ToolInvokeRequest, input:Omit<WriteMemoryNoteInput,"binding"|"actorId">) => Promise<Awaited<ReturnType<AsyncStorage["memoryNotes"]["write"]>>>;
   acquireLocalEmbeddingLease?: AcquireLocalEmbeddingLease;
   prepareEmbeddingUsageDispatch?: PrepareEmbeddingUsageDispatch;
   assertReadPathAllowedForRequest(
@@ -89,13 +91,13 @@ export async function executeKnowledgeTool(
     case "session.history":
       return sessionHistory(request, storage);
     case "memory.read":
-      return memoryRead(request.args, storage);
+      return readScopedMemory(request, deps);
     case "memory.write":
       return memoryWrite(request, storage, false, deps);
     case "memory.upsert":
       return memoryWrite(request, storage, true, deps);
     case "memory.search":
-      return memorySearch(request.args, storage);
+      return readScopedMemory(request, deps);
     case "citations.build":
       return citationsBuild(request.args);
     case "docs.ingest":
@@ -117,66 +119,55 @@ async function memoryWrite(
   upsert: boolean,
   deps: KnowledgeExecutorDeps,
 ) {
+  const {namespace,title,content,metadata,sourceAttribution,trustLevel}=prepareMemoryToolWrite(request);
+  if (!deps.writeMemory || !request.memoryWriteBinding) throw new Error("The canonical memory lifecycle write owner is unavailable.");
+  // Embed outside the lifecycle transaction. The owner checks the frozen scope and exact target again afterwards.
+  const chunks = chunkText(content, 1200, 180, 400);
+  const canonicalUsageEventIds = new Set<string>();
+  const embeddedChunks = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (chunk) => {
+    const generated = await generateEmbedding(chunk,undefined,undefined,embeddingRuntimeOptions(request, deps, "memory_write"));
+    collectUsageEventIds(canonicalUsageEventIds, generated.modelUsageEventIds);
+    return { content:chunk,embedding:generated.embedding,embeddingMetadata:{...generated.metadata,
+      ...(generated.modelUsageEventIds ? {modelUsageEventIds:generated.modelUsageEventIds} : {})} };
+  });
+  const saved = await deps.writeMemory(request,{namespace,title,content,metadata,chunks:embeddedChunks,upsert});
+  const attribution = knowledgeDocumentAttribution(saved.document);
+  return {mode:upsert ? "upsert":"write",itemId:saved.itemId,sourceHash:saved.sourceHash,
+    document:{...saved.document,attribution},attribution,trustLevel,
+    ...(sourceAttribution.length ? {sourceAttribution} : {}),chunksSaved:chunks.length,
+    ...(canonicalUsageEventIds.size ? {modelUsageEventIds:[...canonicalUsageEventIds]} : {})};
+}
+
+/** One normalized, credential-checked material for policy preparation and execution. */
+export function prepareMemoryToolWrite(request:ToolInvokeRequest) {
   const args = request.args;
   // A Chat "remember this" call often sends only the content (#566), so the namespace and title have defaults.
   const content = required(args.content, "content");
+  if (redactSecretText(content.normalize("NFKC"), {env:process.env}).redactionCount > 0) {
+    throw new Error("Memory cannot store credential values.");
+  }
   const namespace = asString(args.namespace) ?? DEFAULT_MEMORY_NAMESPACE;
   const title = asString(args.title) ?? memoryTitleFromContent(content);
   const inputMetadata = record(args.metadata);
   const sourceAttribution = normalizeSourceAttributionForStorage(request.sourceAttribution);
-  const carriedTrustLevel = resolveMostRestrictiveSourceTrustLevel(sourceAttribution);
+  const persistedFields = { namespace, title, tags: stringArray(args.tags), metadata: inputMetadata, sourceAttribution };
+  if (redactStructuredSecrets(persistedFields, { env: process.env }).redactionCount > 0 ||
+      redactSecretText(JSON.stringify(persistedFields).normalize("NFKC"), { env: process.env }).redactionCount > 0) {
+    throw new Error("Memory cannot store credential values.");
+  }
+  const carriedTrustLevel = resolveMostRestrictiveSourceTrustLevel([
+    ...sourceAttribution,...(request.trustLevel ? [{sourceType:"memory",sourceRef:"calling-context",trustLevel:request.trustLevel} as ContextSourceAttribution]:[])
+  ]) ?? "trusted_workspace";
   const ingestionMetadata = {
     ...record(inputMetadata.ingestion),
     ...(carriedTrustLevel ? { trustLevel: carriedTrustLevel } : {}),
   };
-  // Embed every chunk before writing anything, then store the document and its chunks in one transaction,
-  // so a cancelled or failed embedding or a failed insert leaves no partial note behind (#571).
-  const chunks = chunkText(content, 1200, 180, 400);
-  const canonicalUsageEventIds = new Set<string>();
-  const embeddedChunks = await mapWithConcurrency(chunks, EMBEDDING_CONCURRENCY, async (chunk) => {
-    const generated = await generateEmbedding(
-      chunk,
-      undefined,
-      undefined,
-      embeddingRuntimeOptions(request, deps, "memory_write"),
-    );
-    collectUsageEventIds(canonicalUsageEventIds, generated.modelUsageEventIds);
-    return {
-      content: chunk,
-      embedding: generated.embedding,
-      embeddingMetadata: {
-        ...generated.metadata,
-        ...(generated.modelUsageEventIds ? { modelUsageEventIds: generated.modelUsageEventIds } : {}),
-      },
-    };
-  });
-  const { document: doc } = await storage.knowledge.createDocumentWithChunks(
-    {
-      namespace,
-      sourceType: "memory",
-      sourceRef: upsert ? `upsert:${namespace}:${title}` : `memory:${Date.now()}`,
-      title,
-      metadata: {
+  return {namespace,title,content,sourceAttribution,trustLevel:carriedTrustLevel,metadata: {
         tags: stringArray(args.tags),
         ...inputMetadata,
         ...(sourceAttribution.length > 0 ? { sourceAttribution } : {}),
         ...(Object.keys(ingestionMetadata).length > 0 ? { ingestion: ingestionMetadata } : {}),
-      },
-    },
-    embeddedChunks,
-  );
-  const attribution = knowledgeDocumentAttribution(doc);
-  return {
-    mode: upsert ? "upsert" : "write",
-    document: {
-      ...doc,
-      attribution,
-    },
-    attribution,
-    ...(sourceAttribution.length > 0 ? { sourceAttribution } : {}),
-    chunksSaved: chunks.length,
-    ...(canonicalUsageEventIds.size > 0 ? { modelUsageEventIds: [...canonicalUsageEventIds] } : {}),
-  };
+  }};
 }
 
 /**
@@ -188,7 +179,10 @@ async function memoryWrite(
  */
 async function sessionSearch(request: ToolInvokeRequest, storage: AsyncStorage) {
   const query = (asString(request.args.query) ?? "").trim();
-  const scope = asString(request.args.scope) === "all" ? "all" : "session";
+  if (!query) return {scope:asString(request.args.scope) === "all" ? "all" : "session",query:"",hits:[]};
+  const caller = await storage.sessions?.getBySessionId(request.sessionId);
+  if (!caller) throw new Error("Session history is unavailable without a canonical calling session");
+  const scope = asString(request.args.scope) === "all" && caller.kind === "dm" ? "all" : "session";
   const limit = clampInt(request.args.limit, 10, 1, 50);
   if (!query) {
     return { scope, query: "", hits: [] };
@@ -378,12 +372,14 @@ async function resolveAuthorizedSessionWorkspace(
   targetSessionId: string,
 ): Promise<string> {
   const [callingMeta, targetMeta] = await Promise.all([
-    storage.chatSessionMeta.get(request.sessionId),
-    storage.chatSessionMeta.get(targetSessionId),
+    storage.chatSessionMeta?.get(request.sessionId),
+    storage.chatSessionMeta?.get(targetSessionId),
   ]);
+  const caller = await storage.sessions?.getBySessionId(request.sessionId);
   const workspaceId = callingMeta?.workspaceId?.trim();
   if (
-    !workspaceId ||
+    !caller || !workspaceId ||
+    (targetSessionId !== request.sessionId && caller.kind !== "dm") ||
     !targetMeta?.workspaceId ||
     targetMeta.workspaceId !== workspaceId ||
     (request.workspaceId !== undefined && request.workspaceId.trim() !== workspaceId) ||
@@ -394,108 +390,10 @@ async function resolveAuthorizedSessionWorkspace(
   return workspaceId;
 }
 
-async function memoryRead(args: Record<string, unknown>, storage: AsyncStorage) {
-  const namespace = asString(args.namespace);
-  const query = (asString(args.query) ?? asString(args.title) ?? asString(args.key) ?? "").trim().toLowerCase();
-  const limit = clampInt(args.limit, 5, 1, 50);
-  const documents = await storage.knowledge.listDocuments(namespace, 500);
-  type DocumentChunks = Awaited<ReturnType<AsyncStorage["knowledge"]["listChunksByDocument"]>>;
-  const chunkMap = new Map<string, Promise<DocumentChunks>>();
-  const readChunks = (docId: string): Promise<DocumentChunks> => {
-    const existing = chunkMap.get(docId);
-    if (existing) {
-      return existing;
-    }
-    // Cache the in-flight read before yielding so duplicate document records
-    // evaluated concurrently share one repository request.
-    const next = storage.knowledge.listChunksByDocument(docId, 25);
-    chunkMap.set(docId, next);
-    return next;
-  };
-
-  if (!query) {
-    return {
-      namespace: namespace ?? "all",
-      items: await Promise.all(
-        documents.slice(0, limit).map(async (doc) => {
-          const chunks = await readChunks(doc.docId);
-          return {
-            docId: doc.docId,
-            title: doc.title,
-            sourceRef: doc.sourceRef,
-            metadata: doc.metadata,
-            attribution: knowledgeDocumentAttribution(doc),
-            snippet: chunks[0]?.content.slice(0, 320) ?? "",
-          };
-        }),
-      ),
-    };
-  }
-
-  const candidates = await Promise.all(
-    documents.map(async (doc) => {
-      const chunks = await readChunks(doc.docId);
-      const titleScore = scoreLexical(query, `${doc.title} ${doc.sourceRef}`.toLowerCase());
-      const bestChunk = chunks
-        .map((chunk) => ({
-          chunk,
-          score: scoreLexical(query, chunk.content.toLowerCase()),
-        }))
-        .sort((left, right) => right.score - left.score)[0];
-      const score = Math.max(titleScore, bestChunk?.score ?? 0);
-      return score > 0
-        ? {
-            docId: doc.docId,
-            title: doc.title,
-            sourceRef: doc.sourceRef,
-            metadata: doc.metadata,
-            attribution: knowledgeDocumentAttribution(doc),
-            score,
-            snippet: bestChunk?.chunk.content.slice(0, 320) ?? "",
-          }
-        : undefined;
-    }),
-  );
-  const items = candidates
-    .filter((item): item is NonNullable<typeof item> => Boolean(item))
-    .sort((left, right) => right.score - left.score)
-    .slice(0, limit);
-
-  return {
-    namespace: namespace ?? "all",
-    query,
-    items,
-  };
-}
-
-async function memorySearch(args: Record<string, unknown>, storage: AsyncStorage) {
-  const query = required(args.query, "query").toLowerCase();
-  const namespace = asString(args.namespace);
-  const limit = clampInt(args.limit, 12, 1, 100);
-  const [chunks, documents] = await Promise.all([
-    storage.knowledge.listChunksByNamespace(namespace, 2000),
-    storage.knowledge.listDocuments(namespace, 500),
-  ]);
-  const docById = new Map(documents.map((doc) => [doc.docId, doc] as const));
-  const items = chunks
-    .map((chunk) => {
-      const doc = docById.get(chunk.docId);
-      if (!doc) {
-        return undefined;
-      }
-      return {
-        chunkId: chunk.chunkId,
-        docId: chunk.docId,
-        score: scoreLexical(query, chunk.content.toLowerCase()),
-        snippet: chunk.content.slice(0, 320),
-        attribution: knowledgeDocumentAttribution(doc),
-      };
-    })
-    .filter((item): item is NonNullable<typeof item> => item !== undefined)
-    .filter((item) => item.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
-  return { namespace: namespace ?? "all", query, items };
+async function readScopedMemory(request: ToolInvokeRequest, deps: KnowledgeExecutorDeps) {
+  if (!deps.searchMemory) return { namespace:asString(request.args.namespace) ?? "all",query:asString(request.args.query) ?? asString(request.args.title) ?? asString(request.args.key) ?? "",
+    items: [], unavailable: true, reason: "Governed memory recall is unavailable in this runtime." };
+  return deps.searchMemory(request);
 }
 
 function knowledgeDocumentAttribution(
@@ -633,8 +531,8 @@ async function embeddingsIndex(request: ToolInvokeRequest, storage: AsyncStorage
   const embeddingProfileRequest = normalizeEmbeddingProfileRequest(args.embeddingProfile);
   const embeddingProfile = currentEmbeddingProfile(embeddingProfileRequest);
   const chunks = documentId
-    ? await storage.knowledge.listChunksByDocument(documentId, 2000)
-    : await storage.knowledge.listChunksByNamespace(namespace, 2000);
+    ? await storage.knowledge.listChunksByDocument(documentId, 2000, { excludeMemory: true })
+    : await storage.knowledge.listChunksByNamespace(namespace, 2000, { excludeMemory: true });
   let indexed = 0;
   let skipped = 0;
   let stale = 0;
@@ -690,8 +588,8 @@ async function embeddingsQuery(request: ToolInvokeRequest, storage: AsyncStorage
   const canonicalUsageEventIds = new Set<string>();
   collectUsageEventIds(canonicalUsageEventIds, generatedQuery.modelUsageEventIds);
   const [chunks, documents] = await Promise.all([
-    storage.knowledge.listChunksByNamespace(namespace, 2000),
-    storage.knowledge.listDocuments(namespace, 500),
+    storage.knowledge.listChunksByNamespace(namespace, 2000, { excludeMemory: true }),
+    storage.knowledge.listDocuments(namespace, 500, { excludeMemory: true }),
   ]);
   const docById = new Map(documents.map((doc) => [doc.docId, doc] as const));
   let repairedEmbeddings = 0;

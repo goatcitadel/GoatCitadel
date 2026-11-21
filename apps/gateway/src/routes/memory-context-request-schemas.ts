@@ -3,6 +3,7 @@ import { z } from "zod";
 export const composeSchema = z.object({
   scope: z.enum(["chat", "orchestration"]),
   prompt: z.string().min(1),
+  intent: z.enum(["automatic","explicit_recall"]).optional(),
   sessionId: z.string().min(1).optional(),
   taskId: z.string().min(1).optional(),
   runId: z.string().min(1).optional(),
@@ -33,7 +34,7 @@ export const retrievalBenchmarkSchema = z.object({
             .array(
               z
                 .object({
-                  sourceType: z.enum(["transcript", "file", "memory_item"]),
+                  sourceType: z.enum(["transcript", "file", "memory_item", "memory_learning", "knowledge_chunk"]),
                   sourceRef: z.string().min(1).max(1024),
                 })
                 .strict(),
@@ -43,7 +44,7 @@ export const retrievalBenchmarkSchema = z.object({
             .array(
               z
                 .object({
-                  sourceType: z.enum(["transcript", "file", "memory_item"]),
+                  sourceType: z.enum(["transcript", "file", "memory_item", "memory_learning", "knowledge_chunk"]),
                   sourceRef: z.string().min(1).max(1024),
                 })
                 .strict(),

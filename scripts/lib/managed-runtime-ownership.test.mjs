@@ -14,12 +14,36 @@ import {
   formatManagedEndpointCollision,
   parseManagedProcessMetadata,
   resolveLauncherEndpoint,
+  waitForManagedEndpointHealth,
 } from "./managed-runtime-ownership.mjs";
 import { queryProcessCreationIdentity } from "./managed-runtime-lifecycle.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const launcherPath = path.join(repoRoot, "bin", "goatcitadel.mjs");
 const PID_STATES = ["missing", "invalid", "running", "stale", "reused", "unverified"];
+
+test("managed readiness wakes a full ownership check as soon as health responds", async () => {
+  let time = 0;
+  const probes = [];
+  await waitForManagedEndpointHealth(async (timeoutMs) => {
+    probes.push([time, timeoutMs]);
+    return time >= 150;
+  }, 1_000, { now: () => time, wait: async (ms) => { time += ms; } });
+  assert.deepEqual(probes, [[50, 100], [100, 100], [150, 100]]);
+  assert.equal(time, 150);
+});
+
+test("managed readiness leaves time for the scheduled ownership check when health stays unavailable", async () => {
+  let time = 0;
+  const probes = [];
+  await waitForManagedEndpointHealth(async (timeoutMs) => {
+    probes.push([time, timeoutMs]);
+    time += timeoutMs;
+    return false;
+  }, 225, { now: () => time, wait: async (ms) => { time += ms; } });
+  assert.deepEqual(probes, [[50, 100], [200, 25]]);
+  assert.equal(time, 225);
+});
 
 test("managed process metadata rejects legacy PID files and validates the complete identity", () => {
   const metadata = {

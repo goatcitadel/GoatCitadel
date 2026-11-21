@@ -296,7 +296,7 @@ begin
     Separator := Pos('/', Counts);
     Completed := StrToIntDef(Copy(Counts, 1, Separator - 1), -1);
     Total := StrToIntDef(Copy(Counts, Separator + 1, MaxInt), 0);
-    if (Completed >= 0) and (Total > 0) and (Completed <= Total) then
+    if (not WizardSilent()) and (Completed >= 0) and (Total > 0) and (Completed <= Total) then
     begin
       if Phase = 'Extracting-and-hashing' then Phase := 'Extracting and checking'
       else if Phase = 'Manifest' then Phase := 'Checking the package'
@@ -316,18 +316,21 @@ procedure RunPayloadOperation(FileName, Parameters, WorkingDir, StatusText: Stri
 var
   ResultCode: Integer;
 begin
-  EnsurePayloadProgressPage();
-  PayloadProgressText := StatusText;
-  PayloadProgressPage.SetText(StatusText, 'Starting...');
-  PayloadProgressPage.SetProgress(0, 0);
-  PayloadProgressPage.Show();
+  if not WizardSilent() then
+  begin
+    EnsurePayloadProgressPage();
+    PayloadProgressText := StatusText;
+    PayloadProgressPage.SetText(StatusText, 'Starting...');
+    PayloadProgressPage.SetProgress(0, 0);
+    PayloadProgressPage.Show();
+  end;
   try
     if not ExecAndLogOutput(FileName, Parameters, WorkingDir, SW_HIDE, ewWaitUntilTerminated, ResultCode, @PayloadOperationOutput) then
       RaiseException('Failed to start ' + FileName + ' while ' + StatusText);
     if ResultCode <> 0 then
       RaiseException(FileName + ' exited with code ' + IntToStr(ResultCode) + ' while ' + StatusText);
   finally
-    PayloadProgressPage.Hide();
+    if not WizardSilent() then PayloadProgressPage.Hide();
   end;
 end;
 
@@ -708,16 +711,18 @@ begin
   end;
   WriteTransactionMarker(StageRoot);
   StageCreatedByCurrentSetup := True;
-  EnsurePayloadProgressPage();
-  ArchiveProgressPage := CreateOutputMarqueeProgressPage('Installing GoatCitadel', 'Unpacking the installer archive');
-  ArchiveProgressPage.SetText('Preparing the payload for extraction...', 'This may take a moment.');
-  ArchiveProgressPage.Show();
-  ArchiveProgressPage.Animate();
+  if not WizardSilent() then
+  begin
+    ArchiveProgressPage := CreateOutputMarqueeProgressPage('Installing GoatCitadel', 'Unpacking the installer archive');
+    ArchiveProgressPage.SetText('Preparing the payload for extraction...', 'This may take a moment.');
+    ArchiveProgressPage.Show();
+    ArchiveProgressPage.Animate();
+  end;
   try
     ExtractTemporaryFile('bundle.zip');
     ExtractTemporaryFile('validate-windows-bundle.ps1');
   finally
-    ArchiveProgressPage.Hide();
+    if not WizardSilent() then ArchiveProgressPage.Hide();
   end;
   // The trusted validator checks archive paths before writing, and hashes each
   // payload stream while extracting. Installed-copy validation still rereads every file.

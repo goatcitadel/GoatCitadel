@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import {randomBytes} from "node:crypto";
 import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import { capabilitiesRoutes } from "./capabilities.js";
 
@@ -923,7 +924,14 @@ describe("capabilities routes", () => {
         relatedProposals: [{ proposalId: "captured-proposal", candidateId: "captured" }],
         activationBlocked: true,
       };
-      const create = vi.fn(async (input: unknown) => input);
+      // A generated public nonce can happen to resemble a credential prefix.
+      // This is random test data, never a real credential.
+      const actionNonce = `ghp_${randomBytes(20).toString("hex").slice(0,39)}`;
+      const create = vi.fn(async (input: unknown) => ({
+        ...(input as object),
+        requiredAction: {kind: "artifact_review", actionNonce},
+        result: {password: "never-publish-this-credential"},
+      }));
       const direct = vi.fn();
       app = Fastify();
       app.decorateRequest("authActorId", "authenticated-operator");
@@ -950,6 +958,8 @@ describe("capabilities routes", () => {
         },
       });
       expect(response.statusCode, response.body).toBe(202);
+      expect(response.json().changePlan.requiredAction.actionNonce).toBe(actionNonce);
+      expect(response.json().changePlan.result.password).toBe("[REDACTED]");
       expect(create).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           actor: expect.objectContaining({ workspaceId: "captured-workspace", actorId: "authenticated-operator" }),

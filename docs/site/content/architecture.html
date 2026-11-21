@@ -1,0 +1,37 @@
+<h2 id="gateway">Gateway</h2>
+<p>
+  The Fastify Gateway owns routing, tool policy, approvals, memory, provider connections, and durable execution. It
+  records decisions and run outcomes in storage and sends realtime updates as work progresses.
+</p>
+
+<h2 id="mission-control">Mission Control</h2>
+<p>
+  Mission Control requests state and actions through Gateway APIs. Chat is the entry point for conversation, agentic
+  work, and governed code execution. Work and Inbox show run and decision records from that same runtime.
+</p>
+
+<h2 id="models-and-tools">Models and tools</h2>
+<p>
+  The provider layer routes model requests to the configured cloud or local runtime. The capability system keeps the
+  catalog you can inspect separate from the tools and skills the assistant can call. The Gateway checks current policy,
+  approvals, and scope before executing an action.
+</p>
+<p>
+  Code Mode runs trusted code with explicit approval and records the artifact used for execution. Run only code you
+  trust.
+</p>
+
+<h2 id="runtime-records">Runtime records</h2>
+<p>
+  A session holds turns. A durable run tracks resumable execution. An approval records a decision and can link to the
+  run it governs. Realtime events notify Mission Control about changes, and the underlying records preserve the outcome.
+</p>
+<p>
+  Read the
+  <a href="https://github.com/goatcitadel/GoatCitadel/blob/main/docs/CANONICAL_RUNTIME_STATE_MODEL.md"
+    >canonical runtime state model</a
+  >
+  for state ownership and linkage rules, and the
+  <a href="https://github.com/goatcitadel/GoatCitadel/blob/main/docs/1_0_CONTRACT.md">product contract</a> for supported
+  behavior.
+</p>

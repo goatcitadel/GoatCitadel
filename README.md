@@ -560,6 +560,7 @@ Do not claim without fresh proof:
 ## Public Docs
 
 - [goatcitadel.app](https://goatcitadel.app)
+- [Documentation site source and local preview](./docs/site/README.md)
 - [CHANGELOG.md](./CHANGELOG.md)
 - [CONTRIBUTING.md](./CONTRIBUTING.md)
 - [SECURITY.md](./SECURITY.md)

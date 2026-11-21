@@ -28,10 +28,14 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 281,
-        name: "skill_hub_remove_operation_kind",
+        version: 287,
+        name: "canonical_memory_note_origins",
       },
     );
+    assert.deepEqual({ ...rows.find((row) => row.version === 281) }, {
+      version: 281,
+      name: "skill_hub_remove_operation_kind",
+    });
     db.close();
   });
 

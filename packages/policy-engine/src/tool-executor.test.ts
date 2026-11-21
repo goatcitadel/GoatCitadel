@@ -44,10 +44,21 @@ import {
 } from "./tool-executor.js";
 import { createUntrustedContentEnvelope } from "./browser-content-guard.js";
 import { channelEnvSecretStandIn } from "./tool-executor/channel-env-secret.test-support.js";
+import {prepareMemoryToolWrite} from "./tool-executor/knowledge-executor.js";
 
 /** A send reads a connection's variable only through the hook the Gateway supplies, so every test gets a stand-in. */
-const executeTool: typeof executeToolWithHooks = (request, config, storage, runtimeHooks = {}) =>
-  executeToolWithHooks(request, config, storage, { resolveChannelEnvSecret: channelEnvSecretStandIn, ...runtimeHooks });
+const executeTool: typeof executeToolWithHooks = async (request, config, storage, runtimeHooks = {}) => {
+  // This unit fixture supplies the lifecycle port. Canonical scope/CAS/history are tested against real storage and Gateway.
+  if(["memory.write","memory.upsert"].includes(request.toolName) && !runtimeHooks.writeMemory){
+    const material=prepareMemoryToolWrite(request);
+    request={...request,memoryWriteBinding:{workspaceId:"default",sessionId:request.sessionId,sessionIncarnation:"a".repeat(64),visibility:"workspace",trustLevel:material.trustLevel,upsertKey:"b".repeat(64)}};
+    runtimeHooks={...runtimeHooks,writeMemory:async(_request,input)=>{
+      const artifact=await storage.knowledge.createDocumentWithChunks({namespace:input.namespace,title:input.title,metadata:input.metadata,sourceType:"memory",sourceRef:"memory-item:fixture"},input.chunks);
+      return {...artifact,itemId:"fixture-note",sourceHash:createHash("sha256").update(input.content).digest("hex")};
+    }};
+  }
+  return executeToolWithHooks(request,config,storage,{resolveChannelEnvSecret:channelEnvSecretStandIn,...runtimeHooks});
+};
 
 const LOCALHOST_HOST = new URL("http://localhost").hostname;
 const EXAMPLE_HOST = new URL("https://example.com").hostname;
@@ -229,6 +240,7 @@ describe("executeTool", () => {
       },
     ]);
     const searchStorage = {
+      sessions:{getBySessionId:vi.fn(() => ({kind:"dm"}))},
       chatMessages: { searchMessages },
       chatSessionMeta: {
         get: vi.fn(() => ({ workspaceId: "workspace-search", includeInHistory: true })),
@@ -262,6 +274,7 @@ describe("executeTool", () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const searchMessages = vi.fn(() => []);
     const searchStorage = {
+      sessions:{getBySessionId:vi.fn(() => ({kind:"dm"}))},
       chatMessages: { searchMessages },
       chatSessionMeta: {
         get: vi.fn(() => ({ workspaceId: "workspace-search", includeInHistory: true })),
@@ -306,6 +319,7 @@ describe("executeTool", () => {
       hit("workspace-search", "hidden", "hidden", 3),
     ]);
     const searchStorage = {
+      sessions:{getBySessionId:vi.fn(() => ({kind:"dm"}))},
       chatMessages: { searchMessages },
       chatSessionMeta: {
         get: vi.fn((sessionId: string) =>
@@ -368,6 +382,7 @@ describe("executeTool", () => {
       hasNewer: false,
     }));
     const historyStorage = {
+      sessions:{getBySessionId:vi.fn(() => ({kind:"dm"}))},
       chatMessages: { readAnchoredWindow },
       chatSessionMeta: {
         get: vi.fn(() => ({ workspaceId: "workspace-search", includeInHistory: true })),
@@ -405,6 +420,7 @@ describe("executeTool", () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const readAnchoredWindow = vi.fn();
     const historyStorage = {
+      sessions:{getBySessionId:vi.fn(() => ({kind:"dm"}))},
       chatMessages: { readAnchoredWindow },
       chatSessionMeta: {
         get: vi.fn((sessionId: string) =>
@@ -1038,7 +1054,7 @@ describe("executeTool", () => {
     expect((result.matches as Array<Record<string, unknown>>)[0]?.path).toBe(filePath);
   });
 
-  it("reads saved memory entries with memory.read", async () => {
+  it("does not read unscoped saved entries when the lifecycle reader is unavailable", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const memoryStorage = {
       knowledge: {
@@ -1072,11 +1088,8 @@ describe("executeTool", () => {
       query: "dark mode",
     });
     expect(Array.isArray(result.items)).toBe(true);
-    expect((result.items as Array<Record<string, unknown>>)[0]).toMatchObject({
-      docId: "doc-1",
-      title: "Preferences",
-    });
-    expect(String((result.items as Array<Record<string, unknown>>)[0]?.snippet ?? "")).toContain("dark mode");
+    expect(result).toMatchObject({items:[],unavailable:true});
+    expect(memoryStorage.knowledge.listDocuments).not.toHaveBeenCalled();
   });
 
   it("builds citation bundles without failing when sources are provided", async () => {
@@ -6142,26 +6155,23 @@ describe("executeTool", () => {
       policyConfig,
       harness.storage,
     );
-    expect((listed.items as Array<Record<string, unknown>>).length).toBeGreaterThan(0);
+    expect(listed).toMatchObject({items:[],unavailable:true});
 
     const queried = await executeTool(
       toolRequest("memory.read", { namespace: "project", query: "operator truth" }),
       policyConfig,
       harness.storage,
     );
-    expect((queried.items as Array<Record<string, unknown>>)[0]?.score).toBeGreaterThan(0);
+    expect(queried).toMatchObject({items:[],unavailable:true});
 
     const searched = await executeTool(
       toolRequest("memory.search", { namespace: "project", query: "native" }),
       policyConfig,
       harness.storage,
     );
-    expect((searched.items as Array<Record<string, unknown>>)[0]?.snippet).toContain("native ingestion");
-    expect((searched.items as Array<Record<string, unknown>>)[0]?.attribution).toMatchObject({
-      sourceType: "memory",
-      trustLevel: "trusted_workspace",
-    });
+    expect(searched).toMatchObject({items:[],unavailable:true});
 
+    harness.storage.knowledge.createDocumentWithChunks({namespace:"project",sourceType:"text",sourceRef:"public-fixture",title:"Public operator documentation",metadata:{ingestion:{trustLevel:"trusted_workspace"}}},[{content:"Public native ingestion guidance."},{content:"Public operator truth documentation."}]);
     const indexed = await executeTool(
       toolRequest("embeddings.index", { namespace: "project", force: true }),
       policyConfig,
@@ -6177,7 +6187,7 @@ describe("executeTool", () => {
     expect(embeddingResults).toMatchObject({ method: "pseudo-embedding" });
     expect((embeddingResults.items as Array<Record<string, unknown>>).length).toBeGreaterThan(0);
     expect((embeddingResults.items as Array<Record<string, unknown>>)[0]?.attribution).toMatchObject({
-      trustLevel: "trusted_workspace",
+      sourceType:"text",trustLevel: "untrusted_external",
     });
 
     const docId = String((written.document as Record<string, unknown>).docId);
@@ -6189,7 +6199,7 @@ describe("executeTool", () => {
     expect(indexedByDocument).toMatchObject({ documentId: docId, indexed: 0 });
   });
 
-  it("returns source attribution for memory reads and searches over ingested URL and text documents", async () => {
+  it("keeps unbound memory reads closed and preserves attribution on explicit document retrieval", async () => {
     const harness = createExecutorKnowledgeHarness();
     const urlDocument = harness.storage.knowledge.createDocument({
       namespace: "project",
@@ -6229,23 +6239,8 @@ describe("executeTool", () => {
       harness.storage,
     );
 
-    expect((read.items as Array<Record<string, unknown>>)[0]?.attribution).toMatchObject({
-      sourceType: "url",
-      sourceRef: "https://example.com/untrusted",
-      trustLevel: "untrusted_external",
-    });
-    expect((search.items as Array<Record<string, unknown>>).map((item) => item.attribution)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          sourceType: "url",
-          trustLevel: "untrusted_external",
-        }),
-        expect.objectContaining({
-          sourceType: "text",
-          trustLevel: "untrusted_external",
-        }),
-      ]),
-    );
+    expect(read).toMatchObject({items:[],unavailable:true});
+    expect(search).toMatchObject({items:[],unavailable:true});
 
     const embeddingResults = await executeTool(
       toolRequest("embeddings.query", { namespace: "project", query: "unsafe install" }),
@@ -6316,14 +6311,8 @@ describe("executeTool", () => {
       harness.storage,
     );
 
-    expect((search.items as Array<Record<string, unknown>>)[0]?.attribution).toMatchObject({
-      sourceType: "memory",
-      trustLevel: "untrusted_external",
-    });
-    expect((embeddingResults.items as Array<Record<string, unknown>>)[0]?.attribution).toMatchObject({
-      sourceType: "memory",
-      trustLevel: "untrusted_external",
-    });
+    expect(search).toMatchObject({items:[],unavailable:true});
+    expect(embeddingResults.items).toEqual([]);
   });
 
   it("covers docs file ingestion, docs search, restricted validation, and shell failures", async () => {
@@ -6751,9 +6740,11 @@ function createExecutorKnowledgeHarness(): { storage: Storage & AsyncStorage } {
   let chunkSeq = 0;
 
   const storage = {
+    chatSessionMeta:{get:vi.fn(() => ({workspaceId:"default"}))},
+    sessions:{getBySessionId:vi.fn(() => ({kind:"dm"}))},
     knowledge: {
-      listDocuments: vi.fn((namespace?: string) =>
-        documents.filter((doc) => !namespace || doc.namespace === namespace),
+      listDocuments: vi.fn((namespace?: string,_limit?:number,options?:{excludeMemory?:boolean}) =>
+        documents.filter((doc) => (!namespace || doc.namespace === namespace) && (!options?.excludeMemory || doc.sourceType!=="memory")),
       ),
       createDocument: vi.fn((input: Record<string, unknown>) => {
         const doc = {
@@ -6794,10 +6785,10 @@ function createExecutorKnowledgeHarness(): { storage: Storage & AsyncStorage } {
         const document = this.createDocument(input);
         return { document, chunks: this.appendChunks(document.docId, entries) };
       }),
-      listChunksByDocument: vi.fn((docId: string) => chunksByDocId.get(docId) ?? []),
-      listChunksByNamespace: vi.fn((namespace?: string) => {
+      listChunksByDocument: vi.fn((docId: string,_limit?:number,options?:{excludeMemory?:boolean}) => options?.excludeMemory && documents.find(doc=>doc.docId===docId)?.sourceType==="memory" ? [] : chunksByDocId.get(docId) ?? []),
+      listChunksByNamespace: vi.fn((namespace?: string,_limit?:number,options?:{excludeMemory?:boolean}) => {
         const matchingDocIds = documents
-          .filter((doc) => !namespace || doc.namespace === namespace)
+          .filter((doc) => (!namespace || doc.namespace === namespace) && (!options?.excludeMemory || doc.sourceType!=="memory"))
           .map((doc) => String(doc.docId));
         return matchingDocIds.flatMap((docId) => chunksByDocId.get(docId) ?? []);
       }),

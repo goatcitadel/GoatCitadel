@@ -26,6 +26,7 @@ export function RiskApprovalAction({
   specialistReview,
   reviewedInPlace = false,
   inlineDangerReview = false,
+  initiallyOpen = false,
   approveLabel,
   reviewLabel,
   confirmLabel,
@@ -48,6 +49,7 @@ export function RiskApprovalAction({
    */
   reviewedInPlace?: boolean;
   inlineDangerReview?: boolean;
+  initiallyOpen?: boolean;
   /** Names the one-click approve button for an action with its own wording, such as "Run it". */
   approveLabel?: string;
   /** Names the button that opens a danger-level review; nuclear keeps "Review nuclear approval" so its tier shows. */
@@ -64,7 +66,7 @@ export function RiskApprovalAction({
   loading?: boolean;
   loadingLabel?: string;
 }) {
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(inlineDangerReview && initiallyOpen);
   // GoatCitadel is unreachable: approving waits, including inside the confirmation dialog, which stays open.
   const connectionLost = useApprovalConnectionLost();
   const reviewId = useId();

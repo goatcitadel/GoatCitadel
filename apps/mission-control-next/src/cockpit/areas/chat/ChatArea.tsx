@@ -7,7 +7,7 @@ import { MissionThreadedControllerHost } from "@goatcitadel/threaded-surface-cor
 import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-surface-core";
 import { ChatConversationRail } from "./ChatConversationRail";
 import { unsentConversationId } from "./conversation-reuse";
-import { ChatEmptyState, ChatSessionHeader, ChatSetupGate } from "./ChatAreaChrome";
+import { ChatSessionHeader } from "./ChatAreaChrome";
 import { CHAT_SHELL_FRAME } from "./ChatHostStatus";
 import { ChatTranscript } from "./ChatTranscript";
 import { ChatNoticeText } from "./ChatNoticeText";
@@ -30,6 +30,7 @@ import { useChannelComposerProps } from "./use-channel-composer";
 import { isChannelConversation } from "./channel-conversation-scope";
 import {
   DeferredBtwSideChatPanel,
+  DeferredChatLeaf,
   DeferredChatInspector,
   DeferredChatTimerPanel,
   DeferredProjectAssignmentReview,
@@ -39,6 +40,13 @@ import "../../../features/threaded-surface/styles/btw-side-chat.css";
 import { useOptionalStableHandler, useStableHandler } from "../../../features/threaded-surface/useStableHandler";
 
 const LazyChatBuildEditor = lazy(async () => ({ default: (await import("./ChatBuildEditor")).ChatBuildEditor }));
+const ChatEmptyState = lazy(async () => ({ default: (await import("./ChatSetupViews")).ChatEmptyState }));
+const ChatSetupGate = lazy(async () => ({ default: (await import("./ChatSetupViews")).ChatSetupGate }));
+const loadingConversations = (
+  <div className="flex min-h-0 flex-1 flex-col items-center justify-center-safe p-5 text-center">
+    <p role="status" className="text-sm text-fg-muted">Loading conversations…</p>
+  </div>
+);
 
 function conversationInspector(
   input: MissionThreadedRenderSurfaceInput,
@@ -204,6 +212,7 @@ export function ChatAreaView({
     [],
   );
   const codePanel = input.workflowPanel?.kind === "code" ? input.workflowPanel : null;
+  const canOpenBuildEditor = input.canOpenBuildEditor ?? Boolean(codePanel);
   const latestLocalNotice = active?.notices.find((notice) => notice.id.startsWith("notice-"));
   // A conversation held through a channel is an external session; the header needs it as much as a mission chat.
   const { missionSessions, externalSessions = [] } = input.sessionRail;
@@ -307,7 +316,7 @@ export function ChatAreaView({
           channel={channel}
           selectedSessionId={selectedSessionId}
           buildEditor={
-            codePanel
+            canOpenBuildEditor
               ? {
                   open: buildOpen,
                   onToggle: () => {
@@ -331,11 +340,11 @@ export function ChatAreaView({
         {active ? (
           <DeferredProjectAssignmentReview active={active} search={search} identity={inspectorIdentity} />
         ) : null}
-        <ChatSetupGate
-          onboarding={onboarding}
-          hidden={buildOpen || !active}
-          onSetup={() => navigate("/settings/first-run")}
-        />
+        {!buildOpen && active && onboarding.data && !onboarding.data.completed && !onboarding.isError ? (
+          <DeferredChatLeaf label="Chat setup" identity={selectedSessionId ?? ""}>
+            <ChatSetupGate onboarding={onboarding} hidden={false} onSetup={() => navigate("/settings/first-run")} />
+          </DeferredChatLeaf>
+        ) : null}
         {buildOpen && active?.streamError ? (
           <ChatStreamErrorNotice
             error={active.streamError}
@@ -349,7 +358,7 @@ export function ChatAreaView({
             <ChatNoticeText content={latestLocalNotice.content} />
           </div>
         ) : null}
-        {buildOpen && codePanel ? (
+        {buildOpen && canOpenBuildEditor ? (
           <Suspense
             fallback={
               <p aria-busy="true" className="p-4 text-sm text-fg-muted">
@@ -357,7 +366,17 @@ export function ChatAreaView({
               </p>
             }
           >
-            <LazyChatBuildEditor key={selectedSessionId} panel={codePanel} />
+            {codePanel ? (
+              <LazyChatBuildEditor key={selectedSessionId} panel={codePanel} />
+            ) : input.buildEditorUnavailable ? (
+              <p role="alert" className="p-4 text-sm text-status-failed">
+                The build editor could not load. Return to the conversation and try again.
+              </p>
+            ) : (
+              <p aria-busy="true" className="p-4 text-sm text-fg-muted">
+                Loading code workbench…
+              </p>
+            )}
           </Suspense>
         ) : active ? (
           <div className="cockpit-chat-content flex min-h-0 flex-1 flex-col">
@@ -373,14 +392,16 @@ export function ChatAreaView({
               onOpenArtifact={openTranscriptArtifact}
             />
           </div>
-        ) : (
-          <ChatEmptyState
-            rail={input.sessionRail}
-            onboarding={onboarding}
-            onSetup={() => navigate("/settings/first-run")}
-            onOpenConversations={() => setConversationsOpen(true)}
-            railYields={Boolean(inspectorContent)}
-          />
+        ) : input.sessionRail.loading ? loadingConversations : (
+          <DeferredChatLeaf label="Conversations" identity={selectedSessionId ?? ""} loadingVisible fallback={loadingConversations}>
+            <ChatEmptyState
+              rail={input.sessionRail}
+              onboarding={onboarding}
+              onSetup={() => navigate("/settings/first-run")}
+              onOpenConversations={() => setConversationsOpen(true)}
+              railYields={Boolean(inspectorContent)}
+            />
+          </DeferredChatLeaf>
         )}
         {active?.sessionStatusPanel ? (
           <DeferredSessionStatusPanel key={selectedSessionId} hidden={buildOpen} panel={active.sessionStatusPanel} />
@@ -398,6 +419,14 @@ export function ChatAreaView({
           <ChatTextComposer
             props={composerProps}
             gatewayUnavailable={gatewayUnavailable}
+            startupDraftContext={active?.draftHydrated && selectedSessionId
+              && active.selectedSessionId === selectedSessionId && session?.sessionId === selectedSessionId
+              ? {
+                  key: JSON.stringify([activeWorkspaceId, selectedSessionId]),
+                  label: active.sessionTitle || "this conversation",
+                  newChat: active.thread?.sessionId === selectedSessionId && active.thread.turns.length === 0,
+                }
+              : undefined}
             reasoningEfforts={input.contextDockProps?.selectedModelReasoningEfforts}
             onOpenSchedules={() => navigate("/work/schedules")}
           />

@@ -2,6 +2,7 @@ import { KnowledgeFacadeService } from "./memory-facade-service.js";
 import { readKnowledgeApprovalResult } from "./knowledge-approval-result.js";
 import { listKnowledgeDocuments } from "./knowledge-document-list.js";
 import { SkillEvaluationService } from "./skill-evaluation-service.js";
+import { resolveBackgroundSkillEvaluationTarget } from "./background-skill-candidate-evidence.js";
 import { CapabilityPluginStore } from "./capability-plugin-store.js";
 import { SkillHubOperatorService } from "./skill-hub-operator-service.js";
 import { KeychainEvidenceReceiptSigningKeyProvider } from "./evidence-receipt-signing-key.js";
@@ -47,6 +48,7 @@ export function composeMemoryKnowledgeRouteDependencies(
   const skillEvaluation = new SkillEvaluationService({
     storage: gateway.storage,
     listSkills: async () => gateway.listSkills(),
+    resolveCandidateSkillForEvaluation:skillId=>resolveBackgroundSkillEvaluationTarget({storage:gateway.storage,rootDir:gateway.config.rootDir,candidateRoot:gateway.config.assistant.capabilities.candidateRoot},skillId),
     createCapabilityProposal: (input) => gateway.capabilitySystemService.createProposal(input),
     recordSkillEvaluationSignal: (input) => gateway.improvementService.recordSkillEvaluationSignal(input),
   });

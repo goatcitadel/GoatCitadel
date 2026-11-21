@@ -1,5 +1,6 @@
+import { createRequire } from "node:module";
 import { performance } from "node:perf_hooks";
-import { Pool, type PoolClient, type PoolConfig, type QueryResultRow } from "pg";
+import type { Pool, PoolClient, PoolConfig, QueryResultRow } from "pg";
 import { POSTGRES_MIGRATIONS } from "./migrations.js";
 import {
   assertPostgresMigrationCurrentSchemaIsDurable,
@@ -34,6 +35,7 @@ import { buildPostgresConnectionStringStartupConfig, buildPostgresStartupOptions
 
 const POSTGRES_MIGRATION_QUIESCENCE_RETRY_MS = 50;
 const POSTGRES_MIGRATION_QUIESCENCE_TIMEOUT_MS = 5_000;
+const requirePostgresDriver = createRequire(import.meta.url);
 
 export type PostgresSslMode = "disable" | "prefer" | "require";
 
@@ -162,7 +164,7 @@ export class PostgresDatabaseClient {
   ) {
     this.migrationsTable = input?.migrationsTable ?? "schema_migrations";
     this.quotedMigrationsTable = quotePostgresIdentifier(this.migrationsTable);
-    this.pool = input?.pool ?? new Pool(buildPostgresPoolConfig(options));
+    this.pool = input?.pool ?? createPostgresPool(options);
   }
 
   public async query<T extends QueryResultRow = QueryResultRow>(
@@ -628,6 +630,11 @@ function findMigrationNameDrift(appliedMigrations: ReadonlyArray<{ version: numb
     }
   }
   return issues;
+}
+
+function createPostgresPool(options: PostgresConnectionOptions): Pool {
+  const { Pool: PgPool } = requirePostgresDriver("pg") as Pick<typeof import("pg"), "Pool">;
+  return new PgPool(buildPostgresPoolConfig(options));
 }
 
 export function buildPostgresPoolConfig(options: PostgresConnectionOptions): PoolConfig {

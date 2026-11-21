@@ -1,8 +1,11 @@
 /* eslint-disable max-lines -- Cron automation keeps scheduling, run lookup, failure metadata, and operator actions co-located while gateway ownership is still centralized. */
 import { observeActiveCronAgentRun, reconcileCompletedCronChannelDelivery } from "./cron-channel-reconciliation.js";
+import { resolveCronAgentWorkspaceScope } from "./cron-agent-workspace-scope.js";
 import { requireClaimedCommitmentOccurrence } from "../scheduled-cron-storage-guards.js";
+import { ScheduledChatProviderRouteError } from "../chat-feature-admission-service.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  ConflictError,
   canReadCitadel,
   isCronRunTerminalStatus,
   NotFoundError,
@@ -125,12 +128,16 @@ const CRON_BACKOFF_BASE_MS = 60_000;
 const CRON_BACKOFF_MAX_MS = 60 * 60_000;
 
 export interface CronRunOptions {
+  expectedRevision?: number;
+  expectedExecutionGeneration?: number;
+  operatorAction?: import("@goatcitadel/contracts").CronOperatorAction;
   force?: boolean;
   reason?: string;
   /** Stable occurrence timestamp supplied by the due scheduler. */
   scheduledFor?: string;
   /** Optional caller-owned idempotency key for this occurrence. */
   admissionKey?: string;
+  eventSource?: import("@goatcitadel/contracts").CronEventSource;
 }
 
 export interface CronRunResult {
@@ -279,11 +286,18 @@ export class CronAutomationService {
     const now = new Date();
     const reader = this.citadelReader();
     return await Promise.all(
-      jobs.map((job) =>
-        withTaskDestination(withProjectedNextRun(job, now, computeNextCronRunAt), async (target) =>
+      jobs.map(async (job) => {
+        const once = job.actionConfig?.agentTurn?.oneShot;
+        const occurred = once
+          ? await this.deps.storage.cronRuns.getByAdmission(job.jobId, `one-shot:${once.at}`)
+          : undefined;
+        const projected = occurred
+          ? { ...job, nextRunAt: undefined, nextRunProjected: undefined }
+          : withProjectedNextRun(job, now, computeNextCronRunAt);
+        return withTaskDestination(projected, async (target) =>
           cronTaskDestinationWorkspaceId(await resolveCronJobCitadelScope(reader, target)),
-        ),
-      ),
+        );
+      }),
     );
   }
 
@@ -343,7 +357,7 @@ export class CronAutomationService {
       job.citadelId = citadelId;
     }
     if (isScheduledCronAction(job.action)) {
-      job.nextRunAt = computeNextCronRunAt(job.schedule, new Date(), job.endAt);
+      job.nextRunAt = computeNextCronJobRunAt(job, new Date());
     }
     const saved = await this.deps.specOwner.createSpec(
       job,
@@ -408,7 +422,7 @@ export class CronAutomationService {
           : current.citadelId,
     };
     if (isScheduledCronAction(updated.action)) {
-      updated.nextRunAt = computeNextCronRunAt(updated.schedule, new Date(), updated.endAt);
+      updated.nextRunAt = computeNextCronJobRunAt(updated, new Date());
     }
     const saved = await this.deps.specOwner.updateSpec(
       updated,
@@ -470,7 +484,11 @@ export class CronAutomationService {
     }
     // Citadel scope is enforced for every trigger (due sweep, manual, forced): a job whose
     // citadel is gone or archived is refused rather than run as a global job.
-    const citadelScope = await resolveCronJobCitadelScope(this.citadelReader(), job);
+    const citadelScope = await resolveCronAgentWorkspaceScope(
+      this.deps.storage,
+      job,
+      await resolveCronJobCitadelScope(this.citadelReader(), job),
+    );
     const lifecycleAdmission = this.deps.sharedHostLifecycle?.tryReserve(
       "cron",
       `cron:${normalizedJobId}:${options.admissionKey?.trim() || randomUUID()}`,
@@ -693,6 +711,10 @@ export class CronAutomationService {
       admissionKey,
       scheduledFor,
       trigger,
+      expectedJobRevision: options.expectedRevision,
+      expectedExecutionGeneration: options.expectedExecutionGeneration,
+      operatorAction: options.operatorAction,
+      eventSource: options.eventSource,
     });
     if (admission.outcome === "blocked") {
       return { outcome: "existing", result: await this.toCanonicalCronRunResult(admission.activeRun) };
@@ -707,6 +729,12 @@ export class CronAutomationService {
   }
 
   private async runCanonicalAgentTurnCronJob(job: CronJobRecord, options: CronRunOptions): Promise<CronRunResult> {
+    const once = job.actionConfig?.agentTurn?.oneShot;
+    if (once) {
+      const existing = await this.deps.storage.cronRuns.getByAdmission(job.jobId, `one-shot:${once.at}`);
+      if (existing) return this.toCanonicalCronRunResult(existing);
+      options = { ...options, scheduledFor: once.at, admissionKey: `one-shot:${once.at}` };
+    }
     const requestedRunId = randomUUID();
     const trigger = options.force === true ? "forced" : options.reason === "scheduled_due" ? "scheduled_due" : "manual";
     const scheduledFor = normalizeCronOccurrenceTimestamp(options.scheduledFor ?? new Date().toISOString());
@@ -719,6 +747,10 @@ export class CronAutomationService {
       admissionKey,
       scheduledFor,
       trigger,
+      expectedJobRevision: options.expectedRevision,
+      expectedExecutionGeneration: options.expectedExecutionGeneration,
+      operatorAction: options.operatorAction,
+      eventSource: options.eventSource,
     });
     if (admission.outcome === "blocked") {
       return await this.toCanonicalCronRunResult(admission.activeRun);
@@ -836,7 +868,13 @@ export class CronAutomationService {
     let workspaceId: string | undefined;
     try {
       job = await this.buildCanonicalAgentTurnSnapshotJob(current);
-      workspaceId = (await resolveCronJobCitadelScope(this.citadelReader(), job)).workspaceId;
+      workspaceId = (
+        await resolveCronAgentWorkspaceScope(
+          this.deps.storage,
+          job,
+          await resolveCronJobCitadelScope(this.citadelReader(), job),
+        )
+      ).workspaceId;
     } catch (error) {
       return await this.settleCanonicalAgentTurnCronRun(current, "manual_reconciliation_required", {
         failureMessage: normalizeCronFailureMessage(error),
@@ -854,17 +892,26 @@ export class CronAutomationService {
     ) {
       throw new Error(`Cron run ${current.runId} lost execution ownership before child launch.`);
     }
-    const admittedSummary = await runAgentTurnCronJob({
-      job,
-      workspaceId,
-      normalizedJobId: current.jobId,
-      runId: current.runId,
-      cronRun: token,
-      runHandler: this.deps.runHandlers.agentTurn,
-      attachDeterministicChild: async (executionToken, linkage, attachedAt) =>
-        await this.deps.storage.cronRuns.attachDeterministicChild(executionToken, linkage, attachedAt),
-      publishRealtime: this.deps.publishRealtime,
-    });
+    let admittedSummary;
+    try {
+      admittedSummary = await runAgentTurnCronJob({
+        job,
+        workspaceId,
+        normalizedJobId: current.jobId,
+        runId: current.runId,
+        cronRun: token,
+        runHandler: this.deps.runHandlers.agentTurn,
+        attachDeterministicChild: async (executionToken, linkage, attachedAt) =>
+          await this.deps.storage.cronRuns.attachDeterministicChild(executionToken, linkage, attachedAt),
+        publishRealtime: this.deps.publishRealtime,
+      });
+    } catch (error) {
+      if (!(error instanceof ScheduledChatProviderRouteError)) throw error;
+      await this.settleCanonicalAgentTurnCronRun(current, "failed", {
+        failureMessage: error.message,
+      });
+      throw error;
+    }
     if (admittedSummary.mode === "inbox") {
       return await this.settleCanonicalAgentTurnCronRun(current, "completed", { outcome: admittedSummary });
     }
@@ -903,6 +950,18 @@ export class CronAutomationService {
       actionConfig: normalizeAgentTurnCronActionConfig(snapshotConfig),
       ...(snapshotCitadelId ? { citadelId: snapshotCitadelId } : {}),
     };
+  }
+
+  /** Notification after Chat's canonical finalizers settle. Reconciliation only:
+   * this path cannot launch a child or repeat a delivery. Periodic recovery is
+   * retained for a lost notification or a process restart. */
+  public async reconcileFinalizedChatChild(child:DurableRunRecord):Promise<CronRunResult|undefined>{
+    const binding=child.metadata?.cronAdmission as {cronRunId?:unknown;jobId?:unknown;executionGeneration?:unknown}|undefined;
+    if(!binding)return undefined;
+    if(typeof binding.cronRunId!=="string" || typeof binding.jobId!=="string" || !Number.isSafeInteger(binding.executionGeneration))throw new ConflictError({message:"The finalized Chat child has invalid cron linkage."});
+    const observed=await this.deps.storage.cronRuns.get(binding.cronRunId);
+    if(!observed || observed.action!=="agent_turn" || observed.childDurableRunId!==child.runId || observed.jobId!==binding.jobId || observed.executionGeneration!==binding.executionGeneration)throw new ConflictError({message:"The finalized Chat child no longer matches its exact cron occurrence."});
+    return this.reconcileCanonicalAgentTurnChild(observed);
   }
 
   private async reconcileCanonicalAgentTurnChild(observed: CronRunRecord): Promise<CronRunResult> {
@@ -1091,8 +1150,8 @@ export class CronAutomationService {
       action: current.action,
       runId: current.runId,
       canonicalStatus: status,
-      childDurableRunId: current.childDurableRunId,
-      deliveryRunId: current.deliveryRunId,
+      ...(current.childDurableRunId ? { childDurableRunId: current.childDurableRunId } : {}),
+      ...(current.deliveryRunId ? { deliveryRunId: current.deliveryRunId } : {}),
     };
     const evidenceEnvelopeId = await this.recordCronRunEvidence(
       job,
@@ -1279,6 +1338,8 @@ export class CronAutomationService {
       if (!isExplicitCronJobDueNow(job, now)) {
         continue;
       }
+      const once = job.actionConfig?.agentTurn?.oneShot;
+      if (once && (await this.deps.storage.cronRuns.getByAdmission(job.jobId, `one-shot:${once.at}`))) continue;
       if (didCronJobRunInCurrentWindow(job, now)) {
         continue;
       }
@@ -1299,6 +1360,7 @@ export class CronAutomationService {
           reason: "scheduled_due",
           scheduledFor,
           admissionKey: `scheduled:${scheduledFor}`,
+          expectedRevision: job.revision,
         });
         if (result.status === "pending") {
           summary.pendingCount += 1;
@@ -1575,7 +1637,7 @@ export class CronAutomationService {
         lastFailure: null,
         failureCount: 0,
         backoffUntil: null,
-        nextRunAt: computeNextCronRunAt(job.schedule, new Date(finishedAt), job.endAt) ?? null,
+        nextRunAt: computeNextCronJobRunAt(job, new Date(finishedAt), true) ?? null,
       },
       finishedAt,
     );
@@ -1678,7 +1740,7 @@ export class CronAutomationService {
         },
         failureCount,
         backoffUntil,
-        nextRunAt: computeNextCronRunAt(job.schedule, failedAt, job.endAt) ?? null,
+        nextRunAt: computeNextCronJobRunAt(job, failedAt, true) ?? null,
       },
       failedAtIso,
     );
@@ -2169,6 +2231,9 @@ export function isCronJobActive(job: CronJobRecord, now: Date): boolean {
 }
 
 export function isExplicitCronJobDueNow(job: CronJobRecord, now: Date): boolean {
+  if (job.actionConfig?.agentTurn?.eventWake) return false;
+  const once = job.actionConfig?.agentTurn?.oneShot;
+  if (once) return Number.isFinite(Date.parse(once.at)) && Date.parse(once.at) <= now.getTime();
   const parsed = parseSimpleCronSchedule(job.schedule);
   if (!parsed) {
     return false;
@@ -2177,6 +2242,9 @@ export function isExplicitCronJobDueNow(job: CronJobRecord, now: Date): boolean 
 }
 
 export function didCronJobRunInCurrentWindow(job: CronJobRecord, now: Date): boolean {
+  // One-shot deduplication belongs to its canonical occurrence identity, even
+  // when the spec was edited or the selected instant falls in a DST fold.
+  if (job.actionConfig?.agentTurn?.oneShot || job.actionConfig?.agentTurn?.eventWake) return false;
   if (!job.lastRunAt) {
     return false;
   }
@@ -2234,6 +2302,7 @@ export function computeNextCronRunAt(schedule: string, from: Date, endAt?: strin
 }
 
 function computeCronOccurrenceScheduledFor(job: CronJobRecord, observedAt: Date): string {
+  if (job.actionConfig?.agentTurn?.oneShot) return job.actionConfig.agentTurn.oneShot.at;
   const parsed = parseSimpleCronSchedule(job.schedule);
   const occurrence = new Date(observedAt);
   occurrence.setUTCSeconds(0, 0);
@@ -2246,6 +2315,7 @@ function computeCronOccurrenceScheduledFor(job: CronJobRecord, observedAt: Date)
 }
 
 function computeNextCronRunAfterOccurrence(job: CronJobRecord, scheduledFor: string): string | undefined {
+  if (job.actionConfig?.agentTurn?.oneShot || job.actionConfig?.agentTurn?.eventWake) return undefined;
   const parsed = parseSimpleCronSchedule(job.schedule);
   const occurrenceMs = Date.parse(scheduledFor);
   if (!parsed || !Number.isFinite(occurrenceMs)) {
@@ -2257,6 +2327,18 @@ function computeNextCronRunAfterOccurrence(job: CronJobRecord, scheduledFor: str
   // per minute and therefore need no window offset.
   const windowOffsetMs = parsed.wildcardMinute ? 0 : 4 * 60_000;
   return computeNextCronRunAt(job.schedule, new Date(occurrenceMs + windowOffsetMs), job.endAt);
+}
+
+export function computeNextCronJobRunAt(
+  job: Pick<CronJobRecord, "schedule" | "actionConfig" | "endAt">,
+  from: Date,
+  alreadyAdmitted = false,
+): string | undefined {
+  if (job.actionConfig?.agentTurn?.eventWake) return undefined;
+  const once = job.actionConfig?.agentTurn?.oneShot;
+  if (once)
+    return !alreadyAdmitted && (!job.endAt || Date.parse(once.at) <= Date.parse(job.endAt)) ? once.at : undefined;
+  return computeNextCronRunAt(job.schedule, from, job.endAt);
 }
 
 function doesCronScheduleMatch(parsed: NonNullable<ReturnType<typeof parseSimpleCronSchedule>>, date: Date): boolean {

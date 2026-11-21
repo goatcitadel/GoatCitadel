@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, it } from "node:test";
 import { createDatabase } from "../sqlite.js";
 import { runSqliteMigrations, type SqliteMigration } from "./migration-registry.js";
+import { createSqliteSchemaReference, readCompatibleSqliteSchemaReference } from "./schema-reference.js";
 import { assertSqliteSchemaShape, readSqliteSchemaShape } from "./schema-shape.js";
 
 describe("SQLite canonical schema shape", () => {
@@ -52,10 +53,18 @@ describe("SQLite canonical schema shape", () => {
     ];
     try {
       runSqliteMigrations(canonical, migrations);
-      const expected = readSqliteSchemaShape(canonical);
+      const reference = createSqliteSchemaReference(canonical, migrations);
       target.exec("CREATE TABLE shape_probe (id TEXT PRIMARY KEY, wrong_value BLOB)");
 
       runSqliteMigrations(target, migrations);
+      const expected = readCompatibleSqliteSchemaReference(target, migrations, reference);
+      assert(expected);
+      assert.deepEqual(expected, readSqliteSchemaShape(canonical));
+      assert.equal(readCompatibleSqliteSchemaReference(target, [], reference), undefined);
+      assert.equal(readCompatibleSqliteSchemaReference(target, migrations, {
+        ...reference,
+        shape: { ...reference.shape, entries: reference.shape.entries.slice(1) },
+      }), undefined);
       assert.throws(
         () => assertSqliteSchemaShape(readSqliteSchemaShape(target), expected),
         /canonical schema-shape validation failed/u,

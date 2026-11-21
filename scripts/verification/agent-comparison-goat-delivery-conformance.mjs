@@ -55,9 +55,9 @@ const profile = {
   provider: "comparison",
   model: "fixture-model",
   reasoning: "medium",
-  contextTokens: 32000,
+  contextTokens: 128000,
   outputTokens: 2048,
-  maxTaskMs: 300000,
+  maxTaskMs: 390000,
   tools: ["schedule"],
   grants: ["test-workspace", "controlled-telegram-target"],
 };
@@ -169,9 +169,17 @@ await write(
 );
 const { config } = goatComparisonConfig(profile, { workspace, baseUrl: proxy.baseUrl });
 config.assistant.features.autonomyV1Disabled = false;
+config.assistant.features.durableKernelV1Enabled = true;
+config.assistant.features.scheduledChatTurnsV1Enabled = true;
 config.toolPolicy.tools.allow = ["schedule.manage", "comms.send"];
 config.toolPolicy.sandbox.networkAllowlist = ["127.0.0.1", "api.telegram.org"];
 await write(path.join(stateDirectory, "config/goatcitadel.json"), config);
+await write(path.join(stateDirectory, "config/llm-model-metadata.json"), {
+  version: 1,
+  entries: {
+    [`comparison/${profile.model}`]: { contextWindow: profile.contextTokens, outputTokenLimit: profile.outputTokens },
+  },
+});
 await write(path.join(stateDirectory, ".env"), "");
 await write(path.join(evidence, "session-start.json"), {
   ...binding,
@@ -235,9 +243,9 @@ globalThis.fetch = async (input, init) => {
   }
   throw new Error(`Unexpected network destination in the controlled fixture: ${url.origin}`);
 };
-let app, baseUrl, token;
+let app, baseUrl;
+const token = randomBytes(32).toString("base64url");
 const startApp = async () => {
-  token = randomBytes(32).toString("base64url");
   process.env.GOATCITADEL_AUTH_TOKEN = token;
   app = await buildApp();
   baseUrl = `${await app.listen({ host: "127.0.0.1", port: 0 })}/`;
@@ -351,16 +359,18 @@ const superviseDelivery = (api, scheduleId, connectionId) => {
   };
 };
 try {
+  process.env.TELEGRAM_BOT_TOKEN = "controlled-no-live-telegram";
   await startApp();
-  const api = createGoatComparisonClient({ baseUrl, token, retain, signal: controller.signal });
+  const makeClient = () => createGoatComparisonClient({ baseUrl, token, retain, signal: controller.signal });
+  let api = makeClient();
   const connection = await api("telegram-connection", "/integrations/connections", {
     catalogId: "channel.telegram",
     label: "Controlled comparison Telegram",
     enabled: true,
     status: "connected",
-    config: { botToken: "controlled-no-live-telegram", defaultChatId: target },
+    config: { botTokenEnv: "TELEGRAM_BOT_TOKEN", defaultChatId: target },
   });
-  const scheduledFor = new Date(Math.ceil((Date.now() + 90000) / 60000) * 60000);
+  const scheduledFor = new Date(Math.ceil((Date.now() + 30000) / 60000) * 60000);
   scheduleArgs = {
     op: "create",
     name: "Comparison reminder",
@@ -383,6 +393,17 @@ try {
   const jobs = (await api("schedules", "/cron/jobs")).items.filter((job) => job.action === "agent_turn");
   assert.equal(jobs.length, 1);
   console.log(`Native reminder retained: ${jobs[0].jobId}; scheduled ${scheduledFor.toISOString()}`);
+  const beforeRestart = baseUrl;
+  assert.equal(providerReceipts.length, 0);
+  await app.close();
+  assert.equal(app.server.listening, false);
+  await startApp();
+  assert.notEqual(baseUrl, beforeRestart);
+  api = makeClient();
+  const restored = (await api("pre-due-restored", "/cron/jobs")).items.find(({ jobId }) => jobId === jobs[0].jobId);
+  assert.equal(restored?.jobId, jobs[0].jobId);
+  assert.ok(Date.now() < scheduledFor.getTime(), "The runtime must reopen before the reminder is due.");
+  await retain("pre-due-restart", { beforeRestart, baseUrl, jobId: restored.jobId, scheduledFor });
   deliverySupervision = superviseDelivery(api, jobs[0].jobId, connection.connectionId);
   const observed = await observeGoatComparisonDelivery({
     cellDirectory,
@@ -396,6 +417,7 @@ try {
       scheduledFor: scheduledFor.toISOString(),
     },
     signal: controller.signal,
+    pollMs: 2500,
     maxTaskMs: profile.maxTaskMs,
     onReconnect: async () => {
       await deliverySupervision.stop();

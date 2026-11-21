@@ -1507,6 +1507,10 @@ function buildSecretPatterns(marker: string, options: SecretTextRedactionOptions
       replace: (match) => `${match.split(/\s+/, 1)[0]} ${marker}`,
     },
     {
+      pattern: /\b((?:my|our)\s+(?:password|passphrase|api[ _-]?key|access[ _-]?token)\s+is\s+)(["']?)([^\s"'<>]{1,512})\2/giu,
+      replace: (_match, prefix, quote) => `${prefix}${quote}${marker}${quote}`,
+    },
+    {
       pattern: /\bBasic\s+([A-Za-z0-9+/]+={0,2})(?![A-Za-z0-9+/=])/giu,
       shouldRedact: (_match, credential) => isBasicAuthorizationCredential(credential),
       replace: (match) => `${match.split(/\s+/, 1)[0]} ${marker}`,

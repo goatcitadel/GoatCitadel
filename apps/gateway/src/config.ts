@@ -194,6 +194,9 @@ export interface FeatureFlagsConfig {
    * ⇒ the consolidation job never runs.
    */
   memoryConsolidationV1Enabled?: boolean;
+  /** Opt-in indexed recall across the canonically scoped saved-memory corpus. */
+  memoryCorpusRecallV1Enabled?: boolean;
+  backgroundSkillDraftsV1Enabled?: boolean;
   /**
    * Records a signed `cron_job_executed` evidence envelope for every cron run
    * (success and failure) and pins the envelope id on the job record.
@@ -909,6 +912,8 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["productSourceEvolutionV1Enabled", process.env.GOATCITADEL_FEATURE_PRODUCT_SOURCE_EVOLUTION_V1_ENABLED],
     ["channelVoiceReplyV1Enabled", process.env.GOATCITADEL_FEATURE_CHANNEL_VOICE_REPLY_V1_ENABLED],
     ["memoryConsolidationV1Enabled", process.env.GOATCITADEL_FEATURE_MEMORY_CONSOLIDATION_V1_ENABLED],
+    ["memoryCorpusRecallV1Enabled", process.env.GOATCITADEL_FEATURE_MEMORY_CORPUS_RECALL_V1_ENABLED],
+    ["backgroundSkillDraftsV1Enabled", process.env.GOATCITADEL_FEATURE_BACKGROUND_SKILL_DRAFTS_V1_ENABLED],
     ["cronEvidenceV1Enabled", process.env.GOATCITADEL_FEATURE_CRON_EVIDENCE_V1_ENABLED],
     ["utilityModelRoutingV1Enabled", process.env.GOATCITADEL_FEATURE_UTILITY_MODEL_ROUTING_V1_ENABLED],
     [
@@ -1565,6 +1570,8 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       // Opt-in weekly memory consolidation. `?? false` keeps the job inert
       // until an operator enables it.
       memoryConsolidationV1Enabled: featuresInput.memoryConsolidationV1Enabled ?? false,
+      memoryCorpusRecallV1Enabled: featuresInput.memoryCorpusRecallV1Enabled ?? false,
+      backgroundSkillDraftsV1Enabled: featuresInput.backgroundSkillDraftsV1Enabled ?? false,
       // Opt-in signed evidence for cron runs. `?? false` keeps cron behavior
       // byte-identical until an operator enables it.
       cronEvidenceV1Enabled: featuresInput.cronEvidenceV1Enabled ?? false,

@@ -13,6 +13,7 @@ import type {
   SkillEvaluationScenario,
   SkillEvaluationScenarioDraft,
   SkillListItem,
+  CandidateSkillEvaluationBinding,
 } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
@@ -36,6 +37,7 @@ export interface SkillEvaluationImprovementResult {
 export interface SkillEvaluationServiceHost {
   storage: Pick<Storage, "skillEvaluationRuns" | "capabilityProposals">;
   listSkills(): Promise<SkillListItem[]>;
+  resolveCandidateSkillForEvaluation?(skillId:string):Promise<{skill:SkillListItem;binding:CandidateSkillEvaluationBinding}|undefined>;
   createCapabilityProposal(input: {
     proposalKind: "skill";
     title: string;
@@ -77,7 +79,7 @@ export class SkillEvaluationService {
   }> {
     const skill = await this.requireSkill(skillId);
     const run = this.buildEvaluationRun(skill, input, "completed");
-    const ledger = await this.host.recordSkillEvaluationSignal?.({
+    const ledger = run.candidateBinding ? undefined:await this.host.recordSkillEvaluationSignal?.({
       skillId: run.skillId,
       skillName: run.skillName,
       runId: run.runId,
@@ -174,7 +176,7 @@ export class SkillEvaluationService {
   }
 
   private buildEvaluationRun(
-    skill: SkillListItem,
+    skill: SkillListItem & {candidateBinding?:CandidateSkillEvaluationBinding},
     input: SkillEvaluationPreviewRequest,
     status: SkillEvaluationRunRecord["status"],
   ): SkillEvaluationRunRecord {
@@ -183,6 +185,14 @@ export class SkillEvaluationService {
     const scenarios = normalizeScenarios(skill, input.scenarios);
     const criteria = normalizeCriteria(input.criteria);
     const baselineResult = scoreInstruction(skill.instructionBody, scenarios, criteria);
+    if(skill.candidateBinding) {
+      if(scenarios.length<2 || new Set(scenarios.map(item=>item.prompt.trim().toLowerCase())).size<2 || !scenarios.some(item=>item.tags?.includes("held_out")))
+        throw new ValidationError({message:"Candidate evaluation needs a source-independent held-out scenario and a distinct development scenario."});
+      const now=new Date().toISOString();
+      return {runId:`skill-eval-${randomUUID()}`,skillId:skill.skillId,skillName:skill.name,status,createdAt:now,updatedAt:now,scenarios,criteria,baselineResult,
+        candidateBinding:skill.candidateBinding,accepted:baselineResult.score.passRate>=targetPassRate,improvementDelta:0,targetPassRate,maxRounds:1,
+        warnings:["Static instruction coverage only; no model task execution or comparative improvement was measured.","This result applies only to the exact candidate artifacts and source evidence. Operator review and approval are still required."],operatorTruth:OPERATOR_TRUTH};
+    }
     const mutation = buildMutation(skill.instructionBody, scenarios, criteria, baselineResult);
     const candidateResult = scoreInstruction(mutation.afterInstructionBody, scenarios, criteria);
     const improvementDelta = roundRate(candidateResult.score.passRate - baselineResult.score.passRate);
@@ -218,10 +228,12 @@ export class SkillEvaluationService {
     };
   }
 
-  private async requireSkill(skillId: string): Promise<SkillListItem> {
+  private async requireSkill(skillId: string): Promise<SkillListItem & {candidateBinding?:CandidateSkillEvaluationBinding}> {
     const normalized = skillId.trim();
     const skill = (await this.host.listSkills()).find((item) => item.skillId === normalized);
     if (!skill) {
+      const candidate=await this.host.resolveCandidateSkillForEvaluation?.(normalized);
+      if(candidate) return {...candidate.skill,skillId:normalized,candidateBinding:candidate.binding};
       throw new NotFoundError({ entity: "skill", id: normalized });
     }
     return skill;

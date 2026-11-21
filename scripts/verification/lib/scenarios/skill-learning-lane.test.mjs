@@ -73,8 +73,14 @@ test("skill-learning lane emits its invariant matrix and every owned proof bound
   assert.deepEqual(writes[0].payload.currentDependencyMigrationHeads, { sqlite: 163, postgres: 105 });
   assert.equal(writes[0].payload.postgresProofConfigured, false);
   assert.ok(writes[0].payload.invariants.some((item) => item.includes("three distinct clean sessions")));
+  assert.ok(writes[0].payload.invariants.some((item) => item.includes("correction evidence") && item.includes("explicitly authenticated")));
+  assert.ok(writes[0].payload.invariants.some((item) => item.includes("background_workflow") && item.includes("system_proposal_only")));
+  assert.ok(writes[0].payload.invariants.some((item) => item.includes("static") && item.includes("task performance")));
   assert.ok(commands[2].args.includes("src/skill-governance-schema-parity.test.ts"));
   assert.ok(commands[3].args.includes("src/services/skill-learning-service.test.ts"));
+  for (const file of ["background-learning-readiness.test.ts", "background-learning-queue-service.test.ts", "background-skill-draft-service.test.ts", "skill-evaluation-service.test.ts", "capability-candidate-lifecycle-scope.test.ts"]) {
+    assert.ok(commands[3].args.includes(`src/services/${file}`), `Missing governed background boundary: ${file}`);
+  }
   assert.ok(commands[4].args.includes("src/services/capability-system-service.test.ts"));
   assert.equal(commands[5].args.at(-1), "typecheck");
   assert.equal(commands.length, 6, "PostgreSQL command is skipped when no test URL is configured");

@@ -1,4 +1,5 @@
 import type { ChatToolRunRecord, ChatTurnTraceRecord, LearnedMemoryItemType } from "@goatcitadel/contracts";
+import {memoryIntentSentences} from "./memory-intent-service.js";
 
 export function shouldExtractLearnedMemoryContent(
   content: string,
@@ -55,11 +56,8 @@ export function extractLearnedMemoryCandidates(
   content: string;
   confidence: number;
 }> {
-  const lines = content
-    .split(/\r?\n/g)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .slice(0, 12);
+  const lines = memoryIntentSentences(content).filter(line => !isQuestionLikeMemoryLine(line) &&
+    !/^(?:if\b|suppose\b|imagine\b|i\s+am\b|my\s+(?:name|address|birthday)\s+is\b|mi\s+nombre\b|vivo\s+en\b|soy\b)/iu.test(line));
   const out: Array<{ itemType: LearnedMemoryItemType; content: string; confidence: number }> = [];
   const add = (itemType: LearnedMemoryItemType, text: string, confidence: number) => {
     const normalized = normalizeMemoryText(text);

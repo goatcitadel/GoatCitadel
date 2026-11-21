@@ -123,6 +123,14 @@ Assume a checkout may contain work owned by the user or another agent, even when
 - Use the repository's output-lock wrappers for build and typecheck commands that provide them. Do not bypass a live lock with a second writer.
 - Before stopping a server, database, worker, or watcher, establish that this task started and owns the exact process tree or port. Leave pre-existing processes alone.
 
+## Computer Use and Screen-Capture Cleanup
+
+- Always close task-owned desktop, monitor, and window capture sessions as soon as UI verification ends, before handing work back. Apply the same cleanup on failures, cancellations, and handoffs; use a `finally` block when the tool supports it. Do not leave a capture session open for possible later use.
+- Prefer the tool's supported session-close or disposal operation. Resetting a JavaScript kernel, clearing bindings, or stopping screenshot requests is not proof that the native capture session ended.
+- Verify cleanup without taking another screenshot. On Windows, check for both `codex-computer-use.exe` and `codex-computer-use-swift.exe` when troubleshooting a lingering yellow capture border. Verify executable paths, process identities, and task ownership before stopping a helper; never terminate all Node, Codex, or computer-use processes indiscriminately. Coordinate with other agents before stopping a shared helper.
+- Check whether a helper restarts automatically. An idle helper process alone does not prove capture is active or stopped. If the border cannot be verified through a supported non-capturing status check, ask the user whether it disappeared and report any remaining uncertainty. Do not claim capture has stopped based only on a kernel reset or a successful termination request.
+- Leave the user's application running unless the task requires closing it. Never disable Windows capture indicators, privacy protections, or security controls to hide an unresolved capture session.
+
 ## Windows and PowerShell Defaults
 
 The primary local development environment is Windows.
@@ -268,6 +276,8 @@ Common proof lanes include:
 - `pnpm verify:visual:regression`
 - `pnpm docs:check`
 - `git diff --check`
+
+Show a mockup before implementing visual changes by default. Use judgment for small fixes that restore an established design.
 
 Every UI/UX review and change requires visual inspection and interaction testing in the rendered app. Check every component in scope, including anything potentially visible in another state, viewport, theme, or interaction. Open overlays and disclosures, exercise the relevant controls, and watch animations and transitions as they run. Check for visual defects such as layout shifts, clipping, unintended text resizing, motion artifacts, and lost focus. Source review, builds, and automated tests supplement rendered checks. Report which components and states were verified and identify any that could not be rendered or tested.
 

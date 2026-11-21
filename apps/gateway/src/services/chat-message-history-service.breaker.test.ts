@@ -447,6 +447,7 @@ function message(messageId: string, role: ChatMessageRecord["role"], content: st
     role,
     actorType: role === "assistant" ? "agent" : "user",
     actorId: role === "assistant" ? "assistant" : "operator",
+    sourceAuthority:role === "assistant" ? "agent_proposed" : "operator",
     content,
     timestamp: "2026-07-14T03:00:00.000Z",
   };

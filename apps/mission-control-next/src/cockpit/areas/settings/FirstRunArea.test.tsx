@@ -50,6 +50,8 @@ vi.mock("./LlamaSetupSettings", () => ({
 vi.mock("./FirstRunDemo", () => ({
   FirstRunDemo: ({ workspaceId }: { workspaceId: string }) => <p>Local demo for {workspaceId}</p>,
 }));
+const { openTutorial } = vi.hoisted(() => ({ openTutorial: vi.fn(() => true) }));
+vi.mock("../../../features/tutorial/handoff", () => ({ openTutorial }));
 vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: api.navigate }) }));
 let owner: OnboardingState, root: Root, container: HTMLDivElement, queryClient: QueryClient;
 const button = (label: string) =>
@@ -71,6 +73,7 @@ async function safety() {
   await act(async () =>
     [...container.querySelectorAll("button")].find((item) => item.textContent?.includes("Step 2"))!.click(),
   );
+  if (button("Skip tutorial")) await click("Skip tutorial");
   await vi.waitFor(() => expect(button("Keep current rule").disabled).toBe(false));
 }
 const deferred = <T,>() => {
@@ -128,8 +131,10 @@ describe("native first-run setup", () => {
   });
   it("continues with an existing ready model without opening provider editors", async () => {
     await render();
-    expect(button("Continue to safety").disabled).toBe(false);
-    await click("Continue to safety");
+    expect(button("Continue setup").disabled).toBe(false);
+    await click("Continue setup");
+    expect(button("Take the tutorial")).toBeDefined();
+    await click("Skip tutorial");
     expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Choose your safety settings");
     expect(api.completeOnboarding).not.toHaveBeenCalled();
   });
@@ -144,9 +149,9 @@ describe("native first-run setup", () => {
         ),
       },
     };
-    await click("Continue to safety");
+    await click("Continue setup");
     expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Choose a model");
-    expect(button("Continue to safety").disabled).toBe(true);
+    expect(button("Continue setup").disabled).toBe(true);
     expect(container.querySelector("#first-run-finish-prerequisite")?.textContent).toContain("Connect a provider");
     expect(api.completeOnboarding).not.toHaveBeenCalled();
   });
@@ -163,15 +168,17 @@ describe("native first-run setup", () => {
     owner = { ...owner, completed: true, completedAt: "2026-09-30T12:00:00.000Z", completedBy: "operator" };
     await act(async () => response.resolve({ state: owner, appliedAt: owner.completedAt! }));
   });
-  it("connects through the guided model owner and moves on to safety when the model is ready", async () => {
+  it("offers the tutorial when the guided model is ready", async () => {
     await render();
     expect(container.textContent).not.toContain("Guided model owner ready");
     await click("Use a cloud provider");
     expect(button("Guided model owner ready")).toBeDefined();
-    expect(guided.rendered).toHaveBeenCalledWith(expect.objectContaining({ enterChatLabel: "Continue to safety" }));
+    expect(guided.rendered).toHaveBeenCalledWith(expect.objectContaining({ enterChatLabel: "Continue setup" }));
     await click("Advanced: edit provider profiles");
     expect(api.navigate).toHaveBeenCalledWith("/settings/models#providers");
     await click("Guided model owner ready");
+    expect(button("Take the tutorial")).toBeDefined();
+    await click("Skip tutorial");
     expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Choose your safety settings");
     expect(button("Open Chat")).toBeUndefined();
     expect(api.completeOnboarding).not.toHaveBeenCalled();
@@ -183,6 +190,31 @@ describe("native first-run setup", () => {
     expect(link.getAttribute("href")).toBe("/settings/models#local-ai");
     expect(container.textContent).toContain("To run a local model instead, llama.cpp setup is on");
     expect(container.textContent).not.toContain("Native llama setup editor");
+  });
+  it("starts the opted-in tutorial after the existing setup completion", async () => {
+    openTutorial.mockReturnValue(true);
+    await render();
+    await click("Continue setup");
+    await click("Take the tutorial");
+    expect(openTutorial).not.toHaveBeenCalled();
+    await click("Keep current rule");
+    await click("Finish setup and start tutorial");
+    expect(api.completeOnboarding).toHaveBeenCalledExactlyOnceWith("operator");
+    expect(openTutorial).toHaveBeenCalledOnce();
+    expect(api.navigate).not.toHaveBeenCalled();
+  });
+  it("keeps Chat available when the tutorial handoff cannot be written", async () => {
+    openTutorial.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    await render();
+    await click("Continue setup");
+    await click("Take the tutorial");
+    await click("Keep current rule");
+    await click("Finish setup and start tutorial");
+    expect(container.textContent).toContain("The tutorial could not start.");
+    expect(button("Open Chat to send a test message").disabled).toBe(false);
+    await click("Try again");
+    expect(openTutorial).toHaveBeenCalledTimes(2);
+    expect(api.completeOnboarding).toHaveBeenCalledTimes(1);
   });
   it("requires fresh safety review then exact owner completion before Chat", async () => {
     await render();
@@ -358,7 +390,7 @@ describe("native first-run setup", () => {
     expect(steps[1]?.textContent).toContain("Tool approval:");
     expect(steps[2]?.textContent).toContain("Current");
     expect(steps.map((step) => step.textContent)).not.toContainEqual(expect.stringContaining("Open"));
-    expect(button("Continue to safety")).toBeUndefined();
+    expect(button("Continue setup")).toBeUndefined();
     expect(container.textContent).not.toContain("Setup is already recorded");
     const primaries = [...container.querySelectorAll("button")].filter((item) => item.className.includes("bg-accent"));
     expect(primaries.map((item) => item.textContent)).toEqual(["Open Chat to send a test message"]);

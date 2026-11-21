@@ -1,6 +1,9 @@
+import { resolveChatLearningMemoryManifest } from "./chat-learning-memory-manifest.js";
 import { assertMcpAdmissionToolAllowed } from "./mcp-admission-tool-policy-guard.js";
 import { resolveMcpToolPolicyOptions, type McpApprovalReliefPort } from "./mcp-approval-relief.js";
 import { buildChatRuntimeSkillReceipts } from "./chat-skill-selection-runtime.js";
+import {resolveChatLearningSkillManifest} from "./chat-learning-skill-manifest.js";
+import {runFollowThroughEventSweep} from "./follow-through-event-runtime.js";
 import { executeApprovedIntegrationDryRunCommit } from "./approved-integration-dry-run-owner.js";
 import { commitProviderSecretGeneration } from "./provider-secret-generation-owner.js";
 import { resolveChatRuntimeSkillSelection } from "./chat-skill-selection-runtime.js";
@@ -43,6 +46,7 @@ import { verifyProviderConnection, verifyTemporaryProviderCredential } from "./p
 import { resolveSustainedLocalCodingProfile } from "./chat-turn-execution-profile.js";
 import { readChangePlanApprovalDisposition } from "./evolution-control-plane-approval-disposition.js";
 import { composeChatTurnControl, type ChatTurnControlComposition } from "./gateway/chat-turn-control-composition.js";
+import { BackgroundSkillDraftService } from "./background-skill-draft-service.js";
 import { cleanupDelegatedChildResources } from "./delegated-child-process-cleanup.js";
 /* eslint-disable @typescript-eslint/no-unused-vars, max-lines */
 import fs from "node:fs/promises";
@@ -449,6 +453,10 @@ import {
   resolveMeshChatToolBinding,
 } from "./gateway/mesh-chat-binding.js";
 import * as chatMessageHistoryService from "./chat-message-history-service.js";
+import { collectChatContinuityLinks } from "./chat-continuity-links.js";
+import { resolveBackgroundLearningReadiness as resolveLearningReadiness } from "./background-learning-readiness.js";
+import {BackgroundLearningQueueService} from "./background-learning-queue-service.js";
+import {estimateBackgroundReviewReservation} from "./background-review-service.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import * as chatAttachmentService from "./chat-attachment-service.js";
 import { createGatewayErrandPressGuard } from "./browser-errands/errand-approval-press-guard.js";
@@ -466,6 +474,7 @@ import type {
 } from "../orchestration/types.js";
 import { type ChannelSetupRecentTestCacheEntry } from "./channel-setup-test-cache.js";
 import { MemoryContextService } from "./memory-context-service.js";
+import { MemoryCorpusSemanticService } from "./memory-corpus-semantic-service.js";
 import { LlamaCppRuntimeService } from "./llama-cpp-runtime-service.js";
 import { LlamaCppSetupSelectionService } from "./llama-cpp-setup-selection-service.js";
 import { LlamaCppSetupService } from "./llama-cpp-setup-service.js";
@@ -537,7 +546,6 @@ import {
 } from "./gateway/system-cron-schedulers.js";
 import {
   EXISTING_LEARNINGS_DEDUP_LIMIT,
-  MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY,
   MemoryConsolidationService,
   PENDING_CANDIDATES_DEDUP_LIMIT,
 } from "./memory-consolidation-service.js";
@@ -1008,13 +1016,6 @@ const CHAT_SESSION_AUTO_ALLOW_TOOLS = [
 ] as const;
 const INTERNAL_TOOL_GRANT_TTL_MS = 5 * 60 * 1000;
 
-/**
- * P2-S1 background-review counter gate. A successful, eligible root turn bumps
- * this counter; the self-improvement review runs (and resets it) once it reaches
- * {@link BACKGROUND_REVIEW_TURN_INTERVAL}. Stored in `system_settings`.
- */
-const BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY = "background_review_turns_since_v1";
-const BACKGROUND_REVIEW_TURN_INTERVAL = 5;
 const IMPROVEMENT_SCHEDULER_INTERVAL_MS = 60_000;
 const CHAT_TIMER_SCHEDULER_INTERVAL_MS = 1_000;
 const maintenanceSchedulerDisabled =
@@ -1090,6 +1091,7 @@ export class GatewayService {
   public readonly llmService: LlmService;
   private readonly assemblyService: AssemblyService;
   private readonly memoryContextService: MemoryContextService;
+  private readonly memoryCorpusSemanticService:MemoryCorpusSemanticService;
   public readonly meshService: MeshService;
   public readonly npuSidecar: NpuSidecarService;
   public readonly llamaCppRuntime: LlamaCppRuntimeService;
@@ -1098,6 +1100,7 @@ export class GatewayService {
   private readonly approvalExplainer: ApprovalExplainerService;
   private readonly commitmentClassifier: CommitmentClassifierService;
   private readonly backgroundReviewService: BackgroundReviewService;
+  private readonly backgroundLearningQueueService:BackgroundLearningQueueService;
   public readonly turnRuntime: GatewayTurnRuntime;
   public readonly explicitContextPreparation: ExplicitContextPreparationPort = {
     prepare: (input) =>
@@ -1338,6 +1341,7 @@ export class GatewayService {
       storage: this.storage,
       isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag as keyof RuntimeSettings["features"]),
       memoryWriteGate: this.memoryWriteGateService,
+      readTrustedLearnings: (workspaceId) => this.memoryLifecycleService.collectTrustedStandingLearnings(workspaceId),
     });
     this.workPassportService = new WorkPassportService(this.operatorProfileService);
     this.onboardingMarkerPath = path.resolve(config.rootDir, config.assistant.dataDir, "onboarding-state.json");
@@ -1505,6 +1509,9 @@ export class GatewayService {
       resolveFirecrawlCredential: (baseUrl) => this.webSearchCredentials.resolveFirecrawlCredential(baseUrl),
       // Live Settings value: a tool call that names another Firecrawl endpoint or key variable is blocked.
       resolveFirecrawlEndpoint: () => this.config.assistant.web.firecrawl,
+      searchMemory: (request) => this.memoryLifecycleService.readMemoryTool(request),
+      prepareMemoryWrite: (request) => this.memoryLifecycleService.prepareMemoryWriteTool(request),
+      writeMemory: (request,input) => this.memoryLifecycleService.writeMemoryTool(request,input),
       configureRuntime: (_request, targetId) => this.runtimeConfigurationService.assertConfigurationAvailable(targetId),
       resolveApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.resolve(secretRef),
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
@@ -1806,6 +1813,9 @@ export class GatewayService {
         await this.publishRealtime(eventType, source, payload);
       },
     });
+    this.memoryCorpusSemanticService = new MemoryCorpusSemanticService({repository:this.storage.memoryRecall,
+      registerBackgroundTask:(task) => {this.registerBackgroundTask(task);},
+      onFailure:() => log.warn("Memory semantic index unavailable; using lexical retrieval.")});
     this.memoryContextService = new MemoryContextService(
       this.storage,
       this.llmService,
@@ -1816,6 +1826,10 @@ export class GatewayService {
       (request) => this.acquireLocalEmbeddingLease(request),
       (input) => this.modelUsageAccounting.prepareDispatch(input),
       (diagnostics) => log.debug("Memory context composition metrics", diagnostics),
+      (input) => this.memoryLifecycleService.collectTrustedRecallSources(input),
+      {search:(input) => this.memoryLifecycleService.searchEligibleCorpus(input),
+        enabled:() => this.isFeatureEnabled("memoryCorpusRecallV1Enabled"),
+        validate:(input) => this.memoryLifecycleService.validateRecallSources(input)},
     );
     this.meshService = new MeshService(this.storage, {
       enabled: config.assistant.mesh.enabled,
@@ -2160,6 +2174,7 @@ export class GatewayService {
         ),
       onChatTurnCancelled: (sessionId, turnId, actorId) =>
         this.chatTurnControl.onChatTurnCancelled(sessionId, turnId, actorId),
+      onChatTurnFinalizersSettled:(run)=>this.cronAutomationService.reconcileFinalizedChatChild(run),
       workflowRegistry: durableExecutionService.createDeferredDurableWorkflowExecutorRegistry(
         () => this.durableWorkflowRegistry,
       ),
@@ -2322,6 +2337,7 @@ export class GatewayService {
       getPromptJudgeModelDefaults: async () => await this.getPromptJudgeModelDefaults(),
       backgroundTasks: this.backgroundTasks,
       runBackgroundWork: (label, work) => this.tryRunWithSharedHostWork("agent", label, work),
+      captureImprovementWatchBindings:(packId)=>this.improvementService.capturePromptLabWatchBindings(packId),
       recordImprovementBenchmarkSignal: async (input) => {
         await this.improvementService.recordPromptLabBenchmarkCompletionSignal(input);
       },
@@ -3099,8 +3115,11 @@ export class GatewayService {
       resolveModelDefaults: async () => await this.getBackgroundJobModelDefaults(),
       resolveApiStyle: (providerId, model) => this.llmService.resolveExecutionApiStyle(providerId, model),
       proposeTraceMemoryCandidate: (input, actorId, authority) =>
-        this.memoryLifecycleService.proposeTraceMemoryCandidate(input, actorId, authority),
+        this.memoryLifecycleService.proposeTraceMemoryCandidate(input, actorId, authority,{deferEmbedding:true}),
       effectAuthority: chatPostCommitEffectAuthority,
+      resolveBackgroundLearningReadiness: (input) => this.resolveBackgroundLearningReadiness(input),
+      enqueueLearningReview:(input)=>this.backgroundLearningQueueService.enqueueLearningReview(input),
+      evaluateGovernedMemoryMaintenance:input=>this.memoryMaintenanceService.evaluateGovernedPostTurn(input,request=>this.backgroundLearningQueueService.enqueueLearningReview(request)),
       isAutonomyDisabled: async () => await this.isFeatureEnabled("autonomyV1Disabled"),
       publishRealtime,
       recordDurableTimelineEvent: async (runId, eventType, payload) => {
@@ -3111,6 +3130,36 @@ export class GatewayService {
     this.commitmentClassifier = chatPostCommitRuntime.commitmentClassifier;
     this.backgroundReviewService = chatPostCommitRuntime.backgroundReviewService;
     this.memoryLifecycleService = new MemoryLifecycleService({
+      recallRepository: this.storage.memoryRecall,
+      isMemoryRecallEnabled: () => config.assistant.memory.enabled,
+      isCorpusRecallEnabled:() => this.isFeatureEnabled("memoryCorpusRecallV1Enabled"),
+      augmentCorpusRecall:(input,result) => this.memoryCorpusSemanticService.augment(input,result),
+      learnings: this.storage.memoryLearnings,
+      validateConsolidationCandidate:async(candidate)=>{
+        const source=candidate.metadata?.consolidationSource as {workspaceId?:string;sessionId?:string;turnIds?:string[];sourceHash?:string}|undefined;
+        if(!source || typeof source.workspaceId!=="string" || typeof source.sessionId!=="string" || source.workspaceId!==candidate.workspaceId || source.sessionId!==candidate.sourceSessionId || !Array.isArray(source.turnIds) || typeof source.sourceHash!=="string") return false;
+        return (await this.storage.memoryLearnings.readConsolidationSource({workspaceId:source.workspaceId,sessionId:source.sessionId,turnIds:source.turnIds}))?.sourceHash===source.sourceHash;
+      },
+      validateQueuedLearningCandidate:async(candidate)=>{
+        const jobId=candidate.metadata?.learningJobId;
+        if(typeof jobId !== "string" || !/^blj-[a-f0-9]{40}$/u.test(jobId)) return false;
+        const job=await this.storage.backgroundLearningJobs.get(jobId);
+        const refs=candidate.metadata?.learningReviewSources;
+        if(!job || job.workspaceId !== candidate.workspaceId || job.sessionId !== candidate.sourceSessionId || !job.candidateIds.includes(candidate.candidateId) || !Array.isArray(refs) || refs.length<1 || refs.length>50) return false;
+        for(const ref of refs) {
+          const source=job.sources.find(source=>canonicalJsonString(source) === canonicalJsonString(ref));
+          if(!source) return false;
+          const {sourceHash,...identity}=source;
+          const current=await this.storage.backgroundLearningJobs.readEligibleSource(identity);
+          if(current?.source.sourceHash !== sourceHash) return false;
+          const evidence=await collectChatContinuityLinks(this.storage,source.sessionId,[source.sourceTurnId]);
+          if(!evidence.complete || evidence.links.some(link=>link.kind === "effect" && !link.completed)) return false;
+        }
+        return true;
+      },
+      recallStorage: this.storage,
+      noteRepository: this.storage.memoryNotes,
+      isLearningRecallEnabled: async () => config.assistant.memory.enabled && await this.isFeatureEnabled("memoryLifecycleAdminV1Enabled"),
       context: this.memoryContextService,
       learned: this.chatLearnedMemoryService,
       maintenance: this.memoryMaintenanceService,
@@ -3161,8 +3210,23 @@ export class GatewayService {
     });
     this.memoryConsolidationService = new MemoryConsolidationService({
       isFeatureEnabled: async (flag) => await this.isFeatureEnabled(flag),
-      listCompletedTurnTracesSince: async (sinceIso, limit) =>
-        await this.storage.chatTurnTraces.listCompletedSince(sinceIso, limit),
+      listWorkspaceIds: async () => (await this.storage.workspaces.list("active", 2000)).map((workspace) => workspace.workspaceId),
+      resolveEligibleSourceSession: async (sessionId) => {
+        try {
+          const [session, meta] = await Promise.all([
+            this.storage.sessions.getBySessionId(sessionId), this.storage.chatSessionMeta.get(sessionId),
+          ]);
+          if (session.sessionId !== sessionId || session.kind !== "dm" || meta?.origin !== "operator" || meta.lifecycleStatus !== "active") return undefined;
+          if((await this.storage.chatSessionPrefs.get(sessionId))?.memoryMode === "off") return undefined;
+          return { workspaceId: meta.workspaceId };
+        } catch (error) {
+          if (error instanceof NotFoundError) return undefined;
+          throw error;
+        }
+      },
+      listCompletedTracePage: async (input) => await this.storage.chatTurnTraces.listCompletedTracePage(input),
+      readCanonicalSource:input=>this.storage.memoryLearnings.readConsolidationSource(input),
+      inspectCanonicalSource:input=>this.storage.memoryLearnings.inspectConsolidationSource(input),
       readTranscriptOrEmpty: async (sessionId) => await this.readTranscriptOrEmpty(sessionId),
       createChatCompletion: async (request, attribution) => await this.createChatCompletion(request, attribution),
       // Rides the prompt-runner chokepoint, so drafting automatically moves to
@@ -3170,27 +3234,81 @@ export class GatewayService {
       resolveModelDefaults: async () => await this.getPromptRunnerModelDefaults(),
       proposeTraceMemoryCandidate: (input, actorId) =>
         this.memoryLifecycleService.proposeTraceMemoryCandidate(input, actorId),
-      listExistingInsightsForDedup: async () => [
+      listExistingInsightsForDedup: async (workspaceId) => [
         ...(
           await this.memoryLifecycleService.listMemoryLearnings({
+            workspaceId,
             status: "all",
             limit: EXISTING_LEARNINGS_DEDUP_LIMIT,
           })
         ).map((item) => item.insight),
         ...(
           await this.memoryLifecycleService.listTraceMemoryCandidates({
+            workspaceId,
             status: "proposed",
             limit: PENDING_CANDIDATES_DEDUP_LIMIT,
           })
         ).map((item) => item.proposedInsight),
       ],
-      getWatermark: async () =>
-        (await this.storage.systemSettings.get<string>(MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY))?.value,
-      setWatermark: async (iso) =>
-        await this.storage.systemSettings.set(MEMORY_CONSOLIDATION_WATERMARK_SETTING_KEY, iso),
+      readProgress: async (workspaceId) => await this.storage.memoryConsolidationProgress.readProgress(workspaceId),
+      claimProgress: async (...args) => await this.storage.memoryConsolidationProgress.claimProgress(...args),
+      commitProgress: async (...args) => await this.storage.memoryConsolidationProgress.commitProgress(...args),
       publishRealtime: async (eventType, source, payload) =>
         await this.publishRealtime(eventType, source, payload ?? {}),
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
+    });
+    const backgroundSkillDrafts=new BackgroundSkillDraftService({storage:this.storage,rootDir:config.rootDir,candidateRoot:config.assistant.capabilities.candidateRoot});
+    this.backgroundLearningQueueService=new BackgroundLearningQueueService({
+      storage:this.storage,backgroundReview:this.backgroundReviewService,
+      readiness:input=>this.resolveBackgroundLearningReadiness(input),
+      readDestinations:input=>this.readBackgroundLearningDestinations(input),
+      estimateBudget:async(input)=>{
+        const defaults=await this.getBackgroundJobModelDefaults();
+        return defaults ? estimateBackgroundReviewReservation({...input,...defaults,dailyCostCeilingUsd:this.config.assistant.budgets.dailyUsdHardCap}):undefined;
+      },
+      admitQueueWrite:async(input)=>{
+        const destination=await this.readBackgroundLearningDestinations(input);
+        return input.kind === "maintenance" ? destination.maintenance:destination.memory || destination.skill;
+      },
+      isSharedLocalModel:async()=>{
+        const defaults=await this.getBackgroundJobModelDefaults();
+        const provider=this.llmService.getRuntimeConfig({useCache:true}).providers.find(item=>item.providerId === defaults?.providerId);
+        if(!provider) return true;
+        try {return provider.providerId === "llamacpp" || ["localhost","127.0.0.1","[::1]"].includes(new URL(provider.baseUrl).hostname);} catch {return true;}
+      },
+      hasForegroundExecution:()=>this.chatTurnExecutionRegistry.hasAnyActiveChatTurnExecution(),
+      inspectSource:async(input,allowSettlingChild)=>this.storage.backgroundLearningJobs.readEligibleSource(input,allowSettlingChild),
+      sourceEffectsAreSettled:async(source)=>{
+        const evidence=await collectChatContinuityLinks(this.storage,source.sessionId,[source.sourceTurnId]);
+        return evidence.complete && !evidence.links.some(link=>link.kind === "effect" && !link.completed);
+      },
+      proposeMemory:async(job,sources,facts)=>{
+        const ids:string[]=[];
+        for(const fact of facts) {
+          const first=sources[0]!;
+          const governedMemoryPlan=job.kind==="maintenance" ? await this.memoryLifecycleService.prepareMemoryMaintenancePlan({jobId:job.jobId,workspaceId:job.workspaceId,sources,proposedInsight:fact.content,preference:fact.kind==="preference"}):undefined;
+          const candidate=await this.memoryLifecycleService.proposeTraceMemoryCandidate({workspaceId:job.workspaceId,
+            candidateType:fact.kind === "preference" ? "operator_preference":"fact",proposedInsight:governedMemoryPlan?.proposedInsight ?? fact.content,confidence:fact.confidence,
+            sourceText:"Completed private Chat work. Canonical source identities and hashes are retained for review.",sourceSessionId:job.sessionId,sourceRunId:first.parentRunId,sourceTurnId:first.sourceTurnId,
+            sourceRefs:sources.flatMap(source=>[{sourceType:"turn" as const,sourceRef:source.sourceTurnId},{sourceType:"run" as const,sourceRef:source.parentRunId}]),
+            metadata:{source:"background_learning_queue",learningJobId:job.jobId,learningReviewSources:sources,operatorProfileReviewCandidate:true,operatorProfileFactKind:fact.kind,
+              ...(governedMemoryPlan ? {governedMemoryPlan}:{})},
+          },"background-reviewer","agent_proposed",{deferEmbedding:true,deferNotification:true});
+          ids.push(candidate.candidateId);
+        }
+        return ids;
+      },
+      proposeSkill:async(job,sources,suggestion)=>{
+        if(!suggestion.shouldAuthor || !suggestion.draftMarkdown) return [];
+        const draft=await backgroundSkillDrafts.proposeBackgroundSkillDraft({jobId:job.jobId,workspaceId:job.workspaceId,sessionId:job.sessionId,sources,markdown:suggestion.draftMarkdown});
+        return [draft.proposalId];
+      },
+      publishCommittedProposals:async(input)=>{
+        const signals=input.candidateIds.map(candidateId=>this.publishRealtime("system","memory",{type:"memory_trace_candidate_proposed",candidateId,workspaceId:input.workspaceId,sessionId:input.sessionId}));
+        if(input.skillProposalIds.length)signals.push(this.publishRealtime("system","skills",{type:"capability_proposals_updated",proposalIds:input.skillProposalIds,workspaceId:input.workspaceId,sessionId:input.sessionId}));
+        const results=await Promise.allSettled(signals);
+        if(results.some(result=>result.status==="rejected"))throw new Error("Learning proposal refresh delivery was incomplete.");
+      },
     });
     this.durableOperatorService = new DurableOperatorService({
       durableRunService: this.durableRunService,
@@ -3265,6 +3383,10 @@ export class GatewayService {
         },
         chatTurn: this.buildDurableChatTurnWorkflowHost(),
         chatPostCommitEffect: chatPostCommitRuntime.effectExecutor,
+        learningReview:{storage:this.storage,backgroundLearningQueue:this.backgroundLearningQueueService,
+          publishRealtime:async(eventType,source,payload,options)=>{await this.publishRealtime(eventType,source,payload,options);},
+          recordDurableTimelineEvent:async(runId,eventType,payload)=>{await this.recordDurableTimelineEvent(runId,eventType,payload);},
+          recordImprovementDurableRunCompletion:(run,state)=>this.recordImprovementDurableRunCompletion(run,state)},
         proactiveTick: {
           chatProactiveService: this.chatProactiveService,
           gatewaySql: this.gatewaySql,
@@ -3754,7 +3876,8 @@ export class GatewayService {
       buildDefaultChatPersonalityOverlay: () => this.buildDefaultChatPersonalityOverlay(),
       buildLlmMessagesFromBranchPath: async (sessionId, pathTurnIds, currentUserMessage, options, state) =>
         await this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
-      composeFrozenOperatorProfileDigest: (workspaceId) => this.composeFrozenOperatorProfileDigest(workspaceId),
+      composeFrozenOperatorProfileDigest: (workspaceId,options) => this.composeFrozenOperatorProfileDigest(workspaceId,options),
+      isNaturalMemoryReviewEnabled: () => this.isNaturalMemoryReviewEnabled(),
       resolveBasePromptCapabilityCatalog: (scope) => this.resolveBasePromptCapabilityCatalog(scope),
       getCodeModeReadiness: async () => await this.capabilitySystemService.getCodeModeReadiness(),
       closeActiveChatTurnStream: (turnId, registrationId) => this.closeActiveChatTurnStream(turnId, registrationId),
@@ -4035,6 +4158,7 @@ export class GatewayService {
       publishRealtime: async (channel, topic, payload, options) =>
         await this.publishRealtime(channel, topic, payload, options),
       hooksService: this.hooksService,
+      captureNaturalChatMemoryIntent: (input) => this.memoryLifecycleService.captureNaturalChatMemoryIntent(input),
       extractAndPersistLearnedMemory: (sessionId, content, source) =>
         this.extractAndPersistLearnedMemory(sessionId, content, source),
       recordTurnCommitments: async (input) => await this.recordTurnCommitments(input),
@@ -5477,8 +5601,11 @@ export class GatewayService {
       {
         label: "cron automation",
         run: () =>
-          this.tryRunWithSharedHostWork("cron", "cron-due-sweep", () =>
-            this.cronAutomationService.runDueTaskCronJobs(),
+          this.tryRunWithSharedHostWork("cron", "cron-due-sweep", async () => {
+            const clock=await this.cronAutomationService.runDueTaskCronJobs();
+            await runFollowThroughEventSweep({storage:this.storage,cron:this.cronAutomationService,isEnabled:async()=>!await this.isFeatureEnabled("autonomyV1Disabled") && await this.isFeatureEnabled("durableKernelV1Enabled") && await this.isFeatureEnabled("scheduledChatTurnsV1Enabled")});
+            return clock;
+          },
           ),
       },
       {
@@ -5510,6 +5637,12 @@ export class GatewayService {
           this.tryRunWithSharedHostWork("worker", "memory-evaluation", () =>
             this.memoryLifecycleService.runDueEvaluation(),
           ),
+      },
+      {
+        label: "memory search index",
+        run: async () => this.config.assistant.memory.enabled && await this.isFeatureEnabled("memoryCorpusRecallV1Enabled")
+          ? this.tryRunWithSharedHostWork("worker", "memory-search-index", () => this.storage.memoryRecall.backfillPage({limit:200}))
+          : undefined,
       },
       {
         label: "engineering learning freshness",
@@ -5867,15 +6000,8 @@ export class GatewayService {
   }
 
   /**
-   * P2-S1 — schedule the self-improvement background review for a successful eligible
-   * turn, counter-gated to run every {@link BACKGROUND_REVIEW_TURN_INTERVAL}
-   * eligible turns. Sibling of {@link scheduleMemoryMaintenancePostTurnEvaluation}
-   * — skips delegated child turns and runs fire-and-forget after a successful turn.
-   *
-   * Guards (master-autonomy / eval-integrity / non-human / closing / delegated-child)
-   * are resolved here and re-asserted inside the service; the counter only
-   * advances for eligible turns. The review is a tracked background task that can
-   * never throw out of the turn path.
+   * Compatibility reconciliation entry point. Canonical durable post-commit
+   * authority owns cadence and queued source admission; no inline inference.
    */
   public async scheduleBackgroundReviewIfDue(input: {
     sessionId: string;
@@ -5887,91 +6013,12 @@ export class GatewayService {
     /** True when the completed turn is itself an autonomous self-wake (skip). */
     autonomous?: boolean;
   }): Promise<void> {
-    // Skip delegated children (mirror the memory-maintenance sibling) and a closing gateway.
-    if (this.closing || input.delegatedChild) {
-      return;
-    }
-    // Skip autonomous turns: a cron/heartbeat/commitment self-wake runs inside a
-    // human session, but re-reviewing its output is a cost-amplifying loop (and
-    // a heartbeat `{notify:false}` carries no review value).
-    if (input.autonomous) {
-      return;
-    }
-    // Master autonomy kill switch: halts the entire self-improvement loop.
-    const autonomyEnabled = !(await this.isFeatureEnabled("autonomyV1Disabled"));
-    if (!autonomyEnabled) {
-      return;
-    }
-    // Eval-integrity / non-human / replay-scratch guard (mirror recordTurnCommitments).
-    const origin = (await this.storage.chatSessionMeta.get(input.sessionId))?.origin;
-    const evalIntegrityTurn = origin === "prompt_pack";
-    const humanSession =
-      origin !== "system" && origin !== "prompt_pack" && !(await this.isReplayScratchSession(input.sessionId));
-    if (evalIntegrityTurn || !humanSession) {
-      return;
-    }
-
-    const task = this.tryRunWithSharedHostWork("worker", "background-review", async () => {
-      // Counter mutation is part of the admitted unit: a rejected/deferred
-      // review must not consume its canonical cadence window.
-      if (!(await this.advanceBackgroundReviewCounter())) return undefined;
-      return this.backgroundReviewService.runBackgroundReview({
-        sessionId: input.sessionId,
-        sourceTurnId: input.turnId,
-        workspaceId: input.workspaceId,
-        userText: input.userText,
-        assistantText: input.assistantText,
-        autonomyEnabled,
-        evalIntegrityTurn,
-        humanSession,
-        turnSucceeded: true,
-      });
-    })
-      .then(async (result) => {
-        if (result?.ran && result.summaryMarker) {
-          await this.publishRealtime("self_improvement_review", "system", {
-            type: "background_review",
-            sessionId: input.sessionId,
-            workspaceId: input.workspaceId,
-            summaryMarker: result.summaryMarker,
-            memoryFactCount: result.memoryFacts.length,
-            skillProposed: result.skillProposed,
-            skillId: result.skillMutation?.skillId,
-          });
-        }
-      })
-      .catch((error) => {
-        log.warn("background review failed", {
-          sessionId: input.sessionId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
-    this.registerBackgroundTask(task);
-  }
-
-  /**
-   * Increment the background-review turn counter; when it reaches the interval,
-   * reset it to 0 and return `true` (the review should run this turn). Otherwise
-   * persist the bumped counter and return `false`. Best-effort: a storage error
-   * never blocks or crashes the turn path (returns `false`).
-   */
-  private async advanceBackgroundReviewCounter(): Promise<boolean> {
-    try {
-      const current =
-        (await this.storage.systemSettings.get<number>(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY))?.value ?? 0;
-      const next = (typeof current === "number" && Number.isFinite(current) ? current : 0) + 1;
-      if (next >= BACKGROUND_REVIEW_TURN_INTERVAL) {
-        await this.storage.systemSettings.set(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY, 0);
-        return true;
-      }
-      await this.storage.systemSettings.set(BACKGROUND_REVIEW_TURNS_SINCE_SETTING_KEY, next);
-      return false;
-    } catch (error) {
-      log.warn("background review counter advance failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    }
+    if(this.closing || input.delegatedChild || input.autonomous) return;
+    const trace=await this.storage.chatTurnTraces.get(input.turnId);
+    if(trace?.sessionId !== input.sessionId || !trace.durable?.runId) return;
+    // Compatibility entry points may request reconciliation only. The durable
+    // post-commit owner alone advances cadence and admits queue source writes.
+    await this.durableRunService.reconcileGeneralChatPostCommit(trace.durable.runId);
   }
 
   public scheduleChatMemoryContextPrewarm(input: {
@@ -6061,6 +6108,7 @@ export class GatewayService {
   }
 
   public beginActiveChatTurnExecution(sessionId: string, turnId: string, operation: string): AbortController {
+    this.backgroundLearningQueueService?.notifyForegroundActivity();
     return this.chatTurnExecutionRegistry.beginActiveExecution(sessionId, turnId, operation);
   }
 
@@ -6554,6 +6602,55 @@ export class GatewayService {
       providerId: fallbackActive?.providerId ?? runtime.activeProviderId,
       model: runtime.activeModel || fallbackActive?.defaultModel,
     };
+  }
+
+  private async readBackgroundLearningDestinations(input:{sessionId:string}) {
+    const [flags,prefs]=await Promise.all([this.readFeatureFlags(),this.storage.chatSessionPrefs.get(input.sessionId)]);
+    const allowed=!flags.autonomyV1Disabled && prefs?.memoryMode !== "off";
+    const memory=allowed && this.config.assistant.memory.enabled && flags.memoryLifecycleAdminV1Enabled;
+    return {memory,skill:allowed && flags.backgroundSkillDraftsV1Enabled === true,maintenance:memory && flags.memoryMaintenanceV1Enabled,
+      memoryReasonCode:prefs?.memoryMode === "off" ? "session_memory_off":!this.config.assistant.memory.enabled ? "memory_disabled":!flags.memoryLifecycleAdminV1Enabled ? "memory_administration_disabled":undefined,
+      skillReasonCode:prefs?.memoryMode === "off" ? "session_memory_off":undefined};
+  }
+
+  /** Background jobs run on the ready active provider or an explicit utility override; `undefined` = skip. */
+  public async resolveBackgroundLearningReadiness(input:{workspaceId:string;sessionId:string},options?:{passive?:boolean}) {
+    const resolveModel=()=>options?.passive ? resolveBackgroundJobModel({getUtilityModelOverride:async()=>{
+      const runtime=this.llmService.getRuntimeConfig({useCache:true});
+      return resolveUtilityModelOverride({flagEnabled:await this.isFeatureEnabled("utilityModelRoutingV1Enabled"),utilityProviderId:runtime.utilityProviderId,utilityModel:runtime.utilityModel,provider:runtime.providers.find(provider=>provider.providerId===runtime.utilityProviderId)});
+    },ensureActiveProviderReadiness:async()=>undefined,getRuntimeConfig:()=>this.llmService.getRuntimeConfig({useCache:true})}):this.getBackgroundJobModelDefaults();
+    return await resolveLearningReadiness({
+      readConfiguration:async()=>{
+        const flags=await this.readFeatureFlags();
+        const destination=await this.readBackgroundLearningDestinations(input);
+        return {autonomyEnabled:!flags.autonomyV1Disabled,memoryEnabled:destination.memory,memoryAdministrationEnabled:flags.memoryLifecycleAdminV1Enabled,
+          skillDraftsEnabled:destination.skill,maintenanceEnabled:destination.maintenance,memoryReasonCode:destination.memoryReasonCode,skillReasonCode:destination.skillReasonCode};
+      },
+      sourceEligible:async({workspaceId,sessionId})=>{
+        try {
+          const [session,meta]=await Promise.all([this.storage.sessions.getBySessionId(sessionId),this.storage.chatSessionMeta.get(sessionId)]);
+          return session.kind === "dm" && meta?.workspaceId === workspaceId && meta.origin === "operator" && meta.lifecycleStatus === "active" && !(await this.isReplayScratchSession(sessionId));
+        } catch(error) {if(error instanceof NotFoundError) return false;throw error;}
+      },
+      providerReady:async()=>Boolean(await resolveModel()),
+      budgetReady:async({sessionId})=>{
+        const cap=this.config.assistant.budgets;
+        if (!(cap.dailyUsdHardCap>0) || !(cap.sessionTokenHardCap>0)) return {ready:false,reasonCode:"budget_exhausted"};
+        const defaults=await resolveModel();
+        const price=defaults ? estimateBackgroundReviewReservation({stage:"memory",userText:"",assistantText:"",...defaults,dailyCostCeilingUsd:cap.dailyUsdHardCap}):undefined;
+        if(!price) return {ready:false,reasonCode:"pricing_unavailable"};
+        const now=new Date().toISOString(),from=`${now.slice(0,10)}T00:00:00.000Z`;
+        const [days,availability,session,reservations]=await Promise.all([
+          this.storage.costLedger.summary("day",from,now),this.storage.costLedger.usageAvailability(from,now),this.storage.modelUsageEvents.list({sessionId,limit:1}),
+          this.storage.backgroundLearningJobs.readBudgetSnapshot(now),
+        ]);
+        const usage=session.summary;
+        if ((availability.totalAgentEvents>0 && !availability.metricAvailability.costUsd.complete) || usage.uncertainDispatchCount>0 ||
+          (usage.attemptCount>0 && (!usage.metricAvailability.inputTokens.complete || !usage.metricAvailability.outputTokens.complete))) return {ready:false,reasonCode:"usage_unknown"};
+        const spent=days.reduce((total,day)=>total+day.costUsd,0),tokens=(usage.inputTokens ?? 0)+(usage.outputTokens ?? 0);
+        return Math.max(spent,reservations.spentCostUsd)+reservations.reservedCostUsd+price.reservedCostUsd<=cap.dailyUsdHardCap && tokens+6400<=cap.sessionTokenHardCap ? {ready:true} : {ready:false,reasonCode:reservations.unsettledOperations>0 ? "budget_reserved":"budget_exhausted"};
+      },
+    },input);
   }
 
   /** Background jobs run on the ready active provider or an explicit utility override; `undefined` = skip. */
@@ -7554,6 +7651,9 @@ export class GatewayService {
   }
 
   public async withChatTurnWriteLease<T>(sessionId: string, operation: string, work: () => Promise<T>): Promise<T> {
+    // A durable Chat may wait for the worker before active execution begins.
+    // Release its shared local model slot at submission, before that wait.
+    this.backgroundLearningQueueService?.notifyForegroundActivity();
     return this.chatTurnExecutionRegistry.withWriteLease(sessionId, operation, work);
   }
 
@@ -7562,6 +7662,7 @@ export class GatewayService {
     operation: string,
     work: () => AsyncGenerator<ChatStreamChunk>,
   ): AsyncGenerator<ChatStreamChunk> {
+    this.backgroundLearningQueueService?.notifyForegroundActivity();
     yield* this.chatTurnExecutionRegistry.withWriteLeaseStream(sessionId, operation, work);
   }
 
@@ -7594,6 +7695,10 @@ export class GatewayService {
     throw new ChatTurnWriteConflictError(
       `Chat branch state changed while writing session ${sessionId}. Refresh the session and retry.`,
     );
+  }
+
+  public async isNaturalMemoryReviewEnabled(): Promise<boolean> {
+    return this.config.assistant.memory.enabled && await this.isFeatureEnabled("memoryLifecycleAdminV1Enabled");
   }
 
   public prepareAgentChatTurn(
@@ -10855,8 +10960,9 @@ export class GatewayService {
     request: ChatCompletionRequest;
     memoryContext?: MemoryContextPack;
     memoryContextPlacement?: MemoryContextPlacement;
+    usageBinding?:{operationId:string;dispatchGeneration:string};
   }): Promise<void> {
-    await persistContextManifestForCompletionRequest({ contextManifests: this.storage.contextManifests }, input);
+    await persistContextManifestForCompletionRequest({ contextManifests: this.storage.contextManifests,resolveStandingMemoryContext:request=>resolveChatLearningMemoryManifest({storage:this.storage,isEnabled:()=>this.isNaturalMemoryReviewEnabled(),composeContext:workspaceId=>this.operatorProfileService.composeFrozenProfileContext(workspaceId)},request),resolveSkillContext:request=>resolveChatLearningSkillManifest({storage:this.storage,renderAdmitted:(refs,workspaceId)=>this.resolveAdmittedSkillInstructions(refs,workspaceId),renderProfile:profile=>this.resolveActivatedSkillInstructions(profile)},request) }, input);
   }
 
   public async listMemoryItems(
@@ -10928,11 +11034,11 @@ export class GatewayService {
    * first use), then returns the cached, byte-stable-per-revision digest. Cheap:
    * no model call on the hot path. Best-effort — a failure must not break a turn.
    */
-  public async composeFrozenOperatorProfileDigest(workspaceId: string): Promise<string | undefined> {
+  public async composeFrozenOperatorProfileDigest(workspaceId: string,options?:{includeLearnings?:boolean}): Promise<string | undefined> {
     try {
       const normalizedWorkspaceId = this.normalizeWorkspaceId(workspaceId);
       await this.operatorProfileService.ensureOperatorProfile(normalizedWorkspaceId);
-      return await this.operatorProfileService.composeFrozenProfileDigest(normalizedWorkspaceId);
+      return await this.operatorProfileService.composeFrozenProfileDigest(normalizedWorkspaceId,options);
     } catch {
       return undefined;
     }
@@ -12287,6 +12393,7 @@ export class GatewayService {
 
   public async close(): Promise<void> {
     this.closing = true;
+    this.backgroundLearningQueueService.close();
     this.mcpStdioSessions.close();
     await this.runtimeReleaseTrustService.close();
     this.chatProactiveService.stopScheduler();
@@ -12309,6 +12416,7 @@ export class GatewayService {
     await this.npuSidecar.close();
     await this.llamaCppRuntime.close();
     await this.llmService.close();
+    await this.memoryCorpusSemanticService.close();
     await this.storage.close();
   }
 
@@ -12996,6 +13104,7 @@ export class GatewayService {
     return {
       storage: this.storage,
       llmService: this.llmService,
+      resolveContinuityLinks: (sessionId,turnIds) => collectChatContinuityLinks(this.storage,sessionId,turnIds),
       readTranscriptOrEmpty: async (sessionId) => await this.readTranscriptOrEmpty(sessionId),
       loadChatTurnSessionState: async (sessionId) => await this.loadChatTurnSessionState(sessionId),
       buildUserMessageContent: (message, supportsVision, codeModeRequestEligible) =>

@@ -1,6 +1,8 @@
 import { useRef, useState } from "react";
+import { ImprovementWatchEvidence } from "../system/ImprovementWatchEvidence";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CuratorReviewItem, OperatorInboxItem, OperatorInboxResponse } from "@goatcitadel/contracts";
+import {isStaticImprovementEvaluation} from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import {
   approveImprovementCandidate,
@@ -236,9 +238,11 @@ export function InboxImprovementProposalDetail({
           </p>
           {current.latestEvaluation ? (
             <p className="text-xs text-fg-muted">
-              Latest evaluation: {improvementEvaluationLabels[current.latestEvaluation.status] ?? "Status unknown"}
+              {isStaticImprovementEvaluation(current.latestEvaluation) ? "Scope and revision check: ":"Latest evaluation: "}{improvementEvaluationLabels[current.latestEvaluation.status] ?? "Status unknown"}
+              {isStaticImprovementEvaluation(current.latestEvaluation) ? ". Task performance has not been tested.":null}
             </p>
           ) : null}
+          <ImprovementWatchEvidence activation={current.latestActivation} />
           {current.corruptionStatus !== "clean" ? (
             <p role="alert">This candidate is {current.corruptionStatus}; decisions are unavailable here.</p>
           ) : null}

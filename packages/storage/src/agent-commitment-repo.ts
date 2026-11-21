@@ -95,6 +95,14 @@ export class AgentCommitmentRepository {
         creator_receipt_json = excluded.creator_receipt_json,
         creator_receipt_sha256 = excluded.creator_receipt_sha256
       WHERE agent_commitments.scheduled_run_id IS NULL
+        AND (excluded.status <> 'proposed' OR agent_commitments.status = 'proposed')
+        AND (agent_commitments.kind <> excluded.kind
+          OR agent_commitments.due_at <> excluded.due_at
+          OR agent_commitments.confidence <> excluded.confidence
+          OR agent_commitments.suggested_text <> excluded.suggested_text
+          OR agent_commitments.workspace_id <> excluded.workspace_id
+          OR COALESCE(agent_commitments.creator_receipt_json, '') <> COALESCE(excluded.creator_receipt_json, '')
+          OR COALESCE(agent_commitments.creator_receipt_sha256, '') <> COALESCE(excluded.creator_receipt_sha256, ''))
     `);
     this.getStmt = db.prepare(`
       SELECT * FROM agent_commitments WHERE commitment_id = ?
@@ -368,6 +376,19 @@ export class AgentCommitmentRepository {
    */
   public hasOpenBySession(sessionId: string): boolean {
     return this.hasOpenBySessionStmt.get({ sessionId }) !== undefined;
+  }
+
+  /** Exact operator review of inferred material. Claimed occurrences belong to cron, never this transition. */
+  public decideSuggestion(input:{commitmentId:string;sessionId:string;workspaceId:string;expectedRevision:number;decision:"accept"|"dismiss"}):AgentCommitmentRecord {
+    return this.db.transaction("immediate",()=>{
+      const status=input.decision==="accept" ? "pending":"dismissed";
+      const allowed=input.decision==="accept" ? "status = 'proposed'":"status IN ('proposed','pending')";
+      const changed=this.db.prepare(`UPDATE agent_commitments SET status=@status,revision=revision+1
+        WHERE commitment_id=@commitmentId AND session_id=@sessionId AND workspace_id=@workspaceId
+          AND revision=@expectedRevision AND scheduled_run_id IS NULL AND ${allowed}`).run({commitmentId:input.commitmentId,sessionId:input.sessionId,workspaceId:input.workspaceId,expectedRevision:input.expectedRevision,status});
+      if(changed.changes!==1)throw new ConflictError({message:"This follow-up changed or already entered execution. Refresh its canonical outcome before deciding."});
+      return this.get(input.commitmentId)!;
+    });
   }
 
   /** Transition a still-pending commitment to async delivery-pending. Returns true if updated. */

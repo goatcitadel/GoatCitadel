@@ -204,7 +204,8 @@ function resolveMemoryFallbackMode(
 export function toCandidateMap(
   candidates: Array<{
     candidateId: string;
-    sourceType: "transcript" | "file" | "memory_item";
+    sourceType: "transcript" | "file" | "memory_item" | "memory_learning" | "knowledge_chunk";
+    sourceHash?: string;
     timestamp?: string;
     rankScore?: number;
     rankSignals?: MemoryRetrievalMatchSignals;
@@ -257,4 +258,14 @@ export function resolveMemoryRelationScope(input: MemoryContextComposeRequest): 
     return "peer";
   }
   return "self";
+}
+
+
+/** Short explicit recall bypasses the ordinary prompt-length optimization. */
+export function isExplicitMemoryRecallPrompt(prompt:string):boolean {
+  const normalized=prompt.slice(0,8000).normalize("NFKC").trim();
+  if (/\b(?:recall|remember|what did we decide|what (?:was|were) (?:my|our)|recuerda|qu[eé] (?:decidimos|acordamos))\b/iu.test(normalized)) return true;
+  if (/^(?:what|which|how)\b.{0,120}\b(?:i|we|my|our)\b.{0,80}\b(?:prefer|prefers|preferred|preferences?|like|usually|normally)\b/iu.test(normalized)) return true;
+  return /^[¿\s]*(?:qu[eé]|cu[aá]l(?:es)?|c[oó]mo)(?=\s).{0,160}\b(?:prefiero|preferimos)\b/iu.test(normalized) ||
+    /^[¿\s]*(?:qu[eé]|cu[aá]l(?:es)?|c[oó]mo)(?=\s).{0,100}\b(?:mi|mis|nuestr[oa]s?)\b.{0,80}\b(?:preferid[oa]s?|preferencias?)\b/iu.test(normalized);
 }

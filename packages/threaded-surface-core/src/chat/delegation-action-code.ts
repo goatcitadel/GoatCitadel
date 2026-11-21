@@ -14,7 +14,8 @@ import {
   fetchChatProactiveStatus as apiFetchChatProactiveStatus,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { toTitleCase } from "./chat-page-normalizers";
-import { CODE_DELEGATION_PRESETS, ExplorerObservationDetachedError, toActiveDelegationStep, toActiveDelegationScopeControl, inferDelegationRunStatus, createSeedDelegationSteps, resolveDelegationMode, resolveDelegationRoute, applyDelegationStatusChunk, applyDelegationStepChunk, applyDelegationStreamFailure, buildDelegationGraph } from "./useChatDelegationPolicyActions";
+import { CODE_DELEGATION_PRESETS, toActiveDelegationStep, toActiveDelegationScopeControl, createSeedDelegationSteps, resolveDelegationMode, resolveDelegationRoute, buildDelegationGraph } from "./useChatDelegationPolicyActions";
+import { ExplorerObservationDetachedError, inferDelegationRunStatus, applyDelegationStatusChunk, applyDelegationStepChunk, applyDelegationStreamFailure } from "./delegation-stream-projection";
 import type { ActiveChatDelegationStep, ChatProactivePolicyPatch } from "./useChatDelegationPolicyActions";
 import type { DelegationActionOwner, DelegationActions } from "./delegation-action-code.types";
 

@@ -189,10 +189,7 @@ describe("tool executor tail coverage", () => {
     const memory = await executeTool(request("memory.read", { limit: 2 }), config, storage);
     expect(memory).toMatchObject({
       namespace: "all",
-      items: [
-        expect.objectContaining({ docId: "doc-empty", snippet: "" }),
-        expect.objectContaining({ docId: "doc-match", snippet: "coverage branch matching text" }),
-      ],
+      items: [], unavailable:true,
     });
 
     const search = await executeTool(request("memory.search", { query: "coverage" }), config, storage);

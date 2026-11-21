@@ -398,7 +398,9 @@ export function composeRuntimeAdminRouteDependencies(
       bootstrapOnboarding: (input) => onboardingStateService.bootstrapOnboarding(onboardingStateHost, input),
       getOnboardingStartupState: () => onboardingStateService.getOnboardingStartupState(onboardingStateHost),
       getOnboardingState: async () => {
-        const state = onboardingStateService.getOnboardingState(onboardingStateHost);
+        const state = await gateway.llmService.withPublicCodexStatusSnapshot(() =>
+          onboardingStateService.getOnboardingState(onboardingStateHost),
+        );
         const firstTask = await readOnboardingFirstTaskEvidence(gateway.storage, state);
         return {
           ...state,

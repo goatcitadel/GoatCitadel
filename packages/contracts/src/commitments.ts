@@ -24,7 +24,8 @@ export type AgentCommitmentKind =
 
 /**
  * Lifecycle status of a commitment record.
- * - `pending`  — inferred + persisted, not yet queued for delivery.
+ * - `proposed` — inferred suggestion awaiting an operator decision; never delivered.
+ * - `pending`  — accepted or explicitly requested, not yet queued for delivery.
  * - `delivery_pending` — accepted into the autonomous delivery path; final channel send is still async.
  * - `delivery_failed` — autonomous delivery failed or went stale before a channel send was confirmed.
  * - `sent`     — the due check-in was delivered.
@@ -32,6 +33,7 @@ export type AgentCommitmentKind =
  * - `superseded` — a newer commitment (or user action) replaced it.
  */
 export type AgentCommitmentStatus =
+  | "proposed"
   | "pending"
   | "delivery_pending"
   | "delivery_failed"

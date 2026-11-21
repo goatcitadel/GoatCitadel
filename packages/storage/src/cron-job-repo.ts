@@ -357,6 +357,15 @@ export class CronJobRepository {
     return rows.map((row) => this.mapRow(row));
   }
 
+  /** Bounded scheduler read. Unrelated clock jobs never consume this page. */
+  public listEventJobs(input:{afterJobId?:string;limit?:number}={}):CronJobRecord[]{
+    const limit=input.limit ?? 21,afterJobId=input.afterJobId ?? "";
+    if(!Number.isSafeInteger(limit) || limit<1 || limit>50 || afterJobId.length>64)throw new TypeError("Invalid bounded event-job cursor.");
+    const eventObject=this.db.dialect==="postgres" ? "jsonb_typeof(CAST(action_config_json AS jsonb)->'agentTurn'->'eventWake')='object'":"json_type(CASE WHEN json_valid(action_config_json) THEN action_config_json ELSE '{}' END,'$.agentTurn.eventWake')='object'";
+    const rows=this.db.prepare(`SELECT * FROM cron_jobs WHERE action='agent_turn' AND enabled=1 AND job_id>@afterJobId AND ${eventObject} ORDER BY job_id ASC LIMIT @limit`).all({afterJobId,limit});
+    assertCronJobRows(rows);return rows.map(row=>this.mapRow(row));
+  }
+
   /**
    * List cron jobs visible to a Citadel: jobs scoped to that Citadel plus global
    * (unscoped) jobs. Global schedules are installation-wide, so every actor allowed

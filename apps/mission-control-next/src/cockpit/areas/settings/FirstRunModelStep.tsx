@@ -60,7 +60,7 @@ export function FirstRunModelStep({
             onboarding={state}
             reloadOnboarding={onReload}
             onEnterChat={onModelReady}
-            enterChatLabel="Continue to safety"
+            enterChatLabel="Continue setup"
           />
           <Button variant="ghost" size="sm" onClick={() => leave.request(() => navigate("/settings/models#providers"))}>
             Advanced: edit provider profiles
@@ -81,7 +81,7 @@ export function FirstRunModelStep({
             disabled={!canContinue}
             onClick={() => leave.request(onContinue)}
           >
-            Continue to safety
+            Continue setup
           </Button>
           <p id="first-run-model-prerequisite" className="text-xs text-fg-muted">
             {canContinue

@@ -65,11 +65,11 @@ afterEach(() => {
 });
 
 describe("cockpit Features switches", () => {
-  it("says the features are off unless turned on here, and that each row shows its state", async () => {
+  it("shows each current state without claiming all installation defaults are off", async () => {
     api.fetchSettings.mockResolvedValue({ revision: 4, features: { memoryLifecycleAdminV1Enabled: true } });
     const { container, unmount } = await mount();
     expect(container.textContent).toContain(
-      "These features are off unless you turn them on here, and each row shows its current state.",
+      "Each row shows the feature's current state.",
     );
     expect(container.textContent).not.toContain("ship turned off");
     unmount();

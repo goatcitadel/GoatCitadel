@@ -1,4 +1,9 @@
 import { composeChatArtifactRenderDependencies } from "./gateway-route-composition-artifact-renders.js";
+import {createAssistantReadinessForGateway} from "./assistant-readiness-composition.js";
+import {createFollowThroughForGateway} from "./follow-through-composition.js";
+import {createChatLearningReceiptForGateway} from "./chat-learning-receipt-composition.js";
+import {createChatContinuationForGateway} from "./chat-continuation-composition.js";
+import {createFollowThroughSetupForGateway} from "./follow-through-setup-composition.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { CHAT_ROUTED_CONTEXT_TOOL_NAMES, ConflictError, NotFoundError } from "@goatcitadel/contracts";
@@ -776,6 +781,11 @@ export function composeChatRouteDependencies(
     },
     chatSessions,
     chatSupport: {
+      assistantReadiness:createAssistantReadinessForGateway(gateway),
+      followThrough:createFollowThroughForGateway(gateway),
+      learningReceipt:createChatLearningReceiptForGateway(gateway),
+      continuations:createChatContinuationForGateway(gateway),
+      followThroughSetup:createFollowThroughSetupForGateway(gateway),
       changePlans: {
         create: (sessionId, input) => gateway.chatChangePlanCompatibilityService.create(sessionId, input),
         list: (sessionId, limit) => gateway.chatChangePlanCompatibilityService.list(sessionId, limit),

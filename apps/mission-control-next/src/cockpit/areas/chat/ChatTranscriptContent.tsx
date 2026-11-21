@@ -35,15 +35,14 @@ import { ChatTurnDetails } from "./ChatTurnDetails";
 import { turnReadsDraft, type TurnActions } from "./use-turn-actions";
 import { useTurnSkillCapture } from "./use-turn-skill-capture";
 
-const ChatChangePlanCard = lazy(async () => ({
-  default: (await import("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard")).ChatChangePlanCard,
-}));
+const ChatChangePlanReceipt = lazy(async () => ({ default: (await import("./ChatChangePlanReceipt")).ChatChangePlanReceipt }));
 const ChatContinueAction = lazy(async () => ({ default: (await import("./ChatContinueAction")).ChatContinueAction }));
 const ChatTurnFailureCard = lazy(async () => ({
   default: (await import("./ChatTurnFailureCard")).ChatTurnFailureCard,
 }));
 const ChatTurnThinking = lazy(async () => ({ default: (await import("./ChatTurnAnnotations")).ChatTurnThinking }));
 const TurnReceipt = lazy(async () => ({ default: (await import("./ChatTurnAnnotations")).TurnReceipt }));
+const ChatLearningReceiptControl=lazy(async()=>({default:(await import("./ChatLearningReceiptControl")).ChatLearningReceiptControl}));
 
 const TURN_NAME_WORDS = 8;
 
@@ -73,6 +72,7 @@ function turnAccessibleName(prompt: string, position?: number): string {
  * props changed. Callers must pass stable `actions` and callbacks.
  */
 export const Turn = memo(function Turn({
+  inlineApprovalId,
   turn,
   position,
   isLatest = false,
@@ -93,6 +93,7 @@ export const Turn = memo(function Turn({
   position?: number;
   /** The newest turn in the conversation; only it can offer Continue. */
   isLatest?: boolean;
+  inlineApprovalId?: string;
   previewText: string | null;
   streaming: boolean;
   actions: TurnActions;
@@ -287,6 +288,7 @@ export const Turn = memo(function Turn({
       isChatTurnTerminalStatus(turn.trace.status) ? (
         <ChatTurnDetails
           turn={turn}
+          inlineApprovalId={inlineApprovalId}
           answerContent={assistantText}
           streaming={streaming}
           readOnly={actions.historicalReadOnly}
@@ -301,6 +303,7 @@ export const Turn = memo(function Turn({
         />
       ) : null}
       {skillCapture.control}
+      {!streaming && actions.workspaceId && isChatTurnTerminalStatus(turn.trace.status) ? <Suspense fallback={null}><ChatLearningReceiptControl sessionId={turn.trace.sessionId} workspaceId={actions.workspaceId} turnId={turn.turnId} readOnly={actions.historicalReadOnly}/></Suspense>:null}
     </article>
   );
 });
@@ -415,7 +418,7 @@ export function ChatTranscriptFooter({ context }: { context?: TranscriptFooterCo
               </p>
             }
           >
-            <ChatChangePlanCard {...receipt} />
+            <ChatChangePlanReceipt receipt={receipt} sessionId={props.selectedSessionId ?? undefined} pendingApprovalId={props.pendingApproval?.approvalId} draftControls={props} onUpdated={props.onRefreshThread} />
           </Suspense>
         ) : null}
         <ChatBlockers key={props.selectedSessionId} props={props} latestTurn={latestTurn} />

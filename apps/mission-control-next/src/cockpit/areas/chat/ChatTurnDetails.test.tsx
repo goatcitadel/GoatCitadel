@@ -174,6 +174,26 @@ describe("ChatTurnDetails copy feedback (CH-31)", () => {
       tools().dispatchEvent(new Event("toggle"));
     });
 
+  it("keeps a matching inline approval's activity available on demand", async () => {
+    const tool = { ...toolRun({}), approvalId: "approval-1", status: "approval_required" } as const;
+    const turn = turnWith([tool]);
+    turn.trace.status = "waiting_for_approval";
+    await act(async () =>
+      root.render(
+        <ChatTurnDetails
+          turn={turn}
+          inlineApprovalId="approval-1"
+          streaming={false}
+          readOnly={false}
+          actions={actions}
+        />,
+      ),
+    );
+    expect(tools().open).toBe(false);
+    operatorToggles(true);
+    expect(tools().open).toBe(true);
+  });
+
   it("keeps an operator-opened tool list open after streaming ends (CH-39)", () => {
     const executed = toolRun({ bytesWritten: 1 });
     act(() =>

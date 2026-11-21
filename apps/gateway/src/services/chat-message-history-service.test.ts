@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHash } from "node:crypto";
-import { renderConversationSummaryForModel } from "./chat-compaction.js";
+import { buildChatContinuityLedger } from "./chat-continuity-ledger.js";
 import type { ChatMessageRecord, TranscriptEvent } from "@goatcitadel/contracts";
 import {
   buildLlmMessagesFromBranchPath,
@@ -12,6 +11,35 @@ import {
 } from "./chat-message-history-service.js";
 
 describe("chat-message-history-service", () => {
+  it("preserves late constraints across durable windows and restart without multiplying the continuity budget", async () => {
+    const sessionState = createBranchSessionState(30, "continuity");
+    const original = sessionState.messagesById.get("user-1")!;
+    original.content = `${"Background detail. ".repeat(45)} Never delete the workspace backup.`;
+    const stored: unknown[] = [];
+    const upsert = vi.fn((input) => { stored.push(JSON.parse(JSON.stringify(input))); return input; });
+    const deps = createDeps({ sessionState, upsertSummary: upsert });
+    const path = Array.from({ length: 30 }, (_, index) => `turn-${index+1}`);
+    const first = await buildLlmMessagesFromBranchPath(deps, "session-1", path);
+    const context = first.filter(message => message.role === "system");
+    expect(context).toHaveLength(1);
+    expect(String(context[0]!.content)).toContain("Never delete the workspace backup.");
+    expect(stored.every(row => Boolean((row as {continuityLedger?:unknown}).continuityLedger))).toBe(true);
+    const restarted = createDeps({sessionState, summaries:stored, upsertSummary:vi.fn(() => {throw new Error("Should reuse frozen ledger");})});
+    expect(await buildLlmMessagesFromBranchPath(restarted,"session-1",path)).toEqual(first);
+    expect(String(context[0]!.content).length).toBeLessThan(8_800);
+  });
+
+  it("keeps canonical history verbatim when the resolved route has no safe continuity headroom", async () => {
+    const sessionState = createBranchSessionState(14, "headroom");
+    sessionState.messagesById.get("user-1")!.content = "Never delete the workspace backup.";
+    const deps = createDeps({sessionState});
+    deps.llmService.getModelContextWindow = () => 1024;
+    deps.llmService.getModelOutputTokenLimit = () => 512;
+    const history = await buildLlmMessagesFromBranchPath(deps,"session-1",Array.from({length:14},(_,index)=>`turn-${index+1}`));
+    expect(history).toHaveLength(28);
+    expect(history[0]!.content).toContain("Never delete the workspace backup.");
+  });
+
   it("normalizes transcript messages with system guidance and multimodal user content", async () => {
     const deps = createDeps({
       transcript: [
@@ -351,21 +379,8 @@ describe("chat-message-history-service", () => {
         sessionState.messagesById.get(trace.assistantMessageId!)!,
       ];
     });
-    const source = JSON.stringify({
-      version: 2,
-      turnIds,
-      messages: sourceMessages.map((message) => ({
-        messageId: message.messageId,
-        role: message.role,
-        actorType: message.actorType,
-        sourceAuthority: message.sourceAuthority ?? "unknown",
-        parentDelegationStepId: message.parentDelegationStepId ?? null,
-        content: message.content,
-        parts: null,
-        attachments: null,
-      })),
-    });
-    const sourceHash = createHash("sha256").update(source).digest("hex");
+    const continuityLedger = buildChatContinuityLedger({messages:sourceMessages,turnIds,canonicalLinks:[]});
+    const sourceHash = continuityLedger.sourceHash;
     const upsert = vi.fn((input) => input);
     const deps = createDeps({
       sessionState,
@@ -379,6 +394,7 @@ describe("chat-message-history-service", () => {
           sourceHash,
           tokenEstimate: 100,
           summary: "Persisted summary for the first eight turns.",
+          continuityLedger,
           createdAt: "2026-05-14T00:00:00.000Z",
           updatedAt: "2026-05-14T00:00:00.000Z",
         },
@@ -393,10 +409,8 @@ describe("chat-message-history-service", () => {
       undefined,
     );
 
-    expect(messages[0]).toEqual({
-      role: "system",
-      content: renderConversationSummaryForModel("Persisted summary for the first eight turns."),
-    });
+    expect(messages[0]!.role).toBe("system");
+    expect(messages[0]!.content).toContain("persisted user 1");
     expect(upsert).not.toHaveBeenCalled();
   });
 

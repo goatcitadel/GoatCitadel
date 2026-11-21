@@ -284,7 +284,22 @@ export async function buildVerificationBuildEnv(baseEnv, extraEnv = {}, omitEnv 
   const env = buildVerificationProcessEnv(baseEnv, extraEnv, omitEnv);
   for (const key of [WORKTREE_OUTPUT_LOCK_LEASE_ENV, WORKTREE_OUTPUT_LOCK_PATH_ENV, WORKTREE_OUTPUT_LOCK_ROOT_ENV])
     delete env[key];
-  return { ...env, ...leaseEnv };
+  const buildEnv = { ...env, ...leaseEnv };
+  // Nested pnpm scripts can push a Windows PATH past cmd.exe's 8191-character
+  // boundary. Keep every distinct search entry in its original order/spelling.
+  if (process.platform === "win32") {
+    for (const key of Object.keys(buildEnv)) {
+      if (key.toLowerCase() !== "path" || typeof buildEnv[key] !== "string") continue;
+      const seen = new Set();
+      buildEnv[key] = buildEnv[key].split(";").filter(entry => {
+        const identity = entry.toLowerCase();
+        if (seen.has(identity)) return false;
+        seen.add(identity);
+        return true;
+      }).join(";");
+    }
+  }
+  return buildEnv;
 }
 
 export function buildVerificationProcessLogName(name, processLogPrefix) {
@@ -385,6 +400,7 @@ export async function requestJson(gatewayUrl, route, init = {}) {
       ...(init.headers ?? {}),
     },
     body: init.body ? JSON.stringify(init.body) : undefined,
+    signal: init.signal,
   });
   const text = await response.text();
   let body = null;

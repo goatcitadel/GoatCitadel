@@ -1,0 +1,2 @@
+import {ChatFollowThroughControl} from "../chat/ChatFollowThroughControl";
+export function WorkFollowThrough({sessionId,workspaceId}:{sessionId:string;workspaceId:string}){return <section className="rounded-lg border border-line bg-panel p-4"><h2 className="mb-3 text-lg font-semibold text-fg">Conversation follow-through</h2><ChatFollowThroughControl sessionId={sessionId} workspaceId={workspaceId}/></section>;}

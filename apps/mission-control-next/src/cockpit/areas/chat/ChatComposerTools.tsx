@@ -14,7 +14,7 @@ import { IconButton } from "../../ui/IconButton";
 import { Sheet } from "../../ui/Sheet";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { warmControlWave } from "../../ui/use-control-wave";
-import { ChatComposerNotices } from "./ChatComposerControls";
+import { ChatComposerNotices } from "./ChatComposerNotices";
 import { attachmentUploadErrorText } from "./chat-upload-error-copy";
 import { loadChatComposerSources } from "./load-chat-composer-sources";
 import type { ComposerProps } from "./ChatTextComposer.types";

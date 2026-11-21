@@ -30,6 +30,9 @@ export interface ChatPostCommitRuntimeCompositionInput {
   resolveModelDefaults(): Promise<{ providerId?: string; model?: string } | undefined>;
   resolveApiStyle(providerId?: string, model?: string): LlmApiStyle;
   proposeTraceMemoryCandidate: ChatPostCommitEffectServiceDeps["proposeTraceMemoryCandidate"];
+  resolveBackgroundLearningReadiness:ChatPostCommitEffectServiceDeps["resolveBackgroundLearningReadiness"];
+  enqueueLearningReview:NonNullable<ChatPostCommitEffectServiceDeps["enqueueLearningReview"]>;
+  evaluateGovernedMemoryMaintenance:NonNullable<ChatPostCommitEffectServiceDeps["evaluateGovernedMemoryMaintenance"]>;
   /** Required in production composition: post-commit children must never run unfenced. */
   effectAuthority: ChatPostCommitEffectAuthorityPort;
   isAutonomyDisabled(): Promise<boolean>;
@@ -66,11 +69,15 @@ export function createChatPostCommitRuntime(
     createChatCompletion: input.createChatCompletion,
     resolveModelDefaults: input.resolveModelDefaults,
     resolveApiStyle: input.resolveApiStyle,
+    resolveBackgroundLearningReadiness:input.resolveBackgroundLearningReadiness,
   });
   const effectService = new ChatPostCommitEffectService({
     storage: input.storage,
     commitmentClassifier,
     backgroundReview: backgroundReviewService,
+    enqueueLearningReview:input.enqueueLearningReview,
+    evaluateGovernedMemoryMaintenance:input.evaluateGovernedMemoryMaintenance,
+    resolveBackgroundLearningReadiness:input.resolveBackgroundLearningReadiness,
     proposeTraceMemoryCandidate: input.proposeTraceMemoryCandidate,
     effectAuthority: input.effectAuthority,
     isAutonomyDisabled: input.isAutonomyDisabled,

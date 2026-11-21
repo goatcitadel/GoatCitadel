@@ -170,6 +170,7 @@ function renderDirect({
   approval = record,
   onResolved = resolved,
   connectionLost = false,
+  inlineDangerReview = false,
 } = {}) {
   root.render(
     <QueryClientProvider client={client}>
@@ -185,6 +186,7 @@ function renderDirect({
         onResolved={onResolved}
         onInvalidated={invalidated}
         connectionLost={connectionLost}
+        inlineDangerReview={inlineDangerReview}
       />
     </QueryClientProvider>,
   );
@@ -242,6 +244,48 @@ afterEach(async () => {
   host.remove();
   client.clear();
   vi.restoreAllMocks();
+});
+const shellRecord = () => ({
+  ...makeRecord(),
+  kind: "shell.exec",
+  riskLevel: "danger" as const,
+  preview: { command: "pnpm test" },
+});
+it("shows shell decision controls before their code loads and opens the exact review on the first click", async () => {
+  record = shellRecord();
+  await act(async () => renderDirect({ inlineDangerReview: true }));
+  expect(button("Review danger approval")).toBeDefined();
+  expect(button("Deny")).toBeDefined();
+  expect(loader.load).not.toHaveBeenCalled();
+  await act(async () => button("Review danger approval").click());
+  await act(async () => { await Promise.all([...bodyLoads]); });
+  await vi.waitFor(() => expect(host.querySelector('section[aria-label="Exact approval review"]:not([hidden])')).toBeTruthy());
+  expect(host.textContent).toContain("pnpm test");
+  expect(api.resolveApproval).not.toHaveBeenCalled();
+});
+it("does not replay a deferred denial when the conversation changes during the import", async () => {
+  record = shellRecord();
+  const delayed = deferCode();
+  await act(async () => renderDirect({ inlineDangerReview: true }));
+  await act(async () => button("Deny").click());
+  await act(async () => renderDirect({ sessionId: "session-b", inlineDangerReview: true }));
+  await act(async () => {
+    delayed.resolve(undefined);
+    await Promise.all([...bodyLoads]);
+  });
+  expect(api.resolveApproval).not.toHaveBeenCalled();
+});
+it("rechecks the exact shell approval and dispatches a deferred denial once", async () => {
+  record = shellRecord();
+  await act(async () => renderDirect({ inlineDangerReview: true }));
+  const deny = button("Deny");
+  await act(async () => {
+    deny.click();
+    deny.click();
+  });
+  await act(async () => { await Promise.all([...bodyLoads]); });
+  await vi.waitFor(() => expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "reject"));
+  expect(api.fetchApproval).toHaveBeenCalled();
 });
 it.each([{}, { outsideRootWrite: {} }, { outsideRootWrite: { kind: "outside_root_write", candidates: [] } }])(
   "keeps ordinary and malformed grant previews cold while ordinary decisions remain available %j",

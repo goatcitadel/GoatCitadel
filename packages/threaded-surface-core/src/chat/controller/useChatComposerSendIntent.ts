@@ -8,7 +8,7 @@ import { useBtwSideChatController } from "../useBtwSideChatController";
 import { useChatDocuments } from "../useChatDocuments";
 import { useChatGoalActions } from "../useChatGoalActions";
 import { useChatKnowledgeAttachments } from "../useChatKnowledgeAttachments";
-import { useChatMultimodalControls } from "../useChatMultimodalControls";
+import type { useChatMultimodalControls } from "../useChatMultimodalControls";
 import { useChatSessionData } from "../useChatSessionData";
 import { useChatSurfaceOrchestration } from "../useChatSurfaceOrchestration";
 import { useExternalSourceAttachments } from "../useExternalSourceAttachments";

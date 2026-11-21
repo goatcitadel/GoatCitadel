@@ -1,3 +1,4 @@
+import { gatewayFetch } from "./gateway-transport.js";
 import {
   isStartupReadPath,
   STARTUP_READ_BATCH_PATH,
@@ -43,6 +44,7 @@ const ALLOWED_HEADERS = new Set([
   "x-goatcitadel-origin-surface",
 ]);
 const RESPONSE_HEADERS = new Set(["content-type", "cache-control", "etag", "x-goatcitadel-correlation-id"]);
+const CHAT_CORE_PATH = /^\/api\/v1\/chat\/sessions\/[^/]+\/core-state$/u;
 const sameScope = (a: StartupReadScope, b: StartupReadScope) =>
   a.installation === b.installation &&
   a.accessRevision === b.accessRevision &&
@@ -83,7 +85,7 @@ function validResult(value: unknown): value is StartupReadResponse {
 }
 async function settleDirectRead(row: PendingRead): Promise<void> {
   try {
-    row.resolve(await fetch(row.url, row.init));
+    row.resolve(await gatewayFetch(row.url, row.init));
   } catch (error) {
     row.reject(error);
   }
@@ -112,7 +114,7 @@ async function dispatch(queue: ReadQueue): Promise<void> {
       try {
         if (group.length === 1) {
           const row = group[0]!;
-          row.resolve(await fetch(row.url, row.init));
+          row.resolve(await gatewayFetch(row.url, row.init));
           return;
         }
         const first = group[0]!;
@@ -123,7 +125,7 @@ async function dispatch(queue: ReadQueue): Promise<void> {
             batch.abort(new DOMException("Every read in this batch was cancelled", "AbortError"));
         };
         for (const row of group) row.release = release;
-        const response = await fetch(batchUrl(queue.scope, group), {
+        const response = await gatewayFetch(batchUrl(queue.scope, group), {
           ...first.init,
           method: "GET",
           signal: batch.signal,
@@ -182,16 +184,20 @@ export function fetchStartupRead(
   const parsed = new URL(url),
     path = parsed.pathname + parsed.search,
     headers = new Headers(init.headers);
+  // Chat needs the selected conversation's thread before an automatic draft
+  // handoff. Its original guarded GET should settle independently of the batch.
+  const loadsChatThread = CHAT_CORE_PATH.test(parsed.pathname) && parsed.searchParams.get("includeThread") !== "false";
   if (
     !windowScope ||
     !sameScope(scope, windowScope) ||
     Date.now() >= windowEnd ||
     init.method !== "GET" ||
     init.body ||
+    loadsChatThread ||
     !isStartupReadPath(path) ||
     [...headers.keys()].some((key) => !ALLOWED_HEADERS.has(key))
   )
-    return fetch(url, init);
+    return gatewayFetch(url, init);
   const item = {
     path,
     correlationId: headers.get("x-goatcitadel-correlation-id") ?? "startup-read",

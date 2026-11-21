@@ -90,6 +90,7 @@ export function buildNativeComparisonProfile(
     if (profile.outputTokens >= profile.contextTokens)
       throw new Error("GoatCitadel needs input space below the context cap.");
     ({ config, nativeTools } = goatComparisonConfig(profile, slots));
+    if (skillWorkflow) config.assistant.features.chatSkillInstructionsV1Enabled = true;
     filename = "config/goatcitadel.json";
     reviewNotes = [
       "The authenticated loopback Gateway owns project/session creation, route preflight, durable Chat, tools, and approvals.",

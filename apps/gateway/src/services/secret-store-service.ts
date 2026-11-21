@@ -1,4 +1,7 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
+import { channel } from "node:diagnostics_channel";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { GoatError } from "@goatcitadel/contracts";
 import { WINDOWS_CREDENTIAL_DELETE_SCRIPT } from "./windows-credential-delete.js";
 import { WINDOWS_CREDENTIAL_CUSTODY_READ_SCRIPT, WINDOWS_CREDENTIAL_CUSTODY_WRITE_SCRIPT,
@@ -8,8 +11,22 @@ import { WINDOWS_CREDENTIAL_RECEIPT_SCRIPT } from "./windows-credential-write-re
 
 const SECRET_SERVICE = "goatcitadel";
 const DISABLE_SECRET_STORE_ENV = "GOATCITADEL_DISABLE_SECRET_STORE";
-// A hung PowerShell must not freeze the gateway event loop (these helpers run via spawnSync).
+// Bound how long a credential helper may run.
 const WINDOWS_CREDENTIAL_TIMEOUT_MS = 10000;
+const NATIVE_WINDOWS_READ_TIMEOUT_MS = 1000;
+const credentialReadTiming = channel("goatcitadel.windows-credential-read");
+const WINDOWS_CREDENTIAL_READ_ARGS = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", `
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
+$vault = [Windows.Security.Credentials.PasswordVault]::new()
+try {
+  $credential = $vault.Retrieve($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT)
+  $credential.RetrievePassword()
+  Write-Output $credential.Password
+} catch {
+  exit 3
+}
+`];
 
 export type SecretSource = "none" | "keychain";
 
@@ -89,6 +106,12 @@ export class SecretStoreService {
     return this.getSecret(providerAccount(providerId));
   }
 
+  public async getProviderApiKeyAsync(providerId: string): Promise<string | undefined> {
+    if (process.platform !== "win32") return this.getProviderApiKey(providerId);
+    assertProviderId(providerId);
+    return this.getSecretAsync(providerAccount(providerId));
+  }
+
   public deleteProviderApiKey(providerId: string): void {
     assertProviderId(providerId);
     this.deleteSecret(providerAccount(providerId));
@@ -117,7 +140,47 @@ export class SecretStoreService {
     this.assertAvailable();
     const value = process.platform === "win32" ? this.getWindowsCredential(account)
       : process.platform === "darwin" ? this.getMacCredential(account) : this.getLinuxCredential(account);
-    return value !== undefined && isMcpReceiptAccount(account) ? decodeMcpCredentialReceipt(value).secret : value;
+    return unwrapCredential(account, value);
+  }
+
+  /** Let Windows PasswordVault reads overlap other Gateway work. */
+  public async getSecretAsync(account: string): Promise<string | undefined> {
+    if (process.platform !== "win32") return this.getSecret(account);
+    assertSecretAccount(account);
+    if (!isSecretStoreExplicitlyDisabled() && this.windowsResource !== SECRET_SERVICE) {
+      const helper = resolveNativeWindowsCredentialReader();
+      if (helper) {
+        const startedAt = performance.now();
+        const result = await readNativeWindowsCredential(helper, this.windowsCredentialReadEnv(account));
+        if (credentialReadTiming.hasSubscribers) {
+          credentialReadTiming.publish({ backend: "native", outcome: result.status, durationMs: performance.now() - startedAt });
+        }
+        if (result.status === "missing") return undefined;
+        if (result.status === "found") return unwrapCredential(account, result.value);
+      }
+    }
+    this.assertAvailable();
+    const startedAt = performance.now();
+    const read = new Promise<string | undefined>((resolve, reject) => {
+      execFile("powershell", WINDOWS_CREDENTIAL_READ_ARGS, {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: WINDOWS_CREDENTIAL_TIMEOUT_MS,
+        maxBuffer: 64 * 1024,
+        env: { ...minimalHelperEnv(), ...this.windowsCredentialReadEnv(account) },
+      }, (error, stdout) => {
+        if (error?.code === 3) resolve(undefined);
+        else if (error) reject(new SecretStoreUnavailableError("Windows credential read failed."));
+        else resolve(stdout.trim() || undefined);
+      });
+    });
+    try {
+      return unwrapCredential(account, await read);
+    } finally {
+      if (credentialReadTiming.hasSubscribers) {
+        credentialReadTiming.publish({ backend: "powershell", durationMs: performance.now() - startedAt });
+      }
+    }
   }
 
   public deleteSecret(account: string): void {
@@ -251,24 +314,10 @@ Write-Output "ok"
   }
 
   private getWindowsCredential(account: string): string | undefined {
-    const script = `
-[Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
-$vault = [Windows.Security.Credentials.PasswordVault]::new()
-try {
-  $credential = $vault.Retrieve($env:GOATCITADEL_SECRET_SERVICE, $env:GOATCITADEL_SECRET_ACCOUNT)
-  $credential.RetrievePassword()
-  Write-Output $credential.Password
-} catch {
-  exit 3
-}
-`;
     const result = runCommand(
       "powershell",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
-      {
-        GOATCITADEL_SECRET_SERVICE: this.windowsResource,
-        GOATCITADEL_SECRET_ACCOUNT: account,
-      },
+      WINDOWS_CREDENTIAL_READ_ARGS,
+      this.windowsCredentialReadEnv(account),
       { allowExitCodes: [3], timeoutMs: WINDOWS_CREDENTIAL_TIMEOUT_MS },
     );
     if (result.status === 3) {
@@ -276,6 +325,10 @@ try {
     }
     const value = result.stdout.trim();
     return value || undefined;
+  }
+
+  private windowsCredentialReadEnv(account: string): Record<string, string> {
+    return { GOATCITADEL_SECRET_SERVICE: this.windowsResource, GOATCITADEL_SECRET_ACCOUNT: account };
   }
 
   private deleteWindowsCredential(account: string): void {
@@ -363,6 +416,46 @@ try {
 
 function providerAccount(providerId: string): string {
   return `provider:${providerId.trim().toLowerCase()}`;
+}
+
+function resolveNativeWindowsCredentialReader(): string | undefined {
+  if (process.arch !== "x64" || process.env.GOATCITADEL_NATIVE_WINDOWS_CREDENTIAL_READ !== "1") return undefined;
+  // Both the compiled Gateway and its Node executable must be from the same installed app.
+  const appDir = fileURLToPath(new URL("../../../", import.meta.url));
+  const bundledNode = path.join(appDir, "runtime", "node", "node.exe");
+  if (path.resolve(process.execPath).toLowerCase() !== bundledNode.toLowerCase()) return undefined;
+  return path.join(appDir, "desktop", "GoatCitadel-Credential-Read.exe");
+}
+
+type NativeWindowsRead = { status: "missing" | "unavailable" } | { status: "found"; value: string | undefined };
+
+function readNativeWindowsCredential(helper: string, lookup: Record<string, string>): Promise<NativeWindowsRead> {
+  return new Promise((resolve) => {
+    execFile(helper, [], {
+      encoding: "buffer",
+      windowsHide: true,
+      timeout: NATIVE_WINDOWS_READ_TIMEOUT_MS,
+      maxBuffer: 64 * 1024,
+      env: { ...minimalHelperEnv(), ...lookup },
+    }, (error, stdout, stderr) => {
+      if (stderr.length || (error && (error.code !== 3 || stdout.length))) {
+        resolve({ status: "unavailable" });
+      } else if (error) {
+        resolve({ status: "missing" });
+      } else {
+        try {
+          const value = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(stdout).trim();
+          resolve({ status: "found", value: value || undefined });
+        } catch {
+          resolve({ status: "unavailable" });
+        }
+      }
+    });
+  });
+}
+
+function unwrapCredential(account: string, value: string | undefined): string | undefined {
+  return value !== undefined && isMcpReceiptAccount(account) ? decodeMcpCredentialReceipt(value).secret : value;
 }
 
 function assertProviderId(providerId: string): void {

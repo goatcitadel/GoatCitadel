@@ -1,16 +1,15 @@
-import * as grpc from "@grpc/grpc-js";
+import type * as grpc from "@grpc/grpc-js";
 import type { A2AJsonRpcMethod, A2AJsonRpcResponse, A2AOutboundPeerConfig } from "@goatcitadel/contracts";
 import { assertHostAllowed } from "@goatcitadel/policy-engine";
-import {
-  type A2AGrpcClientShape,
-  type A2AGrpcJsonEnvelope,
-  type A2AGrpcJsonRequest,
-  type A2AGrpcTaskEnvelope,
-  type A2AGrpcTaskEventEnvelope,
-  type A2AGrpcTaskEventsEnvelope,
-  type A2AGrpcTaskEventsRequest,
-  type A2AGrpcTaskRequest,
-  loadA2AGrpcClientConstructor,
+import type {
+  A2AGrpcClientShape,
+  A2AGrpcJsonEnvelope,
+  A2AGrpcJsonRequest,
+  A2AGrpcTaskEnvelope,
+  A2AGrpcTaskEventEnvelope,
+  A2AGrpcTaskEventsEnvelope,
+  A2AGrpcTaskEventsRequest,
+  A2AGrpcTaskRequest,
 } from "./a2a-grpc-proto.js";
 import { buildOutboundHeaders, jsonRpcResult, readNumber, readString } from "./a2a-route-utils.js";
 
@@ -33,27 +32,26 @@ export class A2AGrpcClient implements A2AGrpcClientPort {
   public async call(input: A2AGrpcOutboundCallInput): Promise<A2AJsonRpcResponse> {
     const endpoint = parseGrpcEndpoint(input.grpcUrl);
     assertHostAllowed(endpoint.allowlistUrl, input.allowlist);
+    const [{ credentials, Metadata }, { loadA2AGrpcClientConstructor }] = await Promise.all([
+      import("@grpc/grpc-js"),
+      import("./a2a-grpc-proto.js"),
+    ]);
     const ClientConstructor = loadA2AGrpcClientConstructor();
     const client = new ClientConstructor(
       endpoint.target,
-      grpc.credentials.createInsecure(),
+      credentials.createInsecure(),
     ) as unknown as A2AGrpcClientShape;
-    const metadata = buildGrpcMetadata(input.peer);
     try {
+      const metadata = new Metadata();
+      const authorization = buildOutboundHeaders(input.peer).authorization;
+      if (authorization) {
+        metadata.set("authorization", authorization);
+      }
       return await callA2AGrpcMethod(client, metadata, input);
     } finally {
       client.close();
     }
   }
-}
-
-function buildGrpcMetadata(peer: Pick<A2AOutboundPeerConfig, "token" | "tokenEnv">): grpc.Metadata {
-  const metadata = new grpc.Metadata();
-  const authorization = buildOutboundHeaders(peer).authorization;
-  if (authorization) {
-    metadata.set("authorization", authorization);
-  }
-  return metadata;
 }
 
 async function callA2AGrpcMethod(

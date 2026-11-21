@@ -17,6 +17,12 @@ function createRepo(): CronJobRepository {
 }
 
 describe("CronJobRepository", () => {
+  it("bounds the event-job scan before mapping unrelated schedules and supports a stable job cursor",()=>{
+    const repo=createRepo();
+    for(const jobId of ["event-a","event-b"]){repo.upsert({jobId,name:jobId,action:"agent_turn",enabled:true,schedule:"* * * * * UTC",actionConfig:{agentTurn:{prompt:"Check",eventWake:{version:1,eventType:"subagent.end",hookId:"h",workspaceId:"default",sourceSessionId:"s",notBefore:"2026-11-19T00:00:00.000Z",timezone:"UTC"}}}});}
+    for(let i=0;i<30;i++)repo.upsert({jobId:`ordinary-${i}`,name:"Ordinary",action:"task",schedule:"* * * * * UTC",enabled:true});
+    assert.deepEqual(repo.listEventJobs({limit:1}).map(job=>job.jobId),["event-a"]);assert.deepEqual(repo.listEventJobs({afterJobId:"event-a",limit:20}).map(job=>job.jobId),["event-b"]);
+  });
   it("never imports creator proof, binds only an exact server actor, preserves harmless edits and invalidates changed actions", () => {
     const repo = createRepo();
     const spec = { jobId: "creator-proof", name: "Creator proof", action: "agent_turn" as const,

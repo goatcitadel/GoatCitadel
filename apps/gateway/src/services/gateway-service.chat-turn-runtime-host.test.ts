@@ -112,3 +112,41 @@ describe("GatewayService.buildChatTurnRuntimeHost", () => {
     expect(assertActiveTurnWrite).toHaveBeenCalledWith(admission);
   });
 });
+
+
+describe("GatewayService foreground submission priority", () => {
+  it("yields local learning before queued non-streaming Chat work", async () => {
+    const events: string[] = [];
+    const gateway = Object.assign(Object.create(GatewayService.prototype) as GatewayService, {
+      backgroundLearningQueueService: { notifyForegroundActivity: () => events.push("yield-learning") },
+      chatTurnExecutionRegistry: {
+        withWriteLease: async (_session: string, _operation: string, work: () => Promise<string>) => {
+          events.push("admit-submission");
+          return work();
+        },
+      },
+    });
+    await expect(gateway.withChatTurnWriteLease("session", "agent-send", async () => {
+      events.push("queue-durable-chat");
+      return "submitted";
+    })).resolves.toBe("submitted");
+    expect(events).toEqual(["yield-learning", "admit-submission", "queue-durable-chat"]);
+  });
+
+  it("yields local learning before queued streaming Chat work", async () => {
+    const events: string[] = [];
+    const gateway = Object.assign(Object.create(GatewayService.prototype) as GatewayService, {
+      backgroundLearningQueueService: { notifyForegroundActivity: () => events.push("yield-learning") },
+      chatTurnExecutionRegistry: {
+        withWriteLeaseStream: async function* (_session: string, _operation: string, work: () => AsyncGenerator<never>) {
+          events.push("admit-submission");
+          yield* work();
+        },
+      },
+    });
+    for await (const _chunk of gateway.withChatTurnWriteLeaseStream("session", "agent-send/stream", async function* () {
+      events.push("queue-durable-chat");
+    })) { /* Empty test stream. */ }
+    expect(events).toEqual(["yield-learning", "admit-submission", "queue-durable-chat"]);
+  });
+});

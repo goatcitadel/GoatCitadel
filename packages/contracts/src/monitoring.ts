@@ -121,6 +121,12 @@ export interface CronNoAgentConfig {
 export type CronAgentTurnDeliverMode = "always" | "on_notify";
 
 export interface CronAgentTurnConfig {
+  /** Explicit Chat workspace, verified against this session and the job's active citadel at execution. */
+  workspaceId?:string;
+  /** Explicitly reviewed event binding; the event body never becomes instructions. */
+  eventWake?:CronFollowThroughEventConfig;
+  /** A single canonical occurrence at an absolute instant, retaining the selected zone for review. */
+  oneShot?:{at:string;timezone:string};
   /** Internal reference to a frozen commitment owned by the canonical cron occurrence. */
   commitment?: import("./commitments.js").CommitmentOccurrenceReference;
   /**
@@ -157,6 +163,8 @@ export interface CronAgentTurnConfig {
     authActorId?: string;
     /** Permission profile the creator held, retained for audit and future profile-intersection support. */
     permissionProfileId?: string;
+    /** Optional exact reviewed profile revision. New guided schedules park if it changes. */
+    permissionProfileRevision?:string;
     /**
      * Job id of the turn that created this job, when created from inside another
      * scheduled turn. Used to enforce the depth-1 anti-recursion chain cap.
@@ -165,6 +173,17 @@ export interface CronAgentTurnConfig {
     /** Chain depth (0 = created interactively; 1 = created by a scheduled turn). */
     depth?: number;
   };
+}
+
+export interface CronFollowThroughEventConfig {
+  version:1;
+  eventType:"subagent.end";
+  hookId:string;
+  workspaceId:string;
+  sourceSessionId:string;
+  /** Only server-recorded hook events at/after this reviewed start are considered. */
+  notBefore:string;
+  timezone:string;
 }
 
 export interface CronJobActionConfig {

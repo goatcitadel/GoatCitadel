@@ -83,6 +83,18 @@ test("buildSafePostgresSearchQuery strips punctuation into plain tsquery input",
   assert.equal(buildSafePostgresSearchQuery("***"), null);
 });
 
+test("workspace recall excludes repeated automation sessions before the result limit while exact-session search stays available", () => {
+  withDatabase(db => {
+    ensureSearchSessions(db,"interactive","machine");
+    new ChatSessionMetaRepository(db).patch("machine",{origin:"system"},"2026-06-01T00:00:00.000Z");
+    const repo = new ChatMessageRepository(db);
+    for(let i=0;i<60;i++) repo.upsert(makeMessage("machine","assistant","Kestrel deployment decision",{timestamp:"2099-01-01T00:00:00.000Z"}));
+    repo.upsert(makeMessage("interactive","user","Kestrel deployment decision"));
+    assert.deepEqual(search(repo,"Kestrel deployment",{limit:1}).map(hit => hit.sessionId),["interactive"]);
+    assert.equal(search(repo,"Kestrel deployment",{sessionId:"machine",limit:1})[0]?.sessionId,"machine");
+  });
+});
+
 test("searchMessages uses Postgres search vectors and coerces numeric rows", () => {
   const preparedSql: string[] = [];
   const searchCalls: unknown[][] = [];

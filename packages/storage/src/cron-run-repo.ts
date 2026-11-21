@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  canonicalJsonString,
   ConflictError,
   NotFoundError,
   PayloadTooLargeError,
@@ -140,6 +141,7 @@ export class CronRunRepository {
           updated_at = @now
       WHERE job_id = @jobId
         AND execution_generation = @expectedGeneration
+        AND revision = @expectedRevision
         AND active_run_id IS NULL
     `);
     this.insertStmt = db.prepare(`
@@ -300,17 +302,49 @@ export class CronRunRepository {
     const trigger = normalizeTrigger(input.trigger ?? "scheduled_due");
     const runId = normalizeOptional(input.runId, "runId") ?? randomUUID();
     const normalizedNow = normalizeTimestamp(now ?? this.readDatabaseNow(), "now");
+    const eventSource = normalizeCronEventSource(input.eventSource);
+    const operatorAction = input.operatorAction;
+    if (
+      operatorAction &&
+      (!operatorAction.actorId?.trim() ||
+        operatorAction.actorId.length > 256 ||
+        !/^[A-Za-z0-9_-]{16,100}$/u.test(operatorAction.operationId) ||
+        !Number.isSafeInteger(operatorAction.expectedExecutionGeneration) ||
+        operatorAction.expectedExecutionGeneration < 0 ||
+        operatorAction.expectedExecutionGeneration !== input.expectedExecutionGeneration ||
+        input.expectedJobRevision === undefined ||
+        trigger !== "manual" ||
+        eventSource)
+    )
+      throw new ConflictError({ message: "Invalid reviewed operator occurrence identity." });
+    const replay = (duplicate: CronRunRecord): CronRunBeginResult => {
+      if (
+        canonicalJsonString(duplicate.actionSnapshot.operatorAction ?? null) !==
+          canonicalJsonString(operatorAction ?? null) ||
+        (operatorAction && duplicate.jobRevision !== input.expectedJobRevision) ||
+        (input.expectedExecutionGeneration !== undefined &&
+          duplicate.executionGeneration !== input.expectedExecutionGeneration + 1)
+      )
+        throw new ConflictError({ message: "This run identity belongs to a different reviewed execution." });
+      if (
+        canonicalJsonString(duplicate.actionSnapshot.eventSource ?? null) !==
+          canonicalJsonString(eventSource ?? null) ||
+        (eventSource && duplicate.jobRevision !== input.expectedJobRevision)
+      )
+        throw new ConflictError({
+          message: "This event identity was already admitted with different bytes or a different reviewed job.",
+        });
+      if (duplicate.scheduledFor !== scheduledFor || duplicate.trigger !== trigger) {
+        throw new ConflictError({
+          message: "Cron admission key was reused for a different scheduled occurrence.",
+          details: { jobId, admissionKey, runId: duplicate.runId },
+        });
+      }
+      return { outcome: "duplicate", run: duplicate };
+    };
     return this.db.transaction("immediate", () => {
       const duplicate = this.getByAdmission(jobId, admissionKey);
-      if (duplicate) {
-        if (duplicate.scheduledFor !== scheduledFor || duplicate.trigger !== trigger) {
-          throw new ConflictError({
-            message: "Cron admission key was reused for a different scheduled occurrence.",
-            details: { jobId, admissionKey, runId: duplicate.runId },
-          });
-        }
-        return { outcome: "duplicate", run: duplicate };
-      }
+      if (duplicate) return replay(duplicate);
       const runIdCollision = this.get(runId);
       if (runIdCollision) {
         throw new ConflictError({
@@ -320,7 +354,42 @@ export class CronRunRepository {
         });
       }
 
-      const job = this.readJob(jobId);
+      const job = this.readJob(jobId, true);
+      // Another PostgreSQL transaction may have committed this exact occurrence
+      // while this worker waited for the job lock. Re-read its idempotency owner
+      // before interpreting the newly populated active-run pointer as overlap.
+      const raced = this.getByAdmission(jobId, admissionKey);
+      if (raced) return replay(raced);
+      const revision = normalizeInteger(job.revision, "revision", 1);
+      if (
+        input.expectedJobRevision !== undefined &&
+        normalizeInteger(input.expectedJobRevision, "expectedJobRevision", 1) !== revision
+      )
+        throw new ConflictError({ message: "This schedule changed after review. Refresh before running it." });
+      const expectedGeneration = normalizeInteger(job.execution_generation, "execution_generation", 0);
+      if (
+        input.expectedExecutionGeneration !== undefined &&
+        normalizeInteger(input.expectedExecutionGeneration, "expectedExecutionGeneration", 0) !== expectedGeneration
+      )
+        throw new ConflictError({
+          message:
+            "Another occurrence was admitted after this execution was reviewed. Refresh before requesting new work.",
+        });
+      const actionConfig = parseActionConfig(job.action_config_json);
+      if (eventSource) {
+        const agentTurn = isPlainRecord(actionConfig?.agentTurn) ? actionConfig.agentTurn : undefined;
+        const config = isPlainRecord(agentTurn?.eventWake) ? agentTurn.eventWake : undefined;
+        if (
+          job.action !== "agent_turn" ||
+          input.expectedJobRevision === undefined ||
+          !config ||
+          config.eventType !== eventSource.eventType ||
+          config.workspaceId !== eventSource.workspaceId ||
+          config.hookId !== eventSource.sourceConnectionId ||
+          admissionKey !== `event:${eventSource.eventId}`
+        )
+          throw new ConflictError({ message: "The event no longer matches this reviewed job's trigger." });
+      }
       if (job.active_run_id) {
         const activeRun = this.get(job.active_run_id);
         if (!activeRun) {
@@ -332,13 +401,15 @@ export class CronRunRepository {
         return { outcome: "blocked", activeRun };
       }
 
-      const expectedGeneration = normalizeInteger(job.execution_generation, "execution_generation", 0);
       const historicalGeneration = this.readHistoricalMaxGeneration(jobId);
+      if (input.expectedExecutionGeneration !== undefined && historicalGeneration > expectedGeneration)
+        throw new ConflictError({ message: "This schedule's execution history requires reconciliation." });
       const executionGeneration = Math.max(expectedGeneration, historicalGeneration) + 1;
       const reserved = this.reserveJobGenerationStmt.run({
         jobId,
         runId,
         expectedGeneration,
+        expectedRevision: revision,
         executionGeneration,
         now: normalizedNow,
       });
@@ -357,7 +428,9 @@ export class CronRunRepository {
       const actionSnapshotJson = normalizeBoundedJson(
         {
           action: job.action,
-          actionConfig: parseActionConfig(job.action_config_json),
+          actionConfig,
+          ...(operatorAction ? { operatorAction: { ...operatorAction } } : {}),
+          ...(eventSource ? { eventSource } : {}),
           // Admission-time scope; omitted for global jobs so their snapshots are unchanged.
           ...(typeof job.citadel_id === "string" && job.citadel_id ? { citadelId: job.citadel_id } : {}),
         },
@@ -652,8 +725,14 @@ export class CronRunRepository {
     });
   }
 
-  private readJob(jobId: string): CronJobExecutionRow {
-    const row = this.getJobStmt.get(jobId) as CronJobExecutionRow | undefined;
+  private readJob(jobId: string, lock = false): CronJobExecutionRow {
+    const row = (
+      lock && this.db.dialect === "postgres"
+        ? this.db.prepare(
+            "SELECT job_id,revision,action,action_config_json,execution_generation,active_run_id,citadel_id FROM cron_jobs WHERE job_id=? FOR UPDATE",
+          )
+        : this.getJobStmt
+    ).get(jobId) as CronJobExecutionRow | undefined;
     if (!row) {
       throw new NotFoundError({ entity: "Cron job", id: jobId });
     }
@@ -1030,4 +1109,26 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+}
+
+function normalizeCronEventSource(value: CronRunBeginInput["eventSource"]): CronRunBeginInput["eventSource"] {
+  if (value === undefined) return undefined;
+  if (
+    !isPlainRecord(value) ||
+    Object.keys(value).length !== 5 ||
+    Object.keys(value).some(
+      (key) => !["eventId", "eventType", "workspaceId", "sourceConnectionId", "payloadHash"].includes(key),
+    ) ||
+    value.eventType !== "subagent.end" ||
+    typeof value.payloadHash !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(value.payloadHash)
+  )
+    throw new ValidationError({ message: "Invalid canonical follow-through event reference." });
+  return {
+    eventId: normalizeRequired(value.eventId, "eventId"),
+    eventType: "subagent.end",
+    workspaceId: normalizeRequired(value.workspaceId, "workspaceId"),
+    sourceConnectionId: normalizeRequired(value.sourceConnectionId, "sourceConnectionId"),
+    payloadHash: value.payloadHash,
+  };
 }

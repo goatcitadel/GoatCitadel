@@ -77,7 +77,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
       }
       mutationAttempted = true;
       if (review.action === "promote") {
-        const learning = await promoteTraceMemoryCandidate(candidateId);
+        const learning = await promoteTraceMemoryCandidate(candidateId,{workspaceId,expectedReviewHash:review.candidate.reviewHash ?? ""});
         if (
           learning.workspaceId !== workspaceId ||
           learning.status !== "trusted" ||
@@ -88,7 +88,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
         }
         setNotice("Promoted to workspace memory. Use Open Memory to see the saved learning.");
       } else {
-        const rejected = await rejectTraceMemoryCandidate(candidateId);
+        const rejected = await rejectTraceMemoryCandidate(candidateId,{workspaceId,expectedReviewHash:review.candidate.reviewHash ?? ""});
         if (
           rejected.candidateId !== candidateId ||
           rejected.workspaceId !== workspaceId ||
@@ -162,6 +162,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
       {candidate && candidate.workspaceId === workspaceId ? (
         <>
           <p className="text-fg-secondary">Proposed insight: {candidate.proposedInsight}</p>
+          {candidate.promotionEligibility?.reason ? <p role="status">{candidate.promotionEligibility.reason}</p>:null}
           <p className="text-xs text-fg-muted">
             Type: {memoryCandidateTypeLabels[candidate.candidateType] ?? "Other"} · Source:{" "}
             {memoryCandidateAuthorityLabels[candidate.authority] ?? "Unknown source"} ·{" "}
@@ -193,7 +194,7 @@ export function InboxMemoryProposalDetail({ item, workspaceId }: { item: Operato
           <Button
             size="sm"
             variant="primary"
-            disabled={pending || checking}
+            disabled={pending || checking || candidate?.promotionEligibility?.allowed===false}
             onClick={() => void resolve({ candidate: candidate!, action: "promote" })}
           >
             Promote to memory

@@ -1,3 +1,4 @@
+import { buildNaturalMemoryReviewInstruction, isNaturalMemoryReviewOnlyTurn } from "./memory-intent-service.js";
 import {
   prepareChatRoutedContextAdmission,
   upsertChatRoutedContextSystemInstruction,
@@ -294,13 +295,14 @@ export interface ChatTurnPrepHost {
   recordRuntimeDecision?(input: RuntimeDecisionTraceAppendInput): Promise<void>;
   isFeatureEnabled(flag: string): Promise<boolean>;
   isDurableChatExecutionEnabled?(): Promise<boolean>;
+  isNaturalMemoryReviewEnabled?(): Promise<boolean>;
   /**
    * Frozen cross-session operator-profile digest (P2-S4b), composed once per
    * session and byte-stable per workspace+revision (cached). Fed to the base
    * prompt as `memoryDigest`. Optional + best-effort: returns `undefined` when
    * there is nothing to inject, and is only consulted when the base prompt is on.
    */
-  composeFrozenOperatorProfileDigest?(workspaceId: string): Promise<string | undefined>;
+  composeFrozenOperatorProfileDigest?(workspaceId: string,options?:{includeLearnings?:boolean}): Promise<string | undefined>;
   /**
    * Callable tool/skill catalog for the base prompt's "what you can do" index
    * (P0-#2). Previously the base prompt was built with an empty toolset, so the
@@ -394,6 +396,8 @@ export interface PreparedAgentChatTurn {
   featureAdmission?: { references: ChatTurnFeatureReferences; referenceSha256: string };
   /** Original admitted content used to validate a durable continuation against its profile. */
   capabilityProfileContent?: string;
+  /** Server-derived downscope: the lifecycle owns this preference-only review. */
+  naturalMemoryReviewOnly?: boolean;
   capabilityCatalogSnapshot?: CapabilityCatalogSnapshotRecord;
   /** Exact immutable routed-context bytes admitted for this turn. */
   routedContextSnapshot?: ChatRoutedContextSnapshotRecord;
@@ -1143,6 +1147,14 @@ export async function prepareAgentChatTurn(
         }
       : undefined,
   );
+  const naturalMemoryReviewEligible = !systemHeartbeatPosture &&
+    session.kind === "dm" && sessionMeta.origin === "operator" && !userMessage.parentDelegationStepId &&
+    !input.parentDelegationStepId && (normalized.memoryMode ?? prefs.memoryMode) !== "off" &&
+    await host.isNaturalMemoryReviewEnabled?.();
+  const naturalMemoryReviewInstruction = !options?.skipProviderPreparation && naturalMemoryReviewEligible
+    ? buildNaturalMemoryReviewInstruction({content:userMessage.content,sourceAuthority:userMessage.sourceAuthority ?? "unknown",sourceMessageId:userMessage.messageId})
+    : undefined;
+  const naturalMemoryReviewOnly = Boolean(naturalMemoryReviewEligible && userMessage.sourceAuthority === "operator" && isNaturalMemoryReviewOnlyTurn(userMessage.content));
   let baseAgentInstruction: ChatCompletionRequest["messages"][number]["content"] | undefined;
   if (baseSystemPromptEnabled) {
     const now = new Date();
@@ -1152,9 +1164,11 @@ export async function prepareAgentChatTurn(
     // the base prompt's volatile tail without busting the P0-A cache prefix.
     // Best-effort: never let a profile read break turn preparation.
     let memoryDigest: string | undefined;
-    if (!quickWebTurn) {
+    if (!quickWebTurn && session.kind === "dm") {
       try {
-        memoryDigest = await host.composeFrozenOperatorProfileDigest?.(workspaceId);
+        memoryDigest = (normalized.memoryMode ?? prefs.memoryMode) === "off"
+          ? await host.composeFrozenOperatorProfileDigest?.(workspaceId,{includeLearnings:false})
+          : await host.composeFrozenOperatorProfileDigest?.(workspaceId);
       } catch {
         memoryDigest = undefined;
       }
@@ -1176,6 +1190,7 @@ export async function prepareAgentChatTurn(
         promptCapabilityCatalog = { toolNames: [] };
       }
     }
+    if (naturalMemoryReviewOnly) promptCapabilityCatalog={...promptCapabilityCatalog,toolNames:promptCapabilityCatalog.toolNames.filter(name=>name!=="memory.write" && name!=="memory.upsert")};
     baseAgentInstruction = renderBaseAgentSystemPromptBlocks(
       buildBaseAgentSystemPrompt({
         mode: effectiveMode,
@@ -1238,6 +1253,7 @@ export async function prepareAgentChatTurn(
       ? "Code mode requires a bound project before execution-heavy work. Until a project is attached, stay in planning and review posture, and do not imply that repository-bound edits or filesystem inspection were executed."
       : undefined,
     options?.extraSystemInstruction,
+    naturalMemoryReviewInstruction,
   );
 
   const hasExplicitParentTurnId = Object.prototype.hasOwnProperty.call(options ?? {}, "parentTurnId");
@@ -1516,6 +1532,7 @@ export async function prepareAgentChatTurn(
     ...(capabilityProfile ? { capabilityProfile } : {}),
     ...(featureAdmission ? { featureAdmission } : {}),
     ...(capabilityProfileContent ? { capabilityProfileContent } : {}),
+    ...(naturalMemoryReviewOnly ? { naturalMemoryReviewOnly: true } : {}),
     ...(routedContextSnapshot ? { routedContextSnapshot } : {}),
   };
   if (!systemHeartbeatPosture) {

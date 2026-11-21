@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
-import {
-  presentApprovalAction,
-  presentDelegationRunStatus,
-  presentAttachmentType,
-  presentDelegationStepStatus,
-  presentFileType,
-  presentToolRunStatus,
-} from "./chat-vocabulary";
+import { presentApprovalAction, presentDelegationRunStatus, presentAttachmentType, presentDelegationStepStatus, presentFileType, presentToolRunStatus } from "./chat-vocabulary";
 
 describe("chat vocabulary", () => {
   it("shows one tool status everywhere: executed is Done, never Executed", () => {

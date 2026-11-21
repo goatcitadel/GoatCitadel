@@ -100,9 +100,14 @@ function setThrottleTimestamp(key: string, now: number): void {
   eventTimestamps.set(key, now);
 }
 
-const diagnosticsEnabled = resolveDevDiagnosticsEnabled();
-const verboseDiagnostics = resolveDevDiagnosticsVerbose();
-const maxItems = resolveBufferSize(readEnv("VITE_GOATCITADEL_DEV_DIAGNOSTICS_CLIENT_BUFFER"), DEFAULT_BUFFER_SIZE);
+// Direct environment reads let Vite and the minifier fold the disabled production path.
+const enabledOverride = import.meta.env.VITE_GOATCITADEL_DEV_DIAGNOSTICS_ENABLED;
+const diagnosticsEnabled =
+  typeof enabledOverride === "string" && enabledOverride
+    ? resolveDevDiagnosticsEnabled(enabledOverride)
+    : import.meta.env.DEV === true;
+const verboseDiagnostics = isEnabledOverride(import.meta.env.VITE_GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE);
+const maxItems = resolveBufferSize(import.meta.env.VITE_GOATCITADEL_DEV_DIAGNOSTICS_CLIENT_BUFFER, DEFAULT_BUFFER_SIZE);
 const echoDiagnosticsToConsole = resolveConsoleDiagnosticsEchoEnabled();
 
 let state: DevDiagnosticsState = {
@@ -127,7 +132,7 @@ export function useDevDiagnosticsState(): DevDiagnosticsState {
 }
 
 export function isDevDiagnosticsEnabled(): boolean {
-  return state.enabled;
+  return diagnosticsEnabled;
 }
 
 export function getCurrentDiagnosticsCorrelationId(): string | undefined {
@@ -139,8 +144,9 @@ export function getCurrentDiagnosticsRoute(): string {
 }
 
 export function setDevDiagnosticsCurrentRoute(route: string): void {
+  if (!diagnosticsEnabled) return;
   const sanitized = sanitizeDiagnosticRoute(route);
-  if (!state.enabled || state.currentRoute === sanitized) {
+  if (state.currentRoute === sanitized) {
     return;
   }
   state = {
@@ -151,8 +157,9 @@ export function setDevDiagnosticsCurrentRoute(route: string): void {
 }
 
 export function setDevDiagnosticsActiveChatSession(sessionId: string | undefined): void {
+  if (!diagnosticsEnabled) return;
   const sanitized = sanitizeOptionalDiagnosticText(sessionId);
-  if (!state.enabled || state.activeChatSessionId === sanitized) {
+  if (state.activeChatSessionId === sanitized) {
     return;
   }
   state = {
@@ -163,8 +170,9 @@ export function setDevDiagnosticsActiveChatSession(sessionId: string | undefined
 }
 
 export function setDevDiagnosticsCurrentEffectsMode(effectsMode: string): void {
+  if (!diagnosticsEnabled) return;
   const sanitized = sanitizeOptionalDiagnosticText(effectsMode);
-  if (!state.enabled || state.currentEffectsMode === sanitized) {
+  if (state.currentEffectsMode === sanitized) {
     return;
   }
   state = {
@@ -175,7 +183,7 @@ export function setDevDiagnosticsCurrentEffectsMode(effectsMode: string): void {
 }
 
 export function setDevDiagnosticsSseState(connectionState: EventStreamConnectionState): void {
-  if (!state.enabled || state.sseState === connectionState) {
+  if (!diagnosticsEnabled || state.sseState === connectionState) {
     return;
   }
   state = {
@@ -186,7 +194,7 @@ export function setDevDiagnosticsSseState(connectionState: EventStreamConnection
 }
 
 export function setDevDiagnosticsGatewayReachable(reachable: boolean): void {
-  if (!state.enabled || state.gatewayReachable === reachable) {
+  if (!diagnosticsEnabled || state.gatewayReachable === reachable) {
     return;
   }
   state = {
@@ -197,8 +205,9 @@ export function setDevDiagnosticsGatewayReachable(reachable: boolean): void {
 }
 
 export function setDevDiagnosticsLastRequestError(errorMessage: string | undefined): void {
+  if (!diagnosticsEnabled) return;
   const sanitized = sanitizeOptionalDiagnosticText(errorMessage);
-  if (!state.enabled || state.lastRequestError === sanitized) {
+  if (state.lastRequestError === sanitized) {
     return;
   }
   state = {
@@ -209,7 +218,7 @@ export function setDevDiagnosticsLastRequestError(errorMessage: string | undefin
 }
 
 export function setDevDiagnosticsLatestTraceSummary(summary: Record<string, unknown> | undefined): void {
-  if (!state.enabled) {
+  if (!diagnosticsEnabled) {
     return;
   }
   state = {
@@ -220,7 +229,7 @@ export function setDevDiagnosticsLatestTraceSummary(summary: Record<string, unkn
 }
 
 export function setDevDiagnosticsStartupSummary(summary: DevDiagnosticsStartupSummary | undefined): void {
-  if (!state.enabled) {
+  if (!diagnosticsEnabled) {
     return;
   }
   state = {
@@ -264,7 +273,7 @@ export function recordClientDiagnostic(input: {
    */
   throttleKeySuffix?: string;
 }): DevDiagnosticsEvent | undefined {
-  if (!state.enabled) {
+  if (!diagnosticsEnabled) {
     return undefined;
   }
   const throttleWindowKey = `${input.category}:${input.event}`;
@@ -357,8 +366,9 @@ function stripSensitiveRouteParams(params: URLSearchParams): void {
 }
 
 export function setDevDiagnosticsActiveCorrelationId(correlationId: string | undefined): void {
+  if (!diagnosticsEnabled) return;
   const sanitized = sanitizeOptionalDiagnosticText(correlationId);
-  if (!state.enabled || !sanitized || state.activeCorrelationId === sanitized) {
+  if (!sanitized || state.activeCorrelationId === sanitized) {
     return;
   }
   state = {
@@ -369,7 +379,7 @@ export function setDevDiagnosticsActiveCorrelationId(correlationId: string | und
 }
 
 export function listClientDiagnostics(filter: DevDiagnosticsFilter = {}): DevDiagnosticsEvent[] {
-  if (!state.enabled) {
+  if (!diagnosticsEnabled) {
     return [];
   }
   const limit = Math.max(1, filter.limit ?? state.items.length);
@@ -406,7 +416,7 @@ export function listClientDiagnostics(filter: DevDiagnosticsFilter = {}): DevDia
 }
 
 export function clearClientDiagnostics(): void {
-  if (!state.enabled) {
+  if (!diagnosticsEnabled) {
     return;
   }
   state = {
@@ -514,35 +524,28 @@ function notify(): void {
   }
 }
 
-function resolveDevDiagnosticsEnabled(): boolean {
-  const override = readEnv("VITE_GOATCITADEL_DEV_DIAGNOSTICS_ENABLED")?.toLowerCase();
-  if (override === "true" || override === "1" || override === "yes" || override === "on") {
+function resolveDevDiagnosticsEnabled(value: string): boolean {
+  const override = value.trim().toLowerCase();
+  if (isEnabledOverride(override)) {
     return true;
   }
   if (override === "false" || override === "0" || override === "no" || override === "off") {
     return false;
   }
-  return Boolean(import.meta.env.DEV);
+  return import.meta.env.DEV === true;
 }
 
-function resolveDevDiagnosticsVerbose(): boolean {
-  const override = readEnv("VITE_GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE")?.toLowerCase();
-  if (override === "true" || override === "1" || override === "yes" || override === "on") {
-    return true;
-  }
-  return false;
+function isEnabledOverride(value: unknown): boolean {
+  const override = typeof value === "string" ? value.trim().toLowerCase() : undefined;
+  return override === "true" || override === "1" || override === "yes" || override === "on";
 }
 
-function resolveBufferSize(raw: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(raw ?? "", 10);
+function resolveBufferSize(raw: unknown, fallback: number): number {
+  const parsed = typeof raw === "string" ? Number.parseInt(raw, 10) : NaN;
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return fallback;
   }
   return Math.min(2000, parsed);
-}
-
-function readEnv(key: string): string | undefined {
-  return (import.meta.env[key] as string | undefined)?.trim() || undefined;
 }
 
 function debugLogDiagnosticEvent(event: DevDiagnosticsEvent): void {

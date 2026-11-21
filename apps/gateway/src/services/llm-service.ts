@@ -67,6 +67,7 @@ import type {
 import {
   canonicalJsonString,
   CLAUDE_CODE_CLI_EGRESS_BASE_URL,
+  ConflictError,
   describeAwsAuthModeApiStyleMismatch,
   describeClaudeCodeCliApiStyleMismatch,
   ExternalServiceError,
@@ -554,14 +555,23 @@ export class LlmService {
     return this.listProviders(options);
   }
 
+  public async withPublicCodexStatusSnapshot<T>(read: () => T | Promise<T>): Promise<T> {
+    if (Array.from(this.providers.values()).some(isOpenAICodexProvider)) {
+      return this.openAICodexOAuth.withPublicStatusSnapshot(read);
+    }
+    return read();
+  }
+
   /** Providers whose model catalogs boot warming loads, active first. The quick listing sees neither saved keychain
    * keys nor an unprobed Claude Code CLI login, so both are added for the active provider only: on Windows each
    * keychain read is a blocking PowerShell call, so other providers' saved keys stay unread. */
   public async resolveCatalogPrewarmTargets(): Promise<{ activeProviderId: string; providerIds: string[] }> {
     const activeProviderId = this.activeProviderId;
     await this.ensureProviderReadiness(activeProviderId);
-    const providerIds = this.getRuntimeConfig({ includeKeychainForActiveProvider: true, useCache: true })
-      .providers.filter((provider) => provider.hasApiKey)
+    const runtime = await this.withPublicCodexStatusSnapshot(() =>
+      this.getRuntimeConfig({ includeKeychainForActiveProvider: true, useCache: true }),
+    );
+    const providerIds = runtime.providers.filter((provider) => provider.hasApiKey)
       .map((provider) => provider.providerId)
       .sort((left, right) => Number(right === activeProviderId) - Number(left === activeProviderId));
     return { activeProviderId, providerIds };
@@ -3125,7 +3135,9 @@ export class LlmService {
       ? options.requireAuth
         ? await this.openAICodexOAuth.resolveAccessToken()
         : undefined
-      : this.resolveApiKey(provider);
+      : options.requireAuth
+        ? this.resolveApiKey(provider)
+        : await this.resolveModelCatalogApiKey(provider);
     if (options.requireAuth && provider.providerId.trim().toLowerCase() === "fireworks" && !apiKey) {
       throw new Error("Fireworks requires a configured API key before provider dispatch.");
     }
@@ -3178,10 +3190,24 @@ export class LlmService {
   }
 
   private resolveApiKey(provider: LlmProviderConfig): string | undefined {
-    const keychain = this.readKeychainApiKey(provider.providerId);
-    if (keychain) {
-      return keychain;
+    return this.readKeychainApiKey(provider.providerId) || this.resolveConfiguredApiKey(provider);
+  }
+
+  private async resolveModelCatalogApiKey(provider: LlmProviderConfig): Promise<string | undefined> {
+    if (!this.secretStore.getProviderApiKeyAsync) return this.resolveApiKey(provider);
+    let keychain: string | undefined;
+    try {
+      keychain = await this.secretStore.getProviderApiKeyAsync(provider.providerId);
+    } catch {
+      // Fall back to configured credentials when the OS keychain is unavailable.
     }
+    if (this.providers.get(provider.providerId) !== provider) {
+      throw new ConflictError({ message: "Provider configuration changed while loading its model catalog." });
+    }
+    return keychain || this.resolveConfiguredApiKey(provider);
+  }
+
+  private resolveConfiguredApiKey(provider: LlmProviderConfig): string | undefined {
     if (provider.apiKeyEnv) {
       const envValue = this.env[provider.apiKeyEnv];
       if (envValue && envValue.trim()) {

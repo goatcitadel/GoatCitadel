@@ -26,13 +26,18 @@ const optionalContractOwners = [
   "change-plan-feature-flag-labels",
   "channel-access",
   "channel-address-host",
+  "external-source-chat",
+  "external-source-validation",
   "google-workspace",
+  "google-workspace-actions",
   "mcp",
   "operator-write-access",
   "personal-ops",
+  "provider-templates",
   "public-web-address",
   "skill-categories",
   "skill-packs",
+  "tool-groups",
   "web-search",
 ] as const;
 function optionalContractFixture(

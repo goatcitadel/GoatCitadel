@@ -83,6 +83,8 @@ interface ApprovalDecisionBarProps {
   installationSetting?: boolean;
   /** Lets the conversation card open its ordinary danger review without an overlay. */
   inlineDangerReview?: boolean;
+  /** A matching Chat control requested the details or denial before the decision code was loaded. */
+  deferredIntent?: { action: "review" | "deny"; claim: () => boolean };
   /** The conversation refreshed an MCP action after a stale decision. */
   reviewAgain?: boolean;
   /** Wording for the one-click approve button, when the action has its own ("Run it"). */
@@ -159,6 +161,7 @@ function ApprovalDecisionReview({
   reviewedInPlace = false,
   installationSetting = false,
   inlineDangerReview = false,
+  deferredIntent,
   reviewAgain = false,
   approveLabel,
   approveDanger = false,
@@ -324,6 +327,9 @@ function ApprovalDecisionReview({
     }
   }
 
+  useLayoutEffect(() => {
+    if (deferredIntent?.action === "deny" && deferredIntent.claim()) void decide("reject");
+  }, [decide, deferredIntent]);
   const allowance = useChatAllowanceControls(
     offerTemporaryGrant,
     Boolean(attempt),
@@ -427,6 +433,7 @@ function ApprovalDecisionReview({
               pending={Boolean(attempt) || (specializedReview && !specialistReady)}
               reviewedInPlace={reviewedInPlace}
               inlineDangerReview={reviewInCard}
+              initiallyOpen={deferredIntent?.action === "review"}
               reviewLabel={reviewAgain ? "Review again" : undefined}
               approveLabel={approveLabel}
               approveDanger={approveDanger}

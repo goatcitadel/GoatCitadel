@@ -5,6 +5,7 @@ import type {
   CronRunLinkage,
   CronRunRecord,
 } from "@goatcitadel/contracts";
+import {normalizeFollowThroughSchedule} from "../follow-through-schedule-input.js";
 
 /**
  * Outcome returned by the gateway-provided agent-turn run handler. The handler
@@ -65,6 +66,8 @@ export function normalizeAgentTurnCronActionConfig(rawValue: Record<string, unkn
     typeof rawAgentTurn.sessionId === "string" && rawAgentTurn.sessionId.trim()
       ? rawAgentTurn.sessionId.trim()
       : undefined;
+  const workspaceId=rawAgentTurn.workspaceId;
+  if(workspaceId!==undefined && (typeof workspaceId!=="string" || !workspaceId.trim() || workspaceId.length>256 || !sessionId))throw new Error("Explicit scheduled workspace requires a current Chat session.");
   const rawChannel =
     rawAgentTurn.deliveryChannel &&
     typeof rawAgentTurn.deliveryChannel === "object" &&
@@ -100,6 +103,8 @@ export function normalizeAgentTurnCronActionConfig(rawValue: Record<string, unkn
   return {
     agentTurn: {
       prompt: rawAgentTurn.prompt.trim(),
+      ...(typeof workspaceId==="string" ? {workspaceId:workspaceId.trim()}:{}),
+      ...normalizeFollowThroughSchedule(rawAgentTurn,sessionId),
       ...(sessionId ? { sessionId } : {}),
       ...(deliveryChannel ? { deliveryChannel } : {}),
       deliverMode,
@@ -132,6 +137,8 @@ function normalizeAgentTurnCreatedBy(value: unknown): NonNullable<CronAgentTurnC
       : undefined;
   const createdByJobId =
     typeof raw.createdByJobId === "string" && raw.createdByJobId.trim() ? raw.createdByJobId.trim() : undefined;
+  const permissionProfileRevision=raw.permissionProfileRevision;
+  if(permissionProfileRevision!==undefined && (typeof permissionProfileRevision!=="string" || !permissionProfileRevision.trim() || permissionProfileRevision.length>256 || !permissionProfileId))throw new Error("A reviewed schedule permission revision requires its exact profile.");
   const depth =
     typeof raw.depth === "number" && Number.isFinite(raw.depth) ? Math.max(0, Math.floor(raw.depth)) : undefined;
   if (!operatorId && !authActorId && !permissionProfileId && !createdByJobId && depth === undefined) {
@@ -141,6 +148,7 @@ function normalizeAgentTurnCreatedBy(value: unknown): NonNullable<CronAgentTurnC
     ...(operatorId ? { operatorId } : {}),
     ...(authActorId ? { authActorId } : {}),
     ...(permissionProfileId ? { permissionProfileId } : {}),
+    ...(typeof permissionProfileRevision==="string" ? {permissionProfileRevision:permissionProfileRevision.trim()}:{}),
     ...(createdByJobId ? { createdByJobId } : {}),
     ...(depth !== undefined ? { depth } : {}),
   };

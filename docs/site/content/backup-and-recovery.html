@@ -1,0 +1,41 @@
+<h2 id="create-a-backup">Create a backup</h2>
+<p>
+  Open <strong>System › Health</strong> and choose <strong>Back up now</strong>. Create a fresh backup before an upgrade
+  or maintenance, then copy the archive to a separate storage location.
+</p>
+<p>Where the GoatCitadel CLI is available, list backups with:</p>
+<figure class="code-block">
+  <figcaption>Terminal</figcaption>
+  <pre tabindex="0" aria-label="List GoatCitadel backups"><code>goatcitadel admin backups list</code></pre>
+</figure>
+
+<h2 id="verify-the-archive">Verify the archive</h2>
+<figure class="code-block">
+  <figcaption>Terminal</figcaption>
+  <pre
+    tabindex="0"
+    aria-label="Verify a backup archive"
+  ><code>goatcitadel admin backup verify --file &lt;backup-file&gt;</code></pre>
+</figure>
+<p>
+  Replace <code>&lt;backup-file&gt;</code> with the path to your archive. For a current backup, check both
+  <code>verified</code> for archive integrity and <code>contractVerified</code> for the required data.
+</p>
+
+<h2 id="restore-offline">Restore offline</h2>
+<p>
+  Keep a verified copy of your current profile before restoring. For a filesystem-backed runtime, stop the Gateway
+  serving the target runtime root and follow the offline CLI restore steps. For PostgreSQL, follow the separate
+  operator-run <code>pg_restore</code> workflow.
+</p>
+<p>
+  Use the procedure for your storage type in the
+  <a href="https://github.com/goatcitadel/GoatCitadel/blob/main/docs/INSTALL_SETUP_TESTING.md"
+    >installation and recovery guide</a
+  >
+  and check the
+  <a href="https://github.com/goatcitadel/GoatCitadel/blob/main/docs/1_0_CONTRACT.md#upgrade-and-backup-guarantees"
+    >backup contract</a
+  >
+  for what the archive covers.
+</p>

@@ -730,6 +730,8 @@ export interface ChatTurnAgentRunnerInput {
   };
   /** Exact validated server-only posture for a storage-admitted heartbeat occurrence. */
   serverOnlyPosture?: Readonly<SystemHeartbeatTurnPrepPosture>;
+  /** Server-derived narrowing only; never grants memory-write authority. */
+  naturalMemoryReviewOnly?: boolean;
   /** Original admitted content when a durable continuation adds answered-prompt context. */
   capabilityProfileContent?: string;
   /** Stable provider/model/capability-selection dimension for compaction hysteresis. */
@@ -1366,13 +1368,13 @@ export class ChatTurnAgentRunner {
       nativeTools,
       meshTools,
     );
-    return await this.buildToolSchema(
+    return filterNaturalMemoryReviewTools(input,await this.buildToolSchema(
       { ...input, executionProfile },
       intents,
       admittedNativeTools,
       admittedMeshTools,
       discoveredToolNames,
-    );
+    ));
   }
 
   private async refreshDiscoveredToolSchema(
@@ -2534,7 +2536,7 @@ export class ChatTurnAgentRunner {
             )
           : await this.resolveCapabilityToolSchema(input);
     const routedContextToolSchema = await this.filterRoutedContextCapabilityToolSchema(input, admittedToolSchema);
-    const filteredToolSchema = await this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema);
+    const filteredToolSchema = filterNaturalMemoryReviewTools(input,await this.filterSystemHeartbeatCapabilityToolSchema(input, routedContextToolSchema));
     if (
       !(await this.isOptionalUserInputEnabled()) ||
       input.parentDelegationStepId ||
@@ -16673,4 +16675,16 @@ function isChatTurnAbortError(error: unknown, signal?: AbortSignal): boolean {
 
 function hasExecutedToolRun(toolRuns: ChatToolRunRecord[], toolName: string): boolean {
   return toolRuns.some((run) => run.toolName === toolName && run.status === "executed");
+}
+
+/** Narrow both schema and allow maps, including persisted profiles and discovery rebuilds. */
+function filterNaturalMemoryReviewTools(
+  input: Pick<ChatTurnAgentRunnerInput, "naturalMemoryReviewOnly">,
+  schema: ResolvedChatTurnToolSchema,
+): ResolvedChatTurnToolSchema {
+  if (!input.naturalMemoryReviewOnly) return schema;
+  // This server-derived posture admits only a preference acknowledgement. The
+  // lifecycle prepares and matches the proposal after success; a model search
+  // can otherwise add an unrelated approve_all gate before that review exists.
+  return { ...schema, tools: [], canonicalToModel: new Map(), modelToCanonical: new Map(), policyDecisions: [] };
 }

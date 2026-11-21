@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type {
   ChatAttachmentRecord,
   ChatSessionRecord,
@@ -12,23 +12,12 @@ import type { ChatErrorSource } from "./chat-error-copy";
 import { getGatewayAccessRevision, getGatewayCallerScopeRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { fetchVoiceRuntimeStatus, fetchVoiceStatus } from "@goatcitadel/mission-control-shared/api/client";
-import type { UploadAttachmentOptions, ChatImageRoute, ImageGenerationOptions } from "./multimodal-action-types";
+import type { UploadAttachmentOptions, ImageGenerationOptions } from "./multimodal-action-types";
 import type { LiveVoiceUiState } from "./multimodal-live-voice-start.js";
 import type { createRealtimeVoiceOperation } from "./multimodal-realtime-voice.js";
+import { useChatImageRouting } from "./chat-image-routing";
+import { readSpeakRepliesPreference, SPEAK_REPLIES_PREF_KEY } from "./chat-speak-preference";
 export type { ImageGenerationOptions } from "./multimodal-action-types";
-
-const SPEAK_REPLIES_PREF_KEY = "goatcitadel.chat.speak-replies.enabled";
-const OPENAI_IMAGE_MODEL_PREFERENCES = ["gpt-image-2", "gpt-image-1"] as const;
-const GOOGLE_IMAGE_MODEL_PREFERENCES = [
-  "gemini-3.1-flash-image-preview",
-  "gemini-3-pro-image-preview",
-  "gemini-2.5-flash-image",
-] as const;
-const IMAGE_MODEL_PREFERENCES: Record<"openai" | "openai-codex" | "google", readonly string[]> = {
-  openai: OPENAI_IMAGE_MODEL_PREFERENCES,
-  "openai-codex": OPENAI_IMAGE_MODEL_PREFERENCES,
-  google: GOOGLE_IMAGE_MODEL_PREFERENCES,
-};
 
 // These functions cache code only. Rejected loads are retried on the next explicit action.
 export const multimodalCodeLoaders = {
@@ -72,96 +61,6 @@ interface LiveVoiceAttempt {
   operation?: ReturnType<typeof createRealtimeVoiceOperation>;
 }
 
-function isImageAttachment(attachment: ChatAttachmentRecord): boolean {
-  return attachment.mediaType === "image" || attachment.mimeType.startsWith("image/");
-}
-
-function normalizeOptionalString(value?: string | null): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function getImageModelPreferences(providerId: string): readonly string[] {
-  return providerId === "openai" || providerId === "openai-codex"
-    ? OPENAI_IMAGE_MODEL_PREFERENCES
-    : providerId === "google"
-      ? GOOGLE_IMAGE_MODEL_PREFERENCES
-      : [];
-}
-
-function getImageModelOptions(provider: ChatModelProviderOption): string[] {
-  const available = new Set<string>();
-  for (const value of [provider.defaultModel, ...provider.models]) {
-    const normalized = normalizeOptionalString(value);
-    if (normalized && normalized.toLowerCase().includes("image")) {
-      available.add(normalized);
-    }
-  }
-  for (const model of getImageModelPreferences(provider.providerId)) {
-    available.add(model);
-  }
-  return [...available];
-}
-
-function resolveImageModel(provider: ChatModelProviderOption, preferredModel?: string): string | null {
-  const normalizedPreferred = normalizeOptionalString(preferredModel);
-  const availableModels = getImageModelOptions(provider);
-  if (normalizedPreferred) {
-    if (availableModels.includes(normalizedPreferred)) {
-      return normalizedPreferred;
-    }
-    if (normalizedPreferred.toLowerCase().includes("image")) {
-      return normalizedPreferred;
-    }
-  }
-  return availableModels[0] ?? null;
-}
-
-function toImageProviderOption(provider: ChatModelProviderOption | null | undefined): ChatModelProviderOption | null {
-  if (!provider || provider.disabled || provider.capabilities?.imageGenerate === false) {
-    return null;
-  }
-  const models = getImageModelOptions(provider);
-  if (models.length === 0 && !IMAGE_MODEL_PREFERENCES[provider.providerId as keyof typeof IMAGE_MODEL_PREFERENCES]) {
-    return null;
-  }
-  return {
-    ...provider,
-    defaultModel: models[0] ?? provider.defaultModel,
-    models,
-  };
-}
-
-function buildImageRoute(
-  provider: ChatModelProviderOption | null | undefined,
-  preferredModel?: string,
-): ChatImageRoute | null {
-  if (!provider || provider.disabled || provider.capabilities?.imageGenerate === false) {
-    return null;
-  }
-  const model = resolveImageModel(provider, preferredModel);
-  if (model && (provider.providerId === "openai" || provider.providerId === "openai-codex")) {
-    return {
-      providerId: provider.providerId,
-      model,
-      label: provider.providerId === "openai-codex" ? `OpenAI Codex / ${model}` : `OpenAI / ${model}`,
-      supportsEdit: true,
-    };
-  }
-  if (model && provider.providerId === "google") {
-    return {
-      providerId: "google",
-      model,
-      label: `Google / ${model}`,
-      supportsEdit: false,
-    };
-  }
-  return null;
-}
-
 function supportsBrowserRealtimeVoice(): boolean {
   if (typeof window === "undefined" || typeof navigator === "undefined") {
     return false;
@@ -202,7 +101,8 @@ function getLiveVoiceStatusLabel(state: LiveVoiceUiState, status?: VoiceStatus["
   return "OpenAI Realtime unavailable";
 }
 
-export function useChatMultimodalControls(input: {
+export interface ChatMultimodalInput {
+  audioInputRef?: RefObject<HTMLInputElement | null>;
   workspaceId?: string;
   selectionRevisionRef?: { readonly current: number };
   selectedSession?: ChatSessionRecord | null;
@@ -224,16 +124,12 @@ export function useChatMultimodalControls(input: {
   setError: (value: string | null, source?: ChatErrorSource) => void;
   pushLocalNotice: (message: string, tone?: "neutral" | "warning" | "critical" | "success") => void;
   uploadAttachments: (files: File[], options?: UploadAttachmentOptions) => Promise<boolean>;
-}) {
+}
+
+export function useChatMultimodalControls(input: ChatMultimodalInput) {
   const {
-    providerOptions,
-    selectedProviderId,
-    preferredImageProviderId,
-    preferredImageModel,
-    routePreflight,
     selectedSessionId,
     activeThreadSessionId,
-    pendingAttachments,
     draft,
     latestAssistantMessageId,
     latestAssistantContent,
@@ -244,7 +140,8 @@ export function useChatMultimodalControls(input: {
     uploadAttachments,
   } = input;
 
-  const audioInputRef = useRef<HTMLInputElement | null>(null);
+  const localAudioInputRef = useRef<HTMLInputElement | null>(null);
+  const audioInputRef = input.audioInputRef ?? localAudioInputRef;
   const lastSpokenMessageIdRef = useRef<string | null>(null);
   const liveVoiceAttemptRef = useRef<LiveVoiceAttempt | null>(null);
   const talkAttemptRef = useRef<object | null>(null);
@@ -266,53 +163,9 @@ export function useChatMultimodalControls(input: {
   const [liveVoiceState, setLiveVoiceState] = useState<LiveVoiceUiState>("idle");
   const [liveVoiceMuted, setLiveVoiceMuted] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
-  const [speakResponsesEnabled, setSpeakResponsesEnabled] = useState<boolean>(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    try {
-      return window.localStorage.getItem(SPEAK_REPLIES_PREF_KEY) === "true";
-    } catch {
-      return false;
-    }
-  });
+  const [speakResponsesEnabled, setSpeakResponsesEnabled] = useState(readSpeakRepliesPreference);
 
-  const activeProviderId =
-    routePreflight?.effectiveProviderId ?? selectedProviderId ?? providerOptions[0]?.providerId ?? null;
-  const activeProvider = useMemo(
-    () => providerOptions.find((provider) => provider.providerId === activeProviderId) ?? null,
-    [activeProviderId, providerOptions],
-  );
-  const imageProviderOptions = useMemo(
-    () =>
-      providerOptions.map((provider) => toImageProviderOption(provider)).filter(Boolean) as ChatModelProviderOption[],
-    [providerOptions],
-  );
-  const preferredImageProvider = useMemo(
-    () => imageProviderOptions.find((provider) => provider.providerId === preferredImageProviderId) ?? null,
-    [imageProviderOptions, preferredImageProviderId],
-  );
-  const primaryImageRoute = useMemo(() => {
-    const preferredRoute = buildImageRoute(preferredImageProvider, preferredImageModel);
-    if (preferredRoute) {
-      return preferredRoute;
-    }
-    const activeRoute = buildImageRoute(toImageProviderOption(activeProvider) ?? undefined);
-    if (activeRoute) {
-      return activeRoute;
-    }
-    return (
-      buildImageRoute(imageProviderOptions.find((provider) => provider.providerId === "openai")) ??
-      buildImageRoute(imageProviderOptions.find((provider) => provider.providerId === "google")) ??
-      null
-    );
-  }, [activeProvider, imageProviderOptions, preferredImageModel, preferredImageProvider]);
-  const googleFallbackImageRoute = useMemo(() => {
-    if (primaryImageRoute?.providerId !== "openai") {
-      return null;
-    }
-    return buildImageRoute(imageProviderOptions.find((provider) => provider.providerId === "google"));
-  }, [imageProviderOptions, primaryImageRoute]);
+  const { activeProviderId, activeProvider, imageProviderOptions, primaryImageRoute, googleFallbackImageRoute, latestImageAttachment, imageGenerationAvailable, imageEditAvailable, imageRouteLabel } = useChatImageRouting(input);
   const mountedRef = useRef(true);
   const [, refreshImageMountGeneration] = useState(0);
   const currentInputRef = useRef(input);
@@ -411,10 +264,6 @@ export function useChatMultimodalControls(input: {
   }, [hasCurrentImageBase, imageRevision]);
   useEffect(() => { if (!imageTicketRef.current) setImageBusy(false); }, [imageGeneration]);
 
-  const latestImageAttachment = useMemo(
-    () => [...pendingAttachments].reverse().find(isImageAttachment) ?? null,
-    [pendingAttachments],
-  );
   const supportsSpeechSynthesis =
     typeof window !== "undefined" &&
     typeof window.speechSynthesis !== "undefined" &&
@@ -444,13 +293,6 @@ export function useChatMultimodalControls(input: {
       : realtimeVoiceStatus?.apiKeyReady === false
         ? "OpenAI Realtime voice requires OPENAI_API_KEY on the Gateway."
         : "OpenAI Realtime voice readiness has not been confirmed yet.";
-  const imageGenerationAvailable = Boolean(primaryImageRoute);
-  const imageEditAvailable = Boolean(primaryImageRoute?.supportsEdit && latestImageAttachment);
-  const imageRouteLabel = primaryImageRoute
-    ? googleFallbackImageRoute
-      ? `${primaryImageRoute.label} with ${googleFallbackImageRoute.label} fallback`
-      : primaryImageRoute.label
-    : null;
   // `talk` is required by the VoiceStatus contract, but partial gateway
   // responses (e.g. a stub returning {}) can omit it at runtime — treat a
   // missing talk block as "no active talk session" everywhere below.
@@ -779,6 +621,9 @@ export function useChatMultimodalControls(input: {
       latestImageAttachment, primaryImageRoute, pushLocalNotice, setDraft, setError, uploadAttachments],
   );
 
+  const handleGenerateImage = useCallback((options?: ImageGenerationOptions) => runImageGeneration("generate", options), [runImageGeneration]);
+  const handleEditImage = useCallback((options?: ImageGenerationOptions) => runImageGeneration("edit", options), [runImageGeneration]);
+
   return {
     onMediaControlsOpenChange,
     audioInputRef,
@@ -808,7 +653,7 @@ export function useChatMultimodalControls(input: {
     handleToggleLiveVoiceMute,
     handleOpenAudioTranscribe,
     handleAudioFileSelected,
-    handleGenerateImage: (options?: ImageGenerationOptions) => runImageGeneration("generate", options),
-    handleEditImage: (options?: ImageGenerationOptions) => runImageGeneration("edit", options),
+    handleGenerateImage,
+    handleEditImage,
   };
 }

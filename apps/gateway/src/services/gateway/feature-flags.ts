@@ -89,6 +89,8 @@ export function buildUpdatedFeatureFlags(
     productSourceEvolutionV1Enabled: patch.productSourceEvolutionV1Enabled ?? current.productSourceEvolutionV1Enabled,
     channelVoiceReplyV1Enabled: patch.channelVoiceReplyV1Enabled ?? current.channelVoiceReplyV1Enabled,
     memoryConsolidationV1Enabled: patch.memoryConsolidationV1Enabled ?? current.memoryConsolidationV1Enabled,
+    memoryCorpusRecallV1Enabled: patch.memoryCorpusRecallV1Enabled ?? current.memoryCorpusRecallV1Enabled ?? false,
+    backgroundSkillDraftsV1Enabled: patch.backgroundSkillDraftsV1Enabled ?? current.backgroundSkillDraftsV1Enabled ?? false,
     cronEvidenceV1Enabled: patch.cronEvidenceV1Enabled ?? current.cronEvidenceV1Enabled,
     utilityModelRoutingV1Enabled: patch.utilityModelRoutingV1Enabled ?? current.utilityModelRoutingV1Enabled,
     chatTurnInterruptionRecoveryV1Disabled:
@@ -192,6 +194,8 @@ export function resolveGatewayFeatureFlags(
       stored?.productSourceEvolutionV1Enabled ?? fromConfig.productSourceEvolutionV1Enabled ?? false,
     channelVoiceReplyV1Enabled: stored?.channelVoiceReplyV1Enabled ?? fromConfig.channelVoiceReplyV1Enabled,
     memoryConsolidationV1Enabled: stored?.memoryConsolidationV1Enabled ?? fromConfig.memoryConsolidationV1Enabled,
+    memoryCorpusRecallV1Enabled: stored?.memoryCorpusRecallV1Enabled ?? fromConfig.memoryCorpusRecallV1Enabled ?? false,
+    backgroundSkillDraftsV1Enabled: stored?.backgroundSkillDraftsV1Enabled ?? fromConfig.backgroundSkillDraftsV1Enabled ?? false,
     cronEvidenceV1Enabled: stored?.cronEvidenceV1Enabled ?? fromConfig.cronEvidenceV1Enabled,
     utilityModelRoutingV1Enabled: stored?.utilityModelRoutingV1Enabled ?? fromConfig.utilityModelRoutingV1Enabled,
     chatTurnInterruptionRecoveryV1Disabled:

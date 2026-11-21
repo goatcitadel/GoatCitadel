@@ -1,6 +1,7 @@
 import type { ChatCitationRecord, ChatMode, ChatTurnTraceRecord } from "./chat.js";
 import type { ChatMemoryMode, ChatThinkingLevel, ChatWebMode } from "./chat.js";
 import type { RunVariableEvidence, RunVariableSchema } from "./run-variables.js";
+import type {PromptPackImprovementWatchBinding} from "./prompt-pack-watch.js";
 
 export type {
   PromptPackExportFormat,
@@ -277,6 +278,8 @@ export interface PromptPackRunRecord {
   executionStyle?: PromptPackExecutionStyle;
   diagnosticMetadata?: PromptPackDiagnosticMetadata;
   runVariables?: RunVariableEvidence;
+  /** Immutable eligibility captured before this run's model work, never backfilled. */
+  improvementWatchBindings?:PromptPackImprovementWatchBinding[];
   /** Raw canonical assistant output captured from the turn transcript. */
   responseText?: string;
   /** Historical fabrication artifact — no longer written. Retained on old run records for audit only; scoring always uses responseText. */
@@ -669,7 +672,7 @@ export interface ReplayRegressionResult {
   resultId: string;
   regressionRunId: string;
   testCode: string;
-  capability: "routing" | "honesty" | "handoff" | "robustness" | "usability";
+  capability: "routing" | "handoff" | PromptPackScoreDimensionV2 | PromptPackScoreDimensionV3;
   scoreDelta: number;
   passDelta: number;
   latencyDeltaMs: number;

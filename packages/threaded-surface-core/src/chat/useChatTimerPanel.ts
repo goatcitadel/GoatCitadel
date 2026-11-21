@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatThreadResponse, ChatTimerRecord } from "@goatcitadel/contracts";
 import {
   cancelChatTimer,
@@ -246,12 +246,11 @@ export function useChatTimerPanel(input: {
     if (panel.open && enabled) void refresh();
   }, [panel.open, enabled, eventStreamState, refresh, thread]);
 
-  return {
-    openChatTimerPanel: open,
-    chatTimerPanel: enabled
+  const busy = pendingScopes.current.has(scope);
+  const chatTimerPanel = useMemo(() => enabled
       ? {
           ...panel,
-          busy: pendingScopes.current.has(scope),
+          busy,
           onDueAtChange: (value: string) => setPanel((current) => ({ ...current, dueAt: value })),
           onTimezoneChange: (value: string) => setPanel((current) => ({ ...current, timezone: value })),
           onMessageChange: (value: string) => setPanel((current) => ({ ...current, message: value })),
@@ -268,6 +267,6 @@ export function useChatTimerPanel(input: {
             setPanel((current) => ({ ...current, open: false }));
           },
         }
-      : undefined,
-  };
+      : undefined, [busy, cancel, enabled, isCurrent, panel, setPanel, submit]);
+  return { openChatTimerPanel: open, chatTimerPanel };
 }

@@ -915,6 +915,20 @@ test("Postgres v2 owner closure treats the independently manifested SQLite group
   assert.deepEqual(updated.exceptions[0].ownerProvenance, manifest.exceptions[0].ownerProvenance);
 });
 
+test("lazy Postgres v2 SQL preserves the migration hash and requires a direct return", () => {
+  const registry = (sql) => extractPostgresWithOwners(postgresSource(`
+    { version: 1, name: "one", sql: "SELECT 1" },
+    { version: 2, name: "canonical_runtime_schema", ${sql} },
+  `));
+  const eager = registry("sql: buildPostgresRuntimeSchemaSql()");
+  const lazy = registry("get sql() { return buildPostgresRuntimeSchemaSql(); }");
+  assert.deepEqual(lazy, eager);
+  assert.throws(
+    () => registry("get sql() { otherWork(); return buildPostgresRuntimeSchemaSql(); }"),
+    /sql must use a property assignment/u,
+  );
+});
+
 test("append-only updater adds only a contiguous suffix and refuses existing drift", () => {
   const originalSqlite = extractSqliteMigrationRegistry(sqliteSource('{ version: 1, name: "one", up: createOne }'));
   const originalPostgres = extractPostgresWithOwners(
@@ -1013,12 +1027,20 @@ test("current registries and checked-in manifest cover every migration exactly",
 
   // These reviewed literals are intentionally independent from the generated
   // manifest so an accidental registry-plus-manifest edit cannot self-certify.
-  assert.equal(sqlite.migrations.length, 281);
-  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 281]);
-  assert.equal(postgres.migrations.length, 234);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 234]);
-  assert.equal(sqlite.migrations.at(-1)?.name, "skill_hub_remove_operation_kind");
-  assert.equal(postgres.migrations.at(-1)?.name, "commitment_and_routed_context_schema_convergence");
+  assert.equal(sqlite.migrations.length, 287);
+  assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 287]);
+  assert.equal(postgres.migrations.length, 240);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 240]);
+  assert.equal(sqlite.migrations.at(-1)?.name, "canonical_memory_note_origins");
+  assert.equal(postgres.migrations.at(-1)?.name, "canonical_memory_note_origins");
+  assert.equal(sqlite.migrations.find(record=>record.version===286)?.name,"prompt_pack_pre_work_watch_bindings");
+  assert.equal(postgres.migrations.find(record=>record.version===239)?.name,"prompt_pack_pre_work_watch_bindings");
+  assert.equal(sqlite.migrations.find(record=>record.version===285)?.name,"improvement_watch_evidence");
+  assert.equal(postgres.migrations.find(record=>record.version===238)?.name,"improvement_watch_evidence");
+  assert.equal(sqlite.migrations.find((record) => record.version === 282)?.name, "scoped_memory_claim_identity");
+  assert.equal(postgres.migrations.find((record) => record.version === 235)?.name, "scoped_memory_claim_identity");
+  assert.equal(sqlite.migrations.find((record) => record.version === 281)?.name, "skill_hub_remove_operation_kind");
+  assert.equal(postgres.migrations.find((record) => record.version === 234)?.name, "commitment_and_routed_context_schema_convergence");
   assert.equal(postgres.migrations.find((record) => record.version === 233)?.name, "skill_hub_remove_operation_kind");
   assert.equal(sqlite.migrations.find((record) => record.version === 280)?.name, "managed_project_file_revisions");
   assert.equal(sqlite.migrations.find((record) => record.version === 279)?.name, "chat_session_approval_modes");
@@ -1155,7 +1177,7 @@ test("current registries and checked-in manifest cover every migration exactly",
       2, 119, 120, 121, 122, 134, 135, 136, 137, 138, 140, 141, 145, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156,
       157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179,
       180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 198, 200, 204, 205, 206, 207,
-      209, 210, 211, 213, 214, 215, 217, 218, 220, 223, 224, 225, 226, 227, 228, 229, 230, 231, 233,
+      209, 210, 211, 213, 214, 215, 217, 218, 220, 223, 224, 225, 226, 227, 228, 229, 230, 231, 233, 235, 236, 237, 238, 239, 240,
     ],
   );
   assert.equal(

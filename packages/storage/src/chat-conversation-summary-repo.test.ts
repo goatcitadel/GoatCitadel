@@ -4,6 +4,7 @@ import { buildChatCompactionStateKey, ChatConversationSummaryRepository } from "
 import { POSTGRES_MIGRATIONS } from "./postgres/migrations.js";
 import { createDatabase } from "./sqlite.js";
 import { TempSqliteFiles } from "./temp-sqlite.test-support.js";
+import type {ChatContinuityLedgerV1} from "@goatcitadel/contracts";
 
 const tempDbs = new TempSqliteFiles();
 
@@ -16,6 +17,21 @@ function createRepo(): ChatConversationSummaryRepository {
 }
 
 describe("ChatConversationSummaryRepository", () => {
+  it("retains typed continuity across reads without changing legacy summaries or overwriting a frozen window",() => {
+    const repo = createRepo();
+    const ledger:ChatContinuityLedgerV1 = {version:1,sourceHash:"a".repeat(64),turnIds:["t"],entries:[{kind:"constraint",authority:"operator_context",text:"Do not publish.",source:{messageId:"m",contentHash:"b".repeat(64),start:0,end:15}}],omittedSourceRefs:[]};
+    const input = {sessionId:"s",branchHeadTurnId:"t",startTurnId:"t",endTurnId:"t",turnIds:["t"],sourceHash:ledger.sourceHash,tokenEstimate:50,summary:"Compacted conversation context. Do not publish.",continuityLedger:ledger};
+    const first = repo.upsert(input);
+    assert.deepEqual(repo.findReusableWindow(input)?.continuityLedger,ledger);
+    assert.equal(first.summary,input.summary);
+    const replay = repo.upsert({...input,summary:"Replaced after the fact",continuityLedger:{...ledger,entries:[]}});
+    assert.equal(replay.summary,first.summary);
+    assert.deepEqual(replay.continuityLedger,ledger);
+    const legacy = repo.upsert({...input,branchHeadTurnId:"legacy-head",sourceHash:"legacy",continuityLedger:undefined,summary:"Old plain-text summary"});
+    assert.equal(legacy.summary,"Old plain-text summary");
+    assert.equal(legacy.continuityLedger,undefined);
+    assert.throws(() => repo.upsert({...input,sourceHash:"wrong-hash"}),/source hash/);
+  });
   it("reuses exact logical windows across branch heads without duplicating rows", () => {
     const repo = createRepo();
 

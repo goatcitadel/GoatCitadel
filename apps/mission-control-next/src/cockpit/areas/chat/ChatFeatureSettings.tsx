@@ -7,6 +7,8 @@ import { ContextDisclosure } from "../../../features/threaded-surface/ThreadedCo
 import { FeatureOffLink } from "../settings/FeatureOffLink";
 import { useFeatureSwitchOn } from "../settings/feature-switches";
 import "./chat-feature-settings.css";
+import {ChatAssistantReadinessControl} from "./ChatAssistantReadinessControl";
+import {ChatFollowThroughControl} from "./ChatFollowThroughControl";
 
 /** Presentation only: existing session controllers and Gateway checks own every action. */
 export function ChatFeatureSettings({ dock }: { dock: MissionThreadedContextDockProps }) {
@@ -161,6 +163,10 @@ export function ChatFeatureSettings({ dock }: { dock: MissionThreadedContextDock
           </section>
         ) : null}
       </ContextDisclosure>
+      {dock.selectedSessionId && dock.selectedSession?.workspaceId ? <ContextDisclosure summary="Memory, learning and follow-through">
+        <ChatAssistantReadinessControl key={`${dock.selectedSession.workspaceId}:${dock.selectedSessionId}`} sessionId={dock.selectedSessionId} workspaceId={dock.selectedSession.workspaceId} onMemoryPreference={()=>dock.onPrefPatch({memoryMode:"auto"})}/>
+        <ContextDisclosure summary="Upcoming work and follow-ups"><ChatFollowThroughControl sessionId={dock.selectedSessionId} workspaceId={dock.selectedSession.workspaceId}/></ContextDisclosure>
+      </ContextDisclosure>:null}
       {error ? <p role="alert">{error}</p> : null}
       <ConfirmModal
         open={confirmAutomatic}

@@ -1,3 +1,4 @@
+import { gatewayLocalStorage } from "@goatcitadel/mission-control-shared/api/gateway-transport";
 import type { ChatAttachmentRecord, ChatGeneratedArtifactRecord } from "@goatcitadel/contracts";
 import { fetchChatSessionGoal } from "@goatcitadel/mission-control-shared/api/client";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
@@ -9,7 +10,7 @@ import {
   type ChatSessionCreation,
 } from "@goatcitadel/mission-control-shared/state/chat-session-creation";
 import { setDevDiagnosticsLatestTraceSummary } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
 import {
   mergeHydratedOutboundQueue,
@@ -67,7 +68,7 @@ type CreationStart = { attempt: ChatSessionCreation; key: string; settled: boole
 
 function nothingStoredFor(key: string): boolean {
   try {
-    return !window.localStorage.getItem(key);
+    return !gatewayLocalStorage().getItem(key);
   } catch {
     return false;
   }
@@ -121,6 +122,7 @@ export function useChatSessionRestoration({
   const { setQueuedOutbound } = orchestration;
   const { sessionMetadataConflictDraftRef, setFolderName, setTagsValue } = metadataDraft;
   const draftStorageKey = createDraftStorageKey(workspaceId, selection.selectedSessionId);
+  const [hydratedDraftKey, setHydratedDraftKey] = useState<string | null>(null);
   const attachmentStorageKey = createAttachmentStorageKey(workspaceId, selection.selectedSessionId);
   const queueStorageKey = createQueueStorageKey(workspaceId, selection.selectedSessionId);
   // Which owner (caller, workspace, conversation) the draft was last hydrated for, and the draft as it was when
@@ -256,9 +258,9 @@ export function useChatSessionRestoration({
         // leaves the text on disk where it was.
         setTimeout(() => {
           try {
-            window.localStorage.setItem(draftStorageKey, text);
-            if (window.localStorage.getItem(previousOwner!.key) === text)
-              window.localStorage.removeItem(previousOwner!.key);
+            gatewayLocalStorage().setItem(draftStorageKey, text);
+            if (gatewayLocalStorage().getItem(previousOwner!.key) === text)
+              gatewayLocalStorage().removeItem(previousOwner!.key);
           } catch {
             // Intentionally ignored: storage refused the write or is unavailable, so the source copy is kept and the
             // new conversation still holds the text in memory.
@@ -269,13 +271,13 @@ export function useChatSessionRestoration({
       setDraft(stored ?? "");
     };
     try {
-      const draftRaw = window.localStorage.getItem(draftStorageKey);
-      hydrateDraft(
-        draftRaw && isWithinStorageBudget(draftRaw) && draftRaw.length <= MAX_HYDRATED_MESSAGE_CHARS ? draftRaw : null,
-      );
+      const draftRaw = gatewayLocalStorage().getItem(draftStorageKey);
+      const usableDraft = !draftRaw || (isWithinStorageBudget(draftRaw) && draftRaw.length <= MAX_HYDRATED_MESSAGE_CHARS);
+      hydrateDraft(usableDraft ? draftRaw : null);
+      setHydratedDraftKey(usableDraft ? draftStorageKey : null);
       // The same key again never replaces attachments added since with the stored copy.
       if (hydratedAttachmentKey !== attachmentStorageKey) {
-        const attachmentsRaw = window.localStorage.getItem(attachmentStorageKey);
+        const attachmentsRaw = gatewayLocalStorage().getItem(attachmentStorageKey);
         setPendingAttachments(
           parseHydratedChatAttachments(attachmentsRaw, {
             workspaceId,
@@ -283,7 +285,7 @@ export function useChatSessionRestoration({
           }),
         );
       }
-      const queueRaw = window.localStorage.getItem(queueStorageKey);
+      const queueRaw = gatewayLocalStorage().getItem(queueStorageKey);
       const hydratedQueue = parseHydratedOutboundQueue(queueRaw, {
         workspaceId,
         sessionId: selection.selectedSessionId,
@@ -375,13 +377,13 @@ export function useChatSessionRestoration({
     if (typeof window === "undefined" || !transferredIds?.size) return;
     try {
       const previousKey = createQueueStorageKey(workspaceId, null);
-      const previousQueue = parseHydratedOutboundQueue(window.localStorage.getItem(previousKey), {
+      const previousQueue = parseHydratedOutboundQueue(gatewayLocalStorage().getItem(previousKey), {
         workspaceId,
         sessionId: null,
       });
       const remaining = previousQueue.filter((item) => !transferredIds.has(item.id));
       if (remaining.length !== previousQueue.length)
-        window.localStorage.setItem(previousKey, JSON.stringify(remaining));
+        gatewayLocalStorage().setItem(previousKey, JSON.stringify(remaining));
     } catch {
       // Keep the in-memory owner authoritative when browser persistence is disabled.
     }
@@ -390,7 +392,7 @@ export function useChatSessionRestoration({
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      window.localStorage.setItem(STREAM_PREF_KEY, String(streamPreferences.streamEnabled));
+      gatewayLocalStorage().setItem(STREAM_PREF_KEY, String(streamPreferences.streamEnabled));
     } catch {
       // Fallback: localStorage may be disabled or quota-exceeded; preference will not persist this session.
     }
@@ -399,7 +401,7 @@ export function useChatSessionRestoration({
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      window.localStorage.setItem(VISUAL_STREAM_MODE_PREF_KEY, streamPreferences.visualStreamMode);
+      gatewayLocalStorage().setItem(VISUAL_STREAM_MODE_PREF_KEY, streamPreferences.visualStreamMode);
     } catch {
       // Fallback: localStorage may be disabled or quota-exceeded; preference will not persist this session.
     }
@@ -434,5 +436,5 @@ export function useChatSessionRestoration({
     setTagsValue,
   ]);
 
-  return {};
+  return { draftHydrated: hydratedDraftKey === draftStorageKey };
 }

@@ -41,7 +41,7 @@ const profile = {
   tools: ["files", "skills"],
   grants: ["test-workspace"],
   reasoning: "none",
-  contextTokens: 32000,
+  contextTokens: 128000,
   outputTokens: 8192,
   maxTaskMs: 600000,
 };

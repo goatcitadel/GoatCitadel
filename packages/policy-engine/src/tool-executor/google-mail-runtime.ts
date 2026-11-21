@@ -40,7 +40,8 @@ export async function executeGoogleMailAction(
     const records = [];
     for (const item of (Array.isArray(page.messages) ? page.messages : []).slice(0, 25)) {
       const messageId = text(object(item).id);
-      if (!messageId) continue;
+      // A malformed provider list entry must not turn the remaining readable messages into a failed batch.
+      if (!messageId || /[\s/\\?#\u0000-\u001f]/u.test(messageId) || messageId === "." || messageId === "..") continue;
       const detailUrl = new URL(`${GMAIL_API}/messages/${id(messageId, "messageId")}`);
       detailUrl.searchParams.set("format", "metadata");
       for (const header of ["From", "To", "Subject", "Date"]) detailUrl.searchParams.append("metadataHeaders", header);

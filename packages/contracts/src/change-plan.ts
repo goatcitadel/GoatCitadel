@@ -200,6 +200,8 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAGS = [
   "utilityModelRoutingV1Enabled",
   "cronEvidenceV1Enabled",
   "memoryConsolidationV1Enabled",
+  "memoryCorpusRecallV1Enabled",
+  "backgroundSkillDraftsV1Enabled",
   "channelVoiceInboundV1Enabled",
   "channelVoiceReplyV1Enabled",
   "externalSideEffectReplayJobsV1Disabled",
