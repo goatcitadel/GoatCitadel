@@ -13,7 +13,6 @@ import { ChatSessionHeader } from "./ChatAreaChrome";
 import { CHAT_SHELL_FRAME } from "./ChatHostStatus";
 import { ChatTranscript } from "./ChatTranscript";
 import { ChatNoticeText } from "./ChatNoticeText";
-import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatTextComposer } from "./ChatTextComposer";
 import { startupDraftFor } from "./NativeStartupDraftGate";
 import { ChatManagedFilesSlot, useChatApprovalModeIntent } from "./chat-managed-files-surface";
@@ -35,6 +34,7 @@ import {
   DeferredChatBuildEditor,
   DeferredChatEmpty,
   DeferredChatSetup,
+  DeferredChatStreamErrorNotice,
   DeferredBtwSideChatPanel,
   DeferredChatTimerPanel,
   DeferredProjectAssignmentReview,
@@ -330,7 +330,8 @@ export function ChatAreaView({
           />
         ) : null}
         {buildOpen && active?.streamError ? (
-          <ChatStreamErrorNotice
+          <DeferredChatStreamErrorNotice
+            sessionId={selectedSessionId}
             error={active.streamError}
             source={active.streamErrorSource}
             onReload={active.onRefreshThread}

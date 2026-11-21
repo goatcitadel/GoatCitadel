@@ -32,10 +32,10 @@ import {
   DeferredChatLeaf,
   DeferredChatLearningDisclosure,
   DeferredChatChangePlanReceipt,
+  DeferredChatStreamErrorNotice,
 } from "./DeferredChatLeaves";
 import { ChatClampedUserMessage, turnAccessibleName } from "./ChatClampedUserMessage";
 import { ChatRunCard } from "./ChatRunCard";
-import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatTranscriptNotices } from "./ChatTranscriptNotices";
 import { ChatTurnDetails } from "./ChatTurnDetails";
 import { turnReadsDraft, type TurnActions } from "./use-turn-actions";
@@ -416,7 +416,8 @@ export function ChatTranscriptFooter({ context }: { context?: TranscriptFooterCo
         ) : null}
         <ChatBlockers key={props.selectedSessionId} props={props} latestTurn={latestTurn} />
         {props.streamError && latestTurn?.trace.status !== "failed" && latestTurn?.trace.status !== "partial" ? (
-          <ChatStreamErrorNotice
+          <DeferredChatStreamErrorNotice
+            sessionId={props.selectedSessionId}
             error={props.streamError}
             source={props.streamErrorSource}
             onReload={props.onRefreshThread}

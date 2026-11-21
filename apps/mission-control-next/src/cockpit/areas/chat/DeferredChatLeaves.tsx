@@ -32,6 +32,31 @@ const ChatChangePlanReceipt = lazy(async () => ({
 const ChatLearningDisclosure = lazy(async () => ({
   default: (await import("./ChatLearningDisclosure")).ChatLearningDisclosure,
 }));
+const ChatStreamErrorNotice = lazy(async () => ({
+  default: (await import("./ChatStreamErrorNotice")).ChatStreamErrorNotice,
+}));
+
+export function DeferredChatStreamErrorNotice({
+  sessionId,
+  ...props
+}: ComponentProps<typeof ChatStreamErrorNotice> & { sessionId?: string | null }) {
+  return (
+    <DeferredChatLeaf
+      label="Conversation error"
+      identity={sessionId ?? ""}
+      fallback={
+        <p
+          role="alert"
+          className={`${props.className ?? "mt-2"} rounded-md border border-status-failed p-2 text-sm text-fg-secondary`}
+        >
+          The request failed. Loading recovery options…
+        </p>
+      }
+    >
+      <ChatStreamErrorNotice {...props} />
+    </DeferredChatLeaf>
+  );
+}
 
 export function DeferredChatLearningDisclosure({
   turn,
