@@ -428,7 +428,7 @@ function buildGovernanceReasons(
 function buildGrpcUrl(baseUrl: string, grpc: A2ABridgeRuntimeConfig["inbound"]["grpc"]): string {
   const base = new URL(normalizeBaseUrl(baseUrl));
   const host = grpc.host === "0.0.0.0" || grpc.host === "::" ? base.hostname : grpc.host;
-  return `grpc://${host}:${grpc.port}`;
+  return `grpc://${host === "::1" ? "[::1]" : host}:${grpc.port}`;
 }
 
 function normalizeProtocolBindings(

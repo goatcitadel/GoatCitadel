@@ -3,10 +3,17 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AssistantReadinessResponse, ChangePlanRecord } from "@goatcitadel/contracts";
-const api = vi.hoisted(() => ({ read: vi.fn(), create: vi.fn(), confirm: vi.fn(), fetch: vi.fn(), navigate: vi.fn() }));
+const api = vi.hoisted(() => ({
+  read: vi.fn(),
+  prepare: vi.fn(),
+  create: vi.fn(),
+  confirm: vi.fn(),
+  fetch: vi.fn(),
+  navigate: vi.fn(),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/assistant-readiness", () => ({
   fetchAssistantReadiness: api.read,
-  prepareAssistantSetup: api.create,
+  prepareAssistantSetup: api.prepare,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
   createChangePlan: api.create,
@@ -58,6 +65,7 @@ let tree: ReactTestRenderer, client: QueryClient;
 afterEach(async () => {
   if (tree) await act(async () => tree.unmount());
   client?.clear();
+  expect(api.create).not.toHaveBeenCalled();
   vi.resetAllMocks();
 });
 async function mount(sessionId = "s") {
@@ -84,7 +92,7 @@ it("views without mutation, reviews exact setup and sends the current revision a
     requiredAction: { kind: "confirmation", actionNonce: "nonce", actionId: "a" },
     request: action.request,
   } as ChangePlanRecord;
-  api.create.mockResolvedValue(plan);
+  api.prepare.mockResolvedValue(plan);
   api.fetch.mockResolvedValue(plan);
   api.confirm.mockResolvedValue({
     ...plan,
@@ -94,9 +102,9 @@ it("views without mutation, reviews exact setup and sends the current revision a
     result: { summary: "Applied" },
   });
   await mount();
-  expect(api.create).not.toHaveBeenCalled();
+  expect(api.prepare).not.toHaveBeenCalled();
   await act(async () => tree.root.findByProps({ "data-readiness-action": "memory" }).props.onClick());
-  expect(api.create).toHaveBeenCalledWith(
+  expect(api.prepare).toHaveBeenCalledWith(
     expect.objectContaining({
       sessionId: "s",
       workspaceId: "A",
@@ -114,7 +122,7 @@ it("views without mutation, reviews exact setup and sends the current revision a
 });
 it("rejects a setup response from another workspace instead of offering its review", async () => {
   api.read.mockResolvedValue(response);
-  api.create.mockResolvedValue({ planId: "foreign", origin: { workspaceId: "B", sessionId: "s" } });
+  api.prepare.mockResolvedValue({ planId: "foreign", origin: { workspaceId: "B", sessionId: "s" } });
   await mount();
   await act(async () => tree.root.findByProps({ "data-readiness-action": "memory" }).props.onClick());
   expect(tree.root.findByProps({ "data-review-dialog": true }).props.plan).toBeNull();
@@ -136,7 +144,7 @@ it("makes a prepared review actionable while its read-only readiness refresh is 
     request: action.request,
     requiredAction: { kind: "confirmation", actionNonce: "nonce" },
   } as ChangePlanRecord;
-  api.create.mockResolvedValue(plan);
+  api.prepare.mockResolvedValue(plan);
   api.fetch.mockResolvedValue(plan);
   await mount();
   let operation: Promise<void> | undefined;
@@ -185,7 +193,7 @@ it("stops presenting cached readiness as current after a refresh fails", async (
   });
   await vi.waitFor(() => expect(tree.root.findAllByProps({ role: "alert" })).toHaveLength(0));
   expect(JSON.stringify(tree.toJSON())).toContain("Reviewed memory");
-  expect(api.create).not.toHaveBeenCalled();
+  expect(api.prepare).not.toHaveBeenCalled();
 });
 it("reopens the matching scoped setup review after runtime changes without creating or applying another plan", async () => {
   api.read.mockResolvedValue(response);
@@ -199,16 +207,16 @@ it("reopens the matching scoped setup review after runtime changes without creat
     requiredAction: { kind: "confirmation", actionNonce: "current-nonce" },
   } as ChangePlanRecord;
   api.fetch.mockResolvedValue(existing);
-  api.create.mockResolvedValue(existing);
+  api.prepare.mockResolvedValue(existing);
   await mount();
   await act(async () => tree.root.findByProps({ "data-readiness-action": "memory" }).props.onClick());
   expect(tree.root.findByProps({ "data-review-dialog": true }).props.plan).toEqual(existing);
-  expect(api.create).toHaveBeenCalledTimes(1);
+  expect(api.prepare).toHaveBeenCalledTimes(1);
   expect(api.confirm).not.toHaveBeenCalled();
 });
 it.each(["foreign_scope", "different_intent"])("does not substitute an occupied setup with %s", async (kind) => {
   api.read.mockResolvedValue(response);
-  api.create.mockResolvedValue({
+  api.prepare.mockResolvedValue({
     planId: "existing",
     origin: { workspaceId: kind === "foreign_scope" ? "B" : "A", sessionId: "s" },
     request: {
@@ -224,7 +232,7 @@ it.each(["foreign_scope", "different_intent"])("does not substitute an occupied 
 it("two immediate setup clicks prepare one review", async () => {
   api.read.mockResolvedValue(response);
   let settle!: (value: unknown) => void;
-  api.create.mockReturnValue(
+  api.prepare.mockReturnValue(
     new Promise((resolve) => {
       settle = resolve;
     }),
@@ -237,7 +245,7 @@ it("two immediate setup clicks prepare one review", async () => {
     second = actionButton.props.onClick();
     await Promise.resolve();
   });
-  expect(api.create).toHaveBeenCalledTimes(1);
+  expect(api.prepare).toHaveBeenCalledTimes(1);
   await act(async () => {
     settle({ planId: "p", origin: { workspaceId: "A", sessionId: "s" } });
     await Promise.all([first, second]);
@@ -245,14 +253,14 @@ it("two immediate setup clicks prepare one review", async () => {
 });
 it("a known ended review permits a fresh explicit review while an unconfirmed creation keeps the same identity", async () => {
   api.read.mockResolvedValue(response);
-  api.create.mockRejectedValueOnce(new Error("reply lost"));
+  api.prepare.mockRejectedValueOnce(new Error("reply lost"));
   await mount();
   const click = () => tree.root.findByProps({ "data-readiness-action": "memory" }).props.onClick();
   await act(async () => {
     await click();
   });
-  const uncertain = api.create.mock.calls[0]![0];
-  api.create.mockResolvedValue({
+  const uncertain = api.prepare.mock.calls[0]![0];
+  api.prepare.mockResolvedValue({
     planId: "old",
     revision: 2,
     status: "failed",
@@ -262,8 +270,8 @@ it("a known ended review permits a fresh explicit review while an unconfirmed cr
   await act(async () => {
     await click();
   });
-  expect(api.create.mock.calls[1]![0].operationId).toBe(uncertain.operationId);
-  api.create.mockResolvedValue({
+  expect(api.prepare.mock.calls[1]![0].operationId).toBe(uncertain.operationId);
+  api.prepare.mockResolvedValue({
     planId: "fresh",
     revision: 1,
     status: "awaiting_confirmation",
@@ -273,6 +281,6 @@ it("a known ended review permits a fresh explicit review while an unconfirmed cr
   await act(async () => {
     await click();
   });
-  expect(api.create.mock.calls[2]![0].operationId).not.toBe(uncertain.operationId);
+  expect(api.prepare.mock.calls[2]![0].operationId).not.toBe(uncertain.operationId);
   expect(api.confirm).not.toHaveBeenCalled();
 });

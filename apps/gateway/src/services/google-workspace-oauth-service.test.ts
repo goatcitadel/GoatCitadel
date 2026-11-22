@@ -133,6 +133,23 @@ async function connect(
 }
 
 describe("Google Workspace sign-in", { timeout: 60_000 }, () => {
+  it("rejects oversized Gmail searches and preserves a query at the limit", async () => {
+    const ctx = setup();
+    const connection = await googleConnection();
+    await connect(ctx, connection.connectionId, ["gmail.read"], { scope: GMAIL_READONLY });
+    const query = "a".repeat(512);
+    const request = {
+      toolName: "gmail.read",
+      agentId: "assistant",
+      sessionId: "s",
+      workspaceId: "default",
+      args: { connectionId: connection.connectionId, query },
+    };
+    expect((await ctx.service.normalizeToolRequest(request)).args.query).toBe(query);
+    await expect(
+      ctx.service.normalizeToolRequest({ ...request, args: { ...request.args, query: query + " is:unread" } }),
+    ).rejects.toThrow(/Gmail query is too long/);
+  });
   it("keeps full-message reads opt-in and requires both grants for replies and draft sends", async () => {
     const ctx = setup();
     const connection = await googleConnection();

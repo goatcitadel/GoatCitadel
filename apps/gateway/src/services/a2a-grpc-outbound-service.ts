@@ -9,7 +9,8 @@ import type {
 import { fetchAllowlisted } from "@goatcitadel/policy-engine";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
-import type { A2AGrpcClientPort } from "./a2a-grpc-client.js";
+import { isLoopbackHost } from "../startup-guard.js";
+import { parseGrpcEndpoint, type A2AGrpcClientPort } from "./a2a-grpc-client.js";
 import { projectA2AJsonRpcResponseForExternal } from "./a2a-public-projection.js";
 import { buildOutboundHeaders, hashStableJson } from "./a2a-route-utils.js";
 import { readBoundedResponseJson } from "./bounded-response-reader.js";
@@ -145,6 +146,10 @@ async function discoverOutboundGrpcUrl(
       (item) => item.protocolBinding === "GRPC" && item.enabled !== false && item.url,
     );
     if (grpc?.url) {
+      const endpoint = parseGrpcEndpoint(grpc.url);
+      if (!endpoint.secure && !isLoopbackHost(new URL(peer.agentCardUrl).hostname)) {
+        throw new Error("A remote A2A Agent Card must advertise a TLS gRPC endpoint.");
+      }
       await recordOutboundGrpcDiscovery(peer, grpc.url, checkedAt, "agent_card", deps);
       return { grpcUrl: grpc.url };
     }

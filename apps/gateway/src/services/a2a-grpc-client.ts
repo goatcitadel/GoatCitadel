@@ -1,6 +1,7 @@
 import type * as grpc from "@grpc/grpc-js";
 import type { A2AJsonRpcMethod, A2AJsonRpcResponse, A2AOutboundPeerConfig } from "@goatcitadel/contracts";
 import { assertHostAllowed } from "@goatcitadel/policy-engine";
+import { isLoopbackHost } from "../startup-guard.js";
 import type {
   A2AGrpcClientShape,
   A2AGrpcJsonEnvelope,
@@ -39,7 +40,8 @@ export class A2AGrpcClient implements A2AGrpcClientPort {
     const ClientConstructor = loadA2AGrpcClientConstructor();
     const client = new ClientConstructor(
       endpoint.target,
-      credentials.createInsecure(),
+      endpoint.secure ? credentials.createSsl() : credentials.createInsecure(),
+      endpoint.secure ? undefined : { "grpc.enable_http_proxy": 0 },
     ) as unknown as A2AGrpcClientShape;
     try {
       const metadata = new Metadata();
@@ -157,11 +159,17 @@ function collectTaskEvents(
     const events: unknown[] = [];
     const stream = client.subscribeToTask(request, metadata);
     const timeout = setTimeout(() => {
-      stream.cancel();
       reject(new Error("A2A gRPC SubscribeToTask timed out."));
+      stream.cancel();
     }, A2A_GRPC_CALL_TIMEOUT_MS);
     stream.on("data", (event: A2AGrpcTaskEventEnvelope) => {
-      events.push(parseJson(event.json));
+      try {
+        events.push(parseJson(event.json));
+      } catch {
+        clearTimeout(timeout);
+        reject(new Error("A2A gRPC peer returned an invalid task event."));
+        stream.cancel();
+      }
     });
     stream.on("error", (error) => {
       clearTimeout(timeout);
@@ -216,14 +224,30 @@ function parseJson(value: string | undefined): unknown {
   return JSON.parse(value);
 }
 
-function parseGrpcEndpoint(value: string): { target: string; allowlistUrl: string } {
+export function parseGrpcEndpoint(value: string): { target: string; allowlistUrl: string; secure: boolean } {
   const trimmed = value.trim();
   const parsed = new URL(trimmed.includes("://") ? trimmed : `grpc://${trimmed}`);
-  if (!parsed.host) {
-    throw new Error("A2A gRPC URL must include a host and port.");
+  const secure = parsed.protocol === "grpcs:" || parsed.protocol === "https:";
+  if (!secure && parsed.protocol !== "grpc:" && parsed.protocol !== "http:") {
+    throw new Error("A2A gRPC URL must use grpc://, grpcs://, http://, or https://.");
   }
+  if (
+    !parsed.hostname ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    (parsed.pathname && parsed.pathname !== "/")
+  ) {
+    throw new Error("A2A gRPC URL must contain only a host and optional port.");
+  }
+  if (!secure && !isLoopbackHost(parsed.hostname)) {
+    throw new Error("Remote A2A gRPC peers require TLS. Use grpcs://.");
+  }
+  const target = parsed.port ? parsed.host : `${parsed.hostname}:${secure ? 443 : 80}`;
   return {
-    target: parsed.host,
-    allowlistUrl: `grpc://${parsed.host}`,
+    target,
+    allowlistUrl: `${secure ? "grpcs" : "grpc"}://${target}`,
+    secure,
   };
 }

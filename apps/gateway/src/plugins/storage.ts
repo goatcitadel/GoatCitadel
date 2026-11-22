@@ -51,7 +51,29 @@ export const gatewayPlugin = fp<GatewayPluginOptions>(async (fastify, options) =
   setBootCheckpoint("storage-plugin:postgres-ready");
   const shouldStopBundledPostgres = shouldStopBundledPostgresOnClose();
   const createRuntimePhase = startupPhases.open("create_runtime", { owner: "gateway.storage" });
-  let gateway: GatewayRuntimePort & GatewayAuthValidationPort;
+  let gateway: (GatewayRuntimePort & GatewayAuthValidationPort) | undefined;
+  let closePromise: Promise<void> | undefined;
+  const closeStorage = () => {
+    closePromise ??= (async () => {
+      try {
+        await gateway?.close();
+      } finally {
+        if (shouldStopBundledPostgres) {
+          await bundledPostgres?.stop();
+        }
+      }
+    })();
+    return closePromise;
+  };
+  const cleanupFailedStartup = async (error: unknown): Promise<never> => {
+    try {
+      await closeStorage();
+    } catch (cleanupError) {
+      fastify.log.error(cleanupError, "Gateway storage startup cleanup failed");
+    }
+    throw error;
+  };
+  fastify.addHook("onClose", closeStorage);
   try {
     gateway = createGatewayRuntime(config, {
       sharedHostLifecycle: fastify.sharedHostLifecycle,
@@ -60,20 +82,21 @@ export const gatewayPlugin = fp<GatewayPluginOptions>(async (fastify, options) =
     createRuntimePhase.close();
   } catch (error) {
     createRuntimePhase.fail(formatStartupPhaseError(error));
-    throw error;
+    return cleanupFailedStartup(error);
   }
-  gateway.attachDevDiagnosticsLogger(fastify.log);
-  fastify.decorate("gatewayRuntime", gateway);
-  fastify.decorate("gatewayAuth", gateway);
-  fastify.decorate("gatewayConfig", config);
+  const runtime = gateway;
   setBootCheckpoint("storage-plugin:initCritical-starting");
   const criticalPhase = startupPhases.open("init_critical", { owner: "gateway.storage" });
   try {
-    await gateway.initCritical();
+    runtime.attachDevDiagnosticsLogger(fastify.log);
+    fastify.decorate("gatewayRuntime", runtime);
+    fastify.decorate("gatewayAuth", runtime);
+    fastify.decorate("gatewayConfig", config);
+    await runtime.initCritical();
     criticalPhase.close();
   } catch (error) {
     criticalPhase.fail(formatStartupPhaseError(error));
-    throw error;
+    return cleanupFailedStartup(error);
   }
   setBootCheckpoint("storage-plugin:initCritical-returned");
 
@@ -96,7 +119,7 @@ export const gatewayPlugin = fp<GatewayPluginOptions>(async (fastify, options) =
     const runDeferredInit = async () => {
       try {
         if (admission.reservation.signal.aborted) return;
-        await gateway.startDeferredInit(admission.reservation.signal);
+        await runtime.startDeferredInit(admission.reservation.signal);
       } finally {
         admission.reservation.release();
       }
@@ -121,13 +144,6 @@ export const gatewayPlugin = fp<GatewayPluginOptions>(async (fastify, options) =
     } catch (error) {
       deferredPhase.fail(formatStartupPhaseError(error));
       throw error;
-    }
-  });
-
-  fastify.addHook("onClose", async () => {
-    await gateway.close();
-    if (shouldStopBundledPostgres) {
-      await bundledPostgres?.stop();
     }
   });
 });

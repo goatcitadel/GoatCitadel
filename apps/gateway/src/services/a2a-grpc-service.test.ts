@@ -7,7 +7,7 @@ import type {
   TaskRecord,
 } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
-import { A2AGrpcClient, type A2AGrpcClientPort } from "./a2a-grpc-client.js";
+import { A2AGrpcClient, parseGrpcEndpoint, type A2AGrpcClientPort } from "./a2a-grpc-client.js";
 import { startA2AGrpcServer, type A2AGrpcServerHandle } from "./a2a-grpc-server.js";
 import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
 import { A2ARouteService } from "./a2a-route-service.js";
@@ -23,6 +23,23 @@ describe("A2A gRPC transport", () => {
     await Promise.all(httpServers.splice(0).map(closeHttpServer));
     storage?.close();
     storage = undefined;
+  });
+
+  it("requires TLS for remote URLs and preserves explicitly local plaintext", () => {
+    expect(parseGrpcEndpoint("grpcs://peer.example:7443")).toMatchObject({
+      target: "peer.example:7443",
+      secure: true,
+    });
+    expect(parseGrpcEndpoint("https://peer.example")).toMatchObject({ target: "peer.example:443", secure: true });
+    expect(parseGrpcEndpoint("127.0.0.1:7443")).toMatchObject({ target: "127.0.0.1:7443", secure: false });
+    expect(() => parseGrpcEndpoint("grpc://peer.example:7443")).toThrow(/require TLS/);
+    expect(() => parseGrpcEndpoint("ftp://peer.example:7443")).toThrow(/must use/);
+  });
+
+  it("refuses to bind the plaintext listener outside loopback", async () => {
+    const harness = createService({ bindings: ["GRPC"] });
+    harness.config.assistant.a2a.inbound.grpc.host = "0.0.0.0";
+    await expect(startA2AGrpcServer({ config: harness.config, a2a: harness.service })).rejects.toThrow(/loopback bind/);
   });
 
   it("accepts authenticated inbound gRPC task operations", async () => {
@@ -244,7 +261,7 @@ describe("A2A gRPC transport", () => {
           protocolBinding: "GRPC",
           protocolVersion: "1.0",
           enabled: true,
-          url: "grpc://grpc.peer.example:9443",
+          url: "grpcs://grpc.peer.example:9443",
         },
       ],
     });
@@ -275,7 +292,7 @@ describe("A2A gRPC transport", () => {
         {
           peerId: "peer-remote",
           agentCardUrl: agentCard.url,
-          grpcUrl: "grpc://fallback.peer.example:7443",
+          grpcUrl: "grpcs://fallback.peer.example:7443",
           token: "remote-token",
         },
       ],
@@ -304,7 +321,7 @@ describe("A2A gRPC transport", () => {
     expect(JSON.stringify(rawPeerResponse)).toContain("outbound-grpc-short");
     expect(grpcClient.call).toHaveBeenCalledWith(
       expect.objectContaining({
-        grpcUrl: "grpc://grpc.peer.example:9443",
+        grpcUrl: "grpcs://grpc.peer.example:9443",
         method: "SendMessage",
         allowlist: ["127.0.0.1"],
         peer: expect.objectContaining({ token: "remote-token" }),
@@ -327,7 +344,7 @@ describe("A2A gRPC transport", () => {
           protocolBinding: "GRPC",
           protocolVersion: "1.0",
           enabled: true,
-          url: "grpc://grpc.peer.example:9443",
+          url: "grpcs://grpc.peer.example:9443",
         },
       ],
     });

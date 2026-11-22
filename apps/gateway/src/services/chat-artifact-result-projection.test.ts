@@ -1,12 +1,32 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { ChatToolRunRecord } from "@goatcitadel/contracts";
+import type { ChatMessageRecord, ChatToolRunRecord, ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import {
+  projectAssistantWorkspaceFileDownloads,
   projectArtifactPathsInAnswer,
   projectArtifactToolResultForModel,
   toWorkspaceRelativePath,
 } from "./chat-artifact-result-projection.js";
+
+it("projects a download link when the workspace root resolves through a directory link", async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "gc-artifact-projection-"));
+  try {
+    const root = path.join(temp, "real-workspace");
+    const linkedRoot = path.join(temp, "workspace");
+    await fs.mkdir(root);
+    await fs.symlink(root, linkedRoot, "junction");
+    await fs.writeFile(path.join(root, "Brief.pdf"), "document");
+    const run = executedRun("documents.create", documentResult(path.join(linkedRoot, "Brief.pdf")));
+    const trace = { sessionId: run.sessionId, turnId: run.turnId, toolRuns: [run] } as ChatTurnTraceRecord;
+    const message = { content: "The brief is ready." } as ChatMessageRecord;
+    const projected = await projectAssistantWorkspaceFileDownloads(message, trace, linkedRoot);
+    expect(projected?.content).toContain("/api/v1/files/download?relativePath=Brief.pdf");
+  } finally {
+    await fs.rm(temp, { recursive: true, force: true });
+  }
+});
 
 const WORKSPACE_ROOT = path.join(os.tmpdir(), "goatcitadel-505", "workspace");
 const ARTIFACT_PATH = path.join(WORKSPACE_ROOT, "artifacts", "Sandbox_Test_Brief.pdf");

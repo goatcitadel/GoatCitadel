@@ -166,20 +166,16 @@ export async function projectAssistantWorkspaceFileDownloads(
     if (!receipt) {
       continue;
     }
-    const verifiedPath = await resolveLiveWorkspaceDownloadPath(receipt.artifactPath, workspaceFileRootDir);
-    if (!verifiedPath) {
+    const downloadHref = await resolveLiveWorkspaceDownloadHref(receipt.artifactPath, workspaceFileRootDir);
+    if (!downloadHref) {
       continue;
     }
-    content = mergeWorkspaceFileDownloadContent(
-      content,
-      toolRun,
-      buildWorkspaceFileDownloadHref(verifiedPath, workspaceFileRootDir),
-    );
+    content = mergeWorkspaceFileDownloadContent(content, toolRun, downloadHref);
   }
   return content === assistantMessage.content ? assistantMessage : { ...assistantMessage, content };
 }
 
-async function resolveLiveWorkspaceDownloadPath(
+async function resolveLiveWorkspaceDownloadHref(
   artifactPath: string,
   workspaceFileRootDir: string,
 ): Promise<string | undefined> {
@@ -191,17 +187,16 @@ async function resolveLiveWorkspaceDownloadPath(
       fs.realpath(workspaceFileRootDir),
       fs.realpath(artifactPath),
     ]);
-    const relativePath = path.relative(realWorkspaceRoot, realArtifactPath);
-    if (
-      !relativePath ||
-      path.isAbsolute(relativePath) ||
-      relativePath === ".." ||
-      relativePath.startsWith(`..${path.sep}`)
-    ) {
+    const relative = path.relative(realWorkspaceRoot, realArtifactPath);
+    if (!relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)) {
+      return undefined;
+    }
+    const href = buildWorkspaceFileDownloadHref(realArtifactPath, realWorkspaceRoot);
+    if (!href) {
       return undefined;
     }
     const stat = await fs.stat(realArtifactPath);
-    return stat.isFile() && stat.size > 0 && stat.size <= MAX_INLINE_FILE_DOWNLOAD_BYTES ? realArtifactPath : undefined;
+    return stat.isFile() && stat.size > 0 && stat.size <= MAX_INLINE_FILE_DOWNLOAD_BYTES ? href : undefined;
   } catch {
     return undefined;
   }

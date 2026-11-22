@@ -124,10 +124,15 @@ function normalizeReadArgs(request: ToolInvokeRequest): ToolInvokeRequest["args"
   if (textValue !== undefined && typeof textValue !== "string") {
     throw new ValidationError({ message: `${textField} must be text.` });
   }
-  if (!gmail && typeof textValue === "string" && textValue.length > 512) {
-    throw new ValidationError({ message: "The Calendar ID is too long." });
+  if (typeof textValue === "string") {
+    const trimmed = textValue.trim();
+    if ((gmail ? trimmed.length : textValue.length) > 512) {
+      throw new ValidationError({
+        message: gmail ? "The Gmail query is too long (maximum 512 characters)." : "The Calendar ID is too long.",
+      });
+    }
+    args[textField] = trimmed || undefined;
   }
-  if (typeof textValue === "string") args[textField] = textValue.trim().slice(0, 512) || undefined;
   if (args.maxResults !== undefined) {
     if (typeof args.maxResults !== "number" || !Number.isFinite(args.maxResults)) {
       throw new ValidationError({ message: "maxResults must be a number." });

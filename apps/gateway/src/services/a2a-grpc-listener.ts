@@ -24,7 +24,8 @@ export async function startA2AGrpcListener(
   const listenerAdmission = reserveGrpcWork(input.sharedHostLifecycle, "worker", "a2a-grpc-listener");
   const server = new grpc.Server();
   server.addService(loadA2AGrpcServiceDefinition(), createA2AGrpcHandlers(input.a2a, input.sharedHostLifecycle));
-  const bindAddress = `${grpcConfig.host}:${grpcConfig.port}`;
+  const host = grpcConfig.host.trim() === "::1" ? "[::1]" : grpcConfig.host.trim();
+  const bindAddress = `${host}:${grpcConfig.port}`;
   let port: number;
   try {
     port = await new Promise<number>((resolve, reject) => {
@@ -43,7 +44,7 @@ export async function startA2AGrpcListener(
   } finally {
     listenerAdmission?.release();
   }
-  const address = `grpc://${grpcConfig.host}:${port}`;
+  const address = `grpc://${host}:${port}`;
   input.logger?.info({ address }, "A2A gRPC listener started");
   return {
     enabled: true,

@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from "fastify";
 import type { GatewayRuntimeConfig } from "../config.js";
+import { isLoopbackHost } from "../startup-guard.js";
 import type { A2ARouteService } from "./a2a-route-service.js";
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
 
@@ -26,6 +27,9 @@ export async function startA2AGrpcServer(input: StartA2AGrpcServerInput): Promis
   }
 
   const { host, port } = a2a.inbound.grpc;
+  if (!isLoopbackHost(host)) {
+    throw new Error("The A2A gRPC listener requires a loopback bind. Use a TLS proxy for remote access.");
+  }
   const { startA2AGrpcListener } = await import("./a2a-grpc-listener.js");
   return startA2AGrpcListener(input, { host, port });
 }
