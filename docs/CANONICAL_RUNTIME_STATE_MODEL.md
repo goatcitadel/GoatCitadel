@@ -828,6 +828,7 @@ Implementation status:
 - A2A v1.0 is the external agent-to-agent standard at the Gateway boundary, not the internal mesh protocol.
 - Callable A2A v1 support includes JSON-RPC over HTTP/S, peer-authenticated HTTP+JSON task routes, peer-configured task push notification delivery, authenticated extended Agent Cards, and Gateway-owned gRPC task transport when the `GRPC` binding and loopback/default gRPC listener are explicitly configured.
 - The Gateway gRPC listener binds to loopback. Remote access requires a TLS-terminating gRPC proxy on the Gateway host. Configure the calling peer's `grpcUrl` as the proxy's `grpcs://` address when the peer's remote Agent Card advertises only its local listener. The caller still requires the network allowlist and validates the proxy certificate.
+- Outbound gRPC task subscriptions fail and cancel the stream if it exceeds 10,000 events or 16 MiB of event JSON.
 - Public Agent Card discovery at `/.well-known/agent-card.json` is disabled by default; operator diagnostics remain available at `/api/v1/a2a/agent-card`.
 - Inbound A2A uses configured peer credentials through the `a2a-peer` route-access class. It must not reuse operator auth as peer auth.
 - Inbound `SendMessage` creates or reuses a peer-scoped hidden chat session, creates a visible TaskLifecycle task, dispatches through `agentSendChatMessage`, and stores an A2A-to-local binding with idempotency by peer/context/message identity.
@@ -931,7 +932,7 @@ Consumers:
   (`evolution_control_plane` events whose `targetOwnerId` is `runtime_settings…`), and the cockpit refreshes every
   settings reader on those. A settings save that does not go through a change plan publishes nothing.
 - Shared fallback polling (`useRefreshSubscription`) waits at least ten minutes between polls while the event stream
-  is open; the stream is the source of truth then, and replay gaps refresh every owner.
+  is open. The stream triggers refreshes, and replay gaps refresh every owner. Repository-backed reads remain authoritative.
 
 ## Linkage Rules
 

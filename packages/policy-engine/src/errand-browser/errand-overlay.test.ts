@@ -72,7 +72,7 @@ describe("errand overlay", () => {
     cursor,
   });
 
-  const approvalState = (requestId = "r1"): ErrandOverlayState => ({
+  const approvalState = (requestId = "r1"): Extract<ErrandOverlayState, { mode: "approval" }> => ({
     mode: "approval",
     bannerText: BANNER,
     cursor: { x: TARGET.x + TARGET.width / 2, y: TARGET.y + TARGET.height / 2 },
@@ -380,6 +380,40 @@ describe("errand overlay", () => {
     await page.keyboard.press("Space");
     await sleep(300);
     expect(events).toEqual([]);
+  }, 60_000);
+
+  it("supports keyboard takeover and hand-back", async () => {
+    const { browser, events } = await openErrand();
+    const page = browser.page();
+    await browser.overlay.render(drivingState());
+    await page.focus("#buy");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => events.slice()).toEqual([{ type: "take_over" }]);
+
+    await browser.overlay.render({ mode: "taken_over", bannerText: BANNER });
+    await page.focus("#buy");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Space");
+    await expect.poll(() => events.slice()).toEqual([{ type: "take_over" }, { type: "hand_back" }]);
+  }, 60_000);
+
+  it("fits long approval disclosures and both actions within a narrow viewport", async () => {
+    const { browser } = await openErrand();
+    const page = browser.page();
+    await browser.overlay.render({
+      ...approvalState(),
+      body: "Read this step before deciding.\n".repeat(80),
+    });
+    await page.setViewportSize({ width: 320, height: 400 });
+    await expect
+      .poll(async () => {
+        const { controls } = await browser.overlay.snapshot();
+        return [controls.deny, controls.approve].every(
+          (rect) => rect && rect.x >= 8 && rect.x + rect.width <= 312 && rect.y + rect.height <= 392,
+        );
+      })
+      .toBe(true);
   }, 60_000);
 
   it("a click right after the card appears is ignored until the dwell time passes", async () => {

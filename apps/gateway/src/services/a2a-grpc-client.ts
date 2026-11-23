@@ -15,6 +15,8 @@ import type {
 import { buildOutboundHeaders, jsonRpcResult, readNumber, readString } from "./a2a-route-utils.js";
 
 const A2A_GRPC_CALL_TIMEOUT_MS = 15_000;
+const A2A_GRPC_MAX_STREAM_EVENTS = 10_000;
+const A2A_GRPC_MAX_STREAM_JSON_BYTES = 16 * 1024 * 1024;
 
 export interface A2AGrpcOutboundCallInput {
   grpcUrl: string;
@@ -157,18 +159,29 @@ function collectTaskEvents(
 ): Promise<unknown[]> {
   return new Promise((resolve, reject) => {
     const events: unknown[] = [];
+    let totalJsonBytes = 0;
+    let cancelled = false;
     const stream = client.subscribeToTask(request, metadata);
-    const timeout = setTimeout(() => {
-      reject(new Error("A2A gRPC SubscribeToTask timed out."));
+    const fail = (message: string): void => {
+      cancelled = true;
+      clearTimeout(timeout);
+      reject(new Error(message));
       stream.cancel();
-    }, A2A_GRPC_CALL_TIMEOUT_MS);
+    };
+    const timeout = setTimeout(() => fail("A2A gRPC SubscribeToTask timed out."), A2A_GRPC_CALL_TIMEOUT_MS);
     stream.on("data", (event: A2AGrpcTaskEventEnvelope) => {
+      if (cancelled) {
+        return;
+      }
+      totalJsonBytes += Buffer.byteLength(event.json ?? "", "utf8");
+      if (events.length >= A2A_GRPC_MAX_STREAM_EVENTS || totalJsonBytes > A2A_GRPC_MAX_STREAM_JSON_BYTES) {
+        fail("A2A gRPC task events exceeded the subscription size limit.");
+        return;
+      }
       try {
         events.push(parseJson(event.json));
       } catch {
-        clearTimeout(timeout);
-        reject(new Error("A2A gRPC peer returned an invalid task event."));
-        stream.cancel();
+        fail("A2A gRPC peer returned an invalid task event.");
       }
     });
     stream.on("error", (error) => {

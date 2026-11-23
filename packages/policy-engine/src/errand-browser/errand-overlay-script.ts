@@ -124,15 +124,15 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
     .banner { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center;
       gap: 12px; padding: 8px 10px 8px 16px; border: 1px solid ${c.colors.accent}; border-radius: 10px;
       background: ${c.colors.navy}; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); pointer-events: none;
-      white-space: nowrap; }
+      width: max-content; max-width: calc(100vw - 16px); flex-wrap: wrap; overflow-wrap: anywhere; }
     .banner .text { color: ${c.colors.accent}; }
-    .card { position: fixed; width: 320px; padding: 14px 16px; border: 1px solid ${c.colors.accent};
+    .card { position: fixed; width: min(320px, calc(100vw - 16px)); padding: 14px 16px; border: 1px solid ${c.colors.accent};
       border-radius: 12px; background: ${c.colors.navy}; box-shadow: 0 10px 32px rgba(0, 0, 0, 0.45);
-      pointer-events: auto; }
+      pointer-events: auto; display: flex; flex-direction: column; overflow: auto; overflow-wrap: anywhere; }
     .card .title { color: ${c.colors.accent}; font-size: 15px; font-weight: 600; margin: 0 0 6px; }
-    .card .body { margin: 0 0 12px; white-space: pre-wrap; }
+    .card .body { margin: 0 0 12px; white-space: pre-wrap; min-height: 0; overflow: auto; }
     .card .notice { margin: 10px 0 0; color: ${c.colors.accent}; }
-    .actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .actions { display: flex; flex: none; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
     button { pointer-events: auto; font: inherit; border-radius: 8px; padding: 6px 12px; cursor: pointer;
       border: 1px solid ${c.colors.accent}; background: transparent; color: ${c.colors.accent}; }
     button.primary { background: ${c.colors.accent}; color: ${c.colors.navy}; font-weight: 600; }
@@ -173,7 +173,6 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   const deny = make("button", "", c.copy.deny);
   const actions = make("div", "actions");
   actions.append(deny, approve);
-  // The notice goes below the buttons so showing it never moves them out from under the pointer.
   card.append(cardTitle, cardBody, actions, cardNotice);
 
   // Paint order matters: nothing GoatCitadel draws may sit above the card's buttons, or the visibility check fails.
@@ -181,10 +180,12 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   root.append(style, layer);
   for (const button of [takeOver, handBack, stop, approve, deny]) {
     button.type = "button";
-    // Out of the page Tab order, and never focused by a press, so no keyboard path can activate a control.
-    button.tabIndex = -1;
     button.addEventListener("mousedown", (event) => event.preventDefault());
   }
+  // Decisions require a pointer. Escape already provides keyboard access to Stop.
+  stop.tabIndex = -1;
+  approve.tabIndex = -1;
+  deny.tabIndex = -1;
 
   // ---- State -----------------------------------------------------------------------------------------------------
   let state: OverlayState = { mode: "hidden" };
@@ -316,7 +317,7 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   // The card age also resets the dwell when a new request replaces the previous one in the same elements.
   const decide = (type: "approve" | "deny") => (event: MouseEvent) => {
     const button = type === "approve" ? approve : deny;
-    if (state.mode !== "approval" || !state.requestId) {
+    if (state.mode !== "approval" || !state.requestId || card.hidden) {
       return;
     }
     const now = performance.now();
@@ -433,11 +434,13 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   // ---- Layout ----------------------------------------------------------------------------------------------------
   const placeCard = (target: Rect, point: Point): void => {
     const gap = 16;
-    const width = card.offsetWidth || 320;
-    const height = card.offsetHeight || 140;
     const viewWidth = window.innerWidth;
     const viewHeight = window.innerHeight;
-    const top = banner.hidden ? 8 : banner.getBoundingClientRect().bottom + 8;
+    const bannerBottom = banner.getBoundingClientRect().bottom + 8;
+    const top = bannerBottom <= viewHeight / 2 ? bannerBottom : 8;
+    card.style.maxHeight = `${Math.max(0, viewHeight - top - 8)}px`;
+    const width = card.offsetWidth;
+    const height = card.offsetHeight;
     const clampY = (y: number) => Math.max(top, Math.min(y, viewHeight - height - 8));
     const clampX = (x: number) => Math.max(8, Math.min(x, viewWidth - width - 8));
     const candidates: Point[] = [
@@ -463,24 +466,33 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
     takeOver.hidden = next.mode !== "driving";
     handBack.hidden = next.mode !== "taken_over" && next.mode !== "sign_in";
     const approval = next.mode === "approval";
-    spot.hidden = !approval;
+    const showCard = approval && Boolean(next.requestId && next.targetRect && next.cursor);
+    const cardWasHidden = card.hidden;
+    spot.hidden = !showCard;
     blocker.hidden = !approval;
-    card.hidden = !approval;
+    card.hidden = !showCard;
     const showCursor = next.mode === "driving" || approval;
     cursor.style.display = showCursor ? "block" : "none";
     trail.hidden = !showCursor;
     if (showCursor && next.cursor) {
       moveCursor(next.cursor);
     }
-    if (approval && next.targetRect && next.cursor) {
+    if (showCard && next.targetRect && next.cursor) {
       const rect = next.targetRect;
       spot.style.left = `${rect.x}px`;
       spot.style.top = `${rect.y}px`;
       spot.style.width = `${rect.width}px`;
       spot.style.height = `${rect.height}px`;
-      cardTitle.textContent = next.title ?? "";
-      cardBody.textContent = next.body ?? "";
-      if (previous.mode !== "approval" || previous.requestId !== next.requestId) {
+      if (
+        cardWasHidden ||
+        previous.mode !== "approval" ||
+        previous.requestId !== next.requestId ||
+        previous.title !== next.title ||
+        previous.body !== next.body
+      ) {
+        cardTitle.textContent = next.title ?? "";
+        cardBody.textContent = next.body ?? "";
+        cardBody.scrollTop = 0;
         cardNotice.textContent = "";
         cardNotice.hidden = true;
         cardShownAt = performance.now();
@@ -488,6 +500,12 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
       placeCard(rect, next.cursor);
     }
   };
+
+  window.addEventListener("resize", () => {
+    if (state.mode === "approval" && !card.hidden && state.targetRect && state.cursor) {
+      placeCard(state.targetRect, state.cursor);
+    }
+  });
 
   const controlRect = (element: HTMLElement) => {
     if (host.style.display === "none" || element.hidden || element.closest("[hidden]")) {

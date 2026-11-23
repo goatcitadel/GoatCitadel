@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import * as grpc from "@grpc/grpc-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   A2AJsonRpcResponse,
@@ -8,6 +9,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { A2AGrpcClient, parseGrpcEndpoint, type A2AGrpcClientPort } from "./a2a-grpc-client.js";
+import { loadA2AGrpcClientConstructor, type A2AGrpcClientShape } from "./a2a-grpc-proto.js";
 import { startA2AGrpcServer, type A2AGrpcServerHandle } from "./a2a-grpc-server.js";
 import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
 import { A2ARouteService } from "./a2a-route-service.js";
@@ -102,6 +104,35 @@ describe("A2A gRPC transport", () => {
       expect.objectContaining({ turnIdentity: expect.any(Object) }),
     );
     expect(lifecycle.snapshot()).toMatchObject({ activeCount: 0, activeByKind: { agent: 0, worker: 0 } });
+  });
+
+  it("returns INVALID_ARGUMENT for malformed JSON envelopes", async () => {
+    const harness = createService({ bindings: ["GRPC"] });
+    const handle = await startA2AGrpcServer({ config: harness.config, a2a: harness.service });
+    grpcHandles.push(handle);
+    const Client = loadA2AGrpcClientConstructor();
+    const client = new Client(
+      parseGrpcEndpoint(handle.address!).target,
+      grpc.credentials.createInsecure(),
+    ) as A2AGrpcClientShape;
+    const metadata = new grpc.Metadata();
+    metadata.set("authorization", "Bearer peer-token");
+    try {
+      await expect(
+        new Promise((resolve, reject) => {
+          client.sendMessage({ json: "{" }, metadata, { deadline: new Date(Date.now() + 5_000) }, (error, reply) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            resolve(reply);
+          });
+        }),
+      ).rejects.toMatchObject({ code: grpc.status.INVALID_ARGUMENT });
+    } finally {
+      client.close();
+    }
+    expect(harness.tasks.createTask).not.toHaveBeenCalled();
   });
 
   it("rejects gRPC ingress when the peer credential only authorizes JSON-RPC", async () => {

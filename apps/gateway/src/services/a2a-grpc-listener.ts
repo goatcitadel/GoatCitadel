@@ -21,13 +21,13 @@ export async function startA2AGrpcListener(
   input: Omit<StartA2AGrpcServerInput, "config">,
   grpcConfig: { host: string; port: number },
 ): Promise<A2AGrpcServerHandle> {
-  const listenerAdmission = reserveGrpcWork(input.sharedHostLifecycle, "worker", "a2a-grpc-listener");
   const server = new grpc.Server();
-  server.addService(loadA2AGrpcServiceDefinition(), createA2AGrpcHandlers(input.a2a, input.sharedHostLifecycle));
   const host = grpcConfig.host.trim() === "::1" ? "[::1]" : grpcConfig.host.trim();
   const bindAddress = `${host}:${grpcConfig.port}`;
+  const listenerAdmission = reserveGrpcWork(input.sharedHostLifecycle, "worker", "a2a-grpc-listener");
   let port: number;
   try {
+    server.addService(loadA2AGrpcServiceDefinition(), createA2AGrpcHandlers(input.a2a, input.sharedHostLifecycle));
     port = await new Promise<number>((resolve, reject) => {
       server.bindAsync(bindAddress, grpc.ServerCredentials.createInsecure(), (error, boundPort) => {
         if (error) {
@@ -251,7 +251,12 @@ function parseJsonObject(value: string | undefined): Record<string, unknown> {
   if (!value?.trim()) {
     return {};
   }
-  const parsed = JSON.parse(value) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw httpJsonServiceError(400, "a2a_grpc_invalid_json", "A2A gRPC JSON envelope must contain an object.");
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw httpJsonServiceError(400, "a2a_grpc_invalid_json", "A2A gRPC JSON envelope must contain an object.");
   }
