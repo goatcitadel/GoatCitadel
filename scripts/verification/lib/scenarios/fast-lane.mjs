@@ -140,9 +140,9 @@ export const FAST_LANE_COMMANDS = Object.freeze([
   {
     id: "fast.test.policy-engine",
     title: "Policy engine tests",
-    // Match the Gateway worker budget: policy coverage also performs real
-    // filesystem and Git operations on high-core Windows hosts.
-    args: ["--filter", "@goatcitadel/policy-engine", "test:coverage", `--maxWorkers=${FAST_LANE_VITEST_MAX_WORKERS}`],
+    // Concurrent SQLite migrations in test hooks can exhaust the setup timeout
+    // on slower CI runners. Limit contention during Policy Engine coverage.
+    args: ["--filter", "@goatcitadel/policy-engine", "test:coverage", "--maxWorkers=2"],
   },
   {
     id: "fast.test.libraries",
