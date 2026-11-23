@@ -112,8 +112,12 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
     .spot { position: fixed; border-radius: 6px; outline: 2px solid ${c.colors.accent}; outline-offset: 2px;
       box-shadow: 0 0 0 200vmax ${c.colors.dim}; pointer-events: none; }
     .blocker { position: fixed; inset: 0; pointer-events: auto; background: transparent; }
-    .cursor { position: fixed; left: 0; top: 0; width: 22px; height: 22px; pointer-events: none;
+    .cursor { position: fixed; left: 0; top: 0; padding: 2px 0 0 4px; pointer-events: none;
+      font: 24px/1 "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
       filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5)); will-change: transform; }
+    .cursor::before { content: ""; position: absolute; left: -3px; top: -3px; width: 6px; height: 6px;
+      box-sizing: border-box; border: 1px solid ${c.colors.navy}; border-radius: 50%;
+      background: ${c.colors.accent}; }
     .dot { position: fixed; left: 0; top: 0; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%;
       background: ${c.colors.accent}; pointer-events: none; animation: fade ${c.motion.trailMs}ms linear forwards; }
     @keyframes fade { from { opacity: 0.55; } to { opacity: 0; } }
@@ -148,16 +152,9 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   const spot = make("div", "spot");
   const blocker = make("div", "blocker");
   const trail = make("div", "trail");
-  const cursor = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  cursor.setAttribute("class", "cursor");
-  cursor.setAttribute("viewBox", "0 0 22 22");
-  const arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  arrow.setAttribute("d", "M2 1.5 L2 18 L6.6 13.6 L9.6 20.5 L12.6 19.2 L9.7 12.4 L16 12.4 Z");
-  arrow.setAttribute("fill", c.colors.accent);
-  arrow.setAttribute("stroke", c.colors.navy);
-  arrow.setAttribute("stroke-width", "1.4");
-  arrow.setAttribute("stroke-linejoin", "round");
-  cursor.append(arrow);
+  const cursor = make("div", "cursor");
+  cursor.setAttribute("aria-hidden", "true");
+  cursor.textContent = "🐐";
 
   const banner = make("div", "banner");
   banner.setAttribute("role", "status");
@@ -353,14 +350,15 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
 
   // ---- Cursor motion ---------------------------------------------------------------------------------------------
   // A quadratic Bezier from the current point to the target, bowed by a small perpendicular arc, eased in and out,
-  // then a brief damped spring along the travel direction so the arrow settles instead of stopping dead.
+  // then a brief damped spring along the travel direction so the cursor settles instead of stopping dead.
   let frame = 0;
   let fallback = 0;
   let lastDot = 0;
   const reducedMotion = (): boolean => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const placeCursor = (point: Point): void => {
     cursorAt = point;
-    cursor.style.transform = `translate(${point.x - 2}px, ${point.y - 1.5}px)`;
+    // The cyan dot is centered on the cursor origin to mark the exact action point.
+    cursor.style.transform = `translate(${point.x}px, ${point.y}px)`;
   };
   const dropDot = (point: Point, now: number): void => {
     if (now - lastDot < 16) {
@@ -425,7 +423,7 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
       }
     };
     frame = requestAnimationFrame(step);
-    // Background windows throttle animation frames; never leave the arrow short of its target.
+    // Background windows throttle animation frames; never leave the cursor short of its target.
     fallback = window.setTimeout(() => {
       cancelAnimationFrame(frame);
       placeCursor(target);
