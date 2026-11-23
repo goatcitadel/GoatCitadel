@@ -2,6 +2,8 @@ import type { ChatCitationRecord, ChatToolRunRecord } from "@goatcitadel/contrac
 
 /** Tools that open a page. A search result list does not count as an opened source. */
 const PAGE_OPENING_TOOL_NAMES = new Set(["browser.navigate", "browser.extract", "http.get"]);
+const SUPPORTING_QUOTE = /^> ([^\r\n]{1,600}?) \[[^\]\r\n]+\]\((https?:\/\/[^\s)]+)\)[ \t]*$/gmu;
+const MAX_PASSAGES_PER_SOURCE = 6;
 const URL_IN_TEXT_PATTERN = /https?:\/\/[^\s<>"'`]+/gi;
 const TRAILING_PUNCTUATION_PATTERN = /[.,;:!?)\]}*_>]$/;
 /** Separators that join two URLs in one token: a markdown link's `](`, a comma, or a table pipe. */
@@ -107,4 +109,46 @@ export function selectAnswerCitations(input: {
     return [...citations];
   }
   return dedupeWebCitations(citations.filter((citation) => citation.sourceType !== "web" || isRelied(citation)));
+}
+
+/** Use the fetched response URL, including its query, rather than the requested URL before a redirect. */
+function passageSourceKey(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    url.hash = "";
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
+export function attachResearchPassages(input: {
+  citations: readonly ChatCitationRecord[];
+  assistantContent: string;
+  toolRuns: readonly ChatToolRunRecord[];
+}): ChatCitationRecord[] {
+  const passagesByUrl = new Map<string, NonNullable<ChatCitationRecord["passages"]>>();
+  for (const [, text, url] of input.assistantContent.matchAll(SUPPORTING_QUOTE)) {
+    const key = passageSourceKey(url);
+    if (!key || !text?.trim()) continue;
+    const passages = passagesByUrl.get(key) ?? [];
+    if (passages.length >= MAX_PASSAGES_PER_SOURCE || passages.some((passage) => passage.text === text)) continue;
+    const run = input.toolRuns.find(({ toolName, status, result }) => {
+      if (!PAGE_OPENING_TOOL_NAMES.has(toolName) || status !== "executed" || !result) return false;
+      if (passageSourceKey(result.finalUrl ?? result.url) !== key) return false;
+      if (typeof result.status === "number" && (result.status < 200 || result.status >= 300)) return false;
+      const fetchedText = toolName === "http.get" ? result.body : result.textSnippet ?? result.text;
+      return typeof fetchedText === "string" && fetchedText.includes(text);
+    });
+    if (!run) continue;
+    passages.push({ text, toolRunId: run.toolRunId });
+    passagesByUrl.set(key, passages);
+  }
+  return input.citations.map((citation) => {
+    const key = citation.sourceType === "web" ? passageSourceKey(citation.url) : undefined;
+    const passages = key ? passagesByUrl.get(key) : undefined;
+    return passages?.length ? { ...citation, passages } : citation;
+  });
 }

@@ -326,6 +326,9 @@ export const DEEP_RESEARCH_PROMPT_SECTION = [
   "- Keep researching while the tool budget allows and a key claim still rests only on a search snippet.",
   "- Cross-check key facts across sources and say which claims you could not verify.",
   "- Cite the pages you relied on by URL.",
+  "- Below each key web finding, add one short verbatim quote from a page you opened during this turn. Keep it on one line and under 600 characters.",
+  "- Write the quote as a Markdown blockquote ending in a link to the fetched page's final URL: `> Exact passage from the page [Source](https://page-url)`.",
+  "- If you could not find a supporting passage in fetched text, say so. A search snippet is not a fetched passage.",
   "Skip web research for greetings and for questions about local files or this workspace.",
 ].join("\n");
 

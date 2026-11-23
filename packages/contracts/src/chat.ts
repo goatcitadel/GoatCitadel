@@ -1035,6 +1035,8 @@ export interface ChatCitationRecord {
   url: string;
   snippet?: string;
   sourceType?: "web" | "file" | "tool" | "memory";
+  /** Verbatim quotes matched against page text fetched by this turn. */
+  passages?: Array<{ text: string; toolRunId: string }>;
   knowledge?: ThreadKnowledgeCitationRecord;
   provenance?: MemoryCitationProvenance;
 }

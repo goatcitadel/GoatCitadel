@@ -4,7 +4,12 @@ import type {
   SkillActivationDecision,
   SkillResolveInput,
 } from "@goatcitadel/contracts";
-import { rankSkillSelectionCandidates, resolveSkillActivation, type SkillSelectionRanking } from "@goatcitadel/skills";
+import {
+  rankSkillSelectionCandidates,
+  resolveSkillActivation,
+  stripSkillFileReferences,
+  type SkillSelectionRanking,
+} from "@goatcitadel/skills";
 
 export interface CallableSkillSelectionInput {
   request: SkillResolveInput;
@@ -154,7 +159,7 @@ function extractExplicitTokens(input: SkillResolveInput): string[] {
   for (const match of input.text.matchAll(/(?:^|\s)\$([a-z][a-z0-9_-]*:[a-z0-9:_-]+)/giu)) {
     if (match[1]) tokens.add(match[1]);
   }
-  for (const match of input.text.matchAll(/\buse\s+([a-z0-9:_-]+)\b/giu)) {
+  for (const match of stripSkillFileReferences(input.text).matchAll(/\buse\s+([a-z0-9:_-]+)\b/giu)) {
     if (match[1]) tokens.add(match[1]);
   }
   return [...tokens];

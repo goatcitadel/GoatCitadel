@@ -3,6 +3,7 @@ export * from "./agent-markdown.js";
 export * from "./precedence.js";
 export * from "./deps.js";
 export * from "./activation.js";
+export * from "./activation-text.js";
 export * from "./selection-ranking.js";
 export * from "./loader.js";
 export * from "./routing-hints.generated.js";

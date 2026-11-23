@@ -18,6 +18,26 @@ function skill(name: string, requires: string[] = [], keywords: string[] = []): 
 }
 
 describe("resolveSkillActivation", () => {
+  it.each([
+    "Read C:\\personal-ai\\.tmp\\weekly-qa\\runtime-note.txt",
+    "Read 'C:\\release diagnostics\\runtime-note.txt'",
+    "Read \"notes/weekly qa/runtime notes.txt\"",
+    "Read ./weekly-qa/runtime-note.txt",
+    "Read /runtime",
+    "Use runtime.md for the answer",
+  ])("does not treat file references as skill intent: %s", (text) => {
+    const runtime = skill("runtime", [], ["runtime", "release diagnostics"]);
+    expect(resolveSkillActivation({ text }, [runtime, skill("qa", [], ["qa"])]).selected).toEqual([]);
+  });
+
+  it("preserves explicit skills and prose triggers beside file references", () => {
+    const result = resolveSkillActivation(
+      { text: "$bundled:planner investigate runtime health in notes/runtime.txt" },
+      [{ ...skill("planner"), skillId: "bundled:planner" }, skill("operations", [], ["runtime health"])],
+    );
+    expect(result.reasons).toEqual({ planner: ["explicit"], operations: ["keyword"] });
+  });
+
   it("activates explicit skills, keyword matches, and dependencies with reasons", () => {
     const base = skill("research", ["sources"], ["market scan"]);
     const dependency = skill("sources");

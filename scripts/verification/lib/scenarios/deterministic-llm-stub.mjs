@@ -89,7 +89,7 @@ export async function startDeterministicLlmStub(options = {}) {
   let dispatchPlan = normalizeDispatchPlan(options.dispatchPlan, replyText);
   let promptReplyRules = normalizePromptReplyRules(options.promptReplyRules);
   const dispatchPlanModel = normalizeOptionalBoundedText(options.dispatchPlanModel, "dispatchPlanModel");
-  const dispatchPlanRequiredTool =
+  let dispatchPlanRequiredTool =
     options.dispatchPlanRequiredTool === undefined
       ? undefined
       : normalizeToolName(options.dispatchPlanRequiredTool, "dispatchPlanRequiredTool");
@@ -289,8 +289,9 @@ export async function startDeterministicLlmStub(options = {}) {
         .map((entry) => ({ ...entry })),
     dispatchPlanDispatchRecords: () =>
       requestSummaries.filter((entry) => Number.isInteger(entry.dispatchPlanIndex)).map((entry) => ({ ...entry })),
-    replaceDispatchPlan: (nextPlan) => {
+    replaceDispatchPlan: (nextPlan, requiredTool = options.dispatchPlanRequiredTool) => {
       dispatchPlan = normalizeDispatchPlan(nextPlan, replyText);
+      dispatchPlanRequiredTool = requiredTool === undefined ? undefined : normalizeToolName(requiredTool, "dispatchPlanRequiredTool");
       dispatchPlanDispatches = 0;
     },
     replacePromptReplyRules: (nextRules) => {

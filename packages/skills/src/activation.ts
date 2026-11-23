@@ -1,8 +1,9 @@
 import type { LoadedSkill, SkillActivationDecision, SkillResolveInput } from "@goatcitadel/contracts";
 import { resolveDependencies } from "./deps.js";
+import { stripSkillFileReferences } from "./activation-text.js";
 
 export function resolveSkillActivation(input: SkillResolveInput, allSkills: LoadedSkill[]): SkillActivationDecision {
-  const text = input.text.toLowerCase();
+  const text = stripSkillFileReferences(input.text).toLowerCase();
   const explicit = new Set<string>(input.explicitSkills ?? extractExplicitSkills(input.text));
 
   const selectedBase: LoadedSkill[] = [];
@@ -75,7 +76,7 @@ function extractExplicitSkills(text: string): string[] {
     }
   }
 
-  for (const token of lower.matchAll(/\buse\s+([a-z0-9_-]+)\b/g)) {
+  for (const token of stripSkillFileReferences(lower).matchAll(/\buse\s+([a-z0-9_-]+)\b/g)) {
     if (token[1]) {
       names.add(token[1]);
     }

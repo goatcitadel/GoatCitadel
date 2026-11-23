@@ -1,4 +1,5 @@
 import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
+import { ChatSourcePassages } from "./ChatSourcePassages";
 
 function safeSourceHref(value: string): string | null {
   try {
@@ -28,7 +29,11 @@ export function ChatTurnSources({ sources }: { sources: ChatThreadTurnRecord["ci
             ) : (
               <span className="font-medium text-fg-secondary">{source.title || "Source"}</span>
             )}
-            {source.snippet ? <p className="mt-1 line-clamp-3 text-fg-muted">{source.snippet}</p> : null}
+            {source.passages?.length ? (
+              <ChatSourcePassages passages={source.passages} />
+            ) : source.snippet ? (
+              <p className="mt-1 line-clamp-3 text-fg-muted">{source.snippet}</p>
+            ) : null}
           </li>
         );
       })}

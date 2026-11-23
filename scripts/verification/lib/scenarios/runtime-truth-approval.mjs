@@ -16,7 +16,7 @@ export async function prepareRuntimeTruthApproval(runtimeRoot) {
   config.assistant.toolApprovalMode = "approve_all";
   delete config.generation;
   await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-  const notePath = path.join(runtimeRoot, "workspace", "runtime-truth-approval-note.txt");
+  const notePath = path.join(runtimeRoot, "workspace", "note.txt");
   await fs.mkdir(path.dirname(notePath), { recursive: true });
   await fs.writeFile(notePath, RUNTIME_TRUTH_NOTE, { flag: "wx" });
   return { notePath };
@@ -46,7 +46,7 @@ export async function requestRuntimeTruthApproval(gatewayUrl, input, deps) {
     }),
     "set isolated runtime-truth preferences",
   );
-  const content = `Use fs.read to read the fixture file at ${input.notePath}, then report its contents.`;
+  const content = "Use fs.read on note.txt and quote the contents.";
   const request = {
     action: "send",
     content,

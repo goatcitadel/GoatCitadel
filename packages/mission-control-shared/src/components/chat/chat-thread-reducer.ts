@@ -407,6 +407,7 @@ function dedupeCitations(citations: ChatThreadTurnRecord["citations"]): ChatThre
       sourceType: existing.sourceType ?? citation.sourceType,
       knowledge: existing.knowledge ?? citation.knowledge,
       provenance: existing.provenance ?? citation.provenance,
+      passages: existing.passages ?? citation.passages,
     };
   }
   // Every duplicate either merges into an earlier slot or is dropped, so an equal

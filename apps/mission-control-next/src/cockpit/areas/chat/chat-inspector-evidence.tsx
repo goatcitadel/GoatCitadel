@@ -8,6 +8,7 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { presentErrorText } from "../../lib/present-error";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
 import { presentTurnModelReason } from "./chat-model-reason";
+import { ChatSourcePassages } from "./ChatSourcePassages";
 export function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-3 border-b border-line-subtle py-2 text-sm">
@@ -49,7 +50,11 @@ export function SourcesPanel({ turn }: { turn: ChatThreadTurnRecord | undefined 
             ) : (
               <span className="font-medium text-fg">{source.title || "Source"}</span>
             )}
-            {source.snippet ? <p className="mt-2 text-fg-secondary">{source.snippet}</p> : null}
+            {source.passages?.length ? (
+              <ChatSourcePassages passages={source.passages} />
+            ) : source.snippet ? (
+              <p className="mt-2 text-fg-secondary">{source.snippet}</p>
+            ) : null}
           </li>
         );
       })}

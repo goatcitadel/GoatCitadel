@@ -2,12 +2,22 @@
 // approval admission, then restarts the Gateway and resumes the same durable
 // run. The Next-shell cross-check uses the recovered identifiers when a browser
 // and served UI are available.
+import assert from "node:assert/strict";
 import {
   prepareRuntimeTruthApproval,
   requestRuntimeTruthApproval,
   assertRuntimeTruthToolCompletion,
 } from "./runtime-truth-approval.mjs";
 import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
+import {
+  RESEARCH_PROMPT,
+  RESEARCH_REPLY,
+  RESEARCH_PASSAGE,
+  RESEARCH_SOURCE,
+  RESEARCH_UNUSED_SOURCE,
+  startRuntimeTruthResearchFixture,
+} from "./runtime-truth-research-fixture.mjs";
+import { clickTurnAction } from "./cockpit-turn-actions.mjs";
 
 export async function runRuntimeTruthLane(context, _options = {}, deps) {
   const {
@@ -41,6 +51,8 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
   let stack;
   let runtimeRoot;
   let llmStub;
+  let researchFixture;
+  let researchTurn;
   let activeChatTransport;
   const restoreUiPackage = forceVerificationUiPackage(NEXT_UI_PACKAGE);
   // Identifiers recovered by the backend-truth scenario and consumed by the
@@ -50,6 +62,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
   let admission = null;
   let seeded = null;
   try {
+    researchFixture = await startRuntimeTruthResearchFixture();
     llmStub = await startDeterministicLlmStub({
       replyText: "Verification restart reply.",
       expectedAuthorization: `Bearer ${VERIFICATION_STUB_LLM_KEY}`,
@@ -63,6 +76,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
       includeUi: false,
       runtimeRoot,
       gatewayEnv: {
+        ...researchFixture.gatewayEnv,
         GOATCITADEL_AUTH_MODE: "token",
         GOATCITADEL_AUTH_TOKEN: "verification-runtime-truth-operator-token",
         GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
@@ -166,6 +180,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
         const gatewayBeforeRestart = ownedGatewayProcessIdentity(stack);
 
         stack.gateway = await restartGatewayProcess(context, stack, {
+          ...researchFixture.gatewayEnv,
           GOATCITADEL_AUTH_MODE: "token",
           GOATCITADEL_AUTH_TOKEN: "verification-runtime-truth-operator-token",
           GOATCITADEL_AUTH_ALLOW_LOOPBACK_BYPASS: "true",
@@ -303,13 +318,13 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
       {
         id: "runtime-truth.deep-research-tool-exposure",
         lane: "runtime-truth",
-        title: "The reported deep-research prompt reaches the provider with web and citation tools",
+        title: "Deep Research persists the quoted text fetched from the cited fixture page",
         subsystem: "mission-control",
       },
       async () => {
         const created = await requestJson(stack.gatewayUrl, "/api/v1/chat/sessions", {
           method: "POST",
-          body: { title: "Deep research tool exposure verification" },
+          body: { title: "Deep Research citations verification", workspaceId: seeded?.body?.workspaceId },
         });
         assertOk(created, "create deep-research session");
         const route = `/api/v1/chat/sessions/${encodeURIComponent(created.body.sessionId)}`;
@@ -329,7 +344,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           method: "PATCH",
           body: { ...controls, expectedRevision: prefs.body.revision },
         }), "set deep-research preferences");
-        const content = "Please do some deep research into the best things to include in an agentic harness.";
+        const content = RESEARCH_PROMPT;
         const request = { action: "send", content, ...controls, fullWebAccess: true, prefsOverride: controls };
         const preflight = await requestJson(stack.gatewayUrl, `${route}/route-preflight`, {
           method: "POST",
@@ -340,6 +355,11 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           throw new Error("Deep-research preflight did not produce a profile-free route decision.");
         }
         const before = llmStub.requestSummaries().length;
+        const searchesBefore = researchFixture.searchCount();
+        llmStub.replaceDispatchPlan([
+          { type: "tool_call", name: "browser_navigate", arguments: { url: RESEARCH_SOURCE.url, maxChars: 12000 } },
+          { type: "success", replyText: RESEARCH_REPLY },
+        ], "browser_navigate");
         const sent = await requestJson(stack.gatewayUrl, `${route}/agent-send`, {
           method: "POST",
           body: { ...request, routeDecision: preflight.body.decision },
@@ -347,18 +367,42 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
         assertOk(sent, "send deep-research turn");
         const providerRequests = llmStub.requestSummaries().slice(before)
           .filter((entry) => entry.path === "/v1/chat/completions" || entry.path === "/v1/responses");
-        const required = ["browser_search", "browser_navigate", "citations_build"];
-        const withRequiredTools = providerRequests.find(
-          (entry) => required.every((name) => entry.toolNames?.includes(name)),
-        );
-        if (!withRequiredTools) {
-          throw new Error(`Deep-research provider request omitted tools: ${JSON.stringify(providerRequests.map((entry) => entry.toolNames ?? []))}`);
-        }
+        const required = ["browser_search", "browser_navigate"];
+        const thread = await requestJson(stack.gatewayUrl, `${route}/thread`);
+        assertOk(thread, "read persisted Deep Research thread");
+        const turn = thread.body?.turns?.find((entry) => entry.userMessage?.content === content);
+        const executedSearch = turn?.toolRuns?.find((tool) => tool.toolName === "browser.search" && tool.status === "executed");
+        const openedPage = turn?.toolRuns?.find((tool) => tool.toolName === "browser.navigate" && tool.status === "executed");
         const outPath = path.join(context.artifactRoot, "diagnostics", "runtime-truth-deep-research-tools.json");
-        await writeJson(outPath, { sessionId: created.body.sessionId, required, providerRequests });
+        const webCitations = turn?.citations?.filter((citation) => citation.sourceType === "web") ?? [];
+        const searches = researchFixture.searchCount() - searchesBefore;
+        await writeJson(outPath, {
+          sessionId: created.body.sessionId,
+          turnId: turn?.turnId,
+          required,
+          providerRequests,
+          searches,
+          turnStatus: turn?.trace?.status,
+          tools: turn?.toolRuns?.map(({ toolName, status, error }) => ({ toolName, status, error })),
+          webCitations,
+        });
+        assert.ok(searches > 0, "Deep Research did not call the local search fixture");
+        const groundedDispatch = providerRequests.find((entry) => entry.behavior === "tool_call" &&
+          entry.promptMetadata?.roles?.includes("tool"));
+        assert.ok(groundedDispatch, "The research provider did not receive a tool result");
+        assert.ok(required.every((name) => groundedDispatch.toolNames?.includes(name)));
+        assert.equal(turn?.trace?.status, "completed");
+        assert.ok(turn.assistantMessage?.content.includes(RESEARCH_SOURCE.url), "Answer omitted the fixture URL");
+        assert.deepEqual(executedSearch?.result?.results, [RESEARCH_SOURCE, RESEARCH_UNUSED_SOURCE]);
+        assert.ok(openedPage?.result?.textSnippet?.includes(RESEARCH_PASSAGE), "The page fetch did not return the passage");
+        assert.deepEqual(webCitations.map(({ url, passages }) => ({ url, passages })), [{
+          url: RESEARCH_SOURCE.url,
+          passages: [{ text: RESEARCH_PASSAGE, toolRunId: openedPage.toolRunId }],
+        }]);
+        researchTurn = { sessionId: created.body.sessionId, turnId: turn.turnId };
         return {
           status: "passed",
-          metrics: { providerRequests: providerRequests.length, requiredTools: required.length },
+          metrics: { providerRequests: providerRequests.length, requiredTools: required.length, persistedWebCitations: webCitations.length },
           artifacts: {
             diagnostics: [relativeToRun(context, outPath)],
             screenshots: [], traces: [], logs: [], perf: [], playwright: [],
@@ -423,6 +467,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
           const page = await browserContext.newPage();
           const browserLog = attachBrowserLogging(page);
           const browserLogCursor = browserLog.mark();
+          const researchScreenshots = [];
 
           // Verify the default Cockpit against the exact recovered Chat run,
           // then inspect the explicit Classic approval owner. Once the browser
@@ -447,6 +492,24 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
             }
             shellStage = "recovered-reply-visibility";
             await page.getByText("Verification restart reply.", { exact: false }).first().waitFor({ timeout: 15000 });
+            if (researchTurn) {
+              shellStage = "deep-research-source-visibility";
+              const url = buildVerificationUiUrl(ui.uiUrl, `/chat?sessionId=${encodeURIComponent(researchTurn.sessionId)}`);
+              const inspect = async (researchPage, viewport) => {
+                await inspectResearchPassage(researchPage, url, researchTurn.turnId);
+                const screenshot = path.join(context.artifactRoot, "screenshots", `deep-research-passage-${viewport}.png`);
+                await researchPage.screenshot({ path: screenshot });
+                researchScreenshots.push(relativeToRun(context, screenshot));
+              };
+              await inspect(page, "desktop");
+              const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: "light" });
+              try {
+                await installMissionControlNextBrowserState(phone, durableTruth.workspaceId);
+                await inspect(await phone.newPage(), "phone");
+              } finally {
+                await phone.close();
+              }
+            }
             shellStage = "classic-approval-navigation";
             await page.goto(
               buildVerificationUiUrl(
@@ -520,6 +583,7 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
             correlationId,
             logCursor: browserLogCursor,
           });
+          artifacts.screenshots.push(...researchScreenshots);
           const browserSanity = assertBrowserConsoleHealthy(browserLog, browserLogCursor, NEXT_UI_PACKAGE);
           return {
             status: "passed",
@@ -543,8 +607,29 @@ export async function runRuntimeTruthLane(context, _options = {}, deps) {
       await stopVerificationStack({ runtimeRoot });
     }
     await llmStub?.close().catch(() => undefined);
+    await researchFixture?.close();
     restoreUiPackage();
   }
+}
+
+async function inspectResearchPassage(page, url, turnId) {
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  const turn = page.locator(`article[data-turn-id="${turnId}"]`);
+  const sources = turn.locator("details").filter({ has: page.locator("summary", { hasText: /^1 source$/u }) });
+  await sources.locator("summary").click();
+  const link = sources.getByRole("link", { name: RESEARCH_SOURCE.title, exact: true });
+  await link.waitFor();
+  assert.equal(await link.getAttribute("href"), RESEARCH_SOURCE.url);
+  await sources.getByText("1 supporting passage", { exact: true }).waitFor();
+  assert.equal(await sources.locator("blockquote").innerText(), RESEARCH_PASSAGE);
+  assert.equal(await sources.getByRole("link", { name: RESEARCH_UNUSED_SOURCE.title, exact: true }).count(), 0);
+  await clickTurnAction(turn, "Run details");
+  await page.getByRole("tab", { name: "Sources", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "Sources", exact: true });
+  const quote = panel.locator("blockquote");
+  await quote.waitFor();
+  assert.equal(await quote.innerText(), RESEARCH_PASSAGE);
+  await quote.scrollIntoViewIfNeeded();
 }
 
 /** Mirrors STARTUP_READ_BATCH_PATH in packages/contracts/src/gateway-startup-reads.ts. */

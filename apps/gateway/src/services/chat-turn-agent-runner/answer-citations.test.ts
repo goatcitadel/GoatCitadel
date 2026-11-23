@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatCitationRecord, ChatToolRunRecord } from "@goatcitadel/contracts";
-import { selectAnswerCitations } from "./answer-citations.js";
+import { attachResearchPassages, selectAnswerCitations } from "./answer-citations.js";
 
 function webCitation(id: string, url: string): ChatCitationRecord {
   return { citationId: id, url, title: id, sourceType: "web" };
@@ -23,6 +23,43 @@ function run(toolName: string, url: string, status: ChatToolRunRecord["status"] 
 }
 
 const ids = (citations: readonly ChatCitationRecord[]) => citations.map((citation) => citation.citationId);
+
+describe("attachResearchPassages", () => {
+  it("retains exact passages once against the fetched URL and records the tool identity", () => {
+    const url = "https://a.com/report?edition=final";
+    const text = "The measured value was  42 units.";
+    const fetched = {
+      ...run("browser.navigate", "https://a.com/redirect"),
+      result: { finalUrl: url, status: 200, textSnippet: `Heading\n\n${text}\n\nMore detail` },
+    };
+    const quote = `> ${text} [Report](${url}#findings)`;
+    expect(attachResearchPassages({
+      citations: [webCitation("source", url)],
+      assistantContent: `A key finding.\n\n${quote}\n${quote}`,
+      toolRuns: [fetched],
+    })).toEqual([{ ...webCitation("source", url), passages: [{ text, toolRunId: fetched.toolRunId }] }]);
+  });
+
+  it("excludes altered quotes, snippets, errors, and quotes attributed to a different page", () => {
+    const url = "https://a.com/report";
+    const text = "The measured value was 42 units.";
+    const citations = [webCitation("source", url)];
+    expect(attachResearchPassages({
+      citations,
+      assistantContent: [
+        `> ${text} [Report](${url})`,
+        `> The actual value was 42 units. [Report](${url})`,
+      ].join("\n"),
+      toolRuns: [
+        { ...run("browser.search", url), result: { results: [{ url, snippet: text }] } },
+        { ...run("browser.navigate", url), result: { finalUrl: "https://a.com/other", status: 200, textSnippet: text } },
+        { ...run("browser.navigate", url), result: { finalUrl: url, status: 404, textSnippet: text } },
+        { ...run("browser.extract", url, "failed"), result: { finalUrl: url, text } },
+        { ...run("http.get", url), result: { url, status: 200, body: "The actual value was  42 units." } },
+      ],
+    })).toEqual(citations);
+  });
+});
 
 describe("selectAnswerCitations", () => {
   it("always keeps non-web citations", () => {

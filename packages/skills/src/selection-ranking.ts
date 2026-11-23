@@ -1,4 +1,5 @@
 import type { LoadedSkill, SkillResolveInput } from "@goatcitadel/contracts";
+import { stripSkillFileReferences } from "./activation-text.js";
 
 const MAX_CANDIDATES = 1_000;
 const MAX_QUERY_CHARS = 8_192;
@@ -45,11 +46,16 @@ export function rankSkillSelectionCandidates(
   limit = 5,
 ): SkillSelectionRanking {
   const boundedLimit = Number.isFinite(limit) ? Math.max(0, Math.min(50, Math.floor(limit))) : 5;
-  const queryTokens = tokenize(input.text.slice(0, MAX_QUERY_CHARS));
+  const boundedText = input.text.slice(0, MAX_QUERY_CHARS);
+  const prose = stripSkillFileReferences(boundedText);
+  const queryTokens = tokenize(prose);
   const query = [...new Set(queryTokens)].slice(0, MAX_TERMS);
   const explicit = new Set((input.explicitSkills ?? []).slice(0, 50).map((name) => name.toLowerCase()));
   if (input.explicitSkills === undefined) {
-    for (const match of input.text.slice(0, MAX_QUERY_CHARS).matchAll(/(?:@skill\s+|\buse\s+)([a-z0-9:_-]+)/giu)) {
+    for (const match of boundedText.matchAll(/@skill\s+([a-z0-9:_-]+)/giu)) {
+      if (match[1]) explicit.add(match[1].toLowerCase());
+    }
+    for (const match of prose.matchAll(/\buse\s+([a-z0-9:_-]+)/giu)) {
       if (match[1]) explicit.add(match[1].toLowerCase());
     }
   }

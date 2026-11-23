@@ -40,6 +40,12 @@ describe("resolveCallableSkillActivation", () => {
     expect(result.reasons.active).toEqual(["explicit"]);
   });
 
+  it("distinguishes a named skill from a filename after use", () => {
+    expect(resolve({ text: "Use active.md for the answer" }).selected).toEqual([]);
+    expect(resolve({ text: "Use inactive.md for the answer" }).blocked).toEqual([]);
+    expect(resolve({ text: "Use active to read notes/inactive-keyword.txt" }).reasons.active).toEqual(["explicit"]);
+  });
+
   it("ignores $ tokens that are not a skill id at a token start", () => {
     const result = resolve({ text: "echo $active; price$extra:active" });
 
