@@ -4117,7 +4117,7 @@ export class GatewayService {
               throw new ConflictError({ message: "The heartbeat was paused or its Chat changed before dispatch." });
             }
           },
-          (refusal) => this.starterHeartbeat.holdAfterBudgetRefusal(sessionId, refusal.reason),
+          this.starterHeartbeat.holdOnPricingRefusal(sessionId),
         ),
       notifyHeartbeatAttention: async ({ workspaceId, sessionId, turnId, occurrenceId }) => {
         if (

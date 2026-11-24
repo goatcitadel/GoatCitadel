@@ -187,4 +187,18 @@ describe("automatic background dispatch budget", () => {
     ).rejects.toThrow("priced model");
     expect(f.bookkeepingFailures).toEqual([["refusal_record", new Error("storage down")]]);
   });
+
+  it("keeps the refusal when a synchronous refusal callback throws", async () => {
+    const f = fixture();
+    const unpriced = dispatch("subscription-sync");
+    const operation = async () => {
+      await f.guardFor(operation)({ ...unpriced, route: { ...unpriced.route, pricing: undefined } });
+    };
+    await expect(
+      f.budget.run(operation, undefined, () => {
+        throw new Error("storage down");
+      }),
+    ).rejects.toThrow("priced model");
+    expect(f.bookkeepingFailures).toEqual([["refusal_record", new Error("storage down")]]);
+  });
 });

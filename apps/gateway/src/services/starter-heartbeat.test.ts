@@ -88,7 +88,7 @@ describe("starter heartbeat unpriced-model hold", () => {
     const h = heldFixture();
     await h.starter.captureExplicitChoice("first", true);
     expect(await h.starter.canDispatch("first")).toBe(true);
-    await h.starter.holdAfterBudgetRefusal("first", "pricing_unavailable");
+    await h.starter.holdOnPricingRefusal("first")({ reason: "pricing_unavailable" });
     expect(await h.starter.canDispatch("first")).toBe(false);
     // The operator's choice is untouched, so follow-through still offers Pause.
     expect(await h.starter.isArmed("first")).toBe(true);
@@ -102,7 +102,7 @@ describe("starter heartbeat unpriced-model hold", () => {
   it("lifts the hold as soon as the model selection changes", async () => {
     const h = heldFixture();
     await h.starter.captureExplicitChoice("first", true);
-    await h.starter.holdAfterBudgetRefusal("first", "pricing_unavailable");
+    await h.starter.holdOnPricingRefusal("first")({ reason: "pricing_unavailable" });
     expect(await h.starter.canDispatch("first")).toBe(false);
     h.setModels({ activeProviderId: "openai", activeModel: "priced-model" });
     expect(await h.starter.canDispatch("first")).toBe(true);
@@ -112,10 +112,19 @@ describe("starter heartbeat unpriced-model hold", () => {
     const h = heldFixture();
     await h.starter.captureExplicitChoice("first", true);
     await h.starter.captureExplicitChoice("second", true);
-    await h.starter.holdAfterBudgetRefusal("first", "background_budget_exhausted");
+    await h.starter.holdOnPricingRefusal("first")({ reason: "background_budget_exhausted" });
     expect(await h.starter.canDispatch("first")).toBe(true);
-    await h.starter.holdAfterBudgetRefusal("first", "pricing_unavailable");
+    await h.starter.holdOnPricingRefusal("first")({ reason: "pricing_unavailable" });
     expect(await h.starter.canDispatch("first")).toBe(false);
     expect(await h.starter.canDispatch("second")).toBe(true);
+  });
+
+  it("never holds a selection that changed after the run started", async () => {
+    const h = heldFixture();
+    await h.starter.captureExplicitChoice("first", true);
+    const onRefused = h.starter.holdOnPricingRefusal("first");
+    h.setModels({ activeProviderId: "openai", activeModel: "priced-model" });
+    await onRefused({ reason: "pricing_unavailable" });
+    expect(await h.starter.canDispatch("first")).toBe(true);
   });
 });

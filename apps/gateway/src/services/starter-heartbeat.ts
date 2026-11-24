@@ -55,15 +55,22 @@ export class StarterHeartbeat {
   }
 
   /**
-   * Records that the automatic budget refused this Chat's heartbeat because its
-   * model has no per-token price (for example a subscription sign-in). Later
-   * occurrences park quietly for a day, or until the model selection changes,
-   * instead of failing every hour with the same reason.
+   * Returns the budget-refusal callback for one heartbeat run. When the budget
+   * refuses it because its model has no per-token price (for example a
+   * subscription sign-in), later occurrences park quietly for a day, or until
+   * the model selection changes, instead of failing every hour.
+   *
+   * The selection is captured now, before dispatch resolves a route, so a
+   * selection changed mid-run is never held for a refusal it did not get;
+   * at worst the hold does not apply and the next occurrence is refused again.
    */
-  public async holdAfterBudgetRefusal(sessionId: string, reason: string): Promise<void> {
-    if (reason !== "pricing_unavailable") return;
-    const hold: UnpricedHold = { heldAt: this.now().toISOString(), models: this.modelFingerprint() };
-    await this.storage.systemSettings.set(UNPRICED_HOLD_PREFIX + sessionId, hold);
+  public holdOnPricingRefusal(sessionId: string): (refusal: { reason: string }) => Promise<void> {
+    const models = this.modelFingerprint();
+    return async ({ reason }) => {
+      if (reason !== "pricing_unavailable") return;
+      const hold: UnpricedHold = { heldAt: this.now().toISOString(), models };
+      await this.storage.systemSettings.set(UNPRICED_HOLD_PREFIX + sessionId, hold);
+    };
   }
 
   /** True while a recent pricing refusal still applies to the current model selection. */

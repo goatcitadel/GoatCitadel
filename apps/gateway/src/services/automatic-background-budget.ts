@@ -68,7 +68,7 @@ export class AutomaticBackgroundBudget {
   public async run<T>(
     operation: () => Promise<T>,
     assertAuthority?: () => Promise<void>,
-    onRefused?: (refusal: AutomaticBackgroundBudgetError) => Promise<void>,
+    onRefused?: (refusal: AutomaticBackgroundBudgetError) => Promise<void> | void,
   ): Promise<T> {
     const days = new Set<string>();
     try {
@@ -80,7 +80,11 @@ export class AutomaticBackgroundBudget {
           // stays the reported error; a failed record is reported as a
           // diagnostic, and the next occurrence is refused and tries again.
           if (error instanceof AutomaticBackgroundBudgetError && onRefused) {
-            await onRefused(error).catch((recordError: unknown) => this.report("refusal_record", recordError));
+            try {
+              await onRefused(error);
+            } catch (recordError) {
+              this.report("refusal_record", recordError);
+            }
           }
           throw error;
         });
