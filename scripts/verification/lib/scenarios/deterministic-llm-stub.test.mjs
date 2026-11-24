@@ -171,16 +171,20 @@ test("stream-only dispatch plans are not consumed by background non-stream reque
       const response = await fetch(`${stub.baseUrl}/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: stub.model, stream, messages: [{ role: "user", content: "fixture" }] }),
+        body: JSON.stringify({ model: "auxiliary-model", stream, messages: [{ role: "user", content: "fixture" }] }),
       });
       const body = await response.text();
-      const content = stream
+      const frames = stream
         ? body
             .split("\n")
             .filter((line) => line.startsWith("data: {"))
-            .map((line) => JSON.parse(line.slice(6)).choices[0].delta.content ?? "")
-            .join("")
-        : JSON.parse(body).choices[0].message.content;
+            .map((line) => JSON.parse(line.slice(6)))
+        : [JSON.parse(body)];
+      assert.ok(frames.length > 0);
+      assert.ok(frames.every((frame) => frame.model === "auxiliary-model"));
+      const content = stream
+        ? frames.map((frame) => frame.choices[0].delta.content ?? "").join("")
+        : frames[0].choices[0].message.content;
       assert.equal(content, stream ? "Visible answer" : "Background");
     }
     assert.equal(stub.dispatchPlanDispatches(), 1);
@@ -574,11 +578,14 @@ test(
       });
       assert.equal(response.status, 200);
       const stream = readSseFrames(response.body);
-      await assert.rejects(async () => {
-        while (await stream.read()) {
-          // Keep collecting all complete frames until the socket fails.
-        }
-      });
+      await assert.rejects(
+        async () => {
+          while (await stream.read()) {
+            // Keep collecting all complete frames until the socket fails.
+          }
+        },
+        (error) => error instanceof TypeError && ["UND_ERR_SOCKET", "ECONNRESET"].includes(error.cause?.code),
+      );
       assert.deepEqual(
         stream.frames.map((frame) => frame.choices[0].delta.content),
         ["PARTIAL"],
@@ -586,7 +593,10 @@ test(
       assert.equal(stream.doneMarker, false);
       await stub.waitForCompletionDispatchCount(1);
       assert.equal(stub.completionDispatches(), 1);
-      assert.equal(stub.completionDispatchRecords()[0]?.behavior, "stream_disconnect");
+      const [dispatch] = stub.completionDispatchRecords();
+      assert.equal(dispatch.behavior, "stream_disconnect");
+      assert.equal(dispatch.outcome, "stream_disconnect");
+      assert.ok(dispatch.finishedAt);
     } finally {
       controller.abort();
       await stub.close();

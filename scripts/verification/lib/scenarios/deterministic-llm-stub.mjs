@@ -150,8 +150,10 @@ export async function startDeterministicLlmStub(options = {}) {
     } catch {
       // Malformed JSON has historically been treated as an empty fixture request.
     }
+    const requestedModel = typeof body.model === "string" ? body.model : undefined;
+    const responseModel = requestedModel ?? model;
     Object.assign(requestSummary, {
-      model: typeof body.model === "string" ? body.model : undefined,
+      model: requestedModel,
       stream: body.stream === true,
       messageCount: Array.isArray(body.messages) ? body.messages.length : undefined,
       toolNames: Array.isArray(body.tools)
@@ -176,7 +178,7 @@ export async function startDeterministicLlmStub(options = {}) {
       completeRequestSummary(requestSummary, { outcome: "success", status: 200 });
       writeJsonResponse(response, 200, {
         created: 1_786_089_600,
-        model: body.model ?? model,
+        model: responseModel,
         data: [
           {
             b64_json: DETERMINISTIC_IMAGE_PNG_BASE64,
@@ -196,9 +198,9 @@ export async function startDeterministicLlmStub(options = {}) {
         requestSummary.behavior = "prompt_reply_rule";
         requestSummary.promptReplyRuleId = promptReplyRule.ruleId;
         if (body.stream === true) {
-          writeStreamingSuccess(response, model, promptReplyRule.replyText, url.pathname);
+          writeStreamingSuccess(response, responseModel, promptReplyRule.replyText, url.pathname);
         } else {
-          writeNonStreamingSuccess(response, body.model ?? model, promptReplyRule.replyText, url.pathname);
+          writeNonStreamingSuccess(response, responseModel, promptReplyRule.replyText, url.pathname);
         }
         completeRequestSummary(requestSummary, { outcome: "success", status: 200 });
         return;
@@ -231,7 +233,7 @@ export async function startDeterministicLlmStub(options = {}) {
         await executePlannedDispatch({
           behavior: planned,
           body,
-          model,
+          model: responseModel,
           request,
           requestPath: url.pathname,
           requestSummary,
@@ -253,13 +255,13 @@ export async function startDeterministicLlmStub(options = {}) {
       }
 
       if (body.stream === true) {
-        writeStreamingSuccess(response, model, replyText, url.pathname);
+        writeStreamingSuccess(response, responseModel, replyText, url.pathname);
         completeRequestSummary(requestSummary, { outcome: "success", status: 200 });
         return;
       }
 
       completeRequestSummary(requestSummary, { outcome: "success", status: 200 });
-      writeNonStreamingSuccess(response, body.model ?? model, replyText, url.pathname);
+      writeNonStreamingSuccess(response, responseModel, replyText, url.pathname);
       return;
     }
 
@@ -512,7 +514,7 @@ async function executePlannedDispatch({
       if (body.stream === true) {
         writeStreamingSuccess(response, model, plannedReply, requestPath);
       } else {
-        writeNonStreamingSuccess(response, body.model ?? model, plannedReply, requestPath);
+        writeNonStreamingSuccess(response, model, plannedReply, requestPath);
       }
       completeRequestSummary(requestSummary, { outcome: "success", status: 200 });
       return;
@@ -521,7 +523,7 @@ async function executePlannedDispatch({
       if (body.stream === true) {
         writeStreamingToolCall(response, model, behavior, requestPath);
       } else {
-        writeNonStreamingToolCall(response, body.model ?? model, behavior, requestPath);
+        writeNonStreamingToolCall(response, model, behavior, requestPath);
       }
       completeRequestSummary(requestSummary, { outcome: "tool_call", status: 200 });
       return;

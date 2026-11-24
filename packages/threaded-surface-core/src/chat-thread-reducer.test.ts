@@ -392,7 +392,7 @@ describe("chat-thread-reducer", () => {
         turnId: "turn-2",
         citation: {
           citationId: "cite-2",
-          url: "https://example.test/doc",
+          url: "https://example.test/Doc",
           snippet: "Merged snippet",
           sourceType: "web",
         },
