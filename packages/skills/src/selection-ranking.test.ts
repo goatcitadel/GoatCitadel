@@ -20,13 +20,15 @@ function skill(name: string, keywords: string[] = []): LoadedSkill {
 describe("skill-selection shadow ranking", () => {
   it("ignores filenames while preserving adjacent intent and explicit names", () => {
     const skills = [skill("runtime", ["runtime"]), skill("qa", ["qa"])];
-    expect(rankSkillSelectionCandidates({ text: "Use runtime.md and read C:\\weekly-qa\\runtime.txt." }, skills).candidates)
-      .toEqual([]);
-    expect(rankSkillSelectionCandidates({ text: "@skill qa check runtime health in notes/runtime.txt" }, skills).candidates)
-      .toEqual([
-        expect.objectContaining({ skillId: "bundled:qa", explicit: true }),
-        expect.objectContaining({ skillId: "bundled:runtime", explicit: false }),
-      ]);
+    expect(
+      rankSkillSelectionCandidates({ text: "Use runtime.md and read C:\\weekly-qa\\runtime.txt." }, skills).candidates,
+    ).toEqual([]);
+    expect(
+      rankSkillSelectionCandidates({ text: "@skill qa check runtime health in notes/runtime.txt" }, skills).candidates,
+    ).toEqual([
+      expect.objectContaining({ skillId: "bundled:qa", explicit: true }),
+      expect.objectContaining({ skillId: "bundled:runtime", explicit: false }),
+    ]);
   });
 
   it("retrieves description terms without searching instruction bodies", () => {
@@ -71,6 +73,10 @@ describe("skill-selection shadow ranking", () => {
     expect(implicit.candidates.map((candidate) => candidate.skillId)).toEqual(["bundled:coding"]);
     const named = rankSkillSelectionCandidates({ text: "use ponytail for the smallest possible change" }, skills);
     expect(named.candidates[0]).toMatchObject({ skillId: "bundled:ponytail", explicit: true });
+    const mention = rankSkillSelectionCandidates({ text: "$Bundled:ponytail make the change" }, skills);
+    expect(mention.candidates[0]).toMatchObject({ skillId: "bundled:ponytail", explicit: true });
+    const variable = rankSkillSelectionCandidates({ text: "price$bundled:ponytail make the change" }, skills);
+    expect(variable.candidates.map((candidate) => candidate.skillId)).toEqual(["bundled:coding"]);
   });
 
   it("keeps explicit selection first and honors caller-provided explicit selection", () => {

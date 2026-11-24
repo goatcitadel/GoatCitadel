@@ -1,5 +1,5 @@
 import type { LoadedSkill, SkillResolveInput } from "@goatcitadel/contracts";
-import { stripSkillFileReferences } from "./activation-text.js";
+import { extractQualifiedSkillMentions, stripSkillFileReferences } from "./activation-text.js";
 
 const MAX_CANDIDATES = 1_000;
 const MAX_QUERY_CHARS = 8_192;
@@ -52,6 +52,7 @@ export function rankSkillSelectionCandidates(
   const query = [...new Set(queryTokens)].slice(0, MAX_TERMS);
   const explicit = new Set((input.explicitSkills ?? []).slice(0, 50).map((name) => name.toLowerCase()));
   if (input.explicitSkills === undefined) {
+    for (const name of extractQualifiedSkillMentions(boundedText)) explicit.add(name);
     for (const match of boundedText.matchAll(/@skill\s+([a-z0-9:_-]+)/giu)) {
       if (match[1]) explicit.add(match[1].toLowerCase());
     }

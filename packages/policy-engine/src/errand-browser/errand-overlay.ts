@@ -31,14 +31,7 @@ export type ErrandOverlayState =
   | { mode: "taken_over"; bannerText: string }
   | { mode: "sign_in"; bannerText: string };
 
-export type ErrandOverlayEvent =
-  | { type: "approve" | "deny"; requestId: string }
-  | { type: "take_over" | "hand_back" | "stop" };
-
-export interface ErrandOverlayControlSnapshot extends ErrandOverlayRect {
-  /** The IntersectionObserver v2 verdict for the control, or null before the first sample. */
-  visible: boolean | null;
-}
+export type ErrandOverlayEvent = { type: "take_over" | "hand_back" | "stop" };
 
 /** What the overlay currently draws, read from GoatCitadel's own world (never from the page). */
 export interface ErrandOverlaySnapshot {
@@ -48,9 +41,7 @@ export interface ErrandOverlaySnapshot {
   bannerText: string | null;
   notice: string | null;
   cursor: ErrandOverlayPoint | null;
-  controls: Partial<
-    Record<"take_over" | "hand_back" | "stop" | "approve" | "deny", ErrandOverlayControlSnapshot | undefined>
-  >;
+  controls: Partial<Record<ErrandOverlayEvent["type"], ErrandOverlayRect | undefined>>;
 }
 
 export interface ErrandOverlay {
@@ -93,7 +84,7 @@ export class ErrandOverlayTimeoutError extends ErrandOverlayError {
 }
 
 const HIDDEN: ErrandOverlayState = { mode: "hidden" };
-const EVENT_TYPES = new Set(["approve", "deny", "take_over", "hand_back", "stop"]);
+const EVENT_TYPES = new Set(["take_over", "hand_back", "stop"]);
 const MAX_PAYLOAD_LENGTH = 512;
 /** Every CDP call the overlay makes on the hot path gives up after this long instead of wedging the caller. */
 export const ERRAND_OVERLAY_CDP_TIMEOUT_MS = 3_000;
@@ -316,14 +307,7 @@ function attachPageOverlay(
 
   const handleBinding = (payload: string): void => {
     const event = parseOverlayEvent(payload);
-    if (!event) {
-      return;
-    }
-    if (event.type === "approve" || event.type === "deny") {
-      if (applied.mode !== "approval" || applied.requestId !== event.requestId) {
-        return;
-      }
-    } else if (applied.mode === "hidden") {
+    if (!event || applied.mode === "hidden") {
       return;
     }
     onEvent(event);
@@ -426,12 +410,9 @@ export function parseOverlayEvent(payload: string): ErrandOverlayEvent | undefin
   if (!parsed || typeof parsed !== "object") {
     return undefined;
   }
-  const { type, requestId } = parsed as { type?: unknown; requestId?: unknown };
+  const { type } = parsed as { type?: unknown };
   if (typeof type !== "string" || !EVENT_TYPES.has(type)) {
     return undefined;
-  }
-  if (type === "approve" || type === "deny") {
-    return typeof requestId === "string" && requestId.length > 0 ? { type, requestId } : undefined;
   }
   return { type: type as "take_over" | "hand_back" | "stop" };
 }

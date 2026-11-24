@@ -47,6 +47,7 @@ export function updateThreadFromStreamChunk(
   if (chunk.type === "message_start") {
     const existing = current?.turns.find((turn) => turn.turnId === chunk.turnId);
     if (current && existing) {
+      if (existing.assistantMessage?.messageId === chunk.messageId) return current;
       // Replayed message_start (resume overlap / re-delivery): refresh the
       // assistant slot for the incoming messageId but keep everything the turn
       // already accumulated — recreating it would wipe live toolRuns/trace,
@@ -385,7 +386,7 @@ function dedupeCitations(citations: ChatThreadTurnRecord["citations"]): ChatThre
   for (const citation of citations) {
     const key = citation.knowledge
       ? `knowledge:${citation.knowledge.attachmentId}:${citation.knowledge.chunkId ?? citation.knowledge.sourceRef}:${citation.knowledge.retrievalMode}`
-      : citation.url.trim().toLowerCase();
+      : citation.url.trim().replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, (authority) => authority.toLowerCase());
     const existingIndex = seen.get(key);
     if (existingIndex === undefined) {
       seen.set(key, deduped.length);
@@ -407,12 +408,29 @@ function dedupeCitations(citations: ChatThreadTurnRecord["citations"]): ChatThre
       sourceType: existing.sourceType ?? citation.sourceType,
       knowledge: existing.knowledge ?? citation.knowledge,
       provenance: existing.provenance ?? citation.provenance,
-      passages: existing.passages ?? citation.passages,
+      passages: mergeCitationPassages(existing.passages, citation.passages),
     };
   }
   // Every duplicate either merges into an earlier slot or is dropped, so an equal
   // length means nothing changed — keep the original array's identity.
   return deduped.length === citations.length ? citations : deduped;
+}
+
+function mergeCitationPassages(
+  existing: ChatThreadTurnRecord["citations"][number]["passages"],
+  incoming: ChatThreadTurnRecord["citations"][number]["passages"],
+): ChatThreadTurnRecord["citations"][number]["passages"] {
+  if (!existing?.length || !incoming?.length) return existing?.length ? existing : (incoming ?? existing);
+  const seen = new Set(existing.map(({ toolRunId, text }) => JSON.stringify([toolRunId, text])));
+  return [
+    ...existing,
+    ...incoming.filter(({ toolRunId, text }) => {
+      const key = JSON.stringify([toolRunId, text]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }),
+  ];
 }
 
 export { carryOverStreamedThinking } from "./chat-thread-thinking.js";

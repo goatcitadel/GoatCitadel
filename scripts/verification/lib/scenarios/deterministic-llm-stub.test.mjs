@@ -252,6 +252,7 @@ test("scripted tool calls use native Responses and Chat Completions protocols", 
     dispatchPlan: [
       { type: "tool_call", name: "presentations_create", arguments: { title: "Fixture deck" }, callId: "call_deck" },
       { type: "tool_call", name: "browser_search", arguments: { query: "fixture" }, callId: "call_search" },
+      { type: "tool_call", name: "browser_search", arguments: { query: "stream" }, callId: "call_stream" },
     ],
   });
   try {
@@ -277,6 +278,22 @@ test("scripted tool calls use native Responses and Chat Completions protocols", 
         id: "call_search",
         type: "function",
         function: { name: "browser_search", arguments: '{"query":"fixture"}' },
+      },
+    ]);
+
+    const stream = await fetch(`${stub.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: stub.model, stream: true, messages: [{ role: "user", content: "fixture" }] }),
+    });
+    const toolFrame = (await stream.text()).split("\n").find((line) => line.startsWith("data: {"));
+    assert.ok(toolFrame);
+    assert.deepEqual(JSON.parse(toolFrame.slice(6)).choices[0].delta.tool_calls, [
+      {
+        index: 0,
+        id: "call_stream",
+        type: "function",
+        function: { name: "browser_search", arguments: '{"query":"stream"}' },
       },
     ]);
   } finally {
@@ -581,7 +598,12 @@ test("listen and advertised host validation rejects unsafe or unusable values", 
 test("provider-error clock markers are explicit response metadata and leave native failures unchanged", async () => {
   const stub = await startDeterministicLlmStub({
     dispatchPlan: [
-      { type: "provider_error", code: "server_error", message: "Marked fixture failure.", faultClockMarker: "GC_CLOCK_TRANSPORT_TEST" },
+      {
+        type: "provider_error",
+        code: "server_error",
+        message: "Marked fixture failure.",
+        faultClockMarker: "GC_CLOCK_TRANSPORT_TEST",
+      },
       { type: "provider_error", code: "server_error", message: "Unmarked fixture failure." },
     ],
   });
@@ -596,7 +618,10 @@ test("provider-error clock markers are explicit response metadata and leave nati
       assert.equal(response.headers.get("x-goatcitadel-verification-fault-clock"), expectedMarker);
       assert.match(await response.text(), /"type":"response.failed"/u);
     }
-    assert.deepEqual(stub.dispatchPlanDispatchRecords().map(({ outcome }) => outcome), ["provider_error", "provider_error"]);
+    assert.deepEqual(
+      stub.dispatchPlanDispatchRecords().map(({ outcome }) => outcome),
+      ["provider_error", "provider_error"],
+    );
   } finally {
     await stub.close();
   }

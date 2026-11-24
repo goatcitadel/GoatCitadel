@@ -20,9 +20,7 @@ export const ERRAND_OVERLAY_COPY = {
   takeOver: "Take over",
   handBack: "Hand back",
   stop: "Stop",
-  approve: "Approve",
-  deny: "Not now",
-  useChat: "Use Approve in Chat for this one.",
+  useChat: "Review and decide in GoatCitadel Chat.",
 } as const;
 
 const ERRAND_OVERLAY_CONSTANTS = {
@@ -36,10 +34,6 @@ const ERRAND_OVERLAY_CONSTANTS = {
     dim: "rgba(4, 10, 16, 0.58)",
   },
   zIndex: 2147483647,
-  /** IntersectionObserver v2 visibility sampling; the spec's minimum delay. */
-  visibilityDelayMs: 100,
-  /** Approve and Not now count only after the card and the button have both been visible this long. */
-  decisionDwellMs: 500,
   /** Input this soon after GoatCitadel's own automation input ends is still treated as automation's. */
   automationGraceMs: 150,
   /** The automation flag clears itself this long after it was last set, so a lost clear cannot leave controls dead. */
@@ -71,9 +65,7 @@ interface Rect extends Point {
   height: number;
 }
 
-type OverlayEventPayload =
-  | { type: "approve" | "deny"; requestId: string }
-  | { type: "take_over" | "hand_back" | "stop" };
+type OverlayEventPayload = { type: "take_over" | "hand_back" | "stop" };
 
 interface OverlayState {
   mode: "hidden" | "driving" | "approval" | "taken_over" | "sign_in";
@@ -132,10 +124,8 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
     .card .title { color: ${c.colors.accent}; font-size: 15px; font-weight: 600; margin: 0 0 6px; }
     .card .body { margin: 0 0 12px; white-space: pre-wrap; min-height: 0; overflow: auto; }
     .card .notice { margin: 10px 0 0; color: ${c.colors.accent}; }
-    .actions { display: flex; flex: none; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
     button { pointer-events: auto; font: inherit; border-radius: 8px; padding: 6px 12px; cursor: pointer;
       border: 1px solid ${c.colors.accent}; background: transparent; color: ${c.colors.accent}; }
-    button.primary { background: ${c.colors.accent}; color: ${c.colors.navy}; font-weight: 600; }
     button:focus-visible { outline: 2px solid ${c.colors.text}; outline-offset: 2px; }
     [hidden] { display: none !important; }
   `;
@@ -168,24 +158,17 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   card.setAttribute("role", "dialog");
   const cardTitle = make("p", "title");
   const cardBody = make("p", "body");
-  const cardNotice = make("p", "notice");
-  const approve = make("button", "primary", c.copy.approve);
-  const deny = make("button", "", c.copy.deny);
-  const actions = make("div", "actions");
-  actions.append(deny, approve);
-  card.append(cardTitle, cardBody, actions, cardNotice);
+  const cardNotice = make("p", "notice", c.copy.useChat);
+  card.append(cardTitle, cardBody, cardNotice);
 
-  // Paint order matters: nothing GoatCitadel draws may sit above the card's buttons, or the visibility check fails.
   layer.append(spot, blocker, trail, cursor, banner, card);
   root.append(style, layer);
-  for (const button of [takeOver, handBack, stop, approve, deny]) {
+  for (const button of [takeOver, handBack, stop]) {
     button.type = "button";
     button.addEventListener("mousedown", (event) => event.preventDefault());
   }
-  // Decisions require a pointer. Escape already provides keyboard access to Stop.
+  // Escape also provides keyboard access to Stop.
   stop.tabIndex = -1;
-  approve.tabIndex = -1;
-  deny.tabIndex = -1;
 
   // ---- State -----------------------------------------------------------------------------------------------------
   let state: OverlayState = { mode: "hidden" };
@@ -195,7 +178,6 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   let automation = false;
   let automationEndedAt = Number.NEGATIVE_INFINITY;
   let automationSetAt = Number.NEGATIVE_INFINITY;
-  let cardShownAt = Number.POSITIVE_INFINITY;
   const inputBlocked = (): boolean =>
     suspended ||
     (automation && performance.now() - automationSetAt < c.automationExpiryMs) ||
@@ -235,14 +217,15 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   let reactions: number[] = [];
   let backoffMs: number = c.reattach.backoffMinMs;
   let backoffTimer = 0;
+  let lastReactionAt = Number.NEGATIVE_INFINITY;
   const throttled = (work: () => void) => (): void => {
     const now = performance.now();
+    if (backoffTimer) return;
+    if (now - lastReactionAt >= c.reattach.windowMs) backoffMs = c.reattach.backoffMinMs;
+    lastReactionAt = now;
     reactions = reactions.filter((at) => now - at < c.reattach.windowMs);
     if (reactions.length < c.reattach.budget) {
       reactions.push(now);
-      if (reactions.length === 1) {
-        backoffMs = c.reattach.backoffMinMs;
-      }
       work();
       return;
     }
@@ -250,6 +233,7 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
       backoffTimer = window.setTimeout(() => {
         backoffTimer = 0;
         reactions = [];
+        lastReactionAt = performance.now();
         work();
       }, backoffMs);
       backoffMs = Math.min(backoffMs * 2, c.reattach.backoffMaxMs);
@@ -280,30 +264,6 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   ensureAttached();
   document.addEventListener("DOMContentLoaded", ensureAttached);
 
-  // ---- Visibility: IntersectionObserver v2 -----------------------------------------------------------------------
-  // Sample the decision controls and the disclosure separately. A page can cover the title or body with
-  // pointer-events: none while leaving the real buttons visible and clickable.
-  const visible = new Map<Element, boolean>();
-  const visibleSince = new Map<Element, number>();
-  const visibility = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        const isVisible = (entry as IntersectionObserverEntry & { isVisible?: boolean }).isVisible === true;
-        if (!isVisible) {
-          visibleSince.delete(entry.target);
-        } else if (!visibleSince.has(entry.target)) {
-          visibleSince.set(entry.target, performance.now());
-        }
-        visible.set(entry.target, isVisible);
-      }
-    },
-    { trackVisibility: true, delay: c.visibilityDelayMs } as IntersectionObserverInit,
-  );
-  visibility.observe(cardTitle);
-  visibility.observe(cardBody);
-  visibility.observe(approve);
-  visibility.observe(deny);
-
   const onControl = (element: HTMLElement, handler: (event: MouseEvent) => void): void => {
     element.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -313,29 +273,6 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
       handler(event);
     });
   };
-  // A decision needs a real pointer click and a full dwell interval with the button and its disclosure visible.
-  // The card age also resets the dwell when a new request replaces the previous one in the same elements.
-  const decide = (type: "approve" | "deny") => (event: MouseEvent) => {
-    const button = type === "approve" ? approve : deny;
-    if (state.mode !== "approval" || !state.requestId || card.hidden) {
-      return;
-    }
-    const now = performance.now();
-    const settled =
-      now - cardShownAt >= c.decisionDwellMs &&
-      [button, cardTitle, cardBody].every((element) => {
-        const since = visibleSince.get(element);
-        return since !== undefined && now - since >= c.decisionDwellMs;
-      });
-    if (event.detail === 0 || !settled) {
-      cardNotice.textContent = c.copy.useChat;
-      cardNotice.hidden = false;
-      return;
-    }
-    report({ type, requestId: state.requestId });
-  };
-  onControl(approve, decide("approve"));
-  onControl(deny, decide("deny"));
   onControl(takeOver, () => report({ type: "take_over" }));
   onControl(handBack, () => report({ type: "hand_back" }));
   onControl(stop, () => report({ type: "stop" }));
@@ -493,9 +430,6 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
         cardTitle.textContent = next.title ?? "";
         cardBody.textContent = next.body ?? "";
         cardBody.scrollTop = 0;
-        cardNotice.textContent = "";
-        cardNotice.hidden = true;
-        cardShownAt = performance.now();
       }
       placeCard(rect, next.cursor);
     }
@@ -512,7 +446,7 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
       return undefined;
     }
     const box = element.getBoundingClientRect();
-    return { x: box.x, y: box.y, width: box.width, height: box.height, visible: visible.get(element) ?? null };
+    return { x: box.x, y: box.y, width: box.width, height: box.height };
   };
 
   const api = {
@@ -552,15 +486,13 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
         displayed,
         mode: state.mode,
         bannerText: displayed ? bannerText.textContent : null,
-        notice: !card.hidden && !cardNotice.hidden ? cardNotice.textContent : null,
+        notice: displayed && !card.hidden ? cardNotice.textContent : null,
         cursor: cursorAt ?? null,
         controls: displayed
           ? {
               take_over: controlRect(takeOver),
               hand_back: controlRect(handBack),
               stop: controlRect(stop),
-              approve: controlRect(approve),
-              deny: controlRect(deny),
             }
           : {},
       };

@@ -1,5 +1,6 @@
 import * as grpc from "@grpc/grpc-js";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import type { A2AGrpcServerHandle, StartA2AGrpcServerInput } from "./a2a-grpc-server.js";
 import type { A2APeerAuthFailure, A2APeerAuthResult, A2ARouteService } from "./a2a-route-service.js";
 import { A2AJsonRpcServiceError } from "./a2a-json-rpc-error.js";
@@ -67,61 +68,79 @@ function createA2AGrpcHandlers(
   lifecycle?: SharedHostLifecycleAdmissionPort,
 ): grpc.UntypedServiceImplementation {
   return {
-    sendMessage: unary(a2a, lifecycle, async (peer, request: A2AGrpcJsonRequest) => ({
+    sendMessage: unary(a2a, lifecycle, "mutation", async (peer, request: A2AGrpcJsonRequest) => ({
       json: JSON.stringify(projectA2AExternalValue(await a2a.sendGrpcMessage(peer, parseJsonRequest(request)))),
     })),
-    sendStreamingMessage: unary(a2a, lifecycle, async (peer, request: A2AGrpcJsonRequest) => {
+    sendStreamingMessage: unary(a2a, lifecycle, "mutation", async (peer, request: A2AGrpcJsonRequest) => {
       const result = await a2a.sendGrpcStreamingMessage(peer, parseJsonRequest(request));
       return {
         taskJson: JSON.stringify(projectA2AExternalValue(result.task)),
         eventJson: result.events.map((event) => JSON.stringify(projectA2AExternalValue(event))),
       };
     }),
-    getTask: unary(a2a, lifecycle, async (peer, request: A2AGrpcTaskRequest) => ({
+    getTask: unary(a2a, lifecycle, "read", async (peer, request: A2AGrpcTaskRequest) => ({
       json: JSON.stringify(projectA2AExternalValue(await a2a.getGrpcTask(peer, taskRequestParams(request)))),
     })),
-    cancelTask: unary(a2a, lifecycle, async (peer, request: A2AGrpcTaskRequest) => ({
+    cancelTask: unary(a2a, lifecycle, "mutation", async (peer, request: A2AGrpcTaskRequest) => ({
       json: JSON.stringify(projectA2AExternalValue(await a2a.cancelGrpcTask(peer, taskRequestParams(request)))),
     })),
     subscribeToTask: async (
       call: grpc.ServerWritableStream<A2AGrpcTaskEventsRequest, { json: string }>,
     ): Promise<void> => {
       let reservation: SharedHostWorkReservation | undefined;
+      const cancellation = new AbortController();
+      const onCancelled = () => cancellation.abort();
+      call.once("cancelled", onCancelled);
       try {
         reservation = reserveGrpcWork(lifecycle, "agent", "a2a-grpc-stream");
+        const signal = reservation ? AbortSignal.any([reservation.signal, cancellation.signal]) : cancellation.signal;
+        if (call.cancelled) return;
+        signal.throwIfAborted();
         const peer = authenticateGrpcPeer(a2a, call.metadata);
         const result = await a2a.getGrpcTaskEvents(peer, taskEventsRequestParams(call.request));
         for (const event of result.events) {
-          call.write({ json: JSON.stringify(projectA2AExternalValue(event)) });
+          signal.throwIfAborted();
+          if (!call.write({ json: JSON.stringify(projectA2AExternalValue(event)) })) {
+            await once(call, "drain", { signal });
+          }
         }
+        signal.throwIfAborted();
         call.end();
       } catch (error) {
-        call.emit("error", toGrpcError(error));
+        if (!call.cancelled) {
+          call.emit(
+            "error",
+            reservation?.signal.aborted
+              ? grpcStatusError(grpc.status.UNAVAILABLE, "A2A gRPC subscription interrupted by host drain.")
+              : toGrpcError(error),
+          );
+        }
       } finally {
+        call.removeListener("cancelled", onCancelled);
         reservation?.release();
       }
     },
-    setTaskPushNotificationConfig: unary(a2a, lifecycle, async (peer, request: A2AGrpcJsonRequest) => ({
+    setTaskPushNotificationConfig: unary(a2a, lifecycle, "mutation", async (peer, request: A2AGrpcJsonRequest) => ({
       json: JSON.stringify(
         projectA2AExternalValue(await a2a.setGrpcTaskPushNotificationConfig(peer, parseJsonRequest(request))),
       ),
     })),
-    getTaskPushNotificationConfig: unary(a2a, lifecycle, async (peer, request: A2AGrpcTaskRequest) => ({
+    getTaskPushNotificationConfig: unary(a2a, lifecycle, "read", async (peer, request: A2AGrpcTaskRequest) => ({
       json: JSON.stringify(
         projectA2AExternalValue(await a2a.getGrpcTaskPushNotificationConfig(peer, taskRequestParams(request))),
       ),
     })),
-    listTaskPushNotificationConfig: unary(a2a, lifecycle, async (peer, request: A2AGrpcJsonRequest) => ({
+    listTaskPushNotificationConfig: unary(a2a, lifecycle, "read", async (peer, request: A2AGrpcJsonRequest) => ({
       json: JSON.stringify(
         projectA2AExternalValue(await a2a.listGrpcTaskPushNotificationConfigs(peer, parseJsonRequest(request))),
       ),
     })),
-    deleteTaskPushNotificationConfig: unary(a2a, lifecycle, async (peer, request: A2AGrpcTaskRequest) => ({
+    deleteTaskPushNotificationConfig: unary(a2a, lifecycle, "mutation", async (peer, request: A2AGrpcTaskRequest) => ({
       json: JSON.stringify(
         projectA2AExternalValue(await a2a.deleteGrpcTaskPushNotificationConfig(peer, taskRequestParams(request))),
       ),
     })),
-    getAuthenticatedExtendedCard: unary(a2a, lifecycle, async (peer) => ({
+    getAuthenticatedExtendedCard: unary(a2a, lifecycle, "read", async (peer) => ({
       json: JSON.stringify(
         projectA2AExternalValue(
           await a2a.getGrpcAuthenticatedExtendedAgentCard(peer, { checkedAt: new Date().toISOString() }),
@@ -134,33 +153,48 @@ function createA2AGrpcHandlers(
 function unary<TRequest, TResponse>(
   a2a: A2ARouteService,
   lifecycle: SharedHostLifecycleAdmissionPort | undefined,
+  operation: "read" | "mutation",
   handler: (peer: A2APeerAuthResult, request: TRequest) => Promise<TResponse> | TResponse,
 ): grpc.handleUnaryCall<TRequest, TResponse> {
   return (call, callback) => {
     let reservation: SharedHostWorkReservation | undefined;
     let replied = false;
+    let dispatched = false;
+    const onDrainAbort = () => {
+      if (replied || call.cancelled) return;
+      replied = true;
+      const response =
+        dispatched && operation === "mutation"
+          ? grpcStatusError(
+              grpc.status.UNKNOWN,
+              "A2A gRPC mutation outcome is unknown after host drain. Reconcile before retrying.",
+            )
+          : grpcStatusError(grpc.status.UNAVAILABLE, "A2A gRPC request interrupted by host drain.");
+      callback(response);
+    };
     void (async () => {
       try {
         reservation = reserveGrpcWork(lifecycle, "agent", "a2a-grpc-unary");
-        const onDrainAbort = () => {
-          if (replied) return;
-          replied = true;
-          callback(grpcStatusError(grpc.status.UNAVAILABLE, "A2A gRPC request interrupted by host drain."));
-        };
-        reservation?.signal.addEventListener("abort", onDrainAbort, { once: true });
         const peer = authenticateGrpcPeer(a2a, call.metadata);
+        if (call.cancelled) return;
+        if (reservation?.signal.aborted) {
+          onDrainAbort();
+          return;
+        }
+        reservation?.signal.addEventListener("abort", onDrainAbort, { once: true });
+        dispatched = true;
         const response = await handler(peer, call.request);
-        reservation?.signal.removeEventListener("abort", onDrainAbort);
-        if (!replied) {
+        if (!replied && !call.cancelled) {
           replied = true;
           callback(null, response);
         }
       } catch (error) {
-        if (!replied) {
+        if (!replied && !call.cancelled) {
           replied = true;
           callback(toGrpcError(error));
         }
       } finally {
+        reservation?.signal.removeEventListener("abort", onDrainAbort);
         reservation?.release();
       }
     })().catch((error: unknown) => {

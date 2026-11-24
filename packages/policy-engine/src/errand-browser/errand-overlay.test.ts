@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { launchErrandBrowser, type ErrandBrowser } from "./errand-browser.js";
 import {
   ErrandOverlayError,
+  parseOverlayEvent,
   type ErrandOverlayEvent,
   type ErrandOverlayRect,
   type ErrandOverlayState,
@@ -24,7 +25,6 @@ const PAGE_HTML = `<!doctype html><html><head><style>
   #buy { position: absolute; left: ${TARGET.x}px; top: ${TARGET.y}px; width: ${TARGET.width}px; height: ${TARGET.height}px; }
 </style></head><body><div class="stripe"></div><p>Errand test page</p><button id="buy">Place your order</button></body></html>`;
 
-const DWELL_WAIT_MS = 600;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("errand overlay", () => {
@@ -92,28 +92,6 @@ describe("errand overlay", () => {
     return last;
   }
 
-  async function approveRectWhenVisible(browser: ErrandBrowser): Promise<ErrandOverlayRect> {
-    const snapshot = await waitFor(
-      () => browser.overlay.snapshot(),
-      (value) => value.controls.approve?.visible === true,
-    );
-    const approve = snapshot.controls.approve;
-    expect(approve?.visible, "the Approve button should be visible to the operator").toBe(true);
-    // Decisions count only after the card and button have been visible for the dwell time.
-    await sleep(DWELL_WAIT_MS);
-    return approve!;
-  }
-
-  async function approveRectNow(browser: ErrandBrowser): Promise<ErrandOverlayRect> {
-    const snapshot = await waitFor(
-      () => browser.overlay.snapshot(),
-      (value) => value.controls.approve !== undefined,
-    );
-    return snapshot.controls.approve!;
-  }
-
-  const center = (rect: ErrandOverlayRect) => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
-
   it("overlay is invisible to page script", async () => {
     const { browser } = await openErrand();
     await browser.overlay.render(drivingState());
@@ -149,127 +127,11 @@ describe("errand overlay", () => {
     expect(events).toEqual([]);
   }, 60_000);
 
-  it("synthetic click is ignored", async () => {
-    const { browser, events } = await openErrand();
-    await browser.overlay.render(approvalState("r1"));
-    const approve = center(await approveRectWhenVisible(browser));
-    await browser.page().evaluate(({ x, y }) => {
-      const element = document.elementFromPoint(x, y);
-      element?.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true, clientX: x, clientY: y }));
-      (element as HTMLElement | null)?.click();
-    }, approve);
-    await sleep(300);
-    expect(events).toEqual([]);
-  }, 60_000);
-
-  it("covered approve is ignored", async () => {
-    const { browser, events } = await openErrand();
-    await browser.overlay.render(approvalState("r1"));
-    const approve = await approveRectWhenVisible(browser);
-    await browser.page().evaluate((rect) => {
-      const cover = document.createElement("div");
-      cover.style.cssText = `position:fixed;left:${rect.x - 40}px;top:${rect.y - 40}px;width:${rect.width + 200}px;height:${rect.height + 80}px;background:#123;pointer-events:none;z-index:2147483647`;
-      document.documentElement.appendChild(cover);
-    }, approve);
-    await waitFor(
-      () => browser.overlay.snapshot(),
-      (value) => value.controls.approve?.visible === false,
-    );
-    const point = center(approve);
-    await browser.page().mouse.click(point.x, point.y);
-    await sleep(300);
-    expect(events.filter((event) => event.type === "approve")).toEqual([]);
-    expect((await browser.overlay.snapshot()).notice).toBe(ERRAND_OVERLAY_COPY.useChat);
-  }, 60_000);
-
-  it("refuses overlay approval when the page covers the step disclosure but leaves Approve visible", async () => {
-    const { browser, events } = await openErrand();
-    await browser.overlay.render(approvalState("covered-disclosure"));
-    const approve = await approveRectWhenVisible(browser);
-    const page = browser.page();
-    const session = await page.context().newCDPSession(page);
-
-    const disclosure = await (async () => {
-      try {
-        const { root } = await session.send("DOM.getDocument", { depth: -1, pierce: true });
-        const findClass = (node: typeof root, name: string): number | undefined => {
-          if (
-            node.attributes?.some(
-              (value, index, attrs) => index % 2 === 0 && value === "class" && attrs[index + 1] === name,
-            )
-          ) {
-            return node.nodeId;
-          }
-          for (const child of [...(node.children ?? []), ...(node.shadowRoots ?? [])]) {
-            const found = findClass(child, name);
-            if (found !== undefined) return found;
-          }
-          return undefined;
-        };
-        return await Promise.all(
-          ["title", "body"].map(async (name) => {
-            const nodeId = findClass(root, name);
-            expect(nodeId, `the isolated overlay has a ${name} element`).toBeDefined();
-            const { model } = await session.send("DOM.getBoxModel", { nodeId: nodeId! });
-            const [x, y] = model.border;
-            return { x: x!, y: y!, width: model.width, height: model.height };
-          }),
-        );
-      } finally {
-        await session.detach();
-      }
-    })();
-    const left = Math.floor(Math.min(...disclosure.map(({ x }) => x))) - 1;
-    const top = Math.floor(Math.min(...disclosure.map(({ y }) => y))) - 1;
-    const right = Math.ceil(Math.max(...disclosure.map(({ x, width }) => x + width))) + 1;
-    const bottom = Math.ceil(Math.max(...disclosure.map(({ y, height }) => y + height))) + 1;
-    expect(bottom, "the cover must stop above the Approve button").toBeLessThan(approve.y);
-
-    await page.evaluate(
-      ({ left, top, right, bottom }) => {
-        const cover = document.createElement("div");
-        cover.style.cssText = `position:fixed;left:${left}px;top:${top}px;width:${right - left}px;height:${bottom - top}px;background:rgb(239,0,219);pointer-events:none;z-index:2147483647`;
-        document.documentElement.appendChild(cover);
-      },
-      { left, top, right, bottom },
-    );
-    await sleep(DWELL_WAIT_MS);
-    const snapshot = await browser.overlay.snapshot();
-    expect(snapshot.controls.approve?.visible, "Chrome must still report Approve as visible").toBe(true);
-
-    const { data, info } = await sharp(await browser.captureForPeople())
-      .ensureAlpha()
-      .raw()
-      .toBuffer({ resolveWithObject: true });
-    for (const rect of disclosure) {
-      const { x, y } = center(rect);
-      const offset = (Math.floor(y) * info.width + Math.floor(x)) * info.channels;
-      expect([...data.subarray(offset, offset + 4)], "page pixels hide the original title and body").toEqual([
-        239, 0, 219, 255,
-      ]);
+  it("rejects decision events at the browser boundary", () => {
+    for (const type of ["approve", "deny"]) {
+      expect(parseOverlayEvent(JSON.stringify({ type, requestId: "r1" }))).toBeUndefined();
     }
-
-    const point = center(approve);
-    await page.mouse.click(point.x, point.y);
-    expect(
-      await waitFor(
-        async () => ({ events: [...events], notice: (await browser.overlay.snapshot()).notice }),
-        ({ events, notice }) => events.length > 0 || notice === ERRAND_OVERLAY_COPY.useChat,
-      ),
-    ).toEqual({ events: [], notice: ERRAND_OVERLAY_COPY.useChat });
-  }, 60_000);
-
-  it("real click approves", async () => {
-    const { browser, events } = await openErrand();
-    await browser.overlay.render(approvalState("r7"));
-    const point = center(await approveRectWhenVisible(browser));
-    await browser.page().mouse.click(point.x, point.y);
-    await waitFor(
-      async () => events.length,
-      (count) => count > 0,
-    );
-    expect(events).toEqual([{ type: "approve", requestId: "r7" }]);
-  }, 60_000);
+  });
 
   it("page removing the host does not remove the overlay", async () => {
     const { browser } = await openErrand();
@@ -342,13 +204,11 @@ describe("errand overlay", () => {
     );
     expect(events).toEqual([{ type: "stop" }]);
   }, 60_000);
-  it("automation input cannot stop or approve; the operator's Esc still stops", async () => {
+  it("automation input cannot stop; the operator's Esc still stops", async () => {
     const { browser, events } = await openErrand();
     await browser.overlay.render(approvalState("r3"));
-    const point = center(await approveRectWhenVisible(browser));
     await browser.overlay.withAutomationInput(async () => {
       await browser.page().keyboard.press("Escape");
-      await browser.page().mouse.click(point.x, point.y);
     });
     await sleep(300);
     expect(events).toEqual([]);
@@ -358,28 +218,6 @@ describe("errand overlay", () => {
       (count) => count > 0,
     );
     expect(events).toEqual([{ type: "stop" }]);
-  }, 60_000);
-
-  it("keyboard activation cannot approve or deny", async () => {
-    const { browser, events } = await openErrand();
-    await browser.overlay.render(approvalState("r4"));
-    const point = center(await approveRectWhenVisible(browser));
-    const page = browser.page();
-    await page.focus("#buy");
-    for (let index = 0; index < 8; index += 1) {
-      await page.keyboard.press("Tab");
-      await page.keyboard.press("Enter");
-      await page.keyboard.press("Space");
-    }
-    // Press on Approve, slide off before releasing (no click), then try to activate whatever got focus.
-    await page.mouse.move(point.x, point.y);
-    await page.mouse.down();
-    await page.mouse.move(10, 790);
-    await page.mouse.up();
-    await page.keyboard.press("Enter");
-    await page.keyboard.press("Space");
-    await sleep(300);
-    expect(events).toEqual([]);
   }, 60_000);
 
   it("supports keyboard takeover and hand-back", async () => {
@@ -398,40 +236,21 @@ describe("errand overlay", () => {
     await expect.poll(() => events.slice()).toEqual([{ type: "take_over" }, { type: "hand_back" }]);
   }, 60_000);
 
-  it("fits long approval disclosures and both actions within a narrow viewport", async () => {
-    const { browser } = await openErrand();
+  it("shows the Chat decision instruction on a narrow viewport without in-page decisions", async () => {
+    const { browser, events } = await openErrand();
     const page = browser.page();
     await browser.overlay.render({
       ...approvalState(),
       body: "Read this step before deciding.\n".repeat(80),
     });
     await page.setViewportSize({ width: 320, height: 400 });
-    await expect
-      .poll(async () => {
-        const { controls } = await browser.overlay.snapshot();
-        return [controls.deny, controls.approve].every(
-          (rect) => rect && rect.x >= 8 && rect.x + rect.width <= 312 && rect.y + rect.height <= 392,
-        );
-      })
-      .toBe(true);
-  }, 60_000);
-
-  it("a click right after the card appears is ignored until the dwell time passes", async () => {
-    const { browser, events } = await openErrand();
-    const rendered = Date.now();
-    await browser.overlay.render(approvalState("r9"));
-    const point = center(await approveRectNow(browser));
-    await browser.page().mouse.click(point.x, point.y);
-    expect(Date.now() - rendered).toBeLessThan(450);
-    await sleep(200);
+    await expect.poll(async () => (await browser.overlay.snapshot()).notice).toBe(ERRAND_OVERLAY_COPY.useChat);
+    const snapshot = await browser.overlay.snapshot();
+    expect(snapshot.mode).toBe("approval");
+    expect(
+      Object.keys(snapshot.controls).filter((key) => snapshot.controls[key as ErrandOverlayEvent["type"]]),
+    ).toEqual(["stop"]);
     expect(events).toEqual([]);
-    await sleep(DWELL_WAIT_MS);
-    await browser.page().mouse.click(point.x, point.y);
-    await waitFor(
-      async () => events.length,
-      (count) => count > 0,
-    );
-    expect(events).toEqual([{ type: "approve", requestId: "r9" }]);
   }, 60_000);
 
   it("model capture is refused when the overlay cannot be hidden", async () => {

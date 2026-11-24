@@ -9,3 +9,8 @@ export function stripSkillFileReferences(text: string): string {
         : token,
     );
 }
+
+// A composer mention begins a token and includes a source prefix.
+export function extractQualifiedSkillMentions(text: string): string[] {
+  return Array.from(text.toLowerCase().matchAll(/(?:^|\s)\$([a-z][a-z0-9_-]*:[a-z0-9:_-]+)/g), (match) => match[1]!);
+}

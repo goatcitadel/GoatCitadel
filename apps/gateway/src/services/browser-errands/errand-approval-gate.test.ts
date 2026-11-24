@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeEvent } from "@goatcitadel/contracts";
-import type { ErrandOverlayEvent, ErrandTargetInfo } from "@goatcitadel/policy-engine";
+import type { ErrandTargetInfo } from "@goatcitadel/policy-engine";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import {
   createApproval,
@@ -153,7 +153,6 @@ function createHost(db: Storage) {
 }
 
 function createFakeBrowser(url = "https://shop.example/checkout") {
-  const listeners = new Set<(event: ErrandOverlayEvent) => void>();
   const state = { url, target: target() as ErrandTargetInfo | null, focused: null as ErrandTargetInfo | null };
   const browser = {
     currentUrl: vi.fn(() => state.url),
@@ -171,17 +170,11 @@ function createFakeBrowser(url = "https://shop.example/checkout") {
         cursor: null,
         controls: {},
       })),
-      onEvent: vi.fn((listener: (event: ErrandOverlayEvent) => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      }),
+      onEvent: vi.fn(() => () => undefined),
       withAutomationInput: vi.fn(async <T>(dispatch: () => Promise<T>) => dispatch()),
     },
   };
-  const emit = (event: ErrandOverlayEvent) => {
-    for (const listener of [...listeners]) listener(event);
-  };
-  return { browser, state, emit };
+  return { browser, state };
 }
 
 function setup(options: { now?: () => number; failSupersededAppend?: boolean } = {}) {
@@ -324,8 +317,8 @@ describe("errand approval gate", () => {
     await expect(answer).resolves.toBe("denied");
   });
 
-  it("window approve resolves the same record", async () => {
-    const { db, fake, gate, waitForPending } = setup();
+  it("restores the driving banner after the Chat decision", async () => {
+    const { db, host, fake, gate, waitForPending } = setup();
     const answer = gate.request(approvalInput());
     const approvalId = await waitForPending();
     await vi.waitFor(() =>
@@ -333,10 +326,10 @@ describe("errand approval gate", () => {
         expect.objectContaining({ mode: "approval", requestId: approvalId, title: 'Click "Place order"' }),
       ),
     );
-    fake.emit({ type: "approve", requestId: "some-other-request" });
-    fake.emit({ type: "approve", requestId: approvalId });
+    expect(db.approvals.get(approvalId).status).toBe("pending");
+    await resolveApproval(host, approvalId, { decision: "approve", resolvedBy: "operator" });
     await expect(answer).resolves.toBe("approved");
-    expect(db.approvals.get(approvalId).resolvedBy).toBe("operator:errand-window");
+    expect(db.approvals.get(approvalId).resolvedBy).toBe("operator");
     // Restored before `request` returned, so the loop acts under the driving banner.
     expect(fake.browser.overlay.render).toHaveBeenLastCalledWith(
       expect.objectContaining({ mode: "driving", bannerText: "GoatCitadel is working" }),
@@ -841,7 +834,8 @@ describe("browser errand drag approval binding", () => {
     const answer = h.gate.request(h.input);
     try {
       const first = await h.waitForPending();
-      if (changed === "source") h.endpoints.source = { ...h.endpoints.source, text: "Other report", backendNodeId: 303 };
+      if (changed === "source")
+        h.endpoints.source = { ...h.endpoints.source, text: "Other report", backendNodeId: 303 };
       else h.fake.state.target = target({ text: "Publish", backendNodeId: 404 });
       await resolveApproval(h.host, first, { decision: "approve", resolvedBy: "operator" });
 

@@ -291,7 +291,8 @@ export async function startDeterministicLlmStub(options = {}) {
       requestSummaries.filter((entry) => Number.isInteger(entry.dispatchPlanIndex)).map((entry) => ({ ...entry })),
     replaceDispatchPlan: (nextPlan, requiredTool = options.dispatchPlanRequiredTool) => {
       dispatchPlan = normalizeDispatchPlan(nextPlan, replyText);
-      dispatchPlanRequiredTool = requiredTool === undefined ? undefined : normalizeToolName(requiredTool, "dispatchPlanRequiredTool");
+      dispatchPlanRequiredTool =
+        requiredTool === undefined ? undefined : normalizeToolName(requiredTool, "dispatchPlanRequiredTool");
       dispatchPlanDispatches = 0;
     },
     replacePromptReplyRules: (nextRules) => {
@@ -497,7 +498,10 @@ function normalizeDispatchPlan(value, defaultReplyText) {
         return {
           type: "provider_error",
           delayMs,
-          faultClockMarker: normalizeFaultClockMarker(entry.faultClockMarker, `dispatchPlan[${index}].faultClockMarker`),
+          faultClockMarker: normalizeFaultClockMarker(
+            entry.faultClockMarker,
+            `dispatchPlan[${index}].faultClockMarker`,
+          ),
           code: normalizeBoundedText(entry.code ?? "server_error", `dispatchPlan[${index}].code`),
           message: normalizeBoundedText(
             entry.message ?? "Synthetic provider failure.",
@@ -909,7 +913,7 @@ function writeStreamingToolCall(response, model, behavior, requestPath) {
       id: "stub-stream-tool-call",
       object: "chat.completion.chunk",
       model,
-      choices: [{ index: 0, delta: { role: "assistant", tool_calls: [buildChatToolCall(behavior)] } }],
+      choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, ...buildChatToolCall(behavior) }] } }],
     },
     {
       id: "stub-stream-tool-call",

@@ -1,6 +1,6 @@
 import type { LoadedSkill, SkillActivationDecision, SkillResolveInput } from "@goatcitadel/contracts";
 import { resolveDependencies } from "./deps.js";
-import { stripSkillFileReferences } from "./activation-text.js";
+import { extractQualifiedSkillMentions, stripSkillFileReferences } from "./activation-text.js";
 
 export function resolveSkillActivation(input: SkillResolveInput, allSkills: LoadedSkill[]): SkillActivationDecision {
   const text = stripSkillFileReferences(input.text).toLowerCase();
@@ -67,14 +67,7 @@ function extractExplicitSkills(text: string): string[] {
     }
   }
 
-  // The composer's skill palette inserts `$<skillId>` (for example `$bundled:impeccable`) at a token
-  // start. The `source:` segment is required and the `$` must open a token, so shell or template
-  // variables in pasted code (`$research`, `price$qa`) are not read as operator mentions.
-  for (const token of lower.matchAll(/(?:^|\s)\$([a-z][a-z0-9_-]*:[a-z0-9:_-]+)/g)) {
-    if (token[1]) {
-      names.add(token[1]);
-    }
-  }
+  for (const name of extractQualifiedSkillMentions(lower)) names.add(name);
 
   for (const token of stripSkillFileReferences(lower).matchAll(/\buse\s+([a-z0-9_-]+)\b/g)) {
     if (token[1]) {

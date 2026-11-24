@@ -215,6 +215,18 @@ describe("chat-thread-reducer", () => {
     expect(appendedWithoutKnownParent.systemNoticeHiddenCount).toBe(2);
   });
 
+  it("preserves the assistant message when a start for the same message is replayed", () => {
+    const current = baseThread() as Parameters<typeof updateThreadFromStreamChunk>[0];
+    const replayed = updateThreadFromStreamChunk(
+      current,
+      { type: "message_start", sessionId, turnId: "turn-2", messageId: "assistant-turn-2" },
+      null,
+      sessionId,
+      null,
+    );
+    expect(replayed).toBe(current);
+  });
+
   it("preserves retained system notices when a replayed message_start refreshes an existing turn", () => {
     const current = baseThread() as never;
 
@@ -384,6 +396,35 @@ describe("chat-thread-reducer", () => {
     });
   });
 
+  it("retains distinct case-sensitive source URLs and merges supporting passages", () => {
+    const current = baseThread() as Parameters<typeof updateThreadFromStreamChunk>[0];
+    const paragraph = { toolRunId: "read-1", text: "First passage" };
+    const additional = { toolRunId: "read-2", text: "Second passage" };
+    const deliver = (
+      thread: typeof current,
+      citation: NonNullable<typeof current>["turns"][number]["citations"][number],
+    ) =>
+      updateThreadFromStreamChunk(
+        thread,
+        { type: "citation", sessionId, turnId: "turn-2", citation },
+        null,
+        sessionId,
+        null,
+      );
+    const source = { citationId: "source", url: "HTTPS://Example.test/Docs?q=X", passages: [] };
+    const first = deliver(current, source);
+    const enriched = deliver(first, { ...source, url: "https://example.test/Docs?q=X", passages: [paragraph] });
+    const merged = deliver(enriched, { ...source, passages: [paragraph, additional] });
+    const differentPath = deliver(merged, { citationId: "path", url: "https://example.test/docs?q=X" });
+    const differentValue = deliver(differentPath, { citationId: "query", url: "https://example.test/Docs?q=x" });
+    expect(differentValue?.turns[1]?.citations.map((citation) => citation.citationId)).toEqual([
+      "source",
+      "path",
+      "query",
+    ]);
+    expect(differentValue?.turns[1]?.citations[0]?.passages).toEqual([paragraph, additional]);
+  });
+
   it("replaces tool runs, dedupes citations, and merges trace updates", () => {
     const current = baseThread() as never;
     const toolRun = {
@@ -457,7 +498,7 @@ describe("chat-thread-reducer", () => {
         turnId: "turn-2",
         citation: {
           citationId: "cite-2",
-          url: "https://example.test/doc",
+          url: "https://example.test/Doc",
           snippet: "Merged snippet",
           sourceType: "web",
         },

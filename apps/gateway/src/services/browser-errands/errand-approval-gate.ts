@@ -182,28 +182,11 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
 
   /** Listens for this request's decision hints until the returned function is called. */
   const listen = (approvalId: string): (() => void) => {
-    const unsubscribeRealtime = deps.realtime.subscribeRealtime((event) => {
+    return deps.realtime.subscribeRealtime((event) => {
       if (event.eventType === "approval_resolved" && event.payload.approvalId === approvalId) {
         wakeAll();
       }
     });
-    const unsubscribeOverlay = browser.overlay.onEvent((event) => {
-      if ((event.type !== "approve" && event.type !== "deny") || event.requestId !== approvalId) {
-        return;
-      }
-      void deps.approvals
-        .resolveApproval(approvalId, {
-          decision: event.type === "approve" ? "approve" : "reject",
-          resolvedBy: ERRAND_WINDOW_ACTOR_ID,
-        })
-        // Another surface may have decided first; the stored record still decides.
-        .catch(() => undefined)
-        .finally(wakeAll);
-    });
-    return () => {
-      unsubscribeRealtime();
-      unsubscribeOverlay();
-    };
   };
 
   const sleep = (): Promise<void> =>
@@ -390,9 +373,7 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
           targetText: input.target.text,
           targetRect: input.target.rect,
           pageOrigin: origin,
-          ...(input.dragSource
-            ? { dragSourceText: input.dragSource.text, dragSourceRect: input.dragSource.rect }
-            : {}),
+          ...(input.dragSource ? { dragSourceText: input.dragSource.text, dragSourceRect: input.dragSource.rect } : {}),
         },
       },
       onCreated,
@@ -450,11 +431,13 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
     const targets: Array<ErrandTargetInfo | null> = [];
     // Each read temporarily hides the same overlay; finish restoring it before hiding it for the next target.
     for (const [index, expected] of expectedTargets.entries()) {
-      targets.push(await (
-        index === 0 && asked.input.targetsFocus
-          ? browser.describeFocusedBeneathOverlay()
-          : browser.describeTargetBeneathOverlay(expected.x, expected.y)
-      ).catch(() => null));
+      targets.push(
+        await (
+          index === 0 && asked.input.targetsFocus
+            ? browser.describeFocusedBeneathOverlay()
+            : browser.describeTargetBeneathOverlay(expected.x, expected.y)
+        ).catch(() => null),
+      );
     }
     return {
       unchanged: expectedTargets.every((expected, index) =>

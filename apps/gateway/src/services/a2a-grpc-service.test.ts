@@ -153,6 +153,41 @@ describe("A2A gRPC transport", () => {
     expect(harness.chatTurnRuntime.agentSendChatMessage).not.toHaveBeenCalled();
   });
 
+  it("reports an ambiguous outcome when a forced drain interrupts a dispatched mutation", async () => {
+    const harness = createService({ bindings: ["GRPC"] });
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    const settled = Promise.withResolvers<Awaited<ReturnType<A2ARouteService["sendGrpcMessage"]>>>();
+    const send = vi.spyOn(harness.service, "sendGrpcMessage").mockReturnValueOnce(settled.promise);
+    const handle = await startA2AGrpcServer({
+      config: harness.config,
+      a2a: harness.service,
+      sharedHostLifecycle: lifecycle,
+    });
+    grpcHandles.push(handle);
+
+    const outcome = new A2AGrpcClient().call({
+      grpcUrl: handle.address!,
+      method: "SendMessage",
+      params: { text: "in flight" },
+      peer: { token: "peer-token" },
+      allowlist: ["127.0.0.1"],
+    });
+    const assertion = expect(outcome).rejects.toMatchObject({
+      code: grpc.status.UNKNOWN,
+      details: expect.stringContaining("Reconcile before retrying"),
+    });
+    try {
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      await lifecycle.drain({ mode: "force", timeoutMs: 10, reason: "scale_down", actorId: "ops" });
+      await assertion;
+      expect(lifecycle.snapshot().activeCount).toBe(1);
+    } finally {
+      settled.reject(new Error("fixture cleanup"));
+    }
+    await vi.waitFor(() => expect(lifecycle.snapshot().activeCount).toBe(0));
+  });
+
   it.each(["SendMessage", "SubscribeToTask"] as const)(
     "rejects late %s ingress with retryable UNAVAILABLE after admission closes",
     async (method) => {
