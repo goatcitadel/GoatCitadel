@@ -1,11 +1,37 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { request as httpRequest } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { startDeterministicLlmStub, writeDeterministicLlmProviderConfig } from "./deterministic-llm-stub.mjs";
+
+test("a cancelled fixture upload leaves the provider available", async () => {
+  const stub = await startDeterministicLlmStub();
+  try {
+    const upload = httpRequest(`${stub.baseUrl}/responses`, { method: "POST" });
+    upload.on("error", () => undefined);
+    const sent = new Promise((resolve, reject) => {
+      upload.on("error", reject);
+      upload.write('{"input":', resolve);
+    });
+    try {
+      await sent;
+      await delay(20);
+    } finally {
+      upload.destroy();
+    }
+    const response = await fetch(`${stub.baseUrl}/models`);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).data[0].id, stub.model);
+    assert.equal(stub.completionDispatches(), 0);
+  } finally {
+    await stub.close();
+  }
+});
 
 test("controlled display streams hold, advance exact chunks, finish and release their controller", async () => {
   const stub = await startDeterministicLlmStub({
@@ -211,6 +237,33 @@ test("scripted tool calls retain a full research-deck payload while bounding pat
     }),
     /no more than 128000 characters/u,
   );
+});
+
+test("non-streaming completions receive a JSON provider failure on each route", async () => {
+  const failure = { type: "provider_error", code: "server_error", message: "Fixture failure." };
+  const stub = await startDeterministicLlmStub({ dispatchPlan: [failure, failure] });
+  try {
+    for (const route of ["responses", "chat/completions"]) {
+      const response = await fetch(`${stub.baseUrl}/${route}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: stub.model, stream: false }),
+      });
+      assert.equal(response.status, 500);
+      assert.match(response.headers.get("content-type"), /^application\/json/u);
+      assert.deepEqual((await response.json()).error, {
+        code: "server_error",
+        type: "server_error",
+        message: "Fixture failure.",
+      });
+    }
+    assert.deepEqual(
+      stub.completionDispatchRecords().map((entry) => entry.status),
+      [500, 500],
+    );
+  } finally {
+    await stub.close();
+  }
 });
 
 test("scripted Responses provider emits a native server_error then succeeds without retaining prompt text", async () => {
@@ -490,6 +543,7 @@ test("scripted stream stall can expose one partial frame before the client disco
     const first = await reader.read();
     assert.equal(first.done, false);
     assert.match(new TextDecoder().decode(first.value), /STREAMING_BEFORE_RESTART/u);
+    assert.equal(stub.completionDispatchRecords()[0]?.finishedAt, undefined);
     controller.abort();
     await reader.cancel().catch(() => undefined);
     await stub.waitForCompletionDispatchCount(1);

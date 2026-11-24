@@ -103,7 +103,7 @@ export async function startDeterministicLlmStub(options = {}) {
   let dispatchPlanDispatches = 0;
   let imageGenerationDispatches = 0;
 
-  const server = createServer(async (request, response) => {
+  const handleRequest = async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     const chunks = [];
     for await (const chunk of request) {
@@ -252,6 +252,18 @@ export async function startDeterministicLlmStub(options = {}) {
     writeJsonResponse(response, 404, {
       error: { message: `no stub route for ${request.method} ${url.pathname}` },
     });
+  };
+  const server = createServer((request, response) => {
+    void handleRequest(request, response).catch(() => {
+      if (request.aborted || response.destroyed || response.writableEnded) return;
+      if (response.headersSent) {
+        response.destroy();
+        return;
+      }
+      writeJsonResponse(response, 500, {
+        error: { message: "Synthetic provider request failed.", type: "server_error", code: "server_error" },
+      });
+    });
   });
 
   server.on("connection", (socket) => {
@@ -338,7 +350,7 @@ async function executePlannedDispatch({
   controlledStreams,
 }) {
   if (behavior.delayMs > 0) {
-    await abortableDelay(behavior.delayMs, request);
+    await waitForResponseClose(request, response, behavior.delayMs);
   }
   if (request.aborted || response.destroyed) {
     completeRequestSummary(requestSummary, { outcome: "client_disconnected" });
@@ -349,7 +361,7 @@ async function executePlannedDispatch({
     case "stream_controlled": {
       response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
       response.flushHeaders?.();
-      const closed = waitForRequestClose(request, response);
+      const closed = waitForResponseClose(request, response);
       let index = 0;
       let completed = false;
       const advance = () => {
@@ -402,10 +414,21 @@ async function executePlannedDispatch({
       }
       return;
     }
-    case "provider_error":
-      completeRequestSummary(requestSummary, { outcome: "provider_error", status: 200 });
-      writeStreamingProviderError(response, model, behavior, requestPath);
+    case "provider_error": {
+      if (behavior.faultClockMarker !== undefined) {
+        response.setHeader("x-goatcitadel-verification-fault-clock", behavior.faultClockMarker);
+      }
+      if (body.stream === true) {
+        completeRequestSummary(requestSummary, { outcome: "provider_error", status: 200 });
+        writeStreamingProviderError(response, model, behavior, requestPath);
+      } else {
+        completeRequestSummary(requestSummary, { outcome: "provider_error", status: 500 });
+        writeJsonResponse(response, 500, {
+          error: { code: behavior.code, type: behavior.code, message: behavior.message },
+        });
+      }
       return;
+    }
     case "http_error":
       completeRequestSummary(requestSummary, { outcome: "http_error", status: behavior.status });
       writeJsonResponse(response, behavior.status, {
@@ -466,7 +489,7 @@ async function executePlannedDispatch({
               };
         response.write(`data: ${JSON.stringify(frame)}\n\n`);
       }
-      await waitForRequestClose(request, response);
+      await waitForResponseClose(request, response);
       completeRequestSummary(requestSummary, { outcome: "stream_stall_aborted", status: 200 });
       return;
     case "success": {
@@ -972,11 +995,7 @@ function buildChatToolCall(behavior) {
 }
 
 function writeStreamingProviderError(response, model, behavior, requestPath) {
-  const headers = { "cache-control": "no-cache", "content-type": "text/event-stream" };
-  if (behavior.faultClockMarker !== undefined) {
-    headers["x-goatcitadel-verification-fault-clock"] = behavior.faultClockMarker;
-  }
-  response.writeHead(200, headers);
+  response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
   if (requestPath === "/v1/responses") {
     response.write(
       `data: ${JSON.stringify({
@@ -1006,27 +1025,21 @@ function completeRequestSummary(summary, patch) {
   Object.assign(summary, patch, { finishedAt: new Date().toISOString() });
 }
 
-function abortableDelay(ms, request) {
-  if (ms <= 0) return Promise.resolve();
+// A completed upload does not close the response. A delay may also expire normally.
+function waitForResponseClose(request, response, timeoutMs) {
+  if (request.aborted || response.destroyed || response.writableFinished) return Promise.resolve();
   return new Promise((resolve) => {
-    const timer = setTimeout(finish, ms);
-    timer.unref?.();
+    const timer = timeoutMs === undefined ? undefined : setTimeout(finish, timeoutMs);
+    timer?.unref?.();
     request.once("aborted", finish);
-    request.once("close", finish);
+    response.once("close", finish);
+
     function finish() {
       clearTimeout(timer);
       request.off("aborted", finish);
-      request.off("close", finish);
+      response.off("close", finish);
       resolve(undefined);
     }
-  });
-}
-
-function waitForRequestClose(request, response) {
-  return new Promise((resolve) => {
-    request.once("aborted", resolve);
-    request.once("close", resolve);
-    response.once("close", resolve);
   });
 }
 
