@@ -18,6 +18,8 @@ import { applyPostgresMigrationsSync, runPostgresMigrations } from "./migrator.j
 import { POSTGRES_MIGRATIONS, type PostgresMigration } from "./migrations.js";
 import { PostgresSyncDatabaseClient } from "./sync.js";
 import { CommsDeliveryRepository } from "../comms-delivery-repo.js";
+import { CronJobRepository } from "../cron-job-repo.js";
+import { CronRunRepository } from "../cron-run-repo.js";
 import { CHANNEL_DELIVERY_PARTS_POSTGRES_SQL } from "../channel-delivery-parts-schema.js";
 import { ApprovalEffectRepository } from "../approval-effect-repo.js";
 import { DurableRunRepository } from "../durable-run-repo.js";
@@ -44,6 +46,81 @@ import {
 import { buildPostgresSchemaShapeManifest, buildPostgresSchemaShapeReplacementValidationSql } from "./schema-shape.js";
 
 const connectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
+
+test(
+  "cron settlement holds the PostgreSQL job ownership lock before changing the run",
+  { skip: !connectionString && "Set GOATCITADEL_TEST_POSTGRES_URL to a disposable PostgreSQL instance." },
+  async () => {
+    assert.ok(connectionString);
+    const schema = `cron_settlement_${randomUUID().replaceAll("-", "")}`;
+    const pool = new Pool({ connectionString });
+    const scopedUrl = new URL(connectionString);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schema}`);
+    const db = new PostgresSyncDatabaseClient({
+      connectionString: scopedUrl.toString(),
+      database: "goatcitadel_test",
+    });
+    try {
+      await pool.query(`CREATE SCHEMA ${schema}`);
+      applyPostgresMigrationsSync(db);
+      const jobs = new CronJobRepository(db);
+      const runs = new CronRunRepository(db);
+      const job = jobs.upsert({
+        jobId: "settlement-proof",
+        name: "Settlement proof",
+        action: "task",
+        schedule: "0 * * * *",
+        enabled: true,
+      });
+      const admitted = runs.begin({
+        jobId: job.jobId,
+        admissionKey: "settlement-occurrence",
+        scheduledFor: "2026-07-13T10:00:00.000Z",
+      });
+      if (admitted.outcome !== "begun") assert.fail("expected a newly admitted cron run");
+      const { runId, jobId, executionGeneration } = admitted.run;
+      const token = { runId, jobId, executionGeneration };
+      runs.admitInlineExecution(token);
+      const delivery = { status: "waiting" as const, phase: "delivery" as const };
+      runs.advancePhase(token, delivery);
+      const linked = runs.advancePhase(token, { ...delivery, linkage: { deliveryRunId: "delivery-proof" } });
+      assert.equal(linked?.deliveryRunId, "delivery-proof");
+      assert.deepEqual(runs.getByGeneration(jobId, executionGeneration), linked);
+
+      const locker = await pool.connect();
+      try {
+        await locker.query("BEGIN");
+        await locker.query(`SELECT job_id FROM ${schema}.cron_jobs WHERE job_id = $1 FOR UPDATE`, [jobId]);
+        assert.throws(
+          () =>
+            db.transaction("immediate", () => {
+              db.exec("SET LOCAL lock_timeout = '250ms'");
+              // This settlement retains the active pointer, so only the
+              // ownership read can encounter the job's lock.
+              runs.requireReconciliation(token, { reason: "Delivery is unresolved." });
+            }),
+          /lock timeout/u,
+        );
+      } finally {
+        try {
+          await locker.query("ROLLBACK");
+        } finally {
+          locker.release();
+        }
+      }
+      assert.deepEqual(runs.get(runId), linked);
+      assert.equal(runs.markSucceeded(token)?.status, "completed");
+      assert.equal(jobs.get(jobId)?.activeRunId, undefined);
+    } finally {
+      try {
+        db.close();
+        await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      } finally {
+        await pool.end();
+      }
+    }
+  },
+);
 
 test(
   "bootstrap replacement accepts server column version metadata and rejects custom column options",

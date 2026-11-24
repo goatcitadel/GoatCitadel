@@ -833,6 +833,11 @@ export class DurableRunService {
     return deriveDurableRunOperationalState(await this.readCanonicalDurableRun(runId));
   }
 
+  async getDurableRunsByIds(runIds: string[]): Promise<Map<string, DurableRunRecord>> {
+    await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
+    return await this.ctx.storage.durableRuns.getRunsByIds(runIds);
+  }
+
   async listDurableRunTimeline(runId: string, limit = 300): Promise<DurableRunTimelineEvent[]> {
     await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     return await this.ctx.storage.durableRunEvents.listByRun(runId, limit);

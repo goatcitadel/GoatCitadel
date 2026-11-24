@@ -24,7 +24,7 @@ function dependencies(): InboxProjectionDependencies {
     durable: {
       listRunHistory: vi.fn(async () => ({ items: [] })),
       listDeadLetters: vi.fn(async () => []),
-      getRun: vi.fn(),
+      getRunsByIds: vi.fn(async () => new Map()),
     },
     runtimeHealth: {
       listBackups: vi.fn(async () => []),
@@ -898,24 +898,30 @@ describe("Gateway inbox projection", () => {
       },
       {
         deadLetterId: "dead-c",
-        runId: "run-a",
+        runId: "run-resolved",
         reason: "Resolved",
         payload: {},
         createdAt: "2026-09-28T12:02:00.000Z",
         resolvedAt: "2026-09-28T12:03:00.000Z",
       },
+      {
+        deadLetterId: "dead-d",
+        runId: "run-a",
+        reason: "Another record for the same run",
+        payload: {},
+        createdAt: "2026-09-28T11:59:00.000Z",
+      },
     ] as never);
-    vi.mocked(deps.durable.getRun).mockImplementation(
-      async (runId) =>
-        ({
-          runId,
-          payload: { workspaceId: runId === "run-a" ? "workspace-a" : "workspace-b" },
-          metadata: {},
-        }) as never,
+    vi.mocked(deps.durable.getRunsByIds).mockResolvedValue(
+      new Map([
+        ["run-a", { runId: "run-a", payload: { workspaceId: "workspace-a" }, metadata: {} }],
+        ["run-b", { runId: "run-b", payload: { workspaceId: "workspace-b" }, metadata: {} }],
+      ]) as never,
     );
 
     const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
-    expect(projection.items.map((item) => item.id)).toEqual(["dead_letter:dead-a"]);
+    expect(deps.durable.getRunsByIds).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"]);
+    expect(projection.items.map((item) => item.id)).toEqual(["dead_letter:dead-a", "dead_letter:dead-d"]);
     expect(projection.items[0]).toMatchObject({
       kind: "dead_letter",
       source: { workspaceId: "workspace-a", runId: "run-a", deadLetterId: "dead-a" },
@@ -935,7 +941,9 @@ describe("Gateway inbox projection", () => {
         createdAt: "2026-09-28T12:00:00.000Z",
       },
     ] as never);
-    vi.mocked(deps.durable.getRun).mockResolvedValue({ runId: "run-x", payload: {}, metadata: {} } as never);
+    vi.mocked(deps.durable.getRunsByIds).mockResolvedValue(
+      new Map([["run-x", { runId: "run-x", payload: {}, metadata: {} }]]) as never,
+    );
 
     const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
 

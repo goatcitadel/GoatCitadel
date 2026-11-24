@@ -921,21 +921,53 @@ export async function updateSettings(
   return await getSettings(deps);
 }
 
-/** Adds revision-bound Basic username verification to the private Change Plan settings read. */
+/** Binds Change Plan verification to the credential write committed by this settings owner. */
 export function bindRuntimeConfigurationSettings(
-  owner: { getSettings: () => Promise<RuntimeSettings>; readSettingsRevision: () => number },
+  owner: {
+    getSettings: () => Promise<RuntimeSettings>;
+    readSettingsRevision: () => number;
+    updateSettings: (input: UpdateSettingsInput, onCommit?: (revision: number) => void) => Promise<RuntimeSettings>;
+  },
   readConfig: () => SettingsRuntimeDependencies["config"],
 ) {
-  return async (expectedBasicUsername?: string): Promise<RuntimeSettings & { basicUsernameMatches?: boolean }> => {
+  // Basic credentials may be runtime-only. After restart, recovery requires
+  // fresh operator review if this owner can no longer prove the replacement.
+  let credentialWrite: { planId: string; revision: number } | undefined;
+  const getSettings = async (expected?: {
+    basicUsername?: string;
+    credentialPlanId?: string;
+  }): Promise<RuntimeSettings & { basicUsernameMatches?: boolean; credentialWriteMatches?: boolean }> => {
     const settings = await owner.getSettings();
-    if (expectedBasicUsername === undefined) return settings;
+    if (expected?.basicUsername === undefined && expected?.credentialPlanId === undefined) return settings;
+    const sameRevision = owner.readSettingsRevision() === settings.revision;
     return {
       ...settings,
-      basicUsernameMatches:
-        owner.readSettingsRevision() === settings.revision &&
-        readConfig().assistant.auth.basic.username === expectedBasicUsername,
+      ...(expected.basicUsername === undefined
+        ? {}
+        : {
+            basicUsernameMatches: sameRevision && readConfig().assistant.auth.basic.username === expected.basicUsername,
+          }),
+      ...(expected.credentialPlanId === undefined
+        ? {}
+        : {
+            credentialWriteMatches:
+              sameRevision &&
+              credentialWrite?.planId === expected.credentialPlanId &&
+              credentialWrite.revision === settings.revision,
+          }),
     };
   };
+  const updateSettings = (input: UpdateSettingsInput, credentialPlanId?: string): Promise<RuntimeSettings> => {
+    if (!credentialPlanId || !(input.auth?.token?.trim() || input.auth?.basicPassword?.trim())) {
+      return owner.updateSettings(input);
+    }
+    return owner.updateSettings(input, (revision) => {
+      if (!credentialWrite || revision > credentialWrite.revision) {
+        credentialWrite = { planId: credentialPlanId, revision };
+      }
+    });
+  };
+  return { getSettings, updateSettings };
 }
 
 export function getAuthRuntimeSettings(deps: SettingsRuntimeDependencies): AuthRuntimeSettings {

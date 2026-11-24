@@ -183,7 +183,7 @@ export interface InboxProjectionDependencies {
   memory: Pick<MemoryLifecycleService, "listTraceMemoryCandidates">;
   memoryProposalsEnabled: () => Promise<boolean>;
   improvement: Pick<ImprovementService, "listCuratorReviewItems">;
-  durable: Pick<DurableOperatorService, "listRunHistory" | "listDeadLetters" | "getRun">;
+  durable: Pick<DurableOperatorService, "listRunHistory" | "listDeadLetters" | "getRunsByIds">;
   runtimeHealth: {
     getDatabaseHealthSnapshot: DatabaseCutoverService["getHealthSnapshot"];
     getDaemonStatus: DaemonRouteService["getDaemonStatus"];
@@ -585,16 +585,19 @@ export class InboxProjectionService {
 
     await collect("dead_letters", ["needs_attention"], async () => {
       const records = await this.deps.durable.listDeadLetters(SOURCE_LIMIT);
+      const unresolved = records.filter((letter) => !letter.resolvedAt);
+      const runIds = [...new Set(unresolved.map((letter) => letter.runId))];
+      const runs = runIds.length > 0 ? await this.deps.durable.getRunsByIds(runIds) : undefined;
       let unscoped = false;
       const visible: OperatorInboxItem[] = [];
-      for (const letter of records) {
-        if (letter.resolvedAt) continue;
-        const run = await this.deps.durable.getRun(letter.runId).catch(() => null);
-        if (!run || !runWorkspaceId(run)) {
+      for (const letter of unresolved) {
+        const run = runs?.get(letter.runId);
+        const runWorkspace = run ? runWorkspaceId(run) : null;
+        if (!runWorkspace) {
           unscoped = true;
           continue;
         }
-        if (runWorkspaceId(run) !== workspaceId) continue;
+        if (runWorkspace !== workspaceId) continue;
         visible.push({
           id: `dead_letter:${letter.deadLetterId}`,
           kind: "dead_letter",

@@ -10,7 +10,7 @@ import {
   type ChangePlanRecord,
 } from "@goatcitadel/contracts";
 import { RuntimeConfigurationChangePlanAdapter } from "./runtime-configuration-change-plan-adapter.js";
-import { bindRuntimeConfigurationSettings } from "./settings-auth-service.js";
+import { bindRuntimeConfigurationSettings, type UpdateSettingsInput } from "./settings-auth-service.js";
 
 const context = {
   origin: { surface: "settings", workspaceId: "default", actorId: "operator-1" },
@@ -57,8 +57,8 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
     const current = settings({ auth: { mode: "basic", allowLoopbackBypass: false, basicConfigured: true } });
     const basic = { username: "previous-operator" };
     let settingsRevision = current.revision;
-    const getSettings = bindRuntimeConfigurationSettings(
-      { getSettings: async () => current, readSettingsRevision: () => settingsRevision },
+    const { getSettings } = bindRuntimeConfigurationSettings(
+      { getSettings: async () => current, readSettingsRevision: () => settingsRevision, updateSettings: vi.fn() },
       () => ({ assistant: { auth: { basic } } }) as never,
     );
     const adapter = new RuntimeConfigurationChangePlanAdapter({
@@ -91,6 +91,57 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
       status: "completed",
     });
   });
+
+  it.each(["token", "basic"] as const)(
+    "requires the committed %s replacement from this plan and revision",
+    async (mode) => {
+      const current = settings({
+        auth: { mode, allowLoopbackBypass: false, tokenConfigured: true, basicConfigured: true },
+      });
+      const owner = {
+        getSettings: async () => current,
+        readSettingsRevision: () => current.revision,
+        updateSettings: vi.fn(async (_input: UpdateSettingsInput, onCommit?: (revision: number) => void) => {
+          current.revision += 1;
+          onCommit?.(current.revision);
+          return current;
+        }),
+      };
+      const bindOwner = () => bindRuntimeConfigurationSettings(owner, () => ({}) as never);
+      const bindAdapter = () =>
+        new RuntimeConfigurationChangePlanAdapter({
+          ...authCredentialDeps,
+          ...bindOwner(),
+          hasTemporaryAuthCredential: () => true,
+        });
+      const adapter = bindAdapter();
+      const request = {
+        kind: "runtime_configuration",
+        change: { operation: "gateway_auth_configuration", mode, allowLoopbackBypass: false, replaceCredential: true },
+      } as const;
+      const { target } = await adapter.prepare(context, request);
+      const plan = { planId: "rotation-plan", request, target } as ChangePlanRecord;
+
+      await expect(adapter.verify(context, plan)).resolves.toMatchObject({ status: "manual_required" });
+      owner.updateSettings.mockRejectedValueOnce(new Error("Settings write failed"));
+      await expect(adapter.apply(context, plan)).rejects.toThrow("Settings write failed");
+      await expect(adapter.reconcile(context, plan)).resolves.toMatchObject({ effectObserved: false });
+
+      const applied = await adapter.apply(context, plan);
+      expect(applied.status).toBe("verifying");
+      const verifying = { ...plan, result: applied.result, evidenceRefs: applied.evidenceRefs };
+      await expect(adapter.verify(context, verifying)).resolves.toMatchObject({ status: "completed" });
+      await expect(adapter.reconcile(context, verifying)).resolves.toMatchObject({ effectObserved: true });
+      await expect(adapter.verify(context, { ...verifying, planId: "different-plan" })).resolves.toMatchObject({
+        status: "manual_required",
+      });
+      await expect(bindAdapter().reconcile(context, verifying)).resolves.toMatchObject({ effectObserved: false });
+
+      current.revision += 1;
+      await expect(adapter.verify(context, verifying)).resolves.toMatchObject({ status: "manual_required" });
+      expect(JSON.stringify(applied)).not.toContain("temporary-credential");
+    },
+  );
 
   it("requires a fresh external catalog and preserves the prior Chat default if runtime verification fails", async () => {
     let current = settings({
@@ -511,10 +562,13 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
       target: prepared.target,
     } as ChangePlanRecord);
     expect(consumeTemporaryAuthCredential).toHaveBeenCalledWith("plan-auth");
-    expect(updateSettings).toHaveBeenCalledWith({
-      expectedRevision: 7,
-      auth: { mode: "token", allowLoopbackBypass: false, token: "private-token-value" },
-    });
+    expect(updateSettings).toHaveBeenCalledWith(
+      {
+        expectedRevision: 7,
+        auth: { mode: "token", allowLoopbackBypass: false, token: "private-token-value" },
+      },
+      "plan-auth",
+    );
   });
 
   describe("runtime write access", () => {

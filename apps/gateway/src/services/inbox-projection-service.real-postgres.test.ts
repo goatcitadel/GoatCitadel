@@ -41,7 +41,7 @@ function projectionDependencies(storage: AsyncStorage): InboxProjectionDependenc
     durable: {
       listRunHistory: vi.fn(async () => ({ items: [] })),
       listDeadLetters: vi.fn(async () => []),
-      getRun: vi.fn(),
+      getRunsByIds: vi.fn(async () => new Map()),
     },
     runtimeHealth: {
       listBackups: vi.fn(async () => []),

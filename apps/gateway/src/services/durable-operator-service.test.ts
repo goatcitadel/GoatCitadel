@@ -201,6 +201,7 @@ function fakeDeps() {
     listDurableRunCheckpoints: vi.fn(() => [{ checkpointId: "checkpoint-1" }] as never),
     createDurableRun: vi.fn(() => run("queued")),
     getDurableRun: vi.fn(() => run("completed")),
+    getDurableRunsByIds: vi.fn(async () => new Map()),
     listDurableRunTimeline: vi.fn(() => [{ eventId: "event-1" }] as never),
     pauseDurableRun: vi.fn(() => run("paused")),
     resumeDurableRun: vi.fn(() => run("running")),

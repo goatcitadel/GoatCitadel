@@ -19,7 +19,7 @@ import {
   matchesLlamaSetup,
   validateLlamaSetup,
 } from "./runtime-llama-setup-change.js";
-import type { UpdateSettingsInput } from "./settings-auth-service.js";
+import type { bindRuntimeConfigurationSettings, UpdateSettingsInput } from "./settings-auth-service.js";
 import {
   describeGlobalToolAccessChange,
   describeOperatorWriteRootChange,
@@ -53,11 +53,9 @@ import type {
   EvolutionControlPlaneOwnerInputReceipt,
 } from "./evolution-control-plane-adapter.js";
 
-export interface RuntimeConfigurationChangePlanAdapterDependencies {
-  readonly getSettings: (
-    expectedBasicUsername?: string,
-  ) => Promise<RuntimeSettings & { basicUsernameMatches?: boolean }>;
-  readonly updateSettings: (input: UpdateSettingsInput) => Promise<RuntimeSettings>;
+export interface RuntimeConfigurationChangePlanAdapterDependencies extends ReturnType<
+  typeof bindRuntimeConfigurationSettings
+> {
   readonly listModels?: (providerId: string) => Promise<readonly LlmModelRecord[]>;
   readonly previewLlamaModels?: (baseUrl: string) => Promise<LlmModelPreviewResponse>;
   readonly resolveManagedSelection?: (selectionId: string, workspaceId: string) => Promise<LlamaCppSetupSelection>;
@@ -196,16 +194,19 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
         await this.assertTemporaryAuthCredential(plan.planId);
         credential = await this.deps.consumeTemporaryAuthCredential(plan.planId);
       }
-      const updated = await updateSettings({
-        expectedRevision: current.revision,
-        auth: {
-          mode: change.mode,
-          allowLoopbackBypass: change.allowLoopbackBypass,
-          ...(change.basicUsername !== undefined ? { basicUsername: change.basicUsername } : {}),
-          ...(change.mode === "token" && credential ? { token: credential } : {}),
-          ...(change.mode === "basic" && credential ? { basicPassword: credential } : {}),
+      const updated = await updateSettings(
+        {
+          expectedRevision: current.revision,
+          auth: {
+            mode: change.mode,
+            allowLoopbackBypass: change.allowLoopbackBypass,
+            ...(change.basicUsername !== undefined ? { basicUsername: change.basicUsername } : {}),
+            ...(change.mode === "token" && credential ? { token: credential } : {}),
+            ...(change.mode === "basic" && credential ? { basicPassword: credential } : {}),
+          },
         },
-      });
+        needsCredential ? plan.planId : undefined,
+      );
       return {
         status: "verifying",
         evidenceRefs: [`runtime_settings:gateway_auth:revision:${updated.revision}`],
@@ -343,7 +344,19 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       change.operation === "gateway_auth_configuration" && change.mode === "basic"
         ? change.basicUsername?.trim()
         : undefined;
-    const current = await this.deps.getSettings(expectedBasicUsername);
+    const expectsReplacement =
+      change.operation === "gateway_auth_configuration" && change.mode !== "none" && change.replaceCredential === true;
+    const current = await this.deps.getSettings({
+      basicUsername: expectedBasicUsername,
+      credentialPlanId: expectsReplacement ? plan.planId : undefined,
+    });
+    if (expectsReplacement && current.credentialWriteMatches !== true) {
+      return {
+        applied: false,
+        reason: "The Gateway could not verify the credential replacement for this plan.",
+        evidenceRefs: [],
+      };
+    }
     const applied =
       matches(plan.request, current) && (expectedBasicUsername === undefined || current.basicUsernameMatches === true);
     return {
