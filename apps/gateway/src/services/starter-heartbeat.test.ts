@@ -87,22 +87,25 @@ describe("starter heartbeat unpriced-model hold", () => {
   it("parks an armed heartbeat after a pricing refusal until a day passes", async () => {
     const h = heldFixture();
     await h.starter.captureExplicitChoice("first", true);
-    expect(await h.starter.isArmed("first")).toBe(true);
+    expect(await h.starter.canDispatch("first")).toBe(true);
     await h.starter.holdAfterBudgetRefusal("first", "pricing_unavailable");
-    expect(await h.starter.isArmed("first")).toBe(false);
-    h.advance(UNPRICED_HEARTBEAT_HOLD_MS - 1);
-    expect(await h.starter.isArmed("first")).toBe(false);
-    h.advance(1);
+    expect(await h.starter.canDispatch("first")).toBe(false);
+    // The operator's choice is untouched, so follow-through still offers Pause.
     expect(await h.starter.isArmed("first")).toBe(true);
+    expect(await h.starter.isWaitingForPricedModel("first")).toBe(true);
+    h.advance(UNPRICED_HEARTBEAT_HOLD_MS - 1);
+    expect(await h.starter.canDispatch("first")).toBe(false);
+    h.advance(1);
+    expect(await h.starter.canDispatch("first")).toBe(true);
   });
 
   it("lifts the hold as soon as the model selection changes", async () => {
     const h = heldFixture();
     await h.starter.captureExplicitChoice("first", true);
     await h.starter.holdAfterBudgetRefusal("first", "pricing_unavailable");
-    expect(await h.starter.isArmed("first")).toBe(false);
+    expect(await h.starter.canDispatch("first")).toBe(false);
     h.setModels({ activeProviderId: "openai", activeModel: "priced-model" });
-    expect(await h.starter.isArmed("first")).toBe(true);
+    expect(await h.starter.canDispatch("first")).toBe(true);
   });
 
   it("ignores budget refusals other than missing pricing and holds only that Chat", async () => {
@@ -110,9 +113,9 @@ describe("starter heartbeat unpriced-model hold", () => {
     await h.starter.captureExplicitChoice("first", true);
     await h.starter.captureExplicitChoice("second", true);
     await h.starter.holdAfterBudgetRefusal("first", "background_budget_exhausted");
-    expect(await h.starter.isArmed("first")).toBe(true);
+    expect(await h.starter.canDispatch("first")).toBe(true);
     await h.starter.holdAfterBudgetRefusal("first", "pricing_unavailable");
-    expect(await h.starter.isArmed("first")).toBe(false);
-    expect(await h.starter.isArmed("second")).toBe(true);
+    expect(await h.starter.canDispatch("first")).toBe(false);
+    expect(await h.starter.canDispatch("second")).toBe(true);
   });
 });

@@ -43,9 +43,11 @@ function fixture() {
       usageAvailability: async () => ({ totalAgentEvents: 1, metricAvailability: { costUsd: { complete: true } } }),
     },
   } as unknown as Pick<AsyncStorage, "systemSettings" | "modelUsageEvents" | "costLedger">;
+  const bookkeepingFailures: [string, unknown][] = [];
   const budget = new AutomaticBackgroundBudget({
     storage,
     now: () => now,
+    onBookkeepingFailure: (task, error) => bookkeepingFailures.push([task, error]),
     getLimits: () => ({ automaticUsd: 0.25, totalUsd: 50 }),
     runWithDispatchGuard: async (guard, operation) => {
       guardByCall.set(operation, guard);
@@ -54,6 +56,7 @@ function fixture() {
   });
   return {
     budget,
+    bookkeepingFailures,
     guardFor: (operation: () => Promise<unknown>) => guardByCall.get(operation)!,
     advance: (value: string) => {
       now = new Date(value);
@@ -171,7 +174,7 @@ describe("automatic background dispatch budget", () => {
     expect(work).not.toHaveBeenCalled();
   });
 
-  it("keeps the refusal as the reported error when recording it fails", async () => {
+  it("keeps the refusal as the reported error and reports a failed record as a diagnostic", async () => {
     const f = fixture();
     const unpriced = dispatch("subscription");
     const operation = async () => {
@@ -182,5 +185,6 @@ describe("automatic background dispatch budget", () => {
         throw new Error("storage down");
       }),
     ).rejects.toThrow("priced model");
+    expect(f.bookkeepingFailures).toEqual([["refusal_record", new Error("storage down")]]);
   });
 });

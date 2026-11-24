@@ -96,6 +96,9 @@ function FollowThroughSession({
     lock.current = true;
     setPending(true);
     setError(undefined);
+    // A retry of a request whose outcome was never confirmed settles nothing
+    // about that first send, even when the retry itself is refused.
+    const retryingUnconfirmed = input.action === "run_now" && unconfirmed?.operationId === input.operationId;
     try {
       if (input.action === "run_now") remember(input);
       const result = await requestFollowThroughAction(input);
@@ -114,9 +117,9 @@ function FollowThroughSession({
       }
       if (mounted.current) await query.refetch();
     } catch (cause) {
-      // A clean refusal (for example a stale revision) recorded nothing, so
-      // keeping the exact request would lock every action and only resend it.
-      const refused = isDefiniteRefusal(cause);
+      // A clean refusal of a first send (for example a stale revision)
+      // recorded nothing, so keeping the exact request would lock every action.
+      const refused = !retryingUnconfirmed && isDefiniteRefusal(cause);
       if (input.action === "run_now" && refused) remember(undefined);
       if (mounted.current) {
         setError(

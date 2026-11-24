@@ -5,15 +5,23 @@ import { StarterHeartbeat } from "./starter-heartbeat.js";
 export function createFollowThroughForGateway(
   gateway: Pick<
     GatewayRouteCompositionPort,
-    "storage" | "readFeatureFlags" | "cronAutomationService" | "chatProactiveService" | "chatTurnRuntime"
+    "storage" | "readFeatureFlags" | "cronAutomationService" | "chatProactiveService" | "chatTurnRuntime" | "llmService"
   >,
 ) {
-  const heartbeat = new StarterHeartbeat(gateway.storage);
+  const storage = gateway.storage;
+  // The same model reader as the Gateway's own instance, so a hold recorded
+  // after a pricing refusal is recognized here too.
+  const heartbeat = new StarterHeartbeat(storage, () => gateway.llmService.getRuntimeConfig({ useCache: true }));
   return new FollowThroughProjectionService({
-    storage: gateway.storage,
+    storage,
     cron: gateway.cronAutomationService,
     readFlags: async () => ({ ...(await gateway.readFeatureFlags()) }),
-    readHeartbeatArmed: (sessionId) => heartbeat.isArmed(sessionId),
+    readHeartbeatStatus: async (sessionId) =>
+      !(await heartbeat.isArmed(sessionId))
+        ? "off"
+        : (await heartbeat.isWaitingForPricedModel(sessionId))
+          ? "waiting_for_priced_model"
+          : "armed",
     updateHeartbeat: async ({ sessionId, expectedRevision, enabled, heartbeatIntervalSeconds }) => {
       await gateway.storage.runImmediateTransaction(async () => {
         const heartbeatEnabled = enabled ?? (await heartbeat.isArmed(sessionId));

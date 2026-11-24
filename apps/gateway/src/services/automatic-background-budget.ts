@@ -25,7 +25,8 @@ interface AutomaticBackgroundBudgetDeps {
   storage: Pick<AsyncStorage, "systemSettings" | "modelUsageEvents" | "costLedger">;
   getLimits(): { automaticUsd: number; totalUsd: number };
   runWithDispatchGuard<T>(guard: LlmDispatchGuard, operation: () => Promise<T>): Promise<T>;
-  onReconciliationFailure?(error: unknown): void;
+  /** Reports budget bookkeeping that failed without changing the run's outcome. */
+  onBookkeepingFailure?(task: "usage_reconciliation" | "refusal_record", error: unknown): void;
   now?: () => Date;
 }
 
@@ -76,13 +77,10 @@ export class AutomaticBackgroundBudget {
         const day = await this.reserve(input).catch(async (error: unknown) => {
           // A recurring caller records the refusal so later occurrences can
           // wait instead of failing again for the same reason. The refusal
-          // stays the reported error: if that record fails, the next
-          // occurrence is simply refused again and tries to record it again.
+          // stays the reported error; a failed record is reported as a
+          // diagnostic, and the next occurrence is refused and tries again.
           if (error instanceof AutomaticBackgroundBudgetError && onRefused) {
-            await onRefused(error).then(
-              () => undefined,
-              () => undefined,
-            );
+            await onRefused(error).catch((recordError: unknown) => this.report("refusal_record", recordError));
           }
           throw error;
         });
@@ -97,7 +95,7 @@ export class AutomaticBackgroundBudget {
           try {
             await this.reconcile(day);
           } catch (error) {
-            this.deps.onReconciliationFailure?.(error);
+            this.report("usage_reconciliation", error);
           }
         }),
       );
@@ -180,6 +178,10 @@ export class AutomaticBackgroundBudget {
       "budget_unavailable",
       "The automatic background budget changed concurrently.",
     );
+  }
+
+  private report(task: "usage_reconciliation" | "refusal_record", error: unknown): void {
+    this.deps.onBookkeepingFailure?.(task, error);
   }
 
   private now(): string {

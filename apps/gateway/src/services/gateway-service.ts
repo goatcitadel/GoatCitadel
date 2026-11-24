@@ -1788,8 +1788,7 @@ export class GatewayService {
         totalUsd: this.config.assistant.budgets.dailyUsdHardCap,
       }),
       runWithDispatchGuard: (guard, work) => this.llmService.runWithDispatchGuard(guard, work),
-      onReconciliationFailure: (error) =>
-        this.logMaintenanceTaskFailure("automatic_background_usage_reconciliation", error),
+      onBookkeepingFailure: (task, error) => this.logMaintenanceTaskFailure(`automatic_background_${task}`, error),
     });
     this.starterHeartbeat = new StarterHeartbeat(this.storage, () => this.getLlmConfig());
     this.llmService.setDispatchWardGuard(
@@ -2280,7 +2279,7 @@ export class GatewayService {
         (await this.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled")) &&
         !(await this.isFeatureEnabled("autonomyV1Disabled")) &&
         (await this.isFeatureEnabled("durableKernelV1Enabled")) &&
-        (await this.starterHeartbeat.isArmed(sessionId)),
+        (await this.starterHeartbeat.canDispatch(sessionId)),
       enqueuePreclaimedHeartbeat: async (input) => {
         const run = await enqueueAutonomousChatTurn(this.chatAutonomousTurnDeps(), {
           sessionId: input.occurrence.sessionId,
@@ -4113,7 +4112,7 @@ export class GatewayService {
             if (
               !(await this.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled")) ||
               (await this.isFeatureEnabled("autonomyV1Disabled")) ||
-              !(await this.starterHeartbeat.isArmed(sessionId))
+              !(await this.starterHeartbeat.canDispatch(sessionId))
             ) {
               throw new ConflictError({ message: "The heartbeat was paused or its Chat changed before dispatch." });
             }

@@ -43,12 +43,15 @@ export class StarterHeartbeat {
     if (target) await this.storage.systemSettings.set(EXPLICIT_HEARTBEAT_PREFIX + sessionId, { ...target, enabled });
   }
 
-  /** Whether the heartbeat may dispatch now: armed and not waiting out an unpriced-model refusal. */
+  /** Whether the operator's choice (or the starter binding) has this Chat's heartbeat on. */
   public async isArmed(sessionId: string): Promise<boolean> {
     const target = await this.readTarget(sessionId);
-    if (!target) return false;
-    if (await this.isHeldForUnpricedModel(sessionId)) return false;
-    return await this.isTargetArmed(target);
+    return target ? await this.isTargetArmed(target) : false;
+  }
+
+  /** Whether the heartbeat may dispatch now: armed and not waiting out an unpriced-model refusal. */
+  public async canDispatch(sessionId: string): Promise<boolean> {
+    return (await this.isArmed(sessionId)) && !(await this.isWaitingForPricedModel(sessionId));
   }
 
   /**
@@ -63,7 +66,8 @@ export class StarterHeartbeat {
     await this.storage.systemSettings.set(UNPRICED_HOLD_PREFIX + sessionId, hold);
   }
 
-  private async isHeldForUnpricedModel(sessionId: string): Promise<boolean> {
+  /** True while a recent pricing refusal still applies to the current model selection. */
+  public async isWaitingForPricedModel(sessionId: string): Promise<boolean> {
     const row = await this.storage.systemSettings.get<UnpricedHold>(UNPRICED_HOLD_PREFIX + sessionId);
     const hold = row?.value;
     if (!hold || typeof hold.heldAt !== "string" || typeof hold.models !== "string") return false;

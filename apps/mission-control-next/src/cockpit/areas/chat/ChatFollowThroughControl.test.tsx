@@ -126,3 +126,17 @@ it("an idempotency-key conflict keeps the exact request because it may already h
   expect(Boolean(button("Retry exact run request"))).toBe(true);
   expect(button("Run now")?.props.disabled).toBe(true);
 });
+it("a refused retry of an unconfirmed request keeps it, since the first send may still have run", async () => {
+  api.read.mockResolvedValue(response);
+  api.send.mockRejectedValueOnce(new Error("connection lost")).mockRejectedValueOnce(httpError(403, "Forbidden"));
+  await mount();
+  await act(async () => {
+    await button("Run now")!.props.onClick();
+  });
+  await act(async () => {
+    await button("Retry exact run request")!.props.onClick();
+  });
+  expect(api.send).toHaveBeenCalledTimes(2);
+  expect(Boolean(button("Retry exact run request"))).toBe(true);
+  expect(JSON.stringify(tree.toJSON())).not.toContain("Nothing ran.");
+});
