@@ -70,20 +70,38 @@ test("a cancelled fixture upload leaves the provider available", async () => {
 });
 
 test(
-  "controlled display streams hold, advance exact chunks, finish and release their controller",
+  "controlled display rejects incompatible requests, then holds and finishes the planned stream",
   { timeout: 10_000 },
   async (t) => {
     const controller = new AbortController();
+    const signal = AbortSignal.any([t.signal, controller.signal]);
     const stub = await startDeterministicLlmStub({
       dispatchPlan: [{ type: "stream_controlled", chunks: ["First\n\n", "\nSecond " + "fragment ".repeat(160)] }],
     });
     try {
+      for (const [route, stream] of [
+        ["chat/completions", false],
+        ["responses", true],
+      ]) {
+        const response = await fetch(`${stub.baseUrl}/${route}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          signal,
+          body: JSON.stringify({ model: stub.model, stream }),
+        });
+        assert.equal(response.status, 400);
+        assert.equal((await response.json()).error.type, "invalid_request_error");
+      }
+      assert.equal(stub.dispatchPlanDispatches(), 0);
+
       const response = await fetch(`${stub.baseUrl}/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        signal: AbortSignal.any([t.signal, controller.signal]),
+        signal,
         body: JSON.stringify({ model: stub.model, stream: true, messages: [] }),
       });
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("content-type"), /^text\/event-stream/u);
       const stream = readSseFrames(response.body);
       const deltas = () => stream.frames.map((frame) => frame.choices[0].delta.content ?? "");
       const firstText = "First\n\n";
@@ -106,6 +124,7 @@ test(
       assert.equal(stream.doneMarker, true);
       assert.equal(stream.frames.at(-1).usage.prompt_tokens_details.cached_tokens, 0);
       assert.ok(deltas().every((delta) => delta.length <= 128));
+      assert.equal(stub.dispatchPlanDispatches(), 1);
     } finally {
       controller.abort();
       await stub.close();
@@ -134,29 +153,6 @@ test("deterministic provider metadata supports Chat thinking off", async () => {
     });
   } finally {
     await fs.rm(runtimeRoot, { recursive: true, force: true });
-  }
-});
-
-test("controlled display rejects incompatible requests before consuming its dispatch", async () => {
-  const stub = await startDeterministicLlmStub({
-    dispatchPlan: [{ type: "stream_controlled", chunks: ["fixture", "more"] }],
-  });
-  try {
-    for (const [route, stream] of [
-      ["chat/completions", false],
-      ["responses", true],
-    ]) {
-      const response = await fetch(`${stub.baseUrl}/${route}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: stub.model, stream }),
-      });
-      assert.equal(response.status, 400);
-      assert.equal((await response.json()).error.type, "invalid_request_error");
-    }
-    assert.equal(stub.dispatchPlanDispatches(), 0);
-  } finally {
-    await stub.close();
   }
 });
 
