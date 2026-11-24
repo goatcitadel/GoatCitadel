@@ -247,6 +247,15 @@ describe("errand overlay", () => {
     await expect.poll(async () => (await browser.overlay.snapshot()).notice).toBe(ERRAND_OVERLAY_COPY.useChat);
     const snapshot = await browser.overlay.snapshot();
     expect(snapshot.mode).toBe("approval");
+    const session = await page.context().newCDPSession(page);
+    try {
+      const { nodes } = await session.send("Accessibility.getFullAXTree");
+      const dialog = nodes.find((node) => node.role?.value === "dialog");
+      expect(dialog?.name?.value).toBe("Place your order");
+      expect(dialog?.description?.value).toContain(ERRAND_OVERLAY_COPY.useChat);
+    } finally {
+      await session.detach();
+    }
     expect(
       Object.keys(snapshot.controls).filter((key) => snapshot.controls[key as ErrandOverlayEvent["type"]]),
     ).toEqual(["stop"]);

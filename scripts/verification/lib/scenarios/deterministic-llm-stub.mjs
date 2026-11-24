@@ -196,6 +196,16 @@ export async function startDeterministicLlmStub(options = {}) {
               (tool) => tool?.type === "function" && (tool.function?.name ?? tool.name) === dispatchPlanRequiredTool,
             )));
       const planned = isDispatchPlanRequest ? dispatchPlan[dispatchPlanDispatches] : undefined;
+      if (planned?.type === "stream_controlled" && (body.stream !== true || url.pathname !== "/v1/chat/completions")) {
+        completeRequestSummary(requestSummary, { outcome: "invalid_request", status: 400 });
+        writeJsonResponse(response, 400, {
+          error: {
+            message: "Controlled display fixture requires streaming chat completions.",
+            type: "invalid_request_error",
+          },
+        });
+        return;
+      }
       if (isDispatchPlanRequest) {
         dispatchPlanDispatches += 1;
         requestSummary.dispatchPlanIndex = dispatchPlanDispatches - 1;
@@ -334,8 +344,6 @@ async function executePlannedDispatch({
 
   switch (behavior.type) {
     case "stream_controlled": {
-      if (!body.stream || requestPath !== "/v1/chat/completions")
-        throw new Error("Controlled display fixture requires streaming chat completions");
       response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
       response.flushHeaders?.();
       const closed = waitForRequestClose(request, response);
@@ -611,9 +619,15 @@ function collectPromptUserContent(body) {
   return collectPromptRoleContent(body, "user");
 }
 
+function promptMessages(body) {
+  if (Array.isArray(body?.messages)) return body.messages;
+  if (Array.isArray(body?.input)) return body.input;
+  if (typeof body?.input === "string") return [{ role: "user", content: body.input }];
+  return [];
+}
+
 function collectPromptRoleContent(body, role) {
-  const messages = Array.isArray(body?.messages) ? body.messages : Array.isArray(body?.input) ? body.input : [];
-  return messages
+  return promptMessages(body)
     .filter((message) => message?.role === role)
     .flatMap((message) => extractPromptText(message?.content))
     .join("\n");
@@ -632,7 +646,7 @@ const PROMPT_METADATA_MARKERS = Object.freeze({
 });
 
 function summarizePromptMetadata(body) {
-  const messages = Array.isArray(body?.messages) ? body.messages : Array.isArray(body?.input) ? body.input : [];
+  const messages = promptMessages(body);
   const userContent = collectPromptRoleContent(body, "user");
   const systemContent = collectPromptRoleContent(body, "system");
   const combined = `${systemContent}\n${userContent}`;

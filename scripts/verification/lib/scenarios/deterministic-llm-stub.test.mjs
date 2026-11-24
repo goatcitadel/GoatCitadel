@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -64,6 +65,29 @@ test("deterministic provider metadata supports Chat thinking off", async () => {
     });
   } finally {
     await fs.rm(runtimeRoot, { recursive: true, force: true });
+  }
+});
+
+test("controlled display rejects incompatible requests before consuming its dispatch", async () => {
+  const stub = await startDeterministicLlmStub({
+    dispatchPlan: [{ type: "stream_controlled", chunks: ["fixture", "more"] }],
+  });
+  try {
+    for (const [route, stream] of [
+      ["chat/completions", false],
+      ["responses", true],
+    ]) {
+      const response = await fetch(`${stub.baseUrl}/${route}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: stub.model, stream }),
+      });
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).error.type, "invalid_request_error");
+    }
+    assert.equal(stub.dispatchPlanDispatches(), 0);
+  } finally {
+    await stub.close();
   }
 });
 
@@ -171,7 +195,10 @@ test("scripted tool calls retain a full research-deck payload while bounding pat
       body: JSON.stringify({ model: stub.model, input: "fixture" }),
     });
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /presentations_create/u);
+    const body = await response.json();
+    const call = body.output.find((item) => item.type === "function_call");
+    assert.equal(call?.name, "presentations_create");
+    assert.deepEqual(JSON.parse(call.arguments), accepted);
   } finally {
     await stub.close();
   }
@@ -296,6 +323,29 @@ test("scripted tool calls use native Responses and Chat Completions protocols", 
         function: { name: "browser_search", arguments: '{"query":"stream"}' },
       },
     ]);
+  } finally {
+    await stub.close();
+  }
+});
+
+test("Responses string input participates in prompt rules and privacy-safe metadata", async () => {
+  const input = "Synthetic user prompt with café";
+  const stub = await startDeterministicLlmStub({
+    promptReplyRules: [{ ruleId: "string-input", userContentIncludes: "user prompt", replyText: "STRING_MATCH" }],
+  });
+  try {
+    const response = await fetch(`${stub.baseUrl}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: stub.model, input }),
+    });
+    assert.match(await response.text(), /STRING_MATCH/u);
+    const [summary] = stub.requestSummaries();
+    assert.equal(summary.promptReplyRuleId, "string-input");
+    assert.deepEqual(summary.promptMetadata.roles, ["user"]);
+    assert.equal(summary.promptMetadata.userContentByteLength, Buffer.byteLength(input, "utf8"));
+    assert.equal(summary.promptMetadata.userContentSha256, createHash("sha256").update(input).digest("hex"));
+    assert.ok(!JSON.stringify(summary).includes(input));
   } finally {
     await stub.close();
   }

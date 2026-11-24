@@ -319,7 +319,7 @@ function applyTraceUpdate(turn: ChatThreadTurnRecord, trace: ChatThreadTurnRecor
     ...trace,
     assistantMessageId: trace.assistantMessageId ?? turn.trace.assistantMessageId,
     capabilityUpgradeSuggestions: trace.capabilityUpgradeSuggestions ?? turn.trace.capabilityUpgradeSuggestions,
-    toolRuns: trace.toolRuns ?? turn.trace.toolRuns,
+    toolRuns: trace.toolRuns ? reconcileTraceToolRuns(turn.toolRuns, trace.toolRuns) : turn.trace.toolRuns,
     citations: dedupeCitations(trace.citations ?? turn.trace.citations),
     routing: trace.routing ?? turn.trace.routing,
   };
@@ -355,6 +355,32 @@ function isShallowEqualRecord(next: object, prev: object): boolean {
   return true;
 }
 
+type TurnToolRun = ChatThreadTurnRecord["toolRuns"][number];
+
+function retainsTerminalToolRun(existing: TurnToolRun, incoming: TurnToolRun): boolean {
+  // A retry receives its own Gateway-authored toolRunId.
+  return (
+    ["executed", "failed", "blocked"].includes(existing.status) &&
+    ["started", "approval_required"].includes(incoming.status)
+  );
+}
+
+function reconcileTraceToolRuns(
+  current: ChatThreadTurnRecord["toolRuns"],
+  incoming: ChatThreadTurnRecord["toolRuns"],
+): ChatThreadTurnRecord["toolRuns"] {
+  const currentById = new Map(current.map((run) => [run.toolRunId, run]));
+  let reconciled: ChatThreadTurnRecord["toolRuns"] | undefined;
+  for (const [index, run] of incoming.entries()) {
+    const existing = currentById.get(run.toolRunId);
+    if (existing && retainsTerminalToolRun(existing, run)) {
+      reconciled ??= incoming.slice();
+      reconciled[index] = existing;
+    }
+  }
+  return reconciled ?? incoming;
+}
+
 function appendOrReplaceToolRun(
   current: ChatThreadTurnRecord["toolRuns"],
   toolRun: ChatThreadTurnRecord["toolRuns"][number],
@@ -362,14 +388,7 @@ function appendOrReplaceToolRun(
   const index = current.findIndex((item) => item.toolRunId === toolRun.toolRunId);
   if (index === -1) return [...current, toolRun];
   const existing = current[index]!;
-  // A delayed/replayed start or approval wait cannot erase a recorded result.
-  // A retry receives its own Gateway-authored toolRunId.
-  if (
-    existing === toolRun ||
-    (["executed", "failed", "blocked"].includes(existing.status) &&
-      ["started", "approval_required"].includes(toolRun.status))
-  )
-    return current;
+  if (existing === toolRun || retainsTerminalToolRun(existing, toolRun)) return current;
   return current.map((item, i) => (i === index ? toolRun : item));
 }
 

@@ -159,6 +159,11 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   const cardTitle = make("p", "title");
   const cardBody = make("p", "body");
   const cardNotice = make("p", "notice", c.copy.useChat);
+  cardTitle.id = "errand-approval-title";
+  cardBody.id = "errand-approval-description";
+  cardNotice.id = "errand-approval-instruction";
+  card.setAttribute("aria-labelledby", cardTitle.id);
+  card.setAttribute("aria-describedby", `${cardBody.id} ${cardNotice.id}`);
   card.append(cardTitle, cardBody, cardNotice);
 
   layer.append(spot, blocker, trail, cursor, banner, card);
