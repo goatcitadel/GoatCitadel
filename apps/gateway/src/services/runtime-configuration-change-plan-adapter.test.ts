@@ -318,6 +318,21 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
     expect(applied.result?.summary).toBe("Claude Code CLI: reuse one process between tool steps is now on.");
   });
 
+  it("names a shipped switch without a change-plan label the way Settings › Features does", async () => {
+    const adapter = new RuntimeConfigurationChangePlanAdapter({
+      ...authCredentialDeps,
+      getSettings: vi.fn(async () => settings()),
+      updateSettings: vi.fn(async () => settings({ revision: 8 })),
+    });
+    const prepared = await adapter.prepare(context, {
+      kind: "runtime_configuration" as const,
+      change: { operation: "feature_flag" as const, flag: "chatTimersV1Enabled" as const, enabled: true },
+    });
+    expect(prepared.title).toBe("Turn on Chat timers");
+    expect(prepared.summary).toBe("Makes timers available in conversations. This turns it on.");
+    expect(`${prepared.title} ${prepared.summary} ${prepared.impact}`).not.toContain("chatTimersV1Enabled");
+  });
+
   it("names the Features switches in plain words in their approval", async () => {
     const adapter = new RuntimeConfigurationChangePlanAdapter({
       ...authCredentialDeps,

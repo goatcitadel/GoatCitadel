@@ -26,7 +26,8 @@ export interface FollowThroughDeps {
   readFlags(): Promise<Record<string, boolean | undefined>>;
   readProactiveRuns(sessionId: string, limit: number): Promise<ProactiveRunRecord[]>;
   now?: () => Date;
-  readHeartbeatArmed?(sessionId: string): Promise<boolean>;
+  /** "waiting_for_priced_model": armed, but holding after its model was refused for having no price. */
+  readHeartbeatStatus?(sessionId: string): Promise<"off" | "armed" | "waiting_for_priced_model">;
   updateHeartbeat?(input: {
     sessionId: string;
     expectedRevision: number;
@@ -253,19 +254,30 @@ export class FollowThroughProjectionService {
         ownerHref: `/work/schedules?jobId=${encodeURIComponent(job.jobId)}`,
       });
     }
-    const [heartbeat, heartbeatArmed] = await Promise.all([
+    const [heartbeat, heartbeatStatus] = await Promise.all([
       this.deps.storage.heartbeatOccurrences.findUnresolved(meta.workspaceId, sessionId),
-      this.deps.readHeartbeatArmed?.(sessionId) ?? Promise.resolve(Boolean(prefs?.heartbeatEnabled)),
+      this.deps.readHeartbeatStatus?.(sessionId) ?? Promise.resolve(prefs?.heartbeatEnabled ? "armed" : "off"),
     ]);
+    const heartbeatArmed = heartbeatStatus !== "off";
     const heartbeatAvailable = !restricted && flags.proactiveHeartbeatTurnsV1Enabled === true;
+    const heartbeatWaiting = heartbeatAvailable && heartbeatStatus === "waiting_for_priced_model";
     items.push({
       ...base,
       owner: { kind: "heartbeat", ownerId: sessionId },
       revision: prefs?.revision ?? 1,
       purpose: "Quiet background check",
-      state: !heartbeatArmed || !heartbeatAvailable ? "paused" : heartbeat ? "running" : quiet ? "quiet" : "upcoming",
+      state:
+        !heartbeatArmed || !heartbeatAvailable
+          ? "paused"
+          : heartbeat
+            ? "running"
+            : heartbeatWaiting
+              ? "waiting_on_you"
+              : quiet
+                ? "quiet"
+                : "upcoming",
       nextCheckAt:
-        heartbeatArmed && heartbeatAvailable && prefs?.lastProactiveAt
+        heartbeatArmed && heartbeatAvailable && !heartbeatWaiting && prefs?.lastProactiveAt
           ? new Date(Date.parse(prefs.lastProactiveAt) + prefs.heartbeatIntervalSeconds * 1000).toISOString()
           : undefined,
       lastOutcome: heartbeat?.state,
@@ -274,7 +286,9 @@ export class FollowThroughProjectionService {
         ? "Background checks are off in the installation settings."
         : !heartbeatArmed
           ? "Start checks for this conversation to get updates here."
-          : undefined,
+          : heartbeatWaiting
+            ? "Checks are waiting: the current model has no per-token price, so background checks can't stay within their daily budget. Switch to a priced model, or checks try again within a day."
+            : undefined,
       actions:
         !heartbeatAvailable || !this.deps.updateHeartbeat
           ? []

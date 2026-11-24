@@ -30,6 +30,8 @@ interface ChatTimerPanelState {
   timers: ChatTimerRecord[];
 }
 
+const MAX_REMINDER_LENGTH = 4000;
+
 const INITIAL_STATE: ChatTimerPanelState = {
   open: false,
   busy: false,
@@ -204,7 +206,11 @@ export function useChatTimerPanel(input: {
         panel.cancelOnNextReply,
       ]);
       if (confirmation.current?.identity !== identity) {
-        if (!message || message.length > 4000) throw new Error("Enter a reminder message.");
+        if (!message) throw new Error("Enter a reminder message.");
+        if (message.length > MAX_REMINDER_LENGTH)
+          throw new Error(
+            `Shorten the reminder to ${MAX_REMINDER_LENGTH.toLocaleString("en")} characters or fewer (it has ${message.length.toLocaleString("en")}).`,
+          );
         if (deliveryRule && !panel.rules.some((rule) => rule.ruleId === deliveryRule))
           throw new Error("That destination is unavailable. Choose a ready notification rule or This Chat.");
         new Intl.DateTimeFormat("en", { timeZone: timezone });

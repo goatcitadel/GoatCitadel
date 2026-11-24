@@ -43,9 +43,11 @@ function fixture() {
       usageAvailability: async () => ({ totalAgentEvents: 1, metricAvailability: { costUsd: { complete: true } } }),
     },
   } as unknown as Pick<AsyncStorage, "systemSettings" | "modelUsageEvents" | "costLedger">;
+  const bookkeepingFailures: [string, unknown][] = [];
   const budget = new AutomaticBackgroundBudget({
     storage,
     now: () => now,
+    onBookkeepingFailure: (task, error) => bookkeepingFailures.push([task, error]),
     getLimits: () => ({ automaticUsd: 0.25, totalUsd: 50 }),
     runWithDispatchGuard: async (guard, operation) => {
       guardByCall.set(operation, guard);
@@ -54,6 +56,8 @@ function fixture() {
   });
   return {
     budget,
+    bookkeepingFailures,
+    guardFor: (operation: () => Promise<unknown>) => guardByCall.get(operation)!,
     advance: (value: string) => {
       now = new Date(value);
     },
@@ -150,5 +154,51 @@ describe("automatic background dispatch budget", () => {
         route: { ...local.route, credential: { ...local.route.credential, usagePool: "local" } },
       }),
     ).toThrow("verified pricing");
+  });
+
+  it("reports a pricing refusal to the caller before any provider attempt", async () => {
+    const f = fixture();
+    const refusals: string[] = [];
+    const unpriced = dispatch("subscription");
+    const work = vi.fn();
+    const operation = async () => {
+      await f.guardFor(operation)({ ...unpriced, route: { ...unpriced.route, pricing: undefined } });
+      work();
+    };
+    await expect(
+      f.budget.run(operation, undefined, async (refusal) => {
+        refusals.push(refusal.reason);
+      }),
+    ).rejects.toThrow("priced model");
+    expect(refusals).toEqual(["pricing_unavailable"]);
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  it("keeps the refusal as the reported error and reports a failed record as a diagnostic", async () => {
+    const f = fixture();
+    const unpriced = dispatch("subscription");
+    const operation = async () => {
+      await f.guardFor(operation)({ ...unpriced, route: { ...unpriced.route, pricing: undefined } });
+    };
+    await expect(
+      f.budget.run(operation, undefined, async () => {
+        throw new Error("storage down");
+      }),
+    ).rejects.toThrow("priced model");
+    expect(f.bookkeepingFailures).toEqual([["refusal_record", new Error("storage down")]]);
+  });
+
+  it("keeps the refusal when a synchronous refusal callback throws", async () => {
+    const f = fixture();
+    const unpriced = dispatch("subscription-sync");
+    const operation = async () => {
+      await f.guardFor(operation)({ ...unpriced, route: { ...unpriced.route, pricing: undefined } });
+    };
+    await expect(
+      f.budget.run(operation, undefined, () => {
+        throw new Error("storage down");
+      }),
+    ).rejects.toThrow("priced model");
+    expect(f.bookkeepingFailures).toEqual([["refusal_record", new Error("storage down")]]);
   });
 });

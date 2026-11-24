@@ -357,6 +357,14 @@ export class InboxProjectionService {
         plan.status === "awaiting_approval" &&
         plan.requiredAction?.kind === "approval" &&
         listedApprovals.has(plan.requiredAction.approvalId);
+      // A manual-step or failed plan past its expiry can no longer be acted on,
+      // so it leaves the Inbox and stays in change-plan history. A failed
+      // rollback stays listed: the setting it touched may be half-changed.
+      const checkedAt = Date.now();
+      const expiredWithNothingToDo = (plan: (typeof visible)[number]) =>
+        (plan.status === "manual_required" || plan.status === "failed") &&
+        Boolean(plan.expiresAt) &&
+        Date.parse(plan.expiresAt!) <= checkedAt;
       return {
         partial: batches.some((batch) => batch.length === SOURCE_LIMIT) || visible.length !== records.length,
         detail:
@@ -364,7 +372,7 @@ export class InboxProjectionService {
             ? "Change plans without matching workspace and waiting status were omitted."
             : undefined,
         items: visible
-          .filter((plan) => !waitsOnListedApproval(plan))
+          .filter((plan) => !waitsOnListedApproval(plan) && !expiredWithNothingToDo(plan))
           .map(
             (plan): OperatorInboxItem => ({
               id: `change_plan:${plan.planId}`,

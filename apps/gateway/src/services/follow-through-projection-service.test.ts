@@ -353,3 +353,17 @@ it("does not advertise a next one-shot check while paused or awaiting outcome in
   expect(item.state).toBe("unknown");
   expect(item.nextCheckAt).toBeUndefined();
 });
+it("shows an armed heartbeat waiting out a pricing refusal as waiting, with no next check", async () => {
+  const f = fixture();
+  const deps = {
+    ...f.deps,
+    readFlags: async () => ({ ...(await f.deps.readFlags()), proactiveHeartbeatTurnsV1Enabled: true }),
+    readHeartbeatStatus: async () => "waiting_for_priced_model",
+    updateHeartbeat: vi.fn(),
+  };
+  const result = await new FollowThroughProjectionService(deps as never).listFollowThrough("s", "A");
+  const item = result.items.find((entry) => entry.owner.kind === "heartbeat");
+  expect(item).toMatchObject({ state: "waiting_on_you", nextCheckAt: undefined });
+  expect(item?.reason).toContain("no per-token price");
+  expect(item?.actions.map((action) => action.action)).toContain("pause");
+});

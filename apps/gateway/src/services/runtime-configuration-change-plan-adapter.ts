@@ -1,5 +1,6 @@
 import {
   CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS,
+  SHIPPED_FEATURE_CONTROLS,
   checkPublicWebAddress,
   ConflictError,
   SemanticValidationError,
@@ -792,12 +793,23 @@ function describePublicWebAddress(publicWebAddress: string | null) {
 }
 
 function featureFlagName(flag: string): string {
-  return CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS[flag as ChangePlanRuntimeFeatureFlag]?.label ?? flag;
+  return featureFlagLabel(flag as ChangePlanRuntimeFeatureFlag)?.label ?? flag;
+}
+
+/**
+ * The change-plan name for a flag, else the name Settings › Features shows for a
+ * shipped flag, so an operator never reads a raw key such as chatTimersV1Enabled.
+ */
+function featureFlagLabel(flag: ChangePlanRuntimeFeatureFlag): { label: string; description: string } | undefined {
+  const planned = CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS[flag];
+  if (planned) return planned;
+  const shipped = (SHIPPED_FEATURE_CONTROLS as Partial<Record<string, { label: string; description: string }>>)[flag];
+  return shipped ? { label: shipped.label, description: shipped.description } : undefined;
 }
 
 /** One switch, named the way Settings names it; a flag without a Settings name keeps its key (#496). */
 function describeFeatureFlagChange(flag: ChangePlanRuntimeFeatureFlag, enabled: boolean) {
-  const named = CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS[flag];
+  const named = featureFlagLabel(flag);
   const name = named?.label ?? flag;
   const state = enabled ? "on" : "off";
   return {

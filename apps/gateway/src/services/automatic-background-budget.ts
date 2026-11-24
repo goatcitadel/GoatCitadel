@@ -1,6 +1,6 @@
 import { ConflictError, type ModelUsageEventRecord } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
-import type { LlmDispatchGuard, LlmDispatchGuardInput } from "./llm-dispatch-guard.js";
+import type { LlmDispatchGuard, LlmDispatchGuardInput, LlmDispatchRoute } from "./llm-dispatch-guard.js";
 
 export const DEFAULT_AUTOMATIC_BACKGROUND_DAILY_USD = 0.25;
 const SETTING_PREFIX = "automatic_background_budget_v1:";
@@ -25,7 +25,8 @@ interface AutomaticBackgroundBudgetDeps {
   storage: Pick<AsyncStorage, "systemSettings" | "modelUsageEvents" | "costLedger">;
   getLimits(): { automaticUsd: number; totalUsd: number };
   runWithDispatchGuard<T>(guard: LlmDispatchGuard, operation: () => Promise<T>): Promise<T>;
-  onReconciliationFailure?(error: unknown): void;
+  /** Reports budget bookkeeping that failed without changing the run's outcome. */
+  onBookkeepingFailure?(task: "usage_reconciliation" | "refusal_record", error: unknown): void;
   now?: () => Date;
 }
 
@@ -64,12 +65,29 @@ export class AutomaticBackgroundBudget {
     };
   }
 
-  public async run<T>(operation: () => Promise<T>, assertAuthority?: () => Promise<void>): Promise<T> {
+  public async run<T>(
+    operation: () => Promise<T>,
+    assertAuthority?: () => Promise<void>,
+    onRefused?: (refusal: AutomaticBackgroundBudgetError, route: LlmDispatchRoute) => Promise<void> | void,
+  ): Promise<T> {
     const days = new Set<string>();
     try {
       return await this.deps.runWithDispatchGuard(async (input) => {
         await assertAuthority?.();
-        const day = await this.reserve(input);
+        const day = await this.reserve(input).catch(async (error: unknown) => {
+          // A recurring caller records the refusal so later occurrences can
+          // wait instead of failing again for the same reason. The refusal
+          // stays the reported error; a failed record is reported as a
+          // diagnostic, and the next occurrence is refused and tries again.
+          if (error instanceof AutomaticBackgroundBudgetError && onRefused) {
+            try {
+              await onRefused(error, input.route);
+            } catch (recordError) {
+              this.report("refusal_record", recordError);
+            }
+          }
+          throw error;
+        });
         if (day) {
           days.add(day);
           await assertAuthority?.();
@@ -81,7 +99,7 @@ export class AutomaticBackgroundBudget {
           try {
             await this.reconcile(day);
           } catch (error) {
-            this.deps.onReconciliationFailure?.(error);
+            this.report("usage_reconciliation", error);
           }
         }),
       );
@@ -164,6 +182,10 @@ export class AutomaticBackgroundBudget {
       "budget_unavailable",
       "The automatic background budget changed concurrently.",
     );
+  }
+
+  private report(task: "usage_reconciliation" | "refusal_record", error: unknown): void {
+    this.deps.onBookkeepingFailure?.(task, error);
   }
 
   private now(): string {

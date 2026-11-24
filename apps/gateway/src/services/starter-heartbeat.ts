@@ -1,8 +1,18 @@
-import { NotFoundError } from "@goatcitadel/contracts";
+import { NotFoundError, type LlmRuntimeConfig } from "@goatcitadel/contracts";
 import { DEFAULT_SESSION_AUTONOMY_PREFS, type AsyncStorage } from "@goatcitadel/storage";
 
 const STARTER_HEARTBEAT_KEY = "starter_heartbeat_v1";
 const EXPLICIT_HEARTBEAT_PREFIX = "explicit_heartbeat_v1:";
+const UNPRICED_HOLD_PREFIX = "heartbeat_unpriced_hold_v1:";
+/** How long a heartbeat waits after its model was refused for having no price. */
+export const UNPRICED_HEARTBEAT_HOLD_MS = 24 * 60 * 60 * 1000;
+
+type ModelSelection = Pick<LlmRuntimeConfig, "activeProviderId" | "activeModel" | "utilityProviderId" | "utilityModel">;
+
+interface UnpricedHold {
+  heldAt: string;
+  models: string;
+}
 
 interface HeartbeatBinding {
   workspaceId: string;
@@ -22,17 +32,71 @@ type HeartbeatEnrollmentStorage = Pick<
  * Eligibility now requires a single starter binding or an operator choice.
  */
 export class StarterHeartbeat {
-  public constructor(private readonly storage: HeartbeatEnrollmentStorage) {}
+  public constructor(
+    private readonly storage: HeartbeatEnrollmentStorage,
+    private readonly readModels: () => ModelSelection = () => ({ activeProviderId: "", activeModel: "" }),
+    private readonly now: () => Date = () => new Date(),
+  ) {}
 
   public async captureExplicitChoice(sessionId: string, enabled: boolean): Promise<void> {
     const target = await this.readTarget(sessionId);
     if (target) await this.storage.systemSettings.set(EXPLICIT_HEARTBEAT_PREFIX + sessionId, { ...target, enabled });
   }
 
+  /** Whether the operator's choice (or the starter binding) has this Chat's heartbeat on. */
   public async isArmed(sessionId: string): Promise<boolean> {
     const target = await this.readTarget(sessionId);
-    if (!target) return false;
-    return await this.isTargetArmed(target);
+    return target ? await this.isTargetArmed(target) : false;
+  }
+
+  /** Whether the heartbeat may dispatch now: armed and not waiting out an unpriced-model refusal. */
+  public async canDispatch(sessionId: string): Promise<boolean> {
+    return (await this.isArmed(sessionId)) && !(await this.isWaitingForPricedModel(sessionId));
+  }
+
+  /**
+   * Returns the budget-refusal callback for one heartbeat run. When the budget
+   * refuses it because its model has no per-token price (for example a
+   * subscription sign-in), later occurrences park quietly for a day, or until
+   * the model selection changes, instead of failing every hour.
+   *
+   * The hold binds to the refused route: it is recorded only when that route
+   * is the active or utility model of the selection captured here, so a
+   * selection that changed around the run is never held for a refusal it did
+   * not get. When the route can't be tied to it (a per-Chat model, or a change
+   * before this call), no hold is recorded and the next occurrence is refused
+   * again.
+   */
+  public holdOnPricingRefusal(
+    sessionId: string,
+  ): (refusal: { reason: string }, route: { providerId: string; modelId: string }) => Promise<void> {
+    const selection = this.readModels();
+    const models = this.modelFingerprint(selection);
+    return async ({ reason }, route) => {
+      if (reason !== "pricing_unavailable" || !selectsRoute(selection, route)) return;
+      const hold: UnpricedHold = { heldAt: this.now().toISOString(), models };
+      await this.storage.systemSettings.set(UNPRICED_HOLD_PREFIX + sessionId, hold);
+    };
+  }
+
+  /** True while a recent pricing refusal still applies to the current model selection. */
+  public async isWaitingForPricedModel(sessionId: string): Promise<boolean> {
+    const row = await this.storage.systemSettings.get<UnpricedHold>(UNPRICED_HOLD_PREFIX + sessionId);
+    const hold = row?.value;
+    if (!hold || typeof hold.heldAt !== "string" || typeof hold.models !== "string") return false;
+    const heldAt = Date.parse(hold.heldAt);
+    if (!Number.isFinite(heldAt)) return false;
+    const age = this.now().getTime() - heldAt;
+    return age >= 0 && age < UNPRICED_HEARTBEAT_HOLD_MS && hold.models === this.modelFingerprint();
+  }
+
+  private modelFingerprint(models: ModelSelection = this.readModels()): string {
+    return JSON.stringify([
+      models.activeProviderId,
+      models.activeModel,
+      models.utilityProviderId ?? null,
+      models.utilityModel ?? null,
+    ]);
   }
 
   public async armIfEligible(sessionId: string, providerReady: () => Promise<boolean>): Promise<boolean> {
@@ -103,6 +167,14 @@ export class StarterHeartbeat {
       throw error;
     }
   }
+}
+
+function selectsRoute(selection: ModelSelection, route: { providerId: string; modelId: string }): boolean {
+  const pairs = [
+    [selection.activeProviderId, selection.activeModel],
+    [selection.utilityProviderId, selection.utilityModel],
+  ];
+  return pairs.some(([providerId, model]) => providerId === route.providerId && model === route.modelId);
 }
 
 function sameTarget(left: HeartbeatBinding, right: HeartbeatBinding): boolean {

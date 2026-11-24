@@ -18,6 +18,7 @@ vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ naviga
 vi.mock("../../../features/native-routes/projects/use-project-access", () => ({
   useProjectAccess: () => ({ identity: "operator" }),
 }));
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { ChatFollowThroughControl } from "./ChatFollowThroughControl";
 let tree: ReactTestRenderer, client: QueryClient;
 afterEach(async () => {
@@ -87,4 +88,55 @@ it("does not treat a successful HTTP response without its canonical receipt as a
   });
   expect(Boolean(button("Retry exact run request"))).toBe(true);
   expect(button("Run now")?.props.disabled).toBe(true);
+});
+
+function httpError(status: number, error: string) {
+  return new ApiRequestError(error, {
+    kind: "http",
+    method: "POST",
+    path: "/follow-through/actions",
+    status,
+    body: { error },
+  });
+}
+it("a clean refusal releases the run request so other actions stay usable", async () => {
+  api.read.mockResolvedValue(response);
+  api.send.mockRejectedValueOnce(httpError(409, "The schedule changed. Refresh before acting."));
+  await mount();
+  await act(async () => {
+    await button("Run now")!.props.onClick();
+  });
+  expect(Boolean(button("Retry exact run request"))).toBe(false);
+  expect(button("Run now")?.props.disabled).toBe(false);
+  expect(JSON.stringify(tree.toJSON())).toContain("Nothing ran.");
+  await act(async () => tree.unmount());
+  client.clear();
+  await mount();
+  expect(Boolean(button("Retry exact run request"))).toBe(false);
+});
+it("an idempotency-key conflict keeps the exact request because it may already have been sent", async () => {
+  api.read.mockResolvedValue(response);
+  api.send.mockRejectedValueOnce(
+    httpError(409, "Mutation for this Idempotency-Key may already have been sent; it is not retried automatically"),
+  );
+  await mount();
+  await act(async () => {
+    await button("Run now")!.props.onClick();
+  });
+  expect(Boolean(button("Retry exact run request"))).toBe(true);
+  expect(button("Run now")?.props.disabled).toBe(true);
+});
+it("a refused retry of an unconfirmed request keeps it, since the first send may still have run", async () => {
+  api.read.mockResolvedValue(response);
+  api.send.mockRejectedValueOnce(new Error("connection lost")).mockRejectedValueOnce(httpError(403, "Forbidden"));
+  await mount();
+  await act(async () => {
+    await button("Run now")!.props.onClick();
+  });
+  await act(async () => {
+    await button("Retry exact run request")!.props.onClick();
+  });
+  expect(api.send).toHaveBeenCalledTimes(2);
+  expect(Boolean(button("Retry exact run request"))).toBe(true);
+  expect(JSON.stringify(tree.toJSON())).not.toContain("Nothing ran.");
 });

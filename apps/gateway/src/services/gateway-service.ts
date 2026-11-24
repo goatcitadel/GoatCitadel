@@ -1788,10 +1788,9 @@ export class GatewayService {
         totalUsd: this.config.assistant.budgets.dailyUsdHardCap,
       }),
       runWithDispatchGuard: (guard, work) => this.llmService.runWithDispatchGuard(guard, work),
-      onReconciliationFailure: (error) =>
-        this.logMaintenanceTaskFailure("automatic_background_usage_reconciliation", error),
+      onBookkeepingFailure: (task, error) => this.logMaintenanceTaskFailure(`automatic_background_${task}`, error),
     });
-    this.starterHeartbeat = new StarterHeartbeat(this.storage);
+    this.starterHeartbeat = new StarterHeartbeat(this.storage, () => this.getLlmConfig());
     this.llmService.setDispatchWardGuard(
       createModelChatWardDispatchGuard({
         storage: this.storage,
@@ -2280,7 +2279,7 @@ export class GatewayService {
         (await this.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled")) &&
         !(await this.isFeatureEnabled("autonomyV1Disabled")) &&
         (await this.isFeatureEnabled("durableKernelV1Enabled")) &&
-        (await this.starterHeartbeat.isArmed(sessionId)),
+        (await this.starterHeartbeat.canDispatch(sessionId)),
       enqueuePreclaimedHeartbeat: async (input) => {
         const run = await enqueueAutonomousChatTurn(this.chatAutonomousTurnDeps(), {
           sessionId: input.occurrence.sessionId,
@@ -4107,15 +4106,19 @@ export class GatewayService {
       durableRunService: this.durableRunService,
       runInChatApprovalScope: (run, work) => this.chatAutoActions.runInDurableTurn(run, work),
       runAutomaticHeartbeat: (sessionId, work) =>
-        this.automaticBackgroundBudget.run(work, async () => {
-          if (
-            !(await this.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled")) ||
-            (await this.isFeatureEnabled("autonomyV1Disabled")) ||
-            !(await this.starterHeartbeat.isArmed(sessionId))
-          ) {
-            throw new ConflictError({ message: "The heartbeat was paused or its Chat changed before model dispatch." });
-          }
-        }),
+        this.automaticBackgroundBudget.run(
+          work,
+          async () => {
+            if (
+              !(await this.isFeatureEnabled("proactiveHeartbeatTurnsV1Enabled")) ||
+              (await this.isFeatureEnabled("autonomyV1Disabled")) ||
+              !(await this.starterHeartbeat.canDispatch(sessionId))
+            ) {
+              throw new ConflictError({ message: "The heartbeat was paused or its Chat changed before dispatch." });
+            }
+          },
+          this.starterHeartbeat.holdOnPricingRefusal(sessionId),
+        ),
       notifyHeartbeatAttention: async ({ workspaceId, sessionId, turnId, occurrenceId }) => {
         if (
           !(await this.isFeatureEnabled("notificationRoutingV1Enabled")) ||

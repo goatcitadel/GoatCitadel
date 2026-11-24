@@ -149,6 +149,16 @@ describe("Chat timer async ownership", () => {
     expect(current.chatTimerPanel!.message).toBe("New draft");
     expect(notice).not.toHaveBeenCalled();
   });
+  it("names the length limit for a reminder that is too long, and asks for one that is empty", async () => {
+    await open();
+    await fill("x".repeat(4001));
+    await act(async () => current.chatTimerPanel!.onCreate());
+    expect(current.chatTimerPanel!.error).toBe("Shorten the reminder to 4,000 characters or fewer (it has 4,001).");
+    await fill("   ");
+    await act(async () => current.chatTimerPanel!.onCreate());
+    expect(current.chatTimerPanel!.error).toBe("Enter a reminder message.");
+    expect(api.createChatTimer).not.toHaveBeenCalled();
+  });
   it("rejects a mismatched create receipt and preserves the draft", async () => {
     api.createChatTimer.mockResolvedValue({ item: timer("foreign") });
     await open();
