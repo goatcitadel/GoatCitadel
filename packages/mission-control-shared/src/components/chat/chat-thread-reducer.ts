@@ -369,16 +369,16 @@ function reconcileTraceToolRuns(
   current: ChatThreadTurnRecord["toolRuns"],
   incoming: ChatThreadTurnRecord["toolRuns"],
 ): ChatThreadTurnRecord["toolRuns"] {
-  const currentById = new Map(current.map((run) => [run.toolRunId, run]));
-  let reconciled: ChatThreadTurnRecord["toolRuns"] | undefined;
-  for (const [index, run] of incoming.entries()) {
-    const existing = currentById.get(run.toolRunId);
-    if (existing && retainsTerminalToolRun(existing, run)) {
-      reconciled ??= incoming.slice();
-      reconciled[index] = existing;
+  const runs = new Map(current.map((run) => [run.toolRunId, run]));
+  let changed = false;
+  for (const run of incoming) {
+    const existing = runs.get(run.toolRunId);
+    if (existing !== run && !(existing && retainsTerminalToolRun(existing, run))) {
+      runs.set(run.toolRunId, run);
+      changed = true;
     }
   }
-  return reconciled ?? incoming;
+  return changed ? [...runs.values()] : current;
 }
 
 function appendOrReplaceToolRun(

@@ -281,15 +281,21 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   onControl(takeOver, () => report({ type: "take_over" }));
   onControl(handBack, () => report({ type: "hand_back" }));
   onControl(stop, () => report({ type: "stop" }));
-  window.addEventListener(
-    "keydown",
-    (event) => {
-      if (event.isTrusted && event.key === "Escape" && state.mode !== "hidden" && !inputBlocked()) {
-        report({ type: "stop" });
-      }
-    },
-    true,
-  );
+  const onKey = (event: KeyboardEvent): void => {
+    if (!event.isTrusted) return;
+    if (event.type === "keydown" && event.key === "Escape" && state.mode !== "hidden" && !inputBlocked()) {
+      report({ type: "stop" });
+    }
+    // The approval overlay already blocks page pointer input. Suppress keyboard defaults
+    // and page handlers too, including when a page element had focus before approval.
+    if (state.mode === "approval" && (event.key === "Escape" || !event.composedPath().includes(host))) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  };
+  window.addEventListener("keydown", onKey, true);
+  window.addEventListener("keypress", onKey, true);
+  window.addEventListener("keyup", onKey, true);
 
   // ---- Cursor motion ---------------------------------------------------------------------------------------------
   // A quadratic Bezier from the current point to the target, bowed by a small perpendicular arc, eased in and out,

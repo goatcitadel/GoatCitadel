@@ -32,10 +32,12 @@ test("controlled display streams hold, advance exact chunks, finish and release 
       source += decoder.decode(part.value);
     }
     assert.match(source, /DONE/);
-    const deltas = source
+    const frames = source
       .split("\n\n")
       .filter((event) => event.startsWith("data: {"))
-      .map((event) => JSON.parse(event.slice(6)).choices[0].delta.content ?? "");
+      .map((event) => JSON.parse(event.slice(6)));
+    assert.equal(frames.at(-1).usage.prompt_tokens_details.cached_tokens, 0);
+    const deltas = frames.map((frame) => frame.choices[0].delta.content ?? "");
     assert.ok(deltas.every((delta) => delta.length <= 128));
     assert.equal(deltas.join(""), "First\n\n\nSecond " + "fragment ".repeat(160));
     assert.throws(() => stub.advanceControlledStream(), /found 0/);
@@ -254,7 +256,10 @@ test("scripted Responses provider emits a native server_error then succeeds with
 
 test("replaceDispatchPlan re-arms the next deterministic completion after fixture setup traffic", async () => {
   const stub = await startDeterministicLlmStub({
-    dispatchPlan: [{ type: "success", replyText: "SETUP" }],
+    dispatchPlan: [
+      { type: "success", replyText: "SETUP" },
+      { type: "success", replyText: "ORIGINAL_PLAN" },
+    ],
   });
   const request = () =>
     fetch(`${stub.baseUrl}/chat/completions`, {
@@ -264,6 +269,15 @@ test("replaceDispatchPlan re-arms the next deterministic completion after fixtur
     });
   try {
     assert.match(await (await request()).text(), /SETUP/u);
+    const previousDispatches = stub.dispatchPlanDispatches();
+    assert.throws(
+      () => stub.replaceDispatchPlan([{ type: "success" }, { type: "http_error", status: 418 }], "bad tool"),
+      /requiredTool/i,
+    );
+    assert.equal(stub.dispatchPlanDispatches(), previousDispatches);
+    const afterRejectedReplacement = await request();
+    assert.equal(afterRejectedReplacement.status, 200);
+    assert.match(await afterRejectedReplacement.text(), /ORIGINAL_PLAN/u);
     stub.replaceDispatchPlan([{ type: "http_error", status: 503, code: "rearmed" }]);
     const rearmed = await request();
     assert.equal(rearmed.status, 503);
@@ -642,7 +656,19 @@ test("listen and advertised host validation rejects unsafe or unusable values", 
     startDeterministicLlmStub({ publicBaseUrlHost: "http://host.docker.internal/path" }),
     /publicBaseUrlHost/u,
   );
-  await assert.rejects(startDeterministicLlmStub({ publicBaseUrlHost: "0.0.0.0" }), /cannot advertise/u);
+  for (const host of ["0.0.0.0", "[::]", "0:0:0:0:0:0:0:0"]) {
+    await assert.rejects(startDeterministicLlmStub({ publicBaseUrlHost: host }), /cannot advertise/u);
+  }
+  for (const host of ["localhost:123", "[::1", "::1]", "example..test", "127.1"]) {
+    await assert.rejects(startDeterministicLlmStub({ publicBaseUrlHost: host }), /plain hostname or IP address/u);
+  }
+  const stub = await startDeterministicLlmStub({ publicBaseUrlHost: "[0:0:0:0:0:0:0:1]" });
+  try {
+    assert.equal(stub.publicBaseUrlHost, "::1");
+    assert.equal(new URL(stub.baseUrl).hostname, "[::1]");
+  } finally {
+    await stub.close();
+  }
 });
 
 test("provider-error clock markers are explicit response metadata and leave native failures unchanged", async () => {

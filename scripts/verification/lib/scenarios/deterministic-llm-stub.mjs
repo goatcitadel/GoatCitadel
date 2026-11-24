@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
+import { isIP } from "node:net";
 import path from "node:path";
 
 export const DETERMINISTIC_LLM_PROVIDER_ID = "verification-stub";
@@ -300,9 +301,11 @@ export async function startDeterministicLlmStub(options = {}) {
     dispatchPlanDispatchRecords: () =>
       requestSummaries.filter((entry) => Number.isInteger(entry.dispatchPlanIndex)).map((entry) => ({ ...entry })),
     replaceDispatchPlan: (nextPlan, requiredTool = options.dispatchPlanRequiredTool) => {
-      dispatchPlan = normalizeDispatchPlan(nextPlan, replyText);
-      dispatchPlanRequiredTool =
+      const normalizedPlan = normalizeDispatchPlan(nextPlan, replyText);
+      const normalizedTool =
         requiredTool === undefined ? undefined : normalizeToolName(requiredTool, "dispatchPlanRequiredTool");
+      dispatchPlan = normalizedPlan;
+      dispatchPlanRequiredTool = normalizedTool;
       dispatchPlanDispatches = 0;
     },
     replacePromptReplyRules: (nextRules) => {
@@ -375,7 +378,12 @@ async function executePlannedDispatch({
             object: "chat.completion.chunk",
             model,
             choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            usage: { prompt_tokens: 12, completion_tokens: 40, total_tokens: 52 },
+            usage: {
+              prompt_tokens: 12,
+              prompt_tokens_details: { cached_tokens: 0 },
+              completion_tokens: 40,
+              total_tokens: 52,
+            },
           })}\n\n`,
         );
         response.end("data: [DONE]\n\n");
@@ -694,15 +702,19 @@ function normalizePublicBaseUrlHost(value) {
 
 function normalizeHostText(value, label) {
   if (typeof value !== "string") throw new TypeError(`${label} must be a string`);
-  const normalized = value.trim();
-  if (!normalized || normalized.length > 253 || !/^[a-zA-Z0-9.:[\]-]+$/u.test(normalized)) {
-    throw new TypeError(`${label} must be a plain hostname or IP address`);
-  }
-  return normalized;
+  const host = value.trim().toLowerCase();
+  const bracketed = host.startsWith("[") && host.endsWith("]");
+  const ip = bracketed ? host.slice(1, -1) : host;
+  if (isIP(ip) === 6) return new URL(`http://[${ip}]`).hostname.slice(1, -1);
+  if (!bracketed && isIP(ip) === 4) return ip;
+  const labels = host.replace(/\.$/u, "").split(".");
+  const dnsName = host.length <= 253 && labels.every((part) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(part));
+  if (dnsName && !/^(?:\d+|0x[0-9a-f]*)$/u.test(labels.at(-1))) return host;
+  throw new TypeError(`${label} must be a plain hostname or IP address`);
 }
 
 function formatUrlHost(host) {
-  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return isIP(host) === 6 ? `[${host}]` : host;
 }
 
 function normalizeDelayMs(value, label) {

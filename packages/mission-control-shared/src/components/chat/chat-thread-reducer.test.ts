@@ -642,6 +642,15 @@ describe("chat-thread-reducer", () => {
       )!;
       expect(trace.turns[1]!.toolRuns[0]).toMatchObject({ status, result: { message: "Recorded result" } });
       expect(trace.turns[1]!.trace.toolRuns).toBe(trace.turns[1]!.toolRuns);
+      const olderTrace = updateThreadFromStreamChunk(
+        trace,
+        { type: "trace_update", sessionId, turnId: "turn-2", trace: { toolRuns: [second] } } as never,
+        null,
+        sessionId,
+        null,
+      )!;
+      expect(olderTrace.turns[1]!.toolRuns).toEqual(trace.turns[1]!.toolRuns);
+      expect(olderTrace.turns[1]!.trace.toolRuns).toBe(trace.turns[1]!.toolRuns);
     }
     deliver("tool_result", { ...second, status: "approval_required" });
     expect(deliver("tool_start", second)!.turns[1]!.toolRuns[1]!.status).toBe("started");

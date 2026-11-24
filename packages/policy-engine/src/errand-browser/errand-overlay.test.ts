@@ -220,6 +220,28 @@ describe("errand overlay", () => {
     expect(events).toEqual([{ type: "stop" }]);
   }, 60_000);
 
+  it("blocks page keyboard input while the preview is open and restores it when driving resumes", async () => {
+    const { browser } = await openErrand();
+    const page = browser.page();
+    await page.evaluate(() => {
+      const button = document.createElement("button");
+      button.id = "keyboard-fixture";
+      button.textContent = "Keyboard fixture";
+      button.addEventListener("click", () => {
+        button.textContent = "Activated";
+      });
+      document.body.append(button);
+      button.focus();
+    });
+    await browser.overlay.render(approvalState());
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Space");
+    expect(await page.locator("#keyboard-fixture").textContent()).toBe("Keyboard fixture");
+    await browser.overlay.render(drivingState());
+    await page.keyboard.press("Enter");
+    expect(await page.locator("#keyboard-fixture").textContent()).toBe("Activated");
+  }, 60_000);
+
   it("supports keyboard takeover and hand-back", async () => {
     const { browser, events } = await openErrand();
     const page = browser.page();
