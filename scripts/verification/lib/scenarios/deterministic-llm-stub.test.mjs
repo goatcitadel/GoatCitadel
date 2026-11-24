@@ -6,8 +6,34 @@ import { setTimeout as delay } from "node:timers/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import sharp from "sharp";
 
 import { startDeterministicLlmStub, writeDeterministicLlmProviderConfig } from "./deterministic-llm-stub.mjs";
+
+function readSseFrames(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const frames = [];
+  let buffer = "";
+  let doneMarker = false;
+  return {
+    frames,
+    get doneMarker() {
+      return doneMarker;
+    },
+    async read() {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const events = buffer.split("\n\n");
+      buffer = events.pop();
+      for (const event of events) {
+        if (event === "data: [DONE]") doneMarker = true;
+        else if (event.startsWith("data: {")) frames.push(JSON.parse(event.slice(6)));
+      }
+      return !done;
+    },
+  };
+}
 
 test("a cancelled fixture upload leaves the provider available", async () => {
   const stub = await startDeterministicLlmStub();
@@ -33,54 +59,46 @@ test("a cancelled fixture upload leaves the provider available", async () => {
   }
 });
 
-test("controlled display streams hold, advance exact chunks, finish and release their controller", async () => {
-  const stub = await startDeterministicLlmStub({
-    dispatchPlan: [{ type: "stream_controlled", chunks: ["First\n\n", "\nSecond " + "fragment ".repeat(160)] }],
-  });
-  try {
-    const response = await fetch(`${stub.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: stub.model, stream: true, messages: [] }),
+test(
+  "controlled display streams hold, advance exact chunks, finish and release their controller",
+  { timeout: 10_000 },
+  async (t) => {
+    const controller = new AbortController();
+    const stub = await startDeterministicLlmStub({
+      dispatchPlan: [{ type: "stream_controlled", chunks: ["First\n\n", "\nSecond " + "fragment ".repeat(160)] }],
     });
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    const frames = [];
-    let buffer = "";
-    let doneMarker = false;
-    async function readFrames() {
-      const { value, done } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      const events = buffer.split("\n\n");
-      buffer = events.pop();
-      for (const event of events) {
-        if (event === "data: [DONE]") doneMarker = true;
-        else if (event.startsWith("data: {")) frames.push(JSON.parse(event.slice(6)));
+    try {
+      const response = await fetch(`${stub.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: AbortSignal.any([t.signal, controller.signal]),
+        body: JSON.stringify({ model: stub.model, stream: true, messages: [] }),
+      });
+      const stream = readSseFrames(response.body);
+      const deltas = () => stream.frames.map((frame) => frame.choices[0].delta.content ?? "");
+      const firstText = "First\n\n";
+      const completeText = firstText + "\nSecond " + "fragment ".repeat(160);
+      while (deltas().join("").length < firstText.length) assert.ok(await stream.read());
+      assert.equal(deltas().join(""), firstText);
+      assert.equal(stream.doneMarker, false);
+      assert.equal(stub.advanceControlledStream(), true);
+      while (deltas().join("").length < completeText.length) assert.ok(await stream.read());
+      assert.equal(deltas().join(""), completeText);
+      assert.equal(stream.doneMarker, false);
+      assert.equal(stub.advanceControlledStream(), false);
+      while (await stream.read()) {
+        // Drain through EOF to parse the final usage event and end marker.
       }
-      return !done;
+      assert.equal(stream.doneMarker, true);
+      assert.equal(stream.frames.at(-1).usage.prompt_tokens_details.cached_tokens, 0);
+      assert.ok(deltas().every((delta) => delta.length <= 128));
+      assert.throws(() => stub.advanceControlledStream(), /found 0/);
+    } finally {
+      controller.abort();
+      await stub.close();
     }
-    const deltas = () => frames.map((frame) => frame.choices[0].delta.content ?? "");
-    const firstText = "First\n\n";
-    const completeText = firstText + "\nSecond " + "fragment ".repeat(160);
-    while (deltas().join("").length < firstText.length) assert.ok(await readFrames());
-    assert.equal(deltas().join(""), firstText);
-    assert.equal(doneMarker, false);
-    assert.equal(stub.advanceControlledStream(), true);
-    while (deltas().join("").length < completeText.length) assert.ok(await readFrames());
-    assert.equal(deltas().join(""), completeText);
-    assert.equal(doneMarker, false);
-    assert.equal(stub.advanceControlledStream(), false);
-    while (await readFrames()) {
-      // Drain through EOF to parse the final usage event and end marker.
-    }
-    assert.equal(doneMarker, true);
-    assert.equal(frames.at(-1).usage.prompt_tokens_details.cached_tokens, 0);
-    assert.ok(deltas().every((delta) => delta.length <= 128));
-    assert.throws(() => stub.advanceControlledStream(), /found 0/);
-  } finally {
-    await stub.close();
-  }
-});
+  },
+);
 
 test("deterministic provider metadata supports Chat thinking off", async () => {
   const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-stub-reasoning-"));
@@ -213,7 +231,10 @@ test("deterministic provider serves a valid PNG through the image-generation rou
     assert.equal(response.status, 200);
     const payload = await response.json();
     const bytes = Buffer.from(payload.data[0].b64_json, "base64");
-    assert.deepEqual([...bytes.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    const png = sharp(bytes);
+    assert.equal((await png.metadata()).format, "png");
+    const { info } = await png.raw().toBuffer({ resolveWithObject: true });
+    assert.deepEqual([info.width, info.height], [1, 1]);
     assert.equal(stub.imageGenerationDispatches(), 1);
     assert.equal(JSON.stringify(stub.requestSummaries()).includes("fixture image"), false);
   } finally {
@@ -512,57 +533,76 @@ test("prompt reply rules require exactly one privacy-safe role matcher", async (
   );
 });
 
-test("scripted stream disconnect exposes one partial frame and never synthesizes a terminal marker", async () => {
-  const stub = await startDeterministicLlmStub({
-    dispatchPlan: [{ type: "stream_disconnect", emittedText: "PARTIAL" }],
-  });
-  try {
-    const response = await fetch(`${stub.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: stub.model, stream: true, messages: [{ role: "user", content: "fixture" }] }),
+test(
+  "scripted stream disconnect exposes one partial frame and never synthesizes a terminal marker",
+  { timeout: 10_000 },
+  async (t) => {
+    const controller = new AbortController();
+    const stub = await startDeterministicLlmStub({
+      dispatchPlan: [{ type: "stream_disconnect", emittedText: "PARTIAL" }],
     });
-    assert.equal(response.status, 200);
-    const reader = response.body.getReader();
-    const first = await reader.read();
-    assert.equal(first.done, false);
-    assert.match(new TextDecoder().decode(first.value), /PARTIAL/u);
-    await assert.rejects(reader.read());
-    await stub.waitForCompletionDispatchCount(1);
-    assert.equal(stub.completionDispatches(), 1);
-    assert.equal(stub.completionDispatchRecords()[0]?.behavior, "stream_disconnect");
-  } finally {
-    await stub.close();
-  }
-});
+    try {
+      const response = await fetch(`${stub.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: AbortSignal.any([t.signal, controller.signal]),
+        body: JSON.stringify({ model: stub.model, stream: true, messages: [{ role: "user", content: "fixture" }] }),
+      });
+      assert.equal(response.status, 200);
+      const stream = readSseFrames(response.body);
+      await assert.rejects(async () => {
+        while (await stream.read()) {
+          // Keep collecting all complete frames until the socket fails.
+        }
+      });
+      assert.deepEqual(
+        stream.frames.map((frame) => frame.choices[0].delta.content),
+        ["PARTIAL"],
+      );
+      assert.equal(stream.doneMarker, false);
+      await stub.waitForCompletionDispatchCount(1);
+      assert.equal(stub.completionDispatches(), 1);
+      assert.equal(stub.completionDispatchRecords()[0]?.behavior, "stream_disconnect");
+    } finally {
+      controller.abort();
+      await stub.close();
+    }
+  },
+);
 
-test("scripted stream stall can expose one partial frame before the client disconnects", async () => {
-  const stub = await startDeterministicLlmStub({
-    dispatchPlan: [{ type: "stream_stall", emittedText: "STREAMING_BEFORE_RESTART" }],
-  });
-  const controller = new AbortController();
-  try {
-    const response = await fetch(`${stub.baseUrl}/responses`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: stub.model, stream: true, input: "fixture" }),
+test(
+  "scripted stream stall can expose one partial frame before the client disconnects",
+  { timeout: 10_000 },
+  async (t) => {
+    const stub = await startDeterministicLlmStub({
+      dispatchPlan: [{ type: "stream_stall", emittedText: "STREAMING_BEFORE_RESTART" }],
     });
-    assert.equal(response.status, 200);
-    const reader = response.body.getReader();
-    const first = await reader.read();
-    assert.equal(first.done, false);
-    assert.match(new TextDecoder().decode(first.value), /STREAMING_BEFORE_RESTART/u);
-    assert.equal(stub.completionDispatchRecords()[0]?.finishedAt, undefined);
-    controller.abort();
-    await reader.cancel().catch(() => undefined);
-    await stub.waitForCompletionDispatchCount(1);
-    assert.equal(stub.completionDispatchRecords()[0]?.behavior, "stream_stall");
-  } finally {
-    controller.abort();
-    await stub.close();
-  }
-});
+    const controller = new AbortController();
+    try {
+      const response = await fetch(`${stub.baseUrl}/responses`, {
+        method: "POST",
+        signal: AbortSignal.any([t.signal, controller.signal]),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: stub.model, stream: true, input: "fixture" }),
+      });
+      assert.equal(response.status, 200);
+      const stream = readSseFrames(response.body);
+      while (stream.frames.length === 0) assert.ok(await stream.read());
+      assert.deepEqual(
+        stream.frames.map((frame) => frame.delta),
+        ["STREAMING_BEFORE_RESTART"],
+      );
+      assert.equal(stream.doneMarker, false);
+      assert.equal(stub.completionDispatchRecords()[0]?.finishedAt, undefined);
+      controller.abort();
+      await stub.waitForCompletionDispatchCount(1);
+      assert.equal(stub.completionDispatchRecords()[0]?.behavior, "stream_stall");
+    } finally {
+      controller.abort();
+      await stub.close();
+    }
+  },
+);
 
 test("listenHost can bind a wildcard while publicBaseUrlHost advertises a safe Docker-reachable host", async () => {
   const stub = await startDeterministicLlmStub({
