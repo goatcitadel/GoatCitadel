@@ -54,6 +54,7 @@ function fixture() {
   });
   return {
     budget,
+    guardFor: (operation: () => Promise<unknown>) => guardByCall.get(operation)!,
     advance: (value: string) => {
       now = new Date(value);
     },
@@ -150,5 +151,36 @@ describe("automatic background dispatch budget", () => {
         route: { ...local.route, credential: { ...local.route.credential, usagePool: "local" } },
       }),
     ).toThrow("verified pricing");
+  });
+
+  it("reports a pricing refusal to the caller before any provider attempt", async () => {
+    const f = fixture();
+    const refusals: string[] = [];
+    const unpriced = dispatch("subscription");
+    const work = vi.fn();
+    const operation = async () => {
+      await f.guardFor(operation)({ ...unpriced, route: { ...unpriced.route, pricing: undefined } });
+      work();
+    };
+    await expect(
+      f.budget.run(operation, undefined, async (refusal) => {
+        refusals.push(refusal.reason);
+      }),
+    ).rejects.toThrow("priced model");
+    expect(refusals).toEqual(["pricing_unavailable"]);
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  it("keeps the refusal as the reported error when recording it fails", async () => {
+    const f = fixture();
+    const unpriced = dispatch("subscription");
+    const operation = async () => {
+      await f.guardFor(operation)({ ...unpriced, route: { ...unpriced.route, pricing: undefined } });
+    };
+    await expect(
+      f.budget.run(operation, undefined, async () => {
+        throw new Error("storage down");
+      }),
+    ).rejects.toThrow("priced model");
   });
 });

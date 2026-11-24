@@ -4,6 +4,7 @@ import type { FollowThroughAction, FollowThroughItem, FollowThroughActionInput }
 import { fetchFollowThrough, requestFollowThroughAction } from "@goatcitadel/mission-control-shared/api/follow-through";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { subscribeRefresh } from "@goatcitadel/mission-control-shared/state/refresh-bus";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
@@ -113,9 +114,15 @@ function FollowThroughSession({
       }
       if (mounted.current) await query.refetch();
     } catch (cause) {
+      // A clean refusal (for example a stale revision) recorded nothing, so
+      // keeping the exact request would lock every action and only resend it.
+      const refused = isDefiniteRefusal(cause);
+      if (input.action === "run_now" && refused) remember(undefined);
       if (mounted.current) {
         setError(
-          `${describeApiError(cause).summary} Refresh to inspect the recorded outcome before trying another action.`,
+          refused
+            ? `${describeApiError(cause).summary} Nothing ran. Refresh follow-through, then choose again.`
+            : `${describeApiError(cause).summary} Refresh to inspect the recorded outcome before trying another action.`,
         );
         void query.refetch();
       }
@@ -207,4 +214,17 @@ function FollowThroughSession({
       ) : null}
     </div>
   );
+}
+/**
+ * True when the Gateway answered with a client error that settled nothing: the
+ * request was refused before any run was recorded. Timeouts, rate limits and
+ * idempotency-key conflicts (in progress, or possibly already sent) stay
+ * uncertain, so the exact request is kept for an identical retry.
+ */
+function isDefiniteRefusal(error: unknown): boolean {
+  if (!isApiRequestError(error) || error.kind === "network" || error.kind === "protocol") return false;
+  const status = error.status ?? 0;
+  if (status < 400 || status >= 500 || status === 408 || status === 429) return false;
+  const body = error.body as { error?: unknown } | undefined;
+  return !(status === 409 && typeof body?.error === "string" && body.error.includes("Idempotency-Key"));
 }

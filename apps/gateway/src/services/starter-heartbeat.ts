@@ -1,8 +1,18 @@
-import { NotFoundError } from "@goatcitadel/contracts";
+import { NotFoundError, type LlmRuntimeConfig } from "@goatcitadel/contracts";
 import { DEFAULT_SESSION_AUTONOMY_PREFS, type AsyncStorage } from "@goatcitadel/storage";
 
 const STARTER_HEARTBEAT_KEY = "starter_heartbeat_v1";
 const EXPLICIT_HEARTBEAT_PREFIX = "explicit_heartbeat_v1:";
+const UNPRICED_HOLD_PREFIX = "heartbeat_unpriced_hold_v1:";
+/** How long a heartbeat waits after its model was refused for having no price. */
+export const UNPRICED_HEARTBEAT_HOLD_MS = 24 * 60 * 60 * 1000;
+
+type ModelSelection = Pick<LlmRuntimeConfig, "activeProviderId" | "activeModel" | "utilityProviderId" | "utilityModel">;
+
+interface UnpricedHold {
+  heldAt: string;
+  models: string;
+}
 
 interface HeartbeatBinding {
   workspaceId: string;
@@ -22,17 +32,55 @@ type HeartbeatEnrollmentStorage = Pick<
  * Eligibility now requires a single starter binding or an operator choice.
  */
 export class StarterHeartbeat {
-  public constructor(private readonly storage: HeartbeatEnrollmentStorage) {}
+  public constructor(
+    private readonly storage: HeartbeatEnrollmentStorage,
+    private readonly readModels: () => ModelSelection = () => ({ activeProviderId: "", activeModel: "" }),
+    private readonly now: () => Date = () => new Date(),
+  ) {}
 
   public async captureExplicitChoice(sessionId: string, enabled: boolean): Promise<void> {
     const target = await this.readTarget(sessionId);
     if (target) await this.storage.systemSettings.set(EXPLICIT_HEARTBEAT_PREFIX + sessionId, { ...target, enabled });
   }
 
+  /** Whether the heartbeat may dispatch now: armed and not waiting out an unpriced-model refusal. */
   public async isArmed(sessionId: string): Promise<boolean> {
     const target = await this.readTarget(sessionId);
     if (!target) return false;
+    if (await this.isHeldForUnpricedModel(sessionId)) return false;
     return await this.isTargetArmed(target);
+  }
+
+  /**
+   * Records that the automatic budget refused this Chat's heartbeat because its
+   * model has no per-token price (for example a subscription sign-in). Later
+   * occurrences park quietly for a day, or until the model selection changes,
+   * instead of failing every hour with the same reason.
+   */
+  public async holdAfterBudgetRefusal(sessionId: string, reason: string): Promise<void> {
+    if (reason !== "pricing_unavailable") return;
+    const hold: UnpricedHold = { heldAt: this.now().toISOString(), models: this.modelFingerprint() };
+    await this.storage.systemSettings.set(UNPRICED_HOLD_PREFIX + sessionId, hold);
+  }
+
+  private async isHeldForUnpricedModel(sessionId: string): Promise<boolean> {
+    const row = await this.storage.systemSettings.get<UnpricedHold>(UNPRICED_HOLD_PREFIX + sessionId);
+    const hold = row?.value;
+    if (!hold || typeof hold.heldAt !== "string" || typeof hold.models !== "string") return false;
+    const heldAt = Date.parse(hold.heldAt);
+    if (!Number.isFinite(heldAt)) return false;
+    const age = this.now().getTime() - heldAt;
+    return age >= 0 && age < UNPRICED_HEARTBEAT_HOLD_MS && hold.models === this.modelFingerprint();
+  }
+
+  private modelFingerprint(): string {
+    const models = this.readModels();
+    return JSON.stringify([
+      models.activeProviderId,
+      models.activeModel,
+      models.utilityProviderId ?? null,
+      models.utilityModel ?? null,
+    ]);
   }
 
   public async armIfEligible(sessionId: string, providerReady: () => Promise<boolean>): Promise<boolean> {

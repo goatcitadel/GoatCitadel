@@ -37,6 +37,17 @@ export function ChatFollowThroughSetupControl({
     [created, setCreated] = useState<CronJobRecord>();
   const lock = useRef(false),
     submitted = useRef<FollowThroughSetupInput | undefined>(undefined);
+  // The panel stays mounted while hidden. Reopening it after a confirmed save
+  // starts a fresh setup; an uncertain request is kept so it is not resent
+  // under a new identity.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open && created) {
+      setCreated(undefined);
+      setError(undefined);
+    }
+  }
   async function create(input: ReviewedFollowThroughSetup) {
     if (lock.current || created) return;
     lock.current = true;
@@ -64,6 +75,8 @@ export function ChatFollowThroughSetupControl({
         job.actionConfig.agentTurn.workspaceId !== workspaceId
       )
         throw new Error("The saved schedule has a different scope. Check the saved schedule before acting.");
+      // Confirmed: the next setup is a new request with its own identity.
+      submitted.current = undefined;
       setCreated(job);
       setUncertain(false);
       onCreated();

@@ -64,12 +64,28 @@ export class AutomaticBackgroundBudget {
     };
   }
 
-  public async run<T>(operation: () => Promise<T>, assertAuthority?: () => Promise<void>): Promise<T> {
+  public async run<T>(
+    operation: () => Promise<T>,
+    assertAuthority?: () => Promise<void>,
+    onRefused?: (refusal: AutomaticBackgroundBudgetError) => Promise<void>,
+  ): Promise<T> {
     const days = new Set<string>();
     try {
       return await this.deps.runWithDispatchGuard(async (input) => {
         await assertAuthority?.();
-        const day = await this.reserve(input);
+        const day = await this.reserve(input).catch(async (error: unknown) => {
+          // A recurring caller records the refusal so later occurrences can
+          // wait instead of failing again for the same reason. The refusal
+          // stays the reported error: if that record fails, the next
+          // occurrence is simply refused again and tries to record it again.
+          if (error instanceof AutomaticBackgroundBudgetError && onRefused) {
+            await onRefused(error).then(
+              () => undefined,
+              () => undefined,
+            );
+          }
+          throw error;
+        });
         if (day) {
           days.add(day);
           await assertAuthority?.();

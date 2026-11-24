@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_SESSION_AUTONOMY_PREFS, type AsyncStorage } from "@goatcitadel/storage";
-import { StarterHeartbeat } from "./starter-heartbeat.js";
+import { StarterHeartbeat, UNPRICED_HEARTBEAT_HOLD_MS } from "./starter-heartbeat.js";
 
 function fixture() {
   const rows = new Map<string, { value: unknown }>();
@@ -64,5 +64,55 @@ describe("starter heartbeat enrollment", () => {
     await f.starter.captureExplicitChoice("second", false);
     expect(await f.starter.isArmed("second")).toBe(false);
     expect(await f.starter.armIfEligible("second", async () => true)).toBe(false);
+  });
+});
+
+describe("starter heartbeat unpriced-model hold", () => {
+  function heldFixture() {
+    const f = fixture();
+    let models = { activeProviderId: "openai-codex", activeModel: "gpt-subscription" };
+    let now = new Date("2026-11-23T12:00:00.000Z");
+    const starter = new StarterHeartbeat(
+      f.storage,
+      () => models,
+      () => now,
+    );
+    return {
+      starter,
+      setModels: (next: typeof models) => (models = next),
+      advance: (ms: number) => (now = new Date(now.getTime() + ms)),
+    };
+  }
+
+  it("parks an armed heartbeat after a pricing refusal until a day passes", async () => {
+    const h = heldFixture();
+    await h.starter.captureExplicitChoice("first", true);
+    expect(await h.starter.isArmed("first")).toBe(true);
+    await h.starter.holdAfterBudgetRefusal("first", "pricing_unavailable");
+    expect(await h.starter.isArmed("first")).toBe(false);
+    h.advance(UNPRICED_HEARTBEAT_HOLD_MS - 1);
+    expect(await h.starter.isArmed("first")).toBe(false);
+    h.advance(1);
+    expect(await h.starter.isArmed("first")).toBe(true);
+  });
+
+  it("lifts the hold as soon as the model selection changes", async () => {
+    const h = heldFixture();
+    await h.starter.captureExplicitChoice("first", true);
+    await h.starter.holdAfterBudgetRefusal("first", "pricing_unavailable");
+    expect(await h.starter.isArmed("first")).toBe(false);
+    h.setModels({ activeProviderId: "openai", activeModel: "priced-model" });
+    expect(await h.starter.isArmed("first")).toBe(true);
+  });
+
+  it("ignores budget refusals other than missing pricing and holds only that Chat", async () => {
+    const h = heldFixture();
+    await h.starter.captureExplicitChoice("first", true);
+    await h.starter.captureExplicitChoice("second", true);
+    await h.starter.holdAfterBudgetRefusal("first", "background_budget_exhausted");
+    expect(await h.starter.isArmed("first")).toBe(true);
+    await h.starter.holdAfterBudgetRefusal("first", "pricing_unavailable");
+    expect(await h.starter.isArmed("first")).toBe(false);
+    expect(await h.starter.isArmed("second")).toBe(true);
   });
 });

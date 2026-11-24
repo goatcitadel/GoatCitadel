@@ -703,6 +703,44 @@ describe("Gateway inbox projection", () => {
     expect(JSON.stringify(projection)).not.toContain("wrong-compatibility-session");
   });
 
+  it("drops manual-step and failed plans past their expiry but keeps live ones and failed rollbacks", async () => {
+    const deps = dependencies();
+    const base = {
+      revision: 1,
+      title: "Turn on Chat timers",
+      summary: "Makes timers available in conversations.",
+      origin: { workspaceId: "workspace-a" },
+      risk: "caution",
+      createdAt: "2026-11-17T05:59:26.200Z",
+      updatedAt: "2026-11-17T06:00:00.000Z",
+    };
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const future = new Date(Date.now() + 60 * 60_000).toISOString();
+    vi.mocked(deps.storage.changePlans.list).mockImplementation(async ({ status }) => {
+      if (status === "failed")
+        return [
+          { ...base, planId: "failed-expired", status, expiresAt: past },
+          { ...base, planId: "failed-live", status, expiresAt: future },
+        ] as never;
+      if (status === "manual_required")
+        return [
+          { ...base, planId: "manual-expired", status, expiresAt: past },
+          { ...base, planId: "manual-no-expiry", status },
+        ] as never;
+      if (status === "rollback_failed")
+        return [{ ...base, planId: "rollback-expired", status, expiresAt: past }] as never;
+      return [];
+    });
+
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+    expect(projection.items.map((item) => item.id).sort()).toEqual([
+      "change_plan:failed-live",
+      "change_plan:manual-no-expiry",
+      "change_plan:rollback-expired",
+    ]);
+    expect(projection.coverage.find((entry) => entry.source === "change_plans")?.state).not.toBe("partial");
+  });
+
   it("shows a change plan waiting on its approval as the one approval decision, named by the plan (#496)", async () => {
     const deps = dependencies();
     vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
