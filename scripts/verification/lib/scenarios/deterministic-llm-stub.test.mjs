@@ -35,6 +35,10 @@ function readSseFrames(body) {
   };
 }
 
+async function assertReadPending(read, signal) {
+  assert.equal(await Promise.race([read.then(() => "read"), delay(30, "waiting", { signal })]), "waiting");
+}
+
 test("a cancelled fixture upload leaves the provider available", async () => {
   const stub = await startDeterministicLlmStub();
   try {
@@ -82,10 +86,7 @@ test(
       assert.equal(deltas().join(""), firstText);
       assert.equal(stream.doneMarker, false);
       const nextRead = stream.read();
-      assert.equal(
-        await Promise.race([nextRead.then(() => "read"), delay(30, "waiting", { signal: t.signal })]),
-        "waiting",
-      );
+      await assertReadPending(nextRead, t.signal);
       assert.equal(stub.advanceControlledStream(), true);
       assert.ok(await nextRead);
       while (deltas().join("").length < completeText.length) assert.ok(await stream.read());
@@ -598,9 +599,12 @@ test(
         stream.frames.map((frame) => frame.delta),
         ["STREAMING_BEFORE_RESTART"],
       );
+      const nextRead = stream.read();
+      await assertReadPending(nextRead, t.signal);
       assert.equal(stream.doneMarker, false);
       assert.equal(stub.completionDispatchRecords()[0]?.finishedAt, undefined);
       controller.abort();
+      await assert.rejects(nextRead, { name: "AbortError" });
       await stub.waitForCompletionDispatchCount(1);
       assert.equal(stub.completionDispatchRecords()[0]?.behavior, "stream_stall");
     } finally {
@@ -685,17 +689,15 @@ test("required tool isolates approval dispatches from setup and background traff
         }),
       });
     try {
-      for (const tools of [undefined, [], [{ type: "function", name: "unrelated" }]]) {
+      const offeredTool = (name) =>
+        route === "responses" ? { type: "function", name } : { type: "function", function: { name } };
+      for (const tools of [undefined, [], [offeredTool("unrelated")]]) {
         const response = await send(tools);
         assert.equal(response.status, 200);
         assert.doesNotMatch(await response.text(), /"fs_read"/u);
       }
       assert.equal(stub.dispatchPlanDispatches(), 0);
-      const offered =
-        route === "responses"
-          ? { type: "function", name: "fs_read" }
-          : { type: "function", function: { name: "fs_read" } };
-      assert.match(await (await send([offered])).text(), /"fs_read"/u);
+      assert.match(await (await send([offeredTool("fs_read")])).text(), /"fs_read"/u);
       assert.equal(stub.dispatchPlanDispatches(), 1);
     } finally {
       await stub.close();
