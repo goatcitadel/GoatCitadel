@@ -81,7 +81,13 @@ test(
       while (deltas().join("").length < firstText.length) assert.ok(await stream.read());
       assert.equal(deltas().join(""), firstText);
       assert.equal(stream.doneMarker, false);
+      const nextRead = stream.read();
+      assert.equal(
+        await Promise.race([nextRead.then(() => "read"), delay(30, "waiting", { signal: t.signal })]),
+        "waiting",
+      );
       assert.equal(stub.advanceControlledStream(), true);
+      assert.ok(await nextRead);
       while (deltas().join("").length < completeText.length) assert.ok(await stream.read());
       assert.equal(deltas().join(""), completeText);
       assert.equal(stream.doneMarker, false);
@@ -717,7 +723,10 @@ test("authentication precedes request-body limits and streamed bodies are bounde
       method: "POST",
       headers: { authorization: "Bearer fixture" },
       body: (async function* () {
-        yield oversized;
+        const chunkSize = 256 * 1024;
+        for (let offset = 0; offset < oversized.length; offset += chunkSize) {
+          yield oversized.subarray(offset, offset + chunkSize);
+        }
       })(),
       duplex: "half",
     });
