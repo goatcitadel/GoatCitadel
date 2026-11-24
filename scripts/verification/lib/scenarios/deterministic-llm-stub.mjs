@@ -129,7 +129,14 @@ export async function startDeterministicLlmStub(options = {}) {
       return;
     }
 
-    const rawBody = await readBoundedRequestBody(request);
+    let rawBody;
+    try {
+      rawBody = await readBoundedRequestBody(request, requestSummary);
+    } catch (error) {
+      if (!request.aborted && !response.destroyed) throw error;
+      completeRequestSummary(requestSummary, { outcome: "client_disconnected" });
+      return;
+    }
     if (rawBody === undefined) {
       completeRequestSummary(requestSummary, { outcome: "request_too_large", status: 413 });
       writeJsonResponse(response, 413, {
@@ -1078,13 +1085,14 @@ function notifyDispatchWaiters(waiters, count) {
   }
 }
 
-async function readBoundedRequestBody(request) {
+async function readBoundedRequestBody(request, summary) {
   if (Number(request.headers["content-length"]) > MAX_REQUEST_BODY_BYTES) return undefined;
   const chunks = [];
   let bytes = 0;
   // Keep the socket writable long enough to send the 413 response.
   for await (const chunk of request.iterator({ destroyOnReturn: false })) {
     bytes += chunk.length;
+    summary.requestBodyBytes = bytes;
     if (bytes > MAX_REQUEST_BODY_BYTES) return undefined;
     chunks.push(chunk);
   }

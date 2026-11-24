@@ -42,7 +42,8 @@ async function assertReadPending(read, signal) {
 test("a cancelled fixture upload leaves the provider available", async () => {
   const stub = await startDeterministicLlmStub();
   try {
-    const upload = httpRequest(`${stub.baseUrl}/responses`, { method: "POST" });
+    const receiptDeadline = AbortSignal.timeout(5_000);
+    const upload = httpRequest(`${stub.baseUrl}/responses`, { method: "POST", signal: receiptDeadline });
     upload.on("error", () => undefined);
     const sent = new Promise((resolve, reject) => {
       upload.on("error", reject);
@@ -50,11 +51,16 @@ test("a cancelled fixture upload leaves the provider available", async () => {
     });
     try {
       await sent;
-      await delay(20);
+      while (!(stub.requestSummaries()[0]?.requestBodyBytes > 0)) {
+        await delay(5, undefined, { signal: receiptDeadline });
+      }
     } finally {
       upload.destroy();
     }
-    const response = await fetch(`${stub.baseUrl}/models`);
+    while (stub.requestSummaries()[0]?.outcome !== "client_disconnected") {
+      await delay(5, undefined, { signal: receiptDeadline });
+    }
+    const response = await fetch(`${stub.baseUrl}/models`, { signal: receiptDeadline });
     assert.equal(response.status, 200);
     assert.equal((await response.json()).data[0].id, stub.model);
     assert.equal(stub.completionDispatches(), 0);
@@ -391,12 +397,23 @@ test("scripted tool calls use native Responses and Chat Completions protocols", 
     const responses = await fetch(`${stub.baseUrl}/responses`, {
       method: "POST",
       headers: { "content-type": "application/json" },
+      signal: AbortSignal.timeout(5_000),
       body: JSON.stringify({ model: stub.model, stream: true, input: "fixture" }),
     });
-    const responsesBody = await responses.text();
-    assert.match(responsesBody, /"type":"response\.output_item\.done"/u);
-    assert.match(responsesBody, /"name":"presentations_create"/u);
-    assert.match(responsesBody, /"call_id":"call_deck"/u);
+    assert.equal(responses.status, 200);
+    const responsesStream = readSseFrames(responses.body);
+    while (await responsesStream.read()) {
+      // Read through EOF so the completion event is covered.
+    }
+    const item = responsesStream.frames.find((frame) => frame.type === "response.output_item.done")?.item;
+    assert.equal(item?.type, "function_call");
+    assert.equal(item.name, "presentations_create");
+    assert.equal(item.call_id, "call_deck");
+    assert.deepEqual(JSON.parse(item.arguments), { title: "Fixture deck" });
+    const completion = responsesStream.frames.find((frame) => frame.type === "response.completed")?.response;
+    assert.equal(completion?.status, "completed");
+    assert.deepEqual(completion.output, [item]);
+    assert.equal(responsesStream.doneMarker, true);
 
     const chat = await fetch(`${stub.baseUrl}/chat/completions`, {
       method: "POST",
