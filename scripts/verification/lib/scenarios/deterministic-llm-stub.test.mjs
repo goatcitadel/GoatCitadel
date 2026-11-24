@@ -256,7 +256,10 @@ test("deterministic provider serves a valid PNG through the image-generation rou
 });
 
 test("scripted tool calls retain a full research-deck payload while bounding pathological arguments", async () => {
-  const accepted = { title: "Fixture", evidence: "x".repeat(24_000) };
+  const limit = 128_000;
+  const accepted = { title: "Fixture", evidence: "" };
+  accepted.evidence = "x".repeat(limit - JSON.stringify(accepted).length);
+  assert.equal(JSON.stringify(accepted).length, limit);
   const stub = await startDeterministicLlmStub({
     dispatchPlan: [{ type: "tool_call", name: "presentations_create", arguments: accepted }],
   });
@@ -275,9 +278,11 @@ test("scripted tool calls retain a full research-deck payload while bounding pat
     await stub.close();
   }
 
+  const oversized = { ...accepted, evidence: accepted.evidence + "x" };
+  assert.equal(JSON.stringify(oversized).length, limit + 1);
   await assert.rejects(
     startDeterministicLlmStub({
-      dispatchPlan: [{ type: "tool_call", name: "presentations_create", arguments: { evidence: "x".repeat(128_001) } }],
+      dispatchPlan: [{ type: "tool_call", name: "presentations_create", arguments: oversized }],
     }),
     /no more than 128000 characters/u,
   );
@@ -895,20 +900,24 @@ test("expectedAuthorization rejects invalid provider credentials without dispatc
     replyText: "AUTH_OK",
   });
   try {
-    const rejected = await fetch(`${stub.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: "Bearer wrong-key" },
-      body: JSON.stringify({ model: stub.model, messages: [{ role: "user", content: "fixture" }] }),
-    });
-    assert.equal(rejected.status, 401);
-    assert.deepEqual(await rejected.json(), {
-      error: {
-        message: "Synthetic provider credential rejected.",
-        type: "invalid_api_key",
-        code: "invalid_api_key",
-      },
-    });
-    assert.equal(stub.completionDispatches(), 0);
+    for (const authorization of [undefined, "Bearer wrong-key"]) {
+      const headers = new Headers({ "content-type": "application/json" });
+      if (authorization) headers.set("authorization", authorization);
+      const rejected = await fetch(`${stub.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model: stub.model, messages: [{ role: "user", content: "fixture" }] }),
+      });
+      assert.equal(rejected.status, 401);
+      assert.deepEqual(await rejected.json(), {
+        error: {
+          message: "Synthetic provider credential rejected.",
+          type: "invalid_api_key",
+          code: "invalid_api_key",
+        },
+      });
+      assert.equal(stub.completionDispatches(), 0);
+    }
 
     const accepted = await fetch(`${stub.baseUrl}/chat/completions`, {
       method: "POST",
@@ -920,7 +929,7 @@ test("expectedAuthorization rejects invalid provider credentials without dispatc
     assert.equal(stub.completionDispatches(), 1);
     assert.deepEqual(
       stub.requestSummaries().map((entry) => entry.outcome),
-      ["credential_rejected", "success"],
+      ["credential_rejected", "credential_rejected", "success"],
     );
   } finally {
     await stub.close();
