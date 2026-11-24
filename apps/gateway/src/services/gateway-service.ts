@@ -3525,8 +3525,7 @@ export class GatewayService {
           this.llmService.getDispatchReasoningEfforts(providerId, model),
       }),
       new RuntimeConfigurationChangePlanAdapter({
-        getSettings: settingsAuthService.bindRuntimeConfigurationSettings(this, () => this.config),
-        updateSettings: (input) => this.updateSettings(input),
+        ...settingsAuthService.bindRuntimeConfigurationSettings(this, () => this.config),
         listModels: (providerId) => this.llmService.listModels(providerId),
         previewLlamaModels: (baseUrl) => this.llmService.previewModels({ providerId: "llamacpp", baseUrl }),
         resolveManagedSelection: (selectionId, workspaceId) =>
@@ -10922,7 +10921,7 @@ export class GatewayService {
     }
   }
 
-  public async updateSettings(input: settingsAuthService.UpdateSettingsInput): Promise<RuntimeSettings> {
+  public async updateSettings(input: settingsAuthService.UpdateSettingsInput, onCommit?: (revision: number) => void) {
     const deps = {
       ...createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort()),
       // The write fence requires the submitted CAS revision during candidate construction.
@@ -10938,7 +10937,7 @@ export class GatewayService {
 
     let ownerRollback: { rollback(): Promise<void> } | undefined;
     let previousFeatureOverrides: StoredFeatureFlags | undefined;
-    await this.configGenerationService.commit({
+    const { revision } = await this.configGenerationService.commit({
       expectedRevision: input.expectedRevision,
       requireExpectedRevision: true,
       previousRuntime,
@@ -10989,6 +10988,7 @@ export class GatewayService {
         await rollback.rollback();
       },
     });
+    onCommit?.(revision);
     if (didDisengageAutonomyKillSwitch(previousRuntime.features, await this.readFeatureFlags())) {
       await this.resumeRunsAfterAutonomyKillSwitchDisengaged();
     }

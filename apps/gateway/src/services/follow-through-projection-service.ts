@@ -338,54 +338,55 @@ export class FollowThroughProjectionService {
         (item) => item.owner.kind === input.owner.kind && item.owner.ownerId === input.owner.ownerId,
       );
     if (input.owner.kind === "schedule" && input.action === "run_now") {
-      if (!Number.isSafeInteger(input.expectedExecutionGeneration) || input.expectedExecutionGeneration! < 0)
+      const { expectedExecutionGeneration, operationId } = input;
+      if (
+        expectedExecutionGeneration === undefined ||
+        !Number.isSafeInteger(expectedExecutionGeneration + 1) ||
+        expectedExecutionGeneration < 0
+      )
         throw new ConflictError({
           code: "FOLLOW_THROUGH_RUN_NOT_ADMITTED",
           message: "Review the current execution generation before requesting Run now.",
         });
-      if (!item || !input.operationId || !/^[a-zA-Z0-9_-]{16,100}$/u.test(input.operationId))
+      if (!item || !operationId || !/^[a-zA-Z0-9_-]{16,100}$/u.test(operationId))
         throw new ConflictError({
           code: "FOLLOW_THROUGH_RUN_NOT_ADMITTED",
           message: "Refresh this follow-through and prepare an exact Run now request.",
         });
-      const job = await this.deps.storage.cronJobs.get(input.owner.ownerId),
-        once = job?.actionConfig?.agentTurn?.oneShot;
-      const admissionKey = `operator-follow-through:${createHash("sha256")
-        .update(JSON.stringify([actorId, input.operationId]))
-        .digest("hex")}`;
-      const lookupKey = once ? `one-shot:${once.at}` : admissionKey;
-      const existing = await this.deps.storage.cronRuns.getByAdmission(input.owner.ownerId, lookupKey);
-      const operatorAction = {
-        actorId,
-        operationId: input.operationId,
-        expectedExecutionGeneration: input.expectedExecutionGeneration!,
-      };
-      const receipt = (run: NonNullable<typeof existing>): FollowThroughResponse => {
+      const readOccurrence = () =>
+        this.deps.storage.cronRuns.getByGeneration(input.owner.ownerId, expectedExecutionGeneration + 1);
+      // A one-shot's configuration can change after admission. The reviewed
+      // generation and the recorded operator action still identify the receipt.
+      const existing = await readOccurrence();
+      const operatorAction = { actorId, operationId, expectedExecutionGeneration };
+      const receipt = async (
+        run: NonNullable<typeof existing>,
+      ): Promise<NonNullable<FollowThroughResponse["actionReceipt"]>> => {
         const binding = run.actionSnapshot.operatorAction as typeof operatorAction | undefined;
         const exact =
           binding?.actorId === actorId &&
-          binding.operationId === input.operationId &&
-          binding.expectedExecutionGeneration === input.expectedExecutionGeneration;
+          binding.operationId === operationId &&
+          binding.expectedExecutionGeneration === expectedExecutionGeneration;
+        const job = exact ? undefined : await this.deps.storage.cronJobs.get(input.owner.ownerId);
+        const once = job?.actionConfig?.agentTurn?.oneShot;
+        const sharedOneShot = once && run.admissionKey === `one-shot:${once.at}`;
         if (
           run.jobId !== input.owner.ownerId ||
           run.jobRevision !== input.expectedRevision ||
-          run.executionGeneration !== input.expectedExecutionGeneration! + 1 ||
-          (!once && !exact)
+          run.executionGeneration !== expectedExecutionGeneration + 1 ||
+          (!sharedOneShot && !exact)
         )
           throw new ConflictError({
             message: "This run identity belongs to a different reviewed execution. Inspect its recorded owner.",
           });
         return {
-          ...current,
-          actionReceipt: {
-            operationId: input.operationId!,
-            runId: run.runId,
-            state: run.status,
-            disposition: exact ? "recorded" : "existing_occurrence",
-          },
+          operationId,
+          runId: run.runId,
+          state: run.status,
+          disposition: exact ? "recorded" : "existing_occurrence",
         };
       };
-      if (existing) return receipt(existing);
+      if (existing) return { ...current, actionReceipt: await receipt(existing) };
       if (
         item.revision !== input.expectedRevision ||
         item.executionGeneration !== input.expectedExecutionGeneration ||
@@ -395,20 +396,23 @@ export class FollowThroughProjectionService {
           code: "FOLLOW_THROUGH_RUN_NOT_ADMITTED",
           message: "This schedule or execution changed. Refresh before requesting new work.",
         });
+      const admissionKey = `operator-follow-through:${createHash("sha256")
+        .update(JSON.stringify([actorId, operationId]))
+        .digest("hex")}`;
       await this.deps.cron.runCronJobNow(input.owner.ownerId, {
         expectedRevision: input.expectedRevision,
         expectedExecutionGeneration: input.expectedExecutionGeneration,
         admissionKey,
         operatorAction,
       });
-      const recorded = await this.deps.storage.cronRuns.getByAdmission(input.owner.ownerId, lookupKey);
+      const recorded = await readOccurrence();
       if (!recorded)
         throw new ServiceUnavailableError(
           "The occurrence receipt is unavailable. Keep this exact request and inspect the recorded owner.",
         );
       return {
         ...(await this.listFollowThrough(input.sessionId, input.workspaceId)),
-        actionReceipt: receipt(recorded).actionReceipt,
+        actionReceipt: await receipt(recorded),
       };
     }
     if (

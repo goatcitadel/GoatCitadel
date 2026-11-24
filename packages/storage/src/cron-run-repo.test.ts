@@ -229,9 +229,42 @@ describe("CronRunRepository", () => {
       });
       if (second.outcome !== "begun") assert.fail("expected second begun run");
       assert.equal(second.run.executionGeneration, 2);
+      assert.deepEqual(runs.getByGeneration("job-1", 1), runs.get("run-1"));
+      assert.deepEqual(runs.getByGeneration("job-1", 2), second.run);
+      assert.equal(runs.getByGeneration("job-1", 3), undefined);
       assert.equal(runs.advance(token, "running"), undefined);
       assert.equal(runs.markFailed(token, { error: "stale writer" }), undefined);
       assert.equal(runs.get("run-2")?.status, "admitting");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("records new linkage in the existing phase and leaves an exact replay unchanged", () => {
+    const { db, runs } = createRepos();
+    try {
+      const admitted = runs.begin({
+        runId: "run-delivery",
+        jobId: "job-1",
+        admissionKey: "delivery-slot",
+        scheduledFor: "2026-07-13T10:00:00.000Z",
+      });
+      assert.equal(admitted.outcome, "begun");
+      if (admitted.outcome !== "begun") assert.fail();
+      const token = { runId: admitted.run.runId, jobId: admitted.run.jobId, executionGeneration: 1 };
+      const delivery = { status: "waiting" as const, phase: "delivery" as const };
+      runs.admitInlineExecution(token);
+      runs.advancePhase(token, delivery);
+
+      const linked = { ...delivery, linkage: { deliveryRunId: "delivery-1" } };
+      const recorded = runs.advancePhase(token, { ...linked, now: "2026-07-13T10:00:01.000Z" });
+      assert.equal(recorded?.deliveryRunId, "delivery-1");
+      assert.deepEqual(runs.get(token.runId), recorded);
+      assert.deepEqual(runs.advancePhase(token, { ...linked, now: "2026-07-13T10:00:02.000Z" }), recorded);
+      assert.throws(
+        () => runs.advancePhase(token, { ...delivery, linkage: { deliveryRunId: "delivery-2" } }),
+        ConflictError,
+      );
     } finally {
       db.close();
     }

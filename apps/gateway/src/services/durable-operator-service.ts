@@ -30,6 +30,7 @@ export interface DurableOperatorServiceDeps {
     | "listDurableRunCheckpoints"
     | "createDurableRun"
     | "getDurableRun"
+    | "getDurableRunsByIds"
     | "listDurableRunTimeline"
     | "watchDurableChildRun"
     | "listDurableChildWatchers"
@@ -97,16 +98,21 @@ export class DurableOperatorService {
   }
 
   public async createRun(input: DurableRunCreateRequest): Promise<DurableRunRecord> {
-    const run = await this.deps.durableRunService.createDurableRun(input);
+    const { durableRunService } = this.deps;
+    const run = await durableRunService.createDurableRun(input);
     return this.afterRunCommit("Durable run creation", run, [
       async () => {
-        if (run.status === "queued") await this.deps.durableRunService.requestRunProcessing(run.runId);
+        if (run.status === "queued") await durableRunService.requestRunProcessing(run.runId);
       },
     ]);
   }
 
   public async getRun(runId: string): Promise<DurableRunRecord> {
     return this.deps.durableRunService.getDurableRun(runId);
+  }
+
+  public async getRunsByIds(runIds: string[]): Promise<Map<string, DurableRunRecord>> {
+    return this.deps.durableRunService.getDurableRunsByIds(runIds);
   }
 
   public async listRunTimeline(runId: string, limit = 300): Promise<DurableRunTimelineEvent[]> {

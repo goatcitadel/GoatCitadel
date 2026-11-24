@@ -18,7 +18,10 @@ function fixture() {
       agentCommitments: { listBySession: async () => [commitment], decideSuggestion: decide },
       sessionAutonomyPrefs: { get: async () => undefined },
       heartbeatOccurrences: { findUnresolved: async () => undefined },
-      cronRuns: { get: async () => undefined },
+      cronRuns: {
+        get: async () => undefined,
+        getByGeneration: vi.fn(async (_jobId: string, _generation: number) => undefined),
+      },
     },
     cron: {
       listCronJobs: async () => [
@@ -242,7 +245,7 @@ it("explains an event trigger rather than inventing the placeholder clock schedu
   expect(item.nextCheckAt).toBeUndefined();
   expect(item.reason).toContain("verified subagent completion");
 });
-it("returns the exact admitted run after a lost response without dispatching again, even when Run now is no longer offered", async () => {
+it("returns the exact admitted run after a lost response even when the one-shot is rescheduled or removed", async () => {
   const f = fixture(),
     operationId = "lost-response-1234567890";
   const job = {
@@ -264,16 +267,19 @@ it("returns the exact admitted run after a lost response without dispatching aga
     jobId: "j",
     jobRevision: 2,
     executionGeneration: 1,
+    admissionKey: `one-shot:${job.actionConfig.agentTurn.oneShot.at}`,
     actionSnapshot: {
       actionConfig: job.actionConfig,
       operatorAction: { actorId: "operator", operationId, expectedExecutionGeneration: 0 },
     },
   };
-  f.deps.cron.listCronJobs = async () => [job] as never;
+  let currentJob = job;
+  f.deps.cron.listCronJobs = async () => [currentJob] as never;
   f.deps.storage.cronRuns.get = async () => run as never;
-  Object.assign(f.deps.storage, { cronJobs: { get: async () => job } });
-  Object.assign(f.deps.storage.cronRuns, { getByAdmission: async () => run });
-  const result = await f.service.requestFollowThroughAction({
+  const readJob = vi.fn(async () => currentJob);
+  Object.assign(f.deps.storage, { cronJobs: { get: readJob } });
+  f.deps.storage.cronRuns.getByGeneration.mockResolvedValue(run as never);
+  const request = {
     sessionId: "s",
     workspaceId: "A",
     owner: { kind: "schedule", ownerId: "j" },
@@ -281,8 +287,37 @@ it("returns the exact admitted run after a lost response without dispatching aga
     expectedRevision: 2,
     expectedExecutionGeneration: 0,
     operationId,
-  } as never);
-  expect(result).toMatchObject({ actionReceipt: { operationId, runId: "r", state: "completed" } });
+  } as const;
+  const expectedReceipt = { actionReceipt: { operationId, runId: "r", state: "completed", disposition: "recorded" } };
+  await expect(f.service.requestFollowThroughAction(request)).resolves.toMatchObject(expectedReceipt);
+  await expect(f.service.requestFollowThroughAction(request, "other-operator")).resolves.toMatchObject({
+    actionReceipt: { runId: "r", disposition: "existing_occurrence" },
+  });
+  readJob.mockClear();
+
+  currentJob = {
+    ...job,
+    revision: 3,
+    actionConfig: {
+      agentTurn: {
+        ...job.actionConfig.agentTurn,
+        oneShot: { at: "2026-11-20T10:00:00.000Z", timezone: "UTC" },
+      },
+    },
+  };
+  await expect(f.service.requestFollowThroughAction(request)).resolves.toMatchObject(expectedReceipt);
+
+  currentJob = {
+    ...job,
+    revision: 4,
+    actionConfig: { agentTurn: { sessionId: "s", prompt: "Check" } },
+  } as typeof job;
+  await expect(f.service.requestFollowThroughAction(request)).resolves.toMatchObject(expectedReceipt);
+  expect(readJob).not.toHaveBeenCalled();
+  await expect(f.service.requestFollowThroughAction(request, "other-operator")).rejects.toThrow(
+    "different reviewed execution",
+  );
+  expect(f.deps.storage.cronRuns.getByGeneration).toHaveBeenLastCalledWith("j", 1);
   expect(f.deps.cron.runCronJobNow).not.toHaveBeenCalled();
 });
 it("distinguishes a refused Run now from an unavailable receipt after requesting the run", async () => {
@@ -291,7 +326,6 @@ it("distinguishes a refused Run now from an unavailable receipt after requesting
   const reviewedJob = { ...job!, executionGeneration: 0 };
   f.deps.cron.listCronJobs = async () => [reviewedJob];
   Object.assign(f.deps.storage, { cronJobs: { get: async () => reviewedJob } });
-  Object.assign(f.deps.storage.cronRuns, { getByAdmission: async () => undefined });
   const request = {
     sessionId: "s",
     workspaceId: "A",
@@ -315,7 +349,6 @@ it("distinguishes a refused Run now from an unavailable receipt after requesting
 });
 it("requires the actual reviewed execution generation and explains a changed profile even for an ended one-shot", async () => {
   const f = fixture();
-  Object.assign(f.deps.storage.cronRuns, { getByAdmission: async () => undefined });
   await expect(
     f.service.requestFollowThroughAction({
       sessionId: "s",

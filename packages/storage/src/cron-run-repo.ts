@@ -87,10 +87,12 @@ export class CronRunRepository {
   private readonly databaseNowStmt;
   private readonly getStmt;
   private readonly getByAdmissionStmt;
+  private readonly getByGenerationStmt;
   private readonly listByJobStmt;
   private readonly listPendingSettlementStmt;
   private readonly listUnresolvedReconciliationStmt;
   private readonly getJobStmt;
+  private readonly getJobForUpdateStmt;
   private readonly maxGenerationStmt;
   private readonly reserveJobGenerationStmt;
   private readonly insertStmt;
@@ -111,6 +113,11 @@ export class CronRunRepository {
     this.getByAdmissionStmt = db.prepare(`
       SELECT * FROM cron_runs
       WHERE job_id = @jobId AND admission_key = @admissionKey
+      LIMIT 1
+    `);
+    this.getByGenerationStmt = db.prepare(`
+      SELECT * FROM cron_runs
+      WHERE job_id = @jobId AND execution_generation = @executionGeneration
       LIMIT 1
     `);
     this.listByJobStmt = db.prepare(`
@@ -138,12 +145,14 @@ export class CronRunRepository {
       ORDER BY updated_at ASC, run_id ASC
       LIMIT @limit
     `);
-    this.getJobStmt = db.prepare(`
+    const selectJob = `
       SELECT job_id, revision, action, action_config_json, execution_generation, active_run_id, citadel_id
       FROM cron_jobs
       WHERE job_id = ?
       LIMIT 1
-    `);
+    `;
+    this.getJobStmt = db.prepare(selectJob);
+    this.getJobForUpdateStmt = db.dialect === "postgres" ? db.prepare(`${selectJob} FOR UPDATE`) : this.getJobStmt;
     this.maxGenerationStmt = db.prepare(`
       SELECT MAX(execution_generation) AS max_generation
       FROM cron_runs
@@ -293,6 +302,14 @@ export class CronRunRepository {
       jobId: normalizeRequired(jobId, "jobId"),
       admissionKey: normalizeRequired(admissionKey, "admissionKey"),
     }) as CronRunRow | undefined;
+    return row ? mapRow(row) : undefined;
+  }
+
+  public getByGeneration(jobId: string, executionGeneration: number): CronRunRecord | undefined {
+    const row = this.getByGenerationStmt.get<CronRunRow>({
+      jobId: normalizeRequired(jobId, "jobId"),
+      executionGeneration: normalizeInteger(executionGeneration, "executionGeneration", 1),
+    });
     return row ? mapRow(row) : undefined;
   }
 
@@ -553,15 +570,17 @@ export class CronRunRepository {
     const normalizedLinkage = normalizeLinkage(input.linkage ?? {});
     const now = normalizeTimestamp(input.now ?? this.readDatabaseNow(), "now");
     return this.db.transaction("immediate", () => {
+      const job = this.getJobForUpdateStmt.get<CronJobExecutionRow>(normalizedToken.jobId);
       const current = this.get(normalizedToken.runId);
-      if (!current || !tokenMatches(current, normalizedToken) || !this.ownsActiveGeneration(normalizedToken)) {
+      if (!current || !tokenMatches(current, normalizedToken) || !jobOwnsActiveGeneration(job, normalizedToken)) {
         return undefined;
       }
       assertLinkageCompatible(current, normalizedLinkage);
       if (current.status === targetStatus && current.phase === targetPhase) {
-        return current;
-      }
-      if (!canAdvance(current, targetStatus, targetPhase)) {
+        if (!LINKAGE_FIELDS.some((key) => normalizedLinkage[key] !== undefined && current[key] === undefined)) {
+          return current;
+        }
+      } else if (!canAdvance(current, targetStatus, targetPhase)) {
         throw invalidTransitionError(current, targetStatus, targetPhase);
       }
       const changed = this.advanceStmt.run({
@@ -608,6 +627,9 @@ export class CronRunRepository {
       });
     }
     return this.db.transaction("immediate", () => {
+      // Lock the PostgreSQL job row before reading or writing the run. Settlement
+      // and release must see the same active owner even when other writers are waiting.
+      const job = this.getJobForUpdateStmt.get<CronJobExecutionRow>(normalizedToken.jobId);
       const current = this.get(normalizedToken.runId);
       if (!current || !tokenMatches(current, normalizedToken)) {
         return undefined;
@@ -619,10 +641,7 @@ export class CronRunRepository {
         assertTerminalReplayCompatible(current, input);
         return current;
       }
-      // Settlement and active-run release are one generation-fenced database
-      // transaction. A stale process may still hold a valid historical token,
-      // but it cannot terminalize after ownership moved to a newer generation.
-      if (!this.ownsActiveGeneration(normalizedToken)) {
+      if (!jobOwnsActiveGeneration(job, normalizedToken)) {
         return undefined;
       }
       assertLinkageCompatible(current, { evidenceEnvelopeId: input.evidenceEnvelopeId });
@@ -701,6 +720,8 @@ export class CronRunRepository {
     const targetStatus = normalizeReconciliationStatus(input.status);
     const evidenceEnvelopeId = normalizeOptional(input.evidenceEnvelopeId, "evidenceEnvelopeId");
     return this.db.transaction("immediate", () => {
+      // Keep the same job-then-run lock order as terminal settlement.
+      this.getJobForUpdateStmt.get(normalizedToken.jobId);
       const current = this.get(normalizedToken.runId);
       if (!current || !tokenMatches(current, normalizedToken)) {
         return undefined;
@@ -746,13 +767,7 @@ export class CronRunRepository {
   }
 
   private readJob(jobId: string, lock = false): CronJobExecutionRow {
-    const row = (
-      lock && this.db.dialect === "postgres"
-        ? this.db.prepare(
-            "SELECT job_id,revision,action,action_config_json,execution_generation,active_run_id,citadel_id FROM cron_jobs WHERE job_id=? FOR UPDATE",
-          )
-        : this.getJobStmt
-    ).get(jobId) as CronJobExecutionRow | undefined;
+    const row = (lock ? this.getJobForUpdateStmt : this.getJobStmt).get<CronJobExecutionRow>(jobId);
     if (!row) {
       throw new NotFoundError({ entity: "Cron job", id: jobId });
     }
@@ -767,11 +782,7 @@ export class CronRunRepository {
   }
 
   private ownsActiveGeneration(token: CronRunExecutionToken): boolean {
-    const job = this.readJob(token.jobId);
-    return (
-      job.active_run_id === token.runId &&
-      normalizeInteger(job.execution_generation, "execution_generation", 0) === token.executionGeneration
-    );
+    return jobOwnsActiveGeneration(this.readJob(token.jobId), token);
   }
 
   private readDatabaseNow(): string {
@@ -832,6 +843,13 @@ function tokenMatches(run: CronRunRecord, token: CronRunExecutionToken): boolean
   );
 }
 
+function jobOwnsActiveGeneration(job: CronJobExecutionRow | undefined, token: CronRunExecutionToken): boolean {
+  return (
+    job?.active_run_id === token.runId &&
+    normalizeInteger(job.execution_generation, "execution_generation", 0) === token.executionGeneration
+  );
+}
+
 function normalizeLinkage(linkage: CronRunLinkage): CronRunLinkage {
   return {
     childSessionId: normalizeOptional(linkage.childSessionId, "childSessionId"),
@@ -858,17 +876,19 @@ function linkageParams(linkage: CronRunLinkage): Record<string, string | null> {
   };
 }
 
+const LINKAGE_FIELDS = [
+  "childSessionId",
+  "childMessageId",
+  "childTurnId",
+  "childAssistantMessageId",
+  "childDurableRunId",
+  "deliveryRunId",
+  "externalSideEffectRunId",
+  "evidenceEnvelopeId",
+] as const;
+
 function assertLinkageCompatible(current: CronRunRecord, linkage: CronRunLinkage): void {
-  for (const key of [
-    "childSessionId",
-    "childMessageId",
-    "childTurnId",
-    "childAssistantMessageId",
-    "childDurableRunId",
-    "deliveryRunId",
-    "externalSideEffectRunId",
-    "evidenceEnvelopeId",
-  ] as const) {
+  for (const key of LINKAGE_FIELDS) {
     if (current[key] && linkage[key] && current[key] !== linkage[key]) {
       throw new ConflictError({
         message: `Cron run ${current.runId} is already linked to a different ${key}.`,
