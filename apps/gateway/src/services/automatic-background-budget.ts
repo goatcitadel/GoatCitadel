@@ -1,6 +1,6 @@
 import { ConflictError, type ModelUsageEventRecord } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
-import type { LlmDispatchGuard, LlmDispatchGuardInput } from "./llm-dispatch-guard.js";
+import type { LlmDispatchGuard, LlmDispatchGuardInput, LlmDispatchRoute } from "./llm-dispatch-guard.js";
 
 export const DEFAULT_AUTOMATIC_BACKGROUND_DAILY_USD = 0.25;
 const SETTING_PREFIX = "automatic_background_budget_v1:";
@@ -68,7 +68,7 @@ export class AutomaticBackgroundBudget {
   public async run<T>(
     operation: () => Promise<T>,
     assertAuthority?: () => Promise<void>,
-    onRefused?: (refusal: AutomaticBackgroundBudgetError) => Promise<void> | void,
+    onRefused?: (refusal: AutomaticBackgroundBudgetError, route: LlmDispatchRoute) => Promise<void> | void,
   ): Promise<T> {
     const days = new Set<string>();
     try {
@@ -81,7 +81,7 @@ export class AutomaticBackgroundBudget {
           // diagnostic, and the next occurrence is refused and tries again.
           if (error instanceof AutomaticBackgroundBudgetError && onRefused) {
             try {
-              await onRefused(error);
+              await onRefused(error, input.route);
             } catch (recordError) {
               this.report("refusal_record", recordError);
             }

@@ -68,9 +68,13 @@ describe("starter heartbeat enrollment", () => {
 });
 
 describe("starter heartbeat unpriced-model hold", () => {
+  const refusedRoute = { providerId: "openai-codex", modelId: "gpt-subscription" };
   function heldFixture() {
     const f = fixture();
-    let models = { activeProviderId: "openai-codex", activeModel: "gpt-subscription" };
+    let models: { activeProviderId: string; activeModel: string; utilityProviderId?: string; utilityModel?: string } = {
+      activeProviderId: "openai-codex",
+      activeModel: "gpt-subscription",
+    };
     let now = new Date("2026-11-23T12:00:00.000Z");
     const starter = new StarterHeartbeat(
       f.storage,
@@ -88,7 +92,7 @@ describe("starter heartbeat unpriced-model hold", () => {
     const h = heldFixture();
     await h.starter.captureExplicitChoice("first", true);
     expect(await h.starter.canDispatch("first")).toBe(true);
-    await h.starter.holdOnPricingRefusal("first")({ reason: "pricing_unavailable" });
+    await h.starter.holdOnPricingRefusal("first")({ reason: "pricing_unavailable" }, refusedRoute);
     expect(await h.starter.canDispatch("first")).toBe(false);
     // The operator's choice is untouched, so follow-through still offers Pause.
     expect(await h.starter.isArmed("first")).toBe(true);
@@ -102,7 +106,7 @@ describe("starter heartbeat unpriced-model hold", () => {
   it("lifts the hold as soon as the model selection changes", async () => {
     const h = heldFixture();
     await h.starter.captureExplicitChoice("first", true);
-    await h.starter.holdOnPricingRefusal("first")({ reason: "pricing_unavailable" });
+    await h.starter.holdOnPricingRefusal("first")({ reason: "pricing_unavailable" }, refusedRoute);
     expect(await h.starter.canDispatch("first")).toBe(false);
     h.setModels({ activeProviderId: "openai", activeModel: "priced-model" });
     expect(await h.starter.canDispatch("first")).toBe(true);
@@ -112,9 +116,9 @@ describe("starter heartbeat unpriced-model hold", () => {
     const h = heldFixture();
     await h.starter.captureExplicitChoice("first", true);
     await h.starter.captureExplicitChoice("second", true);
-    await h.starter.holdOnPricingRefusal("first")({ reason: "background_budget_exhausted" });
+    await h.starter.holdOnPricingRefusal("first")({ reason: "background_budget_exhausted" }, refusedRoute);
     expect(await h.starter.canDispatch("first")).toBe(true);
-    await h.starter.holdOnPricingRefusal("first")({ reason: "pricing_unavailable" });
+    await h.starter.holdOnPricingRefusal("first")({ reason: "pricing_unavailable" }, refusedRoute);
     expect(await h.starter.canDispatch("first")).toBe(false);
     expect(await h.starter.canDispatch("second")).toBe(true);
   });
@@ -124,7 +128,30 @@ describe("starter heartbeat unpriced-model hold", () => {
     await h.starter.captureExplicitChoice("first", true);
     const onRefused = h.starter.holdOnPricingRefusal("first");
     h.setModels({ activeProviderId: "openai", activeModel: "priced-model" });
-    await onRefused({ reason: "pricing_unavailable" });
+    await onRefused({ reason: "pricing_unavailable" }, refusedRoute);
     expect(await h.starter.canDispatch("first")).toBe(true);
+  });
+
+  it("does not hold a new selection for a route chosen before it changed", async () => {
+    const h = heldFixture();
+    await h.starter.captureExplicitChoice("first", true);
+    // The route was prepared under the subscription model; the operator
+    // switched to a priced model before the heartbeat run started.
+    h.setModels({ activeProviderId: "openai", activeModel: "priced-model" });
+    await h.starter.holdOnPricingRefusal("first")({ reason: "pricing_unavailable" }, refusedRoute);
+    expect(await h.starter.canDispatch("first")).toBe(true);
+  });
+
+  it("holds when the refused route is the utility model", async () => {
+    const h = heldFixture();
+    await h.starter.captureExplicitChoice("first", true);
+    h.setModels({
+      activeProviderId: "openai",
+      activeModel: "priced-model",
+      utilityProviderId: "openai-codex",
+      utilityModel: "gpt-subscription",
+    });
+    await h.starter.holdOnPricingRefusal("first")({ reason: "pricing_unavailable" }, refusedRoute);
+    expect(await h.starter.canDispatch("first")).toBe(false);
   });
 });

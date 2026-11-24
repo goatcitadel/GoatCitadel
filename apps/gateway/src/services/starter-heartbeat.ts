@@ -60,14 +60,20 @@ export class StarterHeartbeat {
    * subscription sign-in), later occurrences park quietly for a day, or until
    * the model selection changes, instead of failing every hour.
    *
-   * The selection is captured now, before dispatch resolves a route, so a
-   * selection changed mid-run is never held for a refusal it did not get;
-   * at worst the hold does not apply and the next occurrence is refused again.
+   * The hold binds to the refused route: it is recorded only when that route
+   * is the active or utility model of the selection captured here, so a
+   * selection that changed around the run is never held for a refusal it did
+   * not get. When the route can't be tied to it (a per-Chat model, or a change
+   * before this call), no hold is recorded and the next occurrence is refused
+   * again.
    */
-  public holdOnPricingRefusal(sessionId: string): (refusal: { reason: string }) => Promise<void> {
-    const models = this.modelFingerprint();
-    return async ({ reason }) => {
-      if (reason !== "pricing_unavailable") return;
+  public holdOnPricingRefusal(
+    sessionId: string,
+  ): (refusal: { reason: string }, route: { providerId: string; modelId: string }) => Promise<void> {
+    const selection = this.readModels();
+    const models = this.modelFingerprint(selection);
+    return async ({ reason }, route) => {
+      if (reason !== "pricing_unavailable" || !selectsRoute(selection, route)) return;
       const hold: UnpricedHold = { heldAt: this.now().toISOString(), models };
       await this.storage.systemSettings.set(UNPRICED_HOLD_PREFIX + sessionId, hold);
     };
@@ -84,8 +90,7 @@ export class StarterHeartbeat {
     return age >= 0 && age < UNPRICED_HEARTBEAT_HOLD_MS && hold.models === this.modelFingerprint();
   }
 
-  private modelFingerprint(): string {
-    const models = this.readModels();
+  private modelFingerprint(models: ModelSelection = this.readModels()): string {
     return JSON.stringify([
       models.activeProviderId,
       models.activeModel,
@@ -162,6 +167,14 @@ export class StarterHeartbeat {
       throw error;
     }
   }
+}
+
+function selectsRoute(selection: ModelSelection, route: { providerId: string; modelId: string }): boolean {
+  const pairs = [
+    [selection.activeProviderId, selection.activeModel],
+    [selection.utilityProviderId, selection.utilityModel],
+  ];
+  return pairs.some(([providerId, model]) => providerId === route.providerId && model === route.modelId);
 }
 
 function sameTarget(left: HeartbeatBinding, right: HeartbeatBinding): boolean {
