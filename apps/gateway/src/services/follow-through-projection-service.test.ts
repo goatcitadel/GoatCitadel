@@ -285,6 +285,34 @@ it("returns the exact admitted run after a lost response without dispatching aga
   expect(result).toMatchObject({ actionReceipt: { operationId, runId: "r", state: "completed" } });
   expect(f.deps.cron.runCronJobNow).not.toHaveBeenCalled();
 });
+it("distinguishes a refused Run now from an unavailable receipt after requesting the run", async () => {
+  const f = fixture();
+  const [job] = await f.deps.cron.listCronJobs();
+  const reviewedJob = { ...job!, executionGeneration: 0 };
+  f.deps.cron.listCronJobs = async () => [reviewedJob];
+  Object.assign(f.deps.storage, { cronJobs: { get: async () => reviewedJob } });
+  Object.assign(f.deps.storage.cronRuns, { getByAdmission: async () => undefined });
+  const request = {
+    sessionId: "s",
+    workspaceId: "A",
+    owner: { kind: "schedule", ownerId: "j" },
+    action: "run_now",
+    expectedRevision: 2,
+    expectedExecutionGeneration: 0,
+    operationId: "missing-receipt-1234",
+  } as const;
+  await expect(f.service.requestFollowThroughAction({ ...request, expectedRevision: 1 })).rejects.toMatchObject({
+    code: "FOLLOW_THROUGH_RUN_NOT_ADMITTED",
+    httpStatus: 409,
+  });
+  expect(f.deps.cron.runCronJobNow).not.toHaveBeenCalled();
+
+  await expect(f.service.requestFollowThroughAction(request)).rejects.toMatchObject({
+    httpStatus: 503,
+    message: expect.stringContaining("receipt is unavailable"),
+  });
+  expect(f.deps.cron.runCronJobNow).toHaveBeenCalledOnce();
+});
 it("requires the actual reviewed execution generation and explains a changed profile even for an ended one-shot", async () => {
   const f = fixture();
   Object.assign(f.deps.storage.cronRuns, { getByAdmission: async () => undefined });

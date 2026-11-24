@@ -56,6 +56,8 @@ import type {
 export interface RuntimeConfigurationChangePlanAdapterDependencies {
   readonly getSettings: () => Promise<RuntimeSettings>;
   readonly updateSettings: (input: UpdateSettingsInput) => Promise<RuntimeSettings>;
+  /** Verifies the username against the same settings revision without projecting the stored value. */
+  readonly matchesBasicUsername?: (username: string, settingsRevision: number) => boolean;
   readonly listModels?: (providerId: string) => Promise<readonly LlmModelRecord[]>;
   readonly previewLlamaModels?: (baseUrl: string) => Promise<LlmModelPreviewResponse>;
   readonly resolveManagedSelection?: (selectionId: string, workspaceId: string) => Promise<LlamaCppSetupSelection>;
@@ -337,7 +339,13 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       return observeWebSearchCredential(plan.request.change, this.webSearchCredentials);
     }
     const current = await this.deps.getSettings();
-    const applied = matches(plan.request, current);
+    const { change } = plan.request;
+    const applied =
+      matches(plan.request, current) &&
+      (change.operation !== "gateway_auth_configuration" ||
+        change.mode !== "basic" ||
+        change.basicUsername === undefined ||
+        this.deps.matchesBasicUsername?.(change.basicUsername.trim(), current.revision) === true);
     return {
       applied,
       reason: applied

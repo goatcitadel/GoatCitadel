@@ -52,6 +52,41 @@ function settings(overrides: Record<string, unknown> = {}) {
 }
 
 describe("RuntimeConfigurationChangePlanAdapter", () => {
+  it("verifies and reconciles a username-only Basic authentication change against the settings owner", async () => {
+    const current = settings({ auth: { mode: "basic", allowLoopbackBypass: false, basicConfigured: true } });
+    let username = "previous-operator";
+    const matchesBasicUsername = vi.fn(
+      (expected: string, revision: number) => expected === username && revision === current.revision,
+    );
+    const adapter = new RuntimeConfigurationChangePlanAdapter({
+      ...authCredentialDeps,
+      getSettings: async () => current,
+      updateSettings: vi.fn(),
+      matchesBasicUsername,
+    });
+    const request = {
+      kind: "runtime_configuration",
+      change: {
+        operation: "gateway_auth_configuration",
+        mode: "basic",
+        allowLoopbackBypass: false,
+        basicUsername: " next-operator ",
+      },
+    } as const;
+    const { target } = await adapter.prepare(context, request);
+    const plan = { request, target } as ChangePlanRecord;
+    await expect(adapter.verify(context, plan)).resolves.toMatchObject({ status: "manual_required" });
+    await expect(adapter.reconcile(context, plan)).resolves.toMatchObject({ effectObserved: false });
+    expect(matchesBasicUsername).toHaveBeenCalledWith("next-operator", current.revision);
+
+    username = "next-operator";
+    await expect(adapter.verify(context, plan)).resolves.toMatchObject({ status: "completed" });
+    await expect(adapter.reconcile(context, plan)).resolves.toMatchObject({
+      effectObserved: true,
+      status: "completed",
+    });
+  });
+
   it("requires a fresh external catalog and preserves the prior Chat default if runtime verification fails", async () => {
     let current = settings({
       llm: { activeProviderId: "openai", activeModel: "current", defaultThinkingLevel: "standard" },

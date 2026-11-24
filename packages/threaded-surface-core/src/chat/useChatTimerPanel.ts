@@ -316,7 +316,7 @@ export function useChatTimerPanel(input: {
         ? {
             ...panel,
             busy,
-            onDueAtChange: (value: string) => setPanel((current) => ({ ...current, dueAt: value })),
+            onDueAtChange: (value: string) => setPanel((current) => ({ ...current, dueAt: value, delayMs: undefined })),
             onTimezoneChange: (value: string) => setPanel((current) => ({ ...current, timezone: value })),
             onMessageChange: (value: string) => setPanel((current) => ({ ...current, message: value })),
             onNotificationRuleChange: (value: string) =>

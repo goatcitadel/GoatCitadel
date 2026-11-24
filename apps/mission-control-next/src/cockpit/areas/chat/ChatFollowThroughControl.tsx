@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { FollowThroughAction, FollowThroughItem, FollowThroughActionInput } from "@goatcitadel/contracts";
 import { fetchFollowThrough, requestFollowThroughAction } from "@goatcitadel/mission-control-shared/api/follow-through";
@@ -14,6 +14,8 @@ import { useProjectAccess } from "../../../features/native-routes/projects/use-p
 const FollowThroughSetup = lazy(async () => ({
   default: (await import("./ChatFollowThroughSetupControl")).ChatFollowThroughSetupControl,
 }));
+const pendingRunAttempts = new Map<string, symbol>();
+
 export function ChatFollowThroughControl(props: { sessionId: string; workspaceId: string }) {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
   const access = useProjectAccess(props.workspaceId),
@@ -72,7 +74,7 @@ function FollowThroughSession({
   const mounted = useRef(true),
     lock = useRef(false);
   const { refetch } = query;
-  useEffect(() => {
+  useLayoutEffect(() => {
     mounted.current = true;
     const unsub = (["chat", "system", "approvals"] as const).map((topic) =>
       subscribeRefresh(topic, () => void refetch()),
@@ -99,8 +101,16 @@ function FollowThroughSession({
     // A retry of a request whose outcome was never confirmed settles nothing
     // about that first send, even when the retry itself is refused.
     const retryingUnconfirmed = input.action === "run_now" && unconfirmed?.operationId === input.operationId;
+    const attempt = input.action === "run_now" ? Symbol() : undefined;
+    const clearPendingRun = () => {
+      // An older panel may still be waiting for a response to the same operation.
+      if (mounted.current && pendingRunAttempts.get(storageKey) === attempt) remember(undefined);
+    };
     try {
-      if (input.action === "run_now") remember(input);
+      if (attempt) {
+        pendingRunAttempts.set(storageKey, attempt);
+        remember(input);
+      }
       const result = await requestFollowThroughAction(input);
       if (result.sessionId !== sessionId || result.workspaceId !== workspaceId)
         throw new Error("The follow-through scope changed. Refresh before acting.");
@@ -113,14 +123,14 @@ function FollowThroughSession({
           throw new Error(
             "The recorded run could not be confirmed. Keep the exact request while you check the schedule.",
           );
-        remember(undefined);
+        clearPendingRun();
       }
       if (mounted.current) await query.refetch();
     } catch (cause) {
       // A clean refusal of a first send (for example a stale revision)
       // recorded nothing, so keeping the exact request would lock every action.
-      const refused = !retryingUnconfirmed && isDefiniteRefusal(cause);
-      if (input.action === "run_now" && refused) remember(undefined);
+      const refused = !retryingUnconfirmed && isDefiniteRefusal(cause, input.action);
+      if (attempt && refused) clearPendingRun();
       if (mounted.current) {
         setError(
           refused
@@ -130,6 +140,7 @@ function FollowThroughSession({
         void query.refetch();
       }
     } finally {
+      if (attempt && pendingRunAttempts.get(storageKey) === attempt) pendingRunAttempts.delete(storageKey);
       lock.current = false;
       if (mounted.current) setPending(false);
     }
@@ -220,14 +231,15 @@ function FollowThroughSession({
 }
 /**
  * True when the Gateway answered with a client error that settled nothing: the
- * request was refused before any run was recorded. Timeouts, rate limits and
- * idempotency-key conflicts (in progress, or possibly already sent) stay
- * uncertain, so the exact request is kept for an identical retry.
+ * request was refused before any run was recorded. Run now conflicts require
+ * an explicit pre-admission refusal because a receipt can fail after admission.
  */
-function isDefiniteRefusal(error: unknown): boolean {
+function isDefiniteRefusal(error: unknown, action: FollowThroughAction): boolean {
   if (!isApiRequestError(error) || error.kind === "network" || error.kind === "protocol") return false;
   const status = error.status ?? 0;
   if (status < 400 || status >= 500 || status === 408 || status === 429) return false;
-  const body = error.body as { error?: unknown } | undefined;
-  return !(status === 409 && typeof body?.error === "string" && body.error.includes("Idempotency-Key"));
+  if (status !== 409) return true;
+  const body = error.body as { error?: unknown; code?: unknown } | undefined;
+  if (action === "run_now") return body?.code === "FOLLOW_THROUGH_RUN_NOT_ADMITTED";
+  return !(typeof body?.error === "string" && body.error.includes("Idempotency-Key"));
 }

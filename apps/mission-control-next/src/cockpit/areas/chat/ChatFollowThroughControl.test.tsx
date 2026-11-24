@@ -90,18 +90,68 @@ it("does not treat a successful HTTP response without its canonical receipt as a
   expect(button("Run now")?.props.disabled).toBe(true);
 });
 
-function httpError(status: number, error: string) {
+it("preserves the reopened panel's exact retry when an earlier panel receives a late receipt", async () => {
+  let receiveFirst!: (value: unknown) => void;
+  let rejectRetry!: (error: Error) => void;
+  api.read.mockResolvedValue(response);
+  api.send
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        receiveFirst = resolve;
+      }),
+    )
+    .mockReturnValueOnce(
+      new Promise((_, reject) => {
+        rejectRetry = reject;
+      }),
+    );
+  await mount();
+  await act(async () => {
+    void button("Run now")!.props.onClick();
+  });
+  const input = api.send.mock.calls[0]![0];
+  const confirmed = {
+    ...response,
+    actionReceipt: { operationId: input.operationId, runId: "r", state: "completed" },
+  };
+
+  await act(async () => tree.unmount());
+  client.clear();
+  await mount();
+  await act(async () => {
+    void button("Retry exact run request")!.props.onClick();
+  });
+  expect(api.send.mock.calls[1]![0]).toEqual(input);
+  await act(async () => receiveFirst(confirmed));
+
+  await act(async () => tree.unmount());
+  client.clear();
+  await act(async () => rejectRetry(new Error("connection lost")));
+  await mount();
+  expect(button("Run now")?.props.disabled).toBe(true);
+  api.send.mockResolvedValueOnce(confirmed);
+  await act(async () => {
+    await button("Retry exact run request")!.props.onClick();
+  });
+  expect(api.send.mock.calls[2]![0]).toEqual(input);
+  expect(button("Retry exact run request")).toBeUndefined();
+  expect(sessionStorage.length).toBe(0);
+});
+
+function httpError(status: number, error: string, code?: string) {
   return new ApiRequestError(error, {
     kind: "http",
     method: "POST",
     path: "/follow-through/actions",
     status,
-    body: { error },
+    body: { error, code },
   });
 }
 it("a clean refusal releases the run request so other actions stay usable", async () => {
   api.read.mockResolvedValue(response);
-  api.send.mockRejectedValueOnce(httpError(409, "The schedule changed. Refresh before acting."));
+  api.send.mockRejectedValueOnce(
+    httpError(409, "The schedule changed. Refresh before acting.", "FOLLOW_THROUGH_RUN_NOT_ADMITTED"),
+  );
   await mount();
   await act(async () => {
     await button("Run now")!.props.onClick();
@@ -113,6 +163,17 @@ it("a clean refusal releases the run request so other actions stay usable", asyn
   client.clear();
   await mount();
   expect(Boolean(button("Retry exact run request"))).toBe(false);
+});
+it.each([409, 503])("keeps the exact request for a missing receipt reported as HTTP %i", async (status) => {
+  api.read.mockResolvedValue(response);
+  api.send.mockRejectedValueOnce(httpError(status, "The occurrence receipt is unavailable."));
+  await mount();
+  await act(async () => {
+    await button("Run now")!.props.onClick();
+  });
+  expect(button("Run now")?.props.disabled).toBe(true);
+  expect(button("Retry exact run request")).toBeDefined();
+  expect(JSON.stringify(tree.toJSON())).not.toContain("Nothing ran.");
 });
 it("an idempotency-key conflict keeps the exact request because it may already have been sent", async () => {
   api.read.mockResolvedValue(response);

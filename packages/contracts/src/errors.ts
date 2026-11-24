@@ -16,6 +16,7 @@ export type GoatErrorCode =
   | "FIELD_INVALID"
   | "ALREADY_EXISTS"
   | "STATE_CONFLICT"
+  | "FOLLOW_THROUGH_RUN_NOT_ADMITTED"
   | "FEATURE_DISABLED"
   | "WRITE_CONFLICT"
   | "POLICY_BLOCKED"
@@ -106,14 +107,10 @@ export class SemanticValidationError extends GoatError {
 }
 
 export class ConflictError extends GoatError {
-  readonly code: "ALREADY_EXISTS" | "STATE_CONFLICT" | "WRITE_CONFLICT";
+  readonly code: "ALREADY_EXISTS" | "STATE_CONFLICT" | "WRITE_CONFLICT" | "FOLLOW_THROUGH_RUN_NOT_ADMITTED";
   readonly httpStatus = 409;
 
-  constructor(opts: {
-    code?: "ALREADY_EXISTS" | "STATE_CONFLICT" | "WRITE_CONFLICT";
-    message: string;
-    details?: Record<string, unknown>;
-  }) {
+  constructor(opts: { code?: ConflictError["code"]; message: string; details?: Record<string, unknown> }) {
     super(opts.message, opts.details);
     this.code = opts.code ?? "STATE_CONFLICT";
   }
