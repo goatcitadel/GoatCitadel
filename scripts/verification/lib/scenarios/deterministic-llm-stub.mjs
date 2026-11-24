@@ -383,7 +383,7 @@ async function executePlannedDispatch({
       let index = 0;
       let completed = false;
       const advance = () => {
-        if (response.destroyed) throw new Error("Controlled stream is closed");
+        if (response.destroyed || response.writableEnded) throw new Error("Controlled stream is closed");
         if (index < behavior.chunks.length) {
           // A controlled phase can contain a large document fragment. Emit it
           // in ordinary token-sized batches through the real secret projector.
@@ -402,6 +402,7 @@ async function executePlannedDispatch({
           return true;
         }
         completed = true;
+        controlledStreams.delete(advance);
         response.write(
           `data: ${JSON.stringify({
             id: "controlled-display",

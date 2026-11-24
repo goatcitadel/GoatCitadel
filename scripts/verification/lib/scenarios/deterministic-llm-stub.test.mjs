@@ -99,13 +99,13 @@ test(
       assert.equal(deltas().join(""), completeText);
       assert.equal(stream.doneMarker, false);
       assert.equal(stub.advanceControlledStream(), false);
+      assert.throws(() => stub.advanceControlledStream(), /found 0/);
       while (await stream.read()) {
         // Drain through EOF to parse the final usage event and end marker.
       }
       assert.equal(stream.doneMarker, true);
       assert.equal(stream.frames.at(-1).usage.prompt_tokens_details.cached_tokens, 0);
       assert.ok(deltas().every((delta) => delta.length <= 128));
-      assert.throws(() => stub.advanceControlledStream(), /found 0/);
     } finally {
       controller.abort();
       await stub.close();
@@ -700,8 +700,12 @@ test(
       assert.equal(stub.completionDispatchRecords()[0]?.finishedAt, undefined);
       controller.abort();
       await assert.rejects(nextRead, { name: "AbortError" });
-      await stub.waitForCompletionDispatchCount(1);
-      assert.equal(stub.completionDispatchRecords()[0]?.behavior, "stream_stall");
+      let [dispatch] = stub.completionDispatchRecords();
+      while (!dispatch?.finishedAt) {
+        await delay(5, undefined, { signal: t.signal });
+        [dispatch] = stub.completionDispatchRecords();
+      }
+      assert.equal(dispatch.outcome, "stream_stall_aborted");
     } finally {
       controller.abort();
       await stub.close();
