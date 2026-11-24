@@ -945,7 +945,9 @@ test("credential rotation invalidates the previous key without recording credent
     assert.equal((await models(before)).status, 401);
     assert.equal((await models(after)).status, 200);
     const evidence = JSON.stringify(stub.requestSummaries());
-    assert.ok(!evidence.includes(before) && !evidence.includes(after));
+    for (const authorization of [before, after]) {
+      assert.ok(!evidence.includes(authorization.slice("Bearer ".length)));
+    }
   } finally {
     await stub.close();
   }
@@ -985,15 +987,28 @@ test("provider-error clock markers are explicit response metadata and leave nati
     ],
   });
   try {
-    for (const expectedMarker of ["GC_CLOCK_TRANSPORT_TEST", null]) {
+    for (const [expectedMarker, message] of [
+      ["GC_CLOCK_TRANSPORT_TEST", "Marked fixture failure."],
+      [null, "Unmarked fixture failure."],
+    ]) {
       const response = await fetch(stub.baseUrl + "/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
+        signal: AbortSignal.timeout(5_000),
         body: JSON.stringify({ model: stub.model, stream: true, input: "Synthetic fixture" }),
       });
       assert.equal(response.status, 200);
       assert.equal(response.headers.get("x-goatcitadel-verification-fault-clock"), expectedMarker);
-      assert.match(await response.text(), /"type":"response.failed"/u);
+      const stream = readSseFrames(response.body);
+      while (await stream.read()) {
+        // Read through EOF to verify how the provider closes a failed stream.
+      }
+      assert.equal(stream.frames.length, 1);
+      const [failure] = stream.frames;
+      assert.equal(failure.type, "response.failed");
+      assert.equal(failure.response.status, "failed");
+      assert.deepEqual(failure.response.error, { code: "server_error", type: "server_error", message });
+      assert.equal(stream.doneMarker, true);
     }
     assert.deepEqual(
       stub.dispatchPlanDispatchRecords().map(({ outcome }) => outcome),
