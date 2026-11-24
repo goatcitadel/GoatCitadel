@@ -10,6 +10,7 @@ import {
   type ChangePlanRecord,
 } from "@goatcitadel/contracts";
 import { RuntimeConfigurationChangePlanAdapter } from "./runtime-configuration-change-plan-adapter.js";
+import { bindRuntimeConfigurationSettings } from "./settings-auth-service.js";
 
 const context = {
   origin: { surface: "settings", workspaceId: "default", actorId: "operator-1" },
@@ -54,15 +55,16 @@ function settings(overrides: Record<string, unknown> = {}) {
 describe("RuntimeConfigurationChangePlanAdapter", () => {
   it("verifies and reconciles a username-only Basic authentication change against the settings owner", async () => {
     const current = settings({ auth: { mode: "basic", allowLoopbackBypass: false, basicConfigured: true } });
-    let username = "previous-operator";
-    const matchesBasicUsername = vi.fn(
-      (expected: string, revision: number) => expected === username && revision === current.revision,
+    const basic = { username: "previous-operator" };
+    let settingsRevision = current.revision;
+    const getSettings = bindRuntimeConfigurationSettings(
+      { getSettings: async () => current, readSettingsRevision: () => settingsRevision },
+      () => ({ assistant: { auth: { basic } } }) as never,
     );
     const adapter = new RuntimeConfigurationChangePlanAdapter({
       ...authCredentialDeps,
-      getSettings: async () => current,
+      getSettings,
       updateSettings: vi.fn(),
-      matchesBasicUsername,
     });
     const request = {
       kind: "runtime_configuration",
@@ -77,9 +79,12 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
     const plan = { request, target } as ChangePlanRecord;
     await expect(adapter.verify(context, plan)).resolves.toMatchObject({ status: "manual_required" });
     await expect(adapter.reconcile(context, plan)).resolves.toMatchObject({ effectObserved: false });
-    expect(matchesBasicUsername).toHaveBeenCalledWith("next-operator", current.revision);
+    expect(await getSettings()).not.toHaveProperty("basicUsernameMatches");
 
-    username = "next-operator";
+    basic.username = "next-operator";
+    settingsRevision += 1;
+    await expect(adapter.verify(context, plan)).resolves.toMatchObject({ status: "manual_required" });
+    settingsRevision = current.revision;
     await expect(adapter.verify(context, plan)).resolves.toMatchObject({ status: "completed" });
     await expect(adapter.reconcile(context, plan)).resolves.toMatchObject({
       effectObserved: true,

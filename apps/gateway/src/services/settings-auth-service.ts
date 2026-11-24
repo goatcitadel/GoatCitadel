@@ -921,6 +921,23 @@ export async function updateSettings(
   return await getSettings(deps);
 }
 
+/** Adds revision-bound Basic username verification to the private Change Plan settings read. */
+export function bindRuntimeConfigurationSettings(
+  owner: { getSettings: () => Promise<RuntimeSettings>; readSettingsRevision: () => number },
+  readConfig: () => SettingsRuntimeDependencies["config"],
+) {
+  return async (expectedBasicUsername?: string): Promise<RuntimeSettings & { basicUsernameMatches?: boolean }> => {
+    const settings = await owner.getSettings();
+    if (expectedBasicUsername === undefined) return settings;
+    return {
+      ...settings,
+      basicUsernameMatches:
+        owner.readSettingsRevision() === settings.revision &&
+        readConfig().assistant.auth.basic.username === expectedBasicUsername,
+    };
+  };
+}
+
 export function getAuthRuntimeSettings(deps: SettingsRuntimeDependencies): AuthRuntimeSettings {
   const plan = createGatewayAuthCredentialPlan({
     runtimeConfig: deps.config,

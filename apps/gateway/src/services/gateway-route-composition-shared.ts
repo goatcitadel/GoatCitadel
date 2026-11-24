@@ -77,20 +77,16 @@ export function createSettingsRuntimeDependenciesForGateway(
 }
 
 /**
- * The runtime configuration Change Plan adapter reads the settings owner and the reviewed conversation through
- * these checks. Each check resolves the live port when it runs.
+ * The settings-owner checks the runtime configuration Change Plan adapter runs at prepare, each built from the port
+ * only when it runs: the dry-run of a settings update, and the name of a picked errand approval conversation.
  */
 export function createRuntimeConfigurationOwnerChecks(
   port: () => GatewayRouteCompositionPort,
 ): Pick<
   RuntimeConfigurationChangePlanAdapterDependencies,
-  "validateSettingsUpdate" | "errandApprovalConversationTitle" | "matchesBasicUsername"
+  "validateSettingsUpdate" | "errandApprovalConversationTitle"
 > {
   return {
-    matchesBasicUsername: (username, revision) => {
-      const owner = port();
-      return owner.readSettingsRevision() === revision && owner.config.assistant.auth.basic.username === username;
-    },
     validateSettingsUpdate: async (input) => {
       await settingsAuthService.buildSettingsCandidate(createSettingsRuntimeDependenciesForGateway(port()), input);
     },
