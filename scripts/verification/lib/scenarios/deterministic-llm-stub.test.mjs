@@ -355,6 +355,20 @@ test("scripted Responses provider emits a native server_error then succeeds with
   }
 });
 
+test("startup failure status must be an HTTP error", async () => {
+  for (const failureStatus of [200, 399, 400.5, 600, "invalid"]) {
+    await assert.rejects(startDeterministicLlmStub({ failureStatus }), /failureStatus must be an HTTP error status/u);
+  }
+  const stub = await startDeterministicLlmStub({ failuresBeforeSuccess: 1, failureStatus: 429 });
+  try {
+    const response = await fetch(`${stub.baseUrl}/responses`, { method: "POST" });
+    assert.equal(response.status, 429);
+    assert.equal((await response.json()).error.code, "server_error");
+  } finally {
+    await stub.close();
+  }
+});
+
 test("replaceDispatchPlan re-arms the next deterministic completion after fixture setup traffic", async () => {
   const stub = await startDeterministicLlmStub({
     dispatchPlan: [
@@ -384,6 +398,34 @@ test("replaceDispatchPlan re-arms the next deterministic completion after fixtur
     assert.equal(rearmed.status, 503);
     assert.match(await rearmed.text(), /rearmed/u);
     assert.equal(stub.dispatchPlanDispatches(), 1);
+  } finally {
+    await stub.close();
+  }
+});
+
+test("replacing a dispatch plan preserves its tool filter until explicitly cleared", async () => {
+  const stub = await startDeterministicLlmStub({ dispatchPlanRequiredTool: "startup_tool" });
+  const request = (toolName) =>
+    fetch(`${stub.baseUrl}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tools: toolName ? [{ type: "function", name: toolName }] : [] }),
+    });
+  try {
+    const plan = [{ type: "http_error", status: 503 }];
+    stub.replaceDispatchPlan(plan, "active_tool");
+    stub.replaceDispatchPlan(plan);
+    const unrelated = await request("startup_tool");
+    assert.equal(unrelated.status, 200);
+    await unrelated.json();
+    assert.equal(stub.dispatchPlanDispatches(), 0);
+    const matched = await request("active_tool");
+    assert.equal(matched.status, 503);
+    await matched.json();
+    stub.replaceDispatchPlan(plan, null);
+    const cleared = await request();
+    assert.equal(cleared.status, 503);
+    await cleared.json();
   } finally {
     await stub.close();
   }
@@ -472,6 +514,32 @@ test("Responses string input participates in prompt rules and privacy-safe metad
     assert.equal(summary.promptMetadata.userContentByteLength, Buffer.byteLength(input, "utf8"));
     assert.equal(summary.promptMetadata.userContentSha256, createHash("sha256").update(input).digest("hex"));
     assert.ok(!JSON.stringify(summary).includes(input));
+  } finally {
+    await stub.close();
+  }
+});
+
+test("Responses instructions participate in system prompt rules and metadata", async () => {
+  const instructions = "Use the private fixture instructions.";
+  const stub = await startDeterministicLlmStub({
+    promptReplyRules: [
+      { ruleId: "fixture-instructions", systemContentIncludes: "private fixture", replyText: "INSTRUCTIONS_MATCH" },
+    ],
+  });
+  try {
+    const response = await fetch(`${stub.baseUrl}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: stub.model, input: "Fixture user input", instructions }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).output[0].content[0].text, "INSTRUCTIONS_MATCH");
+    const [summary] = stub.requestSummaries();
+    assert.equal(summary.promptReplyRuleId, "fixture-instructions");
+    assert.deepEqual(summary.promptMetadata.roles, ["system", "user"]);
+    assert.equal(summary.promptMetadata.systemContentByteLength, Buffer.byteLength(instructions));
+    assert.equal(summary.promptMetadata.systemContentSha256, createHash("sha256").update(instructions).digest("hex"));
+    assert.ok(!JSON.stringify(summary).includes(instructions));
   } finally {
     await stub.close();
   }

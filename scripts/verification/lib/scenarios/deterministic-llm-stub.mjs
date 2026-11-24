@@ -86,7 +86,7 @@ export async function startDeterministicLlmStub(options = {}) {
   const replyText = options.replyText ?? DETERMINISTIC_LLM_DEFAULT_REPLY;
   const failuresBeforeSuccess = Math.max(0, Number(options.failuresBeforeSuccess ?? 0));
   const failureCode = options.failureCode ?? "server_error";
-  const failureStatus = Number(options.failureStatus ?? 500);
+  const failureStatus = normalizeHttpErrorStatus(options.failureStatus, "failureStatus");
   const listenHost = normalizeListenHost(options.listenHost);
   const publicBaseUrlHost = normalizePublicBaseUrlHost(options.publicBaseUrlHost);
   let dispatchPlan = normalizeDispatchPlan(options.dispatchPlan, replyText);
@@ -192,8 +192,9 @@ export async function startDeterministicLlmStub(options = {}) {
     if (request.method === "POST" && (url.pathname === "/v1/chat/completions" || url.pathname === "/v1/responses")) {
       completionDispatches += 1;
       notifyDispatchWaiters(dispatchWaiters, completionDispatches);
-      requestSummary.promptMetadata = summarizePromptMetadata(body);
-      const promptReplyRule = matchPromptReplyRule(body, promptReplyRules);
+      const messages = promptMessages(body, url.pathname);
+      requestSummary.promptMetadata = summarizePromptMetadata(messages);
+      const promptReplyRule = matchPromptReplyRule(messages, promptReplyRules);
       if (promptReplyRule) {
         requestSummary.behavior = "prompt_reply_rule";
         requestSummary.promptReplyRuleId = promptReplyRule.ruleId;
@@ -329,10 +330,10 @@ export async function startDeterministicLlmStub(options = {}) {
         .map((entry) => ({ ...entry })),
     dispatchPlanDispatchRecords: () =>
       requestSummaries.filter((entry) => Number.isInteger(entry.dispatchPlanIndex)).map((entry) => ({ ...entry })),
-    replaceDispatchPlan: (nextPlan, requiredTool = options.dispatchPlanRequiredTool) => {
+    replaceDispatchPlan: (nextPlan, requiredTool = dispatchPlanRequiredTool) => {
       const normalizedPlan = normalizeDispatchPlan(nextPlan, replyText);
       const normalizedTool =
-        requiredTool === undefined ? undefined : normalizeToolName(requiredTool, "dispatchPlanRequiredTool");
+        requiredTool == null ? undefined : normalizeToolName(requiredTool, "dispatchPlanRequiredTool");
       dispatchPlan = normalizedPlan;
       dispatchPlanRequiredTool = normalizedTool;
       dispatchPlanDispatches = 0;
@@ -568,7 +569,7 @@ function normalizeDispatchPlan(value, defaultReplyText) {
         return {
           type: "http_error",
           delayMs,
-          status: normalizeHttpErrorStatus(entry.status, index),
+          status: normalizeHttpErrorStatus(entry.status, `dispatchPlan[${index}].status`),
           code: normalizeBoundedText(entry.code ?? "server_error", `dispatchPlan[${index}].code`),
           message: normalizeBoundedText(
             entry.message ?? "Synthetic provider failure.",
@@ -652,10 +653,10 @@ function normalizePromptReplyRules(value) {
   });
 }
 
-function matchPromptReplyRule(body, rules) {
+function matchPromptReplyRule(messages, rules) {
   if (rules.length === 0) return undefined;
-  const userContent = collectPromptUserContent(body);
-  const systemContent = collectPromptRoleContent(body, "system");
+  const userContent = collectPromptRoleContent(messages, "user");
+  const systemContent = collectPromptRoleContent(messages, "system");
   return rules.find((rule) =>
     rule.userContentIncludes !== undefined
       ? userContent.includes(rule.userContentIncludes)
@@ -663,19 +664,21 @@ function matchPromptReplyRule(body, rules) {
   );
 }
 
-function collectPromptUserContent(body) {
-  return collectPromptRoleContent(body, "user");
+function promptMessages(body, requestPath) {
+  const messages = Array.isArray(body.messages)
+    ? body.messages
+    : Array.isArray(body.input)
+      ? body.input
+      : typeof body.input === "string"
+        ? [{ role: "user", content: body.input }]
+        : [];
+  return requestPath === "/v1/responses" && typeof body.instructions === "string"
+    ? [{ role: "system", content: body.instructions }, ...messages]
+    : messages;
 }
 
-function promptMessages(body) {
-  if (Array.isArray(body?.messages)) return body.messages;
-  if (Array.isArray(body?.input)) return body.input;
-  if (typeof body?.input === "string") return [{ role: "user", content: body.input }];
-  return [];
-}
-
-function collectPromptRoleContent(body, role) {
-  return promptMessages(body)
+function collectPromptRoleContent(messages, role) {
+  return messages
     .filter((message) => message?.role === role)
     .flatMap((message) => extractPromptText(message?.content))
     .join("\n");
@@ -693,10 +696,9 @@ const PROMPT_METADATA_MARKERS = Object.freeze({
   finalSynthesis: "Tool run summary:",
 });
 
-function summarizePromptMetadata(body) {
-  const messages = promptMessages(body);
-  const userContent = collectPromptRoleContent(body, "user");
-  const systemContent = collectPromptRoleContent(body, "system");
+function summarizePromptMetadata(messages) {
+  const userContent = collectPromptRoleContent(messages, "user");
+  const systemContent = collectPromptRoleContent(messages, "system");
   const combined = `${systemContent}\n${userContent}`;
   return {
     roles: messages.map((message) => (typeof message?.role === "string" ? message.role : "unknown")),
@@ -765,10 +767,10 @@ function normalizeDelayMs(value, label) {
   return Math.floor(parsed);
 }
 
-function normalizeHttpErrorStatus(value, index) {
+function normalizeHttpErrorStatus(value, label) {
   const parsed = Number(value ?? 500);
   if (!Number.isInteger(parsed) || parsed < 400 || parsed > 599) {
-    throw new TypeError(`dispatchPlan[${index}].status must be an HTTP error status`);
+    throw new TypeError(`${label} must be an HTTP error status`);
   }
   return parsed;
 }
