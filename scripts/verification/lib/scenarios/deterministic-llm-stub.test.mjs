@@ -359,6 +359,12 @@ test("startup failure status must be an HTTP error", async () => {
   for (const failureStatus of [200, 399, 400.5, 600, "invalid"]) {
     await assert.rejects(startDeterministicLlmStub({ failureStatus }), /failureStatus must be an HTTP error status/u);
   }
+  for (const failuresBeforeSuccess of [-1, 1.5, "invalid", Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(
+      startDeterministicLlmStub({ failuresBeforeSuccess }),
+      /failuresBeforeSuccess must be a non-negative safe integer/u,
+    );
+  }
   const stub = await startDeterministicLlmStub({ failuresBeforeSuccess: 1, failureStatus: 429 });
   try {
     const response = await fetch(`${stub.baseUrl}/responses`, { method: "POST" });
@@ -604,6 +610,30 @@ test("prompt reply rules survive auxiliary dispatches without retaining matched 
     assert.match(metadata?.userContentSha256 ?? "", /^[a-f0-9]{64}$/u);
     assert.equal(JSON.stringify(metadata).includes("opaque fixture"), false);
     assert.equal(JSON.stringify(stub.requestSummaries()).includes("Only use provided evidence"), false);
+  } finally {
+    await stub.close();
+  }
+});
+
+test("prompt metadata maps an unknown role without retaining its text", async () => {
+  const role = "Private fixture role text";
+  const stub = await startDeterministicLlmStub();
+  try {
+    const response = await fetch(`${stub.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { role: "developer", content: "fixture" },
+          { role, content: "fixture" },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200);
+    await response.json();
+    const [summary] = stub.requestSummaries();
+    assert.deepEqual(summary.promptMetadata.roles, ["developer", "unknown"]);
+    assert.ok(!JSON.stringify(summary).includes(role));
   } finally {
     await stub.close();
   }

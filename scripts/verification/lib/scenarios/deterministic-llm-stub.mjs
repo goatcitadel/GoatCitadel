@@ -23,6 +23,7 @@ const ALLOWED_WILDCARD_LISTEN_HOSTS = new Set(["0.0.0.0", "::"]);
 const MAX_TOOL_ARGUMENT_CHARACTERS = 128_000;
 const MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
 const TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
+const PROMPT_METADATA_ROLES = new Set(["assistant", "developer", "function", "system", "tool", "user"]);
 
 export async function writeDeterministicLlmProviderConfig(runtimeRoot, baseUrl, options = {}) {
   const providerId = options.providerId ?? DETERMINISTIC_LLM_PROVIDER_ID;
@@ -84,7 +85,10 @@ export async function startDeterministicLlmStub(options = {}) {
   const providerId = options.providerId ?? DETERMINISTIC_LLM_PROVIDER_ID;
   const model = options.model ?? DETERMINISTIC_LLM_MODEL;
   const replyText = options.replyText ?? DETERMINISTIC_LLM_DEFAULT_REPLY;
-  const failuresBeforeSuccess = Math.max(0, Number(options.failuresBeforeSuccess ?? 0));
+  const failuresBeforeSuccess = Number(options.failuresBeforeSuccess ?? 0);
+  if (!Number.isSafeInteger(failuresBeforeSuccess) || failuresBeforeSuccess < 0) {
+    throw new TypeError("failuresBeforeSuccess must be a non-negative safe integer");
+  }
   const failureCode = options.failureCode ?? "server_error";
   const failureStatus = normalizeHttpErrorStatus(options.failureStatus, "failureStatus");
   const listenHost = normalizeListenHost(options.listenHost);
@@ -702,7 +706,7 @@ function summarizePromptMetadata(messages) {
   const systemContent = collectPromptRoleContent(messages, "system");
   const combined = `${systemContent}\n${userContent}`;
   return {
-    roles: messages.map((message) => (typeof message?.role === "string" ? message.role : "unknown")),
+    roles: messages.map((message) => (PROMPT_METADATA_ROLES.has(message?.role) ? message.role : "unknown")),
     userContentByteLength: Buffer.byteLength(userContent, "utf8"),
     userContentSha256: createHash("sha256").update(userContent, "utf8").digest("hex"),
     systemContentByteLength: Buffer.byteLength(systemContent, "utf8"),
