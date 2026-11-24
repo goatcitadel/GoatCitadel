@@ -482,14 +482,19 @@ test("scripted tool calls use native Responses and Chat Completions protocols", 
       },
     ]);
 
-    const stream = await fetch(`${stub.baseUrl}/chat/completions`, {
+    const chatStreamResponse = await fetch(`${stub.baseUrl}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
+      signal: AbortSignal.timeout(5_000),
       body: JSON.stringify({ model: stub.model, stream: true, messages: [{ role: "user", content: "fixture" }] }),
     });
-    const toolFrame = (await stream.text()).split("\n").find((line) => line.startsWith("data: {"));
-    assert.ok(toolFrame);
-    assert.deepEqual(JSON.parse(toolFrame.slice(6)).choices[0].delta.tool_calls, [
+    assert.equal(chatStreamResponse.status, 200);
+    const chatStream = readSseFrames(chatStreamResponse.body);
+    while (await chatStream.read()) {
+      // Read through EOF to verify the terminal frame.
+    }
+    const toolFrame = chatStream.frames.find((frame) => frame.choices[0]?.delta?.tool_calls);
+    assert.deepEqual(toolFrame?.choices[0].delta.tool_calls, [
       {
         index: 0,
         id: "call_stream",
@@ -497,6 +502,8 @@ test("scripted tool calls use native Responses and Chat Completions protocols", 
         function: { name: "browser_search", arguments: '{"query":"stream"}' },
       },
     ]);
+    assert.equal(chatStream.frames.at(-1)?.choices[0]?.finish_reason, "tool_calls");
+    assert.equal(chatStream.doneMarker, true);
   } finally {
     await stub.close();
   }
@@ -936,6 +943,7 @@ test("credential rotation invalidates the previous key without recording credent
     assert.equal((await models(after)).status, 200);
     assert.throws(() => stub.replaceExpectedAuthorization(""), /expectedAuthorization/u);
     assert.equal((await models(before)).status, 401);
+    assert.equal((await models(after)).status, 200);
     const evidence = JSON.stringify(stub.requestSummaries());
     assert.ok(!evidence.includes(before) && !evidence.includes(after));
   } finally {
