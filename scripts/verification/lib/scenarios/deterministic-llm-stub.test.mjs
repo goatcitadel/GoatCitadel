@@ -935,15 +935,19 @@ test("credential rotation invalidates the previous key without recording credent
   const before = "Bearer synthetic-before";
   const after = "Bearer synthetic-after";
   const stub = await startDeterministicLlmStub({ expectedAuthorization: before });
-  const models = (authorization) => fetch(stub.baseUrl + "/models", { headers: { authorization } });
+  const modelsStatus = async (authorization) => {
+    const response = await fetch(stub.baseUrl + "/models", { headers: { authorization } });
+    await response.arrayBuffer();
+    return response.status;
+  };
   try {
-    assert.equal((await models(before)).status, 200);
+    assert.equal(await modelsStatus(before), 200);
     stub.replaceExpectedAuthorization(after);
-    assert.equal((await models(before)).status, 401);
-    assert.equal((await models(after)).status, 200);
+    assert.equal(await modelsStatus(before), 401);
+    assert.equal(await modelsStatus(after), 200);
     assert.throws(() => stub.replaceExpectedAuthorization(""), /expectedAuthorization/u);
-    assert.equal((await models(before)).status, 401);
-    assert.equal((await models(after)).status, 200);
+    assert.equal(await modelsStatus(before), 401);
+    assert.equal(await modelsStatus(after), 200);
     const evidence = JSON.stringify(stub.requestSummaries());
     for (const authorization of [before, after]) {
       assert.ok(!evidence.includes(authorization.slice("Bearer ".length)));
