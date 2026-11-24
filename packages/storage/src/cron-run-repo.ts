@@ -576,11 +576,13 @@ export class CronRunRepository {
         return undefined;
       }
       assertLinkageCompatible(current, normalizedLinkage);
-      if (current.status === targetStatus && current.phase === targetPhase) {
-        if (!LINKAGE_FIELDS.some((key) => normalizedLinkage[key] !== undefined && current[key] === undefined)) {
-          return current;
-        }
-      } else if (!canAdvance(current, targetStatus, targetPhase)) {
+      const hasNewLinkage = LINKAGE_FIELDS.some(
+        (key) => normalizedLinkage[key] !== undefined && current[key] === undefined,
+      );
+      if (current.status === targetStatus && current.phase === targetPhase && !hasNewLinkage) {
+        return current;
+      }
+      if (!canAdvance(current, targetStatus, targetPhase)) {
         throw invalidTransitionError(current, targetStatus, targetPhase);
       }
       const changed = this.advanceStmt.run({

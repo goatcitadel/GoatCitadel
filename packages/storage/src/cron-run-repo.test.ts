@@ -252,6 +252,14 @@ describe("CronRunRepository", () => {
       assert.equal(admitted.outcome, "begun");
       if (admitted.outcome !== "begun") assert.fail();
       const token = { runId: admitted.run.runId, jobId: admitted.run.jobId, executionGeneration: 1 };
+      const admission = { status: "admitting" as const, phase: "child_admission" as const };
+      assert.deepEqual(runs.advancePhase(token, admission), admitted.run);
+      assert.throws(
+        () => runs.advancePhase(token, { ...admission, linkage: { deliveryRunId: "delivery-1" } }),
+        ConflictError,
+      );
+      assert.deepEqual(runs.get(token.runId), admitted.run);
+
       const delivery = { status: "waiting" as const, phase: "delivery" as const };
       runs.admitInlineExecution(token);
       runs.advancePhase(token, delivery);
