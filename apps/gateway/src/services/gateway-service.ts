@@ -3527,8 +3527,6 @@ export class GatewayService {
       new RuntimeConfigurationChangePlanAdapter({
         getSettings: () => this.getSettings(),
         updateSettings: (input) => this.updateSettings(input),
-        matchesBasicUsername: (username, revision) =>
-          this.readSettingsRevision() === revision && this.config.assistant.auth.basic.username === username,
         listModels: (providerId) => this.llmService.listModels(providerId),
         previewLlamaModels: (baseUrl) => this.llmService.previewModels({ providerId: "llamacpp", baseUrl }),
         resolveManagedSelection: (selectionId, workspaceId) =>

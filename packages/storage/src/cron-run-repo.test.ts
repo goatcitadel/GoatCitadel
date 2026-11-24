@@ -40,6 +40,25 @@ describe("CronRunRepository", () => {
       runs.markSucceeded(token, { output: "done" });
       assert.equal(runs.beginAdmission(input as never).outcome, "duplicate");
       assert.throws(() => runs.beginAdmission({ ...input, admissionKey: "operator-second" } as never), ConflictError);
+      const operatorAction = {
+        actorId: "operator",
+        operationId: "operator-stale-review",
+        expectedExecutionGeneration: 0,
+      };
+      assert.throws(() => runs.beginAdmission({ ...input, admissionKey: "stale-generation", operatorAction }), {
+        code: "FOLLOW_THROUGH_RUN_NOT_ADMITTED",
+      });
+      assert.throws(
+        () =>
+          runs.beginAdmission({
+            ...input,
+            admissionKey: "stale-revision",
+            expectedJobRevision: job.revision + 1,
+            expectedExecutionGeneration: 1,
+            operatorAction: { ...operatorAction, expectedExecutionGeneration: 1 },
+          }),
+        { code: "FOLLOW_THROUGH_RUN_NOT_ADMITTED" },
+      );
       assert.equal(runs.listByJob(job.jobId).length, 1);
       assert.equal(
         runs.beginAdmission({ ...input, admissionKey: "operator-new-review", expectedExecutionGeneration: 1 } as never)

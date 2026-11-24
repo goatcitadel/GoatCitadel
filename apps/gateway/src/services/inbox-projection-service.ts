@@ -120,15 +120,22 @@ function skillLifecycleApproval(
 
 const SHELL_TOOLS = new Set(["shell.exec", "shell.exec_background"]);
 
+function approvalSummaryTarget(target: string): string {
+  const value = target.trim();
+  if (/^\/\/[^/\\?#]*@/u.test(value)) {
+    const safe = redactUrlForError(`https:${value}`);
+    return safe.startsWith("https://") ? safe.slice("https:".length) : "<unparseable>";
+  }
+  return /^(?:https?:|[a-z][a-z\d+.-]*:\/\/)/iu.test(value) ? redactUrlForError(value) : target;
+}
+
 /** An approval row's summary, and whether it names a command or code (which an unprompted toast must not repeat). */
 function approvalTargetSummary(preview: unknown, kind: string): { summary: string; namesCommand?: true } {
   const record = preview && typeof preview === "object" ? (preview as Record<string, unknown>) : {};
   const value = record.targets;
   const targets = Array.isArray(value) ? value.filter((target): target is string => typeof target === "string") : [];
   if (targets.length) {
-    const summaries = targets
-      .slice(0, 3)
-      .map((target) => (/^\s*(?:https?:|[a-z][a-z\d+.-]+:\/\/)/iu.test(target) ? redactUrlForError(target) : target));
+    const summaries = targets.slice(0, 3).map(approvalSummaryTarget);
     return {
       summary: bounded(`Targets: ${summaries.join(", ")}${targets.length > 3 ? "; more in review" : ""}`),
     };
