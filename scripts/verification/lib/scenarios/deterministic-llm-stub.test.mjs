@@ -43,29 +43,39 @@ test("controlled display streams hold, advance exact chunks, finish and release 
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: stub.model, stream: true, messages: [] }),
     });
-    const reader = response.body.getReader(),
-      decoder = new TextDecoder();
-    let source = decoder.decode((await reader.read()).value);
-    assert.match(source, /First/);
-    assert.doesNotMatch(source, /Second|DONE/);
-    assert.equal(stub.advanceControlledStream(), true);
-    source += decoder.decode((await reader.read()).value);
-    assert.match(source, /Second/);
-    assert.equal(stub.advanceControlledStream(), false);
-    while (true) {
-      const part = await reader.read();
-      if (part.done) break;
-      source += decoder.decode(part.value);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const frames = [];
+    let buffer = "";
+    let doneMarker = false;
+    async function readFrames() {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const events = buffer.split("\n\n");
+      buffer = events.pop();
+      for (const event of events) {
+        if (event === "data: [DONE]") doneMarker = true;
+        else if (event.startsWith("data: {")) frames.push(JSON.parse(event.slice(6)));
+      }
+      return !done;
     }
-    assert.match(source, /DONE/);
-    const frames = source
-      .split("\n\n")
-      .filter((event) => event.startsWith("data: {"))
-      .map((event) => JSON.parse(event.slice(6)));
+    const deltas = () => frames.map((frame) => frame.choices[0].delta.content ?? "");
+    const firstText = "First\n\n";
+    const completeText = firstText + "\nSecond " + "fragment ".repeat(160);
+    while (deltas().join("").length < firstText.length) assert.ok(await readFrames());
+    assert.equal(deltas().join(""), firstText);
+    assert.equal(doneMarker, false);
+    assert.equal(stub.advanceControlledStream(), true);
+    while (deltas().join("").length < completeText.length) assert.ok(await readFrames());
+    assert.equal(deltas().join(""), completeText);
+    assert.equal(doneMarker, false);
+    assert.equal(stub.advanceControlledStream(), false);
+    while (await readFrames()) {
+      // Drain through EOF to parse the final usage event and end marker.
+    }
+    assert.equal(doneMarker, true);
     assert.equal(frames.at(-1).usage.prompt_tokens_details.cached_tokens, 0);
-    const deltas = frames.map((frame) => frame.choices[0].delta.content ?? "");
-    assert.ok(deltas.every((delta) => delta.length <= 128));
-    assert.equal(deltas.join(""), "First\n\n\nSecond " + "fragment ".repeat(160));
+    assert.ok(deltas().every((delta) => delta.length <= 128));
     assert.throws(() => stub.advanceControlledStream(), /found 0/);
   } finally {
     await stub.close();
@@ -644,6 +654,55 @@ test("required tool isolates approval dispatches from setup and background traff
     } finally {
       await stub.close();
     }
+  }
+});
+
+test("authentication precedes request-body limits and streamed bodies are bounded", async () => {
+  const stub = await startDeterministicLlmStub({ expectedAuthorization: "Bearer fixture" });
+  try {
+    const oversized = Buffer.alloc(16 * 1024 * 1024 + 1);
+    for (const [authorization, status] of [
+      ["Bearer wrong", 401],
+      ["Bearer fixture", 413],
+    ]) {
+      const response = await fetch(`${stub.baseUrl}/responses`, {
+        method: "POST",
+        headers: { authorization },
+        body: oversized,
+      });
+      assert.equal(response.status, status);
+      await response.json();
+    }
+    const streamed = await fetch(`${stub.baseUrl}/responses`, {
+      method: "POST",
+      headers: { authorization: "Bearer fixture" },
+      body: (async function* () {
+        yield oversized;
+      })(),
+      duplex: "half",
+    });
+    assert.equal(streamed.status, 413);
+    assert.equal((await streamed.json()).error.type, "invalid_request_error");
+    assert.equal(stub.completionDispatches(), 0);
+  } finally {
+    await stub.close();
+  }
+});
+
+test("provider request summaries retain hyphenated tool names", async () => {
+  const stub = await startDeterministicLlmStub({ dispatchPlanRequiredTool: "fixture-tool" });
+  try {
+    const response = await fetch(`${stub.baseUrl}/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: stub.model, tools: [{ type: "function", name: "fixture-tool" }] }),
+    });
+    assert.equal(response.status, 200);
+    await response.json();
+    assert.equal(stub.dispatchPlanDispatches(), 1);
+    assert.deepEqual(stub.requestSummaries()[0].toolNames, ["fixture-tool"]);
+  } finally {
+    await stub.close();
   }
 });
 

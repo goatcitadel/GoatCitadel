@@ -21,6 +21,8 @@ const DETERMINISTIC_IMAGE_PNG_BASE64 =
 const DEFAULT_LISTEN_HOST = "127.0.0.1";
 const ALLOWED_WILDCARD_LISTEN_HOSTS = new Set(["0.0.0.0", "::"]);
 const MAX_TOOL_ARGUMENT_CHARACTERS = 128_000;
+const MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024;
+const TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
 
 export async function writeDeterministicLlmProviderConfig(runtimeRoot, baseUrl, options = {}) {
   const providerId = options.providerId ?? DETERMINISTIC_LLM_PROVIDER_ID;
@@ -105,29 +107,9 @@ export async function startDeterministicLlmStub(options = {}) {
 
   const handleRequest = async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const chunks = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.from(chunk));
-    }
-    const rawBody = Buffer.concat(chunks).toString("utf8");
-    let body = {};
-    try {
-      body = rawBody.trim() ? JSON.parse(rawBody) : {};
-    } catch {
-      body = {};
-    }
     const requestSummary = {
       method: request.method ?? "GET",
       path: url.pathname,
-      model: typeof body?.model === "string" ? body.model : undefined,
-      stream: body?.stream === true,
-      messageCount: Array.isArray(body?.messages) ? body.messages.length : undefined,
-      toolNames: Array.isArray(body?.tools)
-        ? body.tools
-            .slice(0, 256)
-            .map((tool) => tool?.function?.name ?? tool?.name)
-            .filter((name) => typeof name === "string" && /^[a-zA-Z0-9_]{1,128}$/u.test(name))
-        : undefined,
       startedAt: new Date().toISOString(),
     };
     requestSummaries.push(requestSummary);
@@ -146,6 +128,32 @@ export async function startDeterministicLlmStub(options = {}) {
       });
       return;
     }
+
+    const rawBody = await readBoundedRequestBody(request);
+    if (rawBody === undefined) {
+      completeRequestSummary(requestSummary, { outcome: "request_too_large", status: 413 });
+      writeJsonResponse(response, 413, {
+        error: { message: "Synthetic provider request body is too large.", type: "invalid_request_error" },
+      });
+      return;
+    }
+    let body = {};
+    try {
+      body = JSON.parse(rawBody) ?? {};
+    } catch {
+      // Malformed JSON has historically been treated as an empty fixture request.
+    }
+    Object.assign(requestSummary, {
+      model: typeof body.model === "string" ? body.model : undefined,
+      stream: body.stream === true,
+      messageCount: Array.isArray(body.messages) ? body.messages.length : undefined,
+      toolNames: Array.isArray(body.tools)
+        ? body.tools
+            .slice(0, 256)
+            .map((tool) => tool?.function?.name ?? tool?.name)
+            .filter((name) => typeof name === "string" && TOOL_NAME_PATTERN.test(name))
+        : undefined,
+    });
 
     if (request.method === "GET" && url.pathname === "/v1/models") {
       completeRequestSummary(requestSummary, { outcome: "models", status: 200 });
@@ -778,7 +786,7 @@ function normalizeFaultClockMarker(value, label) {
 
 function normalizeToolName(value, label) {
   const normalized = normalizeBoundedText(value, label);
-  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(normalized)) {
+  if (!TOOL_NAME_PATTERN.test(normalized)) {
     throw new TypeError(`${label} must be a provider-safe function name`);
   }
   return normalized;
@@ -1068,6 +1076,19 @@ function notifyDispatchWaiters(waiters, count) {
   for (const waiter of [...waiters]) {
     if (count >= waiter.expectedCount) waiter.resolve(count);
   }
+}
+
+async function readBoundedRequestBody(request) {
+  if (Number(request.headers["content-length"]) > MAX_REQUEST_BODY_BYTES) return undefined;
+  const chunks = [];
+  let bytes = 0;
+  // Keep the socket writable long enough to send the 413 response.
+  for await (const chunk of request.iterator({ destroyOnReturn: false })) {
+    bytes += chunk.length;
+    if (bytes > MAX_REQUEST_BODY_BYTES) return undefined;
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, bytes).toString("utf8");
 }
 
 function writeJsonResponse(response, status, body) {
