@@ -19,7 +19,9 @@ vi.mock("./ChatFollowThroughSetup", () => ({
   }: {
     onCreate: (input: { sourceHash: string; draft: Record<string, unknown> }) => Promise<void>;
   }) => (
-    <button onClick={() => onCreate({ sourceHash: "hash", draft: { purpose: "Check" } })}>Create follow-through</button>
+    <button type="button" onClick={() => onCreate({ sourceHash: "hash", draft: { purpose: "Check" } })}>
+      Create follow-through
+    </button>
   ),
 }));
 import { ChatFollowThroughSetupControl } from "./ChatFollowThroughSetupControl";
