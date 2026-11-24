@@ -54,7 +54,9 @@ import type {
 } from "./evolution-control-plane-adapter.js";
 
 export interface RuntimeConfigurationChangePlanAdapterDependencies {
-  readonly getSettings: () => Promise<RuntimeSettings>;
+  readonly getSettings: (
+    expectedBasicUsername?: string,
+  ) => Promise<RuntimeSettings & { basicUsernameMatches?: boolean }>;
   readonly updateSettings: (input: UpdateSettingsInput) => Promise<RuntimeSettings>;
   readonly listModels?: (providerId: string) => Promise<readonly LlmModelRecord[]>;
   readonly previewLlamaModels?: (baseUrl: string) => Promise<LlmModelPreviewResponse>;
@@ -336,8 +338,14 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
     if (isWebSearchCredentialChange(plan.request)) {
       return observeWebSearchCredential(plan.request.change, this.webSearchCredentials);
     }
-    const current = await this.deps.getSettings();
-    const applied = matches(plan.request, current);
+    const { change } = plan.request;
+    const expectedBasicUsername =
+      change.operation === "gateway_auth_configuration" && change.mode === "basic"
+        ? change.basicUsername?.trim()
+        : undefined;
+    const current = await this.deps.getSettings(expectedBasicUsername);
+    const applied =
+      matches(plan.request, current) && (expectedBasicUsername === undefined || current.basicUsernameMatches === true);
     return {
       applied,
       reason: applied

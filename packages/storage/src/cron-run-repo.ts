@@ -375,18 +375,23 @@ export class CronRunRepository {
       // before interpreting the newly populated active-run pointer as overlap.
       const raced = this.getByAdmission(jobId, admissionKey);
       if (raced) return replay(raced);
+      const conflictCode = operatorAction ? "FOLLOW_THROUGH_RUN_NOT_ADMITTED" : "STATE_CONFLICT";
       const revision = normalizeInteger(job.revision, "revision", 1);
       if (
         input.expectedJobRevision !== undefined &&
         normalizeInteger(input.expectedJobRevision, "expectedJobRevision", 1) !== revision
       )
-        throw new ConflictError({ message: "This schedule changed after review. Refresh before running it." });
+        throw new ConflictError({
+          code: conflictCode,
+          message: "This schedule changed after review. Refresh before running it.",
+        });
       const expectedGeneration = normalizeInteger(job.execution_generation, "execution_generation", 0);
       if (
         input.expectedExecutionGeneration !== undefined &&
         normalizeInteger(input.expectedExecutionGeneration, "expectedExecutionGeneration", 0) !== expectedGeneration
       )
         throw new ConflictError({
+          code: conflictCode,
           message:
             "Another occurrence was admitted after this execution was reviewed. Refresh before requesting new work.",
         });

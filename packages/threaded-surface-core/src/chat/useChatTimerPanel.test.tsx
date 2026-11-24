@@ -182,6 +182,19 @@ describe("Chat timer async ownership", () => {
     );
     expect(notice).toHaveBeenCalledOnce();
   });
+  it("saves the edited date instead of the original duration", async () => {
+    api.createChatTimer.mockImplementationOnce(async (_session, draft) => ({ item: timer("one", draft) }));
+    await act(async () => current.openChatTimerPanel({ delayMs: 1_200_000, timezone: "UTC", message: "Tea" }));
+    await act(async () => current.chatTimerPanel!.onDueAtChange("2027-03-01T10:30"));
+    await act(async () => current.chatTimerPanel!.onCreate());
+    expect(api.createChatTimer).toHaveBeenCalledWith(
+      "one",
+      expect.objectContaining({ dueAt: "2027-03-01T10:30:00.000Z" }),
+      expect.any(String),
+    );
+    expect(current.chatTimerPanel!.open).toBe(false);
+  });
+
   it("retries the exact reviewed duration, destination and attempt key after a lost response", async () => {
     const rule = {
       workspaceId: "workspace",

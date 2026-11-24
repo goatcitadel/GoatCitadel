@@ -3525,7 +3525,7 @@ export class GatewayService {
           this.llmService.getDispatchReasoningEfforts(providerId, model),
       }),
       new RuntimeConfigurationChangePlanAdapter({
-        getSettings: () => this.getSettings(),
+        getSettings: settingsAuthService.bindRuntimeConfigurationSettings(this, () => this.config),
         updateSettings: (input) => this.updateSettings(input),
         listModels: (providerId) => this.llmService.listModels(providerId),
         previewLlamaModels: (baseUrl) => this.llmService.previewModels({ providerId: "llamacpp", baseUrl }),

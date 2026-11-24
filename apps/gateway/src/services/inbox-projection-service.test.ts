@@ -1373,7 +1373,12 @@ describe("Gateway inbox projection", () => {
   });
 });
 
-it("projects bounded readable approval targets without assuming preview payload shape", async () => {
+it.each([
+  ["HTTPS URL", "https://demo:fixture@example.test/a?mode=1", "https://example.test"],
+  ["one-letter scheme", "x://demo:fixture@example.test/a?mode=1", "x://example.test"],
+  ["scheme-relative URL", "//demo:fixture@example.test/a?mode=1", "//example.test"],
+  ["network path", "//server/share", "//server/share"],
+])("renders a safe Inbox summary for a %s", async (_label, target, summary) => {
   const deps = dependencies();
   vi.mocked(deps.storage.approvals.listPage).mockResolvedValue({
     items: [
@@ -1383,12 +1388,16 @@ it("projects bounded readable approval targets without assuming preview payload 
         status: "pending",
         riskLevel: "danger",
         createdAt: "2026-10-06T00:00:00Z",
-        preview: { targets: ["workspace/report.md", { private: "not a target" }] },
+        preview: {
+          targets: ["workspace/report.md", { private: "not a target" }, target],
+        },
       },
     ],
   } as never);
   const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
-  expect(projection.items.find((item) => item.id === "approval:a")?.summary).toBe("Targets: workspace/report.md");
+  expect(projection.items.find((item) => item.id === "approval:a")?.summary).toBe(
+    `Targets: workspace/report.md, ${summary}`,
+  );
 });
 
 it("names a knowledge write's action and title, and nothing new for other titled previews (IN-L02)", async () => {

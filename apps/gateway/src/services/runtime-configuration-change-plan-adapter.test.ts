@@ -10,6 +10,7 @@ import {
   type ChangePlanRecord,
 } from "@goatcitadel/contracts";
 import { RuntimeConfigurationChangePlanAdapter } from "./runtime-configuration-change-plan-adapter.js";
+import { bindRuntimeConfigurationSettings } from "./settings-auth-service.js";
 
 const context = {
   origin: { surface: "settings", workspaceId: "default", actorId: "operator-1" },
@@ -52,6 +53,45 @@ function settings(overrides: Record<string, unknown> = {}) {
 }
 
 describe("RuntimeConfigurationChangePlanAdapter", () => {
+  it("verifies and reconciles a username-only Basic authentication change against the settings owner", async () => {
+    const current = settings({ auth: { mode: "basic", allowLoopbackBypass: false, basicConfigured: true } });
+    const basic = { username: "previous-operator" };
+    let settingsRevision = current.revision;
+    const getSettings = bindRuntimeConfigurationSettings(
+      { getSettings: async () => current, readSettingsRevision: () => settingsRevision },
+      () => ({ assistant: { auth: { basic } } }) as never,
+    );
+    const adapter = new RuntimeConfigurationChangePlanAdapter({
+      ...authCredentialDeps,
+      getSettings,
+      updateSettings: vi.fn(),
+    });
+    const request = {
+      kind: "runtime_configuration",
+      change: {
+        operation: "gateway_auth_configuration",
+        mode: "basic",
+        allowLoopbackBypass: false,
+        basicUsername: " next-operator ",
+      },
+    } as const;
+    const { target } = await adapter.prepare(context, request);
+    const plan = { request, target } as ChangePlanRecord;
+    await expect(adapter.verify(context, plan)).resolves.toMatchObject({ status: "manual_required" });
+    await expect(adapter.reconcile(context, plan)).resolves.toMatchObject({ effectObserved: false });
+    expect(await getSettings()).not.toHaveProperty("basicUsernameMatches");
+
+    basic.username = "next-operator";
+    settingsRevision += 1;
+    await expect(adapter.verify(context, plan)).resolves.toMatchObject({ status: "manual_required" });
+    settingsRevision = current.revision;
+    await expect(adapter.verify(context, plan)).resolves.toMatchObject({ status: "completed" });
+    await expect(adapter.reconcile(context, plan)).resolves.toMatchObject({
+      effectObserved: true,
+      status: "completed",
+    });
+  });
+
   it("requires a fresh external catalog and preserves the prior Chat default if runtime verification fails", async () => {
     let current = settings({
       llm: { activeProviderId: "openai", activeModel: "current", defaultThinkingLevel: "standard" },

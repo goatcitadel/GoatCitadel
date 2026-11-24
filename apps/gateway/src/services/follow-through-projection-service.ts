@@ -3,6 +3,7 @@ import {
   ConflictError,
   NotFoundError,
   redactSecretText,
+  ServiceUnavailableError,
   type FollowThroughActionInput,
   type FollowThroughItem,
   type FollowThroughResponse,
@@ -338,9 +339,15 @@ export class FollowThroughProjectionService {
       );
     if (input.owner.kind === "schedule" && input.action === "run_now") {
       if (!Number.isSafeInteger(input.expectedExecutionGeneration) || input.expectedExecutionGeneration! < 0)
-        throw new ConflictError({ message: "Review the current execution generation before requesting Run now." });
+        throw new ConflictError({
+          code: "FOLLOW_THROUGH_RUN_NOT_ADMITTED",
+          message: "Review the current execution generation before requesting Run now.",
+        });
       if (!item || !input.operationId || !/^[a-zA-Z0-9_-]{16,100}$/u.test(input.operationId))
-        throw new ConflictError({ message: "Refresh this follow-through and prepare an exact Run now request." });
+        throw new ConflictError({
+          code: "FOLLOW_THROUGH_RUN_NOT_ADMITTED",
+          message: "Refresh this follow-through and prepare an exact Run now request.",
+        });
       const job = await this.deps.storage.cronJobs.get(input.owner.ownerId),
         once = job?.actionConfig?.agentTurn?.oneShot;
       const admissionKey = `operator-follow-through:${createHash("sha256")
@@ -384,7 +391,10 @@ export class FollowThroughProjectionService {
         item.executionGeneration !== input.expectedExecutionGeneration ||
         !item.actions.some((action) => action.action === "run_now")
       )
-        throw new ConflictError({ message: "This schedule or execution changed. Refresh before requesting new work." });
+        throw new ConflictError({
+          code: "FOLLOW_THROUGH_RUN_NOT_ADMITTED",
+          message: "This schedule or execution changed. Refresh before requesting new work.",
+        });
       await this.deps.cron.runCronJobNow(input.owner.ownerId, {
         expectedRevision: input.expectedRevision,
         expectedExecutionGeneration: input.expectedExecutionGeneration,
@@ -393,9 +403,9 @@ export class FollowThroughProjectionService {
       });
       const recorded = await this.deps.storage.cronRuns.getByAdmission(input.owner.ownerId, lookupKey);
       if (!recorded)
-        throw new ConflictError({
-          message: "The occurrence receipt is unavailable. Keep this exact request and inspect the recorded owner.",
-        });
+        throw new ServiceUnavailableError(
+          "The occurrence receipt is unavailable. Keep this exact request and inspect the recorded owner.",
+        );
       return {
         ...(await this.listFollowThrough(input.sessionId, input.workspaceId)),
         actionReceipt: receipt(recorded).actionReceipt,
