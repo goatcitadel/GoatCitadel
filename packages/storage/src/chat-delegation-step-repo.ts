@@ -925,7 +925,7 @@ export class ChatDelegationStepRepository {
   public listResourceCleanupPage(
     afterStepId = "",
     limit = 32,
-  ): { items: ChatDelegationStepRecord[]; nextAfterStepId?: string } {
+  ): { items: ChatDelegationStepRecord[]; nextAfterStepId?: string; malformedCount: number } {
     const bounded = Number.isSafeInteger(limit) ? Math.max(1, Math.min(32, limit)) : 32;
     const rows = this.db
       .prepare(
@@ -938,9 +938,18 @@ export class ChatDelegationStepRepository {
       )
       .all(afterStepId, bounded);
     const last = rows.at(-1);
+    const items: ChatDelegationStepRecord[] = [];
+    for (const row of toChatDelegationStepRows(rows)) {
+      try {
+        items.push(mapRow(row));
+      } catch {
+        // An unreadable persisted step has no cleanup authority.
+      }
+    }
     return {
-      items: toChatDelegationStepRows(rows).map(mapRow),
+      items,
       nextAfterStepId: isRecord(last) && typeof last.step_id === "string" ? last.step_id : undefined,
+      malformedCount: rows.length - items.length,
     };
   }
 

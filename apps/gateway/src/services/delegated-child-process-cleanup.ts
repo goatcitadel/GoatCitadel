@@ -83,38 +83,30 @@ export async function cleanupDelegatedChildProcesses(
       continue;
     }
     const identity = readBackgroundProcessIdentity(result.processIdentity, exactOwner);
-    if (!identity) {
-      summary.unconfirmed += 1;
-      await acknowledgeCleanup(storage, owner, tool, result, {
+    const outcome = await storage.runImmediateTransaction(async () => {
+      // Hold the exact step and receipt locks through the bounded native call.
+      await assertCurrentCleanupOwner(storage, owner, tool.toolRunId, result);
+      const settled = identity ? await cleanup(identity, exactOwner) : "unavailable";
+      if (identity) await assertCurrentCleanupOwner(storage, owner, tool.toolRunId, result);
+      const next = {
         ...result,
         backgroundProcessCleanup: {
           version: "background-process.cleanup.v1",
           stepId: owner.stepId,
-          outcome: "unavailable",
+          outcome: settled,
           scope: "recorded_process_only",
           descendants: "unconfirmed",
         },
-      });
-      continue;
-    }
-    await assertCurrentCleanupOwner(storage, owner, tool);
-    summary.tracked += 1;
-    const outcome = await cleanup(identity, exactOwner);
+      };
+      if (!(await storage.chatToolRuns.compareAndSwapResult(tool.toolRunId, result, next))) {
+        throw new ConflictError({ message: "Delegated child cleanup receipt changed before acknowledgement." });
+      }
+      return settled;
+    });
+    if (identity) summary.tracked += 1;
     if (outcome === "terminated") summary.terminated += 1;
     else if (outcome === "missing") summary.alreadyAbsent += 1;
     else summary.unconfirmed += 1;
-    // Retain the outcome on its existing tool receipt; no PID journal or second
-    // run owner. CAS refuses to overwrite a concurrent canonical result edit.
-    await acknowledgeCleanup(storage, owner, tool, result, {
-      ...result,
-      backgroundProcessCleanup: {
-        version: "background-process.cleanup.v1",
-        stepId: owner.stepId,
-        outcome,
-        scope: "recorded_process_only",
-        descendants: "unconfirmed",
-      },
-    });
   }
   return summary;
 }
@@ -122,13 +114,11 @@ export async function cleanupDelegatedChildProcesses(
 async function assertCurrentCleanupOwner(
   storage: CleanupStorage,
   owner: CleanupOwner,
-  tool: ChatToolRunRecord,
-  lockStep = false,
+  toolRunId: string,
+  expected: NonNullable<ChatToolRunRecord["result"]>,
 ): Promise<void> {
-  const step = lockStep
-    ? await storage.chatDelegationSteps.getForUpdate(owner.stepId)
-    : await storage.chatDelegationSteps.get(owner.stepId);
-  const current = await storage.chatToolRuns.get(tool.toolRunId);
+  const step = await storage.chatDelegationSteps.getForUpdate(owner.stepId);
+  const current = await storage.chatToolRuns.getForUpdate(toolRunId);
   if (
     step.childSessionId !== owner.childSessionId ||
     step.childTurnId !== owner.childTurnId ||
@@ -138,25 +128,10 @@ async function assertCurrentCleanupOwner(
     current.toolName !== "shell.exec_background" ||
     current.status !== "executed" ||
     current.reused ||
-    JSON.stringify(current.result) !== JSON.stringify(tool.result)
+    JSON.stringify(current.result) !== JSON.stringify(expected)
   ) {
     throw new ConflictError({ message: "Delegated child cleanup owner or process receipt changed." });
   }
-}
-
-async function acknowledgeCleanup(
-  storage: CleanupStorage,
-  owner: CleanupOwner,
-  tool: ChatToolRunRecord,
-  expected: Record<string, unknown>,
-  next: Record<string, unknown>,
-): Promise<void> {
-  await storage.runImmediateTransaction(async () => {
-    await assertCurrentCleanupOwner(storage, owner, tool, true);
-    if (!(await storage.chatToolRuns.compareAndSwapResult(tool.toolRunId, expected, next))) {
-      throw new ConflictError({ message: "Delegated child cleanup receipt changed before acknowledgement." });
-    }
-  });
 }
 
 const CLEANUP_SCAN_CURSOR = "delegated_child_process_cleanup_cursor_v1";
@@ -173,7 +148,7 @@ type CleanupScanCursor = {
 export async function reconcileDelegatedChildProcessCleanup(
   storage: CleanupStorage & Pick<AsyncStorage, "systemSettings">,
   cleanup = cleanupRecoveredBackgroundProcess,
-): Promise<{ attempted: number; failed: number }> {
+): Promise<{ attempted: number; failed: number; malformedSteps?: number }> {
   const previous = await storage.systemSettings.get<CleanupScanCursor>(CLEANUP_SCAN_CURSOR);
   const value = previous?.value;
   const cursor: CleanupScanCursor =
@@ -192,6 +167,7 @@ export async function reconcileDelegatedChildProcessCleanup(
       ? value
       : { version: 1, afterStepId: "" };
   let step;
+  let malformedSteps = 0;
   if (cursor.currentStepId) {
     try {
       step = await storage.chatDelegationSteps.get(cursor.currentStepId);
@@ -204,6 +180,7 @@ export async function reconcileDelegatedChildProcessCleanup(
     }
   } else {
     const page = await storage.chatDelegationSteps.listResourceCleanupPage(cursor.afterStepId, 32);
+    malformedSteps = page.malformedCount;
     step = page.items.find(
       (candidate) =>
         ["completed", "failed", "cancelled"].includes(candidate.status) &&
@@ -215,7 +192,7 @@ export async function reconcileDelegatedChildProcessCleanup(
         version: 1,
         afterStepId: page.nextAfterStepId ?? "",
       });
-      return { attempted: 0, failed: 0 };
+      return { attempted: 0, failed: 0, ...(malformedSteps ? { malformedSteps } : {}) };
     }
   }
   if (!step.childSessionId || !step.childTurnId || !["completed", "failed", "cancelled"].includes(step.status)) {
@@ -261,7 +238,7 @@ export async function reconcileDelegatedChildProcessCleanup(
   } finally {
     await storage.systemSettings.compareAndSet(CLEANUP_SCAN_CURSOR, claimed, next);
   }
-  return { attempted: candidate ? 1 : 0, failed };
+  return { attempted: candidate ? 1 : 0, failed, ...(malformedSteps ? { malformedSteps } : {}) };
 }
 
 function readRetainedCleanup(

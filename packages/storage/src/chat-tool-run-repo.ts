@@ -80,6 +80,7 @@ export interface ChatToolCallCount {
 
 export class ChatToolRunRepository {
   private readonly getStmt;
+  private readonly getForUpdateStmt;
   private readonly insertStmt;
   private readonly listByTurnStmt;
   private readonly listBySessionStmt;
@@ -91,6 +92,10 @@ export class ChatToolRunRepository {
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_tool_runs WHERE tool_run_id = ?");
+    this.getForUpdateStmt =
+      db.dialect === "postgres"
+        ? db.prepare("SELECT * FROM chat_tool_runs WHERE tool_run_id = ? FOR UPDATE")
+        : this.getStmt;
     // A call is a run that went out: executed or failed, and not served again from an earlier run. Blocked, waiting
     // and still-running rows never were calls. No index leads with started_at; the Gateway caches this read.
     this.countCallsByToolSinceStmt = db.prepare(`
@@ -159,7 +164,16 @@ export class ChatToolRunRepository {
   }
 
   public get(toolRunId: string): ChatToolRunRecord {
-    const row = toChatToolRunRow(this.getStmt.get(toolRunId));
+    return this.readToolRun(toolRunId, this.getStmt);
+  }
+
+  /** Locks the existing receipt inside a caller-owned transaction. */
+  public getForUpdate(toolRunId: string): ChatToolRunRecord {
+    return this.readToolRun(toolRunId, this.getForUpdateStmt);
+  }
+
+  private readToolRun(toolRunId: string, statement: ReturnType<DatabaseClient["prepare"]>): ChatToolRunRecord {
+    const row = toChatToolRunRow(statement.get(toolRunId));
     if (!row) {
       throw new NotFoundError({ entity: "Chat tool run", id: toolRunId });
     }

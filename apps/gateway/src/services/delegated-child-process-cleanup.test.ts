@@ -70,16 +70,38 @@ it("replays cleanup only from exact settled child tool receipts and retains the 
     } else expect(result.backgroundProcessCleanup).toMatchObject({ outcome: "unavailable" });
     return tool;
   });
+  let inTransaction = false;
+  const getStepForUpdate = vi.fn(async () => {
+    expect(inTransaction).toBe(true);
+    return step;
+  });
+  const getToolForUpdate = vi.fn(async (id: string) => {
+    expect(inTransaction).toBe(true);
+    return (await listByTurn()).find((item) => item.toolRunId === id);
+  });
   const storage = {
-    runImmediateTransaction: async (callback: () => Promise<unknown>) => callback(),
-    chatDelegationSteps: { get: vi.fn(async () => step), getForUpdate: vi.fn(async () => step) },
+    runImmediateTransaction: async (callback: () => Promise<unknown>) => {
+      inTransaction = true;
+      try {
+        return await callback();
+      } finally {
+        inTransaction = false;
+      }
+    },
+    chatDelegationSteps: { get: vi.fn(async () => step), getForUpdate: getStepForUpdate },
     chatToolRuns: {
       listByTurn,
       compareAndSwapResult,
       get: async (id: string) => (await listByTurn()).find((item) => item.toolRunId === id),
+      getForUpdate: getToolForUpdate,
     },
   } as never;
-  const cleanup = vi.fn(async () => "terminated" as const);
+  const cleanup = vi.fn(async () => {
+    expect(inTransaction).toBe(true);
+    expect(getStepForUpdate).toHaveBeenCalledExactlyOnceWith(owner.stepId);
+    expect(getToolForUpdate).toHaveBeenCalledExactlyOnceWith(tool.toolRunId);
+    return "terminated" as const;
+  });
   expect(await cleanupDelegatedChildProcesses(storage, owner, cleanup)).toEqual({
     tracked: 1,
     terminated: 1,
@@ -265,11 +287,20 @@ it("persists sub-page progress, skips ineligible steps, retries failed cleanup a
         });
       }
     }
-    const markMalformed = raw.db.prepare("UPDATE chat_delegation_steps SET started_at = ? WHERE step_id = ?");
+    const insertMalformed = raw.db.prepare(`
+      INSERT INTO chat_delegation_steps (
+        step_id, run_id, role, step_index, status, started_at, instruction_snapshot_json
+      ) VALUES (?, 'malformed-run', 'Coder', ?, 'pending', ?, ?)
+    `);
     for (let index = 0; index < 32; index += 1) {
       const stepId = `00-malformed-${String(index).padStart(2, "0")}`;
-      raw.chatDelegationSteps.create({ stepId, runId: "malformed-run", role: "Coder", index });
-      markMalformed.run(new Uint8Array([1]), stepId);
+      const badRowShape = index % 2 === 0;
+      insertMalformed.run(
+        stepId,
+        index,
+        badRowShape ? new Uint8Array([1]) : "2026-10-11T00:00:00.000Z",
+        badRowShape ? null : "{invalid json",
+      );
     }
     const steps = vi.spyOn(raw.chatDelegationSteps, "listResourceCleanupPage");
     const tools = vi.spyOn(raw.chatToolRuns, "listByTurnPage");
@@ -285,6 +316,7 @@ it("persists sub-page progress, skips ineligible steps, retries failed cleanup a
     for (let tick = 0; tick < 34; tick += 1) {
       const previousCalls = cleanup.mock.calls.length;
       const result = await reconcileDelegatedChildProcessCleanup(storage, cleanup);
+      if (tick === 0) expect(result.malformedSteps).toBe(32);
       expect(cleanup.mock.calls.length - previousCalls).toBeLessThanOrEqual(1);
       expect(result.attempted).toBeLessThanOrEqual(1);
       attempted += result.attempted;
@@ -340,7 +372,7 @@ it.each(["before-native", "before-ack"])("rejects canonical child drift %s", asy
   const storage = {
     runImmediateTransaction: async (callback: () => Promise<unknown>) => callback(),
     chatDelegationSteps: { get, getForUpdate: get },
-    chatToolRuns: { get: async () => tool, listByTurn: async () => [tool], compareAndSwapResult: acknowledge },
+    chatToolRuns: { getForUpdate: async () => tool, listByTurn: async () => [tool], compareAndSwapResult: acknowledge },
   } as never;
   const cleanup = vi.fn(async () => {
     if (phase === "before-ack") step.childTurnId = "changed";
