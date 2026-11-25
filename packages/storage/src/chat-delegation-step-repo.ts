@@ -541,6 +541,15 @@ export class ChatDelegationStepRepository {
     return mapRow(row);
   }
 
+  public listByIds(stepIds: string[]): Map<string, ChatDelegationStepRecord> {
+    if (stepIds.length === 0) return new Map();
+    const placeholders = stepIds.map(() => "?").join(", ");
+    const rows = this.db
+      .prepare(`SELECT * FROM chat_delegation_steps WHERE step_id IN (${placeholders})`)
+      .all(...stepIds);
+    return new Map(toChatDelegationStepRows(rows).map((row) => [row.step_id, mapRow(row)]));
+  }
+
   /** Locks one delegation step for a transactionally fenced transition. */
   public getForUpdate(stepId: string): ChatDelegationStepRecord {
     const row = toChatDelegationStepRow(this.getForUpdateStmt.get(stepId));
@@ -607,7 +616,8 @@ export class ChatDelegationStepRepository {
       stepId: input.stepId,
       runId: input.runId,
       role: input.role,
-      instructionSnapshotJson: input.instructionSnapshot === undefined ? null : JSON.stringify(input.instructionSnapshot),
+      instructionSnapshotJson:
+        input.instructionSnapshot === undefined ? null : JSON.stringify(input.instructionSnapshot),
       label: input.label ?? null,
       index: input.index,
       status: input.status ?? "pending",
@@ -860,9 +870,15 @@ export class ChatDelegationStepRepository {
   /** Bounded primary-key traversal for existing-owner resource reconciliation. */
   public listResourceCleanupPage(afterStepId = "", limit = 32): ChatDelegationStepRecord[] {
     const bounded = Number.isSafeInteger(limit) ? Math.max(1, Math.min(32, limit)) : 32;
-    return toChatDelegationStepRows(this.db.prepare(`
+    return toChatDelegationStepRows(
+      this.db
+        .prepare(
+          `
       SELECT * FROM chat_delegation_steps WHERE step_id > ? ORDER BY step_id ASC LIMIT ?
-    `).all(afterStepId, bounded)).map(mapRow);
+    `,
+        )
+        .all(afterStepId, bounded),
+    ).map(mapRow);
   }
 
   /** Locks all steps for an aggregate transition. Call inside a storage transaction. */
@@ -1291,9 +1307,7 @@ function mapRow(row: ChatDelegationStepRow): ChatDelegationStepRecord {
   };
 }
 
-function parseInstructionSnapshot(
-  raw: string | null,
-): ChatDelegationStepRecord["instructionSnapshot"] {
+function parseInstructionSnapshot(raw: string | null): ChatDelegationStepRecord["instructionSnapshot"] {
   if (raw === null) return undefined;
   let value: unknown;
   try {
@@ -1301,8 +1315,13 @@ function parseInstructionSnapshot(
   } catch {
     throw new Error("Delegation step has a malformed instruction snapshot.");
   }
-  if (!isRecord(value) || Object.keys(value).some((key) => !["objective", "label", "expectedOutput", "resultSchema"].includes(key)) ||
-    [value.objective, value.label, value.expectedOutput].some((field) => field !== undefined && typeof field !== "string")) {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => !["objective", "label", "expectedOutput", "resultSchema"].includes(key)) ||
+    [value.objective, value.label, value.expectedOutput].some(
+      (field) => field !== undefined && typeof field !== "string",
+    )
+  ) {
     throw new Error("Delegation step has a malformed instruction snapshot.");
   }
   if (value.resultSchema !== undefined) readChatDelegationResultSchema(value.resultSchema);

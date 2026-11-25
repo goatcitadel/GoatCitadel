@@ -32,8 +32,8 @@ function projectionDependencies(storage: AsyncStorage): InboxProjectionDependenc
       taskDeliverables: { listRecentByWorkspace: vi.fn(async () => []) },
       durableChildWatchers: { listRecentCompletedDelegations: vi.fn(async () => []) },
       durableRuns: { getRunsByIds: vi.fn(async () => new Map()) },
-      chatDelegationRuns: { get: vi.fn() },
-      chatDelegationSteps: { get: vi.fn() },
+      chatDelegationRuns: storage.chatDelegationRuns,
+      chatDelegationSteps: storage.chatDelegationSteps,
     },
     memory: { listTraceMemoryCandidates: vi.fn(async () => []) },
     memoryProposalsEnabled: vi.fn(async () => true),
@@ -116,6 +116,34 @@ describe.skipIf(!url)("Inbox projection approvals on isolated real PostgreSQL", 
       await lease?.release();
     }
   }, 120_000);
+
+  it("loads persisted delegation records for a batch of Inbox lineage IDs", async () => {
+    const run = await storage.chatDelegationRuns.create({
+      runId: "inbox-delegation",
+      sessionId: "inbox-parent-session",
+      taskId: "inbox-task",
+      objective: "Review the persisted linkage",
+      roles: ["Coder"],
+      mode: "sequential",
+      status: "completed",
+      startedAt: "2026-11-25T10:00:00.000Z",
+    });
+    const step = await storage.chatDelegationSteps.create({
+      runId: run.runId,
+      stepId: "inbox-step",
+      role: "Coder",
+      index: 0,
+      status: "completed",
+      startedAt: "2026-11-25T10:00:00.000Z",
+    });
+
+    const [runs, steps] = await Promise.all([
+      storage.chatDelegationRuns.listByIds([run.runId, "missing-delegation"]),
+      storage.chatDelegationSteps.listByIds([step.stepId, "missing-step"]),
+    ]);
+    expect(runs).toEqual(new Map([[run.runId, run]]));
+    expect(steps).toEqual(new Map([[step.stepId, step]]));
+  });
 
   it("lists one install-wide skill approval in every workspace's Inbox and keeps linked ones scoped", async () => {
     const linked = (workspaceId: string) =>

@@ -136,6 +136,19 @@ export class ChatDelegationRunRepository {
     return mapRow(row);
   }
 
+  public listByIds(runIds: string[]): Map<string, ChatDelegationRunRecord> {
+    if (runIds.length === 0) return new Map();
+    const placeholders = runIds.map(() => "?").join(", ");
+    const rows = this.db.prepare(`SELECT * FROM chat_delegation_runs WHERE run_id IN (${placeholders})`).all(...runIds);
+    return new Map(
+      rows.map((raw) => {
+        const row = toChatDelegationRunRow(raw);
+        if (!row) throw new Error("A delegation run is corrupt or uses unsupported persisted values.");
+        return [row.run_id, mapRow(row)];
+      }),
+    );
+  }
+
   /** Locks the parent run for an aggregate transition. Call inside a storage transaction. */
   public getForUpdate(runId: string): ChatDelegationRunRecord {
     const raw = this.getForUpdateStmt.get(runId);

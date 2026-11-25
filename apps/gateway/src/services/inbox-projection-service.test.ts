@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { NotFoundError } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { InboxProjectionService, type InboxProjectionDependencies } from "./inbox-projection-service.js";
 
@@ -15,8 +14,8 @@ function dependencies(): InboxProjectionDependencies {
       taskDeliverables: { listRecentByWorkspace: vi.fn(async () => []) },
       durableChildWatchers: { listRecentCompletedDelegations: vi.fn(async () => []) },
       durableRuns: { getRunsByIds: vi.fn(async () => new Map()) },
-      chatDelegationRuns: { get: vi.fn() },
-      chatDelegationSteps: { get: vi.fn() },
+      chatDelegationRuns: { listByIds: vi.fn(async () => new Map()) },
+      chatDelegationSteps: { listByIds: vi.fn(async () => new Map()) },
     },
     memory: { listTraceMemoryCandidates: vi.fn(async () => []) },
     memoryProposalsEnabled: vi.fn(async () => true),
@@ -1131,24 +1130,38 @@ describe("Gateway inbox projection", () => {
             .map((sessionId) => [sessionId, { workspaceId }]),
         ) as never,
     );
-    vi.mocked(deps.storage.chatDelegationRuns.get).mockImplementation(async (runId) => {
-      if (runId === "delegation-good" || runId === "delegation-wrong-step") {
-        return { runId, parentRunId: "parent-good", sessionId: "parent-session" } as never;
-      }
-      throw new NotFoundError({ entity: "Delegation run", id: runId });
-    });
-    vi.mocked(deps.storage.chatDelegationSteps.get).mockImplementation(async (stepId) => {
-      if (stepId === "step-good" || stepId === "step-wrong-step") {
-        return {
-          stepId,
-          runId: stepId.replace("step-", "delegation-"),
-          durableRunId: stepId === "step-good" ? "child-good" : "different-child",
-          childSessionId: stepId === "step-good" ? "session-good" : "session-wrong-step",
-          childTurnId: stepId === "step-good" ? "turn-good" : "turn-wrong-step",
-        } as never;
-      }
-      throw new NotFoundError({ entity: "Delegation step", id: stepId });
-    });
+    vi.mocked(deps.storage.chatDelegationRuns.listByIds).mockResolvedValue(
+      new Map(
+        ["delegation-good", "delegation-wrong-step"].map((runId) => [
+          runId,
+          { runId, parentRunId: "parent-good", sessionId: "parent-session" },
+        ]),
+      ) as never,
+    );
+    vi.mocked(deps.storage.chatDelegationSteps.listByIds).mockResolvedValue(
+      new Map([
+        [
+          "step-good",
+          {
+            stepId: "step-good",
+            runId: "delegation-good",
+            durableRunId: "child-good",
+            childSessionId: "session-good",
+            childTurnId: "turn-good",
+          },
+        ],
+        [
+          "step-wrong-step",
+          {
+            stepId: "step-wrong-step",
+            runId: "delegation-wrong-step",
+            durableRunId: "different-child",
+            childSessionId: "session-wrong-step",
+            childTurnId: "turn-wrong-step",
+          },
+        ],
+      ]) as never,
+    );
 
     const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
     expect(deps.storage.durableChildWatchers.listRecentCompletedDelegations).toHaveBeenCalledWith(
@@ -1158,8 +1171,12 @@ describe("Gateway inbox projection", () => {
     );
     expect(deps.storage.durableRuns.getRunsByIds).toHaveBeenCalledOnce();
     expect(deps.storage.chatSessionMeta.listBySessionIds).toHaveBeenCalledWith(expect.any(Array), "workspace-a");
-    expect(deps.storage.chatDelegationRuns.get).toHaveBeenCalledWith("delegation-good");
-    expect(deps.storage.chatDelegationRuns.get).toHaveBeenCalledWith("delegation-orphan");
+    expect(deps.storage.chatDelegationRuns.listByIds).toHaveBeenCalledExactlyOnceWith(
+      expect.arrayContaining(["delegation-good", "delegation-orphan", "delegation-wrong-step"]),
+    );
+    expect(deps.storage.chatDelegationSteps.listByIds).toHaveBeenCalledExactlyOnceWith(
+      expect.arrayContaining(["step-good", "step-orphan", "step-wrong-step"]),
+    );
     expect(projection.items.map((item) => item.id)).toEqual(["completed_background_run:good"]);
     expect(projection.items[0]).toMatchObject({
       kind: "completed_background_run",

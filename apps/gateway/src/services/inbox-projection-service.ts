@@ -7,7 +7,7 @@ import type {
   OperatorInboxResponse,
   OperatorInboxSourceCoverage,
 } from "@goatcitadel/contracts";
-import { isInstallWideApproval, NotFoundError } from "@goatcitadel/contracts";
+import { isInstallWideApproval } from "@goatcitadel/contracts";
 import { codeRunSummary, shellCommandSummary } from "./inbox-preview-text.js";
 import { redactUrlForError } from "@goatcitadel/policy-engine";
 import { redactLocalHomePaths } from "./user-facing-failure-text.js";
@@ -177,8 +177,8 @@ export interface InboxProjectionDependencies {
     taskDeliverables: Pick<AsyncStorage["taskDeliverables"], "listRecentByWorkspace">;
     durableChildWatchers: Pick<AsyncStorage["durableChildWatchers"], "listRecentCompletedDelegations">;
     durableRuns: Pick<AsyncStorage["durableRuns"], "getRunsByIds">;
-    chatDelegationRuns: Pick<AsyncStorage["chatDelegationRuns"], "get">;
-    chatDelegationSteps: Pick<AsyncStorage["chatDelegationSteps"], "get">;
+    chatDelegationRuns: Pick<AsyncStorage["chatDelegationRuns"], "listByIds">;
+    chatDelegationSteps: Pick<AsyncStorage["chatDelegationSteps"], "listByIds">;
   };
   memory: Pick<MemoryLifecycleService, "listTraceMemoryCandidates">;
   memoryProposalsEnabled: () => Promise<boolean>;
@@ -190,15 +190,6 @@ export interface InboxProjectionDependencies {
     inspectLatestBackupTrust: BackupRetentionService["inspectLatestBackupTrust"];
     listBackups: BackupRetentionService["listBackups"];
   };
-}
-
-async function readOptionalOwner<T>(read: () => Promise<T>): Promise<T | undefined> {
-  try {
-    return await read();
-  } catch (error) {
-    if (error instanceof NotFoundError) return undefined;
-    throw error;
-  }
 }
 
 const DELIVERABLE_LEADS: Record<string, string> = {
@@ -702,7 +693,7 @@ export class InboxProjectionService {
         ),
       ];
       const sessions = await this.deps.storage.chatSessionMeta.listBySessionIds(sessionIds, workspaceId);
-      const visible: OperatorInboxItem[] = [];
+      const scopedCandidates = [];
       let unverified = false;
       for (const { watcher, finishedAt } of candidates) {
         const parent = runs.get(watcher.parentRunId);
@@ -744,10 +735,38 @@ export class InboxProjectionService {
           continue;
         }
         if (parentSession.workspaceId !== workspaceId || childSession.workspaceId !== workspaceId) continue;
-        const [delegationRun, step] = await Promise.all([
-          readOptionalOwner(() => this.deps.storage.chatDelegationRuns.get(delegationRunId)),
-          readOptionalOwner(() => this.deps.storage.chatDelegationSteps.get(stepId)),
-        ]);
+        scopedCandidates.push({
+          watcher,
+          finishedAt,
+          parent,
+          child,
+          parentSessionId,
+          childSessionId,
+          childTurnId,
+          delegationRunId,
+          stepId,
+        });
+      }
+      const delegationIds = [...new Set(scopedCandidates.map(({ delegationRunId }) => delegationRunId))];
+      const stepIds = [...new Set(scopedCandidates.map(({ stepId }) => stepId))];
+      const [delegations, steps] = await Promise.all([
+        this.deps.storage.chatDelegationRuns.listByIds(delegationIds),
+        this.deps.storage.chatDelegationSteps.listByIds(stepIds),
+      ]);
+      const visible: OperatorInboxItem[] = [];
+      for (const {
+        watcher,
+        finishedAt,
+        parent,
+        child,
+        parentSessionId,
+        childSessionId,
+        childTurnId,
+        delegationRunId,
+        stepId,
+      } of scopedCandidates) {
+        const delegationRun = delegations.get(delegationRunId);
+        const step = steps.get(stepId);
         if (
           !delegationRun ||
           !step ||
