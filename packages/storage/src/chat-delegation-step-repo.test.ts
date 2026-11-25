@@ -482,6 +482,20 @@ describe("ChatDelegationStepRepository", () => {
     assert.equal(staleBinding.step.status, "running");
   });
 
+  it("returns the claimed step without a second read", () => {
+    const { repo } = createStore();
+    const step = repo.create({ stepId: "claim-return", runId: "claim-run", role: "Coder", index: 0 });
+    repo.get = () => assert.fail("Dispatch mutations must return the row they changed");
+    const claimed = repo.claimPendingForDispatch(
+      step.stepId,
+      "claim-token",
+      "2099-01-01T00:00:00.000Z",
+      "2026-03-26T00:00:00.000Z",
+    );
+    assert.equal(claimed?.stepId, step.stepId);
+    assert.equal(claimed?.status, "running");
+  });
+
   it("atomically owns, links, reclaims, and finalizes child dispatch", () => {
     const { db, repo } = createStore();
     const competingRepo = new ChatDelegationStepRepository(db);

@@ -241,12 +241,14 @@ export class ChatDelegationStepRepository {
           dispatch_claim_expires_at = @claimExpiresAt, started_at = @startedAt
       WHERE step_id = @stepId AND status = 'pending'
         AND dispatch_claim_token IS NULL AND child_session_id IS NULL AND child_turn_id IS NULL
+      RETURNING *
     `);
     this.claimUnlinkedRunningDispatchStmt = db.prepare(`
       UPDATE chat_delegation_steps
       SET dispatch_claim_token = @claimToken, dispatch_claim_expires_at = @claimExpiresAt, started_at = @startedAt
       WHERE step_id = @stepId AND status = 'running' AND dispatch_claim_token IS NULL
         AND child_session_id IS NULL AND child_turn_id IS NULL
+      RETURNING *
     `);
     this.reclaimDispatchMarkerStmt = db.prepare(`
       UPDATE chat_delegation_steps
@@ -254,6 +256,7 @@ export class ChatDelegationStepRepository {
       WHERE step_id = @stepId AND status = 'running'
         AND dispatch_claim_token = @expectedClaimToken AND child_session_id IS NULL AND child_turn_id IS NULL
         AND ${expiredDispatchClaimSql}
+      RETURNING *
     `);
     this.linkClaimedDispatchStmt = db.prepare(`
       UPDATE chat_delegation_steps
@@ -262,6 +265,7 @@ export class ChatDelegationStepRepository {
       WHERE step_id = @stepId AND status = 'running' AND dispatch_claim_token = @claimToken
         AND child_session_id IS NULL AND child_turn_id IS NULL
         AND ${liveDispatchClaimSql}
+      RETURNING *
     `);
     this.reclaimLinkedDispatchStmt = db.prepare(`
       UPDATE chat_delegation_steps
@@ -270,6 +274,7 @@ export class ChatDelegationStepRepository {
       WHERE step_id = @stepId AND status = 'running'
         AND child_session_id = @childSessionId AND dispatch_claim_token = @expectedDispatchToken
         AND ${expiredDispatchClaimSql}
+      RETURNING *
     `);
     this.claimLinkedDispatchStmt = db.prepare(`
       UPDATE chat_delegation_steps
@@ -277,6 +282,7 @@ export class ChatDelegationStepRepository {
           started_at = @startedAt
       WHERE step_id = @stepId AND status = 'running'
         AND child_session_id = @childSessionId AND child_turn_id IS NULL AND dispatch_claim_token IS NULL
+      RETURNING *
     `);
     this.claimFinalizedLinkedDispatchStmt = db.prepare(`
       UPDATE chat_delegation_steps
@@ -285,6 +291,7 @@ export class ChatDelegationStepRepository {
       WHERE step_id = @stepId AND status = 'running'
         AND child_session_id = @childSessionId AND child_turn_id = @expectedChildTurnId
         AND dispatch_claim_token IS NULL
+      RETURNING *
     `);
     this.finalizeLinkedDispatchStmt = db.prepare(`
       UPDATE chat_delegation_steps
@@ -293,6 +300,7 @@ export class ChatDelegationStepRepository {
         AND child_session_id = @childSessionId AND dispatch_claim_token = @expectedDispatchToken
         AND (child_turn_id IS NULL OR child_turn_id = @childTurnId)
         AND ${liveDispatchClaimSql}
+      RETURNING *
     `);
     this.ownsLinkedDispatchStmt = db.prepare(`
       SELECT step_id
@@ -315,6 +323,7 @@ export class ChatDelegationStepRepository {
             AND dispatch_claim_expires_at IS NOT NULL
             AND gc_try_parse_timestamptz(dispatch_claim_expires_at) > clock_timestamp()
             AND (durable_run_id IS NULL OR durable_run_id = CAST(@durableRunId AS TEXT))
+          RETURNING *
         `
         : `
           UPDATE chat_delegation_steps
@@ -326,6 +335,7 @@ export class ChatDelegationStepRepository {
             AND dispatch_claim_expires_at IS NOT NULL
             AND julianday(dispatch_claim_expires_at) > julianday('now')
             AND (durable_run_id IS NULL OR durable_run_id = @durableRunId)
+          RETURNING *
         `,
     );
     this.extendOwnedDispatchLeaseStmt = db.prepare(`
@@ -338,6 +348,7 @@ export class ChatDelegationStepRepository {
         AND dispatch_claim_expires_at IS NOT NULL
         AND ${liveDispatchClaimSql}
         AND durable_run_id IS NOT NULL
+      RETURNING *
     `);
     this.recoverDurableRunBindingStmt = db.prepare(`
       UPDATE chat_delegation_steps
@@ -350,6 +361,7 @@ export class ChatDelegationStepRepository {
         AND child_session_id = @childSessionId
         AND (durable_run_id IS NULL OR durable_run_id = @durableRunId)
         AND (child_turn_id IS NULL OR child_turn_id = @childTurnId)
+      RETURNING *
     `);
     this.finishOwnedDispatchWithErrorStmt = db.prepare(
       db.dialect === "postgres"
@@ -373,6 +385,7 @@ export class ChatDelegationStepRepository {
               (CAST(@expectedChildSessionId AS TEXT) IS NULL AND child_session_id IS NULL)
               OR child_session_id = CAST(@expectedChildSessionId AS TEXT)
             )
+          RETURNING *
         `
         : `
           UPDATE chat_delegation_steps
@@ -394,6 +407,7 @@ export class ChatDelegationStepRepository {
               (@expectedChildSessionId IS NULL AND child_session_id IS NULL)
               OR child_session_id = @expectedChildSessionId
             )
+          RETURNING *
         `,
     );
     this.finishOwnedDispatchWithResponseStmt = db.prepare(
@@ -424,6 +438,7 @@ export class ChatDelegationStepRepository {
             AND dispatch_claim_token = @expectedDispatchToken
             AND dispatch_claim_expires_at IS NOT NULL
             AND gc_try_parse_timestamptz(dispatch_claim_expires_at) > clock_timestamp()
+          RETURNING *
         `
         : `
           UPDATE chat_delegation_steps
@@ -451,6 +466,7 @@ export class ChatDelegationStepRepository {
             AND dispatch_claim_token = @expectedDispatchToken
             AND dispatch_claim_expires_at IS NOT NULL
             AND julianday(dispatch_claim_expires_at) > julianday('now')
+          RETURNING *
         `,
     );
     this.releaseOwnedWaitingDispatchStmt = db.prepare(
@@ -466,6 +482,7 @@ export class ChatDelegationStepRepository {
             AND dispatch_claim_token = @expectedDispatchToken
             AND dispatch_claim_expires_at IS NOT NULL
             AND gc_try_parse_timestamptz(dispatch_claim_expires_at) > clock_timestamp()
+          RETURNING *
         `
         : `
           UPDATE chat_delegation_steps
@@ -478,6 +495,7 @@ export class ChatDelegationStepRepository {
             AND dispatch_claim_token = @expectedDispatchToken
             AND dispatch_claim_expires_at IS NOT NULL
             AND julianday(dispatch_claim_expires_at) > julianday('now')
+          RETURNING *
         `,
     );
     this.finishUnclaimedPendingWithErrorStmt = db.prepare(
@@ -504,6 +522,7 @@ export class ChatDelegationStepRepository {
                 AND gc_try_parse_timestamptz(dispatch_claim_expires_at) <= clock_timestamp()
               )
             )
+          RETURNING *
         `
         : `
           UPDATE chat_delegation_steps
@@ -527,6 +546,7 @@ export class ChatDelegationStepRepository {
                 AND julianday(dispatch_claim_expires_at) <= julianday('now')
               )
             )
+          RETURNING *
         `,
     );
     this.failUnownedPreAdmissionStmt = db.prepare(
@@ -541,6 +561,7 @@ export class ChatDelegationStepRepository {
             AND ((dispatch_claim_token IS NULL AND dispatch_claim_expires_at IS NULL)
               OR (dispatch_claim_token IS NOT NULL AND dispatch_claim_expires_at IS NOT NULL
                 AND gc_try_parse_timestamptz(dispatch_claim_expires_at) <= clock_timestamp()))
+          RETURNING *
         `
         : `
           UPDATE chat_delegation_steps
@@ -552,6 +573,7 @@ export class ChatDelegationStepRepository {
             AND ((dispatch_claim_token IS NULL AND dispatch_claim_expires_at IS NULL)
               OR (dispatch_claim_token IS NOT NULL AND dispatch_claim_expires_at IS NOT NULL
                 AND julianday(dispatch_claim_expires_at) <= julianday('now')))
+          RETURNING *
         `,
     );
   }
@@ -925,8 +947,8 @@ export class ChatDelegationStepRepository {
     claimExpiresAt: string,
     startedAt: string,
   ): ChatDelegationStepRecord | undefined {
-    const result = this.claimPendingDispatchStmt.run({ stepId, claimToken, claimExpiresAt, startedAt });
-    return Number(result.changes ?? 0) > 0 ? this.get(stepId) : undefined;
+    const result = this.claimPendingDispatchStmt.get({ stepId, claimToken, claimExpiresAt, startedAt });
+    return mapUpdatedStep(result);
   }
 
   public reclaimRunningForDispatch(
@@ -937,9 +959,9 @@ export class ChatDelegationStepRepository {
     startedAt: string,
   ): ChatDelegationStepRecord | undefined {
     const result = expectedClaimToken
-      ? this.reclaimDispatchMarkerStmt.run({ stepId, expectedClaimToken, claimToken, claimExpiresAt, startedAt })
-      : this.claimUnlinkedRunningDispatchStmt.run({ stepId, claimToken, claimExpiresAt, startedAt });
-    return Number(result.changes ?? 0) > 0 ? this.get(stepId) : undefined;
+      ? this.reclaimDispatchMarkerStmt.get({ stepId, expectedClaimToken, claimToken, claimExpiresAt, startedAt })
+      : this.claimUnlinkedRunningDispatchStmt.get({ stepId, claimToken, claimExpiresAt, startedAt });
+    return mapUpdatedStep(result);
   }
 
   public linkClaimedDispatch(
@@ -949,14 +971,14 @@ export class ChatDelegationStepRepository {
     dispatchToken: string,
     dispatchExpiresAt: string,
   ): ChatDelegationStepRecord | undefined {
-    const result = this.linkClaimedDispatchStmt.run({
+    const result = this.linkClaimedDispatchStmt.get({
       stepId,
       claimToken,
       childSessionId,
       dispatchToken,
       dispatchExpiresAt,
     });
-    return Number(result.changes ?? 0) > 0 ? this.get(stepId) : undefined;
+    return mapUpdatedStep(result);
   }
 
   public reclaimLinkedDispatch(
@@ -967,7 +989,7 @@ export class ChatDelegationStepRepository {
     dispatchExpiresAt: string,
     startedAt: string,
   ): ChatDelegationStepRecord | undefined {
-    const result = this.reclaimLinkedDispatchStmt.run({
+    const result = this.reclaimLinkedDispatchStmt.get({
       stepId,
       childSessionId,
       expectedDispatchToken,
@@ -975,7 +997,7 @@ export class ChatDelegationStepRepository {
       dispatchExpiresAt,
       startedAt,
     });
-    return Number(result.changes ?? 0) > 0 ? this.get(stepId) : undefined;
+    return mapUpdatedStep(result);
   }
 
   public claimLinkedForDispatch(
@@ -987,7 +1009,7 @@ export class ChatDelegationStepRepository {
     startedAt: string,
   ): ChatDelegationStepRecord | undefined {
     const result = expectedChildTurnId
-      ? this.claimFinalizedLinkedDispatchStmt.run({
+      ? this.claimFinalizedLinkedDispatchStmt.get({
           stepId,
           childSessionId,
           expectedChildTurnId,
@@ -995,8 +1017,8 @@ export class ChatDelegationStepRepository {
           dispatchExpiresAt,
           startedAt,
         })
-      : this.claimLinkedDispatchStmt.run({ stepId, childSessionId, dispatchToken, dispatchExpiresAt, startedAt });
-    return Number(result.changes ?? 0) > 0 ? this.get(stepId) : undefined;
+      : this.claimLinkedDispatchStmt.get({ stepId, childSessionId, dispatchToken, dispatchExpiresAt, startedAt });
+    return mapUpdatedStep(result);
   }
 
   public finalizeLinkedDispatch(
@@ -1005,13 +1027,13 @@ export class ChatDelegationStepRepository {
     expectedDispatchToken: string,
     childTurnId: string,
   ): ChatDelegationStepRecord | undefined {
-    const result = this.finalizeLinkedDispatchStmt.run({
+    const result = this.finalizeLinkedDispatchStmt.get({
       stepId,
       childSessionId,
       expectedDispatchToken,
       childTurnId,
     });
-    return Number(result.changes ?? 0) > 0 ? this.get(stepId) : undefined;
+    return mapUpdatedStep(result);
   }
 
   public ownsLinkedDispatch(stepId: string, childSessionId: string, dispatchToken: string): boolean {
@@ -1028,8 +1050,8 @@ export class ChatDelegationStepRepository {
     childSessionId: string;
     durableRunId: string;
   }): ChatDelegationStepRecord | undefined {
-    const result = this.bindOwnedDurableRunStmt.run(input);
-    return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
+    const result = this.bindOwnedDurableRunStmt.get(input);
+    return mapUpdatedStep(result);
   }
 
   /** Extends the short pre-admission lease only after its durable child binding is canonical. */
@@ -1039,8 +1061,8 @@ export class ChatDelegationStepRepository {
     childSessionId: string;
     leaseExpiresAt: string;
   }): ChatDelegationStepRecord | undefined {
-    const result = this.extendOwnedDispatchLeaseStmt.run(input);
-    return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
+    const result = this.extendOwnedDispatchLeaseStmt.get(input);
+    return mapUpdatedStep(result);
   }
 
   /**
@@ -1056,11 +1078,11 @@ export class ChatDelegationStepRepository {
     durableRunId: string;
     releaseDispatch: boolean;
   }): ChatDelegationStepRecord | undefined {
-    const result = this.recoverDurableRunBindingStmt.run({
+    const result = this.recoverDurableRunBindingStmt.get({
       ...input,
       releaseDispatch: input.releaseDispatch ? 1 : 0,
     });
-    return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
+    return mapUpdatedStep(result);
   }
 
   /**
@@ -1079,7 +1101,7 @@ export class ChatDelegationStepRepository {
     finishedAt: string;
     durationMs: number;
   }): ChatDelegationStepRecord | undefined {
-    const result = this.finishOwnedDispatchWithErrorStmt.run({
+    const result = this.finishOwnedDispatchWithErrorStmt.get({
       stepId: input.stepId,
       expectedDispatchToken: input.expectedDispatchToken,
       expectedChildSessionId: input.expectedChildSessionId ?? null,
@@ -1091,7 +1113,7 @@ export class ChatDelegationStepRepository {
       finishedAt: input.finishedAt,
       durationMs: Math.max(0, Math.floor(input.durationMs)),
     });
-    return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
+    return mapUpdatedStep(result);
   }
 
   /** Atomically commits a child response, retaining the dispatch fence while it remains active. */
@@ -1114,7 +1136,7 @@ export class ChatDelegationStepRepository {
     finishedAt?: string;
     durationMs?: number;
   }): ChatDelegationStepRecord | undefined {
-    const result = this.finishOwnedDispatchWithResponseStmt.run({
+    const result = this.finishOwnedDispatchWithResponseStmt.get({
       stepId: input.stepId,
       expectedDispatchToken: input.expectedDispatchToken,
       childSessionId: input.childSessionId,
@@ -1133,7 +1155,7 @@ export class ChatDelegationStepRepository {
       finishedAt: input.finishedAt ?? null,
       durationMs: input.durationMs === undefined ? null : Math.max(0, Math.floor(input.durationMs)),
     });
-    return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
+    return mapUpdatedStep(result);
   }
 
   /** Releases a waiting response only for the exact database-fresh dispatch generation. */
@@ -1143,8 +1165,8 @@ export class ChatDelegationStepRepository {
     childSessionId: string;
     childTurnId: string;
   }): ChatDelegationStepRecord | undefined {
-    const result = this.releaseOwnedWaitingDispatchStmt.run(input);
-    return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
+    const result = this.releaseOwnedWaitingDispatchStmt.get(input);
+    return mapUpdatedStep(result);
   }
 
   /**
@@ -1161,7 +1183,7 @@ export class ChatDelegationStepRepository {
     finishedAt: string;
     durationMs: number;
   }): ChatDelegationStepRecord | undefined {
-    const result = this.finishUnclaimedPendingWithErrorStmt.run({
+    const result = this.finishUnclaimedPendingWithErrorStmt.get({
       stepId: input.stepId,
       status: input.status,
       label: input.label ?? null,
@@ -1171,7 +1193,7 @@ export class ChatDelegationStepRepository {
       finishedAt: input.finishedAt,
       durationMs: Math.max(0, Math.floor(input.durationMs)),
     });
-    return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
+    return mapUpdatedStep(result);
   }
 
   /** Fails a legacy plan before any child admission, fenced by the database claim clock. */
@@ -1184,11 +1206,11 @@ export class ChatDelegationStepRepository {
     finishedAt: string;
     durationMs: number;
   }): ChatDelegationStepRecord | undefined {
-    const result = this.failUnownedPreAdmissionStmt.run({
+    const result = this.failUnownedPreAdmissionStmt.get({
       ...input,
       durationMs: Math.max(0, Math.floor(input.durationMs)),
     });
-    return Number(result.changes ?? 0) > 0 ? this.get(input.stepId) : undefined;
+    return mapUpdatedStep(result);
   }
 
   public listParentsByChildSessionIds(
@@ -1288,6 +1310,13 @@ function isChatDelegationStepRow(value: unknown): value is ChatDelegationStepRow
     (typeof value.finished_at === "string" || value.finished_at === null) &&
     (typeof value.duration_ms === "number" || value.duration_ms === null)
   );
+}
+
+function mapUpdatedStep(value: unknown): ChatDelegationStepRecord | undefined {
+  if (value === undefined) return undefined;
+  const row = toChatDelegationStepRow(value);
+  if (!row) throw new Error("Updated delegation step has an invalid persisted shape.");
+  return mapRow(row);
 }
 
 function toChatDelegationStepRow(value: unknown): ChatDelegationStepRow | undefined {
