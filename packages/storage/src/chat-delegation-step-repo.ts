@@ -1369,6 +1369,7 @@ function parseScopeControl(raw: string | null | undefined): DelegatedFilesystemS
     !isRecord(parsed) ||
     typeof parsed.rootPath !== "string" ||
     !Array.isArray(parsed.approvedPaths) ||
+    !parsed.approvedPaths.every((entry) => typeof entry === "string") ||
     typeof parsed.scopeHash !== "string" ||
     typeof parsed.dispatchGeneration !== "string" ||
     typeof parsed.updatedAt !== "string"
@@ -1386,7 +1387,10 @@ function parseWorkResult(raw: string | null | undefined): DelegatedWorkResult | 
   if (!isRecord(parsed)) {
     return undefined;
   }
-  if (!["completed", "blocked", "scope_expansion"].includes(String(parsed.disposition))) {
+  if (
+    typeof parsed.disposition !== "string" ||
+    !["completed", "blocked", "scope_expansion"].includes(parsed.disposition)
+  ) {
     return undefined;
   }
   return parsed as unknown as DelegatedWorkResult;

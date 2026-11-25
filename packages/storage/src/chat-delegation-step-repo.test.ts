@@ -1193,6 +1193,32 @@ describe("ChatDelegationStepRepository", () => {
     setStepField(db, "step-a", "degraded_handoff_step_ids_json", "{}");
     assert.deepEqual(repo.get("step-a").degradedHandoffStepIds, []);
 
+    setStepField(
+      db,
+      "step-a",
+      "scope_control_json",
+      JSON.stringify({
+        rootPath: "C:/workspace",
+        approvedPaths: ["src", 123, null],
+        scopeHash: "example-scope",
+        dispatchGeneration: "example-generation",
+        updatedAt: "2026-03-26T00:00:01.000Z",
+      }),
+    );
+    assert.equal(repo.get("step-a").scopeControl, undefined);
+    setStepField(
+      db,
+      "step-a",
+      "work_result_json",
+      JSON.stringify({
+        disposition: ["completed"],
+        summary: "Persisted result",
+        changedFiles: [],
+        evidenceRefs: [],
+      }),
+    );
+    assert.equal(repo.get("step-a").workResult, undefined);
+
     setStepField(db, "step-a", "started_at", new Uint8Array([1]));
     assert.throws(() => repo.get("step-a"), /Delegation step step-a not found/);
     assert.deepEqual(repo.listByRun("run-a"), []);
