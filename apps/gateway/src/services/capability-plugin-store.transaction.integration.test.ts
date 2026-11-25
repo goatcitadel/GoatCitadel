@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import { CapabilityPluginStore } from "./capability-plugin-store.js";
 import { feedPluginToolGroupHolds } from "./capability-plugins-composition.js";
@@ -39,7 +39,6 @@ async function fixture() {
     waitInBackground: () => new Promise<void>((resolve) => waits.push(resolve)),
     isClosing: () => state.closing,
   });
-  await feed.load();
   cleanups.push(async () => {
     state.closing = true;
     for (const resume of waits.splice(0)) resume();
@@ -47,6 +46,7 @@ async function fixture() {
     await storage.close();
     await fs.rm(root, { recursive: true, force: true });
   });
+  await feed.load();
   const transaction = async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> => {
     const previous = state.transactionOpen;
     state.transactionOpen = true;
@@ -69,8 +69,14 @@ async function fixture() {
 }
 
 describe("plugin record fence notifications over real async SQLite storage", () => {
+  let h: Awaited<ReturnType<typeof fixture>>;
+
+  // Fresh on-disk migrations can be slow under coverage. Bound setup separately from transaction liveness.
+  beforeEach(async () => {
+    h = await fixture();
+  }, 45_000);
+
   it("notifies only after commit and recovers from a subsequent read failure outside the transaction", async () => {
-    const h = await fixture();
     await h.store.withLock(h.transaction, async () => {
       await h.saveHold();
       await new Promise((resolve) => setImmediate(resolve));
@@ -88,7 +94,6 @@ describe("plugin record fence notifications over real async SQLite storage", () 
   });
 
   it("reconverges to committed records after rollback without publishing its temporary hold", async () => {
-    const h = await fixture();
     await expect(h.store.withLock(h.transaction, async () => {
       await h.saveHold();
       await new Promise((resolve) => setImmediate(resolve));
@@ -103,7 +108,6 @@ describe("plugin record fence notifications over real async SQLite storage", () 
   });
 
   it("defers a nested fence notification until the outer transaction rolls back", async () => {
-    const h = await fixture();
     await expect(h.store.withLock(h.transaction, async () => {
       await h.store.withLock(h.transaction, h.saveHold);
       await new Promise((resolve) => setImmediate(resolve));
@@ -117,7 +121,6 @@ describe("plugin record fence notifications over real async SQLite storage", () 
   });
 
   it("keeps an independent queued write observable after another fence rolls back", async () => {
-    const h = await fixture();
     let entered!: () => void;
     let release!: () => void;
     const inside = new Promise<void>((resolve) => { entered = resolve; });
