@@ -128,6 +128,7 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
         summary: description.summary,
         impact: description.impact,
         risk: description.risk,
+        evidenceRefs: needsCredential ? ["gateway-auth:credential-write-required"] : undefined,
         status: needsCredential ? ("awaiting_input" as const) : ("awaiting_confirmation" as const),
         requiredAction: needsCredential
           ? context.actions.secureInput({
@@ -344,16 +345,20 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       change.operation === "gateway_auth_configuration" && change.mode === "basic"
         ? change.basicUsername?.trim()
         : undefined;
-    const expectsReplacement =
-      change.operation === "gateway_auth_configuration" && change.mode !== "none" && change.replaceCredential === true;
+    const expectsCredentialWrite =
+      change.operation === "gateway_auth_configuration" &&
+      change.mode !== "none" &&
+      (change.replaceCredential === true ||
+        plan.evidenceRefs?.includes("gateway-auth:credential-write-required") ||
+        plan.evidenceRefs?.includes("gateway-auth:temporary-credential-captured"));
     const current = await this.deps.getSettings({
       basicUsername: expectedBasicUsername,
-      credentialPlanId: expectsReplacement ? plan.planId : undefined,
+      credentialPlanId: expectsCredentialWrite ? plan.planId : undefined,
     });
-    if (expectsReplacement && current.credentialWriteMatches !== true) {
+    if (expectsCredentialWrite && current.credentialWriteMatches !== true) {
       return {
         applied: false,
-        reason: "The Gateway could not verify the credential replacement for this plan.",
+        reason: "The Gateway could not verify the credential write for this plan.",
         evidenceRefs: [],
       };
     }

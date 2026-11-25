@@ -107,6 +107,14 @@ test(
         })?.status,
         "admitted",
       );
+      assert.equal(
+        cronRuns.attachDeterministicChild(token, {
+          childTurnId: `turn-${suffix}`,
+          childDurableRunId: `durable-${suffix}`,
+          childMessageId: `message-${suffix}`,
+        })?.childMessageId,
+        `message-${suffix}`,
+      );
       assert.equal(cronRuns.terminalize(token, { status: "completed" })?.status, "completed");
 
       jobs.upsert({

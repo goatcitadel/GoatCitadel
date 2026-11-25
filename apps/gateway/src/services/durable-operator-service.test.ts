@@ -10,8 +10,15 @@ describe("DurableOperatorService", () => {
     expect(await service.getDiagnostics()).toEqual({ status: "ok" });
     expect(await service.listRuns()).toEqual([{ runId: "run-1", status: "completed" }]);
     expect(await service.listRuns(7)).toEqual([{ runId: "run-1", status: "completed" }]);
-    expect(await service.listRunHistory({ workspaceId: "alpha", limit: 2, cursor: "page" })).toEqual({ items: [], nextCursor: "next" });
-    expect(deps.durableRunService.listDurableRunHistory).toHaveBeenCalledWith({ workspaceId: "alpha", limit: 2, cursor: "page" });
+    expect(await service.listRunHistory({ workspaceId: "alpha", limit: 2, cursor: "page" })).toEqual({
+      items: [],
+      nextCursor: "next",
+    });
+    expect(deps.durableRunService.listDurableRunHistory).toHaveBeenCalledWith({
+      workspaceId: "alpha",
+      limit: 2,
+      cursor: "page",
+    });
     expect(await service.listDeadLetters()).toEqual([{ entryId: "dead-1" }]);
     expect(await service.listDeadLetters(8)).toEqual([{ entryId: "dead-1" }]);
     expect(await service.listRunCheckpoints("run-1")).toEqual([{ checkpointId: "checkpoint-1" }]);
@@ -44,8 +51,10 @@ describe("DurableOperatorService", () => {
     const deps = fakeDeps();
     const service = new DurableOperatorService(deps);
 
-    deps.durableRunService.createDurableRun.mockReturnValueOnce(run("queued")).mockReturnValueOnce(run("completed"));
-    deps.durableRunService.retryDurableRun.mockReturnValueOnce(run("queued")).mockReturnValueOnce(run("failed"));
+    deps.durableRunService.createDurableRun
+      .mockResolvedValueOnce(run("queued"))
+      .mockResolvedValueOnce(run("completed"));
+    deps.durableRunService.retryDurableRun.mockResolvedValueOnce(run("queued")).mockResolvedValueOnce(run("failed"));
 
     expect(await service.createRun({ kind: "test" } as never)).toEqual(run("queued"));
     expect(await service.createRun({ kind: "test" } as never)).toEqual(run("completed"));
@@ -98,9 +107,14 @@ describe("DurableOperatorService", () => {
   it("enqueues wake hooks only when a run was actually woken", async () => {
     const deps = fakeDeps();
     const service = new DurableOperatorService(deps);
-    const woke: DurableWakeResult = { outcome: "woke", run: run("queued") } as never;
-    const ignored: DurableWakeResult = { outcome: "ignored", reason: "not_waiting" } as never;
-    deps.durableRunService.wakeDurableRun.mockReturnValueOnce(woke).mockReturnValueOnce(ignored);
+    const woke: DurableWakeResult = {
+      runId: "run-1",
+      eventKey: "approval.resolved",
+      outcome: "woke",
+      run: run("queued"),
+    };
+    const ignored: DurableWakeResult = { runId: "run-2", eventKey: "timer", outcome: "skipped_not_waiting" };
+    deps.durableRunService.wakeDurableRun.mockResolvedValueOnce(woke).mockResolvedValueOnce(ignored);
 
     expect(
       await service.wakeRun("run-1", {
@@ -130,8 +144,13 @@ describe("DurableOperatorService", () => {
   it("can defer processing until a larger wake transaction commits", async () => {
     const deps = fakeDeps();
     const service = new DurableOperatorService(deps);
-    const woke: DurableWakeResult = { outcome: "woke", run: run("queued") } as never;
-    deps.durableRunService.wakeDurableRun.mockReturnValueOnce(woke);
+    const woke: DurableWakeResult = {
+      runId: "run-1",
+      eventKey: "approval.resolved",
+      outcome: "woke",
+      run: run("queued"),
+    };
+    deps.durableRunService.wakeDurableRun.mockResolvedValueOnce(woke);
 
     await expect(
       service.wakeRun(
@@ -194,27 +213,35 @@ function run(status: DurableRunRecord["status"]): DurableRunRecord {
 
 function fakeDeps() {
   const durableRunService = {
-    getDurableDiagnostics: vi.fn(() => ({ status: "ok" })),
-    listDurableRuns: vi.fn(() => [{ runId: "run-1", status: "completed" }] as never),
-    listDurableRunHistory: vi.fn(() => ({ items: [], nextCursor: "next" })),
-    listDurableDeadLetters: vi.fn(() => [{ entryId: "dead-1" }] as never),
-    listDurableRunCheckpoints: vi.fn(() => [{ checkpointId: "checkpoint-1" }] as never),
-    createDurableRun: vi.fn(() => run("queued")),
-    getDurableRun: vi.fn(() => run("completed")),
+    getDurableDiagnostics: vi.fn(async () => ({ status: "ok" }) as never),
+    listDurableRuns: vi.fn(async () => [{ runId: "run-1", status: "completed" }] as never),
+    listDurableRunHistory: vi.fn(async () => ({ items: [], nextCursor: "next" })),
+    listDurableDeadLetters: vi.fn(async () => [{ entryId: "dead-1" }] as never),
+    getDurableDeadLetter: vi.fn(),
+    listDurableRunCheckpoints: vi.fn(async () => [{ checkpointId: "checkpoint-1" }] as never),
+    createDurableRun: vi.fn(async () => run("queued")),
+    getDurableRun: vi.fn(async () => run("completed")),
     getDurableRunsByIds: vi.fn(async () => new Map()),
-    listDurableRunTimeline: vi.fn(() => [{ eventId: "event-1" }] as never),
-    pauseDurableRun: vi.fn(() => run("paused")),
-    resumeDurableRun: vi.fn(() => run("running")),
-    cancelDurableRun: vi.fn(() => run("cancelled")),
-    retryDurableRun: vi.fn(() => run("queued")),
-    wakeDurableRun: vi.fn(() => ({ outcome: "woke", run: run("queued") }) as never),
-    recoverDurableDeadLetter: vi.fn(() => run("queued")),
+    listDurableRunTimeline: vi.fn(async () => [{ eventId: "event-1" }] as never),
+    watchDurableChildRun: vi.fn(),
+    listDurableChildWatchers: vi.fn(),
+    detachDurableChildWatcher: vi.fn(),
+    reattachDurableChildWatcher: vi.fn(),
+    closeDurableChildWatcher: vi.fn(),
+    getDurableBackgroundTaskRail: vi.fn(),
+    controlDurableBackgroundTask: vi.fn(),
+    pauseDurableRun: vi.fn(async () => run("paused")),
+    resumeDurableRun: vi.fn(async () => run("running")),
+    cancelDurableRun: vi.fn(async () => run("cancelled")),
+    retryDurableRun: vi.fn(async () => run("queued")),
+    wakeDurableRun: vi.fn<DurableOperatorServiceDeps["durableRunService"]["wakeDurableRun"]>(),
+    recoverDurableDeadLetter: vi.fn(async () => run("queued")),
     requestRunProcessing: vi.fn(),
   };
   return {
     durableRunService,
     hooksService: { enqueueAfterHooks: vi.fn() },
     memoryLifecycleService: { syncMaintenanceFromDurableRun: vi.fn() },
-    resolveDurableRunHookWorkspaceId: vi.fn((input: DurableRunRecord) => `workspace-${input.runId}`),
+    resolveDurableRunHookWorkspaceId: vi.fn(async (input: DurableRunRecord) => `workspace-${input.runId}`),
   } satisfies DurableOperatorServiceDeps;
 }

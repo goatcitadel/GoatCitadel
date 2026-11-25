@@ -28,7 +28,7 @@ function projectionDependencies(storage: AsyncStorage): InboxProjectionDependenc
       documentPatchProposals: { list: vi.fn(async () => []) },
       capabilityProposals: { list: vi.fn(async () => []) },
       chatTurnTraces: { listActive: vi.fn(async () => []) },
-      chatSessionMeta: { get: vi.fn(async () => undefined), listBySessionIds: vi.fn(async () => new Map()) },
+      chatSessionMeta: { listBySessionIds: vi.fn(async () => new Map()) },
       taskDeliverables: { listRecentByWorkspace: vi.fn(async () => []) },
       durableChildWatchers: { listRecentCompletedDelegations: vi.fn(async () => []) },
       durableRuns: { getRunsByIds: vi.fn(async () => new Map()) },
@@ -91,22 +91,28 @@ describe.skipIf(!url)("Inbox projection approvals on isolated real PostgreSQL", 
 
   afterAll(async () => {
     try {
-      await storage?.close();
-    } finally {
-      if (admin) {
+      try {
+        await storage?.close();
+      } finally {
         try {
-          await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+          if (admin) {
+            try {
+              await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+            } finally {
+              await admin.end();
+            }
+          }
         } finally {
-          await admin.end();
+          if (
+            root &&
+            path.dirname(path.resolve(root)) === path.resolve(os.tmpdir()) &&
+            path.basename(root).startsWith("gc-inbox-projection-pg-")
+          ) {
+            await fs.rm(root, { recursive: true, force: true });
+          }
         }
       }
-      if (
-        root &&
-        path.dirname(path.resolve(root)) === path.resolve(os.tmpdir()) &&
-        path.basename(root).startsWith("gc-inbox-projection-pg-")
-      ) {
-        await fs.rm(root, { recursive: true, force: true });
-      }
+    } finally {
       await lease?.release();
     }
   }, 120_000);

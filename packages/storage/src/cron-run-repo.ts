@@ -512,13 +512,24 @@ export class CronRunRepository {
     }
     const normalizedNow = normalizeTimestamp(now ?? this.readDatabaseNow(), "now");
     return this.db.transaction("immediate", () => {
+      const job = this.getJobForUpdateStmt.get<CronJobExecutionRow>(normalizedToken.jobId);
       const current = this.get(normalizedToken.runId);
-      if (!current || !tokenMatches(current, normalizedToken) || !this.ownsActiveGeneration(normalizedToken)) {
+      if (!current || !tokenMatches(current, normalizedToken) || !jobOwnsActiveGeneration(job, normalizedToken)) {
         return undefined;
       }
       assertLinkageCompatible(current, normalizedLinkage);
       if (current.status === "admitted") {
-        return current;
+        if (!hasNewLinkage(current, normalizedLinkage)) return current;
+        const changed = this.advanceStmt.run({
+          ...normalizedToken,
+          ...linkageParams(normalizedLinkage),
+          expectedStatus: current.status,
+          expectedPhase: current.phase,
+          targetStatus: current.status,
+          targetPhase: current.phase,
+          now: normalizedNow,
+        });
+        return changed.changes > 0 ? this.get(normalizedToken.runId) : undefined;
       }
       if (current.status !== "admitting" || current.phase !== "child_admission") {
         throw invalidTransitionError(current, "admitted", "chat_execution");
@@ -576,10 +587,11 @@ export class CronRunRepository {
         return undefined;
       }
       assertLinkageCompatible(current, normalizedLinkage);
-      const hasNewLinkage = LINKAGE_FIELDS.some(
-        (key) => normalizedLinkage[key] !== undefined && current[key] === undefined,
-      );
-      if (current.status === targetStatus && current.phase === targetPhase && !hasNewLinkage) {
+      if (
+        current.status === targetStatus &&
+        current.phase === targetPhase &&
+        !hasNewLinkage(current, normalizedLinkage)
+      ) {
         return current;
       }
       if (!canAdvance(current, targetStatus, targetPhase)) {
@@ -888,6 +900,10 @@ const LINKAGE_FIELDS = [
   "externalSideEffectRunId",
   "evidenceEnvelopeId",
 ] as const;
+
+function hasNewLinkage(current: CronRunRecord, linkage: CronRunLinkage): boolean {
+  return LINKAGE_FIELDS.some((key) => linkage[key] !== undefined && current[key] === undefined);
+}
 
 function assertLinkageCompatible(current: CronRunRecord, linkage: CronRunLinkage): void {
   for (const key of LINKAGE_FIELDS) {

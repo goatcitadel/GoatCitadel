@@ -218,6 +218,13 @@ describe("CronRunRepository", () => {
         () => runs.attachChild(token, { childTurnId: "turn-2", childDurableRunId: "durable-1" }),
         ConflictError,
       );
+      const enriched = runs.attachChild(token, {
+        childMessageId: "message-1",
+        childTurnId: "turn-1",
+        childDurableRunId: "durable-1",
+      });
+      assert.equal(enriched?.childMessageId, "message-1");
+      assert.equal(enriched?.admittedAt, attached?.admittedAt);
       assert.equal(runs.advance(token, "running")?.status, "running");
       assert.equal(runs.markSucceeded(token, { output: "done" })?.status, "completed");
 

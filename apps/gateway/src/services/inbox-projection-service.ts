@@ -173,7 +173,7 @@ export interface InboxProjectionDependencies {
     documentPatchProposals: Pick<AsyncStorage["documentPatchProposals"], "list">;
     capabilityProposals: Pick<AsyncStorage["capabilityProposals"], "list">;
     chatTurnTraces: Pick<AsyncStorage["chatTurnTraces"], "listActive">;
-    chatSessionMeta: Pick<AsyncStorage["chatSessionMeta"], "get" | "listBySessionIds">;
+    chatSessionMeta: Pick<AsyncStorage["chatSessionMeta"], "listBySessionIds">;
     taskDeliverables: Pick<AsyncStorage["taskDeliverables"], "listRecentByWorkspace">;
     durableChildWatchers: Pick<AsyncStorage["durableChildWatchers"], "listRecentCompletedDelegations">;
     durableRuns: Pick<AsyncStorage["durableRuns"], "getRunsByIds">;
@@ -620,17 +620,21 @@ export class InboxProjectionService {
 
     await collect("user_input", ["needs_decision"], async () => {
       const traces = await this.deps.storage.chatTurnTraces.listActive(SOURCE_LIMIT);
+      const pending = traces.flatMap((trace) =>
+        trace.pendingUserInput ? [{ trace, prompt: trace.pendingUserInput }] : [],
+      );
+      const sessionIds = [...new Set(pending.map(({ trace }) => trace.sessionId))];
+      // An unscoped owner lookup distinguishes missing sessions from other workspaces.
+      const sessions = await this.deps.storage.chatSessionMeta.listBySessionIds(sessionIds);
       let unscoped = false;
       const visible: OperatorInboxItem[] = [];
-      for (const trace of traces) {
-        if (!trace.pendingUserInput) continue;
-        const session = await this.deps.storage.chatSessionMeta.get(trace.sessionId);
+      for (const { trace, prompt } of pending) {
+        const session = sessions.get(trace.sessionId);
         if (!session) {
           unscoped = true;
           continue;
         }
         if (session.workspaceId !== workspaceId) continue;
-        const prompt = trace.pendingUserInput;
         visible.push({
           id: `user_input:${prompt.promptId}`,
           kind: "user_input",

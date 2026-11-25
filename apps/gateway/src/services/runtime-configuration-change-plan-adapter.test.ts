@@ -92,17 +92,28 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
     });
   });
 
-  it.each(["token", "basic"] as const)(
-    "requires the committed %s replacement from this plan and revision",
-    async (mode) => {
+  it.each([
+    ["token", true],
+    ["basic", true],
+    ["token", false],
+    ["basic", false],
+  ] as const)(
+    "requires the committed %s credential from this plan and revision (replacement: %s)",
+    async (mode, replaceCredential) => {
       const current = settings({
-        auth: { mode, allowLoopbackBypass: false, tokenConfigured: true, basicConfigured: true },
+        auth: {
+          mode,
+          allowLoopbackBypass: false,
+          tokenConfigured: replaceCredential,
+          basicConfigured: replaceCredential,
+        },
       });
       const owner = {
         getSettings: async () => current,
         readSettingsRevision: () => current.revision,
         updateSettings: vi.fn(async (_input: UpdateSettingsInput, onCommit?: (revision: number) => void) => {
           current.revision += 1;
+          current.auth = { ...current.auth, tokenConfigured: mode === "token", basicConfigured: mode === "basic" };
           onCommit?.(current.revision);
           return current;
         }),
@@ -117,10 +128,10 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
       const adapter = bindAdapter();
       const request = {
         kind: "runtime_configuration",
-        change: { operation: "gateway_auth_configuration", mode, allowLoopbackBypass: false, replaceCredential: true },
+        change: { operation: "gateway_auth_configuration", mode, allowLoopbackBypass: false, replaceCredential },
       } as const;
-      const { target } = await adapter.prepare(context, request);
-      const plan = { planId: "rotation-plan", request, target } as ChangePlanRecord;
+      const { target, evidenceRefs } = await adapter.prepare(context, request);
+      const plan = { planId: "credential-plan", request, target, evidenceRefs } as ChangePlanRecord;
 
       await expect(adapter.verify(context, plan)).resolves.toMatchObject({ status: "manual_required" });
       owner.updateSettings.mockRejectedValueOnce(new Error("Settings write failed"));
@@ -129,7 +140,11 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
 
       const applied = await adapter.apply(context, plan);
       expect(applied.status).toBe("verifying");
-      const verifying = { ...plan, result: applied.result, evidenceRefs: applied.evidenceRefs };
+      const verifying = {
+        ...plan,
+        result: applied.result,
+        evidenceRefs: [...(plan.evidenceRefs ?? []), ...(applied.evidenceRefs ?? [])],
+      };
       await expect(adapter.verify(context, verifying)).resolves.toMatchObject({ status: "completed" });
       await expect(adapter.reconcile(context, verifying)).resolves.toMatchObject({ effectObserved: true });
       await expect(adapter.verify(context, { ...verifying, planId: "different-plan" })).resolves.toMatchObject({

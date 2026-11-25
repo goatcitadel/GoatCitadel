@@ -11,7 +11,7 @@ function dependencies(): InboxProjectionDependencies {
       documentPatchProposals: { list: vi.fn(async () => []) },
       capabilityProposals: { list: vi.fn(async () => []) },
       chatTurnTraces: { listActive: vi.fn(async () => []) },
-      chatSessionMeta: { get: vi.fn(async () => undefined), listBySessionIds: vi.fn(async () => new Map()) },
+      chatSessionMeta: { listBySessionIds: vi.fn(async () => new Map()) },
       taskDeliverables: { listRecentByWorkspace: vi.fn(async () => []) },
       durableChildWatchers: { listRecentCompletedDelegations: vi.fn(async () => []) },
       durableRuns: { getRunsByIds: vi.fn(async () => new Map()) },
@@ -370,8 +370,11 @@ describe("Gateway inbox projection", () => {
         pendingUserInput: { promptId: "prompt-b", title: "Private", question: "Foreign workspace" },
       },
     ] as never);
-    vi.mocked(deps.storage.chatSessionMeta.get).mockImplementation(
-      async (sessionId) => ({ workspaceId: sessionId === "session-a" ? "workspace-a" : "workspace-b" }) as never,
+    vi.mocked(deps.storage.chatSessionMeta.listBySessionIds).mockResolvedValue(
+      new Map([
+        ["session-a", { workspaceId: "workspace-a" }],
+        ["session-b", { workspaceId: "workspace-b" }],
+      ]) as never,
     );
     vi.mocked(deps.durable.listRunHistory).mockResolvedValue({
       items: [
@@ -423,6 +426,7 @@ describe("Gateway inbox projection", () => {
     expect(projection.items[2]?.summary).toBe("ENOENT: scandir '~/workspace'");
     expect(JSON.stringify(projection)).not.toContain("do-not-project");
     expect(JSON.stringify(projection)).not.toContain("Foreign workspace");
+    expect(deps.storage.chatSessionMeta.listBySessionIds).toHaveBeenCalledWith(["session-a", "session-b"]);
     expect(projection.counts.needs_decision).toEqual({ known: 2, complete: true });
     expect(projection.counts.needs_attention).toEqual({ known: 1, complete: false });
     expect(projection.coverage.find((entry) => entry.source === "durable_runs")?.state).toBe("partial");
