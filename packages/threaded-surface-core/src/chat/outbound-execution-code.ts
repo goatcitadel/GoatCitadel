@@ -863,10 +863,12 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
           includeThread: true,
         }).catch(() => undefined);
       }
-      if (item.action !== "retry") {
+      // Once the Gateway accepted the turn the message is already in the thread (reloaded above), so refilling the
+      // composer would invite a duplicate send; only a request that never became a turn gives the text back.
+      if (item.action !== "retry" && !canonicalTurnAccepted) {
         setDraft((current) => (current.trim().length > 0 ? current : item.content));
         setPendingAttachments((current) => (current.length > 0 ? current : attachmentsSnapshot));
-        if (item.action === "send" && item.workspaceSnapshot && !canonicalTurnAccepted) {
+        if (item.action === "send" && item.workspaceSnapshot) {
           onWorkspaceSnapshotFailedRef.current?.(item);
         }
         if (item.action === "edit" && item.targetTurnId) {

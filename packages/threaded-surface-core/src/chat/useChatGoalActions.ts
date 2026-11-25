@@ -118,20 +118,23 @@ export function useChatGoalActions({
     }
   }, [pushLocalNotice, selectedSessionId, setPinnedGoal, setUiError]);
 
+  /** Resolves true only when the Gateway accepted the instruction, so a caller keeps the operator's text otherwise. */
   const handleSteerMidTurn = useCallback(
-    async (instruction: string) => {
+    async (instruction: string): Promise<boolean> => {
       if (!selectedSessionId) {
-        return;
+        return false;
       }
       try {
         const response = await steerChatSession(selectedSessionId, { instruction });
         if (!response.accepted) {
           pushLocalNotice(response.reason ?? "Steering instruction not accepted.", "warning");
-        } else {
-          pushLocalNotice("Steering instruction queued.", "success");
+          return false;
         }
+        pushLocalNotice("Steering instruction queued.", "success");
+        return true;
       } catch (cause) {
         setUiError(cause instanceof Error ? cause.message : "Failed to send steering instruction.");
+        return false;
       }
     },
     [pushLocalNotice, selectedSessionId, setUiError],

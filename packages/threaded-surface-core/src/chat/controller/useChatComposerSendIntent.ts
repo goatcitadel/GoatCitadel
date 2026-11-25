@@ -273,8 +273,8 @@ export function useChatComposerSendIntent({
         queueCommand?.kind === "steer" ? queueCommand.text : draft.trimStart().replace(/^\/steer\s*/i, "");
       if (stripped) {
         setFollowThreadOutput(true);
-        await handleSteerMidTurn(stripped);
-        setDraft("");
+        // A rejected or failed steer keeps the operator's text; an accepted one clears only the submitted draft.
+        if (await handleSteerMidTurn(stripped)) setDraft((current) => (current === draft ? "" : current));
         return;
       }
     }
