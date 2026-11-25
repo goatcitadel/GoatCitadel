@@ -1,10 +1,13 @@
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = "DetachedManifest")]
 param(
   [Parameter(Mandatory = $true)]
   [string]$InstallerPath,
 
-  [Parameter(Mandatory = $true)]
+  [Parameter(Mandatory = $true, ParameterSetName = "DetachedManifest")]
   [string]$ExpectedReleaseManifestPath,
+
+  [Parameter(Mandatory = $true, ParameterSetName = "InstalledLive")]
+  [hashtable]$LiveAcceptance,
 
   [Parameter(Mandatory = $true)]
   [ValidateSet("windows-x64", "windows-arm64")]
@@ -43,9 +46,24 @@ if (Test-Path -LiteralPath $smokeRoot) {
 }
 
 $installer = (Resolve-Path -LiteralPath $InstallerPath -ErrorAction Stop).Path
-$detachedReleaseManifestPath = (Resolve-Path -LiteralPath $ExpectedReleaseManifestPath -ErrorAction Stop).Path
 $signedMode = $TrustMode -eq "signed"
 $upgradeMode = -not [string]::IsNullOrWhiteSpace($BetaInstallerPath)
+$liveMode = $PSCmdlet.ParameterSetName -eq "InstalledLive"
+if ($liveMode) {
+  if ($env:GITHUB_ACTIONS -ne "true" -or $env:RUNNER_ENVIRONMENT -ne "github-hosted" -or
+      $Target -ne "windows-x64" -or $signedMode -or $upgradeMode -or
+      $LiveAcceptance.CandidateCommit -cnotmatch '^[a-f0-9]{40}$' -or
+      $LiveAcceptance.InstallerSha256 -cnotmatch '^[a-f0-9]{64}$') {
+    throw "Installed live acceptance requires a disposable x64 GitHub runner and a pinned unsigned EXE."
+  }
+  $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($installerHash -cne $LiveAcceptance.InstallerSha256) {
+    throw "The installer bytes do not match the pinned acceptance digest."
+  }
+}
+else {
+  $detachedReleaseManifestPath = (Resolve-Path -LiteralPath $ExpectedReleaseManifestPath -ErrorAction Stop).Path
+}
 if ($upgradeMode -ne (-not [string]::IsNullOrWhiteSpace($BetaInstallerSha256)) -or ($upgradeMode -and $signedMode)) {
   throw "Beta upgrade proof needs an installer and its SHA-256 in unsigned smoke mode."
 }
@@ -353,9 +371,11 @@ try {
     throw "Installed release manifest was not found at $installedReleaseManifestPath"
   }
   $installedManifestHash = (Get-FileHash -LiteralPath $installedReleaseManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
-  $detachedManifestHash = (Get-FileHash -LiteralPath $detachedReleaseManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
-  if ($installedManifestHash -cne $detachedManifestHash) {
-    throw "Installed release manifest does not match the detached release manifest bytes."
+  if (-not $liveMode) {
+    $detachedManifestHash = (Get-FileHash -LiteralPath $detachedReleaseManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($installedManifestHash -cne $detachedManifestHash) {
+      throw "Installed release manifest does not match the detached release manifest bytes."
+    }
   }
   $releaseManifest = Get-Content -LiteralPath $installedReleaseManifestPath -Raw -ErrorAction Stop | ConvertFrom-Json
   $expectedArch = if ($Target -eq "windows-arm64") { "arm64" } else { "x64" }
@@ -366,6 +386,9 @@ try {
       [string]$releaseManifest.sourceCommit -cnotmatch '^[0-9a-f]{40}$' -or
       [string]::IsNullOrWhiteSpace([string]$releaseManifest.version)) {
     throw "Installed release manifest target, architecture, commit, version, or clean-source truth is invalid."
+  }
+  if ($liveMode -and $releaseManifest.sourceCommit -cne $LiveAcceptance.CandidateCommit) {
+    throw "The installed manifest does not identify the requested candidate commit."
   }
   & $payloadValidatorPath `
     -StageRoot $installDir `
@@ -586,6 +609,14 @@ try {
   Stop-InstalledProcesses
   Start-Sleep -Seconds 2
 
+  if ($liveMode) {
+    & $bundledNode (Join-Path $PSScriptRoot "windows-installed-live.mjs") `
+      $appHome $smokeRoot $LiveAcceptance.EvidenceDirectory $LiveAcceptance.OllamaExe $LiveAcceptance.NtfyExe
+    if ($LASTEXITCODE -ne 0) {
+      throw "One or more installed live feature checks failed. See the retained feature records."
+    }
+  }
+
   $uninstaller = Join-Path $installDir "unins000.exe"
   if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
     throw "Installed candidate did not provide an uninstaller at $uninstaller"
@@ -638,6 +669,23 @@ try {
       betaSeedDependency = if ($Target -eq "windows-arm64") { "@img/sharp-win32-arm64 from the manifested candidate" } else { $null }
       retained = @("workspace", "chat transcript", "guidance file", "workspace setting", "uninstalled profile data")
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $upgradeProofPath -Encoding UTF8
+  }
+  if ($liveMode) {
+    [ordered]@{
+      sourceCommit = $releaseManifest.sourceCommit
+      sourceModified = $releaseManifest.sourceModified
+      candidateVersion = $releaseManifest.version
+      target = $Target
+      installerSha256 = $installerHash
+      installedManifestSha256 = $installedManifestHash
+      authenticode = [string]$installerSignature.Status
+      windowsVersion = [System.Environment]::OSVersion.Version.ToString()
+      runnerArchitecture = $env:RUNNER_ARCH
+      installerRunId = $LiveAcceptance.InstallerRunId
+      nativeFirstLaunch = $true
+      installedPayloadValidated = $true
+      uninstallVerified = $true
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LiveAcceptance.EvidenceDirectory "lifecycle.json") -Encoding UTF8
   }
   if (Test-Path -LiteralPath $installDir) {
     Get-ChildItem -LiteralPath $installDir -Force -ErrorAction SilentlyContinue |

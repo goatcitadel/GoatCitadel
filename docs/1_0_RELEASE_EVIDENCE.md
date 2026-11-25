@@ -75,6 +75,8 @@ Record the candidate version, exact source SHA, workflow and artifact links, x64
 | Live channel | Set up a supported test channel and retain redacted evidence of a send and a receive through the installed candidate. |
 | Governed approval | Review the scope of a waiting action and approve it on the installed candidate. Verify that the linked durable run resumes and retain the approval decision and the action's recorded outcome. |
 
+To replay a successful unsigned x64 installer on a disposable Windows runner, dispatch `release-installers.yml` with `allow_unsigned=false`, `live_acceptance_run`, `live_acceptance_commit`, and `live_acceptance_sha256`. The job checks the producer run and EXE digest, validates the installed payload, and retains the native lifecycle and feature records in `windows-x64-installed-live-acceptance`. It uses a pinned local Ollama model, an authenticated ntfy topic, and a deterministic model fixture for the governed approval and inbound Chat paths.
+
 Chat Evolution runs in the scheduled and tagged release-proof matrix as deterministic foundation proof. Its artifacts keep real-provider onboarding, browser secure input, Windows live restart and rollback, and signed promotion explicitly held until matching evidence is retained. [Verification 1.0 Release Proof](../.github/workflows/verification-1-0-release-proof.yml)
 
 ## Durable Ownership Evidence

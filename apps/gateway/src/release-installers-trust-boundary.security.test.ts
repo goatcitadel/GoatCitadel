@@ -30,13 +30,28 @@ describe("release-installers workflow trust boundary", () => {
     const manualJobNames = extractJobNames(workflow).filter((jobName) =>
       extractJobMetadata(workflow, jobName).includes("workflow_dispatch"),
     );
-    expect(manualJobNames).toEqual(["windows-build-inputs", "linux", "macos-build-inputs"]);
-    for (const jobName of manualJobNames) {
+    const buildJobs = ["windows-build-inputs", "linux", "macos-build-inputs"];
+    expect(manualJobNames).toEqual(["windows-installed-live", ...buildJobs]);
+    for (const jobName of buildJobs) {
       const metadata = extractJobMetadata(workflow, jobName);
       expect(metadata).toContain(unsignedSmokeCondition);
       expect(metadata).toContain("github.event_name == 'push'");
       expect(metadata).toContain("github.repository == 'goatcitadel/GoatCitadel'");
     }
+  });
+
+  it("replays the exact installer on a fresh runner without entering the build or signing jobs", () => {
+    const metadata = extractJobMetadata(workflow, "windows-installed-live");
+    const block = extractJobBlock(workflow, "windows-installed-live");
+    expect(metadata).toContain("runs-on: windows-latest");
+    expect(metadata).toContain("github.event_name == 'workflow_dispatch'");
+    expect(metadata).toContain("github.event.inputs.allow_unsigned == 'false'");
+    expect(metadata).toContain("github.repository == 'goatcitadel/GoatCitadel'");
+    expect(metadata).not.toContain("environment:");
+    expect(block).toContain("persist-credentials: false");
+    expect(block).toContain("$run.head_sha -cne $env:INSTALLER_COMMIT");
+    expect(block).toContain("-InstallerSha256 $env:INSTALLER_SHA256");
+    expect(block).not.toMatch(/secrets\.|id-token: write|contents: write/u);
   });
 
   it("requires exact tag-push repository identity on every signed-release job", () => {

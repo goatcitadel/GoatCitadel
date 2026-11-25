@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       allow_unsigned:
-        description: "Manual runs are unsigned smoke only. Choose true to run; false intentionally runs no jobs."
+        description: "Build unsigned smoke artifacts. Choose false when replaying an existing installer."
         required: true
         default: "true"
         type: choice
@@ -18,6 +18,15 @@ on:
         description: "Also test an unattended upgrade from the pinned 0.9.2 Beta 2 installer"
         type: boolean
         default: false
+      live_acceptance_run:
+        description: "Successful manual installer run ID to replay on a disposable Windows x64 runner"
+        type: string
+      live_acceptance_commit:
+        description: "Exact source commit of the x64 installer to replay"
+        type: string
+      live_acceptance_sha256:
+        description: "Independently verified SHA-256 of the unsigned x64 EXE"
+        type: string
 
 concurrency:
   group: release-installers-${{ github.ref }}
@@ -38,6 +47,60 @@ env:
   INNO_SETUP_SHA256: 9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
 
 jobs:
+  windows-installed-live:
+    name: Installed live acceptance (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/heads/') && github.event.inputs.allow_unsigned == 'false' && inputs.live_acceptance_run != '' }}
+    env:
+      INSTALLER_RUN: ${{ inputs.live_acceptance_run }}
+      INSTALLER_COMMIT: ${{ inputs.live_acceptance_commit }}
+      INSTALLER_SHA256: ${{ inputs.live_acceptance_sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the exact installer from the successful unsigned run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:INSTALLER_RUN -cnotmatch '^[1-9][0-9]{0,19}$' -or
+              $env:INSTALLER_COMMIT -cnotmatch '^[0-9a-f]{40}$' -or
+              $env:INSTALLER_SHA256 -cnotmatch '^[0-9a-f]{64}$') {
+            throw "Supply an installer run ID, a full commit SHA, and a pinned EXE SHA-256."
+          }
+          $runJson = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:INSTALLER_RUN"
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read the installer workflow run." }
+          $run = $runJson | ConvertFrom-Json
+          if ($run.head_repository.full_name -ne $env:GITHUB_REPOSITORY -or
+              $run.path -cne ".github/workflows/release-installers.yml" -or
+              $run.event -cne "workflow_dispatch" -or $run.conclusion -cne "success" -or
+              $run.head_sha -cne $env:INSTALLER_COMMIT) {
+            throw "The installer run does not match the successful unsigned workflow and exact candidate commit."
+          }
+          $candidate = Join-Path $env:RUNNER_TEMP "installed-live/candidate"
+          gh run download $env:INSTALLER_RUN --repo $env:GITHUB_REPOSITORY --name windows-x64-unsigned-package-smoke-assets --dir $candidate
+          if ($LASTEXITCODE -ne 0) { throw "Unable to download the x64 installer artifact." }
+
+      - name: Run installed provider, channel, and approval checks
+        shell: pwsh
+        run: |
+          & ./scripts/packaging/replay-windows-installed-live.ps1 `
+            -InstallerRunId $env:INSTALLER_RUN `
+            -CandidateCommit $env:INSTALLER_COMMIT `
+            -InstallerSha256 $env:INSTALLER_SHA256
+
+      - name: Upload installed live evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-x64-installed-live-acceptance
+          path: ${{ runner.temp }}/installed-live/evidence/*.json
+          if-no-files-found: warn
+
   windows-build-inputs:
     runs-on: ${{ matrix.runner }}
     if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true') }}
