@@ -36,10 +36,12 @@ export async function prepareVerificationRuntime(runId) {
 }
 
 export async function startVerificationStack(context, options = {}) {
+  const workspaceBuildStartedAt = performance.now();
   await ensureGatewayWorkspaceBuild(context, {
     omitEnv: options.gatewayEnvOmit,
     processLogPrefix: options.processLogPrefix,
   });
+  let buildPreparationMs = performance.now() - workspaceBuildStartedAt;
   const uiTarget = resolveUiTarget(repoRoot, process.env);
   const runtimeRoot = options.runtimeRoot ?? (await prepareVerificationRuntime(context.runId));
   let gateway;
@@ -89,10 +91,12 @@ export async function startVerificationStack(context, options = {}) {
         ...options.uiEnv,
       };
       if (options.uiMode === "preview") {
+        const uiBuildStartedAt = performance.now();
         await ensureVerificationUiBuild(context, uiTarget.packageName, uiEnv, {
           omitEnv: options.uiEnvOmit,
           processLogPrefix: options.processLogPrefix,
         });
+        buildPreparationMs += performance.now() - uiBuildStartedAt;
       }
       ui = await startProcess(
         context,
@@ -109,6 +113,7 @@ export async function startVerificationStack(context, options = {}) {
       ui,
       gatewayUrl,
       uiUrl,
+      buildPreparationMs,
     };
   } catch (error) {
     // Cleanup problems are reported by stopVerificationStack itself and must

@@ -242,8 +242,17 @@ try {
         $betaManifest.sourceCommit -cne "627c83d8afa870f5278816a30b1677e29d7fda83" -or $betaManifest.sourceModified -ne $false) {
       throw "Installed beta manifest does not match the pinned upgrade source."
     }
-    $betaLaunchOutput = & $bundledNode $launcher launch --no-open --wait --json 2>$launchStderr
-    $betaLaunchExitCode = $LASTEXITCODE
+    $originalNodePath = [Environment]::GetEnvironmentVariable("NODE_PATH", "Process")
+    try {
+      if ($Target -eq "windows-arm64") {
+        $env:NODE_PATH = New-BetaArm64SeedModulePath $appHome $detachedReleaseManifestPath (Join-Path $smokeRoot "beta-seed-modules")
+      }
+      $betaLaunchOutput = & $bundledNode $launcher launch --no-open --wait --json 2>$launchStderr
+      $betaLaunchExitCode = $LASTEXITCODE
+    }
+    finally {
+      [Environment]::SetEnvironmentVariable("NODE_PATH", $originalNodePath, "Process")
+    }
     $betaLaunchOutput | ForEach-Object { Redact-DiagnosticLine $_ } | Set-Content -LiteralPath $launchStdout -Encoding UTF8
     $betaLaunchLine = $betaLaunchOutput | Where-Object { $_.TrimStart().StartsWith("{") } | Select-Object -Last 1
     if ($betaLaunchExitCode -ne 0 -or -not $betaLaunchLine) {
@@ -390,6 +399,10 @@ try {
   $desktopStartup = $null
   $expectedWebViewPath = "/settings/onboarding"
   $expectedWebViewTitle = "GoatCitadel Settings · Get started"
+  if ($upgradeMode) {
+    $expectedWebViewPath = "/"
+    $expectedWebViewTitle = "GoatCitadel"
+  }
   # Each cold launcher endpoint has a three-minute bound. Allow both plus page
   # navigation, while rejecting native failures immediately. Debug-port flags are
   # intentionally ignored by elevated WebView2 hosts on hosted Windows runners.
@@ -622,6 +635,7 @@ try {
       candidateVersion = $releaseManifest.version
       candidateCommit = $releaseManifest.sourceCommit
       candidateInstallerSha256 = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+      betaSeedDependency = if ($Target -eq "windows-arm64") { "@img/sharp-win32-arm64 from the manifested candidate" } else { $null }
       retained = @("workspace", "chat transcript", "guidance file", "workspace setting", "uninstalled profile data")
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $upgradeProofPath -Encoding UTF8
   }

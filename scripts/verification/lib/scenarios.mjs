@@ -1740,6 +1740,8 @@ export async function runOperatorProofLane(context, _options = {}) {
     stack = await startVerificationStack(context, {
       runtimeRoot: operatorRuntimeRoot,
       includeUi: false,
+      // AppContainer runs the compiled child from the installer without a source loader.
+      gatewayMode: process.platform === "win32" ? "built" : "source",
       gatewayEnv: {
         GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
         GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",

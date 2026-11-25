@@ -80,3 +80,39 @@ function New-BetaUpgradeProfile {
   } | Out-Null
   Get-UpgradeProfileSnapshot $GatewayUrl $workspaceId $sessionId $marker
 }
+
+function New-BetaArm64SeedModulePath {
+  param([string]$BetaAppRoot, [string]$CandidateManifestPath, [string]$SeedModulePath)
+
+  # The archived ARM64 beta omitted this optional package. Supply only the
+  # identical locked package for profile seeding through a process-local NODE_PATH.
+  $moduleName = "@img/sharp-win32-arm64"
+  $betaSharp = Get-Content -LiteralPath (Join-Path $BetaAppRoot "gateway/node_modules/sharp/package.json") -Raw | ConvertFrom-Json
+  $expectedVersion = $betaSharp.optionalDependencies.$moduleName
+  $manifest = Get-Content -LiteralPath $CandidateManifestPath -Raw | ConvertFrom-Json
+  $candidateRoot = Split-Path -Parent (Split-Path -Parent $CandidateManifestPath)
+  $prefix = "app/gateway/node_modules/$moduleName/"
+  $entries = @($manifest.payload.files | Where-Object { $_.path.StartsWith($prefix, [StringComparison]::Ordinal) })
+  if (-not $expectedVersion -or $manifest.target -ne "windows-arm64" -or $entries.Count -eq 0) {
+    throw "Cannot seed the archived ARM64 beta without its matching manifested Sharp module."
+  }
+  $destRoot = Join-Path $SeedModulePath $moduleName
+  foreach ($entry in $entries) {
+    $relative = $entry.path.Substring($prefix.Length)
+    if ($relative -notmatch '^[a-zA-Z0-9._-]+(/[a-zA-Z0-9._-]+)*$' -or ($relative -split '/') -contains '..') {
+      throw "Unsafe Sharp module path in the candidate manifest."
+    }
+    $source = Join-Path $candidateRoot $entry.path
+    $dest = Join-Path $destRoot $relative
+    if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $entry.sha256) {
+      throw "The candidate's Sharp seeding module hash differs from its manifest."
+    }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $dest) -Force | Out-Null
+    Copy-Item -LiteralPath $source -Destination $dest
+  }
+  $seedModule = Get-Content -LiteralPath (Join-Path $destRoot "package.json") -Raw | ConvertFrom-Json
+  if ($seedModule.name -cne $moduleName -or $seedModule.version -cne $expectedVersion) {
+    throw "The candidate's Sharp seeding module does not match the beta's locked dependency."
+  }
+  $SeedModulePath
+}
