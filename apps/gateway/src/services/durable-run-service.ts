@@ -185,6 +185,8 @@ const DURABLE_LEASE_TTL_MS = 120_000;
 const DURABLE_WORKER_POLL_MIN_MS = 750;
 const DURABLE_WORKER_POLL_JITTER_MS = 500;
 const DURABLE_LEASE_HEARTBEAT_MS = 5_000;
+/** A run reclaimed this often without settling is crash-looping its worker: finalize it instead of requeueing it again. */
+const DURABLE_LEASE_RECLAIM_LIMIT = 8;
 const DETACHED_WATCHER_NOTIFICATION_BATCH_SIZE = 100;
 // Transient lease-renewal errors (storage contention, CAS retry exhaustion)
 // should not abort an in-flight run; only repeated consecutive failures may.
@@ -4453,14 +4455,18 @@ export class DurableRunService {
     let reclaimedCount = await this.reconcileExitedLocalProcessRuns(recoveryObservedAt);
     const runningRunIds = await this.ctx.storage.durableRuns.listExpiredRunningRunIds(recoveryObservedAt);
     for (const runId of runningRunIds) {
+      if (this.isRecoveryBackedOff(runId)) {
+        continue;
+      }
       try {
         const run = await this.ctx.storage.durableRuns.getRun(runId);
         if (run.status !== "running" || !run.leaseExpiresAt) {
           continue;
         }
         const recoverability = await this.deps.workflowRegistry.isWorkflowRecoverable(run);
-        if (!recoverability.recoverable) {
-          const reason = recoverability.reason ?? "Run could not be recovered after restart.";
+        const reclaimLimitReason = recoverability.recoverable ? await this.leaseReclaimLimitReason(run) : undefined;
+        if (!recoverability.recoverable || reclaimLimitReason) {
+          const reason = reclaimLimitReason ?? recoverability.reason ?? "Run could not be recovered after restart.";
           await this.transitionRunToPendingFinalization(run, reason, recoveryObservedAt, { kind: "expired" });
           continue;
         }
@@ -4504,6 +4510,13 @@ export class DurableRunService {
     return reclaimedCount;
   }
 
+  /** Counts past reclaims across the whole timeline; a reason means the run must stop being requeued. */
+  private async leaseReclaimLimitReason(run: DurableRunRecord): Promise<string | undefined> {
+    const reclaims = await this.ctx.storage.durableRunEvents.countByRunAndType(run.runId, "run_reclaimed");
+    if (reclaims < DURABLE_LEASE_RECLAIM_LIMIT) return undefined;
+    return `The run was restarted ${reclaims} times after its worker stopped without finishing, so it was stopped instead of being restarted again. Review the run before retrying it.`;
+  }
+
   private async reconcileExitedLocalProcessRuns(recoveryObservedAt: string): Promise<number> {
     if (this.deps?.sharedHostLifecycle?.snapshot().mode !== "local_always_available") {
       return 0;
@@ -4516,10 +4529,15 @@ export class DurableRunService {
           continue;
         }
         const recoverability = await this.deps.workflowRegistry.isWorkflowRecoverable(observed);
-        if (!recoverability.recoverable) {
+        const reclaimLimitReason = recoverability.recoverable
+          ? await this.leaseReclaimLimitReason(observed)
+          : undefined;
+        if (!recoverability.recoverable || reclaimLimitReason) {
           await this.transitionRunToPendingFinalization(
             observed,
-            recoverability.reason ?? "Run could not be recovered after its local worker process exited.",
+            reclaimLimitReason ??
+              recoverability.reason ??
+              "Run could not be recovered after its local worker process exited.",
             recoveryObservedAt,
             {
               kind: "exited_local_process",
@@ -5102,6 +5120,11 @@ export class DurableRunService {
       return;
     }
     await publishFailure();
+  }
+
+  private isRecoveryBackedOff(runId: string): boolean {
+    const backoff = this.recoveryFailureBackoff.get(runId);
+    return Boolean(backoff && backoff.nextAttemptAtMs > Date.now());
   }
 
   private recordRecoveryFailureBackoff(runId: string): RecoveryFailureBackoff {
@@ -5713,6 +5736,10 @@ export class DurableRunService {
     }
     let run: DurableRunRecord | undefined;
     for (const runId of queuedRunIds) {
+      // A run whose claim check keeps failing waits out its backoff instead of being re-reported every poll.
+      if (this.isRecoveryBackedOff(runId)) {
+        continue;
+      }
       if (await this.terminalizeQueuedLegacyUnadmittedChatTurn(runId)) {
         continue;
       }
@@ -5724,6 +5751,7 @@ export class DurableRunService {
           !(await this.deps.workflowRegistry.isWorkflowReadyToClaim(candidate))
         )
           continue;
+        this.recoveryFailureBackoff.delete(runId);
       } catch (error) {
         await this.reportDurableRunRecoveryFailure(runId, error);
         continue;

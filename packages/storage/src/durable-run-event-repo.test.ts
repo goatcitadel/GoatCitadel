@@ -69,6 +69,32 @@ describe("DurableRunEventRepository", () => {
     );
   });
 
+  it("counts one event type across a run's whole timeline, past the bounded list limit", () => {
+    const { events, runs } = createRepos();
+    for (const runId of ["run-counted", "run-other"]) {
+      runs.createRun({ runId, workflowKey: "connector.delivery", now: "2026-05-12T00:00:00.000Z" });
+    }
+    for (let index = 0; index < 305; index += 1) {
+      events.append({
+        eventId: `event-progress-${index}`,
+        runId: "run-counted",
+        eventType: "run_started",
+        createdAt: "2026-05-12T00:00:01.000Z",
+      });
+    }
+    for (const [eventId, runId] of [
+      ["event-reclaim-1", "run-counted"],
+      ["event-reclaim-2", "run-counted"],
+      ["event-reclaim-other", "run-other"],
+    ] as const) {
+      events.append({ eventId, runId, eventType: "run_reclaimed", createdAt: "2026-05-12T00:00:02.000Z" });
+    }
+
+    assert.equal(events.countByRunAndType("run-counted", "run_reclaimed"), 2);
+    assert.equal(events.countByRunAndType("run-other", "run_reclaimed"), 1);
+    assert.equal(events.countByRunAndType("run-missing", "run_reclaimed"), 0);
+  });
+
   it("orders colliding timestamps by the per-run monotonic sequence", () => {
     const { events, runs } = createRepos();
     runs.createRun({
