@@ -486,6 +486,7 @@ describe("ChatDelegationStepRepository", () => {
     const { db, repo } = createStore();
     const competingRepo = new ChatDelegationStepRepository(db);
     const activeExpiresAt = "2099-01-01T00:00:00.000Z";
+    const expiredAt = "2000-01-01T00:00:00.000Z";
     assert.equal(Number.isFinite(Date.parse(repo.readDatabaseNow())), true);
     repo.create({
       stepId: "step-dispatch",
@@ -516,6 +517,22 @@ describe("ChatDelegationStepRepository", () => {
       expiresAt: activeExpiresAt,
     });
     assert.equal(repo.listByRun("run-dispatch")[0]?.childSessionId, undefined);
+    const initialClaim = "delegation-claim:v1:1000:turn-stable:owner-a";
+    const takenOverClaim = "delegation-claim:v1:1000:turn-stable:owner-c";
+    const dispatchStartedAt = "2026-03-26T00:00:01.000Z";
+    const expire = db.prepare("UPDATE chat_delegation_steps SET dispatch_claim_expires_at = ? WHERE step_id = ?");
+    assert.equal(
+      repo.reclaimRunningForDispatch("step-dispatch", initialClaim, takenOverClaim, activeExpiresAt, dispatchStartedAt),
+      undefined,
+    );
+    expire.run(expiredAt, "step-dispatch");
+    assert.equal(
+      repo.linkClaimedDispatch("step-dispatch", initialClaim, "child-stable", "unused-dispatch", activeExpiresAt),
+      undefined,
+    );
+    assert.ok(
+      repo.reclaimRunningForDispatch("step-dispatch", initialClaim, takenOverClaim, activeExpiresAt, dispatchStartedAt),
+    );
     assert.equal(repo.listByRun("run-dispatch")[0]?.childTurnId, undefined);
     assert.equal(loser, undefined);
 
@@ -531,7 +548,7 @@ describe("ChatDelegationStepRepository", () => {
     );
     const linked = repo.linkClaimedDispatch(
       "step-dispatch",
-      "delegation-claim:v1:1000:turn-stable:owner-a",
+      takenOverClaim,
       "child-stable",
       "delegation-dispatch:v1:2000:turn-stable:owner-a",
       activeExpiresAt,
@@ -575,11 +592,18 @@ describe("ChatDelegationStepRepository", () => {
       leaseExpiresAt: "2099-01-02T00:00:00.000Z",
     };
     assert.ok(repo.extendOwnedDispatchLease(renewal));
-    const expiredAt = "2000-01-01T00:00:00.000Z";
-    db.prepare("UPDATE chat_delegation_steps SET dispatch_claim_expires_at = ? WHERE step_id = ?").run(
-      expiredAt,
-      renewal.stepId,
+    assert.equal(
+      repo.reclaimLinkedDispatch(
+        renewal.stepId,
+        renewal.childSessionId,
+        renewal.expectedDispatchToken,
+        "unused-takeover",
+        activeExpiresAt,
+        dispatchStartedAt,
+      ),
+      undefined,
     );
+    expire.run(expiredAt, renewal.stepId);
     assert.equal(repo.extendOwnedDispatchLease(renewal), undefined);
     assert.equal(repo.getDispatchClaim(renewal.stepId)?.expiresAt, expiredAt);
 
@@ -826,7 +850,7 @@ describe("ChatDelegationStepRepository", () => {
         "claim-owner-a",
         "child-response",
         "dispatch-owner-a",
-        "2099-01-01T00:00:00.000Z",
+        "2000-01-01T00:00:00.000Z",
       ),
     );
     assert.ok(

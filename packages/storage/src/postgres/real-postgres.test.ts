@@ -1190,7 +1190,7 @@ test(
         claimA,
         ids.session,
         dispatchA,
-        claimExpiresAt,
+        "2000-01-01T00:00:00.000Z",
       );
       assert.equal(linked?.childSessionId, ids.session);
       assert.equal(linked?.childTurnId, undefined);

@@ -161,6 +161,7 @@ describe.skipIf(!url)("Inbox projection approvals on isolated real PostgreSQL", 
       {
         write: `UPDATE "${schema}".chat_delegation_runs SET final_summary = $1 WHERE run_id = $2`,
         id: run.runId,
+        expectedStatus: "completed",
         patch: async () => {
           const value = await runs.patch(run.runId, { status: "completed" });
           return { status: value.status, summary: value.finalSummary };
@@ -169,8 +170,18 @@ describe.skipIf(!url)("Inbox projection approvals on isolated real PostgreSQL", 
       {
         write: `UPDATE "${schema}".chat_delegation_steps SET summary = $1 WHERE step_id = $2`,
         id: step.stepId,
+        expectedStatus: "completed",
         patch: async () => {
           const value = await steps.patch(step.stepId, { status: "completed" });
+          return { status: value.status, summary: value.summary };
+        },
+      },
+      {
+        write: `UPDATE "${schema}".chat_delegation_runs SET final_summary = $1 WHERE run_id = $2`,
+        id: run.runId,
+        expectedStatus: "running",
+        patch: async () => {
+          const value = await steps.patch(step.stepId, { status: "running" });
           return { status: value.status, summary: value.summary };
         },
       },
@@ -206,7 +217,10 @@ describe.skipIf(!url)("Inbox projection approvals on isolated real PostgreSQL", 
         }
       }
       const result = await pending;
-      expect(result).toEqual({ status: "fulfilled", value: { status: "completed", summary: "Independent summary" } });
+      expect(result).toEqual({
+        status: "fulfilled",
+        value: { status: operation.expectedStatus, summary: "Independent summary" },
+      });
     }
   }, 30_000);
 
@@ -246,9 +260,25 @@ describe.skipIf(!url)("Inbox projection approvals on isolated real PostgreSQL", 
     const expiredAt = "2000-01-01T00:00:00.000Z";
     const childSessionId = "active-delegation-child";
     const dispatchToken = "active-delegation-dispatch";
-    const claimToken = "active-delegation-claim";
+    const initialClaim = "active-delegation-claim";
+    const claimToken = "active-delegation-reclaimed";
+    const databaseNow = await steps.readDatabaseNow();
+    const expire = async () => {
+      await admin.query(
+        `UPDATE "${schema}".chat_delegation_steps SET dispatch_claim_expires_at = $1 WHERE step_id = $2`,
+        [expiredAt, stepId],
+      );
+    };
+    expect(await steps.claimPendingForDispatch(stepId, initialClaim, liveExpiry, databaseNow)).toBeDefined();
     expect(
-      await steps.claimPendingForDispatch(stepId, claimToken, liveExpiry, await steps.readDatabaseNow()),
+      await steps.reclaimRunningForDispatch(stepId, initialClaim, claimToken, liveExpiry, databaseNow),
+    ).toBeUndefined();
+    await expire();
+    expect(
+      await steps.linkClaimedDispatch(stepId, initialClaim, childSessionId, dispatchToken, liveExpiry),
+    ).toBeUndefined();
+    expect(
+      await steps.reclaimRunningForDispatch(stepId, initialClaim, claimToken, liveExpiry, databaseNow),
     ).toBeDefined();
     expect(
       await steps.linkClaimedDispatch(stepId, claimToken, childSessionId, dispatchToken, liveExpiry),
@@ -256,12 +286,30 @@ describe.skipIf(!url)("Inbox projection approvals on isolated real PostgreSQL", 
     const ownership = { stepId, childSessionId, expectedDispatchToken: dispatchToken };
     expect(await steps.bindOwnedDurableRun({ ...ownership, durableRunId: "active-delegation-durable" })).toBeDefined();
     expect(await steps.extendOwnedDispatchLease({ ...ownership, leaseExpiresAt: liveExpiry })).toBeDefined();
-    await admin.query(
-      `UPDATE "${schema}".chat_delegation_steps SET dispatch_claim_expires_at = $1 WHERE step_id = $2`,
-      [expiredAt, stepId],
-    );
+    const replacementDispatch = "active-delegation-next";
+    expect(
+      await steps.reclaimLinkedDispatch(
+        stepId,
+        childSessionId,
+        dispatchToken,
+        replacementDispatch,
+        liveExpiry,
+        databaseNow,
+      ),
+    ).toBeUndefined();
+    await expire();
     expect(await steps.extendOwnedDispatchLease({ ...ownership, leaseExpiresAt: liveExpiry })).toBeUndefined();
     expect((await steps.getDispatchClaim(stepId))?.expiresAt).toBe(expiredAt);
+    expect(
+      await steps.reclaimLinkedDispatch(
+        stepId,
+        childSessionId,
+        dispatchToken,
+        replacementDispatch,
+        liveExpiry,
+        databaseNow,
+      ),
+    ).toBeDefined();
   });
 
   it("lists one install-wide skill approval in every workspace's Inbox and keeps linked ones scoped", async () => {

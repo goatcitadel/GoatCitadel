@@ -77,15 +77,10 @@ describe("canonical local delegation authority", () => {
           if (kind === "parent-archived")
             await storage.chatSessionMeta.patch("local-parent-session", { lifecycleStatus: "archived" });
           if (kind === "dispatch-expired") {
-            const expired = await storage.chatDelegationSteps.reclaimLinkedDispatch(
-              "local-step",
-              fixture.input.sessionId,
-              fixture.dispatchToken,
-              fixture.dispatchToken,
-              "2000-01-01T00:00:00.000Z",
-              new Date().toISOString(),
-            );
-            expect(expired).toBeDefined();
+            const expired = raw.db
+              .prepare("UPDATE chat_delegation_steps SET dispatch_claim_expires_at = ? WHERE step_id = ?")
+              .run("2000-01-01T00:00:00.000Z", "local-step");
+            expect(expired.changes).toBe(1);
           }
           if (kind === "child-turn-drift")
             await storage.chatDelegationSteps.patch("local-step", { childTurnId: "foreign" });

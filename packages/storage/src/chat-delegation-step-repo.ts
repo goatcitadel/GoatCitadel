@@ -71,6 +71,7 @@ export class ChatDelegationStepRepository {
   private readonly getForUpdateStmt;
   private readonly getDispatchClaimStmt;
   private readonly lockParentRunStmt;
+  private readonly lockParentRunForStepStmt;
   private readonly insertStmt;
   private readonly patchStmt;
   private readonly materializeApprovalOutcomeStmt;
@@ -111,6 +112,11 @@ export class ChatDelegationStepRepository {
     this.getStmt = db.prepare("SELECT * FROM chat_delegation_steps WHERE step_id = ?");
     this.lockParentRunStmt = db.prepare(`
       SELECT run_id FROM chat_delegation_runs WHERE run_id = ?
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `);
+    this.lockParentRunForStepStmt = db.prepare(`
+      SELECT run_id FROM chat_delegation_runs
+      WHERE run_id = (SELECT run_id FROM chat_delegation_steps WHERE step_id = ?)
       ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
     `);
     this.getForUpdateStmt = db.prepare(
@@ -222,6 +228,13 @@ export class ChatDelegationStepRepository {
       ORDER BY step_index ASC, started_at ASC, step_id ASC
       ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
     `);
+    const claimExpirySql =
+      db.dialect === "postgres"
+        ? "gc_try_parse_timestamptz(dispatch_claim_expires_at)"
+        : "julianday(dispatch_claim_expires_at)";
+    const databaseClockSql = db.dialect === "postgres" ? "clock_timestamp()" : "julianday('now')";
+    const liveDispatchClaimSql = `${claimExpirySql} > ${databaseClockSql}`;
+    const expiredDispatchClaimSql = `${claimExpirySql} <= ${databaseClockSql}`;
     this.claimPendingDispatchStmt = db.prepare(`
       UPDATE chat_delegation_steps
       SET status = 'running', dispatch_claim_token = @claimToken,
@@ -240,6 +253,7 @@ export class ChatDelegationStepRepository {
       SET dispatch_claim_token = @claimToken, dispatch_claim_expires_at = @claimExpiresAt, started_at = @startedAt
       WHERE step_id = @stepId AND status = 'running'
         AND dispatch_claim_token = @expectedClaimToken AND child_session_id IS NULL AND child_turn_id IS NULL
+        AND ${expiredDispatchClaimSql}
     `);
     this.linkClaimedDispatchStmt = db.prepare(`
       UPDATE chat_delegation_steps
@@ -247,6 +261,7 @@ export class ChatDelegationStepRepository {
           dispatch_claim_expires_at = @dispatchExpiresAt
       WHERE step_id = @stepId AND status = 'running' AND dispatch_claim_token = @claimToken
         AND child_session_id IS NULL AND child_turn_id IS NULL
+        AND ${liveDispatchClaimSql}
     `);
     this.reclaimLinkedDispatchStmt = db.prepare(`
       UPDATE chat_delegation_steps
@@ -254,6 +269,7 @@ export class ChatDelegationStepRepository {
           started_at = @startedAt
       WHERE step_id = @stepId AND status = 'running'
         AND child_session_id = @childSessionId AND dispatch_claim_token = @expectedDispatchToken
+        AND ${expiredDispatchClaimSql}
     `);
     this.claimLinkedDispatchStmt = db.prepare(`
       UPDATE chat_delegation_steps
@@ -276,11 +292,8 @@ export class ChatDelegationStepRepository {
       WHERE step_id = @stepId AND status = 'running'
         AND child_session_id = @childSessionId AND dispatch_claim_token = @expectedDispatchToken
         AND (child_turn_id IS NULL OR child_turn_id = @childTurnId)
+        AND ${liveDispatchClaimSql}
     `);
-    const liveDispatchClaimSql =
-      db.dialect === "postgres"
-        ? "gc_try_parse_timestamptz(dispatch_claim_expires_at) > clock_timestamp()"
-        : "julianday(dispatch_claim_expires_at) > julianday('now')";
     this.ownsLinkedDispatchStmt = db.prepare(`
       SELECT step_id
       FROM chat_delegation_steps
@@ -685,6 +698,7 @@ export class ChatDelegationStepRepository {
     },
   ): ChatDelegationStepRecord {
     return this.db.transaction("immediate", () => {
+      if (input.status === "pending" || input.status === "running") this.lockParentRunForStepStmt.get(stepId);
       const current = this.getForUpdate(stepId);
       this.patchStmt.run({
         stepId,
