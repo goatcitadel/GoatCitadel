@@ -162,6 +162,8 @@ describe("ChatToolRunRepository", () => {
     );
     assert.equal(repo.listBySession("session-a", 0).length, 1);
     assert.equal(repo.listBySession("session-a", 3000).length, 5);
+    assert.equal(repo.listBySession("session-a", 1.5).length, 5);
+    assert.equal(repo.listBySession("session-a", Number.NaN).length, 5);
 
     assert.equal(repo.listByTurnIds([]).size, 0);
     const grouped = repo.listByTurnIds([" turn-b ", "turn-a", "", "turn-a"]);

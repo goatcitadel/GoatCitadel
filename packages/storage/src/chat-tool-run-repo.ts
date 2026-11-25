@@ -313,7 +313,7 @@ export class ChatToolRunRepository {
     const rows = toChatToolRunRows(
       this.listBySessionStmt.all({
         sessionId,
-        limit: Math.max(1, Math.min(limit, 2000)),
+        limit: Number.isSafeInteger(limit) ? Math.max(1, Math.min(limit, 2000)) : 200,
       }),
     );
     return rows.map(mapRow);
