@@ -145,6 +145,60 @@ describe.skipIf(!url)("Inbox projection approvals on isolated real PostgreSQL", 
     expect(steps).toEqual(new Map([[step.stepId, step]]));
   });
 
+  it("keeps a superseded run with an active step and refuses to renew its expired dispatch", async () => {
+    const runs = storage.chatDelegationRuns;
+    const steps = storage.chatDelegationSteps;
+    const base = {
+      sessionId: "active-delegation-session",
+      taskId: "active-delegation-task",
+      objective: "Test active child recovery",
+      roles: ["Coder"],
+      mode: "sequential",
+    } as const;
+    const stale = await runs.create({
+      ...base,
+      roles: [...base.roles],
+      runId: "active-delegation-stale",
+      startedAt: "2026-11-20T10:00:00.000Z",
+    });
+    await runs.create({
+      ...base,
+      roles: [...base.roles],
+      runId: "active-delegation-new",
+      status: "completed",
+      startedAt: "2026-11-21T10:00:00.000Z",
+    });
+    const stepId = "active-delegation-step";
+    await steps.create({ runId: stale.runId, stepId, role: "Coder", index: 0 });
+    expect(
+      await runs.reconcileSupersededRunningRunsForSession(base.sessionId, {
+        now: "2026-11-22T10:00:00.000Z",
+      }),
+    ).toEqual([]);
+    expect((await runs.get(stale.runId)).status).toBe("running");
+
+    const liveExpiry = "2099-01-01T00:00:00.000Z";
+    const expiredAt = "2000-01-01T00:00:00.000Z";
+    const childSessionId = "active-delegation-child";
+    const dispatchToken = "active-delegation-dispatch";
+    const claimToken = "active-delegation-claim";
+    expect(
+      await steps.claimPendingForDispatch(stepId, claimToken, liveExpiry, await steps.readDatabaseNow()),
+    ).toBeDefined();
+    expect(
+      await steps.linkClaimedDispatch(stepId, claimToken, childSessionId, dispatchToken, liveExpiry),
+    ).toBeDefined();
+    const ownership = { stepId, childSessionId, expectedDispatchToken: dispatchToken };
+    expect(await steps.bindOwnedDurableRun({ ...ownership, durableRunId: "active-delegation-durable" })).toBeDefined();
+    expect(await steps.extendOwnedDispatchLease({ ...ownership, leaseExpiresAt: liveExpiry })).toBeDefined();
+    await admin.query(
+      `UPDATE "${schema}".chat_delegation_steps SET dispatch_claim_expires_at = $1 WHERE step_id = $2`,
+      [expiredAt, stepId],
+    );
+    expect(await steps.extendOwnedDispatchLease({ ...ownership, leaseExpiresAt: liveExpiry })).toBeUndefined();
+    expect((await steps.getDispatchClaim(stepId))?.expiresAt).toBe(expiredAt);
+  });
+
   it("lists one install-wide skill approval in every workspace's Inbox and keeps linked ones scoped", async () => {
     const linked = (workspaceId: string) =>
       storage.approvals.create({

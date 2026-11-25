@@ -271,17 +271,17 @@ export class ChatDelegationStepRepository {
         AND child_session_id = @childSessionId AND dispatch_claim_token = @expectedDispatchToken
         AND (child_turn_id IS NULL OR child_turn_id = @childTurnId)
     `);
+    const liveDispatchClaimSql =
+      db.dialect === "postgres"
+        ? "gc_try_parse_timestamptz(dispatch_claim_expires_at) > clock_timestamp()"
+        : "julianday(dispatch_claim_expires_at) > julianday('now')";
     this.ownsLinkedDispatchStmt = db.prepare(`
       SELECT step_id
       FROM chat_delegation_steps
       WHERE step_id = @stepId AND status = 'running'
         AND child_session_id = @childSessionId AND dispatch_claim_token = @dispatchToken
         AND dispatch_claim_expires_at IS NOT NULL
-        AND ${
-          db.dialect === "postgres"
-            ? "gc_try_parse_timestamptz(dispatch_claim_expires_at) > clock_timestamp()"
-            : "julianday(dispatch_claim_expires_at) > julianday('now')"
-        }
+        AND ${liveDispatchClaimSql}
       LIMIT 1
     `);
     this.bindOwnedDurableRunStmt = db.prepare(
@@ -316,6 +316,8 @@ export class ChatDelegationStepRepository {
         AND status = 'running'
         AND child_session_id = @childSessionId
         AND dispatch_claim_token = @expectedDispatchToken
+        AND dispatch_claim_expires_at IS NOT NULL
+        AND ${liveDispatchClaimSql}
         AND durable_run_id IS NOT NULL
     `);
     this.recoverDurableRunBindingStmt = db.prepare(`

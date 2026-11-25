@@ -44,7 +44,7 @@ export class ChatDelegationRunRepository {
   private readonly findLatestBySessionAndTaskStmt;
   private readonly findLatestBySessionParentAndWorkflowTemplateStmt;
   private readonly listRecentStmt;
-  private readonly activeStepCountStmt;
+  private readonly activeStepExistsStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_delegation_runs WHERE run_id = ?");
@@ -117,10 +117,11 @@ export class ChatDelegationRunRepository {
       ORDER BY runs.started_at DESC, runs.run_id DESC
       LIMIT @limit
     `);
-    this.activeStepCountStmt = db.prepare(`
-      SELECT COUNT(*) AS active_count
+    this.activeStepExistsStmt = db.prepare(`
+      SELECT 1
       FROM chat_delegation_steps
       WHERE run_id = ? AND status IN ('running', 'pending')
+      LIMIT 1
     `);
   }
 
@@ -225,28 +226,31 @@ export class ChatDelegationRunRepository {
       clearFinishedAt?: boolean;
     },
   ): ChatDelegationRunRecord {
-    const current = this.get(runId);
-    const nextRouteDecision = input.routeDecision !== undefined ? input.routeDecision : current.routeDecision;
-    const nextTrace = input.trace !== undefined ? input.trace : current.trace;
-    this.patchStmt.run({
-      runId,
-      status: input.status ?? current.status,
-      visibility: input.visibility !== undefined ? input.visibility : (current.visibility ?? null),
-      workflowTemplate:
-        input.workflowTemplate !== undefined ? input.workflowTemplate : (current.workflowTemplate ?? null),
-      executionPlanId: input.executionPlanId !== undefined ? input.executionPlanId : (current.executionPlanId ?? null),
-      routeDecisionJson: stringifyOptionalRecord(nextRouteDecision),
-      finalSummary: input.finalSummary !== undefined ? input.finalSummary : (current.finalSummary ?? null),
-      stitchedOutput: input.stitchedOutput !== undefined ? input.stitchedOutput : (current.stitchedOutput ?? null),
-      citationsJson: JSON.stringify(input.citations ?? current.citations),
-      traceJson: stringifyOptionalRecord(nextTrace),
-      finishedAt: input.clearFinishedAt
-        ? null
-        : input.finishedAt !== undefined
-          ? input.finishedAt
-          : (current.finishedAt ?? null),
+    return this.db.transaction("immediate", () => {
+      const current = this.getForUpdate(runId);
+      const nextRouteDecision = input.routeDecision !== undefined ? input.routeDecision : current.routeDecision;
+      const nextTrace = input.trace !== undefined ? input.trace : current.trace;
+      this.patchStmt.run({
+        runId,
+        status: input.status ?? current.status,
+        visibility: input.visibility !== undefined ? input.visibility : (current.visibility ?? null),
+        workflowTemplate:
+          input.workflowTemplate !== undefined ? input.workflowTemplate : (current.workflowTemplate ?? null),
+        executionPlanId:
+          input.executionPlanId !== undefined ? input.executionPlanId : (current.executionPlanId ?? null),
+        routeDecisionJson: stringifyOptionalRecord(nextRouteDecision),
+        finalSummary: input.finalSummary !== undefined ? input.finalSummary : (current.finalSummary ?? null),
+        stitchedOutput: input.stitchedOutput !== undefined ? input.stitchedOutput : (current.stitchedOutput ?? null),
+        citationsJson: JSON.stringify(input.citations ?? current.citations),
+        traceJson: stringifyOptionalRecord(nextTrace),
+        finishedAt: input.clearFinishedAt
+          ? null
+          : input.finishedAt !== undefined
+            ? input.finishedAt
+            : (current.finishedAt ?? null),
+      });
+      return this.get(runId);
     });
-    return this.get(runId);
   }
 
   public listBySession(sessionId: string, limit = 100): ChatDelegationRunRecord[] {
@@ -383,7 +387,7 @@ export class ChatDelegationRunRepository {
       if (!newerTerminal || !Number.isFinite(startedMs) || nowMs - startedMs < maxAgeMs) {
         continue;
       }
-      if (this.countActiveSteps(run.runId) > 0) {
+      if (this.activeStepExistsStmt.get(run.runId)) {
         continue;
       }
       patched.push(
@@ -398,18 +402,6 @@ export class ChatDelegationRunRepository {
       );
     }
     return patched;
-  }
-
-  private countActiveSteps(runId: string): number {
-    const raw = this.activeStepCountStmt.get(runId);
-    if (!isRecord(raw)) {
-      return 0;
-    }
-    const count = raw.active_count ?? raw.count;
-    if (typeof count === "number" && Number.isFinite(count)) {
-      return count;
-    }
-    return typeof count === "bigint" ? Number(count) : 0;
   }
 }
 

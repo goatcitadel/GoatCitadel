@@ -598,6 +598,21 @@ describe("ChatDelegationStepRepository", () => {
     );
     assert.equal(repo.get("step-dispatch").durableRunId, "durable-child-stable");
 
+    const renewal = {
+      stepId: "step-dispatch",
+      expectedDispatchToken: "delegation-dispatch:v1:2000:turn-stable:owner-a",
+      childSessionId: "child-stable",
+      leaseExpiresAt: "2099-01-02T00:00:00.000Z",
+    };
+    assert.ok(repo.extendOwnedDispatchLease(renewal));
+    const expiredAt = "2000-01-01T00:00:00.000Z";
+    db.prepare("UPDATE chat_delegation_steps SET dispatch_claim_expires_at = ? WHERE step_id = ?").run(
+      expiredAt,
+      renewal.stepId,
+    );
+    assert.equal(repo.extendOwnedDispatchLease(renewal), undefined);
+    assert.equal(repo.getDispatchClaim(renewal.stepId)?.expiresAt, expiredAt);
+
     assert.equal(
       repo.reclaimLinkedDispatch(
         "step-dispatch",

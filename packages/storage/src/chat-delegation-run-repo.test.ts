@@ -132,6 +132,35 @@ describe("ChatDelegationRunRepository", () => {
     assert.throws(() => repo.patch("missing-run", { status: "failed" }), /Delegation run missing-run not found/);
   });
 
+  it("preserves an independent patch when updating run status", () => {
+    const { db, repo } = createStore();
+    const competingRepo = new ChatDelegationRunRepository(db);
+    const { runId } = repo.create({
+      runId: "run-patch-race",
+      sessionId: "session-patch-race",
+      taskId: "task-patch-race",
+      objective: "Preserve independent updates",
+      roles: ["Coder"],
+      mode: "sequential",
+      finalSummary: "Initial summary",
+    });
+    const { getStmt } = repo as unknown as { getStmt: { get: (id: string) => unknown } };
+    const read = getStmt.get.bind(getStmt);
+    let wroteSummary = false;
+    getStmt.get = (id) => {
+      const snapshot = read(id);
+      if (!wroteSummary) {
+        wroteSummary = true;
+        competingRepo.patch(runId, { finalSummary: "Independent summary" });
+      }
+      return snapshot;
+    };
+
+    repo.patch(runId, { status: "completed" });
+    assert.equal(repo.get(runId).status, "completed");
+    assert.equal(repo.get(runId).finalSummary, "Independent summary");
+  });
+
   it("keeps unset and cleared optional patch records as SQL null", () => {
     const { db, repo } = createStore();
     repo.create({
