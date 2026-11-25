@@ -132,35 +132,6 @@ describe("ChatDelegationRunRepository", () => {
     assert.throws(() => repo.patch("missing-run", { status: "failed" }), /Delegation run missing-run not found/);
   });
 
-  it("preserves an independent patch when updating run status", () => {
-    const { db, repo } = createStore();
-    const competingRepo = new ChatDelegationRunRepository(db);
-    const { runId } = repo.create({
-      runId: "run-patch-race",
-      sessionId: "session-patch-race",
-      taskId: "task-patch-race",
-      objective: "Preserve independent updates",
-      roles: ["Coder"],
-      mode: "sequential",
-      finalSummary: "Initial summary",
-    });
-    const { getStmt } = repo as unknown as { getStmt: { get: (id: string) => unknown } };
-    const read = getStmt.get.bind(getStmt);
-    let wroteSummary = false;
-    getStmt.get = (id) => {
-      const snapshot = read(id);
-      if (!wroteSummary) {
-        wroteSummary = true;
-        competingRepo.patch(runId, { finalSummary: "Independent summary" });
-      }
-      return snapshot;
-    };
-
-    repo.patch(runId, { status: "completed" });
-    assert.equal(repo.get(runId).status, "completed");
-    assert.equal(repo.get(runId).finalSummary, "Independent summary");
-  });
-
   it("keeps unset and cleared optional patch records as SQL null", () => {
     const { db, repo } = createStore();
     repo.create({
@@ -444,6 +415,23 @@ describe("ChatDelegationRunRepository", () => {
     assert.equal(repo.get("run-stale").status, "partial");
     assert.match(repo.get("run-stale").stitchedOutput ?? "", /Superseded by later delegation run run-new/);
     assert.equal(repo.get("run-active-wait").status, "running");
+
+    db.prepare("DELETE FROM chat_delegation_steps WHERE step_id = ?").run("step-active");
+    const listBySession = repo.listBySession.bind(repo);
+    repo.listBySession = (...args) => {
+      const listed = listBySession(...args);
+      repo.patch("run-active-wait", { status: "completed", finalSummary: "Already settled" });
+      return listed;
+    };
+    assert.deepEqual(
+      repo.reconcileSupersededRunningRunsForSession("session-a", {
+        now: "2026-05-20T02:00:00.000Z",
+        maxAgeMs: 24 * 60 * 60 * 1000,
+      }),
+      [],
+    );
+    assert.equal(repo.get("run-active-wait").status, "completed");
+    assert.equal(repo.get("run-active-wait").finalSummary, "Already settled");
   });
 
   it("casts optional listRecent filters for postgres null parameters", () => {

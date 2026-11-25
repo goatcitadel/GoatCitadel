@@ -78,7 +78,7 @@ describe.skipIf(!url)("Inbox projection approvals on isolated real PostgreSQL", 
       connection: {
         connectionString: scopedUrl.toString(),
         database: scopedUrl.pathname.slice(1),
-        applicationName: "goatcitadel-inbox-projection-test",
+        applicationName: schema,
         pool: { max: 2, connectionTimeoutMs: 10_000 },
       },
       migrationsTable: "schema_migrations",
@@ -144,6 +144,71 @@ describe.skipIf(!url)("Inbox projection approvals on isolated real PostgreSQL", 
     expect(runs).toEqual(new Map([[run.runId, run]]));
     expect(steps).toEqual(new Map([[step.stepId, step]]));
   });
+
+  it("serializes delegation patches behind a concurrent writer and preserves both updates", async () => {
+    const runs = storage.chatDelegationRuns;
+    const steps = storage.chatDelegationSteps;
+    const run = await runs.create({
+      runId: "delegation-patch-race",
+      sessionId: "delegation-patch-session",
+      taskId: "delegation-patch-task",
+      objective: "Verify separate PostgreSQL writers",
+      roles: ["Coder"],
+      mode: "sequential",
+    });
+    const step = await steps.create({ runId: run.runId, stepId: "delegation-patch-step", role: "Coder", index: 0 });
+    for (const operation of [
+      {
+        write: `UPDATE "${schema}".chat_delegation_runs SET final_summary = $1 WHERE run_id = $2`,
+        id: run.runId,
+        patch: async () => {
+          const value = await runs.patch(run.runId, { status: "completed" });
+          return { status: value.status, summary: value.finalSummary };
+        },
+      },
+      {
+        write: `UPDATE "${schema}".chat_delegation_steps SET summary = $1 WHERE step_id = $2`,
+        id: step.stepId,
+        patch: async () => {
+          const value = await steps.patch(step.stepId, { status: "completed" });
+          return { status: value.status, summary: value.summary };
+        },
+      },
+    ]) {
+      const writer = await admin.connect();
+      let pending: Promise<PromiseSettledResult<{ status: string; summary?: string }>> | undefined;
+      let committed = false;
+      try {
+        await writer.query("BEGIN");
+        await writer.query(operation.write, ["Independent summary", operation.id]);
+        pending = operation.patch().then(
+          (value) => ({ status: "fulfilled", value }),
+          (reason: unknown) => ({ status: "rejected", reason }),
+        );
+        await vi.waitFor(
+          async () => {
+            const blocked = await admin.query(
+              "SELECT 1 FROM pg_stat_activity WHERE application_name = $1 AND wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE%'",
+              [schema],
+            );
+            expect(blocked.rowCount).toBeGreaterThan(0);
+          },
+          { timeout: 5_000 },
+        );
+        await writer.query("COMMIT");
+        committed = true;
+      } finally {
+        try {
+          if (!committed) await writer.query("ROLLBACK");
+        } finally {
+          writer.release();
+          await pending;
+        }
+      }
+      const result = await pending;
+      expect(result).toEqual({ status: "fulfilled", value: { status: "completed", summary: "Independent summary" } });
+    }
+  }, 30_000);
 
   it("keeps a superseded run with an active step and refuses to renew its expired dispatch", async () => {
     const runs = storage.chatDelegationRuns;

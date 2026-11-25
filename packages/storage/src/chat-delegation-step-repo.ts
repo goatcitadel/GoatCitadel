@@ -70,6 +70,7 @@ export class ChatDelegationStepRepository {
   private readonly getStmt;
   private readonly getForUpdateStmt;
   private readonly getDispatchClaimStmt;
+  private readonly lockParentRunStmt;
   private readonly insertStmt;
   private readonly patchStmt;
   private readonly materializeApprovalOutcomeStmt;
@@ -108,6 +109,10 @@ export class ChatDelegationStepRepository {
         `,
     );
     this.getStmt = db.prepare("SELECT * FROM chat_delegation_steps WHERE step_id = ?");
+    this.lockParentRunStmt = db.prepare(`
+      SELECT run_id FROM chat_delegation_runs WHERE run_id = ?
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
+    `);
     this.getForUpdateStmt = db.prepare(
       db.dialect === "postgres"
         ? "SELECT * FROM chat_delegation_steps WHERE step_id = ? FOR UPDATE"
@@ -181,6 +186,7 @@ export class ChatDelegationStepRepository {
         AND status = 'running'
         AND child_session_id = @expectedChildSessionId
         AND child_turn_id = @expectedChildTurnId
+        AND (durable_run_id IS NULL OR durable_run_id = COALESCE(@durableRunId, durable_run_id))
         AND dispatch_claim_token IS NULL
         AND dispatch_claim_expires_at IS NULL
     `);
@@ -401,6 +407,7 @@ export class ChatDelegationStepRepository {
             AND status = 'running'
             AND child_session_id = @childSessionId
             AND (child_turn_id IS NULL OR child_turn_id = @childTurnId)
+            AND (durable_run_id IS NULL OR durable_run_id = COALESCE(CAST(@durableRunId AS TEXT), durable_run_id))
             AND dispatch_claim_token = @expectedDispatchToken
             AND dispatch_claim_expires_at IS NOT NULL
             AND gc_try_parse_timestamptz(dispatch_claim_expires_at) > clock_timestamp()
@@ -427,6 +434,7 @@ export class ChatDelegationStepRepository {
             AND status = 'running'
             AND child_session_id = @childSessionId
             AND (child_turn_id IS NULL OR child_turn_id = @childTurnId)
+            AND (durable_run_id IS NULL OR durable_run_id = COALESCE(@durableRunId, durable_run_id))
             AND dispatch_claim_token = @expectedDispatchToken
             AND dispatch_claim_expires_at IS NOT NULL
             AND julianday(dispatch_claim_expires_at) > julianday('now')
@@ -614,36 +622,41 @@ export class ChatDelegationStepRepository {
     finishedAt?: string;
     durationMs?: number;
   }): ChatDelegationStepRecord {
-    this.insertStmt.run({
-      stepId: input.stepId,
-      runId: input.runId,
-      role: input.role,
-      instructionSnapshotJson:
-        input.instructionSnapshot === undefined ? null : JSON.stringify(input.instructionSnapshot),
-      label: input.label ?? null,
-      index: input.index,
-      status: input.status ?? "pending",
-      parallelizable: input.parallelizable ? 1 : 0,
-      dependsOnStepIdsJson: JSON.stringify(input.dependsOnStepIds ?? []),
-      providerId: input.providerId ?? null,
-      model: input.model ?? null,
-      summary: input.summary ?? null,
-      output: input.output ?? null,
-      error: input.error ?? null,
-      failureGuidance: input.failureGuidance ?? null,
-      durableRunId: input.durableRunId ?? null,
-      childSessionId: input.childSessionId ?? null,
-      childTurnId: input.childTurnId ?? null,
-      citationsJson: input.citations ? JSON.stringify(input.citations) : null,
-      degradedHandoffStepIdsJson:
-        input.degradedHandoffStepIds !== undefined ? JSON.stringify(input.degradedHandoffStepIds) : null,
-      workResultJson: input.workResult ? JSON.stringify(input.workResult) : null,
-      scopeControlJson: input.scopeControl ? JSON.stringify(input.scopeControl) : null,
-      startedAt: input.startedAt ?? new Date().toISOString(),
-      finishedAt: input.finishedAt ?? null,
-      durationMs: input.durationMs ?? null,
+    return this.db.transaction("immediate", () => {
+      // Coordinate a new active step with stale reconciliation on its existing parent.
+      const status = input.status ?? "pending";
+      if (status === "pending" || status === "running") this.lockParentRunStmt.get(input.runId);
+      this.insertStmt.run({
+        stepId: input.stepId,
+        runId: input.runId,
+        role: input.role,
+        instructionSnapshotJson:
+          input.instructionSnapshot === undefined ? null : JSON.stringify(input.instructionSnapshot),
+        label: input.label ?? null,
+        index: input.index,
+        status,
+        parallelizable: input.parallelizable ? 1 : 0,
+        dependsOnStepIdsJson: JSON.stringify(input.dependsOnStepIds ?? []),
+        providerId: input.providerId ?? null,
+        model: input.model ?? null,
+        summary: input.summary ?? null,
+        output: input.output ?? null,
+        error: input.error ?? null,
+        failureGuidance: input.failureGuidance ?? null,
+        durableRunId: input.durableRunId ?? null,
+        childSessionId: input.childSessionId ?? null,
+        childTurnId: input.childTurnId ?? null,
+        citationsJson: input.citations ? JSON.stringify(input.citations) : null,
+        degradedHandoffStepIdsJson:
+          input.degradedHandoffStepIds !== undefined ? JSON.stringify(input.degradedHandoffStepIds) : null,
+        workResultJson: input.workResult ? JSON.stringify(input.workResult) : null,
+        scopeControlJson: input.scopeControl ? JSON.stringify(input.scopeControl) : null,
+        startedAt: input.startedAt ?? new Date().toISOString(),
+        finishedAt: input.finishedAt ?? null,
+        durationMs: input.durationMs ?? null,
+      });
+      return this.get(input.stepId);
     });
-    return this.get(input.stepId);
   }
 
   public patch(
@@ -745,7 +758,10 @@ export class ChatDelegationStepRepository {
       const current = this.getForUpdate(input.stepId);
       const ownsExpectedChild =
         current.childSessionId === input.expectedChildSessionId && current.childTurnId === input.expectedChildTurnId;
-      if (!ownsExpectedChild) {
+      if (
+        !ownsExpectedChild ||
+        (input.durableRunId && current.durableRunId && input.durableRunId !== current.durableRunId)
+      ) {
         return { outcome: "rejected", step: current };
       }
       if (current.status === input.status) {

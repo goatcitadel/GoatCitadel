@@ -243,40 +243,6 @@ describe("ChatDelegationStepRepository", () => {
     }
   });
 
-  it("preserves a disjoint writer that commits between a generic patch read and write", () => {
-    const { db, repo } = createStore();
-    const competingRepo = new ChatDelegationStepRepository(db);
-    repo.create({
-      stepId: "step-generic-race",
-      runId: "run-generic-race",
-      role: "QA",
-      index: 0,
-      status: "running",
-      summary: "Initial summary",
-      startedAt: "2026-03-26T00:00:00.000Z",
-    });
-
-    const internal = repo as unknown as {
-      getStmt: { get: (stepId: string) => unknown };
-    };
-    const originalGet = internal.getStmt.get.bind(internal.getStmt);
-    let injectedConcurrentWrite = false;
-    internal.getStmt.get = (stepId) => {
-      const snapshot = originalGet(stepId);
-      if (!injectedConcurrentWrite) {
-        injectedConcurrentWrite = true;
-        competingRepo.patch(stepId, { summary: "Concurrent summary" });
-      }
-      return snapshot;
-    };
-
-    repo.patch("step-generic-race", { status: "completed" });
-
-    const final = repo.get("step-generic-race");
-    assert.equal(final.status, "completed");
-    assert.equal(final.summary, "Concurrent summary");
-  });
-
   it("materializes an approval outcome only for the exact unowned waiting child generation", () => {
     const { db, repo } = createStore();
     repo.create({
@@ -295,18 +261,22 @@ describe("ChatDelegationStepRepository", () => {
       startedAt: "2026-03-26T00:00:00.000Z",
     });
 
-    const applied = repo.materializeApprovalOutcome({
+    const approval = {
       stepId: "step-approval-materialization",
       expectedChildSessionId: "child-session",
       expectedChildTurnId: "child-turn",
-      status: "completed",
+      status: "completed" as const,
       output: "Approved output",
       summary: "Approved output",
       durableRunId: "durable-child",
       citations: [citation()],
       finishedAt: "2026-03-26T00:00:03.000Z",
       durationMs: 3_000,
-    });
+    };
+    const conflicting = repo.materializeApprovalOutcome({ ...approval, durableRunId: "different-durable-child" });
+    assert.equal(conflicting.outcome, "rejected");
+    assert.equal(conflicting.step.durableRunId, "durable-child");
+    const applied = repo.materializeApprovalOutcome(approval);
     assert.equal(applied.outcome, "applied");
     assert.equal(applied.step.status, "completed");
     assert.equal(applied.step.output, "Approved output");
@@ -892,12 +862,12 @@ describe("ChatDelegationStepRepository", () => {
     assert.equal(repo.get("step-owned-response").status, "running");
     assert.equal(repo.getDispatchClaim("step-owned-response")?.token, "dispatch-owner-b");
 
-    const completed = repo.finishOwnedDispatchWithResponse({
+    const response = {
       stepId: "step-owned-response",
       expectedDispatchToken: "dispatch-owner-b",
       childSessionId: "child-response",
       childTurnId: "turn-response",
-      status: "completed",
+      status: "completed" as const,
       providerId: "openai",
       model: "gpt-test",
       label: "Researcher",
@@ -907,7 +877,21 @@ describe("ChatDelegationStepRepository", () => {
       durableRunId: "durable-response",
       finishedAt: "2026-03-26T00:00:03.000Z",
       durationMs: 3_000,
-    });
+    };
+    assert.ok(
+      repo.bindOwnedDurableRun({
+        stepId: response.stepId,
+        expectedDispatchToken: response.expectedDispatchToken,
+        childSessionId: response.childSessionId,
+        durableRunId: response.durableRunId,
+      }),
+    );
+    assert.equal(
+      repo.finishOwnedDispatchWithResponse({ ...response, durableRunId: "different-durable-id" }),
+      undefined,
+    );
+    assert.equal(repo.get(response.stepId).durableRunId, "durable-response");
+    const completed = repo.finishOwnedDispatchWithResponse(response);
     assert.equal(completed?.status, "completed");
     assert.equal(completed?.childTurnId, "turn-response");
     assert.equal(completed?.output, "Replacement output");

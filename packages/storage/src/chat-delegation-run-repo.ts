@@ -387,19 +387,25 @@ export class ChatDelegationRunRepository {
       if (!newerTerminal || !Number.isFinite(startedMs) || nowMs - startedMs < maxAgeMs) {
         continue;
       }
-      if (this.activeStepExistsStmt.get(run.runId)) {
-        continue;
-      }
-      patched.push(
-        this.patch(run.runId, {
+      const reconciled = this.db.transaction("immediate", () => {
+        let current: ChatDelegationRunRecord;
+        try {
+          current = this.getForUpdate(run.runId);
+        } catch (error) {
+          if (error instanceof NotFoundError) return undefined;
+          throw error;
+        }
+        if (current.status !== "running" || this.activeStepExistsStmt.get(current.runId)) return undefined;
+        return this.patch(current.runId, {
           status: "partial",
           finalSummary: "Superseded by a later terminal delegation run; stale running state reconciled.",
           stitchedOutput:
-            run.stitchedOutput ??
+            current.stitchedOutput ??
             `STALE: Superseded by later delegation run ${newerTerminal.runId}; no active child step remained.`,
           finishedAt: input.now ?? new Date(nowMs).toISOString(),
-        }),
-      );
+        });
+      });
+      if (reconciled) patched.push(reconciled);
     }
     return patched;
   }
