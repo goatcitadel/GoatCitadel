@@ -242,6 +242,11 @@ describe("ChatToolRunRepository", () => {
     assert.equal(malformedPayload.args, undefined);
     assert.equal(malformedPayload.result, undefined);
 
+    setRawField(db, "tool-run-a", "status", "unknown_status");
+    assert.throws(() => repo.get("tool-run-a"), /Chat tool run tool-run-a not found/);
+    assert.deepEqual(repo.listByTurn("turn-a"), []);
+    setRawField(db, "tool-run-a", "status", "started");
+
     setStartedAtBlob(db, "tool-run-a");
     assert.throws(() => repo.get("tool-run-a"), /Chat tool run tool-run-a not found/);
     assert.deepEqual(repo.listByTurn("turn-a"), []);

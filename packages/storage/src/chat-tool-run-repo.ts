@@ -399,6 +399,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const toolRunStatuses = {
+  started: true,
+  executed: true,
+  blocked: true,
+  approval_required: true,
+  failed: true,
+} satisfies Record<ChatToolRunRecord["status"], true>;
+
 function isChatToolRunRow(value: unknown): value is ChatToolRunRow {
   if (!isRecord(value)) {
     return false;
@@ -409,6 +417,7 @@ function isChatToolRunRow(value: unknown): value is ChatToolRunRow {
     typeof value.session_id === "string" &&
     typeof value.tool_name === "string" &&
     typeof value.status === "string" &&
+    Object.hasOwn(toolRunStatuses, value.status) &&
     (typeof value.approval_id === "string" || value.approval_id === null) &&
     (typeof value.args_json === "string" || value.args_json === null) &&
     (typeof value.result_json === "string" || value.result_json === null) &&
