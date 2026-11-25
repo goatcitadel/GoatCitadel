@@ -14,6 +14,10 @@ on:
         options:
           - "true"
           - "false"
+      beta_upgrade:
+        description: "Also test an unattended upgrade from the pinned 0.9.2 Beta 2 installer"
+        type: boolean
+        default: false
 
 concurrency:
   group: release-installers-${{ github.ref }}
@@ -156,14 +160,30 @@ jobs:
       - name: Smoke install unsigned Windows installer
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
         shell: pwsh
-        timeout-minutes: 30
+        timeout-minutes: 50
         run: |
           $packageVersion = node -e "process.stdout.write(require('./package.json').version)"
-          & ./scripts/packaging/smoke-windows-installer.ps1 `
-            -InstallerPath "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe" `
-            -ExpectedReleaseManifestPath "artifacts/installers/bundles/GoatCitadel-$packageVersion-${{ matrix.target }}/app/release-manifest.json" `
-            -Target "${{ matrix.target }}" `
-            -TrustMode unsigned
+          foreach ($upgrade in @($false, ('${{ inputs.beta_upgrade }}' -eq 'true')) | Select-Object -Unique) {
+            $upgradeOptions = @{}
+            if ($upgrade) {
+              $beta = Join-Path $env:RUNNER_TEMP "GoatCitadel-Setup-${{ matrix.target }}-beta.2.exe"
+              $betaHashes = @{
+                "windows-x64" = "ec92babd695001161f69738381765f494592722ff2b0f9a27a13891c4663ff99"
+                "windows-arm64" = "da8fdd91039dc2614912439d36467328101c90d8136b81c953607d3ec78f0798"
+              }
+              Invoke-WebRequest -Uri "https://github.com/goatcitadel/GoatCitadel/releases/download/preview-0.9.2-beta.2/GoatCitadel-Setup-${{ matrix.target }}.exe" -OutFile $beta -TimeoutSec 180
+              $upgradeOptions = @{
+                ScratchRoot = Join-Path $env:RUNNER_TEMP "beta-upgrade"
+                BetaInstallerPath = $beta
+                BetaInstallerSha256 = $betaHashes["${{ matrix.target }}"]
+              }
+            }
+            & ./scripts/packaging/smoke-windows-installer.ps1 `
+              -InstallerPath "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe" `
+              -ExpectedReleaseManifestPath "artifacts/installers/bundles/GoatCitadel-$packageVersion-${{ matrix.target }}/app/release-manifest.json" `
+              -Target "${{ matrix.target }}" `
+              -TrustMode unsigned @upgradeOptions
+          }
 
       - name: Upload unsigned Windows convenience artifact
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
@@ -173,6 +193,14 @@ jobs:
           path: |
             artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe
             artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe.sha256
+          if-no-files-found: error
+
+      - name: Upload Windows beta upgrade evidence
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_unsigned == 'true' && inputs.beta_upgrade }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.target }}-beta-upgrade-proof
+          path: ${{ runner.temp }}/beta-upgrade/${{ matrix.target }}-beta-upgrade-proof.json
           if-no-files-found: error
 
   windows-component-sign:
@@ -704,7 +732,7 @@ jobs:
             artifacts/installers/linux/GoatCitadel-${{ env.PACKAGE_VERSION }}-linux-x64.tar.gz.sha256
 
   macos-build-inputs:
-    runs-on: macos-14
+    runs-on: macos-15
     if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true') }}
     steps:
       - name: Checkout
@@ -771,7 +799,7 @@ jobs:
           if-no-files-found: error
 
   macos-sign-notarize:
-    runs-on: macos-14
+    runs-on: macos-15
     needs: macos-build-inputs
     if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
     environment: release
@@ -887,7 +915,7 @@ jobs:
           if-no-files-found: error
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     needs: macos-sign-notarize
     if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
     steps:
