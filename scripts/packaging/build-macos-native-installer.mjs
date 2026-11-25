@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { notarizeMacDmg } from "./lib/macos-notarization.mjs";
 import { requirePackagingTarget } from "./lib/packaging-targets.mjs";
 import { renderMacTauriConfig } from "./lib/package-renderers.mjs";
 
@@ -50,6 +51,11 @@ async function main() {
     throw new Error("macOS DMG packaging must run on macOS because Tauri app bundles, ad-hoc signing, and DMG creation require Apple tooling.");
   }
 
+  const notaryCredentials = args.notarize ? readNotaryCredentials() : undefined;
+  if (notaryCredentials && signingIdentity === "-") {
+    throw new Error("macOS notarization requires a Developer ID signing identity.");
+  }
+
   if (!fs.existsSync(bundleDir)) {
     runNode([
       path.join(scriptDir, "build-bundle.mjs"),
@@ -88,8 +94,9 @@ async function main() {
 
   const builtDmg = findBuiltDmg(targetInfo.tauriTriple);
   fs.copyFileSync(builtDmg, outDmgPath);
-  if (args.notarize) {
-    notarizeAndStapleDmg(outDmgPath);
+  if (notaryCredentials) {
+    const submissionId = notarizeMacDmg(outDmgPath, { ...notaryCredentials, cwd: repoRoot });
+    console.log(`Apple notarization accepted and stapled submission ${submissionId}.`);
   }
   fs.writeFileSync(`${outDmgPath}.sha256`, `${sha256(outDmgPath)} *${path.basename(outDmgPath)}\n`, "utf8");
   console.log(`Built experimental macOS installer: ${outDmgPath}`);
@@ -187,7 +194,7 @@ function writeMacTauriConfig(currentConfigPath, currentBundleDir) {
   fs.writeFileSync(currentConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
-function notarizeAndStapleDmg(dmgPath) {
+function readNotaryCredentials() {
   const appleId = args.notaryAppleId || process.env.GOATCITADEL_MACOS_NOTARY_APPLE_ID;
   const teamId = args.notaryTeamId || process.env.GOATCITADEL_MACOS_NOTARY_TEAM_ID;
   const password = args.notaryPassword || process.env.GOATCITADEL_MACOS_NOTARY_PASSWORD;
@@ -197,20 +204,7 @@ function notarizeAndStapleDmg(dmgPath) {
     );
   }
 
-  runCommand("xcrun", [
-    "notarytool",
-    "submit",
-    dmgPath,
-    "--apple-id",
-    appleId,
-    "--team-id",
-    teamId,
-    "--password",
-    password,
-    "--wait",
-  ]);
-  runCommand("xcrun", ["stapler", "staple", dmgPath]);
-  runCommand("xcrun", ["stapler", "validate", dmgPath]);
+  return { appleId, teamId, password };
 }
 
 function runNode(nodeArgs) {
@@ -227,14 +221,6 @@ function runPnpm(pnpmArgs) {
     stdio: "inherit",
   });
   assertSuccessful(result, `pnpm ${pnpmArgs.join(" ")}`);
-}
-
-function runCommand(command, commandArgs) {
-  const result = spawnSync(command, commandArgs, {
-    cwd: repoRoot,
-    stdio: "inherit",
-  });
-  assertSuccessful(result, `${command} ${commandArgs.join(" ")}`);
 }
 
 function ensureRustTarget(triple) {

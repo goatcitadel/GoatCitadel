@@ -199,7 +199,7 @@ mapped separately through `release-certificate.json` and [docs/1_0_RELEASE_EVIDE
 - legacy Cowork and Code routes normalize to Chat or Ops Kanban, with agentic and code-capability behavior visible inside Chat
 - visible runtime and catalog surfaces expose readable health, diagnostics, and recovery actions
 - provider, channel, MCP, backup/restore, and extension/SDK claims for the visible catalog are backed by the evidence map in [docs/1_0_RELEASE_EVIDENCE.md](./1_0_RELEASE_EVIDENCE.md) and its cited green proof lanes/supporting tests
-- repo-visible PR workflows exist for the blocking release-gate lanes; branch protection still must mark them as required outside the repo
+- the `release-proof-result` check runs the full release-proof matrix and security gate for pull requests to `main`; GitHub's `Protect Main` ruleset must require that check as well as the direct PR checks
 - the exact release candidate has retained acceptance evidence for unsigned x64 and arm64 clean install and first launch, unattended upgrade from a supported beta with representative data preserved, and uninstall on both architectures
 - the installed candidate has retained live evidence for a real provider turn, a real channel send and receive, and a governed approval with its observable result. [Release-candidate acceptance](./1_0_RELEASE_EVIDENCE.md#release-candidate-acceptance)
 

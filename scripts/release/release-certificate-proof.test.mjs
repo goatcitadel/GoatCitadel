@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveLaneProof } from "./release-certificate-proof.mjs";
+import { resolveLaneProof, selectReleaseCommitRun } from "./release-certificate-proof.mjs";
 
 const spec = {
   name: "verify:runtime:truth",
@@ -182,6 +182,36 @@ test("release certificate records additive exact-SHA summary fields", () => {
   assert.match(writer, /exactShaStatus,/);
   assert.match(writer, /function summarizeRequiredLaneExactSha\(requiredLanes,\s*commit\)/);
   assert.match(writer, /status:\s*mismatched\.length === 0 && missingProof\.length === 0 \? "matched" : "incomplete"/);
+});
+
+test("main PRs and merge queues get one fail-closed release-proof check", () => {
+  const file = new URL("../../.github/workflows/verification-1-0-release-proof.yml", import.meta.url);
+  const workflow = fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+  const triggers = workflow.split("\npermissions:")[0];
+  assert.match(triggers, /\n  pull_request:\n    branches: \[main\]\n/);
+  assert.match(triggers, /\n  merge_group:\n    types: \[checks_requested\]\n/);
+  assert.doesNotMatch(triggers, /pull_request_target:|paths(?:-ignore)?:/);
+  const secrets = workflow.match(/^\s+[A-Z_]+:.*secrets\..*$/gm);
+  assert.equal(secrets.length, 6);
+  for (const line of secrets) {
+    assert.match(line, /github\.event_name != 'pull_request' && github\.event_name != 'merge_group' && secrets\./);
+  }
+  const result = workflowJob(workflow, "release-proof-result");
+  assert.match(result, /if: \$\{\{ always\(\) \}\}/);
+  assert.match(result, /needs: \[required-lanes, security\]/);
+  assert.match(result, /"\$MATRIX_RESULT" != success \|\| "\$SECURITY_RESULT" != success/);
+  assert.match(result, /exit 1/);
+});
+
+test("release commit evidence excludes pull-request and merge-queue runs even when their reported head matches", () => {
+  const pullRequest = { id: 1, head_sha: "abc123", event: "pull_request", conclusion: "success" };
+  const mergeQueue = { id: 2, head_sha: "abc123", event: "merge_group", conclusion: "success" };
+  const unrelated = { id: 3, head_sha: "other", event: "push", conclusion: "success" };
+  const exact = { id: 4, head_sha: "abc123", event: "push", conclusion: "failure" };
+  const older = { id: 5, head_sha: "abc123", event: "schedule", conclusion: "success" };
+  assert.equal(selectReleaseCommitRun([pullRequest, mergeQueue, unrelated], "abc123"), null);
+  assert.equal(selectReleaseCommitRun([pullRequest, mergeQueue, unrelated, exact, older], "abc123"), exact);
+  assert.equal(selectReleaseCommitRun([{ ...older, event: "workflow_dispatch" }], "abc123").id, older.id);
 });
 
 test("release certificate records parity closure gates for top 1.0 parity gaps", () => {
@@ -744,6 +774,7 @@ test("reusable platform signing secrets are isolated from repository and depende
   assert.match(macSigner, /if: \$\{\{ always\(\) \}\}[\s\S]*security delete-keychain/);
   assert.match(macSigner, /rm -rf[^\n]*goatcitadel-macos-cert\.p12/);
   assert.match(macSigner, /xcrun notarytool submit "\$OUTPUT_DMG"/);
+  assert.match(macSigner, /notarytool submit[^\n]*--output-format json[\s\S]*\.status == "Accepted"[\s\S]*xcrun stapler staple/);
   assert.match(macSigner, /stat -f %z "\$INPUT_DMG"/);
 
   for (const noReusableSecretJob of [
