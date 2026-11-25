@@ -4,6 +4,7 @@ import {
   buildLegacyToolEffectEvidence,
   isToolEffectEvidenceRecord,
   NotFoundError,
+  TOOL_EFFECT_CLASSIFICATION_VERSION,
   type ToolEffectDisposition,
   type ToolEffectEvidenceRecord,
   type ToolEffectOutcomeKind,
@@ -98,12 +99,32 @@ export class ChatToolRunRepository {
         : this.getStmt;
     // A call is a run that went out: executed or failed, and not served again from an earlier run. Blocked, waiting
     // and still-running rows never were calls. No index leads with started_at; the Gateway caches this read.
+    const effectJson =
+      db.dialect === "postgres"
+        ? "gc_try_parse_jsonb(effect_evidence_json)"
+        : "(CASE WHEN json_valid(effect_evidence_json) THEN effect_evidence_json END)";
+    const effectValue = (key: string) =>
+      db.dialect === "postgres" ? `(${effectJson} ->> '${key}')` : `json_extract(${effectJson}, '$.${key}')`;
+    const emptyEffectRefs =
+      db.dialect === "postgres"
+        ? `(${effectJson} -> 'refs') = '[]'::jsonb`
+        : `json_type(${effectJson}, '$.refs') = 'array' AND json_array_length(${effectJson}, '$.refs') = 0`;
     this.countCallsByToolSinceStmt = db.prepare(`
       SELECT tool_name, COUNT(*) AS calls, MAX(started_at) AS last_called_at
       FROM chat_tool_runs
       WHERE started_at >= @since
         AND status IN ('executed', 'failed')
         AND (reused IS NULL OR reused = 0)
+        AND CASE WHEN status = 'failed' AND finished_at IS NOT NULL
+          AND effect_potential IN ('none', 'unknown')
+          AND effect_disposition = 'none' AND effect_outcome_kind = 'none'
+          AND ${effectValue("version")} = @effectVersion AND ${effectValue("outcomeKind")} = 'none'
+          AND (${emptyEffectRefs})
+          AND (
+            ${effectValue("reason")} = 'pre_dispatch_blocked'
+            OR (approval_id IS NULL AND ${effectValue("reason")} = 'skipped_before_dispatch')
+          )
+        THEN 0 ELSE 1 END = 1
       GROUP BY tool_name
       ORDER BY tool_name ASC
     `);
@@ -165,20 +186,20 @@ export class ChatToolRunRepository {
   }
 
   public get(toolRunId: string): ChatToolRunRecord {
-    return this.readToolRun(toolRunId, this.getStmt.get(toolRunId));
+    return mapRow(this.readToolRunRow(toolRunId, this.getStmt.get(toolRunId)));
   }
 
   /** Locks the existing receipt inside a caller-owned transaction. */
   public getForUpdate(toolRunId: string): ChatToolRunRecord {
-    return this.readToolRun(toolRunId, this.getForUpdateStmt.get(toolRunId));
+    return mapRow(this.readToolRunRow(toolRunId, this.getForUpdateStmt.get(toolRunId)));
   }
 
-  private readToolRun(toolRunId: string, raw: unknown): ChatToolRunRecord {
+  private readToolRunRow(toolRunId: string, raw: unknown): ChatToolRunRow {
     const row = toChatToolRunRow(raw);
     if (!row) {
       throw new NotFoundError({ entity: "Chat tool run", id: toolRunId });
     }
-    return mapRow(row);
+    return row;
   }
 
   public create(input: ChatToolRunCreateInput): ChatToolRunRecord {
@@ -208,46 +229,25 @@ export class ChatToolRunRepository {
 
   public patch(toolRunId: string, input: ChatToolRunPatchInput): ChatToolRunRecord {
     return this.db.transaction("immediate", () => {
-      const current = this.getForUpdate(toolRunId);
+      const current = this.readToolRunRow(toolRunId, this.getForUpdateStmt.get(toolRunId));
       this.patchStmt.run({
         toolRunId,
         status: input.status ?? current.status,
-        approvalId: input.approvalId !== undefined ? input.approvalId : (current.approvalId ?? null),
-        resultJson:
-          input.result !== undefined
-            ? JSON.stringify(input.result)
-            : current.result
-              ? JSON.stringify(current.result)
-              : null,
-        reused:
-          input.reused !== undefined
-            ? input.reused
-              ? 1
-              : 0
-            : current.reused === undefined
-              ? null
-              : current.reused
-                ? 1
-                : 0,
+        approvalId: input.approvalId !== undefined ? input.approvalId : current.approval_id,
+        resultJson: input.result !== undefined ? JSON.stringify(input.result) : current.result_json,
+        reused: input.reused === undefined ? current.reused : Number(input.reused),
         reusedFromToolRunId:
-          input.reusedFromToolRunId !== undefined ? input.reusedFromToolRunId : (current.reusedFromToolRunId ?? null),
-        reuseReason: input.reuseReason !== undefined ? input.reuseReason : (current.reuseReason ?? null),
-        error: input.error !== undefined ? input.error : (current.error ?? null),
-        failureGuidance:
-          input.failureGuidance !== undefined ? input.failureGuidance : (current.failureGuidance ?? null),
-        effectPotential:
-          input.effectPotential !== undefined ? input.effectPotential : (current.effectPotential ?? null),
-        effectDisposition:
-          input.effectDisposition !== undefined ? input.effectDisposition : (current.effectDisposition ?? null),
+          input.reusedFromToolRunId !== undefined ? input.reusedFromToolRunId : current.reused_from_tool_run_id,
+        reuseReason: input.reuseReason !== undefined ? input.reuseReason : current.reuse_reason,
+        error: input.error !== undefined ? input.error : current.error,
+        failureGuidance: input.failureGuidance !== undefined ? input.failureGuidance : current.failure_guidance,
+        effectPotential: input.effectPotential !== undefined ? input.effectPotential : current.effect_potential,
+        effectDisposition: input.effectDisposition !== undefined ? input.effectDisposition : current.effect_disposition,
         effectOutcomeKind:
-          input.effectOutcomeKind !== undefined ? input.effectOutcomeKind : (current.effectOutcomeKind ?? null),
+          input.effectOutcomeKind !== undefined ? input.effectOutcomeKind : current.effect_outcome_kind,
         effectEvidenceJson:
-          input.effectEvidence !== undefined
-            ? JSON.stringify(input.effectEvidence)
-            : current.effectEvidence
-              ? JSON.stringify(current.effectEvidence)
-              : null,
-        finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
+          input.effectEvidence !== undefined ? JSON.stringify(input.effectEvidence) : current.effect_evidence_json,
+        finishedAt: input.finishedAt !== undefined ? input.finishedAt : current.finished_at,
       });
       return this.get(toolRunId);
     });
@@ -264,7 +264,7 @@ export class ChatToolRunRepository {
       expectedResultJson: JSON.stringify(expectedResult),
       nextResultJson: JSON.stringify(nextResult),
     });
-    return row === undefined ? undefined : this.readToolRun(toolRunId, row);
+    return row === undefined ? undefined : mapRow(this.readToolRunRow(toolRunId, row));
   }
 
   public listByTurn(turnId: string): ChatToolRunRecord[] {
@@ -330,7 +330,10 @@ export class ChatToolRunRepository {
    * PostgreSQL hands COUNT(*) back as a bigint string, so the count is converted here.
    */
   public countCallsByToolSince(sinceIso: string): ChatToolCallCount[] {
-    const rows = this.countCallsByToolSinceStmt.all({ since: sinceIso });
+    const rows = this.countCallsByToolSinceStmt.all({
+      since: sinceIso,
+      effectVersion: TOOL_EFFECT_CLASSIFICATION_VERSION,
+    });
     return (Array.isArray(rows) ? rows : []).flatMap((row: unknown) => {
       if (!isRecord(row) || typeof row.tool_name !== "string" || typeof row.last_called_at !== "string") {
         return [];
@@ -409,7 +412,7 @@ function isChatToolRunRow(value: unknown): value is ChatToolRunRow {
     (typeof value.approval_id === "string" || value.approval_id === null) &&
     (typeof value.args_json === "string" || value.args_json === null) &&
     (typeof value.result_json === "string" || value.result_json === null) &&
-    (typeof value.reused === "number" || value.reused === null) &&
+    (value.reused === 0 || value.reused === 1 || value.reused === null) &&
     (typeof value.reused_from_tool_run_id === "string" || value.reused_from_tool_run_id === null) &&
     (typeof value.reuse_reason === "string" || value.reuse_reason === null) &&
     (typeof value.error === "string" || value.error === null) &&
@@ -506,7 +509,7 @@ function isCoherentToolEffectProjection(input: {
   if (!potential || !outcomeKind || !evidence || outcomeKind !== evidence.outcomeKind) return false;
   const startedOpen = row.status === "started" && row.finished_at === null;
   const settled = row.status !== "started" && row.finished_at !== null;
-  const notReused = row.reused !== 1;
+  const notReused = row.reused === null || row.reused === 0;
   const noApproval = row.approval_id === null;
   const terminalApprovalLinked = !noApproval && settled && (row.status === "executed" || row.status === "failed");
 

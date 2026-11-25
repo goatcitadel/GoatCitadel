@@ -287,11 +287,20 @@ describe("ChatToolRunRepository", () => {
     raw.close();
 
     const reopened = tempDbs.open({ dbPath });
-    const projected = new ChatToolRunRepository(reopened).get("legacy-run");
+    const reopenedRepo = new ChatToolRunRepository(reopened);
+    const projected = reopenedRepo.patch("legacy-run", { approvalId: "approval-legacy" });
     assert.equal(projected.effectPotential, "unknown");
     assert.equal(projected.effectDisposition, "unknown");
     assert.equal(projected.effectOutcomeKind, "uncertain");
     assert.equal(projected.effectEvidence?.reason, "legacy_or_malformed_effect_truth");
+    const preserved = reopened
+      .prepare(
+        "SELECT effect_potential, effect_disposition, effect_outcome_kind, effect_evidence_json FROM chat_tool_runs WHERE tool_run_id = ?",
+      )
+      .get("legacy-run");
+    assert.deepEqual(preserved, stored);
+    reopened.prepare("UPDATE chat_tool_runs SET reused = 2 WHERE tool_run_id = ?").run("legacy-run");
+    assert.throws(() => reopenedRepo.get("legacy-run"), /Chat tool run legacy-run not found/);
     reopened.close();
   });
 
@@ -451,7 +460,7 @@ describe("ChatToolRunRepository", () => {
   });
 
   it("preserves canonical pre-dispatch failure after approval replay", () => {
-    const { repo } = createStore();
+    const { db, repo } = createStore();
     const record = repo.create({
       toolRunId: "approved-before-dispatch",
       turnId: "turn-approved-before-dispatch",
@@ -474,6 +483,49 @@ describe("ChatToolRunRepository", () => {
     assert.equal(record.effectDisposition, "none");
     assert.equal(record.effectOutcomeKind, "none");
     assert.equal(repo.get(record.toolRunId).effectEvidence?.reason, "pre_dispatch_blocked");
+    const skipped = repo.create({
+      ...record,
+      toolRunId: "skipped-before-dispatch",
+      approvalId: undefined,
+      effectEvidence: {
+        version: TOOL_EFFECT_CLASSIFICATION_VERSION,
+        outcomeKind: "none",
+        reason: "skipped_before_dispatch",
+        refs: [],
+      },
+    });
+    const possiblyDispatched = repo.create({
+      ...record,
+      toolRunId: "possibly-dispatched",
+      effectOutcomeKind: "uncertain",
+      effectDisposition: "unknown",
+      effectEvidence: {
+        version: TOOL_EFFECT_CLASSIFICATION_VERSION,
+        outcomeKind: "uncertain",
+        reason: "dispatch_may_have_occurred",
+        refs: [],
+      },
+      startedAt: "2026-09-08T00:00:00.000Z",
+    });
+    const since = "2026-09-01T00:00:00.000Z";
+    assert.deepEqual(repo.countCallsByToolSince(since), [
+      {
+        toolName: record.toolName,
+        calls: 1,
+        lastCalledAt: possiblyDispatched.startedAt,
+      },
+    ]);
+    db.prepare("UPDATE chat_tool_runs SET effect_evidence_json = ? WHERE tool_run_id = ?").run(
+      "{invalid json",
+      skipped.toolRunId,
+    );
+    assert.deepEqual(repo.countCallsByToolSince(since), [
+      {
+        toolName: record.toolName,
+        calls: 2,
+        lastCalledAt: skipped.startedAt,
+      },
+    ]);
   });
 
   it("keeps a post-dispatch output rejection coherent instead of degrading to legacy", () => {
