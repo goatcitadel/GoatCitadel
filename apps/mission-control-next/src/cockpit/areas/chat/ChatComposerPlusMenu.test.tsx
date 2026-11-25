@@ -229,3 +229,29 @@ it("offers Model council and Project summary only when GoatCitadel reports them 
   expect(onToggleModelCouncil).toHaveBeenCalledOnce();
   expect(onToggleWorkspaceSnapshot).toHaveBeenCalledOnce();
 });
+
+it("moves focus to the message box when a mode pill is removed", async () => {
+  const { ChatComposerModePills } = await import("./ChatComposerPlusMenu");
+  const composerRef = createRef<HTMLTextAreaElement>();
+  const onToggleModelCouncil = vi.fn();
+  const props = composerProps({ composerRef, modelCouncilEnabled: true, onToggleModelCouncil });
+  // The pills read only the sources panel id, its open state and its toggle.
+  const sources = {
+    open: false,
+    panelId: "sources",
+    onToggle: vi.fn(),
+  } as unknown as import("./ChatComposerTools").ComposerSources;
+  await act(async () =>
+    root.render(
+      <>
+        <textarea aria-label="Message" ref={composerRef} />
+        <ChatComposerModePills props={props} sources={sources} />
+      </>,
+    ),
+  );
+  const remove = host.querySelector<HTMLButtonElement>('[aria-label="Turn off Model council"]')!;
+  remove.focus();
+  await act(async () => remove.click());
+  expect(onToggleModelCouncil).toHaveBeenCalledOnce();
+  expect(document.activeElement).toBe(composerRef.current);
+});
