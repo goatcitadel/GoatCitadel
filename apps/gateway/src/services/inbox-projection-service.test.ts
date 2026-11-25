@@ -882,6 +882,27 @@ describe("Gateway inbox projection", () => {
     expect(JSON.stringify(projection)).not.toContain("do-not-project");
   });
 
+  it("reports dead letters as partial instead of failing the source when their runs cannot be read", async () => {
+    const deps = dependencies();
+    vi.mocked(deps.durable.listDeadLetters).mockResolvedValue([
+      {
+        deadLetterId: "dead-a",
+        runId: "run-a",
+        reason: "Needs recovery",
+        payload: {},
+        createdAt: "2026-09-28T12:00:00.000Z",
+      },
+    ] as never);
+    vi.mocked(deps.durable.getRunsByIds).mockRejectedValue(new Error("Feature durableKernelV1Enabled is disabled"));
+
+    const projection = await new InboxProjectionService(deps).getProjection("workspace-a");
+    expect(projection.items.filter((item) => item.kind === "dead_letter")).toEqual([]);
+    expect(projection.coverage.find((entry) => entry.source === "dead_letters")).toMatchObject({
+      state: "partial",
+      detail: expect.stringMatching(/could not be matched to a workspace/),
+    });
+  });
+
   it("projects only unresolved dead letters with a readable workspace run and an exact owner ID", async () => {
     const deps = dependencies();
     vi.mocked(deps.durable.listDeadLetters).mockResolvedValue([

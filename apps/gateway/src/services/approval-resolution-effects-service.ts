@@ -199,6 +199,9 @@ const APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS = 2_000;
 const APPROVAL_EFFECT_CODE_MODE_CLAIM_RETRY_MS = 1_000;
 const APPROVAL_OBSERVABILITY_RETRY_BASE_MS = 1_000;
 const APPROVAL_OBSERVABILITY_RETRY_MAX_MS = 5 * 60_000;
+/** Fixed short retry delays (waiting on a child, a claim, a predecessor) hold for this many attempts, then back off. */
+const APPROVAL_FIXED_RETRY_FREE_ATTEMPTS = 30;
+const APPROVAL_FIXED_RETRY_MAX_MS = 15_000;
 const APPROVAL_OBSERVABILITY_PREDECESSOR_RETRY_MS = 250;
 const APPROVAL_WAIT_MATERIALIZE_RETRY_MS = 1_000;
 const APPROVAL_EXPIRY_SWEEP_INTERVAL_MS = 1_000;
@@ -4804,11 +4807,12 @@ export class ApprovalEffectsService {
   ): Promise<ApprovalEffectRecord | undefined> {
     const now = new Date();
     const retryDelayMs =
-      retryDelayOverrideMs ??
-      Math.min(
-        APPROVAL_OBSERVABILITY_RETRY_BASE_MS * 2 ** Math.min(20, Math.max(0, effect.attemptCount - 1)),
-        APPROVAL_OBSERVABILITY_RETRY_MAX_MS,
-      );
+      retryDelayOverrideMs === undefined
+        ? Math.min(
+            APPROVAL_OBSERVABILITY_RETRY_BASE_MS * 2 ** Math.min(20, Math.max(0, effect.attemptCount - 1)),
+            APPROVAL_OBSERVABILITY_RETRY_MAX_MS,
+          )
+        : fixedRetryDelayMs(retryDelayOverrideMs, effect.attemptCount);
     const errorMessage = error instanceof Error ? error.message : String(error);
     const retryAt = new Date(now.getTime() + retryDelayMs).toISOString();
     const deferred = await this.ctx.storage.approvalEffects.deferEffectForRetry(
@@ -5560,4 +5564,11 @@ function asApprovalStatus(value: unknown): ApprovalRequest["status"] {
 
 function asWakeOutcome(value: unknown): DurableWakeResult["outcome"] | undefined {
   return typeof value === "string" ? (value as DurableWakeResult["outcome"]) : undefined;
+}
+
+/** Keeps a fixed retry delay while a wait is young, then doubles it (capped) so a long wait stops rewriting every second. */
+export function fixedRetryDelayMs(delayMs: number, attemptCount: number): number {
+  const extraAttempts = attemptCount - APPROVAL_FIXED_RETRY_FREE_ATTEMPTS;
+  if (extraAttempts <= 0) return delayMs;
+  return Math.max(delayMs, Math.min(delayMs * 2 ** Math.min(20, extraAttempts), APPROVAL_FIXED_RETRY_MAX_MS));
 }

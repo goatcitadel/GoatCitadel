@@ -69,6 +69,10 @@ export const presentFailureClass = (value: ChatTurnFailureClass) => failureClass
 export const PLAN_HELP = "Plan before acting. GoatCitadel still governs every tool and approval.";
 export const REVIEW_HELP =
   "Check each answer with one extra model call before it finishes; the result shows under the answer. Adds cost to every message.";
+export const COUNCIL_HELP =
+  "Ask a council of other configured models for advice on the next message. Council members cannot use tools; adds cost.";
+export const SNAPSHOT_HELP =
+  "Include a point-in-time summary of the project with the next message: latest commit, branch and file counts, no file contents.";
 export const WEB_HELP =
   "Auto searches when the message needs current information; Off removes web tools; Deep searches on every message with a larger budget. GoatCitadel policy and available tools still apply.";
 

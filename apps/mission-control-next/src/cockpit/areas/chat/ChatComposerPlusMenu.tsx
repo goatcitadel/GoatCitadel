@@ -79,11 +79,14 @@ function ModePill({
   removeLabel,
   disabled,
   onRemove,
+  focusAfter,
 }: {
   label: string;
   removeLabel: string;
   disabled: boolean;
   onRemove: () => void;
+  /** The pill unmounts once its mode is off, so focus moves here instead of falling to the page. */
+  focusAfter?: { current: HTMLElement | null };
 }) {
   return (
     <span className={PILL}>
@@ -93,7 +96,10 @@ function ModePill({
         aria-label={removeLabel}
         title={removeLabel}
         disabled={disabled}
-        onClick={onRemove}
+        onClick={() => {
+          onRemove();
+          focusAfter?.current?.focus();
+        }}
         className="inline-flex size-5 items-center justify-center rounded-full text-fg-secondary hover:bg-raised hover:text-fg disabled:opacity-60"
       >
         <X aria-hidden="true" className="size-3.5" />
@@ -119,6 +125,7 @@ export function ChatComposerModePills({ props, sources }: { props: ComposerProps
         <ModePill
           label="Plan first"
           removeLabel="Turn off Plan first"
+          focusAfter={props.composerRef}
           disabled={disabled}
           onRemove={props.onTogglePlanningMode}
         />
@@ -127,6 +134,7 @@ export function ChatComposerModePills({ props, sources }: { props: ComposerProps
         <ModePill
           label={`Web: ${webLabel}`}
           removeLabel="Set web search back to Auto"
+          focusAfter={props.composerRef}
           disabled={disabled}
           onRemove={() => props.onSetWebMode?.("auto")}
         />
@@ -135,8 +143,27 @@ export function ChatComposerModePills({ props, sources }: { props: ComposerProps
         <ModePill
           label="Review answer"
           removeLabel="Turn off Review answer"
+          focusAfter={props.composerRef}
           disabled={disabled}
           onRemove={props.onToggleReviewMode}
+        />
+      ) : null}
+      {props.modelCouncilEnabled && props.onToggleModelCouncil ? (
+        <ModePill
+          label="Model council"
+          removeLabel="Turn off Model council"
+          focusAfter={props.composerRef}
+          disabled={disabled}
+          onRemove={props.onToggleModelCouncil}
+        />
+      ) : null}
+      {props.workspaceSnapshotRequest ? (
+        <ModePill
+          label="Project summary"
+          removeLabel="Remove the project summary"
+          focusAfter={props.composerRef}
+          disabled={disabled}
+          onRemove={props.onToggleWorkspaceSnapshot}
         />
       ) : null}
       {sourceControls && sourceControls.attachments.length > 0 ? (

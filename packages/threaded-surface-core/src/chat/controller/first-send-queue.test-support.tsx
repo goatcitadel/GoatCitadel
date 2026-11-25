@@ -245,7 +245,7 @@ function Harness({ sendOnAssignment = false }: { sendOnAssignment?: boolean }) {
     openBtwSideChat: api.openBtwSideChat,
     setDraft,
     coordination: { activeStreamRef },
-    goalActions: { handleSteerMidTurn: async () => undefined },
+    goalActions: { handleSteerMidTurn: async () => true },
     oneShotContext: {
       consumeModelCouncilArming: () => undefined,
       modelCouncilEnabledRef: useRef(false),

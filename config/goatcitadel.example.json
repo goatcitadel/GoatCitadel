@@ -198,13 +198,13 @@
     },
     "features": {
       "durableKernelV1Enabled": true,
-      "replayOverridesV1Enabled": false,
-      "memoryLifecycleAdminV1Enabled": false,
+      "replayOverridesV1Enabled": true,
+      "memoryLifecycleAdminV1Enabled": true,
       "memoryLifecycleAutoForgetEnabled": true,
-      "memoryMaintenanceV1Enabled": false,
-      "connectorDiagnosticsV1Enabled": false,
+      "memoryMaintenanceV1Enabled": true,
+      "connectorDiagnosticsV1Enabled": true,
       "computerUseGuardrailsV1Enabled": true,
-      "cronReviewQueueV1Enabled": false,
+      "cronReviewQueueV1Enabled": true,
       "replayRegressionV1Enabled": true
     },
     "budgets": {

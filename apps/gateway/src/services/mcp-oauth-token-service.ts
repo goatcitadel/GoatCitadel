@@ -1,4 +1,9 @@
-import { persistMcpOAuthTokenResponse, accessTokenAccount, refreshTokenAccount, type TokenResponse } from "./mcp-oauth-token-persistence.js";
+import {
+  persistMcpOAuthTokenResponse,
+  accessTokenAccount,
+  refreshTokenAccount,
+  type TokenResponse,
+} from "./mcp-oauth-token-persistence.js";
 import {
   hasMcpOAuthEndpointSource,
   type McpOAuthConfig,
@@ -14,12 +19,17 @@ import type { McpAuthStateRecord } from "./mcp-server-admin-service.js";
 import type { McpConnectionFence } from "./mcp-static-environment-service.js";
 
 export interface McpOAuthTokenServiceOptions {
-  secretStore: Pick<SecretStoreService, "setSecret" | "getSecret" | "deleteSecret"> & Partial<Pick<SecretStoreService, "setSecretForCustody" | "supportsCredentialWriteReceipts">>;
+  secretStore: Pick<SecretStoreService, "setSecret" | "getSecret" | "deleteSecret"> &
+    Partial<Pick<SecretStoreService, "setSecretForCustody" | "supportsCredentialWriteReceipts" | "getSecretAsync">>;
   /** A getter reads the live allowlist; settings edits replace the array, so a startup snapshot goes stale. */
   networkAllowlist: string[] | (() => string[]);
   env?: NodeJS.ProcessEnv;
   environmentResolver?: (server: McpServerRecord, fence?: McpConnectionFence) => Promise<NodeJS.ProcessEnv>;
-  stageCredentials?: (serverId: string, refs: readonly string[], write: (custodyId?: string, writeId?: string) => undefined) => Promise<void>;
+  stageCredentials?: (
+    serverId: string,
+    refs: readonly string[],
+    write: (custodyId?: string, writeId?: string) => undefined,
+  ) => Promise<void>;
 }
 
 export class McpOAuthTokenService {
@@ -74,16 +84,16 @@ export class McpOAuthTokenService {
     stateRecord: McpAuthStateRecord | undefined,
     beforeRequest?: () => Promise<void>,
   ): Promise<{ accessToken: string; state: McpAuthStateRecord }> {
-    const current = this.readCurrentAccessToken(server, stateRecord);
+    const current = await this.readCurrentAccessToken(server, stateRecord);
     if (current) return current;
     return this.refreshAccessToken(server, stateRecord!, beforeRequest);
   }
 
   /** Reads a usable credential without dispatching or authorizing a refresh. */
-  public readCurrentAccessToken(
+  public async readCurrentAccessToken(
     server: McpServerRecord,
     stateRecord: McpAuthStateRecord | undefined,
-  ): { accessToken: string; state: McpAuthStateRecord } | undefined {
+  ): Promise<{ accessToken: string; state: McpAuthStateRecord } | undefined> {
     if (server.authType !== "oauth2") {
       throw new Error("MCP OAuth token resolution only applies to oauth2 servers.");
     }
@@ -98,7 +108,7 @@ export class McpOAuthTokenService {
       }
       return undefined;
     }
-    const accessToken = this.readSecretRef(current.accessTokenRef, server.serverId, "access-token");
+    const accessToken = await this.readSecretRef(current.accessTokenRef, server.serverId, "access-token");
     if (!accessToken) {
       throw new Error("MCP OAuth access token is unavailable in the OS secret store; reconnect this server.");
     }
@@ -152,7 +162,7 @@ export class McpOAuthTokenService {
   ): Promise<{ accessToken: string; state: McpAuthStateRecord }> {
     const oauth = requireOAuthConfig(server, stateRecord);
     const refreshToken = stateRecord.refreshTokenRef
-      ? this.readSecretRef(stateRecord.refreshTokenRef, server.serverId, "refresh-token")
+      ? await this.readSecretRef(stateRecord.refreshTokenRef, server.serverId, "refresh-token")
       : undefined;
     if (!refreshToken) {
       throw new Error("MCP OAuth refresh token is unavailable in the OS secret store; reconnect this server.");
@@ -173,7 +183,7 @@ export class McpOAuthTokenService {
       refreshTokenRef: stateRecord.refreshTokenRef,
       error: undefined,
     });
-    const accessToken = this.readSecretRef(state.accessTokenRef, server.serverId, "access-token");
+    const accessToken = await this.readSecretRef(state.accessTokenRef, server.serverId, "access-token");
     if (!accessToken) {
       throw new Error("MCP OAuth refresh did not persist an access token.");
     }
@@ -238,7 +248,9 @@ export class McpOAuthTokenService {
     response: TokenResponse,
     previous: McpAuthStateRecord,
   ): Promise<McpAuthStateRecord> {
-    return persistMcpOAuthTokenResponse(this.options, serverId, response, previous, (accounts) => this.deleteOwnedAccounts(accounts));
+    return persistMcpOAuthTokenResponse(this.options, serverId, response, previous, (accounts) =>
+      this.deleteOwnedAccounts(accounts),
+    );
   }
 
   private isRefreshNeeded(oauth: McpOAuthConfig | undefined, stateRecord: McpAuthStateRecord): boolean {
@@ -249,16 +261,20 @@ export class McpOAuthTokenService {
     return Date.parse(stateRecord.tokenExpiresAt) - skewMs <= Date.now();
   }
 
-  private readSecretRef(
+  private async readSecretRef(
     ref: string | undefined,
     serverId: string,
     kind: "access-token" | "refresh-token",
-  ): string | undefined {
+  ): Promise<string | undefined> {
     if (ref && !isMcpOAuthTokenRefForServer(ref, serverId, kind)) {
       throw new Error("MCP OAuth token reference belongs to a different authority.");
     }
     const account = accountFromTokenRef(ref);
-    return account ? this.options.secretStore.getSecret(account)?.trim() || undefined : undefined;
+    if (!account) return undefined;
+    // Every OAuth MCP tool call reads its token: the async reader keeps a Windows keychain read off the event loop.
+    const store = this.options.secretStore;
+    const value = store.getSecretAsync ? await store.getSecretAsync(account) : store.getSecret(account);
+    return value?.trim() || undefined;
   }
 }
 
@@ -374,7 +390,10 @@ type ResolvedMcpOAuthConfig = Required<Pick<McpOAuthConfig, "tokenUrl">> &
 
 /** Saved endpoints win; otherwise the token endpoint and client id come from the discovered record. */
 function requireOAuthConfig(server: McpServerRecord, stateRecord?: McpAuthStateRecord): ResolvedMcpOAuthConfig {
-  if (server.oauth?.tokenUrl?.trim() && (server.oauth.authorizationUrl?.trim() || server.oauth.metadataDiscovery !== true)) {
+  if (
+    server.oauth?.tokenUrl?.trim() &&
+    (server.oauth.authorizationUrl?.trim() || server.oauth.metadataDiscovery !== true)
+  ) {
     return { ...server.oauth, tokenUrl: server.oauth.tokenUrl };
   }
   const discovered = server.oauth?.metadataDiscovery === true ? stateRecord?.authorizationServer : undefined;
@@ -398,7 +417,9 @@ export function isMcpOAuthTokenRefForServer(
   return (
     ref === base ||
     (ref.startsWith(`${base}:`) &&
-      /^(?:receipt-v1:)?[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(ref.slice(base.length + 1)))
+      /^(?:receipt-v1:)?[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(
+        ref.slice(base.length + 1),
+      ))
   );
 }
 

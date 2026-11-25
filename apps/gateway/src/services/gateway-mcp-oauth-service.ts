@@ -33,10 +33,23 @@ export class GatewayMcpOAuthService {
     stateRecord: McpAuthStateRecord,
     review?: McpOAuthExchangeReview,
   ): Promise<McpAuthStateRecord> {
-    const captured = review ? { fence: Object.freeze({ ...review.fence }), onCommitted: review.onCommitted } : undefined;
-    return this.runTokenRequest(server, stateRecord, "authorization_code", (configuration, expected, beforeRequest) =>
-      this.options.tokenService.exchangeAuthorizationCode(configuration, code, expected, beforeRequest, captured?.fence),
-    captured);
+    const captured = review
+      ? { fence: Object.freeze({ ...review.fence }), onCommitted: review.onCommitted }
+      : undefined;
+    return this.runTokenRequest(
+      server,
+      stateRecord,
+      "authorization_code",
+      (configuration, expected, beforeRequest) =>
+        this.options.tokenService.exchangeAuthorizationCode(
+          configuration,
+          code,
+          expected,
+          beforeRequest,
+          captured?.fence,
+        ),
+      captured,
+    );
   }
 
   public async resolveAccessToken(server: McpServerRecord): Promise<string | undefined> {
@@ -46,7 +59,7 @@ export class GatewayMcpOAuthService {
     const configuration = structuredClone(server);
     const expected = structuredClone((await this.options.registry.readAuthState())[server.serverId]);
     if (!expected?.tokenRequest) {
-      const current = this.options.tokenService.readCurrentAccessToken(configuration, expected);
+      const current = await this.options.tokenService.readCurrentAccessToken(configuration, expected);
       if (current) {
         // Fence even a read against configuration/auth changes before returning the credential.
         await this.options.registry.writeAuthState({ server: configuration, expected, next: current.state });
@@ -77,8 +90,13 @@ export class GatewayMcpOAuthService {
     const fence = review ? Object.freeze({ ...review.fence }) : undefined;
     const reservation = await registry.reserveAuthRequest(server, expected, kind, fence);
     // The exact auth attempt is now durably reserved. Even later pre-network failure needs inspection.
-    try { await review?.onCommitted?.(); }
-    catch (cause) { const error = cause instanceof Error ? cause : new Error("OAuth admission requires inspection."); Object.assign(error, { mutationCommitted: true }); throw error; }
+    try {
+      await review?.onCommitted?.();
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error("OAuth admission requires inspection.");
+      Object.assign(error, { mutationCommitted: true });
+      throw error;
+    }
     const request = reservation.auth.tokenRequest;
     let published: McpAuthStateRecord | undefined;
     const run = await runIdempotentExternalSideEffect({
@@ -120,7 +138,12 @@ export class GatewayMcpOAuthService {
       commitCompleted: async (claim, state) => {
         const next = { ...state, tokenRequest: undefined };
         await storage.runImmediateTransaction(async () => {
-          await registry.writeAuthState({ server: reservation.server, expected: reservation.auth, next, ...(fence ? { fence } : {}) });
+          await registry.writeAuthState({
+            server: reservation.server,
+            expected: reservation.auth,
+            next,
+            ...(fence ? { fence } : {}),
+          });
           await markIdempotentExternalSideEffectCompleted(storage.mutationIdempotency, claim, new Date().toISOString());
           if (!claim.sideEffectRunId) throw new Error("MCP OAuth completion requires its durable request ledger.");
           await storage.externalSideEffectRuns.markCompleted(claim.sideEffectRunId, {
@@ -132,7 +155,8 @@ export class GatewayMcpOAuthService {
     }).catch((cause: unknown) => {
       if (!review) throw cause;
       const error = cause instanceof Error ? cause : new Error("Reviewed OAuth token request requires inspection.");
-      Object.assign(error, { mutationCommitted: true }); throw error;
+      Object.assign(error, { mutationCommitted: true });
+      throw error;
     });
     if (run.status !== "executed" || !published) {
       // Keep the reservation. The shared ledger alone decides whether a retry is safe.

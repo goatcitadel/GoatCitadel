@@ -342,15 +342,6 @@ export function LibraryKnowledgeSection(props: NativeRoutePagesProps) {
                     meta: `${data?.qmd?.recent.length ?? 0} context packs`,
                     tone: citationCount > 0 ? "success" : "warning",
                   },
-                  {
-                    id: "attach-project",
-                    label: "Attach to project",
-                    value: "Manual today",
-                    description:
-                      "Project attachment for knowledge sources is not wired in this route yet; keep provenance visible when using it.",
-                    actionLabel: "Project flow pending",
-                    tone: "neutral",
-                  },
                 ]}
               />
             ) : null}
