@@ -72,7 +72,7 @@ export const REVIEW_HELP =
 export const COUNCIL_HELP =
   "Ask a council of other configured models for advice on the next message. Council members cannot use tools; adds cost.";
 export const SNAPSHOT_HELP =
-  "Include a point-in-time summary of the project with the next message: revision, branch and file counts, no file contents.";
+  "Include a point-in-time summary of the project with the next message: latest commit, branch and file counts, no file contents.";
 export const WEB_HELP =
   "Auto searches when the message needs current information; Off removes web tools; Deep searches on every message with a larger budget. GoatCitadel policy and available tools still apply.";
 

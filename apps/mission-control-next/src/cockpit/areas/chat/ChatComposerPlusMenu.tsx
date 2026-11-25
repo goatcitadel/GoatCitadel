@@ -149,8 +149,8 @@ export function ChatComposerModePills({ props, sources }: { props: ComposerProps
       ) : null}
       {props.workspaceSnapshotRequest ? (
         <ModePill
-          label="Workspace snapshot"
-          removeLabel="Remove the workspace snapshot"
+          label="Project summary"
+          removeLabel="Remove the project summary"
           disabled={disabled}
           onRemove={props.onToggleWorkspaceSnapshot}
         />

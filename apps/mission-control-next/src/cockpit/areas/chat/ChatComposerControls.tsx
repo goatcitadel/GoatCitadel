@@ -116,7 +116,7 @@ export function ChatComposerModeOptions({ props, disabled }: { props: Controls; 
       >
         Review answer
       </button>
-      {/* Shown only while the Gateway reports each available, or while a stale arming still needs turning off. */}
+      {/* Shown only while GoatCitadel reports each available, or while a stale arming still needs turning off. */}
       {props.modelCouncilAvailable || props.modelCouncilEnabled ? (
         <button
           type="button"
@@ -135,12 +135,12 @@ export function ChatComposerModeOptions({ props, disabled }: { props: Controls; 
           type="button"
           title={SNAPSHOT_HELP}
           aria-pressed={Boolean(props.workspaceSnapshotRequest)}
-          aria-describedby={`${modeHelpId}-snapshot`}
+          aria-describedby={`${modeHelpId}-summary`}
           disabled={disabled}
           onClick={props.onToggleWorkspaceSnapshot}
           className="inline-flex min-h-8 items-center rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
         >
-          Workspace snapshot
+          Project summary
         </button>
       ) : null}
       {/* Hover keeps the tooltip, the options popover shows the same help as text, and screen readers get it here. */}
@@ -153,7 +153,7 @@ export function ChatComposerModeOptions({ props, disabled }: { props: Controls; 
       <span id={`${modeHelpId}-council`} className="sr-only">
         {COUNCIL_HELP}
       </span>
-      <span id={`${modeHelpId}-snapshot`} className="sr-only">
+      <span id={`${modeHelpId}-summary`} className="sr-only">
         {SNAPSHOT_HELP}
       </span>
     </>

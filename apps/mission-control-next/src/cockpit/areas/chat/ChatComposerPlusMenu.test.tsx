@@ -206,14 +206,14 @@ it("keeps the composer usable without mutations when optional code rejects", asy
   expect(props.onAttachFiles).not.toHaveBeenCalled();
   expect(props.onTogglePlanningMode).not.toHaveBeenCalled();
 });
-it("offers Model council and Workspace snapshot only when the Gateway reports them available", async () => {
+it("offers Model council and Project summary only when GoatCitadel reports them available", async () => {
   const onToggleModelCouncil = vi.fn(),
     onToggleWorkspaceSnapshot = vi.fn();
   await render(composerProps({ onToggleModelCouncil, onToggleWorkspaceSnapshot }));
   await open();
   const modes = () => [...document.querySelectorAll('[aria-label="Modes"] button')].map((n) => n.textContent?.trim());
   expect(modes()).not.toContain("Model council");
-  expect(modes()).not.toContain("Workspace snapshot");
+  expect(modes()).not.toContain("Project summary");
   await render(
     composerProps({
       modelCouncilAvailable: true,
@@ -222,10 +222,10 @@ it("offers Model council and Workspace snapshot only when the Gateway reports th
       onToggleWorkspaceSnapshot,
     }),
   );
-  await vi.waitFor(() => expect(modes()).toEqual(expect.arrayContaining(["Model council", "Workspace snapshot"])));
+  await vi.waitFor(() => expect(modes()).toEqual(expect.arrayContaining(["Model council", "Project summary"])));
   expect(button("Model council").getAttribute("aria-pressed")).toBe("false");
   await act(async () => button("Model council").click());
-  await act(async () => button("Workspace snapshot").click());
+  await act(async () => button("Project summary").click());
   expect(onToggleModelCouncil).toHaveBeenCalledOnce();
   expect(onToggleWorkspaceSnapshot).toHaveBeenCalledOnce();
 });
