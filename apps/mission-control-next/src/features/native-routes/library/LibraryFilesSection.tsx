@@ -46,13 +46,26 @@ export function LibraryFilesSection({
   const [selectedFilePath, setSelectedFilePath] = useState("");
   const [view, setView] = useState<"preview" | "upload" | "template" | null>(null);
   const leave = useDraftLeave();
-  const uploadDraft = useSessionDraft("file-upload:" + activeCitadelId + ":" + activeWorkspaceId, { path: "", content: "" }, undefined, { label: "Text file", active: view === "upload", onSave: () => handleUpload() });
-  const templateDraft = useSessionDraft("file-template:" + activeCitadelId + ":" + activeWorkspaceId, { templateId: "", path: "" }, undefined, { label: "File from template", active: view === "template", onSave: () => handleCreateFromTemplate() });
-  const uploadPath = uploadDraft.value.path, uploadContent = uploadDraft.value.content, targetPath = templateDraft.value.path;
+  const uploadDraft = useSessionDraft(
+    "file-upload:" + activeCitadelId + ":" + activeWorkspaceId,
+    { path: "", content: "" },
+    undefined,
+    { label: "Text file", active: view === "upload", onSave: () => handleUpload() },
+  );
+  const templateDraft = useSessionDraft(
+    "file-template:" + activeCitadelId + ":" + activeWorkspaceId,
+    { templateId: "", path: "" },
+    undefined,
+    { label: "File from template", active: view === "template", onSave: () => handleCreateFromTemplate() },
+  );
+  const uploadPath = uploadDraft.value.path,
+    uploadContent = uploadDraft.value.content,
+    targetPath = templateDraft.value.path;
   const setUploadPath = (path: string) => uploadDraft.setValue((current) => ({ ...current, path }));
   const setUploadContent = (content: string) => uploadDraft.setValue((current) => ({ ...current, content }));
   const setTargetPath = (path: string) => templateDraft.setValue((current) => ({ ...current, path }));
-  const setSelectedTemplateId = (templateId: string) => templateDraft.setValue((current) => ({ ...current, templateId }));
+  const setSelectedTemplateId = (templateId: string) =>
+    templateDraft.setValue((current) => ({ ...current, templateId }));
   const [uploading, setUploading] = useState(false);
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -138,7 +151,10 @@ export function LibraryFilesSection({
       setNotice({ tone: "success", message: `${created.relativePath} created from template.` });
       const clean = templateDraft.acceptSaved({ templateId: "", path: "" }, undefined, submitted);
       await reload();
-      if (clean) { setSelectedFilePath(created.relativePath); setView("preview"); }
+      if (clean) {
+        setSelectedFilePath(created.relativePath);
+        setView("preview");
+      }
       return clean;
     } catch (createError) {
       setNotice({ tone: "error", message: getErrorMessage(createError) });
@@ -158,7 +174,10 @@ export function LibraryFilesSection({
       setNotice({ tone: "success", message: `${uploaded.relativePath} uploaded.` });
       const clean = uploadDraft.acceptSaved({ path: "", content: "" }, undefined, submitted);
       await reload();
-      if (clean) { setSelectedFilePath(uploaded.relativePath); setView("preview"); }
+      if (clean) {
+        setSelectedFilePath(uploaded.relativePath);
+        setView("preview");
+      }
       return clean;
     } catch (uploadError) {
       setNotice({ tone: "error", message: getErrorMessage(uploadError) });
@@ -179,183 +198,219 @@ export function LibraryFilesSection({
       {notice ? <LibraryNotice notice={notice} /> : null}
       <LibraryLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
       <div className="mc-next-calm-directory">
-        {!view ? <NativeCard actions={<details className="mc-next-inline-details"><summary>Add file{uploadDraft.isDirty || templateDraft.isDirty ? " · Unsaved" : ""}</summary><NativeButton variant="ghost" onClick={() => setView("upload")}>{uploadDraft.isDirty ? "Resume text file" : "Upload text file"}</NativeButton><NativeButton variant="ghost" onClick={() => setView("template")}>{templateDraft.isDirty ? "Resume template" : "Create from template"}</NativeButton></details>}
-          title="Workspace files"
-          subtitle="Browsable shared files outside the active Code surface."
-          stats={[
-            { label: "Visible", value: String(data?.files.length ?? 0) },
-            { label: "Templates", value: String(data?.templates.length ?? 0) },
-            { label: "Citadel", value: activeCitadelName ?? activeCitadelId ?? "legacy" },
-          ]}
-        >
-          <div className="mc-next-settings-field-grid">
-            <label className="mc-next-settings-field span-2">
-              <span>Filter files</span>
-              <input
-                className="mc-next-settings-input"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search relative path"
-              />
-            </label>
-          </div>
-          <LibrarySelectableList
-            items={visibleFiles.map((item) => ({
-              id: item.relativePath,
-              title: item.relativePath,
-              meta: formatBytes(item.size),
-              body: `${formatDateTime(item.modifiedAt)} · ${activeWorkspaceName}`,
-            }))}
-            selectedId={selectedFilePath}
-            onSelect={(id) => leave.request(() => { setSelectedFilePath(id); setView("preview"); })}
-            emptyLabel="No files returned from the workspace."
-          />
-        </NativeCard> : null}
-        <div className="mc-next-settings-stack">
-          {view === "preview" ? <FocusedDetail title={selectedFilePath || "File unavailable"} onClose={() => leave.request(() => setView(null))}><NativeCard
-            title={selectedFilePath || "File preview"}
-            subtitle={preview.data?.contentType ?? "Select a file to preview it."}
+        {!view ? (
+          <NativeCard
+            actions={
+              <details className="mc-next-inline-details">
+                <summary>Add file{uploadDraft.isDirty || templateDraft.isDirty ? " · Unsaved" : ""}</summary>
+                <NativeButton variant="ghost" onClick={() => setView("upload")}>
+                  {uploadDraft.isDirty ? "Resume text file" : "Upload text file"}
+                </NativeButton>
+                <NativeButton variant="ghost" onClick={() => setView("template")}>
+                  {templateDraft.isDirty ? "Resume template" : "Create from template"}
+                </NativeButton>
+              </details>
+            }
+            title="Workspace files"
+            subtitle="Browsable shared files outside the active Code surface."
+            stats={[
+              { label: "Visible", value: String(data?.files.length ?? 0) },
+              { label: "Templates", value: String(data?.templates.length ?? 0) },
+              { label: "Citadel", value: activeCitadelName ?? activeCitadelId ?? "legacy" },
+            ]}
           >
-            {preview.loading ? <LibraryEmptyState label="Loading file preview…" /> : null}
-            {preview.error ? <LibraryEmptyState label={preview.error} /> : null}
-            {selectedFilePath ? (
-              <LibraryActionCardGrid
-                items={[
-                  {
-                    id: "file-preview",
-                    label: "Preview health",
-                    value: preview.loading ? "Loading" : preview.error ? "Failed" : preview.data ? "Loaded" : "Queued",
-                    description: preview.error ?? "The selected file is read through the gateway file API.",
-                    meta: preview.data?.contentType ?? selectedFilePath,
-                    tone: preview.error ? "warning" : preview.data ? "success" : "info",
-                  },
-                  {
-                    id: "workspace-bind",
-                    label: "Workspace binding",
-                    value: activeWorkspaceName,
-                    description: selectedFile
-                      ? `${formatBytes(selectedFile.size)} · ${formatDateTime(selectedFile.modifiedAt)}`
-                      : "Selected file metadata is not visible in the current filter.",
-                    meta: selectedFilePath,
-                    tone: selectedFile ? "info" : "warning",
-                  },
-                  {
-                    id: "import-upload",
-                    label: "Import / upload",
-                    value: "Available",
-                    description: "Upload a path-jailed UTF-8 text fixture or create a file from a governed template.",
-                    actionLabel: "Use upload form",
-                    tone: "success",
-                  },
-                  {
-                    id: "project-link",
-                    label: "Link to project",
-                    value: "Manual today",
-                    description:
-                      "Project/file linking still needs an operator action surface before Library can attach this file directly.",
-                    actionLabel: "Project flow pending",
-                    tone: "neutral",
-                  },
-                ]}
-              />
-            ) : null}
-            {!preview.loading && !preview.error && preview.data ? (
-              <>
+            <div className="mc-next-settings-field-grid">
+              <label className="mc-next-settings-field span-2">
+                <span>Filter files</span>
+                <input
+                  className="mc-next-settings-input"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search relative path"
+                />
+              </label>
+            </div>
+            <LibrarySelectableList
+              items={visibleFiles.map((item) => ({
+                id: item.relativePath,
+                title: item.relativePath,
+                meta: formatBytes(item.size),
+                body: `${formatDateTime(item.modifiedAt)} · ${activeWorkspaceName}`,
+              }))}
+              selectedId={selectedFilePath}
+              onSelect={(id) =>
+                leave.request(() => {
+                  setSelectedFilePath(id);
+                  setView("preview");
+                })
+              }
+              emptyLabel="No files returned from the workspace."
+            />
+          </NativeCard>
+        ) : null}
+        <div className="mc-next-settings-stack">
+          {view === "preview" ? (
+            <FocusedDetail
+              title={selectedFilePath || "File unavailable"}
+              onClose={() => leave.request(() => setView(null))}
+            >
+              <NativeCard
+                title={selectedFilePath || "File preview"}
+                subtitle={preview.data?.contentType ?? "Select a file to preview it."}
+              >
+                {preview.loading ? <LibraryEmptyState label="Loading file preview…" /> : null}
+                {preview.error ? <LibraryEmptyState label={preview.error} /> : null}
+                {selectedFilePath ? (
+                  <LibraryActionCardGrid
+                    items={[
+                      {
+                        id: "file-preview",
+                        label: "Preview health",
+                        value: preview.loading
+                          ? "Loading"
+                          : preview.error
+                            ? "Failed"
+                            : preview.data
+                              ? "Loaded"
+                              : "Queued",
+                        description: preview.error ?? "The selected file is read through the gateway file API.",
+                        meta: preview.data?.contentType ?? selectedFilePath,
+                        tone: preview.error ? "warning" : preview.data ? "success" : "info",
+                      },
+                      {
+                        id: "workspace-bind",
+                        label: "Workspace binding",
+                        value: activeWorkspaceName,
+                        description: selectedFile
+                          ? `${formatBytes(selectedFile.size)} · ${formatDateTime(selectedFile.modifiedAt)}`
+                          : "Selected file metadata is not visible in the current filter.",
+                        meta: selectedFilePath,
+                        tone: selectedFile ? "info" : "warning",
+                      },
+                      {
+                        id: "import-upload",
+                        label: "Import / upload",
+                        value: "Available",
+                        description:
+                          "Upload a path-jailed UTF-8 text fixture or create a file from a governed template.",
+                        actionLabel: "Use upload form",
+                        tone: "success",
+                      },
+                    ]}
+                  />
+                ) : null}
+                {!preview.loading && !preview.error && preview.data ? (
+                  <>
+                    <LibraryButtonRow>
+                      <button type="button" className="mc-next-settings-filter" onClick={handleDownload}>
+                        <Download size={16} />
+                        Download file
+                      </button>
+                    </LibraryButtonRow>
+                    <LibraryCodeBlock label="Preview">{preview.data.content}</LibraryCodeBlock>
+                  </>
+                ) : null}
+                {!preview.loading && !preview.error && !preview.data ? (
+                  <LibraryEmptyState label="Select a file to preview it." />
+                ) : null}
+              </NativeCard>
+            </FocusedDetail>
+          ) : null}
+          {view === "upload" ? (
+            <FocusedDetail title={"Upload text file"} onClose={() => leave.request(() => setView(null))}>
+              <NativeCard
+                title="Upload text file"
+                subtitle="Writes through the Gateway path jail into the isolated workspace."
+              >
+                <LibraryFieldGrid>
+                  <LibraryField label="Upload path">
+                    <input
+                      className="mc-next-settings-input"
+                      value={uploadPath}
+                      onChange={(event) => setUploadPath(event.target.value)}
+                      placeholder="notes/usability-fixture.txt"
+                    />
+                  </LibraryField>
+                  <LibraryField label="Upload content" span={2}>
+                    <textarea
+                      className="mc-next-settings-input"
+                      value={uploadContent}
+                      onChange={(event) => setUploadContent(event.target.value)}
+                      placeholder="Deterministic fixture content"
+                      rows={5}
+                    />
+                  </LibraryField>
+                </LibraryFieldGrid>
                 <LibraryButtonRow>
-                  <button type="button" className="mc-next-settings-filter" onClick={handleDownload}>
-                    <Download size={16} />
-                    Download file
+                  <button
+                    type="button"
+                    className="mc-next-settings-filter"
+                    onClick={() => void handleUpload()}
+                    disabled={uploading || !uploadPath.trim() || !uploadContent}
+                  >
+                    <Upload size={16} />
+                    {uploading ? "Uploading..." : "Upload file"}
                   </button>
                 </LibraryButtonRow>
-                <LibraryCodeBlock label="Preview">{preview.data.content}</LibraryCodeBlock>
-              </>
-            ) : null}
-            {!preview.loading && !preview.error && !preview.data ? (
-              <LibraryEmptyState label="Select a file to preview it." />
-            ) : null}
-          </NativeCard></FocusedDetail> : null}
-          {view === "upload" ? <FocusedDetail title={"Upload text file"} onClose={() => leave.request(() => setView(null))}><NativeCard
-            title="Upload text file"
-            subtitle="Writes through the Gateway path jail into the isolated workspace."
-          >
-            <LibraryFieldGrid>
-              <LibraryField label="Upload path">
-                <input
-                  className="mc-next-settings-input"
-                  value={uploadPath}
-                  onChange={(event) => setUploadPath(event.target.value)}
-                  placeholder="notes/usability-fixture.txt"
-                />
-              </LibraryField>
-              <LibraryField label="Upload content" span={2}>
-                <textarea
-                  className="mc-next-settings-input"
-                  value={uploadContent}
-                  onChange={(event) => setUploadContent(event.target.value)}
-                  placeholder="Deterministic fixture content"
-                  rows={5}
-                />
-              </LibraryField>
-            </LibraryFieldGrid>
-            <LibraryButtonRow>
-              <button
-                type="button"
-                className="mc-next-settings-filter"
-                onClick={() => void handleUpload()}
-                disabled={uploading || !uploadPath.trim() || !uploadContent}
+              </NativeCard>
+            </FocusedDetail>
+          ) : null}
+          {view === "template" ? (
+            <FocusedDetail title={"Create from template"} onClose={() => leave.request(() => setView(null))}>
+              <NativeCard
+                title="Create from template"
+                subtitle="File creation stays accessible here instead of forcing you into Code first."
               >
-                <Upload size={16} />
-                {uploading ? "Uploading..." : "Upload file"}
-              </button>
-            </LibraryButtonRow>
-          </NativeCard></FocusedDetail> : null}
-          {view === "template" ? <FocusedDetail title={"Create from template"} onClose={() => leave.request(() => setView(null))}><NativeCard
-            title="Create from template"
-            subtitle="File creation stays accessible here instead of forcing you into Code first."
-          >
-            <LibraryFieldGrid>
-              <LibraryField label="Template">
-                <select
-                  className="mc-next-settings-input"
-                  value={selectedTemplateId}
-                  onChange={(event) => setSelectedTemplateId(event.target.value)}
-                >
-                  {(data?.templates ?? []).map((item) => (
-                    <option key={item.templateId} value={item.templateId}>
-                      {item.title}
-                    </option>
-                  ))}
-                </select>
-              </LibraryField>
-              <LibraryField label="Target path">
-                <input
-                  className="mc-next-settings-input"
-                  value={targetPath}
-                  onChange={(event) => setTargetPath(event.target.value)}
-                  placeholder="Optional target path override"
+                <LibraryFieldGrid>
+                  <LibraryField label="Template">
+                    <select
+                      className="mc-next-settings-input"
+                      value={selectedTemplateId}
+                      onChange={(event) => setSelectedTemplateId(event.target.value)}
+                    >
+                      {(data?.templates ?? []).map((item) => (
+                        <option key={item.templateId} value={item.templateId}>
+                          {item.title}
+                        </option>
+                      ))}
+                    </select>
+                  </LibraryField>
+                  <LibraryField label="Target path">
+                    <input
+                      className="mc-next-settings-input"
+                      value={targetPath}
+                      onChange={(event) => setTargetPath(event.target.value)}
+                      placeholder="Optional target path override"
+                    />
+                  </LibraryField>
+                </LibraryFieldGrid>
+                <LibraryActionList
+                  ariaLabel="File templates"
+                  items={(data?.templates ?? []).map((item) => ({
+                    id: item.templateId,
+                    label: item.title,
+                    description: item.description,
+                    meta: item.defaultPath,
+                  }))}
+                  emptyLabel="No file templates are available."
                 />
-              </LibraryField>
-            </LibraryFieldGrid>
-            <LibraryActionList
-              ariaLabel="File templates"
-              items={(data?.templates ?? []).map((item) => ({
-                id: item.templateId,
-                label: item.title,
-                description: item.description,
-                meta: item.defaultPath,
-              }))}
-              emptyLabel="No file templates are available."
-            />
-            <LibraryButtonRow>
-              <button type="button" className="mc-next-settings-filter" onClick={() => void handleCreateFromTemplate()}>
-                <FileText size={16} />
-                Create file
-              </button>
-            </LibraryButtonRow>
-          </NativeCard></FocusedDetail> : null}
+                <LibraryButtonRow>
+                  <button
+                    type="button"
+                    className="mc-next-settings-filter"
+                    onClick={() => void handleCreateFromTemplate()}
+                  >
+                    <FileText size={16} />
+                    Create file
+                  </button>
+                </LibraryButtonRow>
+              </NativeCard>
+            </FocusedDetail>
+          ) : null}
         </div>
       </div>
-    {leave.dialog}</LibrarySectionShell>
+      {leave.dialog}
+    </LibrarySectionShell>
   );
 }
 

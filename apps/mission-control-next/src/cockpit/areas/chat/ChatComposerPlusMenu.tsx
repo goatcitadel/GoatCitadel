@@ -139,6 +139,22 @@ export function ChatComposerModePills({ props, sources }: { props: ComposerProps
           onRemove={props.onToggleReviewMode}
         />
       ) : null}
+      {props.modelCouncilEnabled && props.onToggleModelCouncil ? (
+        <ModePill
+          label="Model council"
+          removeLabel="Turn off Model council"
+          disabled={disabled}
+          onRemove={props.onToggleModelCouncil}
+        />
+      ) : null}
+      {props.workspaceSnapshotRequest ? (
+        <ModePill
+          label="Workspace snapshot"
+          removeLabel="Remove the workspace snapshot"
+          disabled={disabled}
+          onRemove={props.onToggleWorkspaceSnapshot}
+        />
+      ) : null}
       {sourceControls && sourceControls.attachments.length > 0 ? (
         <ChatSourcesChip
           controls={sourceControls}

@@ -578,7 +578,21 @@ export class InboxProjectionService {
       const records = await this.deps.durable.listDeadLetters(SOURCE_LIMIT);
       const unresolved = records.filter((letter) => !letter.resolvedAt);
       const runIds = [...new Set(unresolved.map((letter) => letter.runId))];
-      const runs = runIds.length > 0 ? await this.deps.durable.getRunsByIds(runIds) : undefined;
+      // One unreadable lookup (the durable kernel switched off, a damaged run row) must not hide every stopped run.
+      let runs: Awaited<ReturnType<InboxProjectionDependencies["durable"]["getRunsByIds"]>> | undefined;
+      let lookupFailed = false;
+      try {
+        runs = runIds.length > 0 ? await this.deps.durable.getRunsByIds(runIds) : undefined;
+      } catch {
+        lookupFailed = true;
+      }
+      if (lookupFailed) {
+        return {
+          items: [],
+          partial: true,
+          detail: "Stopped runs could not be matched to a workspace right now. Their records are kept.",
+        };
+      }
       let unscoped = false;
       const visible: OperatorInboxItem[] = [];
       for (const letter of unresolved) {
