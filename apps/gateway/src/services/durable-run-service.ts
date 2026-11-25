@@ -4453,13 +4453,14 @@ export class DurableRunService {
     await this.reconcileDurableChildWatchers();
     const recoveryObservedAt = new Date().toISOString();
     let reclaimedCount = await this.reconcileExitedLocalProcessRuns(recoveryObservedAt);
-    const runningRunIds = await this.ctx.storage.durableRuns.listExpiredRunningRunIds(recoveryObservedAt);
+    const storage = this.ctx.storage;
+    const runningRunIds = await storage.durableRuns.listExpiredRunningRunIds(recoveryObservedAt);
     for (const runId of runningRunIds) {
       if (this.isRecoveryBackedOff(runId)) {
         continue;
       }
       try {
-        const run = await this.ctx.storage.durableRuns.getRun(runId);
+        const run = await storage.durableRuns.getRun(runId);
         if (run.status !== "running" || !run.leaseExpiresAt) {
           continue;
         }
@@ -4472,7 +4473,7 @@ export class DurableRunService {
         }
         let reclaimedByThisPass = false;
         let reclaimed!: DurableRunRecord;
-        await this.ctx.storage.runImmediateTransaction(async () => {
+        await storage.runImmediateTransaction(async () => {
           const current = await this.lockExpiredExecutionLeaseForRecovery(run);
           if (!current) {
             return;
@@ -4481,7 +4482,7 @@ export class DurableRunService {
             leaseOwnerId: current.leaseOwnerId,
             leaseExpiresAt: current.leaseExpiresAt,
           });
-          reclaimed = await this.ctx.storage.durableRuns.updateRun({
+          reclaimed = await storage.durableRuns.updateRun({
             runId: current.runId,
             status: "queued",
             clearFinishedAt: true,
