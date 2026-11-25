@@ -204,7 +204,7 @@ export async function reconcileDelegatedChildProcessCleanup(
     }
   } else {
     const page = await storage.chatDelegationSteps.listResourceCleanupPage(cursor.afterStepId, 32);
-    step = page.find(
+    step = page.items.find(
       (candidate) =>
         ["completed", "failed", "cancelled"].includes(candidate.status) &&
         candidate.childSessionId &&
@@ -213,7 +213,7 @@ export async function reconcileDelegatedChildProcessCleanup(
     if (!step) {
       await storage.systemSettings.compareAndSet(CLEANUP_SCAN_CURSOR, previous, {
         version: 1,
-        afterStepId: page.at(-1)?.stepId ?? "",
+        afterStepId: page.nextAfterStepId ?? "",
       });
       return { attempted: 0, failed: 0 };
     }

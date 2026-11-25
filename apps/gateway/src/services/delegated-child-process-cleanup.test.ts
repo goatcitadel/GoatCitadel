@@ -265,6 +265,12 @@ it("persists sub-page progress, skips ineligible steps, retries failed cleanup a
         });
       }
     }
+    const markMalformed = raw.db.prepare("UPDATE chat_delegation_steps SET started_at = ? WHERE step_id = ?");
+    for (let index = 0; index < 32; index += 1) {
+      const stepId = `00-malformed-${String(index).padStart(2, "0")}`;
+      raw.chatDelegationSteps.create({ stepId, runId: "malformed-run", role: "Coder", index });
+      markMalformed.run(new Uint8Array([1]), stepId);
+    }
     const steps = vi.spyOn(raw.chatDelegationSteps, "listResourceCleanupPage");
     const tools = vi.spyOn(raw.chatToolRuns, "listByTurnPage");
     let refusedOnce = false;
@@ -276,7 +282,7 @@ it("persists sub-page progress, skips ineligible steps, retries failed cleanup a
       return "terminated" as const;
     });
     let attempted = 0;
-    for (let tick = 0; tick < 28; tick += 1) {
+    for (let tick = 0; tick < 34; tick += 1) {
       const previousCalls = cleanup.mock.calls.length;
       const result = await reconcileDelegatedChildProcessCleanup(storage, cleanup);
       expect(cleanup.mock.calls.length - previousCalls).toBeLessThanOrEqual(1);
@@ -285,6 +291,7 @@ it("persists sub-page progress, skips ineligible steps, retries failed cleanup a
     }
     expect(attempted).toBe(11); // Ten distinct receipts, one retried after cursor wrap.
     expect(cleanup).toHaveBeenCalledTimes(11);
+    expect(steps).toHaveBeenCalledWith("00-malformed-31", 32);
     for (const call of steps.mock.calls) expect(call[1]).toBe(32);
     for (const call of tools.mock.calls) expect(call[2]).toBe(32);
     expect((await storage.chatToolRuns.get("10-many-031")).result?.backgroundProcessCleanup).toMatchObject({

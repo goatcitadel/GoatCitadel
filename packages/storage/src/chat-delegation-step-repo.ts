@@ -922,17 +922,26 @@ export class ChatDelegationStepRepository {
   }
 
   /** Bounded primary-key traversal for existing-owner resource reconciliation. */
-  public listResourceCleanupPage(afterStepId = "", limit = 32): ChatDelegationStepRecord[] {
+  public listResourceCleanupPage(
+    afterStepId = "",
+    limit = 32,
+  ): { items: ChatDelegationStepRecord[]; nextAfterStepId?: string } {
     const bounded = Number.isSafeInteger(limit) ? Math.max(1, Math.min(32, limit)) : 32;
-    return toChatDelegationStepRows(
-      this.db
-        .prepare(
-          `
-      SELECT * FROM chat_delegation_steps WHERE step_id > ? ORDER BY step_id ASC LIMIT ?
+    const rows = this.db
+      .prepare(
+        `
+      SELECT * FROM chat_delegation_steps
+      WHERE step_id > ?
+        ${this.db.dialect === "sqlite" ? "AND typeof(step_id) = 'text'" : ""}
+      ORDER BY step_id ASC LIMIT ?
     `,
-        )
-        .all(afterStepId, bounded),
-    ).map(mapRow);
+      )
+      .all(afterStepId, bounded);
+    const last = rows.at(-1);
+    return {
+      items: toChatDelegationStepRows(rows).map(mapRow),
+      nextAfterStepId: isRecord(last) && typeof last.step_id === "string" ? last.step_id : undefined,
+    };
   }
 
   /** Locks all steps for an aggregate transition. Call inside a storage transaction. */
