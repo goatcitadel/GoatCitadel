@@ -50,6 +50,36 @@ test("bundle ownership cleanup removes unmanifested empty directories", (context
   assert.equal(removeEmptyDirectories(payloadRoot), 0);
 });
 
+test("bundle cleanup removes package manager command shims and retains the SDK command", (context) => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-payload-shims-"));
+  const cleanup = (target) => removeDirectorySafely(target, { repoRoot: process.cwd(), allowedRoot: tempRoot });
+  context.after(() => cleanup(tempRoot));
+  const payload = path.join(tempRoot, "gateway");
+  const modules = path.join(payload, "node_modules");
+  const shims = path.join(modules, ".bin");
+  const nestedShims = path.join(modules, "dependency", "node_modules", ".bin");
+  const sdkCommand = path.join(modules, "@goatcitadel", "extensions-sdk", "dist", "plugin-preflight-cli.js");
+  const unrelated = path.join(payload, "dist", ".bin", "runtime.txt");
+  for (const directory of [shims, nestedShims, path.dirname(sdkCommand), path.dirname(unrelated)]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  fs.writeFileSync(sdkCommand, "export {};\n");
+  fs.writeFileSync(unrelated, "runtime fixture\n");
+  if (process.platform === "win32") {
+    fs.writeFileSync(path.join(shims, "goatcitadel-plugin-preflight.cmd"), "@echo off\r\n");
+  } else {
+    fs.symlinkSync(path.relative(shims, sdkCommand), path.join(shims, "goatcitadel-plugin-preflight"));
+  }
+  fs.writeFileSync(path.join(nestedShims, "example"), "package manager shim\n");
+
+  pruneReleaseResidue(payload, cleanup);
+
+  assert.equal(fs.existsSync(shims), false);
+  assert.equal(fs.existsSync(nestedShims), false);
+  assert.equal(fs.readFileSync(sdkCommand, "utf8"), "export {};\n");
+  assert.equal(fs.readFileSync(unrelated, "utf8"), "runtime fixture\n");
+});
+
 test("bundles exclude nested shard coverage while preserving similarly named runtime files", (context) => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-payload-residue-"));
   const cleanup = (target) => removeDirectorySafely(target, { repoRoot: process.cwd(), allowedRoot: tempRoot });

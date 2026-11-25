@@ -54,7 +54,13 @@ function Assert-ExactStringArray {
 
 # UTF-8 byte order differs from UTF-16 ordinal order for supplementary characters.
 # Compile the hot byte loop without changing the manifest ordering contract.
-Add-Type -ReferencedAssemblies System.dll, System.Core.dll, System.IO.Compression.dll, System.IO.Compression.FileSystem.dll -TypeDefinition @"
+$validatorCompilerOptions = @{}
+if ($PSVersionTable.PSEdition -eq "Desktop") {
+  $validatorCompilerOptions.ReferencedAssemblies = @(
+    "System.dll", "System.Core.dll", "System.IO.Compression.dll", "System.IO.Compression.FileSystem.dll"
+  )
+}
+Add-Type @validatorCompilerOptions -TypeDefinition @"
 using System;
 using System.Text;
 using System.IO;

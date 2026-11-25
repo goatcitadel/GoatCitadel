@@ -2,6 +2,11 @@ name: Verification 1.0 Release Proof
 
 on:
   workflow_dispatch:
+    inputs:
+      review_candidate:
+        description: "Run the full proof on a codex/ review branch with no provider credentials"
+        type: boolean
+        default: false
   schedule:
     # Nightly release-proof run so the full matrix guards `main` even between
     # tagged releases (review Finding 5: the matrix went dark for 458 commits
@@ -20,7 +25,11 @@ permissions:
 
 jobs:
   required-lanes:
-    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      (inputs.review_candidate && startsWith(github.ref, 'refs/heads/codex/'))
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     strategy:
@@ -141,12 +150,12 @@ jobs:
       - name: Run release proof lane
         env:
           GOATCITADEL_UI_PACKAGE: "@goatcitadel/mission-control-next"
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
-          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
-          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          OPENAI_API_KEY: ${{ (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && secrets.OPENAI_API_KEY || '' }}
+          ANTHROPIC_API_KEY: ${{ (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && secrets.ANTHROPIC_API_KEY || '' }}
+          GOOGLE_API_KEY: ${{ (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && secrets.GOOGLE_API_KEY || '' }}
+          MOONSHOT_API_KEY: ${{ (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && secrets.MOONSHOT_API_KEY || '' }}
+          PERPLEXITY_API_KEY: ${{ (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && secrets.PERPLEXITY_API_KEY || '' }}
+          MINIMAX_API_KEY: ${{ (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && secrets.MINIMAX_API_KEY || '' }}
         run: pnpm "${{ matrix.laneScript }}"
 
       - name: Run review generation
@@ -192,3 +201,19 @@ jobs:
           timeout: 15m
           severity: HIGH,CRITICAL
           exit-code: "1"
+
+  release-proof-result:
+    if: ${{ always() }}
+    needs: [required-lanes, security]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require the matrix and security gate to pass
+        env:
+          MATRIX_RESULT: ${{ needs.required-lanes.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+        run: |
+          if [[ "$MATRIX_RESULT" != success || "$SECURITY_RESULT" != success ]]; then
+            printf 'Release proof is incomplete (matrix: %s, security: %s).\n' "$MATRIX_RESULT" "$SECURITY_RESULT"
+            exit 1
+          fi

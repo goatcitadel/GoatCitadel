@@ -106,7 +106,9 @@ export function pruneReleaseResidue(rootDir, removeDirectory) {
     for (const entry of fs.readdirSync(current)) {
       const absolutePath = path.join(current, entry);
       const stats = fs.lstatSync(absolutePath);
-      if (stats.isDirectory() && (prunedDirectories.has(entry) || /^coverage-shard-\d+$/u.test(entry))) {
+      // Packaged runtime commands use their package entrypoints. pnpm shims may be links on Unix.
+      const commandShims = entry === ".bin" && path.basename(current) === "node_modules";
+      if (stats.isDirectory() && (commandShims || prunedDirectories.has(entry) || /^coverage-shard-\d+$/u.test(entry))) {
         removeDirectory(absolutePath);
         continue;
       }

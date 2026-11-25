@@ -38,7 +38,7 @@ it("rechecks live receipt owners and never infers a completed effect from a tool
     chatTurnTraces: {
       getByTurnIds: vi.fn(async () => new Map([["t", { sessionId: "s", turnId: "t", durable: { runId: "run" } }]])),
     },
-    chatToolRuns: { listByTurnPage: vi.fn(async () => tools) },
+    chatToolRuns: { readCompleteByTurn: vi.fn(async () => tools) },
     chatGeneratedArtifacts: { listByTurn: vi.fn(async () => []) },
     externalSideEffectRuns: {
       get: vi.fn(async () => ({ status: completed ? "completed" : "unknown", workspaceId: "A" })),
@@ -47,6 +47,7 @@ it("rechecks live receipt owners and never infers a completed effect from a tool
   };
   const result = await collectChatContinuityLinks(storage as never, "s", ["t"]);
   expect(result.complete).toBe(true);
+  expect(storage.chatToolRuns.readCompleteByTurn).toHaveBeenCalledExactlyOnceWith("t", 32);
   expect(result.links).toContainEqual(
     expect.objectContaining({ canonicalRef: "external_side_effect:receipt-one", completed: true }),
   );
@@ -58,21 +59,15 @@ it("rechecks live receipt owners and never infers a completed effect from a tool
   );
 });
 
-it("fails closed for foreign turns and incomplete bounded receipt pages", async () => {
-  const page = Array.from({ length: 32 }, (_, i) => ({
-    toolRunId: `tool${i}`,
-    sessionId: "s",
-    turnId: "t",
-    startedAt: "now",
-  }));
+it("fails closed for foreign turns and incomplete tool history", async () => {
   const storage = {
     chatSessionMeta: { get: async () => ({ workspaceId: "A", lifecycleStatus: "active" }) },
     chatTurnTraces: { getByTurnIds: async () => new Map([["t", { sessionId: "foreign" }]]) },
-    chatToolRuns: { listByTurnPage: vi.fn(async () => page) },
+    chatToolRuns: { readCompleteByTurn: vi.fn(async () => undefined) },
     chatGeneratedArtifacts: { listByTurn: vi.fn(async () => []) },
   };
   expect((await collectChatContinuityLinks(storage as never, "s", ["t"])).complete).toBe(false);
-  expect(storage.chatToolRuns.listByTurnPage).not.toHaveBeenCalled();
+  expect(storage.chatToolRuns.readCompleteByTurn).not.toHaveBeenCalled();
   storage.chatTurnTraces.getByTurnIds = async () => new Map([["t", { sessionId: "s" }]]);
   expect((await collectChatContinuityLinks(storage as never, "s", ["t"])).complete).toBe(false);
 });

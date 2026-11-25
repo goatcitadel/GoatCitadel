@@ -5,10 +5,10 @@
   "goatcitadelOwner": "mission-control",
   "type": "module",
   "scripts": {
-    "build:deps": "pnpm --filter @goatcitadel/mission-control-shared build && pnpm --filter @goatcitadel/threaded-surface-core build",
+    "build:deps": "tsc -b ../../packages/mission-control-shared ../../packages/threaded-surface-core",
     "predev": "pnpm run build:deps",
     "dev": "vite",
-    "build": "pnpm run build:deps && tsc -b tsconfig.json tsconfig.node.json && vite build",
+    "build": "tsc -b tsconfig.json tsconfig.node.json && vite build",
     "legacy:check": "node ../../scripts/check-mission-control-next-legacy-usage.mjs",
     "tokens:check": "node ../../scripts/check-mission-control-next-token-drift.mjs",
     "typography:check": "node ../../scripts/check-mission-control-next-typography.mjs",
@@ -19,10 +19,10 @@
     "icons:check": "node ../../scripts/check-mission-control-next-icon-sizing.mjs",
     "perf:check": "node ../../scripts/check-mission-control-next-cockpit-classes.mjs && node ../../scripts/check-mission-control-next-cockpit-copy.mjs && node ../../scripts/check-mission-control-next-cockpit-refetch.mjs && node ../../scripts/check-mission-control-next-cockpit-semantics.mjs && node ../../scripts/check-mission-control-next-danger-actions.mjs && node ../../scripts/check-mission-control-next-raw-values.mjs && node ../../scripts/check-mission-control-next-page-anatomy.mjs && node ../../scripts/check-mission-control-next-legacy-usage.mjs && node ../../scripts/check-mission-control-next-token-drift.mjs && node ../../scripts/check-mission-control-next-typography.mjs && node ../../scripts/check-mission-control-next-breakpoints.mjs && node ../../scripts/check-mission-control-next-buttons.mjs && node ../../scripts/check-mission-control-next-scroll-contracts.mjs && node ../../scripts/check-mission-control-next-icon-sizing.mjs && node ../../scripts/check-mission-control-next-contrast.mjs && node ../../scripts/check-mission-control-next-budgets.mjs && node ../../scripts/check-cockpit-workflow-dependencies.mjs",
     "preview": "vite preview",
-    "typecheck": "pnpm run build:deps && tsc -b tsconfig.json tsconfig.node.json",
+    "typecheck": "tsc -b tsconfig.json tsconfig.node.json",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage.enabled --coverage.provider=v8 --coverage.reporter=json --coverage.reporter=text-summary --coverage.reportsDirectory=coverage --coverage.reportOnFailure",
-    "lint": "pnpm run build:deps && tsc -b tsconfig.json tsconfig.node.json"
+    "lint": "tsc -b tsconfig.json tsconfig.node.json"
   },
   "dependencies": {
     "@assistant-ui/react": "0.12.25",

@@ -195,6 +195,26 @@ it("source changes, foreign work and failed turns cannot seed a background draft
   await expect(f.service.proposeBackgroundSkillDraft(input)).rejects.toThrow();
   expect(f.storage.candidateSkillVersions.list()).toEqual([]);
 });
+it("refuses to draft when a source turn has an unreadable tool receipt", async () => {
+  const f = await fixture();
+  f.storage.chatToolRuns.create({
+    toolRunId: "source-tool",
+    turnId: f.source.sourceTurnId,
+    sessionId: "s",
+    toolName: "file.read",
+  });
+  f.storage.db.prepare("UPDATE chat_tool_runs SET status = ? WHERE tool_run_id = ?").run("unknown", "source-tool");
+  await expect(
+    f.service.proposeBackgroundSkillDraft({
+      jobId: f.job.jobId,
+      workspaceId: "default",
+      sessionId: "s",
+      sources: [f.source],
+      markdown,
+    }),
+  ).rejects.toThrow("Background skill requires settled tool evidence");
+  expect(f.storage.candidateSkillVersions.list()).toEqual([]);
+});
 it("requires evaluation of the exact draft, rechecks canonical source evidence and loads only reviewed instructions", async () => {
   const f = await fixture(),
     storage = createSqliteAsyncStorage(f.storage),

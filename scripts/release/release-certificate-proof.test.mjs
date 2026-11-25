@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveLaneProof } from "./release-certificate-proof.mjs";
+import { resolveLaneProof, resolveRequiredLaneProofs } from "./release-certificate-proof.mjs";
 
 const spec = {
   name: "verify:runtime:truth",
@@ -141,6 +141,46 @@ test("release certificate treats verify:fast as direct-only proof", () => {
   assert.ok(coveredBlock, "release proof covered lane list should be present");
   assert.doesNotMatch(coveredBlock[1], /"verify:fast"/);
   assert.match(writer, /\{ name: "verify:fast", workflowFile: "verification-fast\.yml", required: true \}/);
+});
+
+test("all lanes from the same workflow use a single observation", async () => {
+  const releaseProofWorkflowFile = spec.workflowFile;
+  const fastWorkflowFile = "verification-fast.yml";
+  const observed = [];
+  const lanes = await resolveRequiredLaneProofs({
+    specs: [
+      spec,
+      { ...spec, name: "verify:surface:regression" },
+      { name: "verify:fast", workflowFile: fastWorkflowFile, required: true, releaseProofCovered: false },
+    ],
+    releaseProofWorkflowFile,
+    targetCommit: "abc123",
+    readWorkflowRun: async (file) => {
+      observed.push(file);
+      return { ...releaseProofRun, id: observed.length };
+    },
+  });
+
+  assert.deepEqual(observed, [releaseProofWorkflowFile, fastWorkflowFile]);
+  assert.deepEqual(lanes.map((lane) => lane.workflowRunId), [1, 1, 2]);
+  assert.equal(new Set(lanes.map((lane) => lane.checkedAt)).size, 1);
+});
+
+test("release proof fails when either the required matrix or security job is skipped", () => {
+  const workflow = fs.readFileSync(
+    new URL("../../.github/workflows/verification-1-0-release-proof.yml", import.meta.url),
+    "utf8",
+  );
+  const resultJob = workflow.split(/\r?\n  release-proof-result:\r?\n/)[1];
+  assert.ok(resultJob, "release proof needs an aggregate result job");
+  assert.match(resultJob, /if:\s*\$\{\{ always\(\) \}\}/);
+  assert.match(resultJob, /needs: \[required-lanes, security\]/);
+  assert.match(resultJob, /MATRIX_RESULT: \$\{\{ needs\.required-lanes\.result \}\}/);
+  assert.match(resultJob, /SECURITY_RESULT: \$\{\{ needs\.security\.result \}\}/);
+  assert.match(
+    resultJob,
+    /if \[\[ "\$MATRIX_RESULT" != success \|\| "\$SECURITY_RESULT" != success \]\]; then[\s\S]*?exit 1/,
+  );
 });
 
 test("release proof requires measured orchestration performance", () => {

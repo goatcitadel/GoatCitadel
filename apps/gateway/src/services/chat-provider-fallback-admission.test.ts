@@ -79,7 +79,7 @@ function fixture() {
       findFeatureReferences: vi.fn(async () => featureAdmission),
     },
     chatSessionPrefs: { get: vi.fn(async () => ({ providerFallback: fallback })) },
-    chatToolRuns: { listByTurn: vi.fn(async () => [] as unknown[]) },
+    chatToolRuns: { hasByTurn: vi.fn(async () => false) },
   };
   const isFeatureEnabled = vi.fn(async () => true);
   const host = { storage, llmService: llm, isFeatureEnabled } as unknown as ChatProviderFallbackAdmissionHost;
@@ -190,7 +190,7 @@ describe("admitted Chat provider fallback", () => {
           },
         });
       if (drift === "configuration") f.llm.getProviderRouteConfigFingerprint.mockReturnValue("changed");
-      if (drift === "tool") f.storage.chatToolRuns.listByTurn.mockResolvedValue([{}]);
+      if (drift === "tool") f.storage.chatToolRuns.hasByTurn.mockResolvedValue(true);
       if (drift === "context") f.llm.getModelContextWindow.mockReturnValue(100);
       if (drift === "unavailable") f.llm.getCachedModelAvailability.mockReturnValue("unavailable");
       await expect(guard!(f.dispatch)).rejects.toThrow();

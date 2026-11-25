@@ -17,7 +17,7 @@ const AdmZip = createRequire(new URL("../../apps/gateway/package.json", import.m
 test(
   "Windows installer payload validator proves hashes and required PE architecture before promotion",
   { skip: process.platform === "win32" ? false : "Windows PowerShell and PE validation require Windows." },
-  () => {
+  (context) => {
     const stageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-installer-stage-"));
     const archiveRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-installer-archive-"));
     try {
@@ -74,6 +74,13 @@ test(
       assert.match(valid.stdout, /Validated staged GoatCitadel bundle windows-x64 1\.0\.0/);
       assert.match(valid.stdout, /GOATCITADEL_PROGRESS Hashing 0\/7/);
       assert.match(valid.stdout, /GOATCITADEL_PROGRESS Verified 7\/7/);
+      const validCore = runValidator(stageRoot, { shell: "pwsh.exe" });
+      if (validCore.error?.code === "ENOENT") {
+        context.diagnostic("PowerShell 7 is unavailable on this test host.");
+      } else {
+        assert.equal(validCore.status, 0, validCore.stderr || validCore.stdout);
+        assert.match(validCore.stdout, /GOATCITADEL_PROGRESS Verified 7\/7/);
+      }
       const originalDesktopPath = manifest.payload.files[0].path;
       manifest.payload.files[0].path = originalDesktopPath.replace("app/desktop/", "app/Desktop/");
       writeManifest(stageRoot, manifest);
@@ -200,7 +207,7 @@ test(
   },
 );
 
-function runValidator(stageRoot, { installedRoot = false, archivePath } = {}) {
+function runValidator(stageRoot, { installedRoot = false, archivePath, shell = "powershell.exe" } = {}) {
   const args = [
     "-NoLogo",
     "-NoProfile",
@@ -221,7 +228,7 @@ function runValidator(stageRoot, { installedRoot = false, archivePath } = {}) {
     args.push("-InstalledRoot");
   }
   if (archivePath) args.push("-ArchivePath", archivePath);
-  return spawnSync("powershell.exe", args, { encoding: "utf8", windowsHide: true });
+  return spawnSync(shell, args, { encoding: "utf8", windowsHide: true });
 }
 
 function writeMinimalPe(filePath, machine) {
