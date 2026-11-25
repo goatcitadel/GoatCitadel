@@ -13,11 +13,13 @@ afterEach(async () => {
 
 async function fixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "goat-plugin-record-lock-"));
-  const storage = createSqliteAsyncStorage(new Storage({
-    dbPath: path.join(root, "runtime.sqlite"),
-    transcriptsDir: path.join(root, "transcripts"),
-    auditDir: path.join(root, "audit"),
-  }));
+  const storage = createSqliteAsyncStorage(
+    new Storage({
+      dbPath: path.join(root, "runtime.sqlite"),
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    }),
+  );
   const store = new CapabilityPluginStore(storage.systemSettings);
   const setHolds = vi.fn();
   const report = vi.fn();
@@ -30,7 +32,9 @@ async function fixture() {
       if (state.failReads) throw new Error("Temporary records read failure");
       return store.list();
     },
-    onStoreChange: (listener) => { store.onChange(listener); },
+    onStoreChange: (listener) => {
+      store.onChange(listener);
+    },
     setHolds,
     setHoldsUnavailable: vi.fn(),
     report,
@@ -56,19 +60,29 @@ async function fixture() {
       state.transactionOpen = previous;
     }
   };
-  const saveHold = () => store.update("browser-hold", () => ({
-    pluginId: "browser-hold", name: "Browser hold", description: "A hold", version: "1.0.0",
-    trust: "unverified", sourceKind: "folder", sourceDisplay: "browser-hold",
-    pin: { kind: "content", treeSha256: "a".repeat(64) },
-    manifestSha256: "b".repeat(64), snapshotTreeSha256: "a".repeat(64),
-    workspaceId: "default", installPlanId: "install-hold", state: "installed",
-    installedAt: "2026-11-02T00:00:00.000Z",
-    pieces: [{ pieceId: "no-browser", kind: "tool_group_off", owned: true, ref: "browser" }],
-  }));
+  const saveHold = () =>
+    store.update("browser-hold", () => ({
+      pluginId: "browser-hold",
+      name: "Browser hold",
+      description: "A hold",
+      version: "1.0.0",
+      trust: "unverified",
+      sourceKind: "folder",
+      sourceDisplay: "browser-hold",
+      pin: { kind: "content", treeSha256: "a".repeat(64) },
+      manifestSha256: "b".repeat(64),
+      snapshotTreeSha256: "a".repeat(64),
+      workspaceId: "default",
+      installPlanId: "install-hold",
+      state: "installed",
+      installedAt: "2026-11-02T00:00:00.000Z",
+      pieces: [{ pieceId: "no-browser", kind: "tool_group_off", owned: true, ref: "browser" }],
+    }));
   return { store, state, transaction, saveHold, setHolds, report, readsDuringTransaction, waits };
 }
 
-describe("plugin record fence notifications over real async SQLite storage", () => {
+// Real SQLite setup makes the first test pay a cold start; coverage on shared CI runners pushed it past 15 s.
+describe("plugin record fence notifications over real async SQLite storage", { timeout: 45_000 }, () => {
   it("notifies only after commit and recovers from a subsequent read failure outside the transaction", async () => {
     const h = await fixture();
     await h.store.withLock(h.transaction, async () => {
@@ -81,19 +95,23 @@ describe("plugin record fence notifications over real async SQLite storage", () 
     expect(h.readsDuringTransaction).not.toContain(true);
     h.state.failReads = false;
     h.waits.shift()!();
-    await vi.waitFor(() => expect(h.setHolds).toHaveBeenLastCalledWith([
-      { groupId: "browser", pluginId: "browser-hold", pluginName: "Browser hold" },
-    ]));
+    await vi.waitFor(() =>
+      expect(h.setHolds).toHaveBeenLastCalledWith([
+        { groupId: "browser", pluginId: "browser-hold", pluginName: "Browser hold" },
+      ]),
+    );
     expect(h.readsDuringTransaction).not.toContain(true);
   });
 
   it("reconverges to committed records after rollback without publishing its temporary hold", async () => {
     const h = await fixture();
-    await expect(h.store.withLock(h.transaction, async () => {
-      await h.saveHold();
-      await new Promise((resolve) => setImmediate(resolve));
-      throw new Error("Roll back this install");
-    })).rejects.toThrow("Roll back this install");
+    await expect(
+      h.store.withLock(h.transaction, async () => {
+        await h.saveHold();
+        await new Promise((resolve) => setImmediate(resolve));
+        throw new Error("Roll back this install");
+      }),
+    ).rejects.toThrow("Roll back this install");
 
     await vi.waitFor(() => expect(h.setHolds).toHaveBeenCalledTimes(2));
     expect(h.setHolds.mock.calls).toEqual([[[]], [[]]]);
@@ -104,12 +122,14 @@ describe("plugin record fence notifications over real async SQLite storage", () 
 
   it("defers a nested fence notification until the outer transaction rolls back", async () => {
     const h = await fixture();
-    await expect(h.store.withLock(h.transaction, async () => {
-      await h.store.withLock(h.transaction, h.saveHold);
-      await new Promise((resolve) => setImmediate(resolve));
-      expect(h.setHolds).toHaveBeenCalledTimes(1);
-      throw new Error("Roll back the outer fence");
-    })).rejects.toThrow("Roll back the outer fence");
+    await expect(
+      h.store.withLock(h.transaction, async () => {
+        await h.store.withLock(h.transaction, h.saveHold);
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(h.setHolds).toHaveBeenCalledTimes(1);
+        throw new Error("Roll back the outer fence");
+      }),
+    ).rejects.toThrow("Roll back the outer fence");
 
     await vi.waitFor(() => expect(h.setHolds).toHaveBeenCalledTimes(2));
     expect(h.setHolds.mock.calls).toEqual([[[]], [[]]]);
@@ -120,8 +140,12 @@ describe("plugin record fence notifications over real async SQLite storage", () 
     const h = await fixture();
     let entered!: () => void;
     let release!: () => void;
-    const inside = new Promise<void>((resolve) => { entered = resolve; });
-    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const inside = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     const rolledBack = h.store.withLock(h.transaction, async () => {
       await h.saveHold();
       entered();
@@ -136,9 +160,11 @@ describe("plugin record fence notifications over real async SQLite storage", () 
     await rejected;
     await independent;
 
-    await vi.waitFor(() => expect(h.setHolds).toHaveBeenLastCalledWith([
-      { groupId: "browser", pluginId: "browser-hold", pluginName: "Browser hold" },
-    ]));
+    await vi.waitFor(() =>
+      expect(h.setHolds).toHaveBeenLastCalledWith([
+        { groupId: "browser", pluginId: "browser-hold", pluginName: "Browser hold" },
+      ]),
+    );
     expect(h.readsDuringTransaction).not.toContain(true);
     expect(h.report).not.toHaveBeenCalled();
   });
