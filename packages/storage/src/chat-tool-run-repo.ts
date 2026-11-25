@@ -143,6 +143,7 @@ export class ChatToolRunRepository {
       SET result_json = @nextResultJson
       WHERE tool_run_id = @toolRunId
         AND result_json = @expectedResultJson
+      RETURNING *
     `);
     this.listByTurnStmt = db.prepare(`
       SELECT * FROM chat_tool_runs
@@ -164,16 +165,16 @@ export class ChatToolRunRepository {
   }
 
   public get(toolRunId: string): ChatToolRunRecord {
-    return this.readToolRun(toolRunId, this.getStmt);
+    return this.readToolRun(toolRunId, this.getStmt.get(toolRunId));
   }
 
   /** Locks the existing receipt inside a caller-owned transaction. */
   public getForUpdate(toolRunId: string): ChatToolRunRecord {
-    return this.readToolRun(toolRunId, this.getForUpdateStmt);
+    return this.readToolRun(toolRunId, this.getForUpdateStmt.get(toolRunId));
   }
 
-  private readToolRun(toolRunId: string, statement: ReturnType<DatabaseClient["prepare"]>): ChatToolRunRecord {
-    const row = toChatToolRunRow(statement.get(toolRunId));
+  private readToolRun(toolRunId: string, raw: unknown): ChatToolRunRecord {
+    const row = toChatToolRunRow(raw);
     if (!row) {
       throw new NotFoundError({ entity: "Chat tool run", id: toolRunId });
     }
@@ -206,46 +207,50 @@ export class ChatToolRunRepository {
   }
 
   public patch(toolRunId: string, input: ChatToolRunPatchInput): ChatToolRunRecord {
-    const current = this.get(toolRunId);
-    this.patchStmt.run({
-      toolRunId,
-      status: input.status ?? current.status,
-      approvalId: input.approvalId !== undefined ? input.approvalId : (current.approvalId ?? null),
-      resultJson:
-        input.result !== undefined
-          ? JSON.stringify(input.result)
-          : current.result
-            ? JSON.stringify(current.result)
-            : null,
-      reused:
-        input.reused !== undefined
-          ? input.reused
-            ? 1
-            : 0
-          : current.reused === undefined
-            ? null
-            : current.reused
+    return this.db.transaction("immediate", () => {
+      const current = this.getForUpdate(toolRunId);
+      this.patchStmt.run({
+        toolRunId,
+        status: input.status ?? current.status,
+        approvalId: input.approvalId !== undefined ? input.approvalId : (current.approvalId ?? null),
+        resultJson:
+          input.result !== undefined
+            ? JSON.stringify(input.result)
+            : current.result
+              ? JSON.stringify(current.result)
+              : null,
+        reused:
+          input.reused !== undefined
+            ? input.reused
               ? 1
-              : 0,
-      reusedFromToolRunId:
-        input.reusedFromToolRunId !== undefined ? input.reusedFromToolRunId : (current.reusedFromToolRunId ?? null),
-      reuseReason: input.reuseReason !== undefined ? input.reuseReason : (current.reuseReason ?? null),
-      error: input.error !== undefined ? input.error : (current.error ?? null),
-      failureGuidance: input.failureGuidance !== undefined ? input.failureGuidance : (current.failureGuidance ?? null),
-      effectPotential: input.effectPotential !== undefined ? input.effectPotential : (current.effectPotential ?? null),
-      effectDisposition:
-        input.effectDisposition !== undefined ? input.effectDisposition : (current.effectDisposition ?? null),
-      effectOutcomeKind:
-        input.effectOutcomeKind !== undefined ? input.effectOutcomeKind : (current.effectOutcomeKind ?? null),
-      effectEvidenceJson:
-        input.effectEvidence !== undefined
-          ? JSON.stringify(input.effectEvidence)
-          : current.effectEvidence
-            ? JSON.stringify(current.effectEvidence)
-            : null,
-      finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
+              : 0
+            : current.reused === undefined
+              ? null
+              : current.reused
+                ? 1
+                : 0,
+        reusedFromToolRunId:
+          input.reusedFromToolRunId !== undefined ? input.reusedFromToolRunId : (current.reusedFromToolRunId ?? null),
+        reuseReason: input.reuseReason !== undefined ? input.reuseReason : (current.reuseReason ?? null),
+        error: input.error !== undefined ? input.error : (current.error ?? null),
+        failureGuidance:
+          input.failureGuidance !== undefined ? input.failureGuidance : (current.failureGuidance ?? null),
+        effectPotential:
+          input.effectPotential !== undefined ? input.effectPotential : (current.effectPotential ?? null),
+        effectDisposition:
+          input.effectDisposition !== undefined ? input.effectDisposition : (current.effectDisposition ?? null),
+        effectOutcomeKind:
+          input.effectOutcomeKind !== undefined ? input.effectOutcomeKind : (current.effectOutcomeKind ?? null),
+        effectEvidenceJson:
+          input.effectEvidence !== undefined
+            ? JSON.stringify(input.effectEvidence)
+            : current.effectEvidence
+              ? JSON.stringify(current.effectEvidence)
+              : null,
+        finishedAt: input.finishedAt !== undefined ? input.finishedAt : (current.finishedAt ?? null),
+      });
+      return this.get(toolRunId);
     });
-    return this.get(toolRunId);
   }
 
   /** Atomically replaces an exact persisted result; stale writers receive no authority. */
@@ -254,12 +259,12 @@ export class ChatToolRunRepository {
     expectedResult: Record<string, unknown>,
     nextResult: Record<string, unknown>,
   ): ChatToolRunRecord | undefined {
-    const outcome = this.compareAndSwapResultStmt.run({
+    const row = this.compareAndSwapResultStmt.get({
       toolRunId,
       expectedResultJson: JSON.stringify(expectedResult),
       nextResultJson: JSON.stringify(nextResult),
     });
-    return outcome.changes === 1 ? this.get(toolRunId) : undefined;
+    return row === undefined ? undefined : this.readToolRun(toolRunId, row);
   }
 
   public listByTurn(turnId: string): ChatToolRunRecord[] {
@@ -273,18 +278,35 @@ export class ChatToolRunRepository {
     after?: { startedAt: string; toolRunId: string },
     limit = 32,
   ): ChatToolRunRecord[] {
+    return this.listByTurnPageWithCursor(turnId, after, limit).items;
+  }
+
+  public listByTurnPageWithCursor(
+    turnId: string,
+    after?: { startedAt: string; toolRunId: string },
+    limit = 32,
+  ): { items: ChatToolRunRecord[]; nextAfter?: { startedAt: string; toolRunId: string } } {
     const bounded = Number.isSafeInteger(limit) ? Math.max(1, Math.min(32, limit)) : 32;
-    return toChatToolRunRows(
-      this.db
-        .prepare(
-          `
+    const textCursor =
+      this.db.dialect === "sqlite" ? "AND typeof(started_at) = 'text' AND typeof(tool_run_id) = 'text'" : "";
+    const rows = this.db
+      .prepare(
+        `
       SELECT * FROM chat_tool_runs WHERE turn_id = ?
         AND (started_at > ? OR (started_at = ? AND tool_run_id > ?))
+        ${textCursor}
       ORDER BY started_at ASC, tool_run_id ASC LIMIT ?
     `,
-        )
-        .all(turnId, after?.startedAt ?? "", after?.startedAt ?? "", after?.toolRunId ?? "", bounded),
-    ).map(mapRow);
+      )
+      .all(turnId, after?.startedAt ?? "", after?.startedAt ?? "", after?.toolRunId ?? "", bounded);
+    const last = rows.at(-1);
+    return {
+      items: toChatToolRunRows(rows).map(mapRow),
+      nextAfter:
+        isRecord(last) && typeof last.started_at === "string" && typeof last.tool_run_id === "string"
+          ? { startedAt: last.started_at, toolRunId: last.tool_run_id }
+          : undefined,
+    };
   }
 
   public listBySession(sessionId: string, limit = 200): ChatToolRunRecord[] {

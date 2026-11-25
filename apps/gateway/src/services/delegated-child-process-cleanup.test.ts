@@ -302,8 +302,21 @@ it("persists sub-page progress, skips ineligible steps, retries failed cleanup a
         badRowShape ? null : "{invalid json",
       );
     }
+    const insertMalformedTool = raw.db.prepare(`
+      INSERT INTO chat_tool_runs (
+        tool_run_id, turn_id, session_id, tool_name, status, started_at, finished_at
+      ) VALUES (?, 'turn-10-many', 'session-10-many', 'time.now', 'executed', ?, ?)
+    `);
+    const malformedToolTime = "2026-10-10T00:00:00.000Z";
+    for (let index = 0; index < 32; index += 1) {
+      insertMalformedTool.run(
+        `malformed-tool-${String(index).padStart(2, "0")}`,
+        malformedToolTime,
+        new Uint8Array([1]),
+      );
+    }
     const steps = vi.spyOn(raw.chatDelegationSteps, "listResourceCleanupPage");
-    const tools = vi.spyOn(raw.chatToolRuns, "listByTurnPage");
+    const tools = vi.spyOn(raw.chatToolRuns, "listByTurnPageWithCursor");
     let refusedOnce = false;
     const cleanup = vi.fn(async (identity: unknown) => {
       if ((identity as { pid: number }).pid === 40_031 && !refusedOnce) {
@@ -324,6 +337,11 @@ it("persists sub-page progress, skips ineligible steps, retries failed cleanup a
     expect(attempted).toBe(11); // Ten distinct receipts, one retried after cursor wrap.
     expect(cleanup).toHaveBeenCalledTimes(11);
     expect(steps).toHaveBeenCalledWith("00-malformed-31", 32);
+    expect(tools).toHaveBeenCalledWith(
+      "turn-10-many",
+      { startedAt: malformedToolTime, toolRunId: "malformed-tool-31" },
+      32,
+    );
     for (const call of steps.mock.calls) expect(call[1]).toBe(32);
     for (const call of tools.mock.calls) expect(call[2]).toBe(32);
     expect((await storage.chatToolRuns.get("10-many-031")).result?.backgroundProcessCleanup).toMatchObject({

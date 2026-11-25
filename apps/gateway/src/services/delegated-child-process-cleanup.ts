@@ -200,8 +200,8 @@ export async function reconcileDelegatedChildProcessCleanup(
     return { attempted: 0, failed: 0 };
   }
   const owner = { stepId: step.stepId, childSessionId: step.childSessionId, childTurnId: step.childTurnId };
-  const page = await storage.chatToolRuns.listByTurnPage(owner.childTurnId, cursor.afterTool, 32);
-  const candidate = page.find(
+  const page = await storage.chatToolRuns.listByTurnPageWithCursor(owner.childTurnId, cursor.afterTool, 32);
+  const candidate = page.items.find(
     (tool) =>
       tool.sessionId === owner.childSessionId &&
       tool.toolName === "shell.exec_background" &&
@@ -210,7 +210,7 @@ export async function reconcileDelegatedChildProcessCleanup(
       tool.result &&
       !readRetainedCleanup(tool.result, owner.stepId),
   );
-  const last = candidate ?? page.at(-1);
+  const last = candidate ?? page.nextAfter;
   const next: CleanupScanCursor = last
     ? {
         version: 1,
