@@ -4,17 +4,22 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const timezone = "America/Los_Angeles";
 
-export function verifyInstalledScheduledBrief({ api, restart, withNative }, fixture) {
+export function verifyInstalledScheduledBrief({ api, send, waitForTurn, restart, withNative }, fixture) {
   const { connectionId, topic, marker, sample, evidence, poll, readSubscriber } = fixture;
   const purpose = `Post the daily fixture brief ${marker}`;
-  return withNative(async (page) => {
+  async function exercise(page) {
     const origin = new URL(page.url()).origin;
-    const { sessionId } = await api("/api/v1/chat/sessions", "POST", { title: purpose, workspaceId: "default" });
-    const chatRoute = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`;
-    await page.goto(`${origin}/chat?shell=cockpit&sessionId=${encodeURIComponent(sessionId)}`);
+    const chat = await send(purpose, "This conversation will hold a synthetic scheduled brief.", page);
+    await waitForTurn(chat, "completed");
     const button = (name, root = page) => root.getByRole("button", { name, exact: true });
     const settings = page.getByRole("group", { name: "Conversation execution settings" });
-    await button("Inspect").click();
+    await button("Conversation actions").waitFor();
+    if (await button("Inspect").isVisible()) {
+      await button("Inspect").click();
+    } else {
+      await button("Conversation actions").click();
+      await page.getByRole("menuitem", { name: "Inspect conversation", exact: true }).click();
+    }
     await page.getByRole("tab", { name: "Conversation", exact: true }).click();
     await settings.getByText("Memory, learning and follow-through", { exact: true }).click();
     await settings.getByText("Upcoming work and follow-ups", { exact: true }).click();
@@ -33,7 +38,7 @@ export function verifyInstalledScheduledBrief({ api, restart, withNative }, fixt
       page.waitForResponse(
         (response) =>
           response.request().method() === "POST" &&
-          new URL(response.url()).pathname === `${chatRoute}/follow-through/setup`,
+          new URL(response.url()).pathname === `${chat.route}/follow-through/setup`,
       ),
       button("Create this follow-through", setup).click(),
     ]);
@@ -158,5 +163,13 @@ export function verifyInstalledScheduledBrief({ api, restart, withNative }, fixt
       manual,
       pausedWithoutNewRun: true,
     };
+  }
+  return withNative(async (page) => {
+    try {
+      return await exercise(page);
+    } catch (error) {
+      await page.screenshot({ path: path.join(evidence, "scheduled-brief-failure.png") }).catch(() => undefined);
+      throw error;
+    }
   });
 }
