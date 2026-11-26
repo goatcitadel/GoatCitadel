@@ -140,8 +140,11 @@ const BLOCK_COMMENTS: ReadonlyArray<readonly [open: string, close: string]> = [
   ["<#", "#>"],
   ["<!--", "-->"],
 ];
-/** Where a line comment starts: `//` or `#` at the start or after whitespace (`code // note`, `*/ // note`). */
-const LINE_COMMENT = /(?:^|(?<=\s))(?:\/\/|#(?!>))/u;
+/**
+ * Where a line comment starts: `//` anywhere but right after `:` (a URL's `https://`), so `code;// note` counts; `#` at
+ * the start or after whitespace, as shells need. Reading too much here only means more text is checked.
+ */
+const LINE_COMMENT = /(?<![:/])\/\/|(?:^|(?<=\s))#(?!>)/u;
 
 /**
  * A script's comments with its code blanked, line for line, so promptware line numbers still point at the right line.
