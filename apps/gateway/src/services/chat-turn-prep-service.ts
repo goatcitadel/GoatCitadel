@@ -379,6 +379,7 @@ export interface PreparedAgentChatTurn {
   resolvedGuidance: ResolvedRuntimeGuidance;
   conversationMessages: ChatMessageRecord[];
   history: ChatCompletionRequest["messages"];
+  hasPreparedRecallEvidence?: boolean;
   turnId: string;
   /** Frozen pre-routing mutation authority. Required on every production turn. */
   turnAdmission?: ActiveTurnAdmission;
@@ -1179,6 +1180,7 @@ export async function prepareAgentChatTurn(
     isNaturalMemoryReviewOnlyTurn(userMessage.content),
   );
   let baseAgentInstruction: ChatCompletionRequest["messages"][number]["content"] | undefined;
+  let memoryDigest: string | undefined;
   if (baseSystemPromptEnabled) {
     const now = new Date();
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -1186,7 +1188,6 @@ export async function prepareAgentChatTurn(
     // (workspace+revision), so it stays byte-stable within a session and lands in
     // the base prompt's volatile tail without busting the P0-A cache prefix.
     // Best-effort: never let a profile read break turn preparation.
-    let memoryDigest: string | undefined;
     if (!quickWebTurn && session.kind === "dm") {
       try {
         memoryDigest =
@@ -1536,6 +1537,7 @@ export async function prepareAgentChatTurn(
     resolvedGuidance,
     conversationMessages,
     history,
+    hasPreparedRecallEvidence: Boolean(memoryDigest?.trim() || threadKnowledgeContext.citations.length),
     turnId,
     ...(options?.turnAdmission ? { turnAdmission: options.turnAdmission } : {}),
     ...(systemHeartbeatPosture ? { serverOnlyPosture: Object.freeze({ ...systemHeartbeatPosture }) } : {}),

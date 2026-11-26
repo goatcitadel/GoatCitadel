@@ -264,14 +264,18 @@ const reasoningStream = [
 
 describe("ChatTurnAgentRunner incremental thinking stream", () => {
   it.each([
-    { webMode: "auto", foundOnRetry: false },
-    { webMode: "auto", foundOnRetry: true },
-    { webMode: "off", foundOnRetry: false },
+    { webMode: "auto", foundOnRetry: false, memory: "none" },
+    { webMode: "auto", foundOnRetry: true, memory: "none" },
+    { webMode: "off", foundOnRetry: false, memory: "current prompt" },
+    { webMode: "auto", foundOnRetry: false, memory: "retrieved" },
+    { webMode: "auto", foundOnRetry: false, memory: "prepared" },
   ] as const)(
-    "grounds fresh-chat recall after a search retry (Web $webMode, found a hit: $foundOnRetry)",
-    async ({ webMode, foundOnRetry }) => {
+    "grounds fresh-chat recall after a retry (Web $webMode, hit: $foundOnRetry, memory: $memory)",
+    async ({ webMode, foundOnRetry, memory }) => {
       const unsupportedAnswer = "We haven't made a decision yet.";
       const supportedAnswer = "We chose the ferry.";
+      const hasOtherEvidence = memory === "retrieved" || memory === "prepared";
+      const input = baseTurn("fresh-recall", "What did we decide about the ferry departure?");
       const search = (query: string, id: string) => ({
         id,
         model: "m",
@@ -304,7 +308,7 @@ describe("ChatTurnAgentRunner incremental thinking stream", () => {
           choices: [
             {
               index: 0,
-              delta: { content: foundOnRetry ? supportedAnswer : unsupportedAnswer },
+              delta: { content: foundOnRetry || hasOtherEvidence ? supportedAnswer : unsupportedAnswer },
               finish_reason: "stop",
             },
           ],
@@ -322,7 +326,24 @@ describe("ChatTurnAgentRunner incremental thinking stream", () => {
         .mockResolvedValueOnce(toolResult([]))
         .mockResolvedValueOnce(toolResult(foundOnRetry ? [hit] : []));
       const orchestrator = new ChatTurnAgentRunner({
-        storage: createMockStorage() as never,
+        storage: {
+          ...(createMockStorage() as object),
+          contextManifests: {
+            maybeGetDetailByTurn: async () => ({
+              entries: [
+                {
+                  kind: "memory_context",
+                  metadata: {
+                    sourceCitations:
+                      memory === "retrieved"
+                        ? [{ sourceType: "memory_item", sourceRef: "saved-decision" }]
+                        : [{ sourceType: "transcript", sourceRef: input.userMessageId }],
+                  },
+                },
+              ],
+            }),
+          },
+        } as never,
         listToolCatalog: () => [{ ...createToolCatalog()[0]!, toolName: "session.search", category: "knowledge" }],
         createChatCompletion: vi.fn(),
         createChatCompletionStream: async () => {
@@ -337,7 +358,9 @@ describe("ChatTurnAgentRunner incremental thinking stream", () => {
       });
       const chunks = [];
       for await (const chunk of orchestrator.runStream({
-        ...baseTurn("fresh-recall", "What did we decide about the ferry departure?"),
+        ...input,
+        hasPreparedRecallEvidence: memory === "prepared",
+        memoryMode: memory === "none" ? "off" : "on",
         retrievalMode: "standard",
         webMode,
       }))
@@ -346,12 +369,13 @@ describe("ChatTurnAgentRunner incremental thinking stream", () => {
       expect(invokeTool).toHaveBeenCalledTimes(2);
       expect(replies).toHaveLength(webMode === "off" ? 1 : 0);
       expect(chunks.filter((chunk) => chunk.type === "delta").map((chunk) => chunk.delta)).toEqual(
-        foundOnRetry ? [supportedAnswer] : [],
+        foundOnRetry || memory === "prepared" ? [supportedAnswer] : [],
       );
       expect(chunks.find((chunk) => chunk.type === "message_done")).toMatchObject({
-        content: foundOnRetry
-          ? supportedAnswer
-          : "I couldn’t verify that from our earlier chats. The history search found no matching messages.",
+        content:
+          foundOnRetry || hasOtherEvidence
+            ? supportedAnswer
+            : "I couldn’t verify that from our earlier chats. The history search found no matching messages.",
       });
     },
   );

@@ -718,6 +718,8 @@ export interface ChatTurnAgentRunnerInput {
   policyTaskId?: string;
   fullWebAccess?: boolean;
   historyMessages: ChatCompletionRequest["messages"];
+  /** Server-owned signal for recall evidence already included in the prepared prompt. */
+  hasPreparedRecallEvidence?: boolean;
   outputMessageId?: string;
   modelRouter?: ChatTurnTraceRecord["routing"]["modelRouter"];
   /** Which setting chose the model, from the verified route decision; absent when no decision is in scope. */
@@ -2483,6 +2485,7 @@ export class ChatTurnAgentRunner {
       input.mode === "chat" &&
       !promptLabEvalIntegrityTurn &&
       !input.routedContextRequested &&
+      !input.hasPreparedRecallEvidence &&
       input.historyMessages.filter((message) => message.role !== "system" && message.role !== "developer").length ===
         1 &&
       detectConversationRecallIntent(input.content);
@@ -6257,7 +6260,8 @@ export class ChatTurnAgentRunner {
       !pendingUserInput &&
       !toolUseClosed &&
       !durableFanoutWaiting &&
-      hasOnlyEmptyPriorChatSearches(toolRuns)
+      hasOnlyEmptyPriorChatSearches(toolRuns) &&
+      !(await hasOtherAdmittedRecallEvidence(storage, input))
     ) {
       assistantContent =
         "I couldn’t verify that from our earlier chats. The history search found no matching messages.";
@@ -16269,6 +16273,34 @@ function hasOnlyEmptyPriorChatSearches(toolRuns: readonly ChatToolRunRecord[]): 
         run.result.hits.length === 0,
     )
   );
+}
+
+async function hasOtherAdmittedRecallEvidence(
+  storage: Pick<Storage, "contextManifests">,
+  input: Pick<ChatTurnAgentRunnerInput, "memoryMode" | "turnId" | "userMessageId">,
+): Promise<boolean> {
+  if (input.memoryMode === "off") return false;
+  try {
+    const admitted = await storage.contextManifests.maybeGetDetailByTurn(input.turnId);
+    if (!admitted) return true;
+    return admitted.entries.some((entry) => {
+      const { admittedMemories, sourceCitations, citationsCount } = entry.metadata;
+      if (Array.isArray(admittedMemories) && admittedMemories.length > 0) return true;
+      if (entry.kind !== "memory_context") return false;
+      // Retrieval can cite the current user message itself. It adds no prior evidence.
+      return (
+        !Array.isArray(sourceCitations) ||
+        (sourceCitations.length === 0 && Boolean(entry.contentText?.trim())) ||
+        (typeof citationsCount === "number" && citationsCount > sourceCitations.length) ||
+        sourceCitations.some(
+          (source) => source?.sourceType !== "transcript" || source.sourceRef !== input.userMessageId,
+        )
+      );
+    });
+  } catch {
+    log.warn("Could not inspect admitted context for a chat history miss", { turnId: input.turnId });
+    return true;
+  }
 }
 
 function detectMemoryLookupIntent(content: string): boolean {

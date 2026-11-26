@@ -2408,6 +2408,7 @@ export async function* streamPreparedAgentChatTurn(
                 policyTaskId: input.policyTaskId,
                 fullWebAccess: input.fullWebAccess,
                 historyMessages: historyWithSteers,
+                hasPreparedRecallEvidence: prepared.hasPreparedRecallEvidence,
                 modelRouter: prepared.modelRouterDecision,
                 selectionSource: input.routeDecision?.selectionSource,
                 runVariableEvidence: input.runVariableEvidence,
