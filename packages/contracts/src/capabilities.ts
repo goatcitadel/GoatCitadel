@@ -1,3 +1,4 @@
+import type { SkillScanSummary } from "./skill-scan.js";
 import type { ChatSessionWorkbenchValidationStatus } from "./chat.js";
 
 export type CapabilityKind =
@@ -242,6 +243,8 @@ export interface SkillLifecycleRecord {
   lifecycleState: SkillLifecycleState;
   trustLabel: string;
   reviewWarning?: string;
+  /** The content scan of an operator-owned skill (workspace or managed). A warning never changes callability. */
+  scanVerdict?: SkillScanSummary;
   provenance?: {
     source: string;
     sourceRef?: string;

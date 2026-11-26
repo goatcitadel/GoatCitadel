@@ -3,6 +3,7 @@ export * from "./openai-model-controls.js";
 export type * from "./activation.js";
 export type * from "./autonomy.js";
 export type * from "./capabilities.js";
+export * from "./skill-scan.js";
 export * from "./capability-scope.js";
 export type * from "./continuation-gate.js";
 export type * from "./evidence.js";
