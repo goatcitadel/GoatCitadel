@@ -24,15 +24,26 @@ export async function prepareVerificationRuntime(runId) {
   const tempParent = process.env.GOATCITADEL_VERIFY_TEMP_ROOT?.trim() || os.tmpdir();
   await fs.mkdir(tempParent, { recursive: true });
   const tempRoot = await fs.mkdtemp(path.join(tempParent, `goatcitadel-verify-${sanitizeFilePart(runId)}-`));
-  await fs.mkdir(path.join(tempRoot, "data"), { recursive: true });
-  await fs.cp(path.join(repoRoot, "config"), path.join(tempRoot, "config"), { recursive: true });
-  // The Gateway reads the plugins that ship from <rootDir>/plugins outside a packaged install.
-  for (const folder of ["skills", "plugins", "workspaces"]) {
-    if (existsSync(path.join(repoRoot, folder))) {
-      await fs.cp(path.join(repoRoot, folder), path.join(tempRoot, folder), { recursive: true });
+  try {
+    await fs.mkdir(path.join(tempRoot, "data"), { recursive: true });
+    await fs.cp(path.join(repoRoot, "config"), path.join(tempRoot, "config"), { recursive: true });
+    // The Gateway reads the plugins that ship from <rootDir>/plugins outside a packaged install.
+    for (const folder of ["skills", "plugins", "workspaces"]) {
+      if (existsSync(path.join(repoRoot, folder))) {
+        await fs.cp(path.join(repoRoot, folder), path.join(tempRoot, folder), { recursive: true });
+      }
     }
+    return tempRoot;
+  } catch (error) {
+    try {
+      await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 3 });
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Verification runtime setup and cleanup failed", {
+        cause: cleanupError,
+      });
+    }
+    throw error;
   }
-  return tempRoot;
 }
 
 export async function startVerificationStack(context, options = {}) {

@@ -5,7 +5,26 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveLaneProof, resolveRequiredLaneProofs, selectReleaseCommitRun } from "./release-certificate-proof.mjs";
+import {
+  matchesHostileSandboxProofRun,
+  resolveLaneProof,
+  resolveRequiredLaneProofs,
+  selectReleaseCommitRun,
+} from "./release-certificate-proof.mjs";
+
+test("hostile sandbox proof must come from the selected repository, commit and workflow run", () => {
+  const commit = "a".repeat(40);
+  const repository = "goatcitadel/GoatCitadel";
+  const proofRun = { workflowRunId: 42, headSha: commit };
+  const githubRun = { commit, repository, runId: "42" };
+  const target = { commit, repository, proofRun };
+  assert.equal(matchesHostileSandboxProofRun({ githubRun }, target), true);
+  assert.equal(matchesHostileSandboxProofRun({ claim: { publicClaimAllowed: true } }, target), false);
+  assert.equal(matchesHostileSandboxProofRun({ githubRun: { ...githubRun, commit: "b".repeat(40) } }, target), false);
+  assert.equal(matchesHostileSandboxProofRun({ githubRun: { ...githubRun, runId: "41" } }, target), false);
+  assert.equal(matchesHostileSandboxProofRun({ githubRun: { ...githubRun, repository: "other/repo" } }, target), false);
+  assert.equal(matchesHostileSandboxProofRun({ githubRun }, { ...target, proofRun: null }), false);
+});
 
 const spec = {
   name: "verify:runtime:truth",
@@ -185,10 +204,7 @@ test("release proof fails when either the required matrix or security job is ski
 
 test("release proof requires measured orchestration performance", () => {
   const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
-  const workflow = fs.readFileSync(
-    new URL("../../.github/workflows/verification-1-0-release-proof.yml", import.meta.url),
-    "utf8",
-  );
+  const workflow = fs.readFileSync(new URL("../../.github/workflows/verification-1-0-release-proof.yml", import.meta.url), "utf8");
   assert.match(writer, /"verify:orchestration:perf"/);
   assert.match(
     writer,
@@ -201,7 +217,10 @@ test("every named 1.0 contract gate is required by the certificate and covered b
   const contract = fs.readFileSync(new URL("../../docs/1_0_CONTRACT.md", import.meta.url), "utf8")
     .split("## Release Gates")[1].split("## Source of Truth Order")[0];
   const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
-  const workflow = fs.readFileSync(new URL("../../.github/workflows/verification-1-0-release-proof.yml", import.meta.url), "utf8");
+  const workflow = fs.readFileSync(
+    new URL("../../.github/workflows/verification-1-0-release-proof.yml", import.meta.url),
+    "utf8",
+  );
   const required = writer.match(/const REQUIRED_LANE_SPECS = \[([\s\S]*?)\]\.map/)[1];
   const covered = writer.match(/const RELEASE_PROOF_COVERED_LANES = \[([\s\S]*?)\];/)[1];
   const matrix = new Set([...workflow.matchAll(/laneScript:\s*([^\s#]+)/gu)].map((match) => match[1]));

@@ -16,10 +16,21 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const rootDir = path.resolve(process.env.GOATCITADEL_ROOT_DIR?.trim() || process.cwd());
   const config = await loadGatewayConfig(rootDir);
   const platformProofs = await readPlatformProofFiles(options.platformProofs);
-  const proof = await runCodeModeHostileSandboxCanaries(config.assistant.capabilities.codeModeSandbox, {
+  const result = await runCodeModeHostileSandboxCanaries(config.assistant.capabilities.codeModeSandbox, {
     evidenceRef: options.output ? path.basename(options.output) : undefined,
     platformProofs,
   });
+  const proof = {
+    ...result,
+    githubRun:
+      process.env.GITHUB_ACTIONS === "true"
+        ? {
+            commit: process.env.GITHUB_SHA,
+            repository: process.env.GITHUB_REPOSITORY,
+            runId: process.env.GITHUB_RUN_ID,
+          }
+        : null,
+  };
   await writeProof(options, proof);
   process.stdout.write(`${JSON.stringify(proof, null, 2)}\n`);
   if (proof.sandboxAvailable && proof.currentPlatformProof.status !== "pass") {

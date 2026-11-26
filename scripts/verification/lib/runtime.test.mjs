@@ -15,6 +15,7 @@ import {
   buildVerificationProcessLogName,
   buildVerificationUiCommand,
   buildVerificationWorkspaceRefreshCommands,
+  prepareVerificationRuntime,
   requestJson,
   startProcess,
   stopProcess,
@@ -22,6 +23,20 @@ import {
   waitForHttp,
   withVerificationUiOrigin,
 } from "./runtime.mjs";
+
+test("verification runtime removes its partial directory when initialization fails", async (t) => {
+  const setupError = new Error("copy failed");
+  let runtimeRoot;
+  t.mock.method(fs, "cp", async (_source, destination) => {
+    runtimeRoot = path.dirname(destination);
+    await fs.access(path.join(runtimeRoot, "data"));
+    throw setupError;
+  });
+
+  await assert.rejects(prepareVerificationRuntime("cleanup-test"), (error) => error === setupError);
+  assert.ok(runtimeRoot);
+  await assert.rejects(fs.access(runtimeRoot), { code: "ENOENT" });
+});
 
 test("verification readiness times out when a server accepts a connection without sending headers", async () => {
   const server = createServer(() => {});

@@ -11,7 +11,11 @@ import {
   RELEASE_PAYLOAD_ROOTS,
   validateReleaseManifest,
 } from "../packaging/lib/package-renderers.mjs";
-import { resolveRequiredLaneProofs, selectReleaseCommitRun } from "./release-certificate-proof.mjs";
+import {
+  matchesHostileSandboxProofRun,
+  resolveRequiredLaneProofs,
+  selectReleaseCommitRun,
+} from "./release-certificate-proof.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -237,6 +241,7 @@ const hostileSandboxProof = hostileSandboxProofPath ? readOptionalJson(hostileSa
 const exactShaStatus = summarizeRequiredLaneExactSha(requiredLanes, commit);
 const hostileSandboxWindowsClaim = buildHostileSandboxWindowsClaim({
   commit,
+  repository,
   proof: hostileSandboxProof,
   proofPath: hostileSandboxProofPath,
   requiredLanes,
@@ -785,9 +790,9 @@ function buildOperatorTruthProof({ commit, requiredLanes, exactShaStatus, proofB
   };
 }
 
-function buildHostileSandboxWindowsClaim({ commit, proof, proofPath, requiredLanes }) {
+function buildHostileSandboxWindowsClaim({ commit, repository, proof, proofPath, requiredLanes }) {
   const lane = requiredLanes.find((item) => item.name === "verify:code-mode:hostile-sandbox");
-  const proofRun = lane?.substitutedByReleaseProof ? lane.releaseProofRun : lane?.directRun;
+  const proofRun = lane ? selectProofRun(lane) : null;
   const proofHeadSha = proofRun?.headSha ?? null;
   const exactShaMatched = Boolean(commit && proofHeadSha === commit);
   const win32Claim = proof?.claim?.platformClaims?.win32 ?? null;
@@ -796,11 +801,12 @@ function buildHostileSandboxWindowsClaim({ commit, proof, proofPath, requiredLan
     : null;
   const win32Proof = win32Claim?.proof ?? fallbackWin32Proof ?? null;
   const laneGreen = lane?.status === "success";
-  const proofAllowsWindowsClaim = Boolean(win32Claim?.publicClaimAllowed);
+  const artifactRunMatched = matchesHostileSandboxProofRun(proof, { commit, repository, proofRun });
+  const proofAccepted = laneGreen && artifactRunMatched;
   return {
     claimScope: "windows_appcontainer",
-    aggregatePublicClaimAllowed: Boolean(proof?.claim?.publicClaimAllowed),
-    publicClaimAllowed: Boolean(laneGreen && exactShaMatched && proofAllowsWindowsClaim),
+    aggregatePublicClaimAllowed: proofAccepted && proof?.claim?.publicClaimAllowed === true,
+    publicClaimAllowed: proofAccepted && win32Claim?.publicClaimAllowed === true,
     laneStatus: lane?.status ?? "missing",
     workflowRunUrl: lane?.workflowRunUrl ?? null,
     proofWorkflowFile: lane?.proofWorkflowFile ?? RELEASE_PROOF_WORKFLOW_FILE,
@@ -808,13 +814,20 @@ function buildHostileSandboxWindowsClaim({ commit, proof, proofPath, requiredLan
     exactSha: commit,
     proofHeadSha,
     exactShaMatched,
+    artifactRunMatched,
     proofRef: proofPath ? path.relative(repoRoot, proofPath).replaceAll("\\", "/") : null,
     currentPlatform: proof?.platform ?? null,
     currentPlatformProofStatus: proof?.currentPlatformProof?.status ?? null,
     windowsPlatformProofStatus: win32Proof?.status ?? "missing",
     checksPassed: Array.isArray(win32Proof?.checksPassed) ? win32Proof.checksPassed : [],
     checksFailed: Array.isArray(win32Proof?.checksFailed) ? win32Proof.checksFailed : [],
-    blockers: win32Claim?.blockers ?? ["Windows AppContainer hostile sandbox proof artifact was not provided."],
+    blockers: artifactRunMatched
+      ? (win32Claim?.blockers ?? ["Windows AppContainer proof is missing from the artifact."])
+      : [
+          proof
+            ? "Windows AppContainer proof artifact does not match the selected GitHub workflow run."
+            : "Windows AppContainer hostile sandbox proof artifact was not provided.",
+        ],
   };
 }
 

@@ -565,32 +565,45 @@ try {
   $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
   [System.IO.File]::WriteAllText($launchStdout, $launchStdoutTask.Result, $utf8WithoutBom)
   [System.IO.File]::WriteAllText($launchStderr, $launchStderrTask.Result, $utf8WithoutBom)
+  $launchExitCode = $launch.ExitCode
+  $launch.Dispose()
   if (-not $launchExited) {
     Show-RuntimeLogs
     throw "Runtime readiness smoke failed: 'goatcitadel launch --wait' did not exit within 10 minutes. Launcher output, runtime logs, and listener/process state are printed above."
   }
-  $launchExitCode = $launch.ExitCode
   if ($launchExitCode -ne 0) {
     Show-RuntimeLogs
     throw "Runtime readiness smoke failed: 'goatcitadel launch' exited $launchExitCode before the gateway/UI became healthy. The installed host would hang on 'Starting the local runtime…'. A gateway boot crash (for example ERR_MODULE_NOT_FOUND from stranded production dependencies) surfaces here."
   }
 
   # Re-poll both /health endpoints independently; this is the canonical ready assertion.
-  $status = Start-Process -FilePath $bundledNode `
-    -ArgumentList @($quotedLauncher, "status", "--json") `
-    -WorkingDirectory $appHome `
-    -RedirectStandardOutput $statusStdout `
-    -RedirectStandardError $statusStderr `
-    -NoNewWindow -Wait -PassThru
+  $launchStartInfo.Arguments = "$quotedLauncher status --json"
+  $status = [System.Diagnostics.Process]::new()
+  try {
+    $status.StartInfo = $launchStartInfo
+    [void]$status.Start()
+    $statusStdoutTask = $status.StandardOutput.ReadToEndAsync()
+    $statusStderrTask = $status.StandardError.ReadToEndAsync()
+    if (-not $status.WaitForExit(60000)) {
+      $status.Kill()
+      Show-RuntimeLogs
+      throw "Runtime readiness smoke failed: 'goatcitadel status --json' did not exit within 60 seconds."
+    }
+    $statusExitCode = $status.ExitCode
+    [System.IO.File]::WriteAllText($statusStdout, $statusStdoutTask.Result, $utf8WithoutBom)
+    [System.IO.File]::WriteAllText($statusStderr, $statusStderrTask.Result, $utf8WithoutBom)
+  } finally {
+    $status.Dispose()
+  }
   $statusLine = $null
   if (Test-Path -LiteralPath $statusStdout) {
-    $statusLine = Get-Content -LiteralPath $statusStdout -ErrorAction SilentlyContinue |
+    $statusLine = Get-Content -LiteralPath $statusStdout -Encoding UTF8 -ErrorAction SilentlyContinue |
       Where-Object { $_.TrimStart().StartsWith("{") } |
       Select-Object -Last 1
   }
-  if ($status.ExitCode -ne 0 -or -not $statusLine) {
+  if ($statusExitCode -ne 0 -or -not $statusLine) {
     Show-RuntimeLogs
-    throw "Runtime readiness smoke failed: 'goatcitadel status --json' exited $($status.ExitCode) without a JSON status line."
+    throw "Runtime readiness smoke failed: 'goatcitadel status --json' exited $statusExitCode or omitted a JSON status line."
   }
   $runtimeStatus = $statusLine | ConvertFrom-Json
   if ($runtimeStatus.status -ne "ready" -or -not ($runtimeStatus.readiness.gateway -and $runtimeStatus.readiness.ui)) {

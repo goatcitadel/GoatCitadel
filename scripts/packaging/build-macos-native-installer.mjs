@@ -57,6 +57,9 @@ async function main() {
   }
 
   if (!fs.existsSync(bundleDir)) {
+    if (args.bundleDir) {
+      throw new Error(`Custom --bundle-dir must point to an existing bundle: ${bundleDir}`);
+    }
     runNode([
       path.join(scriptDir, "build-bundle.mjs"),
       "--target",
@@ -98,7 +101,8 @@ async function main() {
     const submissionId = notarizeMacDmg(outDmgPath, { ...notaryCredentials, cwd: repoRoot });
     console.log(`Apple notarization accepted and stapled submission ${submissionId}.`);
   }
-  fs.writeFileSync(`${outDmgPath}.sha256`, `${sha256(outDmgPath)} *${path.basename(outDmgPath)}\n`, "utf8");
+  const digest = await sha256(outDmgPath);
+  fs.writeFileSync(`${outDmgPath}.sha256`, `${digest} *${path.basename(outDmgPath)}\n`, "utf8");
   console.log(`Built experimental macOS installer: ${outDmgPath}`);
 }
 
@@ -272,6 +276,10 @@ function findBuiltDmg(triple) {
   return match;
 }
 
-function sha256(filePath) {
-  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+async function sha256(filePath) {
+  const hash = createHash("sha256");
+  for await (const chunk of fs.createReadStream(filePath)) {
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
 }

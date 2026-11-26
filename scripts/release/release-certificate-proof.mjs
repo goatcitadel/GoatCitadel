@@ -1,5 +1,17 @@
 const RELEASE_COMMIT_EVENTS = new Set(["push", "schedule", "workflow_dispatch"]);
 
+export function matchesHostileSandboxProofRun(proof, { commit, repository, proofRun }) {
+  return Boolean(
+    commit &&
+    repository &&
+    proofRun?.workflowRunId &&
+    proofRun.headSha === commit &&
+    proof?.githubRun?.commit === commit &&
+    proof.githubRun.repository === repository &&
+    proof.githubRun.runId === String(proofRun.workflowRunId),
+  );
+}
+
 export function selectReleaseCommitRun(runs, targetCommit) {
   if (!targetCommit || !Array.isArray(runs)) return null;
   // Pull-request run metadata can name the head SHA while checkout tested a synthetic merge commit.

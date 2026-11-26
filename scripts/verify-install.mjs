@@ -187,56 +187,40 @@ async function main() {
       {
         id: "install.provider.smoke-path",
         lane: "install-smoke",
-        title: "Configured-provider smoke evidence path is explicit",
+        title: "Deterministic provider smoke reaches the local fixture",
         subsystem: "providers",
       },
       async () => {
         const statusResponse = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/status");
         const providers = Array.isArray(statusResponse.body?.providers) ? statusResponse.body.providers : [];
         const activeProvider = providers.find((provider) => provider.active);
-        const shouldExercise = process.env.GOATCITADEL_VERIFY_INSTALL_LIVE_PROVIDER === "1";
-        if (shouldExercise && activeProvider) {
-          const exercise = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/provider-exercise", {
-            method: "POST",
-            body: {
-              providerId: activeProvider.providerId,
-              model: statusResponse.body?.activeModel || activeProvider.defaultModel,
-              scenario: "simple",
-            },
-          });
-          return {
-            status: exercise.ok && exercise.body?.ok ? "passed" : "failed",
-            providerId: activeProvider.providerId,
-            modelId: exercise.body?.model,
-            error: exercise.body?.ok ? undefined : (exercise.body?.error ?? JSON.stringify(exercise.body)),
-            notes: exercise.body?.ok ? ["Provider smoke passed with live model evidence."] : [],
-            metrics: {
-              statusCode: exercise.status,
-              elapsedMs: exercise.body?.elapsedMs ?? 0,
-              returnedModel: exercise.body?.model ?? null,
-              usage: exercise.body?.usage ?? null,
-              providerSmokeState: exercise.body?.ok ? "passed_with_evidence" : "failed_with_evidence",
-              liveProviderExercise: true,
-            },
-          };
+        if (!statusResponse.ok || activeProvider?.providerId !== "openai" || !activeProvider.hasSecret) {
+          return { status: "failed", error: "The deterministic provider fixture is not active and configured." };
         }
-        const activeProviderConfigured = Boolean(activeProvider?.hasSecret);
+        const dispatchesBefore = llmStub.completionDispatches();
+        const exercise = await requestJson(stack.gatewayUrl, "/api/v1/dev/verification/provider-exercise", {
+          method: "POST",
+          body: {
+            providerId: activeProvider.providerId,
+            model: statusResponse.body?.activeModel || activeProvider.defaultModel,
+            scenario: "simple",
+          },
+        });
+        const providerDispatches = llmStub.completionDispatches() - dispatchesBefore;
+        const passed = exercise.ok && exercise.body?.ok === true && providerDispatches === 1;
         return {
-          status: statusResponse.ok && activeProvider ? "passed" : "failed",
-          providerId: activeProvider?.providerId,
-          modelId: statusResponse.body?.activeModel,
-          error: statusResponse.ok ? undefined : JSON.stringify(statusResponse.body),
-          notes: [
-            activeProviderConfigured
-              ? "Provider is configured and smoke-ready; live provider smoke was not exercised."
-              : "Provider smoke path is visible, but active provider credentials are not configured.",
-            "Set GOATCITADEL_VERIFY_INSTALL_LIVE_PROVIDER=1 with real credentials to produce provider smoke pass/fail evidence.",
-          ],
+          status: passed ? "passed" : "failed",
+          providerId: activeProvider.providerId,
+          modelId: exercise.body?.model,
+          error: passed
+            ? undefined
+            : `Deterministic provider exercise returned HTTP ${exercise.status} with ${providerDispatches} fixture dispatches.`,
+          notes: passed ? ["Provider smoke passed against the local deterministic fixture."] : [],
           metrics: {
-            statusCode: statusResponse.status,
+            statusCode: exercise.status,
+            providerDispatches,
             liveProviderExercise: false,
-            activeProviderConfigured,
-            providerSmokeState: activeProviderConfigured ? "smoke_ready" : "configured_only",
+            providerSmokeState: passed ? "deterministic_passed" : "deterministic_failed",
           },
         };
       },
