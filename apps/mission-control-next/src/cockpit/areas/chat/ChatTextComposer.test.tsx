@@ -225,6 +225,7 @@ function composerProps(overrides: Partial<ComposerProps> = {}): ComposerProps {
     onSetWebMode: vi.fn(),
     currentReviewDepth: "off",
     onToggleReviewMode: vi.fn(),
+    onToggleWorkspaceSnapshot: vi.fn(),
     onRemoveAttachment: vi.fn(),
     fileInputRef: createRef<HTMLInputElement>(),
     onAttachFiles: vi.fn(),

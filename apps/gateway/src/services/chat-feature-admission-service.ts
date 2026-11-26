@@ -18,6 +18,7 @@ import { buildTrustedSkillSnapshot } from "./chat-turn-capability-profile-servic
 import {
   buildGovernedActivatedSkillReceipts,
   renderGovernedSkillInstructions,
+  SkillInstructionBudgetExceededError,
 } from "./governed-skill-instruction-service.js";
 import { assertScheduledOccurrenceCurrent } from "./scheduled-chat-authority.js";
 import { assertHeartbeatOccurrenceCurrent } from "./heartbeat-chat-authority.js";
@@ -208,7 +209,7 @@ export async function resolveChatFeatureAdmission(
           ? host.getModelContextWindow(route.effectiveProviderId, route.effectiveModel)
           : undefined;
       const instructionBudgetTokens = Math.max(1, Math.min(4_096, Math.floor((contextWindow ?? 8_192) / 8)));
-      references.selectedSkills = readChatTurnFeatureReferences({
+      const selectedSkills = readChatTurnFeatureReferences({
         version: references.version,
         selectedSkills: {
           selectionMode: await host.getSkillSelectionMode(),
@@ -218,7 +219,9 @@ export async function resolveChatFeatureAdmission(
         },
       }).selectedSkills;
       // Validate the exact rendered bytes and budget before making the immutable binding.
-      await renderAdmittedSkillInstructions(host, references, workspaceId);
+      if (await fitsSkillInstructionBudget(host, { ...references, selectedSkills }, workspaceId)) {
+        references.selectedSkills = selectedSkills;
+      }
     }
   }
   const snapshotRequest = input.admission.admittedRequest.workspaceSnapshot;
@@ -311,6 +314,28 @@ export async function resolveChatFeatureAdmission(
     ...(input.admission.durableClaim ? { durableClaim: input.admission.durableClaim } : {}),
     references: readChatTurnFeatureReferences(references),
   });
+}
+
+/**
+ * Automatic skill matches are optional context: when they do not fit the
+ * model's instruction budget the turn continues without them. A skill the
+ * operator named explicitly still fails the turn with the actionable budget
+ * error, because silently dropping an explicit request would hide it.
+ */
+async function fitsSkillInstructionBudget(
+  host: ChatFeatureAdmissionHost,
+  references: ChatTurnFeatureReferences,
+  workspaceId: string,
+): Promise<boolean> {
+  try {
+    await renderAdmittedSkillInstructions(host, references, workspaceId);
+    return true;
+  } catch (error) {
+    if (!(error instanceof SkillInstructionBudgetExceededError)) throw error;
+    const activated = references.selectedSkills?.activatedSkills ?? [];
+    if (activated.some((receipt) => receipt.reasons.includes("explicit"))) throw error;
+    return false;
+  }
 }
 
 export async function renderAdmittedSkillInstructions(

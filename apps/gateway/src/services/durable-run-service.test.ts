@@ -435,6 +435,71 @@ describe("DurableRunService", () => {
     expect(timeline.map((item) => item.eventType)).toContain("run_started");
   });
 
+  it("backs off a queued run whose claim check keeps failing instead of re-reporting it every poll", async () => {
+    const runs = new Map<string, DurableRunRecord>([
+      ["run-poison", createRun("run-poison", "queued", "connector.delivery")],
+    ]);
+    const logger: DurableRunServiceLogger = { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const isWorkflowReadyToClaim = vi.fn(async () => {
+      throw new Error("readiness check unavailable");
+    });
+    const service = new DurableRunService(createContext(runs, [], [], { logger }) as unknown as ServiceContext, {
+      workflowRegistry: {
+        executeWorkflow: vi.fn(),
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable: vi.fn(),
+        isWorkflowReadyToClaim,
+      },
+    });
+    const claim = () => (service as unknown as { claimNextQueuedRun(): Promise<unknown> }).claimNextQueuedRun();
+
+    for (let poll = 0; poll < 6; poll += 1) await expect(claim()).resolves.toBeUndefined();
+
+    // Two free failures, then the third arms a backoff that the next polls respect.
+    expect(isWorkflowReadyToClaim).toHaveBeenCalledTimes(3);
+    expect(logger.error).toHaveBeenCalledTimes(3);
+    expect(runs.get("run-poison")?.status).toBe("queued");
+  });
+
+  it("finalizes an expired-lease run instead of requeueing it once it has been reclaimed too often", async () => {
+    const runs = new Map<string, DurableRunRecord>([
+      [
+        "run-crash-loop",
+        {
+          ...createRun("run-crash-loop", "running", "connector.delivery"),
+          leaseOwnerId: "worker-old",
+          leaseHeartbeatAt: "2026-03-14T00:00:00.000Z",
+          leaseExpiresAt: "2026-03-14T00:00:01.000Z",
+        },
+      ],
+    ]);
+    const timeline: Array<{ runId: string; eventType: string }> = Array.from({ length: 8 }, () => ({
+      runId: "run-crash-loop",
+      eventType: "run_reclaimed",
+    }));
+    const backgroundTasks = new Set<Promise<void>>();
+    const executeWorkflow = vi.fn();
+    const markWorkflowUnrecoverable = vi.fn(async () => undefined);
+    const service = new DurableRunService(createContext(runs, [], timeline) as unknown as ServiceContext, {
+      backgroundTasks,
+      workflowRegistry: {
+        executeWorkflow,
+        isWorkflowRecoverable: () => ({ recoverable: true }),
+        markWorkflowUnrecoverable,
+      },
+    });
+
+    service.startWorker();
+    await Promise.all([...backgroundTasks]);
+    await service.stopWorker();
+
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(markWorkflowUnrecoverable).toHaveBeenCalledTimes(1);
+    expect(runs.get("run-crash-loop")).toMatchObject({ status: "failed", leaseOwnerId: undefined });
+    expect(runs.get("run-crash-loop")?.lastError).toMatch(/restarted 8 times/);
+    expect(timeline.filter((event) => event.eventType === "run_reclaimed")).toHaveLength(8);
+  });
+
   it("reclaims a fresh same-host lease only after its exact local process is confirmed dead", async () => {
     const leaseOwnerId = buildDurableLocalProcessLeaseOwnerId({ pid: 987_654, nonce: randomUUID() });
     const run = {
@@ -5757,6 +5822,8 @@ function createContext(
           return input;
         },
         listByRun: (runId: string) => timeline.filter((entry) => entry.runId === runId),
+        countByRunAndType: (runId: string, eventType: string) =>
+          timeline.filter((entry) => entry.runId === runId && entry.eventType === eventType).length,
       },
       runImmediateTransaction,
     },

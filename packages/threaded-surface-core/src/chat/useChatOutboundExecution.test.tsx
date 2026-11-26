@@ -600,37 +600,40 @@ describe("useChatOutboundExecution", () => {
     { action: "send", streamEnabled: true },
     { action: "retry", streamEnabled: true },
     { action: "edit", streamEnabled: true },
-  ] as const)("preserves queued limited web access for $action (stream: $streamEnabled)", async ({ action, streamEnabled }) => {
-    const dispatch = streamEnabled
-      ? { send: streamAgentChatMessageMock, retry: streamRetryChatTurnMock, edit: streamEditChatTurnMock }[action]
-      : { send: sendAgentChatMessageMock, retry: retryChatTurnMock, edit: editChatTurnMock }[action];
-    if (streamEnabled) {
-      dispatch.mockImplementation(async (...args: unknown[]) => {
-        const onChunk = args[action === "send" ? 2 : 3];
-        if (typeof onChunk !== "function") throw new Error("Expected a stream consumer");
-        const identity = { sessionId: "session-1", turnId: "turn-2", messageId: "assistant-2" };
-        onChunk({ ...identity, type: "message_start", eventId: "evt-0", branchKind: "append" });
-        onChunk({ ...identity, type: "message_done", eventId: "evt-1", content: "Done" });
+  ] as const)(
+    "preserves queued limited web access for $action (stream: $streamEnabled)",
+    async ({ action, streamEnabled }) => {
+      const dispatch = streamEnabled
+        ? { send: streamAgentChatMessageMock, retry: streamRetryChatTurnMock, edit: streamEditChatTurnMock }[action]
+        : { send: sendAgentChatMessageMock, retry: retryChatTurnMock, edit: editChatTurnMock }[action];
+      if (streamEnabled) {
+        dispatch.mockImplementation(async (...args: unknown[]) => {
+          const onChunk = args[action === "send" ? 2 : 3];
+          if (typeof onChunk !== "function") throw new Error("Expected a stream consumer");
+          const identity = { sessionId: "session-1", turnId: "turn-2", messageId: "assistant-2" };
+          onChunk({ ...identity, type: "message_start", eventId: "evt-0", branchKind: "append" });
+          onChunk({ ...identity, type: "message_done", eventId: "evt-1", content: "Done" });
+        });
+      }
+      const requestPrefs = captureOutboundRequestPrefsSnapshot({ prefs: null, fullWebAccess: false });
+      await act(async () => {
+        create(<Harness streamEnabled={streamEnabled} fullWebAccess={true} />);
       });
-    }
-    const requestPrefs = captureOutboundRequestPrefsSnapshot({ prefs: null, fullWebAccess: false });
-    await act(async () => {
-      create(<Harness streamEnabled={streamEnabled} fullWebAccess={true} />);
-    });
-    await act(async () => {
-      await latest!.execute({
-        id: "queue-limited-web",
-        action,
-        ...(action === "send" ? {} : { targetTurnId: "turn-1" }),
-        content: "Check the fixture",
-        attachments: [],
-        requestPrefs,
-        createdAt: "2026-05-03T12:45:00.000Z",
+      await act(async () => {
+        await latest!.execute({
+          id: "queue-limited-web",
+          action,
+          ...(action === "send" ? {} : { targetTurnId: "turn-1" }),
+          content: "Check the fixture",
+          attachments: [],
+          requestPrefs,
+          createdAt: "2026-05-03T12:45:00.000Z",
+        });
       });
-    });
-    expect(dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatch.mock.calls[0]?.[action === "send" ? 1 : 2]).toMatchObject({ fullWebAccess: false });
-  });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch.mock.calls[0]?.[action === "send" ? 1 : 2]).toMatchObject({ fullWebAccess: false });
+    },
+  );
 
   it("carries an explicit model-council opt-in through non-stream send, retry, and edit requests", async () => {
     await act(async () => {
@@ -987,7 +990,9 @@ describe("useChatOutboundExecution", () => {
     await act(async () => {
       create(<Harness streamEnabled initialThread={runningThread} />);
     });
-    await act(async () => { await vi.dynamicImportSettled(); });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     expect(resumeChatTurnStreamMock).toHaveBeenCalledWith(
       "session-1",
       "turn-1",
@@ -1032,44 +1037,87 @@ describe("useChatOutboundExecution", () => {
     expect(latest?.getSnapshot()).toMatchObject({ sending: false, activeStream: null });
   });
 
-  it.each([undefined, "First thought. "])("reattaches thinking deltas once across a transport retry with saved prefix %s", async (savedThinking) => {
-    vi.useFakeTimers();
-    const runningThread = makeThread();
-    runningThread.turns[0]!.trace.status = "running";
-    runningThread.turns[0]!.thinking = savedThinking;
-    const firstTail = createDeferred<void>();
-    const secondTail = createDeferred<void>();
-    let onReplayChunk: ((chunk: any) => void) | undefined;
-    resumeChatTurnStreamMock.mockImplementationOnce((_sessionId, _turnId, onChunk) => {
-      onReplayChunk = onChunk;
-      return firstTail.promise;
-    }).mockImplementationOnce((_sessionId, _turnId, onChunk) => {
-      onReplayChunk = onChunk;
-      return secondTail.promise;
-    });
-    await act(async () => { create(<Harness streamEnabled initialThread={runningThread} />); });
-    await act(async () => { await vi.dynamicImportSettled(); });
-    const thinking = (sequence: number, delta: string) => ({ type: "thinking_delta", eventId: "thinking-" + sequence, sequence, sessionId: "session-1", turnId: "turn-1", delta });
-    await act(async () => {
-      onReplayChunk?.({ type: "message_start", eventId: "start", sequence: 1, sessionId: "session-1", turnId: "turn-1", messageId: "assistant-1", branchKind: "append" });
-      onReplayChunk?.(thinking(2, "First thought. "));
-    });
-    expect(latest!.getSnapshot().thread?.turns[0]?.thinking).toBe("First thought. ");
-    await act(async () => { firstTail.reject(new Error("transport disconnected")); await Promise.resolve(); });
-    expect(resumeChatTurnStreamMock).toHaveBeenLastCalledWith("session-1", "turn-1", expect.any(Function), expect.objectContaining({ sinceEventId: "thinking-2" }));
-    await act(async () => {
-      onReplayChunk?.(thinking(2, "First thought. "));
-      onReplayChunk?.({ ...thinking(99, "Wrong session"), sessionId: "session-2" });
-      onReplayChunk?.({ ...thinking(99, "Wrong turn"), turnId: "turn-2" });
-      onReplayChunk?.(thinking(3, "Second thought."));
-      onReplayChunk?.({ type: "delta", eventId: "text-4", sequence: 4, sessionId: "session-1", turnId: "turn-1", messageId: "assistant-1", delta: "Visible answer" });
-      await vi.advanceTimersByTimeAsync(260);
-    });
-    expect(latest!.getSnapshot().thread?.turns[0]?.thinking).toBe("First thought. Second thought.");
-    expect(getChatStreamingPreview("session-1")).toMatchObject({ text: "Visible answer" });
-    expect(streamAgentChatMessageMock).not.toHaveBeenCalled();
-    await act(async () => { secondTail.resolve(); await Promise.resolve(); });
-  });
+  it.each([undefined, "First thought. "])(
+    "reattaches thinking deltas once across a transport retry with saved prefix %s",
+    async (savedThinking) => {
+      vi.useFakeTimers();
+      const runningThread = makeThread();
+      runningThread.turns[0]!.trace.status = "running";
+      runningThread.turns[0]!.thinking = savedThinking;
+      const firstTail = createDeferred<void>();
+      const secondTail = createDeferred<void>();
+      let onReplayChunk: ((chunk: any) => void) | undefined;
+      resumeChatTurnStreamMock
+        .mockImplementationOnce((_sessionId, _turnId, onChunk) => {
+          onReplayChunk = onChunk;
+          return firstTail.promise;
+        })
+        .mockImplementationOnce((_sessionId, _turnId, onChunk) => {
+          onReplayChunk = onChunk;
+          return secondTail.promise;
+        });
+      await act(async () => {
+        create(<Harness streamEnabled initialThread={runningThread} />);
+      });
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+      const thinking = (sequence: number, delta: string) => ({
+        type: "thinking_delta",
+        eventId: "thinking-" + sequence,
+        sequence,
+        sessionId: "session-1",
+        turnId: "turn-1",
+        delta,
+      });
+      await act(async () => {
+        onReplayChunk?.({
+          type: "message_start",
+          eventId: "start",
+          sequence: 1,
+          sessionId: "session-1",
+          turnId: "turn-1",
+          messageId: "assistant-1",
+          branchKind: "append",
+        });
+        onReplayChunk?.(thinking(2, "First thought. "));
+      });
+      expect(latest!.getSnapshot().thread?.turns[0]?.thinking).toBe("First thought. ");
+      await act(async () => {
+        firstTail.reject(new Error("transport disconnected"));
+        await Promise.resolve();
+      });
+      expect(resumeChatTurnStreamMock).toHaveBeenLastCalledWith(
+        "session-1",
+        "turn-1",
+        expect.any(Function),
+        expect.objectContaining({ sinceEventId: "thinking-2" }),
+      );
+      await act(async () => {
+        onReplayChunk?.(thinking(2, "First thought. "));
+        onReplayChunk?.({ ...thinking(99, "Wrong session"), sessionId: "session-2" });
+        onReplayChunk?.({ ...thinking(99, "Wrong turn"), turnId: "turn-2" });
+        onReplayChunk?.(thinking(3, "Second thought."));
+        onReplayChunk?.({
+          type: "delta",
+          eventId: "text-4",
+          sequence: 4,
+          sessionId: "session-1",
+          turnId: "turn-1",
+          messageId: "assistant-1",
+          delta: "Visible answer",
+        });
+        await vi.advanceTimersByTimeAsync(260);
+      });
+      expect(latest!.getSnapshot().thread?.turns[0]?.thinking).toBe("First thought. Second thought.");
+      expect(getChatStreamingPreview("session-1")).toMatchObject({ text: "Visible answer" });
+      expect(streamAgentChatMessageMock).not.toHaveBeenCalled();
+      await act(async () => {
+        secondTail.resolve();
+        await Promise.resolve();
+      });
+    },
+  );
 
   it("reattaches a locally started running turn after switching conversations", async () => {
     const postTail = createDeferred<void>();
@@ -1188,6 +1236,53 @@ describe("useChatOutboundExecution", () => {
     });
     expect(latest?.getSnapshot()).toMatchObject({ sending: false });
     expect(loadSessionCoreState).toHaveBeenCalledWith("session-1", { background: true, includeThread: true });
+  });
+
+  it("gives the draft back only when a failed send never became a canonical turn", async () => {
+    resumeChatTurnStreamMock.mockRejectedValue(new Error("resume unavailable"));
+    streamAgentChatMessageMock.mockImplementationOnce(async (_sessionId, _payload, onChunk) => {
+      onChunk({
+        type: "message_start",
+        eventId: "evt-accepted-0",
+        sequence: 0,
+        sessionId: "session-1",
+        turnId: "turn-accepted",
+        messageId: "assistant-accepted",
+        branchKind: "append",
+        parentTurnId: "turn-1",
+      });
+      throw new Error("connection dropped");
+    });
+    streamAgentChatMessageMock.mockImplementationOnce(async () => {
+      throw new Error("gateway unreachable");
+    });
+
+    await act(async () => {
+      create(<Harness streamEnabled />);
+    });
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-accepted-then-dropped",
+        action: "send",
+        content: "Already in the thread",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+    // The Gateway accepted the turn: refilling the composer would invite a duplicate send.
+    expect(latest?.getSnapshot().draft).toBe("");
+    expect(latest?.getSnapshot().error).toBeTruthy();
+
+    await act(async () => {
+      await latest?.execute({
+        id: "queue-never-accepted",
+        action: "send",
+        content: "Never reached the Gateway",
+        attachments: [],
+        createdAt: "2026-05-03T12:46:00.000Z",
+      });
+    });
+    expect(latest?.getSnapshot().draft).toBe("Never reached the Gateway");
   });
 
   it("does not reconnect after a terminal provider error stream", async () => {

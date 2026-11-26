@@ -16,7 +16,8 @@ export function CitadelBriefPanel({ citadelId }: { citadelId: string }) {
       title="Daily brief"
       subtitle={
         brief
-          ? `What happened since ${new Date(brief.since).toLocaleString()} across ${brief.workspaces.length} workspace${brief.workspaces.length === 1 ? "" : "s"}.`
+          ? // Approvals are this Citadel's; the event and cost sources carry no Citadel scope, so say they are install-wide.
+            `What happened since ${new Date(brief.since).toLocaleString()}. Pending approvals cover this Citadel's ${brief.workspaces.length} workspace${brief.workspaces.length === 1 ? "" : "s"}; completed, failed, Ward hits and spend count the whole installation.`
           : "What happened in this Citadel while you were away."
       }
       stats={

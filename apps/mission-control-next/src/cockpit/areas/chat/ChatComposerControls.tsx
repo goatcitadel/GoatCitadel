@@ -2,7 +2,7 @@ import { useId, useRef, type ReactNode } from "react";
 import { Paperclip } from "lucide-react";
 import type { ChatCompletionReasoningEffort, ChatWebMode } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { PLAN_HELP, REVIEW_HELP, WEB_HELP } from "./chat-optional-vocabulary";
+import { COUNCIL_HELP, PLAN_HELP, REVIEW_HELP, SNAPSHOT_HELP, WEB_HELP } from "./chat-optional-vocabulary";
 import { ChatModelOptionsButton, type ModelOptionsRequest } from "./ChatModelOptionsButton";
 import { ChatComposerNotices } from "./ChatComposerNotices";
 import { WEB_MODES } from "./chat-composer-web-modes";
@@ -30,6 +30,12 @@ export type Controls = Pick<
   | "onSetWebMode"
   | "currentReviewDepth"
   | "onToggleReviewMode"
+  | "modelCouncilEnabled"
+  | "modelCouncilAvailable"
+  | "onToggleModelCouncil"
+  | "workspaceSnapshotAvailable"
+  | "workspaceSnapshotRequest"
+  | "onToggleWorkspaceSnapshot"
   | "pendingAttachments"
   | "onRemoveAttachment"
   | "fileInputRef"
@@ -110,12 +116,45 @@ export function ChatComposerModeOptions({ props, disabled }: { props: Controls; 
       >
         Review answer
       </button>
+      {/* Shown only while GoatCitadel reports each available, or while a stale arming still needs turning off. */}
+      {props.modelCouncilAvailable || props.modelCouncilEnabled ? (
+        <button
+          type="button"
+          title={COUNCIL_HELP}
+          aria-pressed={Boolean(props.modelCouncilEnabled)}
+          aria-describedby={`${modeHelpId}-council`}
+          disabled={disabled || !props.onToggleModelCouncil}
+          onClick={props.onToggleModelCouncil}
+          className="inline-flex min-h-8 items-center rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
+        >
+          Model council
+        </button>
+      ) : null}
+      {props.workspaceSnapshotAvailable || props.workspaceSnapshotRequest ? (
+        <button
+          type="button"
+          title={SNAPSHOT_HELP}
+          aria-pressed={Boolean(props.workspaceSnapshotRequest)}
+          aria-describedby={`${modeHelpId}-summary`}
+          disabled={disabled}
+          onClick={props.onToggleWorkspaceSnapshot}
+          className="inline-flex min-h-8 items-center rounded-md border border-line-control px-2 py-1 text-fg-secondary hover:border-accent aria-[pressed=true]:border-accent max-sm:min-h-11"
+        >
+          Project summary
+        </button>
+      ) : null}
       {/* Hover keeps the tooltip, the options popover shows the same help as text, and screen readers get it here. */}
       <span id={`${modeHelpId}-plan`} className="sr-only">
         {PLAN_HELP}
       </span>
       <span id={`${modeHelpId}-review`} className="sr-only">
         {REVIEW_HELP}
+      </span>
+      <span id={`${modeHelpId}-council`} className="sr-only">
+        {COUNCIL_HELP}
+      </span>
+      <span id={`${modeHelpId}-summary`} className="sr-only">
+        {SNAPSHOT_HELP}
       </span>
     </>
   );

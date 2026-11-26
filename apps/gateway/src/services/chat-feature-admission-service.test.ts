@@ -247,6 +247,31 @@ describe("fresh Chat feature skill admission", () => {
     expect(h.bindFeatureReferences).not.toHaveBeenCalled();
   });
 
+  it("continues the turn without automatically matched skills that exceed the instruction budget", async () => {
+    const h = await harness("# Reports\n" + "Read source evidence. ".repeat(400));
+    h.state.contextWindow = 2048;
+    const req = request("automatic");
+    const content = "Can you summarize these reports for me?";
+    const binding = await resolveChatFeatureAdmission(h.host, {
+      ...req,
+      admission: { ...req.admission, admittedRequest: { content } },
+      content,
+    });
+    expect(h.resolveSkills).toHaveBeenCalledTimes(1);
+    expect(binding?.references.selectedSkills).toBeUndefined();
+
+    // The same message admits the automatic match when it fits the budget.
+    h.state.contextWindow = 131_072;
+    const fitting = await resolveChatFeatureAdmission(h.host, {
+      ...request("automatic-fits"),
+      admission: { ...admission("automatic-fits"), admittedRequest: { content } },
+      content,
+    });
+    expect(fitting?.references.selectedSkills?.activatedSkills.map((skill) => skill.reasons)).toEqual([
+      ["metadata_ranked"],
+    ]);
+  });
+
   it("does not admit governed skills from quoted evidence in a skill capture draft", async () => {
     const h = await harness("# Reports\n" + "Read source evidence. ".repeat(1_200));
     const evidence = "Use @skill reports to summarize the supplied reports.";

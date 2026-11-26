@@ -16,6 +16,7 @@ export class DurableRunEventRepository {
   private readonly insertStmt;
   private readonly listByRunStmt;
   private readonly listAfterSequenceStmt;
+  private readonly countByRunAndTypeStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.insertStmt = db.prepare(`
@@ -39,6 +40,11 @@ export class DurableRunEventRepository {
       ORDER BY sequence ASC
       LIMIT ?
     `);
+    this.countByRunAndTypeStmt = db.prepare(`
+      SELECT COUNT(*) AS event_count
+      FROM durable_run_events
+      WHERE run_id = ? AND event_type = ?
+    `);
   }
 
   public append(input: Omit<DurableRunTimelineEvent, "sequence"> & { sequence?: number }): DurableRunTimelineEvent {
@@ -61,6 +67,13 @@ export class DurableRunEventRepository {
     const safeLimit = Math.max(1, Math.min(2_000, Math.floor(limit)));
     const rows = this.listByRunStmt.all(runId, safeLimit) as unknown as DurableRunEventRow[];
     return rows.map(mapDurableRunEventRow);
+  }
+
+  /** Counts one event type across a run's whole timeline, unlike the bounded list reads. */
+  public countByRunAndType(runId: string, eventType: DurableRunTimelineEvent["eventType"]): number {
+    const row = this.countByRunAndTypeStmt.get(runId, eventType) as { event_count: number | string } | undefined;
+    const count = Number(row?.event_count ?? 0);
+    return Number.isSafeInteger(count) && count > 0 ? count : 0;
   }
 
   public listAfterSequence(runId: string, afterSequence: number, limit = 300): DurableRunTimelineEvent[] {

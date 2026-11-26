@@ -1234,8 +1234,9 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "automation",
     "canvas-a2ui",
     "Canvas + A2UI",
-    "Visual canvas workspace and agent-to-ui interactions.",
-    "beta",
+    // A2UI has a contract and a proof lane but no operator runtime yet (see onboarding readiness).
+    "Visual canvas workspace and agent-to-ui interactions (not available yet).",
+    "planned",
     ["local"],
     ["scene-view", "selection", "inspect", "agent-apply"],
   ),
@@ -1285,7 +1286,16 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     ["webhook"],
     ["trigger"],
   ),
-  entry("automation", "weather", "Weather", "Weather data integration.", "native", ["none"], ["data"]),
+  // No weather integration runs; weather questions use web search. Planned keeps it off the runnable list.
+  entry(
+    "automation",
+    "weather",
+    "Weather",
+    "Weather data integration (not available yet).",
+    "planned",
+    ["none"],
+    ["data"],
+  ),
   entry(
     "automation",
     "image-gen",
@@ -1338,8 +1348,9 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "platform",
     "android-canvas-camera-screen",
     "Android Canvas/Camera/Screen",
-    "Native Android companion capabilities.",
-    "beta",
+    // Server-side companion contract only (bootstrapStatus "server_foundation"); no Android runtime has shipped.
+    "Native Android companion capabilities (not available yet).",
+    "planned",
     ["app-auth"],
     ["canvas", "camera", "screen"],
   ),
