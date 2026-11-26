@@ -10,7 +10,7 @@ type Item = LearnedMemoryItemRecord & { claim?: MemoryClaim };
 function createFakeRepo(seed: Item[]) {
   const items: Item[] = [...seed];
   const conflicts: Array<{ existingItemId: string; incomingItemId: string }> = [];
-  const corrections: Array<{ itemId: string; content: string }> = [];
+  const corrections: Array<{ itemId: string; expectedSourceHash: string; content: string }> = [];
   let next = 1;
   const insertItem = (input: Partial<Item> & { content: string; status: string }) => {
     const item = {
@@ -43,10 +43,21 @@ function createFakeRepo(seed: Item[]) {
       },
       updateItemConfidence: async () => undefined,
       appendSource: async () => undefined,
-      correctItem: async (input: { itemId: string; replacement: Partial<Item> & { content: string } }) => {
+      correctItem: async (input: {
+        itemId: string;
+        expectedSourceHash: string;
+        replacement: Partial<Item> & { content: string };
+      }) => {
         const previous = items.find((item) => item.itemId === input.itemId)!;
+        // Like the real repo: a changed or non-active target is stale and nothing is mutated.
+        if (previous.sourceHash !== input.expectedSourceHash || previous.status !== "active")
+          throw new Error("The reviewed learned-memory correction is stale.");
         previous.status = "superseded" as Item["status"];
-        corrections.push({ itemId: input.itemId, content: input.replacement.content });
+        corrections.push({
+          itemId: input.itemId,
+          expectedSourceHash: input.expectedSourceHash,
+          content: input.replacement.content,
+        });
         return insertItem({ ...input.replacement, status: "active" });
       },
     },
@@ -94,6 +105,7 @@ describe("learned memory saved before claims existed", () => {
 
   it("infers nothing from a negated statement, so its polarity is never flipped", () => {
     expect(inferSessionMemoryClaim("Never give concise replies.", SESSION)).toBeUndefined();
+    expect(inferSessionMemoryClaim("Always avoid concise replies.", SESSION)).toBeUndefined();
     expect(inferSessionMemoryClaim("Don't use detailed explanations.", SESSION)).toBeUndefined();
     expect(inferSessionMemoryClaim("No, I now prefer detailed replies.", SESSION)).toMatchObject({
       value: "detailed",
@@ -119,8 +131,21 @@ describe("learned memory saved before claims existed", () => {
   it("lets an operator correction supersede the older unclaimed preference", async () => {
     const { fake, say } = createService([legacyItem("old-1", "Remember that I prefer concise replies.")]);
     await say("No, I now prefer detailed replies.", "msg-2");
-    expect(fake.corrections).toEqual([expect.objectContaining({ itemId: "old-1" })]);
+    expect(fake.corrections).toEqual([expect.objectContaining({ itemId: "old-1", expectedSourceHash: "hash-old-1" })]);
     expect(active(fake.items)).toEqual(["No, I now prefer detailed replies."]);
+  });
+
+  it("leaves the older preference unchanged when it changed after it was read", async () => {
+    const { fake, say } = createService([legacyItem("old-1", "Remember that I prefer concise replies.")]);
+    const read = fake.repo.findActiveByType;
+    fake.repo.findActiveByType = async (sessionId, itemType) => {
+      const rows = (await read(sessionId, itemType)).map((item) => ({ ...item }));
+      fake.items[0]!.sourceHash = "hash-edited-elsewhere";
+      return rows;
+    };
+    await expect(say("No, I now prefer detailed replies.", "msg-2")).rejects.toThrow(/stale/u);
+    expect(fake.corrections).toEqual([]);
+    expect(active(fake.items)).toEqual(["Remember that I prefer concise replies."]);
   });
 
   it("leaves an unrelated older preference untouched", async () => {
