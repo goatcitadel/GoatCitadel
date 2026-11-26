@@ -20,6 +20,12 @@ export interface ScriptFinding {
 /** Files treated as scripts: their text is checked by these rules and their comments by the promptware scan. */
 export const SCRIPT_FILE_PATTERN = /\.(ps1|psm1|bat|cmd|sh|bash|zsh|py|js|mjs|cjs|ts|rb|pl|vbs)$/i;
 
+/**
+ * The original, broader script check: any `rm -rf`, `del /f`, encoded PowerShell or a download piped to `iex`. It is a
+ * caution signal on its own; the rules below decide what is dangerous.
+ */
+export const BROAD_SCRIPT_RISK_PATTERN = /(rm\s+-rf|del\s+\/f|powershell\s+-enc|invoke-webrequest\s+.*\|\s*iex)/i;
+
 const NETWORK_INDICATOR_PATTERN = /(https?:\/\/|fetch\s*\(|axios\.|curl\s+)/i;
 
 const SCRIPT_RULES: ReadonlyArray<{ ruleId: ScriptRuleId; dangerous: boolean; patterns: readonly RegExp[] }> = [

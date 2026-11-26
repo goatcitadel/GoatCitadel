@@ -24,7 +24,8 @@ import {
   type MaterializedGitTreeFile,
 } from "./hardened-git.js";
 import { assertSafeGitPositionalArg } from "./security-utils.js";
-import { NETWORK_INDICATOR_PATTERN, SUSPICIOUS_SCRIPT_PATTERN } from "./skill-content-validation.js";
+import { readSkillScanFiles, scanSkillContents, type SkillScanFile } from "./skill-content-scan.js";
+import { BROAD_SCRIPT_RISK_PATTERN, SCRIPT_FILE_PATTERN } from "./skill-script-scan.js";
 import { PROMPTWARE_MAX_FINDINGS, scanPromptwareContent } from "./assembled-prompt-injection-guard.js";
 import {
   SKILL_BUNDLE_MANIFEST_FILENAME,
@@ -53,6 +54,8 @@ import type {
   SkillImportProvenance,
   SkillImportScriptDisposition,
   SkillPromptwareFinding,
+  SkillScanFindingCode,
+  SkillScanSummary,
   SkillImportSourceType,
   SkillImportValidationResult,
   SkillSourceLookupParsedSource,
@@ -67,7 +70,6 @@ import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 const IMPORT_HISTORY_KEY = "skill_import_history_v1";
 const MAX_IMPORT_HISTORY = 300;
-const MAX_SKILL_SCAN_FILES = 80;
 const TEMP_CLEANUP_OPTIONS = {
   recursive: true,
   force: true,
@@ -1650,7 +1652,9 @@ export class SkillImportService {
       errors.push(`Invalid SKILL.md: ${(error as Error).message}`);
     }
 
-    const scan = await scanSkillDirectory(source.skillDir);
+    const scanRead = await readSkillScanFiles(source.skillDir);
+    const scanVerdict = scanSkillContents(scanRead.files, "untrusted", { truncated: scanRead.truncated });
+    const scan = summarizeImportScan(scanRead, scanVerdict);
     const promptwareScan = initialContentIntegrity
       ? await scanPromptwareIntegrityFiles(source.skillDir, initialContentIntegrity)
       : { findings: [], unscannedPaths: ["<content-integrity-unavailable>"] };
@@ -1691,6 +1695,7 @@ export class SkillImportService {
         `Promptware scan incomplete for model-facing files: ${summarizePathList(promptwareScan.unscannedPaths)}.`,
       );
     }
+    errors.push(...describeBlockingScanFindings(scanVerdict, promptwareScan));
     if (!licenseDetected) {
       warnings.push("No license file detected.");
     }
@@ -1765,6 +1770,7 @@ export class SkillImportService {
     return {
       valid: errors.length === 0,
       riskLevel,
+      scanVerdict,
       reviewDisposition: reviewPolicy?.reviewDisposition,
       reviewMessage: reviewPolicy?.message,
       errors,
@@ -2988,86 +2994,63 @@ function normalizeZipEntryPath(entryName: string): string {
   return normalized;
 }
 
-async function scanSkillDirectory(dir: string): Promise<{
+/** The import's view of the shared scan, in the shape its checks and warnings have always read. */
+function summarizeImportScan(
+  read: { files: readonly SkillScanFile[]; truncated: boolean },
+  verdict: SkillScanSummary,
+): {
   suspiciousSignals: string[];
   networkSignals: string[];
   licenseFiles: string[];
   scriptFiles: string[];
   skippedLargeFiles: string[];
   truncated: boolean;
-}> {
-  const suspiciousSignals = new Set<string>();
-  const networkSignals = new Set<string>();
-  const licenseFiles = new Set<string>();
-  const scriptFiles = new Set<string>();
-  const skippedLargeFiles = new Set<string>();
-  const queue = [dir];
-  let scannedFiles = 0;
-  let truncated = false;
-
-  while (queue.length > 0 && scannedFiles < MAX_SKILL_SCAN_FILES) {
-    const current = queue.shift();
-    if (!current) {
-      continue;
-    }
-    const entries = await (async (): Promise<Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>> => {
-      try {
-        return await fs.readdir(current, { withFileTypes: true });
-      } catch {
-        return [];
-      }
-    })();
-
-    for (const entry of entries) {
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name !== ".git") {
-          queue.push(fullPath);
-        }
-        continue;
-      }
-      if (!entry.isFile()) {
-        continue;
-      }
-      scannedFiles += 1;
-      if (/^(license|copying)(\..*)?$/i.test(entry.name)) {
-        licenseFiles.add(path.relative(dir, fullPath).replaceAll("\\", "/"));
-      }
-      if (/\.(ps1|bat|cmd|sh|bash|zsh|py|js|mjs|cjs|ts)$/i.test(entry.name)) {
-        scriptFiles.add(path.relative(dir, fullPath).replaceAll("\\", "/"));
-      }
-      if (scannedFiles > MAX_SKILL_SCAN_FILES) {
-        truncated = true;
-        break;
-      }
-      const readResult = await tryReadFileText(fullPath);
-      if (readResult.skippedLargeFile) {
-        skippedLargeFiles.add(path.relative(dir, fullPath).replaceAll("\\", "/"));
-      }
-      if (!readResult.text) {
-        continue;
-      }
-      const text = readResult.text;
-      if (SUSPICIOUS_SCRIPT_PATTERN.test(text)) {
-        suspiciousSignals.add(path.relative(dir, fullPath).replaceAll("\\", "/"));
-      }
-      if (NETWORK_INDICATOR_PATTERN.test(text)) {
-        networkSignals.add(path.relative(dir, fullPath).replaceAll("\\", "/"));
-      }
-    }
-  }
-  if (queue.length > 0) {
-    truncated = true;
-  }
-
+} {
+  const pathsWith = (codes: readonly SkillScanFindingCode[]) =>
+    Array.from(
+      new Set(verdict.findings.filter((finding) => codes.includes(finding.code)).map((finding) => finding.path)),
+    ).filter((filePath) => filePath !== ".");
+  const names = read.files.map((file) => file.path);
+  // Suspicious means what it always meant (the broad pattern) plus the new dangerous rules; caution-only rules such as
+  // credential paths or startup entries show as warnings without feeding the Skill Hub's suspicious-script blocker.
+  const decoder = new TextDecoder("utf-8");
+  const broadMatches = read.files
+    .filter((file) => BROAD_SCRIPT_RISK_PATTERN.test(decoder.decode(file.bytes)))
+    .map((file) => file.path);
   return {
-    suspiciousSignals: [...suspiciousSignals],
-    networkSignals: [...networkSignals],
-    licenseFiles: [...licenseFiles],
-    scriptFiles: [...scriptFiles],
-    skippedLargeFiles: [...skippedLargeFiles],
-    truncated,
+    suspiciousSignals: Array.from(new Set([...pathsWith(["unsafe_script"]), ...broadMatches])),
+    networkSignals: pathsWith(["network_use"]),
+    licenseFiles: names.filter((filePath) => /^(license|copying)(\..*)?$/i.test(path.posix.basename(filePath))),
+    scriptFiles: names.filter((filePath) => SCRIPT_FILE_PATTERN.test(filePath)),
+    skippedLargeFiles: pathsWith(["scan_incomplete"]),
+    truncated: read.truncated,
   };
+}
+
+/** One error per kind of blocking finding, naming its files. Promptware in .md/.txt already has its own error. */
+function describeBlockingScanFindings(
+  verdict: SkillScanSummary,
+  promptwareScan: { findings: SkillPromptwareFinding[] },
+): string[] {
+  const reported = new Set(promptwareScan.findings.map((finding) => finding.sourcePath));
+  const pathsFor = (code: SkillScanFindingCode) =>
+    Array.from(
+      new Set(
+        verdict.findings
+          .filter((finding) => finding.dangerous && finding.code === code && !reported.has(finding.path))
+          .map((finding) => finding.path),
+      ),
+    );
+  const messages: Array<[SkillScanFindingCode, string]> = [
+    ["prompt_injection", "Prompt-injection instructions detected in skill files"],
+    ["hidden_text", "Hidden or disguised text detected in skill files"],
+    ["unsafe_script", "Unsafe script commands (download-and-run, encoded commands or whole-drive deletes) detected in"],
+    ["unreadable_file", "Skill files could not be read as text and could not be checked"],
+  ];
+  return messages.flatMap(([code, message]) => {
+    const paths = pathsFor(code);
+    return paths.length > 0 ? [`${message}: ${summarizePathList(paths)}.`] : [];
+  });
 }
 
 async function scanPromptwareIntegrityFiles(
@@ -3176,22 +3159,6 @@ function buildScriptDisposition(scriptFiles: string[], suspiciousSignals: string
 
 async function removeTempRoot(tempRoot: string): Promise<void> {
   await fs.rm(tempRoot, TEMP_CLEANUP_OPTIONS);
-}
-
-async function tryReadFileText(filePath: string): Promise<{ text: string; skippedLargeFile: boolean }> {
-  try {
-    const stat = await fs.stat(filePath);
-    if (stat.size > 220_000) {
-      return { text: "", skippedLargeFile: true };
-    }
-    const content = await readBoundedSkillTextFile(filePath, 220_000, "Imported skill scan file");
-    return { text: content, skippedLargeFile: false };
-  } catch (error) {
-    if (error instanceof SkillContentIntegrityLimitError) {
-      return { text: "", skippedLargeFile: true };
-    }
-    return { text: "", skippedLargeFile: false };
-  }
 }
 
 function deriveRiskLevel(input: {

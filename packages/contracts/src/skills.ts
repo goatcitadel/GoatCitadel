@@ -1,3 +1,4 @@
+import type { SkillScanSummary } from "./skill-scan.js";
 import type { CapabilityCategory, SkillLifecycleRecord, SkillLifecycleState } from "./capabilities.js";
 
 export interface SkillFrontmatter {
@@ -345,6 +346,8 @@ export interface SkillPromptwareFinding {
 export interface SkillImportValidationResult {
   valid: boolean;
   riskLevel: "low" | "medium" | "high";
+  /** The shared content scan; `block` findings are also listed in `errors`. */
+  scanVerdict?: SkillScanSummary;
   reviewDisposition?: "allow" | "conditional" | "reference_only" | "reject";
   reviewMessage?: string;
   errors: string[];

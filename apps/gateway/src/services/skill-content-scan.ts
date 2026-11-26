@@ -3,7 +3,12 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import type { SkillScanFinding, SkillScanFindingCode, SkillScanSummary } from "@goatcitadel/contracts";
 import { PROMPTWARE_SCANNER_VERSION, scanPromptwareContent } from "./assembled-prompt-injection-guard.js";
-import { SCRIPT_FILE_PATTERN, hasNetworkIndicator, scanScriptText } from "./skill-script-scan.js";
+import {
+  BROAD_SCRIPT_RISK_PATTERN,
+  SCRIPT_FILE_PATTERN,
+  hasNetworkIndicator,
+  scanScriptText,
+} from "./skill-script-scan.js";
 
 /**
  * One scan for every way a skill reaches the model. The findings are the same whatever the source; only the verdict
@@ -35,12 +40,17 @@ export function scanSkillContents(
   opts: { truncated?: boolean } = {},
 ): SkillScanSummary {
   const findings: SkillScanFinding[] = [];
-  if (opts.truncated) findings.push({ code: "scan_incomplete", path: ".", dangerous: true });
+  // An incomplete scan is reported, not escalated: imports warn about it, and the Skill Hub review refuses it itself.
+  if (opts.truncated) findings.push({ code: "scan_incomplete", path: ".", dangerous: false });
   for (const file of files) findings.push(...scanOneFile(file));
-  const sorted = dedupe(findings)
-    .sort((left, right) => left.path.localeCompare(right.path) || (left.line ?? 0) - (right.line ?? 0))
-    .slice(0, MAX_FINDINGS);
-  return { verdict: verdictFor(sorted, origin), findings: sorted, scannerVersion: PROMPTWARE_SCANNER_VERSION };
+  const byPlace = (left: SkillScanFinding, right: SkillScanFinding) =>
+    left.path.localeCompare(right.path) || (left.line ?? 0) - (right.line ?? 0);
+  const all = dedupe(findings).sort(byPlace);
+  // The verdict reads every finding; the cap keeps dangerous findings first, so a block always shows its reason.
+  const kept = [...all.filter((finding) => finding.dangerous), ...all.filter((finding) => !finding.dangerous)]
+    .slice(0, MAX_FINDINGS)
+    .sort(byPlace);
+  return { verdict: verdictFor(all, origin), findings: kept, scannerVersion: PROMPTWARE_SCANNER_VERSION };
 }
 
 function verdictFor(findings: readonly SkillScanFinding[], origin: SkillScanOrigin): SkillScanSummary["verdict"] {
@@ -51,7 +61,7 @@ function verdictFor(findings: readonly SkillScanFinding[], origin: SkillScanOrig
 function scanOneFile(file: SkillScanFile): SkillScanFinding[] {
   if (ASSET_FILE.test(file.path)) return [];
   if ((file.size ?? file.bytes.length) > SKILL_SCAN_MAX_FILE_BYTES) {
-    return [{ code: "scan_incomplete", path: file.path, dangerous: true }];
+    return [{ code: "scan_incomplete", path: file.path, dangerous: false }];
   }
   let text: string;
   try {
@@ -73,7 +83,15 @@ function scanOneFile(file: SkillScanFile): SkillScanFinding[] {
       findings.push({ code, path: file.path, line: finding.startLine, dangerous: true });
     }
   }
-  for (const finding of scanScriptText(text)) {
+  const scriptFindings = scanScriptText(text);
+  const ruledLines = new Set(scriptFindings.map((finding) => finding.line));
+  text.split(/\r\n|\r|\n/u).forEach((lineText, index) => {
+    // The broader original check (any `rm -rf`) stays a caution signal where no rule already spoke.
+    if (!ruledLines.has(index + 1) && BROAD_SCRIPT_RISK_PATTERN.test(lineText)) {
+      findings.push({ code: "risky_script", path: file.path, line: index + 1, dangerous: false });
+    }
+  });
+  for (const finding of scriptFindings) {
     // Outside a script, a command is documentation the operator should see, not code that runs.
     const dangerous = isScript && finding.dangerous;
     findings.push({

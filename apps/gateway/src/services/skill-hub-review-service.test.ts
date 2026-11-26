@@ -216,6 +216,28 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
         expectedField: "PROMPT_INJECTION_DETECTED",
       },
       {
+        name: "hidden text",
+        mutate: (validation) => {
+          validation.scanVerdict = {
+            verdict: "block",
+            findings: [{ code: "hidden_text", path: "notes.yaml", line: 1, dangerous: true }],
+            scannerVersion: "1.0.0",
+          };
+        },
+        expectedField: "HIDDEN_TEXT_DETECTED",
+      },
+      {
+        name: "unreadable file",
+        mutate: (validation) => {
+          validation.scanVerdict = {
+            verdict: "block",
+            findings: [{ code: "unreadable_file", path: "data.json", dangerous: true }],
+            scannerVersion: "1.0.0",
+          };
+        },
+        expectedField: "UNREADABLE_SKILL_FILE",
+      },
+      {
         name: "promptware scan incomplete",
         mutate: (validation) => {
           validation.checks.promptwareScanComplete = false;
@@ -310,7 +332,7 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
       expect(databaseCount(harness.storage, "candidate_skill_versions")).toBe(0);
       expect(databaseCount(harness.storage, "skill_lifecycle")).toBe(0);
     }
-  }, 90_000); // Seven independently migrated SQLite + filesystem review fixtures.
+  }, 150_000); // Nine independently migrated SQLite + filesystem review fixtures.
 
   it("rejects credentialed, fragmented, local, and marketplace source URLs before materialization", async () => {
     const harness = await createHarness();

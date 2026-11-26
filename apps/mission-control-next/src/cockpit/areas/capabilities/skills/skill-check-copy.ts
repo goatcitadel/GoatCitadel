@@ -27,6 +27,8 @@ export const SKILL_BLOCKER_COPY: Readonly<Record<SkillHubBlockerCode, string>> =
   CANDIDATE_ALREADY_EXISTS: "It's already installed.",
   RUNTIME_ALREADY_EXISTS: "It's already installed.",
   BUNDLED_SKILL_NAME_TAKEN: "GoatCitadel already has a built-in skill with this name.",
+  HIDDEN_TEXT_DETECTED: "Its files contain hidden or disguised text.",
+  UNREADABLE_SKILL_FILE: "Some of its files can't be read, so they couldn't be checked.",
 };
 
 /** The sentence for a code the map doesn't hold: it is one of GoatCitadel's checks all the same. */

@@ -1,7 +1,7 @@
 import { parseSkillMarkdown, resolveSkillNameViolation } from "@goatcitadel/skills";
 import { scanPromptwareContent, type PromptwareScanFinding } from "./assembled-prompt-injection-guard.js";
 import { normalizeSkillId } from "./skill-import-service.js";
-import { scanScriptText } from "./skill-script-scan.js";
+import { BROAD_SCRIPT_RISK_PATTERN, scanScriptText } from "./skill-script-scan.js";
 
 /**
  * Shared skill-content validation + security scan.
@@ -17,7 +17,7 @@ import { scanScriptText } from "./skill-script-scan.js";
  */
 
 /** High-risk shell/script indicators (matches the import directory scanner). */
-export const SUSPICIOUS_SCRIPT_PATTERN = /(rm\s+-rf|del\s+\/f|powershell\s+-enc|invoke-webrequest\s+.*\|\s*iex)/i;
+export const SUSPICIOUS_SCRIPT_PATTERN = BROAD_SCRIPT_RISK_PATTERN;
 
 /** Outbound-network indicators (matches the import directory scanner). */
 export const NETWORK_INDICATOR_PATTERN = /(https?:\/\/|fetch\s*\(|axios\.|curl\s+)/i;

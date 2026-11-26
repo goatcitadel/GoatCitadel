@@ -45,6 +45,7 @@ import {
   type SkillHubPluginSkillInput,
 } from "./skill-hub-plugin-skill-source.js";
 import type { MaterializedSkillReviewContext, SkillImportService } from "./skill-import-service.js";
+import { assertNoScanBlockers, scanVerdictBlockers } from "./skill-hub-scan-blockers.js";
 
 export const SKILL_HUB_REVIEW_SCHEMA_VERSION = "goatcitadel.skill-hub-review.v1" as const;
 
@@ -523,6 +524,8 @@ function assertCompleteValidation(validation: SkillImportValidationResult): void
   if (validation.checks.promptwareSafe !== true || validation.promptwareFindings.length > 0) {
     rejectReview("PROMPT_INJECTION_DETECTED", "Skill source contains prompt-injection instructions.");
   }
+  // The shared scan's dangerous findings refuse with their own reason, ahead of the general validation failure.
+  assertNoScanBlockers(validation, rejectReview);
   if (!validation.valid) {
     rejectReview("VALIDATION_FAILED", "Skill source failed production admission validation.");
   }
@@ -664,6 +667,7 @@ function standardizedBlockers(validation: SkillImportValidationResult): SkillHub
     ...(!validation.checks.promptwareScanComplete || validation.promptwareUnscannedPaths.length > 0
       ? ["PROMPTWARE_SCAN_INCOMPLETE" as const]
       : []),
+    ...scanVerdictBlockers(validation),
   ];
   return [...new Set(blockers)].sort(compareStrings);
 }
