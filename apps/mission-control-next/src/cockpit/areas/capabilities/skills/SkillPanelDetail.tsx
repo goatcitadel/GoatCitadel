@@ -1,13 +1,15 @@
 import type { ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import type { CapabilitySkillDetail, CapabilitySkillItem } from "@goatcitadel/contracts";
+import type { CapabilitySkillDetail, CapabilitySkillItem, SkillScanFinding } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { CHECKING_FOR_CHANGES, recordView } from "../../../data/record-view";
 import { Button } from "../../../ui/Button";
 import { Section } from "../../../ui/Section";
+import { DisclosureSummary } from "../../../ui/DisclosureSummary";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { CapabilityPolicyEvidence, CapabilitySourceEvidence } from "../../library/CapabilityEvidence";
 import { SkillInstructions } from "./SkillInstructions";
+import { SKILL_SCAN_FINDING_COPY } from "./skill-check-copy";
 import { presentSkillReview, presentSkillSource } from "./skill-source";
 
 type DetailQuery = UseQueryResult<CapabilitySkillDetail>;
@@ -100,6 +102,30 @@ function SkillTechnicalDetails({
 }
 
 /**
+ * What the content check found in a skill from the operator's own folders, collapsed until asked for. The skill keeps
+ * working; the list says what to look at, one plain line per finding with the file (and line) it came from.
+ */
+function ScanFindings({ findings }: { findings: readonly SkillScanFinding[] }) {
+  return (
+    <details className="text-sm text-fg-secondary">
+      <DisclosureSummary className="cursor-pointer font-medium text-accent">What the check found</DisclosureSummary>
+      <p className="mt-2">It can still be used. Look at these before you rely on it.</p>
+      <ul className="mt-2 space-y-1">
+        {findings.map((finding) => (
+          <li key={`${finding.code}:${finding.path}:${finding.line ?? ""}`} className="min-w-0 break-words">
+            {SKILL_SCAN_FINDING_COPY[finding.code]}{" "}
+            <span className="font-mono text-xs text-fg-muted">
+              {finding.path === "." ? "the skill's folder" : finding.path}
+              {finding.line ? `, line ${finding.line}` : ""}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+/**
  * The parts of the panel that come from the skill's own details: its instructions, where it came from, and the
  * collapsed Technical details. Where it came from is worded from the list until the details arrive, so it never waits
  * on them; the details only name the host an import came from.
@@ -116,6 +142,7 @@ export function SkillPanelDetail({ item, query }: { item: CapabilitySkillItem; q
       <Section title="Where it came from" headingLevel={3}>
         <p className="text-sm text-fg-secondary">{review ? `${source} · ${review}` : source}</p>
       </Section>
+      {detail?.scanFindings?.length ? <ScanFindings findings={detail.scanFindings} /> : null}
       <SkillTechnicalDetails item={item} detail={detail} />
     </>
   );

@@ -211,6 +211,32 @@ describe("skillOriginFor", () => {
 });
 
 describe("buildCapabilitySkillItems", () => {
+  it("carries a warning scan verdict as scanWarning and nothing for a clean one", () => {
+    const finding = { code: "network_use" as const, path: "README.md", line: 1, dangerous: false };
+    const items = buildCapabilitySkillItems({
+      ...ITEMS_INPUT,
+      skills: [
+        skill({
+          skillId: "mine",
+          name: "a",
+          scanVerdict: { verdict: "warn", findings: [finding], scannerVersion: "1.0.0" },
+        }),
+        skill({
+          skillId: "clean",
+          name: "b",
+          scanVerdict: { verdict: "clean", findings: [], scannerVersion: "1.0.0" },
+        }),
+      ],
+    });
+    expect(items.map((item) => item.scanWarning)).toEqual([true, undefined]);
+    const detail = buildCapabilitySkillDetail(
+      skill({ skillId: "mine", scanVerdict: { verdict: "warn", findings: [finding], scannerVersion: "1.0.0" } }),
+      undefined,
+    );
+    expect(detail.scanFindings).toEqual([finding]);
+    expect(buildCapabilitySkillDetail(skill({ skillId: "clean" }), undefined).scanFindings).toBeUndefined();
+  });
+
   it("maps enabled, sleep and disabled to on, paused and off", () => {
     const items = buildCapabilitySkillItems({
       ...ITEMS_INPUT,

@@ -1,4 +1,5 @@
 import { useId, useRef } from "react";
+import { TriangleAlert } from "lucide-react";
 import { SKILL_ORIGIN_LABELS, type CapabilitySkillItem } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
@@ -14,6 +15,9 @@ import { useSkillSwitch } from "./use-skill-switch";
  * once. The visible words stay in the row's own line.
  */
 const waitingAnnouncement = (name: string) => `${name}: waiting for your approval.`;
+
+/** The row's label for a skill whose content check warned. It takes the caution tone; it never blocks anything. */
+const SCAN_WARNING_STATUS = { label: "Warning", tone: "waiting" } as const;
 
 export interface SkillRowProps {
   /** The live row from the cached list. */
@@ -55,6 +59,10 @@ export function SkillRow({ item, uses, onView }: SkillRowProps) {
             <h3 className="min-w-0 truncate text-base font-semibold text-fg">{item.name}</h3>
             <span className="shrink-0 text-xs text-fg-muted">{SKILL_ORIGIN_LABELS[item.origin]}</span>
             {item.fromPlugin ? <FromPluginLink plugin={item.fromPlugin} className="shrink-0 text-xs" /> : null}
+            {/* The content check found something in the operator's own skill: shown here, explained in its panel. */}
+            {item.scanWarning ? (
+              <StatusBadge status={SCAN_WARNING_STATUS} icon={TriangleAlert} className="shrink-0 self-center" />
+            ) : null}
           </div>
           <p className="mt-0.5 truncate text-sm text-fg-secondary">{item.description}</p>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">

@@ -337,6 +337,37 @@ describe("Skill panel", () => {
     expect([...body()!.querySelectorAll("span, p")].filter((entry) => entry.textContent === "Paused")).toHaveLength(1);
   });
 
+  it("labels a skill whose content check warned and lists what the check found", async () => {
+    const mine = skill({ skillId: "house-style-id", name: "House style", origin: "workspace", scanWarning: true });
+    api.fetchCapabilitySkills.mockResolvedValue(
+      listOf([mine, ...ITEMS.filter((item) => item.skillId !== mine.skillId)]),
+    );
+    api.fetchCapabilitySkillDetail.mockImplementation(async (_workspaceId: string, skillId: string) =>
+      detailOf(skillId, {
+        scanFindings: [{ code: "unsafe_script", path: "scripts/install.sh", line: 2, dangerous: true }],
+      }),
+    );
+    await renderTab();
+
+    expect(rowOf("House style").textContent).toContain("Warning");
+    expect(rowOf("Notes").textContent).not.toContain("Warning");
+
+    await openPanel("House style");
+    const disclosure = [...body()!.querySelectorAll("details")].find((entry) =>
+      entry.querySelector("summary")?.textContent?.includes("What the check found"),
+    );
+    expect(disclosure).toBeDefined();
+    expect(disclosure!.open).toBe(false);
+    expect(disclosure!.textContent).toContain("It includes scripts that look unsafe.");
+    expect(disclosure!.textContent).toContain("scripts/install.sh");
+  });
+
+  it("shows no check findings for a clean skill", async () => {
+    await renderTab();
+    await openPanel("Notes");
+    expect(panelText()).not.toContain("What the check found");
+  });
+
   it("renders a script tag in the instructions as text", async () => {
     api.fetchCapabilitySkillDetail.mockResolvedValue(
       detailOf("acme-writer-v2", {
