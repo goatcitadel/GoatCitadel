@@ -17,8 +17,8 @@ import {
 import { repoRoot, sanitizeFilePart, spawnVerificationProcess, writeText } from "./shared.mjs";
 
 let gatewayWorkspaceBuildEnsured = false;
-const uiBuildKeys = new Map();
 const WINDOWS_CMD_PATH = "C:\\Windows\\System32\\cmd.exe";
+const DEFAULT_REQUEST_TIMEOUT_MS = 180_000;
 
 export async function prepareVerificationRuntime(runId) {
   const tempParent = process.env.GOATCITADEL_VERIFY_TEMP_ROOT?.trim() || os.tmpdir();
@@ -101,9 +101,11 @@ export async function startVerificationStack(context, options = {}) {
         VITE_GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
         ...options.uiEnv,
       };
+      let uiOutDir;
       if (options.uiMode === "preview") {
         const uiBuildStartedAt = performance.now();
-        await ensureVerificationUiBuild(context, uiTarget.packageName, uiEnv, {
+        uiOutDir = await fs.mkdtemp(path.join(runtimeRoot, "ui-preview-"));
+        await buildVerificationUi(context, uiTarget.packageName, uiEnv, uiOutDir, {
           omitEnv: options.uiEnvOmit,
           processLogPrefix: options.processLogPrefix,
         });
@@ -112,7 +114,7 @@ export async function startVerificationStack(context, options = {}) {
       ui = await startProcess(
         context,
         buildVerificationProcessLogName("ui", options.processLogPrefix),
-        buildVerificationUiCommand(uiTarget.packageName, uiPort, options.uiMode),
+        buildVerificationUiCommand(uiTarget.packageName, uiPort, options.uiMode, uiOutDir),
         uiEnv,
         { omitEnv: options.uiEnvOmit, cwd: uiTarget.appDir },
       );
@@ -365,13 +367,13 @@ export function buildVerificationGatewayCommand() {
   ];
 }
 
-export function buildVerificationUiCommand(packageName, port, uiMode) {
+export function buildVerificationUiCommand(packageName, port, uiMode, outDir) {
   const packageDirName = packageName.split("/").at(-1) || "mission-control-next";
   const viteCliPath = path.join(repoRoot, "apps", packageDirName, "node_modules", "vite", "bin", "vite.js");
   return [
     process.execPath,
     viteCliPath,
-    ...(uiMode === "preview" ? ["preview"] : ["--force"]),
+    ...(uiMode === "preview" ? ["preview", "--outDir", outDir] : ["--force"]),
     "--host",
     "127.0.0.1",
     "--port",
@@ -448,6 +450,7 @@ async function finishProcessCleanup(handle, exited) {
 
 export async function requestJson(gatewayUrl, route, init = {}) {
   const method = init.method ?? "GET";
+  const deadline = AbortSignal.timeout(init.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
   const response = await fetch(`${gatewayUrl}${route}`, {
     method,
     headers: {
@@ -456,7 +459,7 @@ export async function requestJson(gatewayUrl, route, init = {}) {
       ...(init.headers ?? {}),
     },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
-    signal: init.signal,
+    signal: init.signal ? AbortSignal.any([init.signal, deadline]) : deadline,
   });
   const text = await response.text();
   let body = null;
@@ -606,27 +609,17 @@ export async function ensureGatewayWorkspaceBuild(context, options = {}) {
   gatewayWorkspaceBuildEnsured = true;
 }
 
-async function ensureVerificationUiBuild(context, packageName, uiEnv, options = {}) {
-  const buildKey = JSON.stringify({
-    overrides: Object.entries(uiEnv).sort(([a], [b]) => a.localeCompare(b)),
-    omitEnv: [...(options.omitEnv ?? [])].sort(),
-  });
-  if (uiBuildKeys.get(packageName) === buildKey) {
-    return;
-  }
-  // A failed build may have already overwritten the older build's assets.
-  uiBuildKeys.delete(packageName);
-
+async function buildVerificationUi(context, packageName, uiEnv, outDir, options) {
   const logLines = [
     "verification startup builds the UI before preview mode so visual proof does not run against Vite HMR/watch state.",
     "",
-    `$ pnpm --dir <repoRoot> --filter ${packageName} build`,
+    `$ pnpm --dir <repoRoot> --filter ${packageName} build --outDir <stack-preview-dir>`,
     "",
   ];
   // Vite's production mode still emits React development code when NODE_ENV is
   // inherited as development. Pin the build only; keep fixture runtime modes.
   const result = await runPnpmSyncWithEnv(
-    ["--dir", repoRoot, "--filter", packageName, "build"],
+    ["--dir", repoRoot, "--filter", packageName, "build", "--outDir", outDir],
     { ...uiEnv, NODE_ENV: "production" },
     options.omitEnv,
   );
@@ -645,8 +638,6 @@ async function ensureVerificationUiBuild(context, packageName, uiEnv, options = 
   if (result.error || result.status !== 0) {
     throw new Error(`Failed to build verification UI ${packageName}. See ${buildLogPath}`);
   }
-
-  uiBuildKeys.set(packageName, buildKey);
 }
 
 function runPnpmSync(args, omitEnv = []) {

@@ -806,7 +806,11 @@ function buildHostileSandboxWindowsClaim({ commit, repository, proof, proofPath,
   return {
     claimScope: "windows_appcontainer",
     aggregatePublicClaimAllowed: proofAccepted && proof?.claim?.publicClaimAllowed === true,
-    publicClaimAllowed: proofAccepted && win32Claim?.publicClaimAllowed === true,
+    publicClaimAllowed:
+      proofAccepted &&
+      proof?.platform === "win32" &&
+      proof.currentPlatformProof?.status === "pass" &&
+      win32Claim?.publicClaimAllowed === true,
     laneStatus: lane?.status ?? "missing",
     workflowRunUrl: lane?.workflowRunUrl ?? null,
     proofWorkflowFile: lane?.proofWorkflowFile ?? RELEASE_PROOF_WORKFLOW_FILE,

@@ -53,6 +53,30 @@ test("verification readiness times out when a server accepts a connection withou
   }
 });
 
+test("verification JSON requests enforce the deadline through headers and body consumption", async () => {
+  const server = createServer((request, response) => {
+    if (request.url === "/body") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.write("{");
+    }
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await assert.rejects(requestJson(origin, "/headers", { timeoutMs: 100 }), { name: "TimeoutError" });
+    await assert.rejects(requestJson(origin, "/body", { timeoutMs: 100 }), { name: "TimeoutError" });
+    const caller = new AbortController();
+    const failure = new Error("caller cancelled");
+    const pending = requestJson(origin, "/headers", { signal: caller.signal });
+    caller.abort(failure);
+    await assert.rejects(pending, (error) => error === failure);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test("verification readiness interrupts a stalled request when its child exits", { timeout: 4_000 }, async () => {
   const artifactRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-runtime-"));
   const handle = await startProcess({ artifactRoot }, "fixture", [
@@ -276,7 +300,8 @@ test("verification stack cleanup never throws; failures are reported and returne
 
 test("verification dev UI invalidates Vite dependency prebundles while preview stays immutable", () => {
   const devCommand = buildVerificationUiCommand("@goatcitadel/mission-control-next", 5173, undefined);
-  const previewCommand = buildVerificationUiCommand("@goatcitadel/mission-control-next", 4173, "preview");
+  const outDir = path.join(os.tmpdir(), "stack-preview");
+  const previewCommand = buildVerificationUiCommand("@goatcitadel/mission-control-next", 4173, "preview", outDir);
   assert.equal(devCommand[0], process.execPath);
   assert.match(devCommand[1].replaceAll("\\", "/"), /apps\/mission-control-next\/node_modules\/vite\/bin\/vite\.js$/u);
   assert.deepEqual(devCommand.slice(2), ["--force", "--host", "127.0.0.1", "--port", "5173", "--strictPort"]);
@@ -285,7 +310,16 @@ test("verification dev UI invalidates Vite dependency prebundles while preview s
     previewCommand[1].replaceAll("\\", "/"),
     /apps\/mission-control-next\/node_modules\/vite\/bin\/vite\.js$/u,
   );
-  assert.deepEqual(previewCommand.slice(2), ["preview", "--host", "127.0.0.1", "--port", "4173", "--strictPort"]);
+  assert.deepEqual(previewCommand.slice(2), [
+    "preview",
+    "--outDir",
+    outDir,
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "4173",
+    "--strictPort",
+  ]);
 });
 
 for (const code of ["EACCES", "EPERM"]) {
