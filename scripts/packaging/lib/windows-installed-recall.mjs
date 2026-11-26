@@ -144,7 +144,6 @@ export function installedRecall(root, evidence, withStub, poll) {
       { type: "success", replyText: "The earlier chat chose the violet harbor route." },
       { type: "tool_call", name: "session_search", arguments: { scope: "prior", query: "Zephyr permit deadline" } },
       { type: "tool_call", name: "session_search", arguments: { scope: "session", query: "Zephyr permit" } },
-      { type: "success", replyText: "We haven't made a decision yet." },
     ],
   });
 }
