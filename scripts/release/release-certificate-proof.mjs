@@ -109,3 +109,69 @@ export function resolveLaneProof({ spec, directRun, releaseProofRun, releaseProo
     releaseProofRun: spec.releaseProofCovered ? summarizeWorkflowRun(releaseProofRun, releaseProofWorkflowFile) : null,
   };
 }
+
+export function selectProofRun(lane) {
+  return lane.substitutedByReleaseProof ? lane.releaseProofRun : lane.directRun;
+}
+
+export function summarizeRequiredLaneExactSha(requiredLanes, commit) {
+  if (!commit) {
+    return {
+      status: "unknown",
+      targetCommit: null,
+      matched: 0,
+      checked: 0,
+      mismatched: [],
+      missingProof: requiredLanes.map((lane) => lane.name),
+    };
+  }
+  const mismatched = [];
+  const missingProof = [];
+  let matched = 0;
+  let checked = 0;
+  for (const lane of requiredLanes) {
+    const headSha = selectProofRun(lane)?.headSha ?? null;
+    if (!headSha) {
+      missingProof.push(lane.name);
+      continue;
+    }
+    checked += 1;
+    if (headSha === commit) {
+      matched += 1;
+      continue;
+    }
+    mismatched.push({
+      name: lane.name,
+      proofWorkflowFile: lane.proofWorkflowFile ?? lane.workflowFile,
+      proofSource: lane.proofSource,
+      headSha,
+    });
+  }
+  return {
+    status: mismatched.length === 0 && missingProof.length === 0 ? "matched" : "incomplete",
+    targetCommit: commit,
+    matched,
+    checked,
+    mismatched,
+    missingProof,
+  };
+}
+
+export function assertExactReleaseProof(exactShaStatus, commit) {
+  if (exactShaStatus.status !== "matched") {
+    throw new Error(
+      `Release certificate exact-SHA proof is "${exactShaStatus.status}" for ${commit}: ` +
+        "one or more required lane proofs are not bound to the release SHA. Re-run the affected lane(s) " +
+        "(or the umbrella release-proof workflow) on the exact commit, then regenerate the certificate.",
+    );
+  }
+}
+
+export function formatProofCheckBlocker(check, commit) {
+  const label = `${check.label}: ${check.laneStatus}`;
+  if (check.exactShaMatched) {
+    return label;
+  }
+  const reason = check.proofHeadSha ? "proof SHA mismatch" : "proof SHA missing";
+  return `${label} (${reason}, expected SHA ${commit ?? "missing"}, actual SHA ${check.proofHeadSha ?? "missing"})`;
+}

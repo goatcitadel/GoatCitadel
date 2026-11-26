@@ -12,9 +12,13 @@ import {
   validateReleaseManifest,
 } from "../packaging/lib/package-renderers.mjs";
 import {
+  assertExactReleaseProof,
   fetchReleaseCommitRun,
+  formatProofCheckBlocker,
   matchesHostileSandboxProofRun,
   resolveRequiredLaneProofs,
+  selectProofRun,
+  summarizeRequiredLaneExactSha,
 } from "./release-certificate-proof.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -304,13 +308,7 @@ if (args.requireSuccess) {
   // Exact-SHA backstop: a required lane that is green only on a stale SHA (its proof is not
   // bound to this release commit) must NOT satisfy --require-success. The certificate is
   // valid only when every required lane's proof is anchored to the exact release-candidate SHA.
-  if (certificate.exactShaStatus.status !== "matched") {
-    throw new Error(
-      `Release certificate exact-SHA proof is "${certificate.exactShaStatus.status}" for ${commit}: ` +
-        "one or more required lane proofs are not bound to the release SHA. Re-run the affected lane(s) " +
-        "(or the umbrella release-proof workflow) on the exact commit, then regenerate the certificate.",
-    );
-  }
+  assertExactReleaseProof(certificate.exactShaStatus, commit);
 }
 
 function parseArgs(argv) {
@@ -640,54 +638,6 @@ function formatLaneFailure(lane) {
   return `${lane.name}=${lane.status} via ${workflow}${url}`;
 }
 
-function summarizeRequiredLaneExactSha(requiredLanes, commit) {
-  if (!commit) {
-    return {
-      status: "unknown",
-      targetCommit: null,
-      matched: 0,
-      checked: 0,
-      mismatched: [],
-      missingProof: requiredLanes.map((lane) => lane.name),
-    };
-  }
-  const mismatched = [];
-  const missingProof = [];
-  let matched = 0;
-  let checked = 0;
-  for (const lane of requiredLanes) {
-    const proofRun = selectProofRun(lane);
-    const headSha = proofRun?.headSha ?? null;
-    if (!headSha) {
-      missingProof.push(lane.name);
-      continue;
-    }
-    checked += 1;
-    if (headSha === commit) {
-      matched += 1;
-      continue;
-    }
-    mismatched.push({
-      name: lane.name,
-      proofWorkflowFile: lane.proofWorkflowFile ?? lane.workflowFile,
-      proofSource: lane.proofSource,
-      headSha,
-    });
-  }
-  return {
-    status: mismatched.length === 0 && missingProof.length === 0 ? "matched" : "incomplete",
-    targetCommit: commit,
-    matched,
-    checked,
-    mismatched,
-    missingProof,
-  };
-}
-
-function selectProofRun(lane) {
-  return lane.substitutedByReleaseProof ? lane.releaseProofRun : lane.directRun;
-}
-
 function buildParityClosureVerdict({
   commit,
   requiredLanes,
@@ -713,7 +663,7 @@ function buildParityClosureVerdict({
     };
   });
   const blockingChecks = checks.filter((check) => check.required && check.status !== "passed");
-  const blockers = blockingChecks.map((check) => `${check.label}: ${check.laneStatus}`);
+  const blockers = blockingChecks.map((check) => formatProofCheckBlocker(check, commit));
   const reportedLanes = new Set(blockingChecks.map((check) => check.lane));
   for (const lane of requiredLanes) {
     if (lane.required && lane.status !== "success" && !reportedLanes.has(lane.name)) {
@@ -763,7 +713,7 @@ function buildOperatorTruthProof({ commit, requiredLanes, exactShaStatus, proofB
   });
   const blockers = checks
     .filter((check) => check.required && check.status !== "passed")
-    .map((check) => `${check.label}: ${check.laneStatus}`);
+    .map((check) => formatProofCheckBlocker(check, commit));
   if (exactShaStatus.status !== "matched") {
     blockers.push(`Exact-SHA proof: ${exactShaStatus.status}`);
   }

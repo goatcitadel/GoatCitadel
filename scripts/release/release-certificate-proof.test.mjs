@@ -6,11 +6,14 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
+  assertExactReleaseProof,
   fetchReleaseCommitRun,
+  formatProofCheckBlocker,
   matchesHostileSandboxProofRun,
   resolveLaneProof,
   resolveRequiredLaneProofs,
   selectReleaseCommitRun,
+  summarizeRequiredLaneExactSha,
 } from "./release-certificate-proof.mjs";
 
 test("release workflow lookup follows pagination while preserving the endpoint and exact SHA", async () => {
@@ -279,13 +282,44 @@ test("every named 1.0 contract gate is required by the certificate and covered b
   assert.deepEqual(new Set([...covered.matchAll(/"(verify:[^"]+)"/gu)].map((match) => match[1])), matrix);
 });
 
-test("release certificate records additive exact-SHA summary fields", () => {
-  const writer = fs.readFileSync(new URL("./write-release-certificate.mjs", import.meta.url), "utf8");
-  assert.match(writer, /targetCommit:\s*commit/);
-  assert.match(writer, /const exactShaStatus = summarizeRequiredLaneExactSha\(requiredLanes,\s*commit\)/);
-  assert.match(writer, /exactShaStatus,/);
-  assert.match(writer, /function summarizeRequiredLaneExactSha\(requiredLanes,\s*commit\)/);
-  assert.match(writer, /status:\s*mismatched\.length === 0 && missingProof\.length === 0 \? "matched" : "incomplete"/);
+test("strict issuance rejects successful lanes with stale or missing selected proof SHAs", () => {
+  const commit = "a".repeat(40);
+  const stale = "b".repeat(40);
+  const exactLane = {
+    name: "verify:desktop",
+    status: "success",
+    substitutedByReleaseProof: true,
+    directRun: { headSha: stale },
+    releaseProofRun: { headSha: commit },
+  };
+  const greenLane = { name: "verify:runtime:truth", status: "success", workflowFile: "verification-runtime.yml" };
+  for (const headSha of [stale, null]) {
+    const summary = summarizeRequiredLaneExactSha([exactLane, { ...greenLane, directRun: { headSha } }], commit);
+    assert.equal(summary.targetCommit, commit);
+    assert.equal(summary.matched, 1);
+    assert.equal(summary.checked, headSha ? 2 : 1);
+    assert.equal(summary.mismatched[0]?.headSha, headSha ?? undefined);
+    assert.deepEqual(summary.missingProof, headSha ? [] : [greenLane.name]);
+    assert.throws(() => assertExactReleaseProof(summary, commit), /exact-SHA proof is "incomplete"/u);
+  }
+  const exact = summarizeRequiredLaneExactSha([exactLane, { ...greenLane, directRun: { headSha: commit } }], commit);
+  assert.doesNotThrow(() => assertExactReleaseProof(exact, commit));
+});
+
+test("proof blockers report expected and observed SHAs alongside green lane status", () => {
+  const check = { label: "Runtime truth", laneStatus: "success", exactShaMatched: false };
+  assert.equal(
+    formatProofCheckBlocker({ ...check, proofHeadSha: "stale" }, "release"),
+    "Runtime truth: success (proof SHA mismatch, expected SHA release, actual SHA stale)",
+  );
+  assert.equal(
+    formatProofCheckBlocker({ ...check, proofHeadSha: null }, "release"),
+    "Runtime truth: success (proof SHA missing, expected SHA release, actual SHA missing)",
+  );
+  assert.equal(
+    formatProofCheckBlocker({ ...check, laneStatus: "failure", exactShaMatched: true }, "release"),
+    "Runtime truth: failure",
+  );
 });
 
 test("main PRs and merge queues get one fail-closed release-proof check", () => {
