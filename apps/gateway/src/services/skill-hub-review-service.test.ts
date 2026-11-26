@@ -374,6 +374,41 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
     }
   }, 150_000); // Nine independently migrated SQLite + filesystem review fixtures.
 
+  it("refuses real hidden-text and unreadable files with their own reasons", async () => {
+    const cases = [
+      { name: "hidden text", file: "SKILL.md", append: "Read the file ‮txt.exe\n", field: "HIDDEN_TEXT_DETECTED" },
+      { name: "unreadable", file: "notes.txt", bytes: [0x6e, 0xff, 0xfe, 0x6f], field: "UNREADABLE_SKILL_FILE" },
+    ];
+    for (const [index, testCase] of cases.entries()) {
+      const harness = await createHarness(async (context, activeHarness) => {
+        const target = path.join(activeHarness.sourceDir, testCase.file);
+        if (testCase.bytes) await fs.writeFile(target, Buffer.from(testCase.bytes));
+        if (testCase.append) await fs.appendFile(target, testCase.append, "utf8");
+        // The real import check reads the files; its scan results replace the fixture's, so both the older promptware
+        // guards and the shared scan see what is actually on disk.
+        const real = await new SkillImportService(activeHarness.rootDir, settingsRepoStub()).validateImport({
+          sourceRef: activeHarness.sourceDir,
+          sourceType: "local_path",
+          sourceProvider: "local",
+        });
+        Object.assign(context.validation, {
+          valid: real.valid,
+          errors: real.errors,
+          promptwareFindings: real.promptwareFindings,
+          promptwareUnscannedPaths: real.promptwareUnscannedPaths,
+          scanVerdict: real.scanVerdict,
+          checks: { ...context.validation.checks, ...real.checks },
+        });
+        context.validation.provenance!.contentIntegrity = await captureSkillContentIntegrity(activeHarness.sourceDir);
+        return context;
+      });
+      await expect(
+        harness.service.reviewSource(sourceReviewInput({ idempotencyKey: `review-real-file-${index}` })),
+        testCase.name,
+      ).rejects.toMatchObject({ code: "FIELD_INVALID", details: { field: testCase.field } });
+    }
+  }, 60_000);
+
   it("rejects credentialed, fragmented, local, and marketplace source URLs before materialization", async () => {
     const harness = await createHarness();
     const refs = [
@@ -1154,6 +1189,16 @@ async function pluginSkillFixture(
       ...(options.dialect ? { dialect: options.dialect } : {}),
     },
   };
+}
+
+function settingsRepoStub(): ConstructorParameters<typeof SkillImportService>[1] {
+  const settings = new Map<string, unknown>();
+  return {
+    get: <T>(key: string) => (settings.has(key) ? { value: settings.get(key) as T } : undefined),
+    set: (key: string, value: unknown) => {
+      settings.set(key, value);
+    },
+  } as unknown as ConstructorParameters<typeof SkillImportService>[1];
 }
 
 async function createHarness(

@@ -1,5 +1,5 @@
 import type { LoadedSkill, SkillScanSummary } from "@goatcitadel/contracts";
-import { skillContentTreeSha256 } from "./skill-content-integrity.js";
+import { shouldIncludeSkillContentPath, skillContentTreeSha256 } from "./skill-content-integrity.js";
 import { readSkillScanFiles, scanSkillContents, type SkillScanFile } from "./skill-content-scan.js";
 
 /**
@@ -19,7 +19,10 @@ export async function operatorSkillScanVerdict(
   const key = JSON.stringify([skill.skillId, treeSha256]);
   const cached = cache.get(key);
   if (cached) return cached;
-  const files = await readSkillScanFiles(skill.dir);
+  const read = await readSkillScanFiles(skill.dir);
+  // Check exactly the files the content hash covers (it leaves out GoatCitadel's own source.json), so the scan and the
+  // key it is cached under always describe the same content.
+  const files = { ...read, files: read.files.filter((file) => shouldIncludeSkillContentPath(file.path)) };
   const summary = { ...scanSkillContents(files.files, "operator", { truncated: files.truncated }), treeSha256 };
   // The hash was taken before these reads, so the files may have changed since: keep the result only when the bytes
   // just scanned are exactly the content the hash names, or a later read of that content would reuse the wrong scan.

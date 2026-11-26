@@ -148,27 +148,48 @@ const TRAILING_COMMENT = /\s(?:\/\/|#)(.*)$/u;
  * Block comments keep their whole body, and a comment after code keeps the comment part.
  */
 function commentsOnly(text: string): string {
-  let closer: string | undefined;
+  const state: { closer?: string } = {};
   return text
     .split(/\r\n|\r|\n/u)
-    .map((lineText) => {
-      if (closer) {
-        const end = lineText.indexOf(closer);
-        if (end < 0) return lineText;
-        closer = undefined;
-        return lineText.slice(0, end);
-      }
-      for (const [open, close] of BLOCK_COMMENTS) {
-        const start = lineText.indexOf(open);
-        if (start < 0) continue;
-        const body = lineText.slice(start + open.length);
-        if (!body.includes(close)) closer = close;
-        return body.slice(0, closer ? undefined : body.indexOf(close));
-      }
-      if (COMMENT_LINE.test(lineText)) return lineText;
-      return TRAILING_COMMENT.exec(lineText)?.[1] ?? "";
-    })
+    .map((lineText) => lineComments(lineText, state))
     .join("\n");
+}
+
+/** Every comment on one line, left to right, carrying an open block comment over to the next line in `state`. */
+function lineComments(lineText: string, state: { closer?: string }): string {
+  const kept: string[] = [];
+  let rest = lineText;
+  while (rest) {
+    if (state.closer) {
+      const end = rest.indexOf(state.closer);
+      if (end < 0) return [...kept, rest].join(" ");
+      kept.push(rest.slice(0, end));
+      rest = rest.slice(end + state.closer.length);
+      delete state.closer;
+      continue;
+    }
+    const opening = firstBlockOpening(rest);
+    const trailing = TRAILING_COMMENT.exec(rest);
+    if (opening && (!trailing || opening.start <= trailing.index)) {
+      state.closer = opening.close;
+      rest = rest.slice(opening.start + opening.open.length);
+      continue;
+    }
+    // The whole line is a comment, or a line comment runs to its end; otherwise what is left is code.
+    if (kept.length === 0 && COMMENT_LINE.test(rest)) return rest;
+    if (trailing) kept.push(trailing[1] ?? "");
+    break;
+  }
+  return kept.join(" ");
+}
+
+function firstBlockOpening(text: string): { start: number; open: string; close: string } | undefined {
+  let first: { start: number; open: string; close: string } | undefined;
+  for (const [open, close] of BLOCK_COMMENTS) {
+    const start = text.indexOf(open);
+    if (start >= 0 && (!first || start < first.start)) first = { start, open, close };
+  }
+  return first;
 }
 
 function dedupe(findings: SkillScanFinding[]): SkillScanFinding[] {
