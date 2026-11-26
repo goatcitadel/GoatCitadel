@@ -150,6 +150,15 @@ async function executeCommsToolWithBoundaryTracking(
   assertNoRawRemoteApprovalBearer(args);
   const connectionId = required(args.connectionId, "connectionId");
   const connection = await storage.integrationConnections.get(connectionId);
+  const expectedConnectionRevision = asString(args.expectedConnectionRevision);
+  if (
+    toolName === "channel.send" &&
+    expectedConnectionRevision &&
+    (connection.revision !== expectedConnectionRevision ||
+      (connection.workspaceId ?? "default") !== request.workspaceId)
+  ) {
+    throw new Error("Blocked: the reviewed delivery connection changed. Review the schedule's destination again.");
+  }
   if (
     isNativeGoogleTool(toolName) &&
     connection.workspaceId !== undefined &&
@@ -1124,6 +1133,8 @@ async function discordSend(
   const resolvedTarget = normalizeChannelTarget(target, "discord");
   const components = buildDiscordApprovalComponents(args.interactiveActions);
   // Buttons only work on a message the bot posts itself: a webhook message's buttons never reach the bot.
+  const exactBotTarget =
+    config.runtimeMode === "gateway" ? /^channel:(\d+)$/u.exec(resolvedTarget ?? "")?.[1] : undefined;
   const webhookUrl = components ? undefined : secretFrom(config, "webhookUrl", "webhookUrlEnv");
   const discordRequest = await buildDiscordMessageRequest(message, attachments, allowlist, grantAllowlist, components);
   if (webhookUrl) {
@@ -1151,7 +1162,7 @@ async function discordSend(
   }
 
   const token = secretFrom(config, "botToken", "botTokenEnv") ?? secretFrom(config, "token", "tokenEnv");
-  const channelId = asString(args.target) ?? resolvedTarget ?? asString(config.defaultChannelId);
+  const channelId = exactBotTarget ?? asString(args.target) ?? resolvedTarget ?? asString(config.defaultChannelId);
   if (!token) {
     throw new Error("Missing Discord bot token");
   }

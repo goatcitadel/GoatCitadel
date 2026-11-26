@@ -13,6 +13,23 @@ afterEach(() => {
 });
 
 describe("protected approval action provider boundary", () => {
+  it("blocks a queued brief whose reviewed connection has a newer revision before provider dispatch", async () => {
+    const harness = createHarness({ channelKey: "discord", revision: "changed-after-review" });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const request = createRequest();
+    request.workspaceId = "default";
+    request.args = {
+      connectionId: "conn-telegram",
+      target: "channel:123456789012345678",
+      message: "Fixture brief",
+      expectedConnectionRevision: "reviewed-revision",
+    };
+    await expect(executeTool(request, createConfig(["discord.com"]), harness.storage, harness.runtime)).rejects.toThrow(
+      /reviewed delivery connection changed/i,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   it("rejects providers without native authenticated approval actions before resolving a bearer", async () => {
     const harness = createHarness({ channelKey: "slack" });
 
@@ -350,6 +367,7 @@ function createHarness(
     parseMode?: string;
     discordRuntimeMode?: string;
     discordWebhookUrl?: string;
+    revision?: string;
   } = {},
 ) {
   const channelKey = overrides.channelKey ?? "telegram";
@@ -372,6 +390,7 @@ function createHarness(
         key: channelKey,
         enabled: overrides.enabled ?? true,
         status: overrides.status ?? "connected",
+        revision: overrides.revision,
         config:
           channelKey === "telegram"
             ? {

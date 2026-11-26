@@ -1,4 +1,36 @@
-import type { CronAgentTurnConfig, CronFollowThroughEventConfig } from "@goatcitadel/contracts";
+import {
+  type CronAgentTurnConfig,
+  type CronFollowThroughEventConfig,
+  type FollowThroughChannelDestination,
+  type IntegrationConnection,
+} from "@goatcitadel/contracts";
+
+export function resolveFollowThroughDestination(
+  connection: IntegrationConnection,
+  workspaceId: string,
+): FollowThroughChannelDestination | undefined {
+  if (!connection.enabled || connection.status !== "connected" || (connection.workspaceId ?? "default") !== workspaceId)
+    return undefined;
+  const channelKey = connection.key;
+  if (channelKey !== "discord" && channelKey !== "ntfy") return undefined;
+  if (
+    channelKey === "discord" &&
+    (connection.config.runtimeMode !== "gateway" || connection.config.webhookUrl || connection.config.webhookUrlEnv)
+  )
+    return undefined;
+  const { defaultChannelId, defaultDiscordChannelId, topic } = connection.config;
+  const candidate = channelKey === "discord" ? (defaultChannelId ?? defaultDiscordChannelId) : topic;
+  const target = typeof candidate === "string" ? candidate.trim() : "";
+  if (channelKey === "discord" ? !/^\d{10,25}$/u.test(target) : !/^[\w-]{1,64}$/u.test(target)) return undefined;
+  return {
+    connectionId: connection.connectionId,
+    revision: connection.revision,
+    channelKey,
+    target,
+    label: connection.label,
+  };
+}
+
 const record = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
 function exact(value: unknown, keys: string[]): Record<string, unknown> {

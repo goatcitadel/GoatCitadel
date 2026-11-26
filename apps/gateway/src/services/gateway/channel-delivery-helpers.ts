@@ -65,6 +65,7 @@ export function buildChannelDeliveryPayload(
   const deliveryDiagnostics = buildChannelDeliveryDiagnostics(sanitized.message, messageParts, chunkLimit);
   return {
     connectionId: input.connectionId,
+    ...(input.expectedConnectionRevision ? { expectedConnectionRevision: input.expectedConnectionRevision } : {}),
     target: input.target,
     message: messageParts[0] ?? "",
     messageParts: messageParts.length > 1 ? messageParts : undefined,
@@ -162,6 +163,9 @@ export function channelDeliveryPayloadToSendInput(input: ChannelDeliveryRuntimeS
   const payload = input.payload;
   return {
     connectionId: readRequiredString(payload.connectionId, "connectionId"),
+    ...(typeof payload.expectedConnectionRevision === "string"
+      ? { expectedConnectionRevision: payload.expectedConnectionRevision }
+      : {}),
     target: readRequiredString(payload.target, "target"),
     message: typeof payload.message === "string" ? payload.message : "",
     attachments: Array.isArray(payload.attachments)

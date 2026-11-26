@@ -3,6 +3,7 @@ import { canonicalJsonString, NotFoundError } from "@goatcitadel/contracts";
 import { DEFAULT_SESSION_AUTONOMY_PREFS } from "@goatcitadel/storage";
 import { permissionProfileAppliesToCreator } from "./gateway/scheduled-profile-intersection.js";
 import { FollowThroughSetupService } from "./follow-through-setup-service.js";
+import { resolveFollowThroughDestination } from "./follow-through-schedule-input.js";
 import type { GatewayRouteCompositionPort } from "./gateway-route-composition-port.js";
 const hash = (value: unknown) => createHash("sha256").update(canonicalJsonString(value)).digest("hex");
 export function createFollowThroughSetupForGateway(
@@ -13,7 +14,7 @@ export function createFollowThroughSetupForGateway(
 ) {
   return new FollowThroughSetupService({
     readSource: async (input) => {
-      const [meta, session, flags, profiles, hooks, prefs, autonomy] = await Promise.all([
+      const [meta, session, flags, profiles, hooks, prefs, autonomy, connections] = await Promise.all([
         gateway.storage.chatSessionMeta.get(input.sessionId),
         gateway.storage.sessions.getBySessionId(input.sessionId),
         gateway.readFeatureFlags(),
@@ -21,6 +22,7 @@ export function createFollowThroughSetupForGateway(
         gateway.storage.workspaceHooks.listByTrigger(input.workspaceId, "subagent.end", 50),
         gateway.storage.chatSessionPrefs.get(input.sessionId),
         gateway.storage.sessionAutonomyPrefs.get(input.sessionId),
+        gateway.storage.integrationConnections.list("channel"),
       ]);
       if (!meta || meta.workspaceId !== input.workspaceId)
         throw new NotFoundError({ entity: "Chat schedule setup", id: input.sessionId });
@@ -28,10 +30,11 @@ export function createFollowThroughSetupForGateway(
         citadel = workspace.citadelId ? await gateway.storage.citadels.findRecord(workspace.citadelId) : undefined;
       const charter =
         workspace.citadelId && !citadel ? await gateway.storage.citadels.getCitadel(workspace.citadelId) : undefined;
+      const { dailyUsdHardCap, sessionTokenHardCap } = gateway.config.assistant.budgets;
       const limits = {
         scope: "installation" as const,
-        dailyUsdHardCap: gateway.config.assistant.budgets.dailyUsdHardCap,
-        sessionTokenHardCap: gateway.config.assistant.budgets.sessionTokenHardCap,
+        dailyUsdHardCap,
+        sessionTokenHardCap,
       };
       const activeHours = autonomy?.activeHours ?? DEFAULT_SESSION_AUTONOMY_PREFS.activeHours;
       return {
@@ -82,6 +85,10 @@ export function createFollowThroughSetupForGateway(
               enabled: hook.enabled,
             }),
           })),
+        channelDestinations: connections.flatMap((connection) => {
+          const destination = resolveFollowThroughDestination(connection, meta.workspaceId);
+          return destination ? [destination] : [];
+        }),
         limits,
         blockedReasons:
           limits.dailyUsdHardCap > 0 && limits.sessionTokenHardCap > 0

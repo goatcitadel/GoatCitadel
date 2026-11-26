@@ -239,6 +239,7 @@ export async function commsSend(
       args: {
         connectionId: input.connectionId,
         target: input.target,
+        ...(input.expectedConnectionRevision ? { expectedConnectionRevision: input.expectedConnectionRevision } : {}),
         message: sanitized.message,
         attachments,
         interactiveActions: input.interactiveActionTemplate ? undefined : input.interactiveActions,
@@ -760,21 +761,48 @@ export interface CommsMutationIdentity {
   args: Record<string, unknown>;
 }
 
-export function buildCommsMailMutationIdentity(input: GmailSendInput, toolName: "gmail.send" | "smtp.send"): CommsMutationIdentity {
+export function buildCommsMailMutationIdentity(
+  input: GmailSendInput,
+  toolName: "gmail.send" | "smtp.send",
+): CommsMutationIdentity {
   const mail = toolName === "gmail.send" ? GMAIL_SEND_PROVIDER : SMTP_SEND_PROVIDER;
-  const message = { connectionId: input.connectionId, to: input.to, cc: input.cc, bcc: input.bcc,
-    subject: input.subject, bodyText: input.bodyText, bodyHtml: input.bodyHtml };
-  return { boundary: mail.boundary, fallbackCatalogId: mail.fallbackCatalogId, actionId: mail.toolName,
+  const message = {
+    connectionId: input.connectionId,
+    to: input.to,
+    cc: input.cc,
+    bcc: input.bcc,
+    subject: input.subject,
+    bodyText: input.bodyText,
+    bodyHtml: input.bodyHtml,
+  };
+  return {
+    boundary: mail.boundary,
+    fallbackCatalogId: mail.fallbackCatalogId,
+    actionId: mail.toolName,
     payload: { provider: mail.provider, ...message },
-    args: Object.fromEntries(Object.entries(message).filter(([, value]) => value !== undefined)) };
+    args: Object.fromEntries(Object.entries(message).filter(([, value]) => value !== undefined)),
+  };
 }
 
 export function buildCommsCalendarMutationIdentity(input: CalendarCreateEventInput): CommsMutationIdentity {
-  const eventFields = { connectionId: input.connectionId, calendarId: input.calendarId, title: input.title,
-    description: input.description, startIso: input.startIso, endIso: input.endIso, attendees: input.attendees,
-    location: input.location, timeZone: input.timeZone };
-  return { boundary: COMMS_CALENDAR_CREATE_BOUNDARY, fallbackCatalogId: "automation.google-calendar", actionId: "calendar.create_event",
-    payload: eventFields, args: Object.fromEntries(Object.entries(eventFields).filter(([, value]) => value !== undefined)) };
+  const eventFields = {
+    connectionId: input.connectionId,
+    calendarId: input.calendarId,
+    title: input.title,
+    description: input.description,
+    startIso: input.startIso,
+    endIso: input.endIso,
+    attendees: input.attendees,
+    location: input.location,
+    timeZone: input.timeZone,
+  };
+  return {
+    boundary: COMMS_CALENDAR_CREATE_BOUNDARY,
+    fallbackCatalogId: "automation.google-calendar",
+    actionId: "calendar.create_event",
+    payload: eventFields,
+    args: Object.fromEntries(Object.entries(eventFields).filter(([, value]) => value !== undefined)),
+  };
 }
 function runLedgeredMailSend(
   host: CommsHost,

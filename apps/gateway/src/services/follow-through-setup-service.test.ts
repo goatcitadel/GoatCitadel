@@ -38,6 +38,44 @@ function fixture() {
   return { source, create, deps, service: new FollowThroughSetupService(deps as never) };
 }
 const scope = { workspaceId: "w", sessionId: "s", actorId: "operator" };
+it("pins a reviewed channel brief to the exact configured connection and destination", async () => {
+  const f = fixture();
+  const destination = {
+    connectionId: "discord-1",
+    revision: "rev-1",
+    channelKey: "discord",
+    target: "123456789012345678",
+    label: "Project brief",
+  };
+  Object.assign(f.source, { channelDestinations: [destination] });
+  const setup = await f.service.inspect(scope);
+  expect(setup.channelDestinations).toEqual([destination]);
+  const input = {
+    ...scope,
+    expectedSetupHash: setup.sourceHash,
+    operationId: "brief-operation-12345",
+    purpose: "Send a daily brief",
+    permissionProfileId: "safe",
+    trigger: { kind: "recurring" as const, schedule: "0 9 * * * America/Los_Angeles" },
+    delivery: { kind: "channel" as const, connectionId: destination.connectionId },
+  };
+  await expect(
+    f.service.create({ ...input, delivery: { kind: "channel", connectionId: "foreign" } }),
+  ).rejects.toThrow();
+  const job = await f.service.create(input);
+  expect(job.actionConfig?.agentTurn).toMatchObject({
+    deliverMode: "always",
+    deliveryChannel: {
+      connectionId: destination.connectionId,
+      connectionRevision: destination.revision,
+      channelKey: destination.channelKey,
+      target: destination.target,
+    },
+  });
+  destination.target = "987654321098765432";
+  await expect(f.service.create(input)).rejects.toThrow(/refresh/i);
+  expect(f.create).toHaveBeenCalledTimes(1);
+});
 it("reviewing setup creates nothing; one exact explicit decision creates an owned recurring job", async () => {
   const f = fixture(),
     setup = await f.service.inspect(scope);

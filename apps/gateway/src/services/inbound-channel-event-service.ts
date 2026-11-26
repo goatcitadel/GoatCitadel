@@ -25,6 +25,7 @@ import {
 import type { BotLoopGuardDecision } from "./channel-bot-loop-guard.js";
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
 import { withChannelProgressHeartbeat } from "./channel-progress-heartbeat.js";
+import { readDiscordBriefReplyReference, type ScheduledBriefReplyReference } from "./scheduled-brief-reply-context.js";
 import {
   buildDeterministicIdentity,
   sha256,
@@ -130,6 +131,7 @@ export interface InboundChannelEventServiceDeps {
    */
   readChatSessionBinding: (sessionId: string) => Promise<ChatSessionBindingRecord | undefined>;
   hasRunningTurn: (sessionId: string) => Promise<boolean>;
+  readScheduledBriefReplyContext?: (input: ScheduledBriefReplyReference) => Promise<string | undefined>;
   respondToExistingChatMessage: (
     sessionId: string,
     eventId: string,
@@ -721,9 +723,25 @@ export class InboundChannelEventService {
         }),
       );
     };
+    const reference = !desk && readDiscordBriefReplyReference(claim.event.channelKey, payload);
+    const scheduledContext = reference
+      ? await this.deps.readScheduledBriefReplyContext?.({
+          ...reference,
+          connectionId: claim.event.connectionId,
+          sessionId: ingestResult.session.sessionId,
+        })
+      : undefined;
+    assertCurrent();
     const respond = () =>
       this.deps.respondToExistingChatMessage(ingestResult.session.sessionId, messageId, {
         ...payload.responseOptions,
+        ...(scheduledContext
+          ? {
+              channelSystemInstruction: [payload.responseOptions?.channelSystemInstruction, scheduledContext]
+                .filter(Boolean)
+                .join("\n\n"),
+            }
+          : {}),
         ...(desk ? { deliveryPrefix: buildDeskDeliveryPrefix(content, connection) } : {}),
         inboundDurableIdentity: identity,
       });

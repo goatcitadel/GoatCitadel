@@ -112,6 +112,7 @@ import type { ChatPostCommitEffectAuthorityContext } from "./chat-post-commit-ef
 import { parseOrchestrationWorkflowPayload as parseOrchestrationLifecycleWorkflowPayload } from "./orchestration-lifecycle-state-helpers.js";
 import { DurableWorkerInterruptionError, type DurableRunService } from "./durable-run-service.js";
 import type { HooksService } from "./hooks-service.js";
+import { readDurableInboundChannelInstruction } from "./scheduled-brief-reply-context.js";
 import { IDEMPOTENT_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { isAutonomousTurnRequest } from "./gateway/autonomous-turn-policy.js";
@@ -135,6 +136,9 @@ type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["sto
     | "chatStreamEvents"
     | "chatTurnCapabilityProfiles"
     | "chatTurnRecovery"
+    | "commsDeliveries"
+    | "cronRuns"
+    | "inboundChannelEvents"
     | "capabilityCatalogSnapshots"
     | "externalSideEffectRuns"
     | "mutationIdempotency"
@@ -151,6 +155,8 @@ type DurableExecutionStorage = chatTurnDispatchService.ChatTurnDispatchHost["sto
 export interface AutonomousTurnDeliveryChannel {
   channelKey: string;
   target?: string;
+  connectionId?: string;
+  connectionRevision?: string;
 }
 
 /**
@@ -231,6 +237,7 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
       capabilityProfileHash?: string;
       featureReferenceSha256?: string;
       capabilityProfileContent?: string;
+      extraSystemInstruction?: string;
       skipProviderPreparation?: boolean;
       turnAdmission?: import("./chat-turn-types.js").ActiveTurnAdmission;
       serverOnlyPosture?: SystemHeartbeatTurnPrepPosture;
@@ -2150,6 +2157,7 @@ export async function executeDurableChatTurnRun(
     skipProviderPreparation: Boolean(
       (await readChatTurnControl(storage, payload.sessionId, payload.turnId)).toolClosure,
     ),
+    extraSystemInstruction: await readDurableInboundChannelInstruction(storage, run, payload),
     branchKind: payload.branchKind,
     sourceTurnId: payload.sourceTurnId,
     parentTurnId: payload.parentTurnId,

@@ -198,6 +198,7 @@ async function dispatchIntegrationChannelAction(
     await deps.markExternalCallStarted?.();
     result = await deps.commsSend({
       connectionId: connector.sourceId,
+      expectedConnectionRevision: optionalString(actionPayload.expectedConnectionRevision),
       target: target ?? requireNonEmptyString(actionPayload.target, "payload.target"),
       message,
       attachments,
@@ -532,7 +533,7 @@ function readConnectorChannelKey(connector: ConnectorRecord): string | undefined
   return typeof key === "string" && key.trim().length > 0 ? key.trim().toLowerCase() : undefined;
 }
 
-function normalizeDiscordDeliveryTarget(target: string): string {
+export function normalizeDiscordDeliveryTarget(target: string): string {
   const channelMention = target.match(/^<#(\d+)>$/);
   if (channelMention) {
     return `channel:${channelMention[1]}`;

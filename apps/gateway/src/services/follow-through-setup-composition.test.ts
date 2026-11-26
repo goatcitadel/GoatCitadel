@@ -17,6 +17,30 @@ it("review binds current conversation preferences and actual quiet-hour zone wit
         sessions: { getBySessionId: async () => ({ kind: "dm" }) },
         chatSessionPrefs: { get: async () => prefs },
         sessionAutonomyPrefs: { get: async () => autonomy },
+        integrationConnections: {
+          list: async () => [
+            {
+              connectionId: "local",
+              key: "discord",
+              revision: "r1",
+              label: "Project brief",
+              enabled: true,
+              status: "connected",
+              workspaceId: "w",
+              config: { runtimeMode: "gateway", defaultChannelId: "123456789012345678" },
+            },
+            {
+              connectionId: "other",
+              key: "discord",
+              revision: "r1",
+              label: "Other project",
+              enabled: true,
+              status: "connected",
+              workspaceId: "other",
+              config: { runtimeMode: "gateway", defaultChannelId: "223456789012345678" },
+            },
+          ],
+        },
         permissionProfiles: { listProfiles: async () => [] },
         workspaceHooks: { listByTrigger: async () => [] },
         workspaces: { get: async () => ({ lifecycleStatus: "active", citadelId: "personal" }) },
@@ -31,6 +55,7 @@ it("review binds current conversation preferences and actual quiet-hour zone wit
   const service = createFollowThroughSetupForGateway(gateway as never),
     scope = { workspaceId: "w", sessionId: "s", actorId: "operator" };
   const first = await service.inspect(scope);
+  expect(first.channelDestinations?.map((item) => item.connectionId)).toEqual(["local"]);
   expect(first).toMatchObject({ quietHours: { start: 12, end: 18, timezone: "Asia/Kathmandu" } });
   prefs = { ...prefs, revision: 2, model: "other-model" };
   const modelChanged = await service.inspect(scope);

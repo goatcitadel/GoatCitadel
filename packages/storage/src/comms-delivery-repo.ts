@@ -56,6 +56,7 @@ export class CommsDeliveryRepository {
   private readonly listByConnectionStmt;
   private readonly getByIdStmt;
   private readonly getByIdempotencyKeyStmt;
+  private readonly getSentByProviderMessageStmt;
   private readonly listDueStmt;
 
   public constructor(private readonly db: DatabaseClient) {
@@ -237,6 +238,13 @@ export class CommsDeliveryRepository {
       SELECT * FROM comms_deliveries
       WHERE idempotency_key = @idempotencyKey
       LIMIT 1
+    `);
+    this.getSentByProviderMessageStmt = db.prepare(`
+      SELECT * FROM comms_deliveries
+      WHERE connection_id = @connectionId AND target = @target AND provider_msg_id = @providerMessageId
+        AND status = 'sent' AND delivery_status = 'sent'
+        AND NOT EXISTS (SELECT 1 FROM channel_delivery_parts part WHERE part.provider_delivery_id = comms_deliveries.delivery_id)
+      LIMIT 2
     `);
     this.listDueStmt = db.prepare(`
       SELECT * FROM comms_deliveries
@@ -517,6 +525,17 @@ export class CommsDeliveryRepository {
           }),
     );
     return rows.map(toCommsDeliveryRecord);
+  }
+
+  public findSentByProviderMessage(
+    connectionId: string,
+    target: string,
+    providerMessageId: string,
+  ): CommsDeliveryRecord | undefined {
+    const rows = toCommsDeliveryRows(
+      this.getSentByProviderMessageStmt.all({ connectionId, target, providerMessageId }),
+    );
+    return rows.length === 1 && rows[0] ? toCommsDeliveryRecord(rows[0]) : undefined;
   }
 }
 

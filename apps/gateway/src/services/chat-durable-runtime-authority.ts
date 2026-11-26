@@ -1,6 +1,11 @@
 /* eslint-disable max-lines -- Canonical authority validators stay together so their exact-shape rules cannot drift. */
 import { createHash } from "node:crypto";
-import type { ChatTurnTraceRecord, DurableRunRecord, DurableRunStatus } from "@goatcitadel/contracts";
+import type {
+  ChatTurnTraceRecord,
+  CronAgentTurnConfig,
+  DurableRunRecord,
+  DurableRunStatus,
+} from "@goatcitadel/contracts";
 import { canonicalJsonString } from "@goatcitadel/contracts";
 import type { PostCommitEligibility, SessionMutationAdmissionRecord } from "@goatcitadel/storage";
 
@@ -235,7 +240,7 @@ export interface AutonomousChatAdmissionMetadataMaterialV1 {
     sourceRunId: string;
     reason: string;
     deliverMode: "always" | "on_notify";
-    deliveryChannel?: { channelKey: string; target?: string };
+    deliveryChannel?: CronAgentTurnConfig["deliveryChannel"];
     profilePosture?: string;
     commitmentId?: string;
   };
@@ -663,15 +668,31 @@ function readAutonomousChatAdmissionMetadataMaterial(value: unknown): Autonomous
   if (autonomous.deliverMode !== "always" && autonomous.deliverMode !== "on_notify") {
     throw new Error("Autonomous Chat admission delivery mode is invalid.");
   }
-  let deliveryChannel: { channelKey: string; target?: string } | undefined;
+  let deliveryChannel: CronAgentTurnConfig["deliveryChannel"];
   if (autonomous.deliveryChannel !== undefined) {
     const channel = requireRecord(autonomous.deliveryChannel, "Autonomous Chat delivery channel");
-    assertExactOptionalKeys(channel, ["channelKey"], ["target"], "Autonomous Chat delivery channel");
+    assertExactOptionalKeys(
+      channel,
+      ["channelKey"],
+      ["target", "connectionId", "connectionRevision"],
+      "Autonomous Chat delivery channel",
+    );
     deliveryChannel = {
       channelKey: requireBoundedIdentifier(channel.channelKey, "delivery channelKey", 256),
       ...(channel.target === undefined
         ? {}
         : { target: requireBoundedIdentifier(channel.target, "delivery target", 1_024) }),
+      ...(channel.connectionId === undefined && channel.connectionRevision === undefined
+        ? {}
+        : {
+            connectionId: requireBoundedIdentifier(channel.connectionId, "delivery connection", 256),
+            connectionRevision: requireBoundedIdentifier(
+              channel.connectionRevision,
+              "delivery connection revision",
+              256,
+            ),
+            target: requireBoundedIdentifier(channel.target, "pinned delivery target", 1_024),
+          }),
     };
   }
   const admission = requireRecord(material.admission, "Autonomous Chat admission identity");

@@ -663,6 +663,8 @@ describe("cron schedule helpers", () => {
     ["* * * * * UTC", "2026-09-12T08:41:59.999Z", "2026-09-12T08:42:00.000Z"],
     ["0 */6 * * * UTC", "2026-05-14T12:04:39.704Z", "2026-05-14T18:00:00.000Z"],
     ["15 9 * * * America/Los_Angeles", "2026-05-14T16:14:39.704Z", "2026-05-14T16:15:00.000Z"],
+    ["0 9 * * * America/Los_Angeles", "2026-03-07T17:05:00.000Z", "2026-03-08T16:00:00.000Z"],
+    ["0 9 * * * America/Los_Angeles", "2026-10-31T16:05:00.000Z", "2026-11-01T17:00:00.000Z"],
     ["0 12 * * * UTC", "2026-05-14T12:03:39.704Z", "2026-05-14T12:04:00.000Z"],
   ])("aligns the next occurrence of %s to a whole minute", (schedule, from, expected) => {
     const input = new Date(from);

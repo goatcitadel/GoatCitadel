@@ -44,13 +44,12 @@ export class FollowThroughSetupService {
       throw new ConflictError({
         message: "Setup, access or limits changed. Refresh and review the current schedule before creating it.",
       });
-    if (
-      !/^[A-Za-z0-9_-]{16,100}$/u.test(input.operationId) ||
-      !input.purpose.trim() ||
-      input.purpose.length > 2000 ||
-      input.delivery.kind !== "conversation"
-    )
-      throw new ConflictError({ message: "Choose an exact purpose and this conversation's delivery destination." });
+    if (!/^[A-Za-z0-9_-]{16,100}$/u.test(input.operationId) || !input.purpose.trim() || input.purpose.length > 2000)
+      throw new ConflictError({ message: "Choose an exact scheduled purpose." });
+    const channelId = input.delivery.kind === "channel" ? input.delivery.connectionId : undefined;
+    const channel = review.channelDestinations?.find((item) => item.connectionId === channelId);
+    if (input.delivery.kind === "channel" && !channel)
+      throw new ConflictError({ message: "Refresh and review a current delivery destination in this workspace." });
     const purpose = input.purpose.normalize("NFKC").trim(),
       redacted = redactSecretText(purpose, { env: process.env });
     if (redacted.redactionCount > 0)
@@ -82,7 +81,17 @@ export class FollowThroughSetupService {
         sessionId: input.sessionId,
         workspaceId: input.workspaceId,
         prompt: purpose,
-        deliverMode: "on_notify",
+        deliverMode: channel ? "always" : "on_notify",
+        ...(channel
+          ? {
+              deliveryChannel: {
+                connectionId: channel.connectionId,
+                connectionRevision: channel.revision,
+                channelKey: channel.channelKey,
+                target: channel.target,
+              },
+            }
+          : {}),
         createdBy: {
           operatorId: input.actorId,
           authActorId: input.actorId,
@@ -176,6 +185,7 @@ export class FollowThroughSetupService {
       configRevision: source.configRevision,
       profiles: source.profiles,
       eventSources: source.eventSources,
+      channelDestinations: source.channelDestinations ?? [],
       limits: source.limits,
       quietHours: source.quietHours,
       blockedReasons,

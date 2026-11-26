@@ -26,6 +26,40 @@ const setup = {
   limits: { scope: "installation", dailyUsdHardCap: 2, sessionTokenHardCap: 20000 },
   blockedReasons: [],
 } satisfies FollowThroughSetupResponse;
+it("reviews the exact configured destination before confirming a daily brief", async () => {
+  const onCreate = vi.fn(async () => {});
+  const current: FollowThroughSetupResponse = {
+    ...setup,
+    channelDestinations: [
+      {
+        channelKey: "discord",
+        connectionId: "thread",
+        revision: "r1",
+        target: "123456789012345678",
+        label: "Project brief",
+      },
+    ],
+  };
+  await act(async () => {
+    tree = create(<ChatFollowThroughSetupForm setup={current} onCreate={onCreate} onClose={() => {}} />);
+  });
+  await act(async () => {
+    tree.root.findByType("textarea").props.onChange({ target: { value: "Send the daily brief" } });
+    const selector = tree.root
+      .findAllByType("select")
+      .find((select) => select.findAllByType("option").some((option) => option.props.value === "thread"));
+    selector?.props.onChange({ target: { value: "thread" } });
+  });
+  await act(async () => tree.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+  expect(JSON.stringify(tree.toJSON())).toContain("Project brief · 123456789012345678 · after every completed run");
+  expect(onCreate).not.toHaveBeenCalled();
+  await act(async () => tree.root.findByProps({ "data-follow-through-confirm": true }).props.onClick());
+  expect(onCreate).toHaveBeenCalledWith(
+    expect.objectContaining({
+      draft: expect.objectContaining({ delivery: { kind: "channel", connectionId: "thread" } }),
+    }),
+  );
+});
 it("an event uses the conversation's real quiet-hour zone rather than a decorative timezone selection", async () => {
   const onCreate = vi.fn(async () => {}),
     current = {

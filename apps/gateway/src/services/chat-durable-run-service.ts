@@ -548,6 +548,7 @@ export async function beginDurableChatRun(
         surface: mode,
         autoPromoted: mode === "chat",
         objective: prepared.content,
+        ...(prepared.inboundChannelEventId ? { inboundChannelEventId: prepared.inboundChannelEventId } : {}),
         ...(remoteWorkerChatContext ? { remoteWorkerChatContextSha256: remoteWorkerChatContext.contextSha256 } : {}),
         ...(remoteWorkerParentContext && remoteWorkerParentContextInput
           ? {

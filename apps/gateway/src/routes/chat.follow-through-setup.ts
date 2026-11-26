@@ -21,7 +21,10 @@ const create = z
     purpose: z.string().trim().min(1).max(2000),
     permissionProfileId: id,
     trigger,
-    delivery: z.object({ kind: z.literal("conversation") }).strict(),
+    delivery: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("conversation") }).strict(),
+      z.object({ kind: z.literal("channel"), connectionId: id }).strict(),
+    ]),
   })
   .strict();
 export function registerChatFollowThroughSetupRoutes(app: FastifyInstance) {

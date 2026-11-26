@@ -3197,6 +3197,22 @@
       "evidence": "google-workspace-review-service.test.ts covers the source, workspace, and staged-file checks. The architecture collector measures 10 accesses and zero host callbacks.",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 10
+    },
+    {
+      "path": "apps/gateway/src/services/autonomous-channel-destination.ts",
+      "planStep": "C0",
+      "reason": "Resolves the exact reviewed connector and destination, including the current workspace and enabled transport.",
+      "evidence": "The architecture collector measures one narrow integration read and zero host callbacks.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 1
+    },
+    {
+      "path": "apps/gateway/src/services/scheduled-brief-reply-context.ts",
+      "planStep": "C0",
+      "reason": "Proves an explicit reply in a channel belongs to an acknowledged scheduled occurrence in the admitted workspace.",
+      "evidence": "Scheduled brief reply tests exercise the five bounded canonical reads. The architecture collector measures zero host callbacks.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 5
     }
   ]
 }

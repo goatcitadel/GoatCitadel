@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IntegrationConnection, ToolInvokeRequest } from "@goatcitadel/contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadGatewayConfig } from "../config.js";
 import {
   startFakeOpenAiCompatibleServer,
@@ -15,6 +15,7 @@ import {
   type FakeOpenAiServer,
 } from "../test/fake-openai-server.js";
 import type { ChatThreadKnowledgeDependencies } from "./chat-thread-knowledge-service.js";
+import { readScheduledBriefReplyContext } from "./scheduled-brief-reply-context.js";
 import { OWN_DELIVERY } from "./comms-service.js";
 import { handleDiscordRuntimeInbound } from "./discord-runtime-bridge-service.js";
 import { GatewayService } from "./gateway-service.js";
@@ -49,6 +50,7 @@ describe("GoatCitadel's own deliveries while a tool group is off", { timeout: 12
     fakeProvider = undefined;
     await fakeDiscord?.close().catch(() => undefined);
     fakeDiscord = undefined;
+    vi.restoreAllMocks();
     for (const root of tempRoots.splice(0)) {
       await fs.promises.rm(root, { recursive: true, force: true }).catch(() => undefined);
     }
@@ -60,7 +62,7 @@ describe("GoatCitadel's own deliveries while a tool group is off", { timeout: 12
   });
 
   async function startGateway(
-    options: { scheduledTurns?: boolean } = {},
+    options: { scheduledTurns?: boolean; target?: string } = {},
   ): Promise<{ live: GatewayService; connection: IntegrationConnection }> {
     fakeProvider = await startFakeOpenAiCompatibleServer(replyWith("REPLY_OK"));
     fakeDiscord = await startFakeDiscordWebhookServer();
@@ -83,8 +85,8 @@ describe("GoatCitadel's own deliveries while a tool group is off", { timeout: 12
       status: "connected",
       config: {
         runtimeMode: "gateway",
-        webhookUrl: fakeDiscord.webhookUrl,
-        defaultChannelId: DISCORD_TARGET,
+        ...(options.target ? { botToken: "fixture-discord-bot-key" } : { webhookUrl: fakeDiscord.webhookUrl }),
+        defaultChannelId: options.target ?? DISCORD_TARGET,
         inboundAccessMode: "open_legacy",
       },
     });
@@ -354,6 +356,125 @@ describe("GoatCitadel's own deliveries while a tool group is off", { timeout: 12
     expect(discordRequests.map((request) => asRecord(request.body).content)).toEqual(["REPLY_OK"]);
   });
 
+  it("creates a reviewed daily brief, delivers to its pinned thread, and supplies context to a reply", async () => {
+    const target = "123456789012345678";
+    const threadEndpoint = `https://discord.com/api/v10/channels/${target}/messages`;
+    const botRequests: Array<{ url: string; body: unknown }> = [];
+    const fetchOriginal = globalThis.fetch;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "object" && "url" in input ? input.url : String(input);
+      if (new URL(url).hostname !== "discord.com") return fetchOriginal(input, init);
+      if (url !== threadEndpoint || init?.method !== "POST") return new Response(null, { status: 404 });
+      botRequests.push({ url, body: parseJson(String(init.body)) });
+      return Response.json({ id: String(123456789012345678n + BigInt(botRequests.length)) });
+    });
+    const { live, connection } = await startGateway({ scheduledTurns: true, target });
+    const session = await live.createChatSession({ title: "Reviewed daily brief" });
+    await live.ensureSessionInternalToolGrant(session.sessionId, "channel.send", "daily-brief-test");
+    const scope = { sessionId: session.sessionId, workspaceId: "default", actorId: "operator-1" };
+    const setup = await live.routeServices.chatAssistantSupport.inspectFollowThroughSetup(scope);
+    expect(setup.channelDestinations).toMatchObject([{ connectionId: connection.connectionId, target }]);
+    const job = await live.routeServices.chatAssistantSupport.createFollowThroughSetup({
+      ...scope,
+      expectedSetupHash: setup.sourceHash,
+      operationId: "reviewed-brief-fixture",
+      permissionProfileId: "trusted_local_power",
+      purpose: "Post the synthetic daily brief",
+      trigger: { kind: "recurring", schedule: "0 9 * * * America/Los_Angeles" },
+      delivery: { kind: "channel", connectionId: connection.connectionId },
+    });
+    await live.routeServices.cron.runCronJobNow(job.jobId);
+    const delivery = await pollFor(
+      async () => (await live.storage.commsDeliveries.list(connection.connectionId, 50))[0],
+      (item) => Boolean(item && (item.status !== "queued" || item.deliveryStatus === "waiting_approval")),
+      "the pinned destination delivery",
+    );
+    expect(delivery?.status, JSON.stringify(delivery)).toBe("sent");
+    const occurrence = await pollFor(
+      async () => {
+        await live.cronAutomationService.runDueTaskCronJobs();
+        return (await live.storage.cronRuns.listByJob(job.jobId))[0];
+      },
+      (run) =>
+        Boolean(
+          run?.status === "completed" || run?.status === "failed" || run?.status === "manual_reconciliation_required",
+        ),
+      "the reviewed daily brief to settle",
+      90_000,
+    );
+    expect(occurrence?.status, JSON.stringify(occurrence?.failure)).toBe("completed");
+    expect(botRequests.map((request) => asRecord(request.body).content)).toEqual(["REPLY_OK"]);
+    expect(fakeDiscord!.requests).toHaveLength(0);
+    const providerMessageId = String(occurrence!.outcome!.providerMessageId);
+    expect(providerMessageId).toMatch(/^\d{10,25}$/u);
+    const context = await readScheduledBriefReplyContext(live.storage, {
+      sessionId: session.sessionId,
+      connectionId: connection.connectionId,
+      target,
+      providerMessageId,
+    });
+    expect(Boolean(context), JSON.stringify({ payload: delivery?.payload, outcome: occurrence?.outcome })).toBe(true);
+    const reply = "Why was the second item included?";
+    const processReply = vi.spyOn(live, "respondToExistingChatMessage");
+    await handleDiscordRuntimeInbound(live, {
+      connectionId: connection.connectionId,
+      target,
+      actorId: "discord-user-1",
+      peer: "discord-user-1",
+      room: target,
+      threadId: target,
+      content: reply,
+      sourceMessageId: "brief-reply-fixture",
+      metadata: { referencedMessageId: providerMessageId },
+    });
+    const outcome = await pollFor(
+      async () =>
+        await live.storage.inboundChannelEvents.getByIdentity({
+          channelKey: "discord",
+          connectionId: connection.connectionId,
+          idempotencyKey: `discord:${connection.connectionId}:brief-reply-fixture`,
+        }),
+      (event) => Boolean(event?.sessionId) && processReply.mock.calls.length > 0,
+      "the same-thread follow-up to enter Chat",
+    );
+    expect(outcome?.payload).toMatchObject({ message: { metadata: { referencedMessageId: providerMessageId } } });
+    const inboundSessionId = outcome?.sessionId;
+    expect(Boolean(inboundSessionId)).toBe(true);
+    const inboundContext = await readScheduledBriefReplyContext(live.storage, {
+      sessionId: inboundSessionId!,
+      connectionId: connection.connectionId,
+      target,
+      providerMessageId,
+    });
+    const inboundMeta = await live.storage.chatSessionMeta.get(inboundSessionId!);
+    expect(Boolean(inboundContext), `inbound workspace ${inboundMeta?.workspaceId}`).toBe(true);
+    expect(processReply.mock.calls[0]?.[2]?.channelSystemInstruction).toBe(inboundContext);
+    const hasModelContext = await pollFor(
+      () =>
+        fakeProvider!.requests.some(
+          (request) =>
+            request.method === "POST" &&
+            JSON.stringify(request.body).includes(reply) &&
+            JSON.stringify(request.body).includes("acknowledged scheduled brief"),
+        ),
+      Boolean,
+      "the same-thread follow-up and its brief to reach the provider",
+    );
+    expect(hasModelContext).toBe(true);
+    await pollFor(
+      async () =>
+        await live.storage.inboundChannelEvents.getByIdentity({
+          channelKey: "discord",
+          connectionId: connection.connectionId,
+          idempotencyKey: `discord:${connection.connectionId}:brief-reply-fixture`,
+        }),
+      (event) => event?.status === "completed",
+      "the same-thread reply delivery to settle",
+      60_000,
+    );
+    expect(botRequests.map((request) => asRecord(request.body).content)).toEqual(["REPLY_OK", "REPLY_OK"]);
+  }, 180_000);
+
   it("stops a schedule.manage schedule's reply while Messaging is off", async () => {
     const { delivery, discordRequests } = await runScheduledReply("admitted_chat");
 
@@ -424,7 +545,7 @@ async function startFakeDiscordWebhookServer(): Promise<FakeDiscordWebhookServer
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     requests.push({ method: request.method ?? "GET", path: url.pathname, body: parseJson(rawBody) });
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ id: `discord-provider-message-${requests.length}` }));
+    response.end(JSON.stringify({ id: String(123456789012345678n + BigInt(requests.length)) }));
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");

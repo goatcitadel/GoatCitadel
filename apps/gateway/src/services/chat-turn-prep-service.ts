@@ -379,6 +379,7 @@ export interface PreparedAgentChatTurn {
   resolvedGuidance: ResolvedRuntimeGuidance;
   conversationMessages: ChatMessageRecord[];
   history: ChatCompletionRequest["messages"];
+  inboundChannelEventId?: string;
   hasPreparedRecallEvidence?: boolean;
   turnId: string;
   /** Frozen pre-routing mutation authority. Required on every production turn. */
@@ -624,6 +625,7 @@ export async function prepareAgentChatTurn(
     existingUserMessage?: ChatMessageRecord;
     ingestUserMessage?: boolean;
     extraSystemInstruction?: string;
+    inboundChannelEventId?: string;
     userMessageId?: string;
     turnId?: string;
     assistantMessageId?: string;
@@ -1538,6 +1540,7 @@ export async function prepareAgentChatTurn(
     conversationMessages,
     history,
     hasPreparedRecallEvidence: Boolean(memoryDigest?.trim() || threadKnowledgeContext.citations.length),
+    ...(options?.inboundChannelEventId ? { inboundChannelEventId: options.inboundChannelEventId } : {}),
     turnId,
     ...(options?.turnAdmission ? { turnAdmission: options.turnAdmission } : {}),
     ...(systemHeartbeatPosture ? { serverOnlyPosture: Object.freeze({ ...systemHeartbeatPosture }) } : {}),

@@ -8,6 +8,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { installedRecall, withNativeRecallPage } from "./lib/windows-installed-recall.mjs";
+import { verifyInstalledScheduledBrief } from "./lib/windows-installed-scheduled-brief.mjs";
 import {
   DETERMINISTIC_LLM_KEY_ENV,
   DETERMINISTIC_LLM_MODEL,
@@ -16,9 +17,8 @@ import {
 } from "../verification/lib/scenarios/deterministic-llm-stub.mjs";
 
 const exec = promisify(execFile);
-const [app, scratch, evidence, ollamaExe, fixtureArgument] = process.argv.slice(2);
+const [app, scratch, evidence, nativeDebugPort, ollamaExe, ntfyExe] = process.argv.slice(2);
 const recallOnly = ollamaExe === "--recall-only";
-const ntfyExe = recallOnly ? undefined : fixtureArgument;
 const ollamaModel = "qwen2.5:0.5b";
 const modelDigest = "a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67";
 const ntfyTokenEnv = "NTFY_READINESS_TOKEN";
@@ -98,7 +98,7 @@ async function withServer(exe, args, cwd, childEnv, run) {
   }
 }
 
-async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [], recall = false }, run) {
+async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [], recall = false, scheduledBrief = false }, run) {
   const [gatewayPort, uiPort] = await ports(2);
   const home = path.join(root, "home");
   const configDir = path.join(home, "runtime-root", "config");
@@ -118,6 +118,13 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
   } else {
     config.assistant.toolApprovalMode = "approve_all";
     config.toolPolicy.approvalMode = "approve_all";
+  }
+  if (scheduledBrief) {
+    Object.assign(config.assistant.features, {
+      durableKernelV1Enabled: true,
+      autonomyV1Disabled: false,
+      scheduledChatTurnsV1Enabled: true,
+    });
   }
   config.toolPolicy.sandbox.networkAllowlist = [new URL(provider.baseUrl).host, ...allow];
   config.cronJobs = { jobs: [] };
@@ -224,7 +231,7 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
       assert.equal(restarted.status, "ready");
     };
     const withNative = async (visit) => {
-      const debugPort = fixtureArgument ? Number(fixtureArgument) : (await ports(1))[0];
+      const debugPort = Number(nativeDebugPort);
       assert.ok(Number.isInteger(debugPort) && debugPort > 0 && debugPort <= 65535);
       return withNativeRecallPage({ app, root, runtimeEnv, uiPort, debugPort, poll, visit });
     };
@@ -364,7 +371,8 @@ async function realChannel(root) {
     const anonymous = await request(port, subscription);
     assert.ok([401, 403].includes(anonymous.status), "Anonymous access to the test topic was allowed");
     await anonymous.body?.cancel();
-    return withStub(root, { fixtureEnv: { [ntfyTokenEnv]: accessToken }, allow: [`127.0.0.1:${port}`] }, async ({ api }) => {
+    return withStub(root, { fixtureEnv: { [ntfyTokenEnv]: accessToken }, allow: [`127.0.0.1:${port}`], scheduledBrief: true }, async (runtime) => {
+      const { api } = runtime;
       const { connectionId } = await api("/api/v1/integrations/connections", "POST", {
         catalogId: "channel.ntfy", label: "Protected runner ntfy", enabled: true, status: "connected", workspaceId: "default",
         config: { baseUrl, topic, tokenEnv: ntfyTokenEnv, inboundStreamEnabled: true,
@@ -423,9 +431,17 @@ async function realChannel(root) {
       const thread = await api(`/api/v1/chat/sessions/${encodeURIComponent(accepted.sessionId)}/thread`);
       const turn = thread.turns?.find((item) => item.turnId === accepted.turnId);
       assert.ok(turn?.userMessage?.content?.includes(inbound), "The linked Chat turn did not contain the inbound text");
+      const scheduledBrief = await verifyInstalledScheduledBrief(runtime, {
+        connectionId, topic, marker, sample, evidence, poll,
+        readSubscriber: async () => {
+          const response = await request(port, subscription, { headers });
+          assert.equal(response.status, 200);
+          return (await response.text()).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+        },
+      });
       return { transport: "ntfy", authenticated: true, sendApprovalId: matching[0].approvalId,
         outboundProviderMessageId: receipt.id, inboundProviderMessageId: source.id, inboundEventId: accepted.eventId,
-        turnId: accepted.turnId, durableRunId: accepted.durableRunId, modelFixture: DETERMINISTIC_LLM_MODEL };
+        turnId: accepted.turnId, durableRunId: accepted.durableRunId, modelFixture: DETERMINISTIC_LLM_MODEL, scheduledBrief };
     });
   });
 }

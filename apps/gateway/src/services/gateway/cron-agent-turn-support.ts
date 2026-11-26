@@ -83,11 +83,26 @@ export function normalizeAgentTurnCronActionConfig(rawValue: Record<string, unkn
     rawChannel && typeof rawChannel.channelKey === "string" && rawChannel.channelKey.trim()
       ? {
           channelKey: rawChannel.channelKey.trim(),
+          ...(typeof rawChannel.connectionId === "string" && rawChannel.connectionId.trim()
+            ? { connectionId: rawChannel.connectionId.trim() }
+            : {}),
+          ...(typeof rawChannel.connectionRevision === "string" && rawChannel.connectionRevision.trim()
+            ? { connectionRevision: rawChannel.connectionRevision.trim() }
+            : {}),
           ...(typeof rawChannel.target === "string" && rawChannel.target.trim()
             ? { target: rawChannel.target.trim() }
             : {}),
         }
       : undefined;
+  if (
+    (rawChannel?.connectionId !== undefined || rawChannel?.connectionRevision !== undefined) &&
+    (!deliveryChannel?.connectionId ||
+      deliveryChannel.connectionId.length > 256 ||
+      !deliveryChannel.target ||
+      !deliveryChannel.connectionRevision ||
+      deliveryChannel.connectionRevision.length > 256)
+  )
+    throw new Error("Pinned scheduled delivery requires an exact connection and destination.");
   const deliverMode = rawAgentTurn.deliverMode === "on_notify" ? "on_notify" : "always";
   const inertInboxFallback = rawAgentTurn.inertInboxFallback === true;
   const createdBy = normalizeAgentTurnCreatedBy(rawAgentTurn.createdBy);

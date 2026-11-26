@@ -61,6 +61,9 @@ describe("CommsDeliveryRepository", () => {
     repo.markSent(original.deliveryId, "provider-123", "2026-09-12T00:02:00.000Z");
     assert.equal(repo.getById(original.deliveryId)?.status, "sent");
     assert.equal(repo.getById(original.deliveryId)?.providerMessageId, "provider-123");
+    assert.equal(repo.findSentByProviderMessage("conn-1", "-123456", "provider-123")?.deliveryId, original.deliveryId);
+    assert.equal(repo.findSentByProviderMessage("conn-elsewhere", "-123456", "provider-123"), undefined);
+    assert.equal(repo.findSentByProviderMessage("conn-1", "-other-thread", "provider-123"), undefined);
   });
 
   it("casts nullable lease parameters in PostgreSQL CAS statements", () => {

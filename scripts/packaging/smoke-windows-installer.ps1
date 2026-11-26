@@ -633,17 +633,16 @@ try {
   Stop-InstalledProcesses
   Start-Sleep -Seconds 2
 
+  if ($liveMode -or $recallMode) {
+    . (Join-Path $PSScriptRoot 'lib/run-hosted-native-recall.ps1')
+  }
   if ($liveMode) {
-    & $bundledNode (Join-Path $PSScriptRoot "windows-installed-live.mjs") `
-      $appHome $smokeRoot $LiveAcceptance.EvidenceDirectory $LiveAcceptance.OllamaExe $LiveAcceptance.NtfyExe
-    if ($LASTEXITCODE -ne 0) {
-      throw "One or more installed live feature checks failed. See the retained feature records."
-    }
+    Invoke-HostedNativeVerification $bundledNode $appHome $smokeRoot $LiveAcceptance.EvidenceDirectory $desktop `
+      @($LiveAcceptance.OllamaExe, $LiveAcceptance.NtfyExe)
   }
   if ($recallMode) {
     New-Item -ItemType Directory -Force -Path $RecallEvidenceDirectory | Out-Null
-    . (Join-Path $PSScriptRoot 'lib/run-hosted-native-recall.ps1')
-    Invoke-HostedNativeRecall $bundledNode $appHome $smokeRoot $RecallEvidenceDirectory $desktop
+    Invoke-HostedNativeVerification $bundledNode $appHome $smokeRoot $RecallEvidenceDirectory $desktop @('--recall-only')
   }
 
   $uninstaller = Join-Path $installDir "unins000.exe"

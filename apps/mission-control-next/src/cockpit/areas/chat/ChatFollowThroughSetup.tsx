@@ -38,6 +38,7 @@ export function ChatFollowThroughSetupForm({
     [fold, setFold] = useState(""),
     [hookId, setHookId] = useState(setup.eventSources[0]?.hookId ?? ""),
     [profileId, setProfileId] = useState(setup.profiles[0]?.profileId ?? ""),
+    [destinationId, setDestinationId] = useState(""),
     [review, setReview] = useState<ReviewedFollowThroughSetup>(),
     [validation, setValidation] = useState<string>();
   const confirmLock = useRef(false),
@@ -58,6 +59,8 @@ export function ChatFollowThroughSetupForm({
     try {
       const text = purpose.normalize("NFKC").trim();
       if (!text || !profileId) throw new Error("Add a purpose and choose the permissions to review.");
+      if (destinationId && !setup.channelDestinations?.some((item) => item.connectionId === destinationId))
+        throw new Error("Choose a current delivery destination before reviewing.");
       if (kind === "once" && (instants.error || !instants.values.length))
         throw new Error(instants.error ?? "That wall-clock time does not exist in this timezone. Choose another time.");
       if (kind === "once" && instants.values.length > 1 && !fold)
@@ -74,7 +77,12 @@ export function ChatFollowThroughSetupForm({
             : { kind, hookId, notBefore: new Date().toISOString(), timezone: setup.quietHours!.timezone };
       setReview({
         sourceHash: setup.sourceHash,
-        draft: { purpose: text, permissionProfileId: profileId, trigger, delivery: { kind: "conversation" } },
+        draft: {
+          purpose: text,
+          permissionProfileId: profileId,
+          trigger,
+          delivery: destinationId ? { kind: "channel", connectionId: destinationId } : { kind: "conversation" },
+        },
       });
     } catch (cause) {
       setValidation(cause instanceof Error ? cause.message : "Review the missing schedule details.");
@@ -91,6 +99,8 @@ export function ChatFollowThroughSetupForm({
   }
   const profile = setup.profiles.find((item) => item.profileId === (review?.draft.permissionProfileId ?? profileId)),
     stale = Boolean(review && review.sourceHash !== setup.sourceHash);
+  const reviewedConnection = review?.draft.delivery.kind === "channel" ? review.draft.delivery.connectionId : undefined;
+  const reviewedDestination = setup.channelDestinations?.find((item) => item.connectionId === reviewedConnection);
   return (
     <section className="grid min-w-0 gap-3 border-t border-line-subtle pt-3 text-sm" aria-label="Set up follow-through">
       <h3 className="font-semibold text-fg">Set up follow-through</h3>
@@ -130,7 +140,13 @@ export function ChatFollowThroughSetupForm({
             </div>
             <div>
               <dt className="font-medium">Reports to</dt>
-              <dd>This conversation, when attention is needed or a result changes.</dd>
+              <dd>
+                {reviewedDestination
+                  ? `${reviewedDestination.label} · ${reviewedDestination.target} · after every completed run`
+                  : reviewedConnection
+                    ? "Delivery destination unavailable"
+                    : "This conversation, when attention is needed or a result changes."}
+              </dd>
             </div>
             <div>
               <dt className="font-medium">Permissions</dt>
@@ -185,6 +201,26 @@ export function ChatFollowThroughSetupForm({
               />
             )}
           </Field>
+          {setup.channelDestinations?.length ? (
+            <Field label="Reports to">
+              {(props) => (
+                <select
+                  {...props}
+                  className={inputStyle}
+                  value={destinationId}
+                  disabled={locked || blocked}
+                  onChange={(event) => setDestinationId(event.target.value)}
+                >
+                  <option value="">This conversation</option>
+                  {setup.channelDestinations?.map((item) => (
+                    <option key={item.connectionId} value={item.connectionId}>
+                      {item.label} · {item.target}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </Field>
+          ) : null}
           <Field label="Trigger">
             {(props) => (
               <select

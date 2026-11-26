@@ -80,7 +80,17 @@ function readCronAdmission(value: unknown): CanonicalCronChatAdmissionIdentity |
 function sameChannel(left: DeliveryChannel | undefined, right: DeliveryChannel): boolean {
   return (
     left !== undefined &&
-    canonicalJsonString({ channelKey: left.channelKey.trim(), target: left.target?.trim() || null }) ===
-      canonicalJsonString({ channelKey: right.channelKey.trim(), target: right.target?.trim() || null })
+    canonicalJsonString({
+      channelKey: left.channelKey.trim(),
+      target: left.target?.trim() || null,
+      connectionId: left.connectionId ?? null,
+      connectionRevision: left.connectionRevision ?? null,
+    }) ===
+      canonicalJsonString({
+        channelKey: right.channelKey.trim(),
+        target: right.target?.trim() || null,
+        connectionId: right.connectionId ?? null,
+        connectionRevision: right.connectionRevision ?? null,
+      })
   );
 }

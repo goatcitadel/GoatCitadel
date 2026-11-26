@@ -69,7 +69,15 @@ export interface FollowThroughSetupDraft {
   purpose: string;
   permissionProfileId: string;
   trigger: FollowThroughSetupTrigger;
-  delivery: { kind: "conversation" };
+  delivery: { kind: "conversation" } | { kind: "channel"; connectionId: string };
+}
+
+export interface FollowThroughChannelDestination {
+  connectionId: string;
+  revision: string;
+  channelKey: "discord" | "ntfy";
+  target: string;
+  label: string;
 }
 export interface FollowThroughSetupInput extends FollowThroughSetupDraft {
   sessionId: string;
@@ -85,6 +93,7 @@ export interface FollowThroughSetupResponse {
   configRevision: number;
   profiles: { profileId: string; revision: string; label: string; description: string; approvalMode: string }[];
   eventSources: { hookId: string; label: string; sourceHash?: string }[];
+  channelDestinations?: FollowThroughChannelDestination[];
   limits: { scope: "installation"; dailyUsdHardCap: number; sessionTokenHardCap: number };
   blockedReasons: string[];
   quietHours?: { start: number; end: number; timezone: string };

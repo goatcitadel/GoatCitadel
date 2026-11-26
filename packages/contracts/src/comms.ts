@@ -24,6 +24,8 @@ export interface ChannelGovernanceInput {
 
 export interface ChannelSendInput extends ChannelGovernanceInput {
   connectionId: string;
+  /** Internal fence for a reviewed destination. Checked by the provider executor after loading the connection. */
+  expectedConnectionRevision?: string;
   target: string;
   message: string;
   attachments?: ChannelAttachmentInput[];

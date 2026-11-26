@@ -137,7 +137,7 @@ export interface CronAgentTurnConfig {
   /** Prompt sent to the model as the scheduled user message. Required, non-empty. */
   prompt: string;
   /** Channel the assistant reply is routed to after the turn completes. */
-  deliveryChannel?: CronNoAgentDeliveryChannel;
+  deliveryChannel?: CronNoAgentDeliveryChannel & { connectionId?: string; connectionRevision?: string };
   /**
    * `always` (default) delivers the assistant reply unconditionally; `on_notify`
    * only delivers when the turn output signals `{ notify: true }`.

@@ -1,6 +1,6 @@
-function Invoke-HostedNativeRecall($Node, $App, $Scratch, $Evidence, $Desktop) {
+function Invoke-HostedNativeVerification($Node, $App, $Scratch, $Evidence, $Desktop, [string[]]$FixtureArguments) {
   if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
-    throw 'The native recall fixture requires a disposable GitHub-hosted runner.'
+    throw 'Native feature verification requires a disposable GitHub-hosted runner.'
   }
   $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
   try {
@@ -22,8 +22,8 @@ function Invoke-HostedNativeRecall($Node, $App, $Scratch, $Evidence, $Desktop) {
   New-ItemProperty -LiteralPath $browserArgumentsPolicy -Name $desktopName -PropertyType String `
     -Value "--remote-debugging-address=127.0.0.1 --remote-debugging-port=$debugPort" | Out-Null
   try {
-    & $Node (Join-Path $PSScriptRoot '../windows-installed-live.mjs') $App $Scratch $Evidence '--recall-only' $debugPort
-    if ($LASTEXITCODE -ne 0) { throw 'Installed recall verification failed. See the retained recall evidence.' }
+    & $Node (Join-Path $PSScriptRoot '../windows-installed-live.mjs') $App $Scratch $Evidence $debugPort @FixtureArguments
+    if ($LASTEXITCODE -ne 0) { throw 'Installed feature verification failed. See the retained feature records.' }
   } finally {
     Remove-ItemProperty -LiteralPath $browserArgumentsPolicy -Name $desktopName
   }

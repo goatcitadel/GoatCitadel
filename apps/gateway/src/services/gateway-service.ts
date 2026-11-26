@@ -824,7 +824,9 @@ import {
   projectQueuedChannelDeliveryResult,
 } from "./gateway/channel-delivery-helpers.js";
 import { buildChannelReplyDeliveryInput } from "./channel-reply-delivery-input.js";
+import { readScheduledBriefReplyContext } from "./scheduled-brief-reply-context.js";
 import { isOwnAutonomousDelivery } from "./autonomous-delivery-ownership.js";
+import { resolveAutonomousChannelDestination } from "./autonomous-channel-destination.js";
 import {
   assertDeploymentProfileUpdate as assertGatewayDeploymentProfileUpdate,
   assertFirecrawlRuntimeUpdate as assertGatewayFirecrawlRuntimeUpdate,
@@ -1395,6 +1397,7 @@ export class GatewayService {
       readChatSessionBinding: async (sessionId) =>
         await chatSessionService.findChatSessionBinding(this.buildChatSessionDependencies(), sessionId),
       hasRunningTurn: async (sessionId) => await this.hasRunningTurn(sessionId),
+      readScheduledBriefReplyContext: (input) => readScheduledBriefReplyContext(this.storage, input),
       respondToExistingChatMessage: async (sessionId, eventId, options) =>
         await this.respondToExistingChatMessage(sessionId, eventId, options),
       transcribeChannelVoice: (input, owner) => this.channelVoiceInboundService.transcribe(input, owner),
@@ -5159,6 +5162,7 @@ export class GatewayService {
             existingUserMessage: userMessage,
             ingestUserMessage: false,
             extraSystemInstruction: channelSystemInstruction,
+            inboundChannelEventId: inboundDurableIdentity?.inboundEventId,
             turnAdmission,
             userMessageId: inboundDurableIdentity?.userMessageId ?? userMessage.messageId,
             turnId,
@@ -7740,6 +7744,7 @@ export class GatewayService {
       existingUserMessage?: ChatMessageRecord;
       ingestUserMessage?: boolean;
       extraSystemInstruction?: string;
+      inboundChannelEventId?: string;
       userMessageId?: string;
       turnId?: string;
       assistantMessageId?: string;
@@ -10349,13 +10354,9 @@ export class GatewayService {
   }
 
   /**
-   * Route an autonomous turn's assistant reply to a channel by enqueuing a
-   * durable `connector.delivery` run. Resolves the channel connector by key,
-   * falling back to the connector's default target when no explicit target is
-   * configured. Returns the delivery run id, or undefined when no active channel
-   * connector / target could be resolved (delivery is best-effort, never fatal
-   * to the turn). Carries `system-cron`-class governance so the channel send is
-   * attributed to the autonomous actor.
+   * Enqueue a durable channel reply under the autonomous actor's policy.
+   * Reviewed destinations must still match. Older jobs resolve by channel key and
+   * can use the connector's default target. Missing destinations skip delivery.
    */
   /** @internal */ public async enqueueAutonomousChannelDelivery(
     input: durableExecutionService.AutonomousChannelDeliveryRequest,
@@ -10365,33 +10366,24 @@ export class GatewayService {
     if (existing) {
       return existing.runId;
     }
-    if (!(await this.isFeatureEnabled("durableKernelV1Enabled"))) {
-      return undefined;
-    }
-    if (await this.isFeatureEnabled("autonomyV1Disabled")) {
-      return undefined;
-    }
     const message = input.assistantText.trim();
-    if (!message) {
+    if (
+      !message ||
+      !(await this.isFeatureEnabled("durableKernelV1Enabled")) ||
+      (await this.isFeatureEnabled("autonomyV1Disabled"))
+    ) {
       return undefined;
     }
-    const channelKey = input.deliveryChannel.channelKey.trim();
-    const connector = (await this.listConnectorRecords("integration_connection")).find(
-      (item) => item.status === "active" && item.metadata?.key === channelKey,
-    );
-    if (!connector) {
-      return undefined;
-    }
-    const target =
-      input.deliveryChannel.target?.trim() ||
-      (typeof connector.metadata?.approvalDeliveryTarget === "string"
-        ? connector.metadata.approvalDeliveryTarget.trim()
-        : undefined);
-    if (!target) {
-      return undefined;
-    }
-    const operatorId = input.systemActorId ?? "system-cron";
     const workspaceId = (await this.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const destination = await resolveAutonomousChannelDestination(
+      input.deliveryChannel,
+      workspaceId,
+      await this.listConnectorRecords("integration_connection"),
+      this.storage.integrationConnections,
+    );
+    if (!destination) return undefined;
+    const { connector, target } = destination;
+    const operatorId = input.systemActorId ?? "system-cron";
     const ownDelivery = await isOwnAutonomousDelivery(input, { storage: this.storage }, this.chatAutonomousTurnDeps());
     const createInput: DurableRunCreateRequest = {
       runId: deliveryRunId,
@@ -10408,7 +10400,14 @@ export class GatewayService {
         authActorId: operatorId,
         authActorSource: "none",
         originSurface: "scheduler",
-        payload: { target, message, ...(input.commitmentId ? { commitmentId: input.commitmentId } : {}) },
+        payload: {
+          target,
+          message,
+          ...(input.deliveryChannel.connectionRevision
+            ? { expectedConnectionRevision: input.deliveryChannel.connectionRevision }
+            : {}),
+          ...(input.commitmentId ? { commitmentId: input.commitmentId } : {}),
+        },
       },
       metadata: {
         deliveryKind: "autonomous.assistant_message",

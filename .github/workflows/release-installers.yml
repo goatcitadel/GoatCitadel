@@ -106,6 +106,7 @@ jobs:
           path: |
             ${{ runner.temp }}/installed-live/evidence/*.json
             ${{ runner.temp }}/installed-live/evidence/recall-*.png
+            ${{ runner.temp }}/installed-live/evidence/scheduled-brief-*.png
           if-no-files-found: warn
 
   windows-build-inputs:

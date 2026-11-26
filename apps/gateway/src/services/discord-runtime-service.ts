@@ -1023,6 +1023,10 @@ export class DiscordRuntimeService {
     if (!normalizedContent && !voiceAttachment) {
       return false;
     }
+    const referencedMessageId =
+      message.channel.isThread() && message.reference?.channelId === message.channelId
+        ? message.reference.messageId
+        : undefined;
     await this.handleAcceptedMessage(message, async () => {
       return await this.callbacks.onInboundMessage({
         connectionId: connection.connectionId,
@@ -1040,6 +1044,7 @@ export class DiscordRuntimeService {
           guildId: message.guildId,
           channelId: message.channelId,
           runtimeMode: "gateway",
+          ...(referencedMessageId ? { referencedMessageId } : {}),
         },
         ...(voiceAttachment ? { voiceAttachment } : {}),
       });
