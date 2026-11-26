@@ -1,4 +1,9 @@
-import type { SkillHubBlockerCode, SkillImportValidationResult, SkillScanFindingCode } from "@goatcitadel/contracts";
+import type {
+  SkillHubBlockerCode,
+  SkillImportValidationResult,
+  SkillScanFinding,
+  SkillScanFindingCode,
+} from "@goatcitadel/contracts";
 
 export const SCAN_BLOCKER_MESSAGES: Partial<Record<SkillHubBlockerCode, string>> = {
   PROMPT_INJECTION_DETECTED: "Skill source contains prompt-injection instructions.",
@@ -7,18 +12,24 @@ export const SCAN_BLOCKER_MESSAGES: Partial<Record<SkillHubBlockerCode, string>>
   UNREADABLE_SKILL_FILE: "Skill source contains files that could not be read and checked.",
 };
 
-/** The shared content scan's dangerous findings, as the blocker codes the Skills tab explains. */
-export function scanVerdictBlockers(validation: SkillImportValidationResult): SkillHubBlockerCode[] {
-  const codeFor: Partial<Record<SkillScanFindingCode, SkillHubBlockerCode>> = {
-    prompt_injection: "PROMPT_INJECTION_DETECTED",
-    hidden_text: "HIDDEN_TEXT_DETECTED",
-    unsafe_script: "SUSPICIOUS_SCRIPT_INDICATOR",
-    unreadable_file: "UNREADABLE_SKILL_FILE",
-  };
-  return (validation.scanVerdict?.findings ?? []).flatMap((finding) => {
-    const code = finding.dangerous ? codeFor[finding.code] : undefined;
+const BLOCKER_FOR_FINDING: Partial<Record<SkillScanFindingCode, SkillHubBlockerCode>> = {
+  prompt_injection: "PROMPT_INJECTION_DETECTED",
+  hidden_text: "HIDDEN_TEXT_DETECTED",
+  unsafe_script: "SUSPICIOUS_SCRIPT_INDICATOR",
+  unreadable_file: "UNREADABLE_SKILL_FILE",
+};
+
+/** Dangerous findings, as the blocker codes the Skills tab explains, in finding order. */
+export function findingBlockers(findings: readonly SkillScanFinding[]): SkillHubBlockerCode[] {
+  return findings.flatMap((finding) => {
+    const code = finding.dangerous ? BLOCKER_FOR_FINDING[finding.code] : undefined;
     return code ? [code] : [];
   });
+}
+
+/** The shared content scan's dangerous findings, as the blocker codes the Skills tab explains. */
+export function scanVerdictBlockers(validation: SkillImportValidationResult): SkillHubBlockerCode[] {
+  return findingBlockers(validation.scanVerdict?.findings ?? []);
 }
 
 /** Refuses a review with the first dangerous finding's own reason, ahead of the general validation failure. */

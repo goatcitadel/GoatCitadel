@@ -36,6 +36,11 @@ const MAX_FINDINGS = 32;
 const PROMPT_TEXT_FILE = /\.(md|markdown|txt|json|ya?ml|toml|html?|svg)$/i;
 /** Images and fonts: not text, never sent to a model, so not scanned. */
 const ASSET_FILE = /\.(png|jpe?g|gif|webp|ico|bmp|woff2?|ttf|otf|eot)$/i;
+
+/** Images and fonts: the scan skips them, so a caller need not read their bytes. */
+export function isSkillAssetPath(filePath: string): boolean {
+  return ASSET_FILE.test(filePath);
+}
 const COMMENT_LINE = /^\s*(?:#|\/\/|--|;|\/\*|\*|<#|REM\b|::|'|<!--)/i;
 
 export function scanSkillContents(

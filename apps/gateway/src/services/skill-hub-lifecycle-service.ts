@@ -30,6 +30,7 @@ import { parseSkillMarkdown } from "@goatcitadel/skills";
 import { CapabilityPluginStore } from "./capability-plugin-store.js";
 import { pluginSkillSource } from "./plugin-owned-refusal.js";
 import { takesPowerAway } from "./skill-hub-operation-power.js";
+import { contentScanSettlement, scanVerifiedArtifactContent } from "./skill-hub-artifact-content-scan.js";
 import { SKILL_STATE_METADATA_SETTING_KEY } from "./skill-state-keys.js";
 import {
   withoutSkillMetadata,
@@ -258,6 +259,19 @@ export class SkillHubLifecycleService {
           })),
           boundaryCrossed: false,
         });
+      }
+      const contentScan = await scanVerifiedArtifactContent(artifact.manifest.files, (entry) =>
+        this.filesystem.readVerifiedText({
+          sourceRoot: bundlePath,
+          sourcePath: path.join(bundlePath, ...entry.path.split("/")),
+          expectedBytes: entry.bytes,
+          expectedSha256: entry.sha256,
+          signal,
+        }),
+      );
+      if (contentScan.kind !== "clean") {
+        const detail = contentScanSettlement(contentScan);
+        return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, detail);
       }
     }
     const skillEntry = artifact.manifest.files.find((file) => file.path === "SKILL.md");
