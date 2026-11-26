@@ -328,7 +328,8 @@ export type SkillPromptwareRuleId =
   | "privileged_prompt_exfiltration"
   | "approval_policy_bypass"
   | "tool_execution_without_approval"
-  | "role_identity_override";
+  | "role_identity_override"
+  | "hidden_text_obfuscation";
 
 export interface SkillPromptwareFinding {
   scannerVersion: string;
