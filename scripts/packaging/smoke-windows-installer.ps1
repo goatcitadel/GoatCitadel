@@ -642,8 +642,8 @@ try {
   }
   if ($recallMode) {
     New-Item -ItemType Directory -Force -Path $RecallEvidenceDirectory | Out-Null
-    . (Join-Path $PSScriptRoot "lib/run-standard-user-recall.ps1")
-    Invoke-StandardUserRecall $bundledNode $appHome $smokeRoot $RecallEvidenceDirectory $PSScriptRoot
+    . (Join-Path $PSScriptRoot 'lib/run-hosted-native-recall.ps1')
+    Invoke-HostedNativeRecall $bundledNode $appHome $smokeRoot $RecallEvidenceDirectory $desktop
   }
 
   $uninstaller = Join-Path $installDir "unins000.exe"

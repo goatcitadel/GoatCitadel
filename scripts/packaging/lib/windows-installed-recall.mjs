@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-export async function withNativeRecallPage({ app, root, runtimeEnv, debugPort, poll, visit }) {
+export async function withNativeRecallPage({ app, root, runtimeEnv, uiPort, debugPort, poll, visit }) {
   const require = createRequire(path.join(app, "gateway", "package.json"));
   const { chromium } = require("playwright");
   const host = spawn(path.join(app, "desktop", "GoatCitadel-Mission-Control-Windows.exe"), [], {
@@ -21,14 +21,15 @@ export async function withNativeRecallPage({ app, root, runtimeEnv, debugPort, p
   try {
     await once(host, "spawn");
     const endpoint = `http://127.0.0.1:${debugPort}`;
+    const uiOrigin = `http://127.0.0.1:${uiPort}/`;
     await poll(async () => {
       if (host.exitCode !== null) throw new Error(`Native recall host exited ${host.exitCode}`);
       const targets = await fetch(`${endpoint}/json/list`, { signal: AbortSignal.timeout(2000) })
         .then((response) => response.json()).catch(() => []);
-      return targets.some((target) => target.type === "page" && target.url.startsWith("http://127.0.0.1:"));
+      return targets.some((target) => target.type === "page" && target.url.startsWith(uiOrigin));
     }, "the installed native WebView", 65000);
     browser = await chromium.connectOverCDP(endpoint);
-    const page = browser.contexts().flatMap((context) => context.pages()).find((entry) => entry.url().startsWith("http://127.0.0.1:"));
+    const page = browser.contexts().flatMap((context) => context.pages()).find((entry) => entry.url().startsWith(uiOrigin));
     assert.ok(page);
     page.setDefaultTimeout(20000);
     const tokenField = page.getByLabel("Gateway token", { exact: true });

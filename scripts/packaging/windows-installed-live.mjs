@@ -16,7 +16,9 @@ import {
 } from "../verification/lib/scenarios/deterministic-llm-stub.mjs";
 
 const exec = promisify(execFile);
-const [app, scratch, evidence, ollamaExe, ntfyExe] = process.argv.slice(2);
+const [app, scratch, evidence, ollamaExe, fixtureArgument] = process.argv.slice(2);
+const recallOnly = ollamaExe === "--recall-only";
+const ntfyExe = recallOnly ? undefined : fixtureArgument;
 const ollamaModel = "qwen2.5:0.5b";
 const modelDigest = "a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67";
 const ntfyTokenEnv = "NTFY_READINESS_TOKEN";
@@ -222,8 +224,9 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
       assert.equal(restarted.status, "ready");
     };
     const withNative = async (visit) => {
-      const [debugPort] = await ports(1);
-      return withNativeRecallPage({ app, root, runtimeEnv, debugPort, poll, visit });
+      const debugPort = fixtureArgument ? Number(fixtureArgument) : (await ports(1))[0];
+      assert.ok(Number.isInteger(debugPort) && debugPort > 0 && debugPort <= 65535);
+      return withNativeRecallPage({ app, root, runtimeEnv, uiPort, debugPort, poll, visit });
     };
     return await run({ api, send, waitForTurn, restart, withNative });
   } finally {
@@ -428,7 +431,7 @@ async function realChannel(root) {
 }
 
 const recallCheck = ["recall", (root) => installedRecall(root, evidence, withStub, poll)];
-const checks = ollamaExe === "--recall-only"
+const checks = recallOnly
   ? [recallCheck]
   : [["provider", realProvider], ["channel", realChannel], ["approval", governedApproval]];
 for (const [name, check] of checks) {
