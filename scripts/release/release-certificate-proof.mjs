@@ -21,6 +21,34 @@ export function selectReleaseCommitRun(runs, targetCommit) {
   return runs.find((run) => run?.head_sha === targetCommit && RELEASE_COMMIT_EVENTS.has(run.event)) ?? null;
 }
 
+export async function fetchReleaseCommitRun(url, { commit, token, fetchImpl = fetch }) {
+  const pageUrl = new URL(url);
+  for (let page = 1; ; page += 1) {
+    // Keep credentials and the exact-SHA query on the configured endpoint.
+    pageUrl.searchParams.set("page", String(page));
+    const response = await fetchImpl(pageUrl, {
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${token}`,
+        "x-github-api-version": "2022-11-28",
+      },
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      return { status: `github-api-${response.status}`, run: null };
+    }
+    const payload = await response.json();
+    const run = selectReleaseCommitRun(payload.workflow_runs, commit);
+    if (run) {
+      return { status: run.conclusion ?? run.status ?? "unknown", run };
+    }
+    const links = response.headers.get("link") ?? "";
+    if (!/(?:^|,)\s*<[^>]+>\s*;\s*rel="next"(?:\s*[,;]|\s*$)/u.test(links)) {
+      return { status: "missing", run: null };
+    }
+  }
+}
+
 export function isUnavailableOrMissingWorkflowStatus(status) {
   return status === "missing" || status === "unavailable" || String(status).startsWith("github-api");
 }

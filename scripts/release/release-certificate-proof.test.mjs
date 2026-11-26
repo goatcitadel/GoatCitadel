@@ -6,11 +6,54 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
+  fetchReleaseCommitRun,
   matchesHostileSandboxProofRun,
   resolveLaneProof,
   resolveRequiredLaneProofs,
   selectReleaseCommitRun,
 } from "./release-certificate-proof.mjs";
+
+test("release workflow lookup follows pagination while preserving the endpoint and exact SHA", async () => {
+  const endpoint = "https://api.github.com/repos/example/project/actions/workflows/verify.yml/runs?head_sha=abc&per_page=100";
+  const eligible = { id: 2, head_sha: "abc", event: "push", conclusion: "success" };
+  const requestedPages = [];
+  const result = await fetchReleaseCommitRun(endpoint, {
+    commit: "abc",
+    token: "fixture",
+    fetchImpl: async (url, options) => {
+      assert.equal(url.origin, "https://api.github.com");
+      assert.equal(url.pathname, new URL(endpoint).pathname);
+      assert.equal(url.searchParams.get("head_sha"), "abc");
+      assert.equal(url.searchParams.get("per_page"), "100");
+      assert.equal(options.headers.authorization, "Bearer fixture");
+      const page = url.searchParams.get("page");
+      requestedPages.push(page);
+      return page === "1"
+        ? Response.json(
+            { workflow_runs: [{ id: 1, head_sha: "abc", event: "pull_request" }] },
+            { headers: { Link: '<https://example.invalid/untrusted>; rel="next", <https://example.invalid/last>; rel="last"' } },
+          )
+        : Response.json({ workflow_runs: [eligible] });
+    },
+  });
+  assert.deepEqual(requestedPages, ["1", "2"]);
+  assert.deepEqual(result, { status: "success", run: eligible });
+});
+
+test("release workflow pagination distinguishes no eligible run from an API error", async () => {
+  const endpoint = "https://api.github.com/workflow-runs?head_sha=abc";
+  for (const [response, status] of [
+    [Response.json({ workflow_runs: [] }), "missing"],
+    [new Response("Forbidden", { status: 403 }), "github-api-403"],
+  ]) {
+    const result = await fetchReleaseCommitRun(endpoint, {
+      commit: "abc",
+      token: "fixture",
+      fetchImpl: async () => response,
+    });
+    assert.deepEqual(result, { status, run: null });
+  }
+});
 
 test("hostile sandbox proof must come from the selected repository, commit and workflow run attempt", () => {
   const commit = "a".repeat(40);
@@ -740,6 +783,18 @@ test("release certificate rejects files outside the fixed release inventory", (t
   const result = runCertificateWriter(fixture);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /fixed closed-world inventory/i);
+});
+
+test("release certificate refuses a POSIX backslash alias for a nested asset", { skip: process.platform === "win32" }, (t) => {
+  const fixture = makeCertificateWriterFixture(t, "backslash-alias");
+  const fileName = "GoatCitadel-Setup-windows-x64.exe";
+  const expectedPath = path.join(fixture.artifactsDir, "windows-x64-release-assets", fileName);
+  const alias = path.join(fixture.artifactsDir, `windows-x64-release-assets\\${fileName}`);
+  fs.renameSync(expectedPath, alias);
+
+  const result = runCertificateWriter(fixture);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Release artifact path is unsafe/u);
 });
 
 test("OIDC write is isolated to fixed-input artifact and certificate signers", () => {

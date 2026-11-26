@@ -12,9 +12,9 @@ import {
   validateReleaseManifest,
 } from "../packaging/lib/package-renderers.mjs";
 import {
+  fetchReleaseCommitRun,
   matchesHostileSandboxProofRun,
   resolveRequiredLaneProofs,
-  selectReleaseCommitRun,
 } from "./release-certificate-proof.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -504,7 +504,7 @@ async function resolveRuntimePayloads({ mappings, artifactsDir, releaseAssets, v
     seenTargets.add(mapping.target);
     const manifestPath = path.resolve(mapping.filePath);
     assertChildPath(artifactsRoot, manifestPath, `runtime manifest ${mapping.target}`);
-    const manifestRelativePath = path.relative(artifactsRoot, manifestPath).replaceAll("\\", "/");
+    const manifestRelativePath = releaseRelativePath(artifactsRoot, manifestPath);
     if (seenManifestPaths.has(manifestRelativePath)) {
       throw new Error(`Runtime manifest path is assigned to multiple targets: ${manifestRelativePath}`);
     }
@@ -577,22 +577,11 @@ async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
   const encodedWorkflow = encodeURIComponent(workflowFile);
   const url = `https://api.github.com/repos/${repository}/actions/workflows/${encodedWorkflow}/runs?head_sha=${commit}&per_page=100`;
   try {
-    const response = await fetch(url, {
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-        "x-github-api-version": "2022-11-28",
-      },
-    });
-    if (!response.ok) {
-      return createWorkflowRunResult(`github-api-${response.status}`);
-    }
-    const payload = await response.json();
-    const run = selectReleaseCommitRun(payload.workflow_runs, commit);
+    const { status, run } = await fetchReleaseCommitRun(url, { commit, token: process.env.GITHUB_TOKEN });
     if (!run) {
-      return createWorkflowRunResult("missing");
+      return createWorkflowRunResult(status);
     }
-    return createWorkflowRunResult(run.conclusion ?? run.status ?? "unknown", {
+    return createWorkflowRunResult(status, {
       conclusion: run.conclusion ?? null,
       html_url: run.html_url ?? null,
       id: run.id ?? null,
@@ -821,7 +810,7 @@ function buildHostileSandboxWindowsClaim({ commit, repository, proof, proofPath,
     proofHeadSha,
     exactShaMatched,
     artifactRunMatched,
-    proofRef: proofPath ? path.relative(repoRoot, proofPath).replaceAll("\\", "/") : null,
+    proofRef: proofPath ? releaseRelativePath(repoRoot, proofPath) : null,
     currentPlatform: proof?.platform ?? null,
     currentPlatformProofStatus: proof?.currentPlatformProof?.status ?? null,
     windowsPlatformProofStatus: win32Proof?.status ?? "missing",
@@ -842,6 +831,10 @@ function readOptionalJson(filePath) {
     return null;
   }
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function releaseRelativePath(root, filePath) {
+  return path.relative(root, filePath).split(path.sep).join("/");
 }
 
 function listFiles(rootDir) {
@@ -867,7 +860,7 @@ function listFiles(rootDir) {
       .sort((left, right) => compareStrings(left.name, right.name))) {
       const absolutePath = path.join(current, entry.name);
       const stats = fs.lstatSync(absolutePath);
-      const relativePath = validateReleaseAssetRelativePath(path.relative(root, absolutePath).replaceAll("\\", "/"));
+      const relativePath = validateReleaseAssetRelativePath(releaseRelativePath(root, absolutePath));
       if (stats.isSymbolicLink()) {
         throw new Error(`Release artifacts cannot contain a symlink or junction: ${relativePath}`);
       }
@@ -894,9 +887,7 @@ function listFiles(rootDir) {
       throw new Error(`Release artifacts cannot contain a special filesystem entry: ${relativePath}`);
     }
   }
-  return files.sort((left, right) =>
-    compareStrings(path.relative(root, left).replaceAll("\\", "/"), path.relative(root, right).replaceAll("\\", "/")),
-  );
+  return files.sort((left, right) => compareStrings(releaseRelativePath(root, left), releaseRelativePath(root, right)));
 }
 
 function validateReleaseAssetRelativePath(relativePath) {
@@ -932,7 +923,7 @@ async function fileRecord(filePath, rootDir) {
   const stable = await hashStableRegularFile(filePath, rootDir, `release file ${path.basename(filePath)}`);
   return {
     fileName: path.basename(filePath),
-    relativePath: path.relative(rootDir, filePath).replaceAll("\\", "/"),
+    relativePath: releaseRelativePath(rootDir, filePath),
     sha256: stable.sha256,
     sizeBytes: stable.sizeBytes,
   };
