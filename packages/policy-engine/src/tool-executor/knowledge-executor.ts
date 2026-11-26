@@ -227,36 +227,41 @@ export function prepareMemoryToolWrite(request: ToolInvokeRequest) {
 /**
  * P2-S4a `session.search`: read-only FTS recall over persisted chat messages.
  *
- * Defaults to the calling session (`scope:"session"`); `scope:"all"` searches the
- * calling workspace. Query sanitisation lives in the storage repo, so arbitrary user text is
- * safe here. The repo enforces sensible limit/context-radius bounds.
+ * Defaults to the calling session. Workspace search from a DM can also exclude the calling session.
  */
 async function sessionSearch(request: ToolInvokeRequest, storage: AsyncStorage) {
   const query = (asString(request.args.query) ?? "").trim();
-  if (!query) return { scope: asString(request.args.scope) === "all" ? "all" : "session", query: "", hits: [] };
+  const requestedScope = request.args.scope === "prior" ? "prior" : request.args.scope === "all" ? "all" : "session";
+  if (!query) return { scope: requestedScope, query: "", hits: [] };
   const caller = await storage.sessions?.getBySessionId(request.sessionId);
   if (!caller) throw new Error("Session history is unavailable without a canonical calling session");
-  const scope = asString(request.args.scope) === "all" && caller.kind === "dm" ? "all" : "session";
+  const scope = caller.kind === "dm" ? requestedScope : "session";
   const limit = clampInt(request.args.limit, 10, 1, 50);
-  if (!query) {
-    return { scope, query: "", hits: [] };
-  }
   if (query.length > 512) {
     throw new Error("session.search query must be 512 characters or fewer");
   }
   const workspaceId = await resolveAuthorizedSessionWorkspace(request, storage, request.sessionId);
-  const hits = await storage.chatMessages.searchMessages(query, {
+  const options = {
     workspaceId,
     ...(scope === "session" ? { sessionId: request.sessionId } : {}),
+    ...(scope === "prior" ? { excludeSessionId: request.sessionId } : {}),
     includeHidden: scope === "session",
     limit,
     contextRadius: 0,
-  });
+  };
+  let hits = await storage.chatMessages.searchMessages(query, options);
+  // The prior-chat schema asks for the subject first. Retry its leading terms
+  // when additional keywords from a paraphrase made the exact search too narrow.
+  const terms = scope === "prior" ? query.match(/[\p{L}\p{N}]+/gu) : null;
+  if (hits.length === 0 && terms && terms.length > 2) {
+    hits = await storage.chatMessages.searchMessages(terms.slice(0, 2).join(" "), options);
+  }
   const authorizedHits: typeof hits = [];
   for (const hit of hits) {
     if (
       hit.workspaceId !== workspaceId ||
       (scope === "session" && hit.sessionId !== request.sessionId) ||
+      (scope === "prior" && hit.sessionId === request.sessionId) ||
       !hit.messageId ||
       !Number.isSafeInteger(hit.sequence) ||
       hit.sequence < 1
@@ -272,6 +277,9 @@ async function sessionSearch(request: ToolInvokeRequest, storage: AsyncStorage) 
   return {
     scope,
     query: capUtf8Text(sanitizeForModel(query), 512, ""),
+    ...(scope === "prior" && authorizedHits.length === 0
+      ? { guidance: "No matching messages in earlier chats. Say you could not verify the decision from chat history." }
+      : {}),
     hits: authorizedHits.map((hit) => ({
       workspaceId: hit.workspaceId,
       sessionId: hit.sessionId,

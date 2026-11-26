@@ -91,9 +91,21 @@ it("shows the source count immediately and mounts safe links when the disclosure
   turn.citations = [
     { citationId: "safe", title: "Evidence", url: "https://example.com/evidence", sourceType: "web" },
     { citationId: "unsafe", title: "Unavailable link", url: "file:///example", sourceType: "web" },
+    {
+      citationId: "history",
+      title: "Open matching message",
+      url: "goatcitadel://chat-history?sessionId=sess-source&messageId=msg-source&sequence=7",
+      sourceType: "tool",
+    },
+    {
+      citationId: "invalid-history",
+      title: "Unavailable message",
+      url: "goatcitadel://chat-history?sessionId=sess-source&messageId=msg-source&sequence=-1",
+      sourceType: "tool",
+    },
   ];
   render(turn);
-  const summary = [...container.querySelectorAll("summary")].find((item) => item.textContent === "2 sources")!;
+  const summary = [...container.querySelectorAll("summary")].find((item) => item.textContent === "4 sources")!;
   expect(container.textContent).not.toContain("Evidence");
 
   await act(async () => {
@@ -106,6 +118,13 @@ it("shows the source count immediately and mounts safe links when the disclosure
   expect(container.querySelector('a[href="https://example.com/evidence"]')?.textContent).toBe("Evidence");
   expect(container.querySelector('a[href^="file:"]')).toBeNull();
   expect(container.textContent).toContain("Unavailable link");
+  const history = container.querySelector(
+    'a[href="/chat?shell=cockpit&sessionId=sess-source&messageId=msg-source&sequence=7"]',
+  );
+  expect(history?.textContent).toBe("Open matching message");
+  expect(history?.hasAttribute("target")).toBe(false);
+  expect(container.textContent).toContain("Unavailable message");
+  expect(container.querySelectorAll('a[href^="/chat?"]')).toHaveLength(1);
 });
 
 describe("ChatTurnDetails design advisories", async () => {

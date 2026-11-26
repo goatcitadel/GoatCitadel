@@ -13,6 +13,10 @@ export interface MemoryIntentResult {
   truncated: boolean;
   remainderDisposition?: "deferred";
 }
+
+const WEEKLY_UPDATE_PREFERENCE =
+  /^(?:(?:please\s+)?remember(?:\s+that)?\s+|actually[,\s]+|no[,\s]+|correction[:,\s]+)?I\s+prefer\s+(?:a\s+)?([1-9]\d?|one|two|three|four|five|six|seven|eight|nine|ten)[\s-]+bullets?\s+weekly\s+updates?[.!]?$/iu;
+const BULLET_COUNT_WORDS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
 export function classifyMemoryIntent(input: {
   content: string;
   sourceAuthority: ChatMessageSourceAuthority;
@@ -106,6 +110,11 @@ function identifyProperty(content: string): MemoryIntentProposal["claimHint"] {
     cardinality: "scalar" as const,
     value,
   });
+  const weeklyCount = WEEKLY_UPDATE_PREFERENCE.exec(content)?.[1]?.toLowerCase();
+  if (weeklyCount) {
+    const count = Number(weeklyCount) || BULLET_COUNT_WORDS.indexOf(weeklyCount) + 1;
+    return hint("weekly_update_bullet_count", String(count));
+  }
   if (
     /\b(?:repl(?:y|ies)|responses?|answers?|explanations?|reports?|respuestas?|explicaciones?|informes?)\b/iu.test(
       content,
@@ -174,7 +183,12 @@ export function isNaturalMemoryReviewOnlyTurn(content: string): boolean {
   return (
     sentences.length > 0 &&
     sentences.every(
-      (sentence) => english.test(sentence) || spanish.test(sentence) || save.test(sentence) || replace.test(sentence),
+      (sentence) =>
+        english.test(sentence) ||
+        spanish.test(sentence) ||
+        save.test(sentence) ||
+        replace.test(sentence) ||
+        WEEKLY_UPDATE_PREFERENCE.test(sentence),
     )
   );
 }

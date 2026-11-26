@@ -54,11 +54,14 @@ function lookupApprovalPreview(toolName: string, args: Record<string, unknown>):
     return undefined;
   }
   const namespace = trimmedText(args.namespace);
+  const scope = trimmedText(args.scope);
   const target =
     toolName === "session.search"
-      ? trimmedText(args.scope) === "all"
+      ? scope === "all"
         ? "Conversations in this workspace that are included in history"
-        : "This conversation"
+        : scope === "prior"
+          ? "Other conversations in this workspace that are included in history"
+          : "This conversation"
       : `${toolName.startsWith("memory.") ? "Memory" : "Knowledge"} namespace: ${namespace ? redact(namespace) : "all namespaces"}`;
   const limit = clampInt(typeof args.limit === "number" ? args.limit : undefined, limits.fallback, 1, limits.max);
   return {

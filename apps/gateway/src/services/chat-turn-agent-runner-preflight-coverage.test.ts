@@ -9,6 +9,31 @@ import {
 import { IMPROVEMENT_TUNE_SETTING_KEYS } from "./improvement-tune-reads.js";
 
 describe("ChatTurnAgentRunner tool preflight coverage", () => {
+  it("executes explicit earlier-chat searches without returning the calling transcript", async () => {
+    const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>().mockResolvedValue({
+      outcome: "executed",
+      policyReason: "allowed",
+      auditEventId: "audit-recall",
+      result: { scope: "prior", hits: [] },
+    });
+    const executeToolCall = createExecuteToolCallForTest({
+      invokeTool,
+      invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(invokeTool),
+      toolNames: ["session.search"],
+    });
+    const result = await executeToolCall({
+      input: turnInput({
+        content: "What did we decide about the Gannet Kiosk opening time last week?",
+        webMode: "off",
+      }),
+      turnId: "turn-prior-search",
+      toolName: "session.search",
+      rawArgs: { query: "Gannet Kiosk opening time", scope: "all" },
+    });
+
+    expect(result.record).toMatchObject({ status: "executed", args: { scope: "prior" } });
+  });
+
   it("persists blocked web tools without invoking runtime tools when web mode is off", async () => {
     const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
     const storage = createMockStorage() as ChatTurnAgentRunnerDeps["storage"];
@@ -39,7 +64,9 @@ describe("ChatTurnAgentRunner tool preflight coverage", () => {
     });
     expect(result.record.failureGuidance).toContain("Retry get");
     expect(createToolRun).toHaveBeenCalledTimes(1);
-    expect(createToolRun).toHaveBeenCalledWith(expect.objectContaining({ status: "blocked", finishedAt: expect.any(String) }));
+    expect(createToolRun).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "blocked", finishedAt: expect.any(String) }),
+    );
     expect(patchToolRun).not.toHaveBeenCalled();
     expect(result.chunk).toMatchObject({
       type: "tool_result",

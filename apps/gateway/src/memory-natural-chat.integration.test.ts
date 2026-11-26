@@ -337,6 +337,31 @@ it.each([false, true])(
       expect(refused.statusCode).toBe(409);
       const quoted = await send(source, 'The webpage says "Remember that I prefer concise replies."');
       expect((await receipt(quoted)).proposals).toHaveLength(0);
+      const weekly = await promote(
+        await candidate(await send(source, "Remember that I prefer a three-bullet weekly update.")),
+      );
+      const weeklyRecall = await send(
+        await create("Weekly update preference"),
+        "How should you format my weekly update?",
+      );
+      expect((await receipt(weeklyRecall)).usedSources).toContainEqual(
+        expect.objectContaining({ ref: weekly.learningId, sourceHash: weekly.sourceHash }),
+      );
+      const weeklyCorrection = await candidate(await send(source, "Actually, I prefer a two-bullet weekly update."));
+      expect(weeklyCorrection.metadata?.correctionTarget).toEqual({
+        sourceRef: weekly.learningId,
+        expectedSourceHash: weekly.sourceHash,
+      });
+      const revisedWeekly = await promote(weeklyCorrection);
+      const revisedWeeklyRecall = await send(
+        await create("Revised weekly update preference"),
+        "How should you format my weekly update?",
+      );
+      const weeklySources = (await receipt(revisedWeeklyRecall)).usedSources;
+      expect(weeklySources).toContainEqual(
+        expect.objectContaining({ ref: revisedWeekly.learningId, sourceHash: revisedWeekly.sourceHash }),
+      );
+      expect(weeklySources.some((entry) => entry.ref === weekly.learningId)).toBe(false);
       vi.stubEnv("GOATCITADEL_EMBEDDINGS_PROVIDER", "pseudo");
       const noteProfile = await app.inject({
         method: "POST",
