@@ -15,6 +15,7 @@ interface GitHubProofRun {
   commit: string;
   repository: string;
   runId: string;
+  attempt: string;
 }
 
 export async function main(args = process.argv.slice(2)): Promise<void> {
@@ -22,8 +23,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const rootDir = path.resolve(process.env.GOATCITADEL_ROOT_DIR?.trim() || process.cwd());
   const config = await loadGatewayConfig(rootDir);
   const githubRun = readCurrentGitHubRun();
-  const inputs = options.platformProofs.map((file) => file.trim()).filter(Boolean);
-  const imported = await Promise.all(inputs.map((file) => readPlatformProofFile(file, githubRun)));
+  const imported = await Promise.all(options.platformProofs.map((file) => readPlatformProofFile(file, githubRun)));
   const result = await runCodeModeHostileSandboxCanaries(config.assistant.capabilities.codeModeSandbox, {
     evidenceRef: options.output ? path.basename(options.output) : undefined,
     platformProofs: imported.flatMap(({ proofs }) => proofs),
@@ -48,23 +48,20 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
 export function parseCliOptions(args: string[]): CliOptions {
   const options: CliOptions = { platformProofs: [] };
   for (let index = 0; index < args.length; index += 1) {
-    const item = args[index];
-    if (item === "--output") {
-      const value = args[index + 1];
-      if (value) {
-        options.output = value;
-      }
-      index += 1;
-    } else if (item?.startsWith("--output=")) {
-      options.output = item.slice("--output=".length);
-    } else if (item === "--platform-proof") {
-      const value = args[index + 1];
-      if (value) {
-        options.platformProofs.push(value);
-      }
-      index += 1;
-    } else if (item?.startsWith("--platform-proof=")) {
-      options.platformProofs.push(item.slice("--platform-proof=".length));
+    const argument = args[index] ?? "";
+    const equals = argument.indexOf("=");
+    const option = equals === -1 ? argument : argument.slice(0, equals);
+    if (option !== "--output" && option !== "--platform-proof") {
+      throw new Error(`Unknown sandbox proof argument: ${argument}`);
+    }
+    const value = (equals === -1 ? args[++index] : argument.slice(equals + 1))?.trim();
+    if (!value || value.startsWith("-")) {
+      throw new Error(`${option} requires a nonempty path.`);
+    }
+    if (option === "--output") {
+      options.output = value;
+    } else {
+      options.platformProofs.push(value);
     }
   }
   return options;
@@ -74,11 +71,16 @@ function readCurrentGitHubRun(): GitHubProofRun | null {
   if (process.env.GITHUB_ACTIONS !== "true") {
     return null;
   }
-  const { GITHUB_SHA: commit, GITHUB_REPOSITORY: repository, GITHUB_RUN_ID: runId } = process.env;
-  if (!commit || !repository || !runId) {
-    throw new Error("GitHub Actions did not supply the sandbox proof commit, repository and run ID.");
+  const {
+    GITHUB_SHA: commit,
+    GITHUB_REPOSITORY: repository,
+    GITHUB_RUN_ID: runId,
+    GITHUB_RUN_ATTEMPT: attempt,
+  } = process.env;
+  if (!commit || !repository || !runId || !attempt) {
+    throw new Error("GitHub Actions did not supply the sandbox proof commit, repository, run ID and attempt.");
   }
-  return { commit, repository, runId };
+  return { commit, repository, runId, attempt };
 }
 
 async function readPlatformProofFile(file: string, currentRun: GitHubProofRun | null) {
@@ -94,8 +96,11 @@ export function parseImportedPlatformProof(payload: unknown, currentRun: GitHubP
   } | null;
   const rawRun = artifact?.githubRun;
   const githubRun =
-    typeof rawRun?.commit === "string" && typeof rawRun.repository === "string" && typeof rawRun.runId === "string"
-      ? { commit: rawRun.commit, repository: rawRun.repository, runId: rawRun.runId }
+    typeof rawRun?.commit === "string" &&
+    typeof rawRun.repository === "string" &&
+    typeof rawRun.runId === "string" &&
+    typeof rawRun.attempt === "string"
+      ? { commit: rawRun.commit, repository: rawRun.repository, runId: rawRun.runId, attempt: rawRun.attempt }
       : null;
   if (!currentRun) {
     return { githubRun, proofs: extractPlatformProofs(payload) };
@@ -103,10 +108,11 @@ export function parseImportedPlatformProof(payload: unknown, currentRun: GitHubP
   if (
     githubRun?.commit !== currentRun.commit ||
     githubRun.repository !== currentRun.repository ||
-    githubRun.runId !== currentRun.runId
+    githubRun.runId !== currentRun.runId ||
+    githubRun.attempt !== currentRun.attempt
   ) {
     throw new Error(
-      "Imported sandbox platform proof must match the current GitHub repository, commit and workflow run.",
+      "Imported sandbox platform proof must match the current GitHub repository, commit and workflow run attempt.",
     );
   }
   const directProof = normalizePlatformProof(artifact?.currentPlatformProof);

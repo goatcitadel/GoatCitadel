@@ -596,6 +596,7 @@ async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
       conclusion: run.conclusion ?? null,
       html_url: run.html_url ?? null,
       id: run.id ?? null,
+      run_attempt: run.run_attempt ?? null,
       head_sha: run.head_sha ?? null,
     });
   } catch (error) {
@@ -609,6 +610,7 @@ function createWorkflowRunResult(status, overrides = {}) {
     conclusion: null,
     html_url: null,
     id: null,
+    run_attempt: null,
     head_sha: null,
     ...overrides,
   };
@@ -829,7 +831,7 @@ function buildHostileSandboxWindowsClaim({ commit, repository, proof, proofPath,
       ? (win32Claim?.blockers ?? ["Windows AppContainer proof is missing from the artifact."])
       : [
           proof
-            ? "Windows AppContainer proof artifact does not match the selected GitHub workflow run."
+            ? "Windows AppContainer proof artifact does not match the selected GitHub workflow run attempt."
             : "Windows AppContainer hostile sandbox proof artifact was not provided.",
         ],
   };

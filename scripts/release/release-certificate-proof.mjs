@@ -5,10 +5,13 @@ export function matchesHostileSandboxProofRun(proof, { commit, repository, proof
     commit &&
     repository &&
     proofRun?.workflowRunId &&
+    Number.isSafeInteger(proofRun.workflowRunAttempt) &&
+    proofRun.workflowRunAttempt > 0 &&
     proofRun.headSha === commit &&
     proof?.githubRun?.commit === commit &&
     proof.githubRun.repository === repository &&
-    proof.githubRun.runId === String(proofRun.workflowRunId),
+    proof.githubRun.runId === String(proofRun.workflowRunId) &&
+    proof.githubRun.attempt === String(proofRun.workflowRunAttempt),
   );
 }
 
@@ -29,6 +32,7 @@ export function summarizeWorkflowRun(run, workflowFile) {
     conclusion: run.conclusion,
     workflowRunUrl: run.html_url,
     workflowRunId: run.id,
+    workflowRunAttempt: run.run_attempt ?? null,
     headSha: run.head_sha,
   };
 }

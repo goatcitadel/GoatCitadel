@@ -12,16 +12,18 @@ import {
   selectReleaseCommitRun,
 } from "./release-certificate-proof.mjs";
 
-test("hostile sandbox proof must come from the selected repository, commit and workflow run", () => {
+test("hostile sandbox proof must come from the selected repository, commit and workflow run attempt", () => {
   const commit = "a".repeat(40);
   const repository = "goatcitadel/GoatCitadel";
-  const proofRun = { workflowRunId: 42, headSha: commit };
-  const githubRun = { commit, repository, runId: "42" };
+  const proofRun = { workflowRunId: 42, workflowRunAttempt: 2, headSha: commit };
+  const githubRun = { commit, repository, runId: "42", attempt: "2" };
   const target = { commit, repository, proofRun };
   assert.equal(matchesHostileSandboxProofRun({ githubRun }, target), true);
   assert.equal(matchesHostileSandboxProofRun({ claim: { publicClaimAllowed: true } }, target), false);
   assert.equal(matchesHostileSandboxProofRun({ githubRun: { ...githubRun, commit: "b".repeat(40) } }, target), false);
   assert.equal(matchesHostileSandboxProofRun({ githubRun: { ...githubRun, runId: "41" } }, target), false);
+  assert.equal(matchesHostileSandboxProofRun({ githubRun: { ...githubRun, attempt: "1" } }, target), false);
+  assert.equal(matchesHostileSandboxProofRun({ githubRun: { ...githubRun, attempt: undefined } }, target), false);
   assert.equal(matchesHostileSandboxProofRun({ githubRun: { ...githubRun, repository: "other/repo" } }, target), false);
   assert.equal(matchesHostileSandboxProofRun({ githubRun }, { ...target, proofRun: null }), false);
 });

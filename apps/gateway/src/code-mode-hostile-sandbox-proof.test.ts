@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { parseImportedPlatformProof } from "./code-mode-hostile-sandbox-proof.js";
+import { parseCliOptions, parseImportedPlatformProof } from "./code-mode-hostile-sandbox-proof.js";
 
-const run = { commit: "a".repeat(40), repository: "goatcitadel/GoatCitadel", runId: "123" };
+const run = { commit: "a".repeat(40), repository: "goatcitadel/GoatCitadel", runId: "123", attempt: "2" };
 const windowsProof = { platform: "win32", status: "pass", checksPassed: [], checksFailed: [] };
 const linuxProof = { ...windowsProof, platform: "linux" };
 const artifact = {
@@ -23,6 +23,8 @@ describe("sandbox platform proof imports", () => {
       { ...run, commit: "b".repeat(40) },
       { ...run, repository: "another/repo" },
       { ...run, runId: "124" },
+      { ...run, attempt: "1" },
+      { ...run, attempt: undefined },
     ]) {
       expect(() => parseImportedPlatformProof({ ...artifact, githubRun }, run)).toThrow(/current GitHub repository/);
     }
@@ -33,5 +35,22 @@ describe("sandbox platform proof imports", () => {
       githubRun: null,
       proofs: [windowsProof],
     });
+  });
+});
+
+describe("sandbox proof CLI arguments", () => {
+  it("accepts both path syntaxes and repeated platform proofs", () => {
+    expect(
+      parseCliOptions(["--output=proof path.json", "--platform-proof", "one.json", "--platform-proof=two=a.json"]),
+    ).toEqual({ output: "proof path.json", platformProofs: ["one.json", "two=a.json"] });
+  });
+
+  it("rejects missing, blank, and option-like path arguments", () => {
+    for (const flag of ["--output", "--platform-proof"]) {
+      for (const args of [[flag], [flag, "--platform-proof", "proof.json"], [`${flag}=`], [flag, "   "]]) {
+        expect(() => parseCliOptions(args)).toThrow(`${flag} requires a nonempty path`);
+      }
+    }
+    expect(() => parseCliOptions(["--unknown"])).toThrow(/Unknown sandbox proof argument/);
   });
 });
