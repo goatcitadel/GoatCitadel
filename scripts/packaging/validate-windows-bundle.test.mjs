@@ -193,7 +193,7 @@ test(
       fs.writeFileSync(launcherPath, "X".repeat(fs.statSync(launcherPath).size), "ascii");
       const corrupt = runValidator(stageRoot);
       assert.notEqual(corrupt.status, 0);
-      assert.match(`${corrupt.stdout}\n${corrupt.stderr}`, /hash does not match its manifest\s+record/i);
+      assert.match(`${corrupt.stdout}\n${corrupt.stderr}`.replace(/\s+/g, " "), /hash does not match its manifest record/i);
 
       fs.writeFileSync(launcherPath, originalLauncher);
       fs.rmSync(hostPath);

@@ -1,3 +1,11 @@
+const RELEASE_COMMIT_EVENTS = new Set(["push", "schedule", "workflow_dispatch"]);
+
+export function selectReleaseCommitRun(runs, targetCommit) {
+  if (!targetCommit || !Array.isArray(runs)) return null;
+  // Pull-request run metadata can name the head SHA while checkout tested a synthetic merge commit.
+  return runs.find((run) => run?.head_sha === targetCommit && RELEASE_COMMIT_EVENTS.has(run.event)) ?? null;
+}
+
 export function isUnavailableOrMissingWorkflowStatus(status) {
   return status === "missing" || status === "unavailable" || String(status).startsWith("github-api");
 }

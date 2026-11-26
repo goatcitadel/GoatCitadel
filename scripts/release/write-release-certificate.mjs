@@ -11,7 +11,7 @@ import {
   RELEASE_PAYLOAD_ROOTS,
   validateReleaseManifest,
 } from "../packaging/lib/package-renderers.mjs";
-import { resolveRequiredLaneProofs } from "./release-certificate-proof.mjs";
+import { resolveRequiredLaneProofs, selectReleaseCommitRun } from "./release-certificate-proof.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -570,7 +570,7 @@ async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
     return createWorkflowRunResult("unavailable");
   }
   const encodedWorkflow = encodeURIComponent(workflowFile);
-  const url = `https://api.github.com/repos/${repository}/actions/workflows/${encodedWorkflow}/runs?head_sha=${commit}&per_page=10`;
+  const url = `https://api.github.com/repos/${repository}/actions/workflows/${encodedWorkflow}/runs?head_sha=${commit}&per_page=100`;
   try {
     const response = await fetch(url, {
       headers: {
@@ -583,7 +583,7 @@ async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
       return createWorkflowRunResult(`github-api-${response.status}`);
     }
     const payload = await response.json();
-    const run = payload.workflow_runs?.[0];
+    const run = selectReleaseCommitRun(payload.workflow_runs, commit);
     if (!run) {
       return createWorkflowRunResult("missing");
     }

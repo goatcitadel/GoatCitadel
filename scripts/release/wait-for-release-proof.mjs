@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { selectReleaseCommitRun } from "./release-certificate-proof.mjs";
+
 const args = parseArgs(process.argv.slice(2));
 const repository = args.repository ?? process.env.GITHUB_REPOSITORY;
 const commit = args.commit ?? process.env.GITHUB_SHA;
@@ -92,7 +94,7 @@ function parseArgs(argv) {
 
 async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
   const encodedWorkflow = encodeURIComponent(workflowFile);
-  const url = `https://api.github.com/repos/${repository}/actions/workflows/${encodedWorkflow}/runs?head_sha=${commit}&per_page=10`;
+  const url = `https://api.github.com/repos/${repository}/actions/workflows/${encodedWorkflow}/runs?head_sha=${commit}&per_page=100`;
   const response = await fetch(url, {
     headers: {
       accept: "application/vnd.github+json",
@@ -104,7 +106,7 @@ async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {
     throw new Error(`GitHub workflow lookup failed (${response.status}) for ${workflowFile}.`);
   }
   const payload = await response.json();
-  return payload.workflow_runs?.[0] ?? null;
+  return selectReleaseCommitRun(payload.workflow_runs, commit);
 }
 
 function sleep(ms) {
