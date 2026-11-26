@@ -38,7 +38,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true') }}
     env:
-      GOATCITADEL_WINDOWS_MSIX_PUBLISHER: ${{ vars.WINDOWS_MSIX_PUBLISHER || 'CN=GoatCitadel' }}
+      GOATCITADEL_WINDOWS_MSIX_PUBLISHER: ${{ vars.WINDOWS_MSIX_PUBLISHER || (github.event_name == 'workflow_dispatch' && 'CN=GoatCitadel') || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -48,6 +48,14 @@ jobs:
           - target: windows-arm64
             runner: windows-11-arm
     steps:
+      - name: Require the Windows package publisher for a tagged release
+        if: github.event_name == 'push'
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GOATCITADEL_WINDOWS_MSIX_PUBLISHER)) {
+            throw "Set WINDOWS_MSIX_PUBLISHER to the exact Authenticode certificate subject before a tagged build."
+          }
+
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -294,7 +302,7 @@ jobs:
     needs: windows-component-sign
     if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
     env:
-      GOATCITADEL_WINDOWS_MSIX_PUBLISHER: ${{ vars.WINDOWS_MSIX_PUBLISHER || 'CN=GoatCitadel' }}
+      GOATCITADEL_WINDOWS_MSIX_PUBLISHER: ${{ vars.WINDOWS_MSIX_PUBLISHER }}
     strategy:
       fail-fast: false
       matrix:
@@ -704,7 +712,7 @@ jobs:
             artifacts/installers/linux/GoatCitadel-${{ env.PACKAGE_VERSION }}-linux-x64.tar.gz.sha256
 
   macos-build-inputs:
-    runs-on: macos-14
+    runs-on: macos-15
     if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true') }}
     steps:
       - name: Checkout
@@ -771,7 +779,7 @@ jobs:
           if-no-files-found: error
 
   macos-sign-notarize:
-    runs-on: macos-14
+    runs-on: macos-15
     needs: macos-build-inputs
     if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
     environment: release
@@ -864,7 +872,12 @@ jobs:
           ln -s /Applications "$WORK/dmg-root/Applications"
           OUTPUT_DMG="$OUTPUT/GoatCitadel-${PACKAGE_VERSION}-macos-arm64.dmg"
           hdiutil create -volname "GoatCitadel Mission Control" -srcfolder "$WORK/dmg-root" -ov -format UDZO "$OUTPUT_DMG"
-          xcrun notarytool submit "$OUTPUT_DMG" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait
+          xcrun notarytool submit "$OUTPUT_DMG" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait --output-format json > "$WORK/notarization.json"
+          if ! NOTARIZATION_ID=$(jq -er 'select(.status == "Accepted") | .id | select(type == "string" and test("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$"))' "$WORK/notarization.json"); then
+            echo "::error::Apple did not provide a verified Accepted notarization receipt."
+            exit 1
+          fi
+          echo "Apple notarization accepted submission $NOTARIZATION_ID."
           xcrun stapler staple "$OUTPUT_DMG"
           xcrun stapler validate "$OUTPUT_DMG"
           hdiutil verify "$OUTPUT_DMG"
@@ -887,7 +900,7 @@ jobs:
           if-no-files-found: error
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     needs: macos-sign-notarize
     if: ${{ github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v') }}
     steps:

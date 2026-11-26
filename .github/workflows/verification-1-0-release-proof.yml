@@ -2,6 +2,10 @@ name: Verification 1.0 Release Proof
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
   schedule:
     # Nightly release-proof run so the full matrix guards `main` even between
     # tagged releases (review Finding 5: the matrix went dark for 458 commits
@@ -110,6 +114,7 @@ jobs:
           # commit to fall back to, which fails the guard closed. Matches
           # verification-fast.yml.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -141,12 +146,12 @@ jobs:
       - name: Run release proof lane
         env:
           GOATCITADEL_UI_PACKAGE: "@goatcitadel/mission-control-next"
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
-          PERPLEXITY_API_KEY: ${{ secrets.PERPLEXITY_API_KEY }}
-          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          OPENAI_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.OPENAI_API_KEY || '' }}
+          ANTHROPIC_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.ANTHROPIC_API_KEY || '' }}
+          GOOGLE_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.GOOGLE_API_KEY || '' }}
+          MOONSHOT_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.MOONSHOT_API_KEY || '' }}
+          PERPLEXITY_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.PERPLEXITY_API_KEY || '' }}
+          MINIMAX_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.MINIMAX_API_KEY || '' }}
         run: pnpm "${{ matrix.laneScript }}"
 
       - name: Run review generation
@@ -175,6 +180,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Run Trivy security gate
         uses: aquasecurity/trivy-action@0.35.0
@@ -192,3 +199,19 @@ jobs:
           timeout: 15m
           severity: HIGH,CRITICAL
           exit-code: "1"
+
+  release-proof-result:
+    if: ${{ always() }}
+    needs: [required-lanes, security]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require the matrix and security gate to pass
+        env:
+          MATRIX_RESULT: ${{ needs.required-lanes.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+        run: |
+          if [[ "$MATRIX_RESULT" != success || "$SECURITY_RESULT" != success ]]; then
+            printf 'Release proof is incomplete (matrix: %s, security: %s).\n' "$MATRIX_RESULT" "$SECURITY_RESULT"
+            exit 1
+          fi
