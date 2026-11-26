@@ -27,6 +27,7 @@ const MAX_RELEASE_ASSETS = 256;
 const MAX_RELEASE_ARTIFACT_DIRECTORIES = 1_024;
 const MAX_RELEASE_ASSET_PATH_BYTES = 240;
 const MAX_CERTIFICATE_BYTES = 2 * 1024 * 1024;
+const MAX_HOSTILE_SANDBOX_PROOF_BYTES = 2 * 1024 * 1024;
 const WINDOWS_RESERVED_BASENAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu;
 
 const RELEASE_PROOF_WORKFLOW_FILE = "verification-1-0-release-proof.yml";
@@ -237,7 +238,7 @@ const runtimePayloads = await resolveRuntimePayloads({
   commit,
 });
 const proofBundle = await fileRecord(proofZipPath, path.dirname(proofZipPath));
-const hostileSandboxProof = hostileSandboxProofPath ? readOptionalJson(hostileSandboxProofPath) : null;
+const hostileSandboxProof = readOptionalHostileSandboxProof(hostileSandboxProofPath);
 const exactShaStatus = summarizeRequiredLaneExactSha(requiredLanes, commit);
 const hostileSandboxWindowsClaim = buildHostileSandboxWindowsClaim({
   commit,
@@ -710,9 +711,14 @@ function buildParityClosureVerdict({
       proofHeadSha: proofRun?.headSha ?? null,
     };
   });
-  const blockers = checks
-    .filter((check) => check.required && check.status !== "passed")
-    .map((check) => `${check.label}: ${check.laneStatus}`);
+  const blockingChecks = checks.filter((check) => check.required && check.status !== "passed");
+  const blockers = blockingChecks.map((check) => `${check.label}: ${check.laneStatus}`);
+  const reportedLanes = new Set(blockingChecks.map((check) => check.lane));
+  for (const lane of requiredLanes) {
+    if (lane.required && lane.status !== "success" && !reportedLanes.has(lane.name)) {
+      blockers.push(formatLaneFailure(lane));
+    }
+  }
   if (!releaseAssets.length) {
     blockers.push("Release assets: missing");
   }
@@ -825,11 +831,16 @@ function buildHostileSandboxWindowsClaim({ commit, repository, proof, proofPath,
   };
 }
 
-function readOptionalJson(filePath) {
-  if (!fs.existsSync(filePath)) {
+function readOptionalHostileSandboxProof(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
     return null;
   }
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  const raw = readBoundedRegularFile(filePath, {
+    rootDir: path.dirname(filePath),
+    maxBytes: MAX_HOSTILE_SANDBOX_PROOF_BYTES,
+    label: "Hostile sandbox proof",
+  });
+  return JSON.parse(raw.toString("utf8"));
 }
 
 function releaseRelativePath(root, filePath) {
@@ -973,7 +984,15 @@ function readBoundedRegularFile(filePath, { rootDir, maxBytes, label }) {
     if (!sameFileIdentity(beforePathStats, openedStats) || !sameFileIdentity(openedStats, currentPathStats)) {
       throw new Error(`${label} changed while it was opened.`);
     }
-    const raw = fs.readFileSync(handle);
+    const raw = Buffer.alloc(openedStats.size);
+    let offset = 0;
+    while (offset < raw.length) {
+      const bytesRead = fs.readSync(handle, raw, offset, raw.length - offset, offset);
+      if (bytesRead === 0) {
+        throw new Error(`${label} ended before its expected size.`);
+      }
+      offset += bytesRead;
+    }
     const finalOpenedStats = fs.fstatSync(handle);
     const finalPathStats = fs.lstatSync(candidate);
     assertAnchoredRegularFile(root, candidate, label);

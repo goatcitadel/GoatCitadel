@@ -778,26 +778,11 @@ test("release certificate rejects manifests assigned to the other target's inven
 });
 
 test("strict release certificate issuance requires successful exact-SHA workflow proof", (t) => {
-  const mockGitHub = `
-    globalThis.fetch = async (input) => {
-      const url = new URL(input);
-      if (url.origin !== "https://api.github.com" || url.searchParams.get("head_sha") !== process.env.GITHUB_SHA) {
-        throw new Error("Unexpected certificate workflow request");
-      }
-      const run = { id: 123, run_attempt: 1, event: "push", conclusion: "success", head_sha: process.env.GITHUB_SHA };
-      if (url.pathname.endsWith("/verification-fast.yml/runs")) {
-        if (process.env.GC_WORKFLOW_PROOF_MODE === "stale") run.head_sha = "b".repeat(40);
-        if (process.env.GC_WORKFLOW_PROOF_MODE === "missing") delete run.head_sha;
-      }
-      return Response.json({ workflow_runs: [run] });
-    };
-  `;
-  for (const mode of ["stale", "missing", "exact"]) {
+  for (const [mode, headSha] of [["stale", "b".repeat(40)], ["missing", null], ["exact", "a".repeat(40)]]) {
     const fixture = makeCertificateWriterFixture(t, `strict-${mode}`);
     const result = runCertificateWriter(fixture, {
       requireSuccess: true,
-      preload: `data:text/javascript,${encodeURIComponent(mockGitHub)}`,
-      env: { GITHUB_TOKEN: "fixture", GC_WORKFLOW_PROOF_MODE: mode },
+      ...mockCertificateWorkflows({ "verification-fast.yml": { head_sha: headSha } }),
     });
     const certificate = JSON.parse(fs.readFileSync(fixture.outFile, "utf8"));
     if (mode === "exact") {
@@ -811,6 +796,52 @@ test("strict release certificate issuance requires successful exact-SHA workflow
       assert.ok(certificate.exactShaStatus.missingProof.includes("verify:fast"));
     }
   }
+});
+
+test("release certificate only allows the Windows claim with successful matching Windows proof", (t) => {
+  const cases = [
+    { name: "eligible", expected: true },
+    { name: "failed-lane", workflows: { "verification-1-0-release-proof.yml": { conclusion: "failure" } } },
+    { name: "other-platform", platform: "linux" },
+    { name: "failed-platform", platformStatus: "fail" },
+    { name: "claim-disabled", claimAllowed: false },
+    { name: "wrong-attempt", attempt: "2" },
+  ];
+  for (const { name, expected = false, workflows, ...proofOptions } of cases) {
+    const fixture = makeCertificateWriterFixture(t, `sandbox-${name}`);
+    const result = runCertificateWriter(fixture, {
+      ...mockCertificateWorkflows(workflows),
+      sandboxProof: writeSandboxProof(fixture, proofOptions),
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const certificate = JSON.parse(fs.readFileSync(fixture.outFile, "utf8"));
+    assert.equal(certificate.hostileSandboxWindowsClaim.publicClaimAllowed, expected, name);
+    assert.equal(certificate.parityClosure.verdict, expected ? "parity-ready" : "not parity-ready", name);
+  }
+});
+
+test("a failed required workflow blocks parity even if all parity checks and the Windows claim pass", (t) => {
+  const fixture = makeCertificateWriterFixture(t, "parity-failed-trivy");
+  const result = runCertificateWriter(fixture, {
+    ...mockCertificateWorkflows({ "security-trivy.yml": { conclusion: "failure" } }),
+    sandboxProof: writeSandboxProof(fixture),
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const certificate = JSON.parse(fs.readFileSync(fixture.outFile, "utf8"));
+  assert.equal(certificate.exactShaStatus.status, "matched");
+  assert.equal(certificate.hostileSandboxWindowsClaim.publicClaimAllowed, true);
+  assert.ok(certificate.parityClosure.checks.every(({ status }) => status === "passed"));
+  assert.equal(certificate.parityClosure.verdict, "not parity-ready");
+  assert.match(certificate.parityClosure.blockers.join("\n"), /security:trivy=failure/u);
+});
+
+test("release certificate rejects an oversized sandbox proof before parsing it", (t) => {
+  const fixture = makeCertificateWriterFixture(t, "oversized-sandbox-proof");
+  const sandboxProof = writeSandboxProof(fixture);
+  fs.truncateSync(sandboxProof, 2 * 1024 * 1024 + 1);
+  const result = runCertificateWriter(fixture, { sandboxProof });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Hostile sandbox proof must be between 1 and 2097152 bytes/u);
 });
 
 test("release certificate rejects non-push and wrong-workflow publisher contexts", (t) => {
@@ -1155,6 +1186,44 @@ function usedActions(workflowBlock) {
   return [...workflowBlock.matchAll(/uses:\s*([^\s#]+)/g)].map((match) => match[1]);
 }
 
+function mockCertificateWorkflows(overrides = {}) {
+  const script = `
+    const overrides = JSON.parse(process.env.GC_WORKFLOW_PROOF_OVERRIDES);
+    globalThis.fetch = async (input) => {
+      const url = new URL(input);
+      if (url.origin !== "https://api.github.com" || url.searchParams.get("head_sha") !== process.env.GITHUB_SHA) {
+        throw new Error("Unexpected certificate workflow request");
+      }
+      const workflow = decodeURIComponent(url.pathname.split("/").at(-2));
+      const run = {
+        id: 123,
+        run_attempt: 1,
+        event: "push",
+        conclusion: "success",
+        head_sha: process.env.GITHUB_SHA,
+        ...overrides[workflow],
+      };
+      return Response.json({ workflow_runs: [run] });
+    };
+  `;
+  return {
+    preload: `data:text/javascript,${encodeURIComponent(script)}`,
+    env: { GITHUB_TOKEN: "fixture", GC_WORKFLOW_PROOF_OVERRIDES: JSON.stringify(overrides) },
+  };
+}
+
+function writeSandboxProof(fixture, { platform = "win32", platformStatus = "pass", claimAllowed = true, attempt = "1" } = {}) {
+  const file = path.join(fixture.root, "sandbox-proof.json");
+  const windowsProof = { platform: "win32", status: "pass", checksPassed: [], checksFailed: [] };
+  fs.writeFileSync(file, JSON.stringify({
+    platform,
+    currentPlatformProof: { ...windowsProof, platform, status: platformStatus },
+    githubRun: { commit: "a".repeat(40), repository: "goatcitadel/GoatCitadel", runId: "123", attempt },
+    claim: { platformClaims: { win32: { publicClaimAllowed: claimAllowed, proof: windowsProof, blockers: [] } } },
+  }));
+  return file;
+}
+
 function runCertificateWriter(fixture, options = {}) {
   const runtimeManifests = options.runtimeManifests ?? Object.entries(fixture.manifests);
   const args = [
@@ -1179,6 +1248,7 @@ function runCertificateWriter(fixture, options = {}) {
     args.push("--runtime-manifest", `${target}=${manifestPath}`);
   }
   if (options.requireSuccess) args.push("--require-success");
+  if (options.sandboxProof) args.push("--hostile-sandbox-proof", options.sandboxProof);
   const env = {
     ...process.env,
     GITHUB_ACTIONS: "true",
@@ -1190,6 +1260,7 @@ function runCertificateWriter(fixture, options = {}) {
     GITHUB_WORKFLOW: "Release Installers and Bundles",
     GITHUB_WORKFLOW_REF: "goatcitadel/GoatCitadel/.github/workflows/release-installers.yml@refs/tags/v1.0.0",
     GITHUB_TOKEN: "",
+    GOATCITADEL_HOSTILE_SANDBOX_PROOF: "",
     ...options.env,
   };
   return spawnSync(process.execPath, args, { cwd: fixture.root, env, encoding: "utf8" });
