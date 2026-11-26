@@ -79,6 +79,11 @@ export interface SkillListItem extends LoadedSkill {
   callable?: boolean;
   trustLabel?: string;
   reviewWarning?: string;
+  /**
+   * The content scan of a skill in the operator's own folders (workspace or managed), worked out when skills are
+   * listed and not stored. It is at most a warning and never changes callability.
+   */
+  scanVerdict?: SkillScanSummary;
 }
 
 export interface SkillActivationDecision {
