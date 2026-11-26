@@ -24,7 +24,12 @@ import {
   type MaterializedGitTreeFile,
 } from "./hardened-git.js";
 import { assertSafeGitPositionalArg } from "./security-utils.js";
-import { readSkillScanFiles, scanSkillContents, type SkillScanFile } from "./skill-content-scan.js";
+import {
+  collectSkillFindings,
+  readSkillScanFiles,
+  summarizeSkillFindings,
+  type SkillScanFile,
+} from "./skill-content-scan.js";
 import { BROAD_SCRIPT_RISK_PATTERN, SCRIPT_FILE_PATTERN } from "./skill-script-scan.js";
 import { PROMPTWARE_MAX_FINDINGS, scanPromptwareContent } from "./assembled-prompt-injection-guard.js";
 import {
@@ -54,6 +59,7 @@ import type {
   SkillImportProvenance,
   SkillImportScriptDisposition,
   SkillPromptwareFinding,
+  SkillScanFinding,
   SkillScanFindingCode,
   SkillScanSummary,
   SkillImportSourceType,
@@ -1653,8 +1659,9 @@ export class SkillImportService {
     }
 
     const scanRead = await readSkillScanFiles(source.skillDir);
-    const scanVerdict = scanSkillContents(scanRead.files, "untrusted", { truncated: scanRead.truncated });
-    const scan = summarizeImportScan(scanRead, scanVerdict);
+    const scanFindings = collectSkillFindings(scanRead.files, { truncated: scanRead.truncated });
+    const scanVerdict = summarizeSkillFindings(scanFindings, "untrusted");
+    const scan = summarizeImportScan(scanRead, scanFindings);
     const promptwareScan = initialContentIntegrity
       ? await scanPromptwareIntegrityFiles(source.skillDir, initialContentIntegrity)
       : { findings: [], unscannedPaths: ["<content-integrity-unavailable>"] };
@@ -2997,7 +3004,7 @@ function normalizeZipEntryPath(entryName: string): string {
 /** The import's view of the shared scan, in the shape its checks and warnings have always read. */
 function summarizeImportScan(
   read: { files: readonly SkillScanFile[]; truncated: boolean },
-  verdict: SkillScanSummary,
+  allFindings: readonly SkillScanFinding[],
 ): {
   suspiciousSignals: string[];
   networkSignals: string[];
@@ -3008,7 +3015,7 @@ function summarizeImportScan(
 } {
   const pathsWith = (codes: readonly SkillScanFindingCode[]) =>
     Array.from(
-      new Set(verdict.findings.filter((finding) => codes.includes(finding.code)).map((finding) => finding.path)),
+      new Set(allFindings.filter((finding) => codes.includes(finding.code)).map((finding) => finding.path)),
     ).filter((filePath) => filePath !== ".");
   const names = read.files.map((file) => file.path);
   // Suspicious means what it always meant (the broad pattern) plus the new dangerous rules; caution-only rules such as

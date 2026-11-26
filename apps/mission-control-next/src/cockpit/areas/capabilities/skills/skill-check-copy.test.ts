@@ -32,6 +32,12 @@ describe("skill check copy", () => {
     expect(blockerSentence("ARTIFACT_NOT_RETAINED")).toBe(UNKNOWN_BLOCKER_COPY);
   });
 
+  it("words a risky script finding for every command it covers", () => {
+    expect(SKILL_SCAN_FINDING_COPY.risky_script).toBe(
+      "It mentions commands worth a closer look, such as deleting files or reading passwords.",
+    );
+  });
+
   it("has plain words for every content check finding", () => {
     for (const code of SKILL_SCAN_FINDING_CODES) expect(SKILL_SCAN_FINDING_COPY[code], code).toMatch(/^[A-Z].*\.$/u);
     expect(Object.keys(SKILL_SCAN_FINDING_COPY).sort()).toEqual([...SKILL_SCAN_FINDING_CODES].sort());

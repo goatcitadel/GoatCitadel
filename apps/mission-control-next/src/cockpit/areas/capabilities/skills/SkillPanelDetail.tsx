@@ -102,14 +102,15 @@ function SkillTechnicalDetails({
 }
 
 /**
- * What the content check found in a skill from the operator's own folders, collapsed until asked for. The skill keeps
- * working; the list says what to look at, one plain line per finding with the file (and line) it came from.
+ * What the content check found in a skill from the operator's own folders, collapsed until asked for. The check itself
+ * never switches the skill off, but Chat's own check can still refuse instructions that try to override its rules, so
+ * the copy promises nothing; it says what to look at, one plain line per finding with the file (and line).
  */
 function ScanFindings({ findings }: { findings: readonly SkillScanFinding[] }) {
   return (
     <details className="text-sm text-fg-secondary">
       <DisclosureSummary className="cursor-pointer font-medium text-accent">What the check found</DisclosureSummary>
-      <p className="mt-2">It can still be used. Look at these before you rely on it.</p>
+      <p className="mt-2">GoatCitadel found these in its files. Look at them before you rely on it.</p>
       <ul className="mt-2 space-y-1">
         {findings.map((finding) => (
           <li key={`${finding.code}:${finding.path}:${finding.line ?? ""}`} className="min-w-0 break-words">

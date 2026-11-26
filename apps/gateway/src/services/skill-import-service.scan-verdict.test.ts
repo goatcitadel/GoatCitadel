@@ -88,12 +88,23 @@ describe("skill import scan verdict", () => {
     expect(result.checks.suspiciousScripts).toBe(false);
   });
 
-  it("accepts a README with a link as a warning and keeps the network warning", async () => {
+  it("accepts a README with a link as clean and keeps the network warning", async () => {
     fs.writeFileSync(path.join(skillDir, "README.md"), "Docs at https://example.com\n");
     const result = await validate();
     expect(result.valid).toBe(true);
-    expect(result.scanVerdict?.verdict).toBe("warn");
+    expect(result.scanVerdict?.verdict).toBe("clean");
     expect(result.checks.networkIndicators).toBe(true);
     expect(result.warnings).toContain("Network usage indicators detected in skill files.");
+  });
+
+  it("still reports a skipped large file when many other findings fill the list", async () => {
+    for (let index = 0; index < 40; index += 1) {
+      fs.writeFileSync(path.join(skillDir, `doc-${String(index).padStart(2, "0")}.md`), "See https://example.com\n");
+    }
+    fs.mkdirSync(path.join(skillDir, "zz"));
+    fs.writeFileSync(path.join(skillDir, "zz", "payload.py"), "x = 1\n".repeat(50_000));
+    const result = await validate();
+    const skipped = result.warnings.find((message) => message.includes("skipped large files"));
+    expect(skipped).toContain("zz/payload.py");
   });
 });

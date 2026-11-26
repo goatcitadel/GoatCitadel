@@ -36,7 +36,7 @@ export const SKILL_SCAN_FINDING_COPY: Readonly<Record<SkillScanFindingCode, stri
   prompt_injection: "Its instructions try to override GoatCitadel's rules.",
   hidden_text: "Its files contain hidden or disguised text.",
   unsafe_script: "It includes scripts that look unsafe.",
-  risky_script: "Its scripts touch passwords, keys or startup settings.",
+  risky_script: "It mentions commands worth a closer look, such as deleting files or reading passwords.",
   network_use: "It reaches out to the internet.",
   unreadable_file: "Some of its files can't be read, so they couldn't be checked.",
   scan_incomplete: "Some of its files couldn't be checked.",

@@ -54,9 +54,9 @@ describe("scanSkillContents", () => {
     });
   });
 
-  it("warns for network use", () => {
+  it("lists network use without making it a warning on its own", () => {
     expect(scanSkillContents([file("notes.md", "See https://example.com for details.")], "untrusted")).toMatchObject({
-      verdict: "warn",
+      verdict: "clean",
       findings: [{ code: "network_use", path: "notes.md", dangerous: false }],
     });
   });
@@ -100,6 +100,22 @@ describe("scanSkillContents", () => {
     expect(scanSkillContents([], "untrusted", { truncated: true }).findings).toEqual([
       { code: "scan_incomplete", path: ".", dangerous: false },
     ]);
+  });
+
+  it("reports a file with a line too long to check as not fully checked, quickly", () => {
+    const started = performance.now();
+    const summary = scanSkillContents([file("notes.md", "Remove-Item -Recurse ".repeat(10_000))], "untrusted");
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(summary.findings).toContainEqual({ code: "scan_incomplete", path: "notes.md", dangerous: false });
+  });
+
+  it("records a file the reader could not read as unreadable", () => {
+    expect(
+      scanSkillContents([{ path: "gone.md", bytes: new Uint8Array(), unreadable: true }], "operator"),
+    ).toMatchObject({
+      verdict: "warn",
+      findings: [{ code: "unreadable_file", path: "gone.md", dangerous: true }],
+    });
   });
 
   it("reports any rm -rf as a risky script line", () => {

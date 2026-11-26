@@ -360,6 +360,9 @@ describe("Skill panel", () => {
     expect(disclosure!.open).toBe(false);
     expect(disclosure!.textContent).toContain("It includes scripts that look unsafe.");
     expect(disclosure!.textContent).toContain("scripts/install.sh");
+    // A finding can stop a skill loading in Chat, so the panel never promises it still works.
+    expect(disclosure!.textContent).toContain("GoatCitadel found these in its files.");
+    expect(disclosure!.textContent).not.toContain("It can still be used");
   });
 
   it("shows no check findings for a clean skill", async () => {

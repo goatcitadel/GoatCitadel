@@ -6,7 +6,9 @@ import { PROMPTWARE_SCANNER_VERSION, scanPromptwareContent } from "./assembled-p
 import {
   BROAD_SCRIPT_RISK_PATTERN,
   SCRIPT_FILE_PATTERN,
+  SCRIPT_SCAN_MAX_LINE_CHARS,
   hasNetworkIndicator,
+  hasOverlongLine,
   scanScriptText,
 } from "./skill-script-scan.js";
 
@@ -22,6 +24,8 @@ export interface SkillScanFile {
   bytes: Uint8Array;
   /** The file's size on disk when the reader did not load an oversized file's bytes. */
   size?: number;
+  /** The reader couldn't open it (gone or locked mid-walk). */
+  unreadable?: true;
 }
 
 export const SKILL_SCAN_MAX_FILES = 80;
@@ -39,13 +43,26 @@ export function scanSkillContents(
   origin: SkillScanOrigin,
   opts: { truncated?: boolean } = {},
 ): SkillScanSummary {
+  return summarizeSkillFindings(collectSkillFindings(files, opts), origin);
+}
+
+const byPlace = (left: SkillScanFinding, right: SkillScanFinding) =>
+  left.path.localeCompare(right.path) || (left.line ?? 0) - (right.line ?? 0);
+
+/** Every finding, uncapped, by path and line. Callers that derive signals from findings must read this list. */
+export function collectSkillFindings(
+  files: readonly SkillScanFile[],
+  opts: { truncated?: boolean } = {},
+): SkillScanFinding[] {
   const findings: SkillScanFinding[] = [];
   // An incomplete scan is reported, not escalated: imports warn about it, and the Skill Hub review refuses it itself.
   if (opts.truncated) findings.push({ code: "scan_incomplete", path: ".", dangerous: false });
   for (const file of files) findings.push(...scanOneFile(file));
-  const byPlace = (left: SkillScanFinding, right: SkillScanFinding) =>
-    left.path.localeCompare(right.path) || (left.line ?? 0) - (right.line ?? 0);
-  const all = dedupe(findings).sort(byPlace);
+  return dedupe(findings).sort(byPlace);
+}
+
+/** The verdict from every finding, and the findings kept for display: at most 32, dangerous ones first. */
+export function summarizeSkillFindings(all: readonly SkillScanFinding[], origin: SkillScanOrigin): SkillScanSummary {
   // The verdict reads every finding; the cap keeps dangerous findings first, so a block always shows its reason.
   const kept = [...all.filter((finding) => finding.dangerous), ...all.filter((finding) => !finding.dangerous)]
     .slice(0, MAX_FINDINGS)
@@ -54,11 +71,13 @@ export function scanSkillContents(
 }
 
 function verdictFor(findings: readonly SkillScanFinding[], origin: SkillScanOrigin): SkillScanSummary["verdict"] {
-  if (findings.length === 0) return "clean";
+  // A link on its own is listed, not a warning: most skills mention a web address, and the label should mean something.
+  if (findings.every((finding) => finding.code === "network_use")) return "clean";
   return origin === "untrusted" && findings.some((finding) => finding.dangerous) ? "block" : "warn";
 }
 
 function scanOneFile(file: SkillScanFile): SkillScanFinding[] {
+  if (file.unreadable) return [{ code: "unreadable_file", path: file.path, dangerous: true }];
   if (ASSET_FILE.test(file.path)) return [];
   if ((file.size ?? file.bytes.length) > SKILL_SCAN_MAX_FILE_BYTES) {
     return [{ code: "scan_incomplete", path: file.path, dangerous: false }];
@@ -84,9 +103,11 @@ function scanOneFile(file: SkillScanFile): SkillScanFinding[] {
     }
   }
   const scriptFindings = scanScriptText(text);
+  if (hasOverlongLine(text)) findings.push({ code: "scan_incomplete", path: file.path, dangerous: false });
   const ruledLines = new Set(scriptFindings.map((finding) => finding.line));
   text.split(/\r\n|\r|\n/u).forEach((lineText, index) => {
     // The broader original check (any `rm -rf`) stays a caution signal where no rule already spoke.
+    if (lineText.length > SCRIPT_SCAN_MAX_LINE_CHARS) return;
     if (!ruledLines.has(index + 1) && BROAD_SCRIPT_RISK_PATTERN.test(lineText)) {
       findings.push({ code: "risky_script", path: file.path, line: index + 1, dangerous: false });
     }
@@ -158,9 +179,14 @@ export async function readSkillScanFiles(dir: string): Promise<{ files: SkillSca
       }
       if (!entry.isFile()) continue;
       if (files.length >= SKILL_SCAN_MAX_FILES) return { files, truncated: true };
-      const size = (await fsp.stat(fullPath)).size;
-      const bytes = size > SKILL_SCAN_MAX_FILE_BYTES ? new Uint8Array() : await fsp.readFile(fullPath);
-      files.push({ path: relativePath(dir, fullPath), bytes, size });
+      try {
+        const size = (await fsp.stat(fullPath)).size;
+        const bytes = size > SKILL_SCAN_MAX_FILE_BYTES ? new Uint8Array() : await fsp.readFile(fullPath);
+        files.push({ path: relativePath(dir, fullPath), bytes, size });
+      } catch {
+        // Gone or locked mid-walk: report it, so one file never fails the whole scan.
+        files.push({ path: relativePath(dir, fullPath), bytes: new Uint8Array(), unreadable: true });
+      }
     }
   }
   return { files, truncated: false };
@@ -186,9 +212,13 @@ export function readSkillScanFilesSync(dir: string): { files: SkillScanFile[]; t
       }
       if (!entry.isFile()) continue;
       if (files.length >= SKILL_SCAN_MAX_FILES) return { files, truncated: true };
-      const size = fs.statSync(fullPath).size;
-      const bytes = size > SKILL_SCAN_MAX_FILE_BYTES ? new Uint8Array() : fs.readFileSync(fullPath);
-      files.push({ path: relativePath(dir, fullPath), bytes, size });
+      try {
+        const size = fs.statSync(fullPath).size;
+        const bytes = size > SKILL_SCAN_MAX_FILE_BYTES ? new Uint8Array() : fs.readFileSync(fullPath);
+        files.push({ path: relativePath(dir, fullPath), bytes, size });
+      } catch {
+        files.push({ path: relativePath(dir, fullPath), bytes: new Uint8Array(), unreadable: true });
+      }
     }
   }
   return { files, truncated: false };

@@ -76,6 +76,16 @@ describe("skill script scan", () => {
     ]);
   });
 
+  it.each(["Remove-Item -Recurse ", "curl ", "powershell -e ", "invoke-webrequest "])(
+    "scans a 220 KB line of %j quickly",
+    (unit) => {
+      const line = unit.repeat(Math.ceil(220_000 / unit.length));
+      const started = performance.now();
+      scanScriptText(line);
+      expect(performance.now() - started).toBeLessThan(500);
+    },
+  );
+
   it("recognizes script files and network indicators", () => {
     expect(SCRIPT_FILE_PATTERN.test("tools/setup.psm1")).toBe(true);
     expect(SCRIPT_FILE_PATTERN.test("tools/run.rb")).toBe(true);

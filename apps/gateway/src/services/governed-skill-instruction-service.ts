@@ -336,7 +336,7 @@ function assertRuntimeSkillPromptwareSafe(skillIds: string[], instruction: strin
     return;
   }
   const findings = scanPromptwareContent({
-    source: "imported_skill",
+    source: "runtime_skill",
     sourcePath: skillIds.length === 1 ? `runtime:${skillIds[0]}` : "runtime:activated-skill-bundle",
     content: instruction,
   });

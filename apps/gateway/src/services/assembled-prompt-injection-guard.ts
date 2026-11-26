@@ -64,7 +64,9 @@ export type PromptwareScanSource =
   | "memory_context"
   | "tool_output"
   | "delegated_output"
-  | "plugin_prompt_pack";
+  | "plugin_prompt_pack"
+  /** A skill's instructions as a chat turn loads them: the original rules only, so a warning never stops a skill. */
+  | "runtime_skill";
 
 /** Skill and prompt pack files get the stricter pass: normalized text, hidden characters and decoded base64. */
 export const SKILL_CONTENT_SOURCES: ReadonlySet<PromptwareScanSource> = new Set([
@@ -119,7 +121,8 @@ export function scanPromptwareContent(input: {
     .map(({ matchIndex: _matchIndex, ...finding }) => finding);
 }
 
-const HIDDEN_TEXT_PATTERN = /[\u200B-\u200D\u2060\u202A-\u202E\u2066-\u2069\uFEFF]/u;
+// Joiners (ZWJ, ZWNJ) are left out: emoji sequences and Persian spelling use them every day.
+const HIDDEN_TEXT_PATTERN = /[\u200B\u2060\u202A-\u202E\u2066-\u2069\uFEFF]/u;
 const ZERO_WIDTH_GLOBAL = /[\u200B-\u200D\u2060\uFEFF]/gu;
 const BASE64_RUN = /[A-Za-z0-9+/]{200,}={0,2}/gu;
 const BASE64_DECODE_LIMIT = 64 * 1024;
