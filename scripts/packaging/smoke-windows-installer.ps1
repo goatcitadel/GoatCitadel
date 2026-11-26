@@ -19,6 +19,9 @@ param(
 
   [string]$ScratchRoot = $env:RUNNER_TEMP,
 
+  [Parameter(ParameterSetName = "DetachedManifest")]
+  [string]$RecallEvidenceDirectory,
+
   [string]$BetaInstallerPath,
 
   [ValidatePattern("^[0-9a-f]{64}$")]
@@ -49,6 +52,14 @@ $installer = (Resolve-Path -LiteralPath $InstallerPath -ErrorAction Stop).Path
 $signedMode = $TrustMode -eq "signed"
 $upgradeMode = -not [string]::IsNullOrWhiteSpace($BetaInstallerPath)
 $liveMode = $PSCmdlet.ParameterSetName -eq "InstalledLive"
+$recallMode = -not [string]::IsNullOrWhiteSpace($RecallEvidenceDirectory)
+if ($recallMode) {
+  if ($env:GITHUB_ACTIONS -ne "true" -or $env:RUNNER_ENVIRONMENT -ne "github-hosted" -or
+      $Target -ne "windows-x64" -or $signedMode -or $upgradeMode) {
+    throw "Recall acceptance requires a disposable hosted Windows x64 clean install."
+  }
+  $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+}
 if ($liveMode) {
   if ($env:GITHUB_ACTIONS -ne "true" -or $env:RUNNER_ENVIRONMENT -ne "github-hosted" -or
       $Target -ne "windows-x64" -or $signedMode -or $upgradeMode -or
@@ -629,6 +640,14 @@ try {
       throw "One or more installed live feature checks failed. See the retained feature records."
     }
   }
+  if ($recallMode) {
+    New-Item -ItemType Directory -Force -Path $RecallEvidenceDirectory | Out-Null
+    & $bundledNode (Join-Path $PSScriptRoot "windows-installed-live.mjs") `
+      $appHome $smokeRoot $RecallEvidenceDirectory "--recall-only"
+    if ($LASTEXITCODE -ne 0) {
+      throw "Installed recall verification failed. See the retained recall evidence."
+    }
+  }
 
   $uninstaller = Join-Path $installDir "unins000.exe"
   if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
@@ -683,7 +702,8 @@ try {
       retained = @("workspace", "chat transcript", "guidance file", "workspace setting", "uninstalled profile data")
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $upgradeProofPath -Encoding UTF8
   }
-  if ($liveMode) {
+  if ($liveMode -or $recallMode) {
+    $lifecycleEvidence = if ($liveMode) { $LiveAcceptance.EvidenceDirectory } else { $RecallEvidenceDirectory }
     [ordered]@{
       sourceCommit = $releaseManifest.sourceCommit
       sourceModified = $releaseManifest.sourceModified
@@ -694,11 +714,11 @@ try {
       authenticode = [string]$installerSignature.Status
       windowsVersion = [System.Environment]::OSVersion.Version.ToString()
       runnerArchitecture = $env:RUNNER_ARCH
-      installerRunId = $LiveAcceptance.InstallerRunId
+      installerRunId = if ($liveMode) { $LiveAcceptance.InstallerRunId } else { $env:GITHUB_RUN_ID }
       nativeFirstLaunch = $true
       installedPayloadValidated = $true
       uninstallVerified = $true
-    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LiveAcceptance.EvidenceDirectory "lifecycle.json") -Encoding UTF8
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $lifecycleEvidence "lifecycle.json") -Encoding UTF8
   }
   if (Test-Path -LiteralPath $installDir) {
     Get-ChildItem -LiteralPath $installDir -Force -ErrorAction SilentlyContinue |

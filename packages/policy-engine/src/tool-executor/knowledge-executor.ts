@@ -278,7 +278,10 @@ async function sessionSearch(request: ToolInvokeRequest, storage: AsyncStorage) 
     scope,
     query: capUtf8Text(sanitizeForModel(query), 512, ""),
     ...(scope === "prior" && authorizedHits.length === 0
-      ? { guidance: "No matching messages in earlier chats. Say you could not verify the decision from chat history." }
+      ? {
+          guidance:
+            "No matching messages in earlier chats. Say you could not verify the decision from chat history. The search result does not establish whether a decision was made. Keep any refined search in earlier chats.",
+        }
       : {}),
     hits: authorizedHits.map((hit) => ({
       workspaceId: hit.workspaceId,

@@ -9398,11 +9398,16 @@ export class ChatTurnAgentRunner {
     let args = { ...input.rawArgs };
     if (
       input.toolName === "session.search" &&
-      args.scope === "all" &&
       !input.evalIntegrityTurn &&
       detectConversationRecallIntent(input.userContent)
     ) {
-      args.scope = "prior";
+      const continuingPriorSearch =
+        (args.scope === undefined || args.scope === "session") &&
+        !/\b(?:this|current)\s+(?:chat|conversation|session|thread)\b/iu.test(input.userContent) &&
+        input.priorToolRuns?.some(
+          (run) => run.toolName === "session.search" && run.status === "executed" && run.result?.scope === "prior",
+        );
+      if (args.scope === "all" || continuingPriorSearch) args.scope = "prior";
     }
     let presentationGrounding:
       | {

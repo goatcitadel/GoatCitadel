@@ -32,6 +32,17 @@ describe("ChatTurnAgentRunner tool preflight coverage", () => {
     });
 
     expect(result.record).toMatchObject({ status: "executed", args: { scope: "prior" } });
+    const followUp = await executeToolCall({
+      input: turnInput({
+        content: "What did we decide about the Gannet Kiosk opening time last week?",
+        webMode: "off",
+      }),
+      turnId: "turn-prior-search",
+      toolName: "session.search",
+      rawArgs: { query: "Gannet Kiosk", scope: "session" },
+      priorToolRuns: [result.record],
+    });
+    expect(followUp.record).toMatchObject({ status: "executed", args: { scope: "prior" } });
   });
 
   it("persists blocked web tools without invoking runtime tools when web mode is off", async () => {

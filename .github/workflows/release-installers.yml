@@ -254,12 +254,23 @@ jobs:
                 BetaInstallerSha256 = $betaHashes["${{ matrix.target }}"]
               }
             }
+            if ('${{ inputs.recall_x64_only }}' -eq 'true') {
+              $upgradeOptions.RecallEvidenceDirectory = Join-Path $env:RUNNER_TEMP 'recall-install-evidence'
+            }
             & ./scripts/packaging/smoke-windows-installer.ps1 `
               -InstallerPath "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe" `
               -ExpectedReleaseManifestPath "artifacts/installers/bundles/GoatCitadel-$packageVersion-${{ matrix.target }}/app/release-manifest.json" `
               -Target "${{ matrix.target }}" `
               -TrustMode unsigned @upgradeOptions
           }
+
+      - name: Upload clean Windows recall evidence
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.allow_unsigned == 'true' && inputs.recall_x64_only }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-x64-clean-recall-proof
+          path: ${{ runner.temp }}/recall-install-evidence
+          if-no-files-found: warn
 
       - name: Upload unsigned Windows convenience artifact
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
