@@ -491,7 +491,6 @@ function validateReleaseWorkflowTruth({ repository, tag, commit }) {
 async function resolveRuntimePayloads({ mappings, artifactsDir, releaseAssets, version, commit }) {
   const artifactsRoot = path.resolve(artifactsDir);
   const seenTargets = new Set();
-  const seenManifestPaths = new Set();
   const records = [];
   for (const mapping of mappings) {
     const targetInfo = PACKAGING_TARGETS[mapping.target];
@@ -505,10 +504,10 @@ async function resolveRuntimePayloads({ mappings, artifactsDir, releaseAssets, v
     const manifestPath = path.resolve(mapping.filePath);
     assertChildPath(artifactsRoot, manifestPath, `runtime manifest ${mapping.target}`);
     const manifestRelativePath = releaseRelativePath(artifactsRoot, manifestPath);
-    if (seenManifestPaths.has(manifestRelativePath)) {
-      throw new Error(`Runtime manifest path is assigned to multiple targets: ${manifestRelativePath}`);
+    const expectedManifestPath = `${mapping.target}-release-assets/app/release-manifest.json`;
+    if (manifestRelativePath !== expectedManifestPath) {
+      throw new Error(`Runtime manifest ${mapping.target} must be at ${expectedManifestPath}: ${manifestRelativePath}`);
     }
-    seenManifestPaths.add(manifestRelativePath);
     const rawManifest = readBoundedRegularFile(manifestPath, {
       rootDir: artifactsRoot,
       maxBytes: RELEASE_PAYLOAD_LIMITS.maxManifestBytes,

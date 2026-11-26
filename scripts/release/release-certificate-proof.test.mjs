@@ -756,6 +756,63 @@ test("release certificate rejects duplicate targets, dirty manifests, and target
   assert.match(result.stderr, /platform\/arch/i);
 });
 
+test("release certificate rejects manifests assigned to the other target's inventory directory", (t) => {
+  const fixture = makeCertificateWriterFixture(t, "swapped-target-paths");
+  const x64 = fixture.manifests["windows-x64"];
+  const arm64 = fixture.manifests["windows-arm64"];
+  const x64Bytes = fs.readFileSync(x64);
+  fs.writeFileSync(x64, fs.readFileSync(arm64));
+  fs.writeFileSync(arm64, x64Bytes);
+
+  const result = runCertificateWriter(fixture, {
+    runtimeManifests: [
+      ["windows-x64", arm64],
+      ["windows-arm64", x64],
+    ],
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /Runtime manifest windows-x64 must be at windows-x64-release-assets\/app\/release-manifest\.json/u,
+  );
+});
+
+test("strict release certificate issuance requires successful exact-SHA workflow proof", (t) => {
+  const mockGitHub = `
+    globalThis.fetch = async (input) => {
+      const url = new URL(input);
+      if (url.origin !== "https://api.github.com" || url.searchParams.get("head_sha") !== process.env.GITHUB_SHA) {
+        throw new Error("Unexpected certificate workflow request");
+      }
+      const run = { id: 123, run_attempt: 1, event: "push", conclusion: "success", head_sha: process.env.GITHUB_SHA };
+      if (url.pathname.endsWith("/verification-fast.yml/runs")) {
+        if (process.env.GC_WORKFLOW_PROOF_MODE === "stale") run.head_sha = "b".repeat(40);
+        if (process.env.GC_WORKFLOW_PROOF_MODE === "missing") delete run.head_sha;
+      }
+      return Response.json({ workflow_runs: [run] });
+    };
+  `;
+  for (const mode of ["stale", "missing", "exact"]) {
+    const fixture = makeCertificateWriterFixture(t, `strict-${mode}`);
+    const result = runCertificateWriter(fixture, {
+      requireSuccess: true,
+      preload: `data:text/javascript,${encodeURIComponent(mockGitHub)}`,
+      env: { GITHUB_TOKEN: "fixture", GC_WORKFLOW_PROOF_MODE: mode },
+    });
+    const certificate = JSON.parse(fs.readFileSync(fixture.outFile, "utf8"));
+    if (mode === "exact") {
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(certificate.exactShaStatus.status, "matched");
+      assert.ok(certificate.requiredLanes.every(({ status }) => status === "success"));
+    } else {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /verify:fast=missing/u);
+      assert.equal(certificate.exactShaStatus.status, "incomplete");
+      assert.ok(certificate.exactShaStatus.missingProof.includes("verify:fast"));
+    }
+  }
+});
+
 test("release certificate rejects non-push and wrong-workflow publisher contexts", (t) => {
   const fixture = makeCertificateWriterFixture(t);
   let result = runCertificateWriter(fixture, { env: { GITHUB_EVENT_NAME: "workflow_dispatch" } });
@@ -1101,6 +1158,7 @@ function usedActions(workflowBlock) {
 function runCertificateWriter(fixture, options = {}) {
   const runtimeManifests = options.runtimeManifests ?? Object.entries(fixture.manifests);
   const args = [
+    ...(options.preload ? ["--import", options.preload] : []),
     fileURLToPath(new URL("./write-release-certificate.mjs", import.meta.url)),
     "--version",
     "1.0.0",
@@ -1120,6 +1178,7 @@ function runCertificateWriter(fixture, options = {}) {
   for (const [target, manifestPath] of runtimeManifests) {
     args.push("--runtime-manifest", `${target}=${manifestPath}`);
   }
+  if (options.requireSuccess) args.push("--require-success");
   const env = {
     ...process.env,
     GITHUB_ACTIONS: "true",
