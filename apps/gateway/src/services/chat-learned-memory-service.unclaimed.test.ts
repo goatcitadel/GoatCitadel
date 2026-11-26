@@ -112,6 +112,17 @@ describe("learned memory saved before claims existed", () => {
     });
   });
 
+  it("keeps a negated explicit save apart from the affirmative preference", async () => {
+    const { fake, say } = createService([legacyItem("old-1", "Always use concise replies.")]);
+    await say("Remember that I always avoid concise replies.", "msg-2");
+    expect(fake.conflicts).toEqual([]);
+    expect(fake.items.find((item) => item.content.includes("avoid"))?.claim).toBeUndefined();
+    expect(active(fake.items).sort()).toEqual([
+      "Always use concise replies.",
+      "Remember that I always avoid concise replies.",
+    ]);
+  });
+
   it("does not treat an unresolved conflict row as an active target", async () => {
     const { fake, say } = createService([
       legacyItem("old-1", "Remember that I prefer concise replies."),

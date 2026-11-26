@@ -25,15 +25,21 @@ const NEGATION =
   /\b(?:not|never|no\s+longer|don't|dont|doesn't|isn't|won't|stop|avoid|without|nunca|jam[aá]s|evita[rn]?|sin)\b|n't\b|\bno\s/iu;
 
 /**
+ * Property hints match keywords only, so "Never give concise replies" would read as "concise".
+ * A negated statement gets no claim on either capture path and stays a separate row.
+ * A leading correction marker ("No, …") is not negation.
+ */
+function isNegatedMemoryStatement(content: string): boolean {
+  return NEGATION.test(content.normalize("NFKC").replace(CORRECTION_PREFIX, ""));
+}
+
+/**
  * A session-scoped claim for text that names a known property (reply length, language, …).
  * It only lets conflict detection compare like with like; write authority is unchanged.
  */
 export function inferSessionMemoryClaim(content: string, sessionId: string): MemoryClaim | undefined {
-  // The property hint matches keywords only, so "Never give concise replies" would read as
-  // "concise". Infer nothing when the statement is negated; it then stays a separate row.
-  const statement = content.normalize("NFKC").replace(CORRECTION_PREFIX, "");
-  if (NEGATION.test(statement)) return undefined;
-  const hint = identifyReviewMemoryProperty(statement);
+  if (isNegatedMemoryStatement(content)) return undefined;
+  const hint = identifyReviewMemoryProperty(content.normalize("NFKC").replace(CORRECTION_PREFIX, ""));
   if (!hint) return undefined;
   return {
     identity: {
@@ -157,7 +163,7 @@ export class ChatLearnedMemoryService {
         content: proposal.content,
         confidence: 0.9,
         correctionRequested: proposal.kind === "correction",
-        ...(proposal.claimHint && source.workspaceId
+        ...(proposal.claimHint && source.workspaceId && !isNegatedMemoryStatement(proposal.content)
           ? {
               claim: {
                 identity: {
