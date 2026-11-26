@@ -227,9 +227,10 @@ const releaseWorkflow = validateReleaseWorkflowTruth({
   tag: tagName,
   commit,
 });
+const releaseFiles = listFiles(artifactsDir);
+validateFixedReleaseAssetInventory(releaseFiles.map((filePath) => releaseRelativePath(artifactsDir, filePath)), version);
 const requiredLanes = await resolveRequiredLanes({ commit, repository });
-const releaseAssets = await Promise.all(listFiles(artifactsDir).map((filePath) => fileRecord(filePath, artifactsDir)));
-validateFixedReleaseAssetInventory(releaseAssets, version);
+const releaseAssets = await Promise.all(releaseFiles.map((filePath) => fileRecord(filePath, artifactsDir)));
 const runtimePayloads = await resolveRuntimePayloads({
   mappings: args.runtimeManifests,
   artifactsDir,
@@ -419,8 +420,8 @@ function validateRepository(value) {
   return value;
 }
 
-function validateFixedReleaseAssetInventory(releaseAssets, version) {
-  const actual = releaseAssets.map((record) => record.relativePath).sort(compareStrings);
+function validateFixedReleaseAssetInventory(relativePaths, version) {
+  const actual = [...relativePaths].sort(compareStrings);
   const expected = fixedReleaseAssetPaths(version);
   if (
     actual.length !== expected.length ||

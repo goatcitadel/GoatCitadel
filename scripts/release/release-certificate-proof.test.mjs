@@ -870,11 +870,23 @@ test("release certificate rejects hard-linked release assets", (t) => {
   assert.match(result.stderr, /hard-linked file|regular single-link file/i);
 });
 
-test("release certificate rejects files outside the fixed release inventory", (t) => {
+test("release certificate rejects an unexpected inventory path before opening it for hashing", (t) => {
   const fixture = makeCertificateWriterFixture(t, "extra-asset");
   fs.writeFileSync(path.join(fixture.artifactsDir, "rogue.bin"), "unexpected\n");
 
-  const result = runCertificateWriter(fixture);
+  const forbidUnexpectedRead = `
+    import fs from "node:fs";
+    const originalOpen = fs.openSync;
+    fs.openSync = (file, ...args) => {
+      if (typeof file === "string" && file.endsWith("rogue.bin")) {
+        throw new Error("Unexpected asset was opened before inventory validation");
+      }
+      return originalOpen(file, ...args);
+    };
+  `;
+  const result = runCertificateWriter(fixture, {
+    preload: `data:text/javascript,${encodeURIComponent(forbidUnexpectedRead)}`,
+  });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /fixed closed-world inventory/i);
 });
