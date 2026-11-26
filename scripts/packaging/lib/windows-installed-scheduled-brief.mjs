@@ -25,7 +25,7 @@ export function verifyInstalledScheduledBrief({ api, send, waitForTurn, restart,
     await settings.getByText("Upcoming work and follow-ups", { exact: true }).click();
     await button("Set up follow-through", settings).click();
     const setup = page.getByRole("region", { name: "Set up follow-through" });
-    await setup.getByLabel("Purpose", { exact: true }).fill(purpose);
+    await setup.getByRole("textbox", { name: /^Purpose\b/ }).fill(purpose);
     await setup.getByLabel("Reports to", { exact: true }).selectOption(connectionId);
     await setup.getByLabel("Frequency", { exact: true }).selectOption("daily");
     await setup.getByLabel("Timezone", { exact: true }).selectOption(timezone);

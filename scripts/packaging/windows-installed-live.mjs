@@ -19,6 +19,7 @@ import {
 const exec = promisify(execFile);
 const [app, scratch, evidence, nativeDebugPort, ollamaExe, ntfyExe] = process.argv.slice(2);
 const recallOnly = ollamaExe === "--recall-only";
+const scheduledBriefOnly = process.env.GOATCITADEL_INSTALLED_SCHEDULED_BRIEF_ONLY === "true";
 const ollamaModel = "qwen2.5:0.5b";
 const modelDigest = "a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67";
 const ntfyTokenEnv = "NTFY_READINESS_TOKEN";
@@ -449,7 +450,9 @@ async function realChannel(root) {
 const recallCheck = ["recall", (root) => installedRecall(root, evidence, withStub, poll)];
 const checks = recallOnly
   ? [recallCheck]
-  : [["provider", realProvider], ["channel", realChannel], ["approval", governedApproval]];
+  : scheduledBriefOnly
+    ? [["channel", realChannel]]
+    : [["provider", realProvider], ["channel", realChannel], ["approval", governedApproval]];
 for (const [name, check] of checks) {
   const root = await fs.mkdtemp(path.join(scratch, `${name}-`));
   let result;
