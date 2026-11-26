@@ -804,6 +804,8 @@ test("release certificate only allows the Windows claim with successful matching
     { name: "failed-lane", workflows: { "verification-1-0-release-proof.yml": { conclusion: "failure" } } },
     { name: "other-platform", platform: "linux" },
     { name: "failed-platform", platformStatus: "fail" },
+    { name: "conflicting-windows-status", windowsStatus: "fail" },
+    { name: "conflicting-windows-checks", windowsChecksFailed: ["artifact_hash_integrity"] },
     { name: "claim-disabled", claimAllowed: false },
     { name: "wrong-attempt", attempt: "2" },
   ];
@@ -816,6 +818,10 @@ test("release certificate only allows the Windows claim with successful matching
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const certificate = JSON.parse(fs.readFileSync(fixture.outFile, "utf8"));
     assert.equal(certificate.hostileSandboxWindowsClaim.publicClaimAllowed, expected, name);
+    assert.equal(certificate.hostileSandboxWindowsClaim.aggregatePublicClaimAllowed, expected, name);
+    if (!expected) {
+      assert.ok(certificate.hostileSandboxWindowsClaim.blockers.length > 0, name);
+    }
     assert.equal(certificate.parityClosure.verdict, expected ? "parity-ready" : "not parity-ready", name);
   }
 });
@@ -1212,14 +1218,21 @@ function mockCertificateWorkflows(overrides = {}) {
   };
 }
 
-function writeSandboxProof(fixture, { platform = "win32", platformStatus = "pass", claimAllowed = true, attempt = "1" } = {}) {
+function writeSandboxProof(fixture, {
+  platform = "win32",
+  platformStatus = "pass",
+  windowsStatus = "pass",
+  windowsChecksFailed = [],
+  claimAllowed = true,
+  attempt = "1",
+} = {}) {
   const file = path.join(fixture.root, "sandbox-proof.json");
-  const windowsProof = { platform: "win32", status: "pass", checksPassed: [], checksFailed: [] };
+  const windowsProof = { platform: "win32", status: windowsStatus, checksPassed: [], checksFailed: windowsChecksFailed };
   fs.writeFileSync(file, JSON.stringify({
     platform,
-    currentPlatformProof: { ...windowsProof, platform, status: platformStatus },
+    currentPlatformProof: { platform, status: platformStatus, checksPassed: [], checksFailed: [] },
     githubRun: { commit: "a".repeat(40), repository: "goatcitadel/GoatCitadel", runId: "123", attempt },
-    claim: { platformClaims: { win32: { publicClaimAllowed: claimAllowed, proof: windowsProof, blockers: [] } } },
+    claim: { publicClaimAllowed: claimAllowed, platformClaims: { win32: { publicClaimAllowed: claimAllowed, proof: windowsProof, blockers: [] } } },
   }));
   return file;
 }

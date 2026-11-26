@@ -798,15 +798,41 @@ function buildHostileSandboxWindowsClaim({ commit, repository, proof, proofPath,
   const win32Proof = win32Claim?.proof ?? fallbackWin32Proof ?? null;
   const laneGreen = lane?.status === "success";
   const artifactRunMatched = matchesHostileSandboxProofRun(proof, { commit, repository, proofRun });
-  const proofAccepted = laneGreen && artifactRunMatched;
+  const currentWindowsPassed = proof?.platform === "win32" && isPassingWindowsProof(proof.currentPlatformProof);
+  const selectedWindowsPassed = isPassingWindowsProof(win32Proof);
+  const reportedBlockers =
+    artifactRunMatched && Array.isArray(win32Claim?.blockers)
+      ? win32Claim.blockers.filter((blocker) => typeof blocker === "string" && blocker.length > 0)
+      : [];
+  const publicClaimAllowed =
+    laneGreen &&
+    artifactRunMatched &&
+    currentWindowsPassed &&
+    selectedWindowsPassed &&
+    win32Claim?.publicClaimAllowed === true &&
+    reportedBlockers.length === 0;
+  const blockers = [];
+  if (!laneGreen) {
+    blockers.push(`Windows AppContainer proof workflow status is ${lane?.status ?? "missing"}.`);
+  }
+  if (!artifactRunMatched) {
+    blockers.push(
+      proof
+        ? "Windows AppContainer proof artifact does not match the selected GitHub workflow run attempt."
+        : "Windows AppContainer hostile sandbox proof artifact was not provided.",
+    );
+  } else {
+    if (!currentWindowsPassed || !selectedWindowsPassed) {
+      blockers.push("Current and selected Windows AppContainer proof must both pass with no failed checks.");
+    }
+    if (win32Claim?.publicClaimAllowed !== true) {
+      blockers.push("The proof artifact did not allow the Windows AppContainer public claim.");
+    }
+  }
   return {
     claimScope: "windows_appcontainer",
-    aggregatePublicClaimAllowed: proofAccepted && proof?.claim?.publicClaimAllowed === true,
-    publicClaimAllowed:
-      proofAccepted &&
-      proof?.platform === "win32" &&
-      proof.currentPlatformProof?.status === "pass" &&
-      win32Claim?.publicClaimAllowed === true,
+    aggregatePublicClaimAllowed: publicClaimAllowed && proof?.claim?.publicClaimAllowed === true,
+    publicClaimAllowed,
     laneStatus: lane?.status ?? "missing",
     workflowRunUrl: lane?.workflowRunUrl ?? null,
     proofWorkflowFile: lane?.proofWorkflowFile ?? RELEASE_PROOF_WORKFLOW_FILE,
@@ -821,14 +847,17 @@ function buildHostileSandboxWindowsClaim({ commit, repository, proof, proofPath,
     windowsPlatformProofStatus: win32Proof?.status ?? "missing",
     checksPassed: Array.isArray(win32Proof?.checksPassed) ? win32Proof.checksPassed : [],
     checksFailed: Array.isArray(win32Proof?.checksFailed) ? win32Proof.checksFailed : [],
-    blockers: artifactRunMatched
-      ? (win32Claim?.blockers ?? ["Windows AppContainer proof is missing from the artifact."])
-      : [
-          proof
-            ? "Windows AppContainer proof artifact does not match the selected GitHub workflow run attempt."
-            : "Windows AppContainer hostile sandbox proof artifact was not provided.",
-        ],
+    blockers: [...blockers, ...reportedBlockers],
   };
+}
+
+function isPassingWindowsProof(proof) {
+  return (
+    proof?.platform === "win32" &&
+    proof.status === "pass" &&
+    Array.isArray(proof.checksFailed) &&
+    proof.checksFailed.length === 0
+  );
 }
 
 function readOptionalHostileSandboxProof(filePath) {
