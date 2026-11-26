@@ -20,12 +20,20 @@ function looksSensitive(value: string): boolean {
   return redactSecretText(value.normalize("NFKC"), { env: process.env }).redactionCount > 0;
 }
 
+const CORRECTION_PREFIX = /^\s*(?:no|actually|correction|en\s+realidad)[,;:\s]+/iu;
+const NEGATION =
+  /\b(?:not|never|no\s+longer|don't|dont|doesn't|isn't|won't|stop|avoid|without|nunca|jam[aá]s|evita[rn]?|sin)\b|n't\b|\bno\s/iu;
+
 /**
  * A session-scoped claim for text that names a known property (reply length, language, …).
  * It only lets conflict detection compare like with like; write authority is unchanged.
  */
 export function inferSessionMemoryClaim(content: string, sessionId: string): MemoryClaim | undefined {
-  const hint = identifyReviewMemoryProperty(content);
+  // The property hint matches keywords only, so "Never give concise replies" would read as
+  // "concise". Infer nothing when the statement is negated; it then stays a separate row.
+  const statement = content.normalize("NFKC").replace(CORRECTION_PREFIX, "");
+  if (NEGATION.test(statement)) return undefined;
+  const hint = identifyReviewMemoryProperty(statement);
   if (!hint) return undefined;
   return {
     identity: {
@@ -212,7 +220,8 @@ export class ChatLearnedMemoryService {
     const claimed = await repo.findActiveClaim(sessionId, workspaceId, claim);
     const key = memoryClaimKey(workspaceId, claim);
     const unclaimed = (await repo.findActiveByType(sessionId, itemType as LearnedMemoryItemType)).flatMap((item) => {
-      if (item.claim || item.redacted) return [];
+      // findActiveByType also returns unresolved `conflict` rows; only active rows are targets.
+      if (item.status !== "active" || item.claim || item.redacted) return [];
       const inferred = inferSessionMemoryClaim(item.content, sessionId);
       return inferred && memoryClaimKey(workspaceId, inferred) === key ? [{ ...item, claim: inferred }] : [];
     });

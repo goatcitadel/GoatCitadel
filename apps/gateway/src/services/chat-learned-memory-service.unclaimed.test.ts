@@ -35,7 +35,8 @@ function createFakeRepo(seed: Item[]) {
             memoryClaimKey(workspaceId, item.claim) === memoryClaimKey(workspaceId, claim),
         ),
       findActiveByType: async (_sessionId: string, itemType: string) =>
-        items.filter((item) => item.status === "active" && item.itemType === itemType),
+        // Mirrors the real query, which also returns unresolved conflict rows.
+        items.filter((item) => ["active", "conflict"].includes(item.status) && item.itemType === itemType),
       insertItem: async (input: Partial<Item> & { content: string; status: string }) => insertItem(input),
       insertConflict: async (input: { existingItemId: string; incomingItemId: string }) => {
         conflicts.push(input);
@@ -52,14 +53,14 @@ function createFakeRepo(seed: Item[]) {
   };
 }
 
-function legacyItem(itemId: string, content: string): Item {
+function legacyItem(itemId: string, content: string, status: Item["status"] = "active"): Item {
   return {
     itemId,
     sessionId: SESSION,
     itemType: "preference",
     content,
     confidence: 0.8,
-    status: "active",
+    status,
     redacted: false,
     sourceHash: `hash-${itemId}`,
   } as Item;
@@ -89,6 +90,23 @@ describe("learned memory saved before claims existed", () => {
       value: "concise",
     });
     expect(inferSessionMemoryClaim("I work on tokenization research.", SESSION)).toBeUndefined();
+  });
+
+  it("infers nothing from a negated statement, so its polarity is never flipped", () => {
+    expect(inferSessionMemoryClaim("Never give concise replies.", SESSION)).toBeUndefined();
+    expect(inferSessionMemoryClaim("Don't use detailed explanations.", SESSION)).toBeUndefined();
+    expect(inferSessionMemoryClaim("No, I now prefer detailed replies.", SESSION)).toMatchObject({
+      value: "detailed",
+    });
+  });
+
+  it("does not treat an unresolved conflict row as an active target", async () => {
+    const { fake, say } = createService([
+      legacyItem("old-1", "Remember that I prefer concise replies."),
+      legacyItem("pending-1", "Remember that I prefer detailed replies.", "conflict"),
+    ]);
+    await say("No, I now prefer detailed replies.", "msg-3");
+    expect(fake.corrections).toEqual([expect.objectContaining({ itemId: "old-1" })]);
   });
 
   it("records a conflict instead of keeping an opposite preference active beside an older unclaimed one", async () => {
