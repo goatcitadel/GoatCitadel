@@ -430,7 +430,7 @@ async function realChannel(root) {
 const recallCheck = ["recall", (root) => installedRecall(root, evidence, withStub, poll)];
 const checks = ollamaExe === "--recall-only"
   ? [recallCheck]
-  : [["provider", realProvider], ["channel", realChannel], ["approval", governedApproval], recallCheck];
+  : [["provider", realProvider], ["channel", realChannel], ["approval", governedApproval]];
 for (const [name, check] of checks) {
   const root = await fs.mkdtemp(path.join(scratch, `${name}-`));
   let result;

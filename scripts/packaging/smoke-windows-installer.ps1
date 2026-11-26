@@ -642,11 +642,8 @@ try {
   }
   if ($recallMode) {
     New-Item -ItemType Directory -Force -Path $RecallEvidenceDirectory | Out-Null
-    & $bundledNode (Join-Path $PSScriptRoot "windows-installed-live.mjs") `
-      $appHome $smokeRoot $RecallEvidenceDirectory "--recall-only"
-    if ($LASTEXITCODE -ne 0) {
-      throw "Installed recall verification failed. See the retained recall evidence."
-    }
+    . (Join-Path $PSScriptRoot "lib/run-standard-user-recall.ps1")
+    Invoke-StandardUserRecall $bundledNode $appHome $smokeRoot $RecallEvidenceDirectory $PSScriptRoot
   }
 
   $uninstaller = Join-Path $installDir "unins000.exe"
