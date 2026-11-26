@@ -8,16 +8,48 @@ import type {
   MemoryCorrectionTarget,
   ChatMessageSourceAuthority,
 } from "@goatcitadel/contracts";
-import { redactSecretText } from "@goatcitadel/contracts";
+import { memoryClaimKey, redactSecretText } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { extractLearnedMemoryCandidates, shouldExtractLearnedMemoryContent } from "./learned-memory-utils.js";
 import { clampMemoryConfidence, decideLearnedMemoryWrite } from "./memory-lifecycle-policy.js";
-import { classifyMemoryIntent } from "./memory-intent-service.js";
+import { classifyMemoryIntent, identifyReviewMemoryProperty } from "./memory-intent-service.js";
 
 // ── pure helpers ─────────────────────────────────────────────────────
 
 function looksSensitive(value: string): boolean {
   return redactSecretText(value.normalize("NFKC"), { env: process.env }).redactionCount > 0;
+}
+
+const CORRECTION_PREFIX = /^\s*(?:no|actually|correction|en\s+realidad)[,;:\s]+/iu;
+const NEGATION =
+  /\b(?:not|never|no\s+longer|don't|dont|doesn't|isn't|won't|stop|avoid|without|nunca|jam[aá]s|evita[rn]?|sin)\b|n't\b|\bno\s/iu;
+
+/**
+ * Property hints match keywords only, so "Never give concise replies" would read as "concise".
+ * A negated statement gets no claim on either capture path and stays a separate row.
+ * A leading correction marker ("No, …") is not negation.
+ */
+function isNegatedMemoryStatement(content: string): boolean {
+  return NEGATION.test(content.normalize("NFKC").replace(CORRECTION_PREFIX, ""));
+}
+
+/**
+ * A session-scoped claim for text that names a known property (reply length, language, …).
+ * It only lets conflict detection compare like with like; write authority is unchanged.
+ */
+export function inferSessionMemoryClaim(content: string, sessionId: string): MemoryClaim | undefined {
+  if (isNegatedMemoryStatement(content)) return undefined;
+  const hint = identifyReviewMemoryProperty(content.normalize("NFKC").replace(CORRECTION_PREFIX, ""));
+  if (!hint) return undefined;
+  return {
+    identity: {
+      subject: hint.subject,
+      predicate: hint.predicate,
+      cardinality: hint.cardinality,
+      scope: { kind: "session", id: sessionId },
+    },
+    value: hint.value,
+  };
 }
 
 // ── service class ────────────────────────────────────────────────────
@@ -118,9 +150,12 @@ export class ChatLearnedMemoryService {
       confidence: number;
       claim?: MemoryClaim;
       correctionRequested?: boolean;
-    }> = extractLearnedMemoryCandidates(content, source.role).filter(
-      (candidate) => !naturalContents.has(candidate.content.toLowerCase()),
-    );
+    }> = extractLearnedMemoryCandidates(content, source.role)
+      .filter((candidate) => !naturalContents.has(candidate.content.toLowerCase()))
+      .map((candidate) => {
+        const claim = source.workspaceId ? inferSessionMemoryClaim(candidate.content, sessionId) : undefined;
+        return claim ? { ...candidate, claim } : candidate;
+      });
     for (const proposal of intent.proposals) {
       if (proposal.kind === "inferred_candidate") continue;
       candidates.push({
@@ -128,7 +163,7 @@ export class ChatLearnedMemoryService {
         content: proposal.content,
         confidence: 0.9,
         correctionRequested: proposal.kind === "correction",
-        ...(proposal.claimHint && source.workspaceId
+        ...(proposal.claimHint && source.workspaceId && !isNegatedMemoryStatement(proposal.content)
           ? {
               claim: {
                 identity: {
@@ -176,6 +211,29 @@ export class ChatLearnedMemoryService {
 
   // ── internal helpers ───────────────────────────────────────────────
 
+  /**
+   * Active items for one property: rows stored with that claim, plus older rows saved
+   * without a claim whose text names the same property. Without the second group an
+   * opposite preference saved before claims existed would stay active beside the new one.
+   */
+  private async findActiveClaimIncludingUnclaimed(
+    sessionId: string,
+    workspaceId: string,
+    itemType: string,
+    claim: MemoryClaim,
+  ): Promise<LearnedMemoryItemRecord[]> {
+    const repo = this.ctx.storage.learnedMemory;
+    const claimed = await repo.findActiveClaim(sessionId, workspaceId, claim);
+    const key = memoryClaimKey(workspaceId, claim);
+    const unclaimed = (await repo.findActiveByType(sessionId, itemType as LearnedMemoryItemType)).flatMap((item) => {
+      // findActiveByType also returns unresolved `conflict` rows; only active rows are targets.
+      if (item.status !== "active" || item.claim || item.redacted) return [];
+      const inferred = inferSessionMemoryClaim(item.content, sessionId);
+      return inferred && memoryClaimKey(workspaceId, inferred) === key ? [{ ...item, claim: inferred }] : [];
+    });
+    return [...claimed, ...unclaimed];
+  }
+
   private async upsertLearnedMemoryItem(input: {
     sessionId: string;
     itemType: string;
@@ -192,7 +250,7 @@ export class ChatLearnedMemoryService {
     const repo = this.ctx.storage.learnedMemory;
     const existing =
       input.claim && input.workspaceId
-        ? await repo.findActiveClaim(input.sessionId, input.workspaceId, input.claim)
+        ? await this.findActiveClaimIncludingUnclaimed(input.sessionId, input.workspaceId, input.itemType, input.claim)
         : await repo.findActiveByType(input.sessionId, input.itemType as LearnedMemoryItemType);
     let correctionTarget: MemoryCorrectionTarget | undefined;
     if (input.correctionRequested) {
