@@ -51,11 +51,13 @@ try {
   exit 1
 }
 "@
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    # Alternate-credential process creation has a 1,024-character command-line limit.
+    $entryPoint = Join-Path $fixture 'run-recall.ps1'
+    Set-Content -LiteralPath $entryPoint -Value $command -Encoding Unicode
     $powershell = Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
     $process = Start-Process -FilePath $powershell -Credential $credential -LoadUserProfile `
       -WorkingDirectory $fixtureRuntime -WindowStyle Hidden -PassThru `
-      -ArgumentList @('-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded)
+      -ArgumentList @('-NoProfile', '-NonInteractive', '-File', ('"' + $entryPoint + '"'))
     if (-not $process.WaitForExit(600000)) {
       throw 'The standard-user installed recall verification timed out.'
     }
