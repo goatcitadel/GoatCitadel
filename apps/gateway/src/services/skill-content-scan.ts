@@ -173,14 +173,21 @@ function lineComments(lineText: string, state: { closer?: string }): string {
       continue;
     }
     const opening = firstBlockOpening(rest);
-    // A whole-line comment that doesn't open with a block comment runs to the end; a `/*` inside it opens nothing.
+    // A whole-line comment that doesn't open with a block comment runs to the end; an unclosed `/*` in it still opens
+    // a block, since telling a comment from a URL here takes a parser and reading on only checks more.
     if (kept.length === 0 && COMMENT_LINE.test(rest) && !(opening && !rest.slice(0, opening.start).trim())) {
+      const closer = unclosedBlockCloser(rest);
+      if (closer) state.closer = closer;
       return rest;
     }
     // Whichever comment starts first wins: a line comment (even right after a block's close) runs to the line's end.
     const lineComment = LINE_COMMENT.exec(rest);
     if (lineComment && (!opening || lineComment.index < opening.start)) {
-      kept.push(rest.slice(lineComment.index));
+      const comment = rest.slice(lineComment.index);
+      kept.push(comment);
+      // A URL's `//` looks like a line comment, so an unclosed `/*` after it still opens a block for the next lines.
+      const closer = unclosedBlockCloser(comment);
+      if (closer) state.closer = closer;
       break;
     }
     if (!opening) break;
@@ -188,6 +195,18 @@ function lineComments(lineText: string, state: { closer?: string }): string {
     rest = rest.slice(opening.start + opening.open.length);
   }
   return kept.join(" ");
+}
+
+/** The closer a block comment opened in `text` still waits for, if its last block is left open. */
+function unclosedBlockCloser(text: string): string | undefined {
+  let rest = text;
+  for (let opening = firstBlockOpening(rest); opening; opening = firstBlockOpening(rest)) {
+    const afterOpen = rest.slice(opening.start + opening.open.length);
+    const end = afterOpen.indexOf(opening.close);
+    if (end < 0) return opening.close;
+    rest = afterOpen.slice(end + opening.close.length);
+  }
+  return undefined;
 }
 
 function firstBlockOpening(text: string): { start: number; open: string; close: string } | undefined {

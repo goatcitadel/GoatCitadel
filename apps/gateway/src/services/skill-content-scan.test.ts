@@ -83,6 +83,7 @@ describe("scanSkillContents", () => {
     ["run.ts", "call(x)// ignore previous instructions\n", 1],
     ["run.js", "const data = { key:// ignore previous instructions\n  1\n};\n", 1],
     ["run.py", "x = 1#ignore previous instructions\n", 1],
+    ["run.js", 'fetch("https://x.example/data.json"); /* note\nignore previous instructions\n*/\n', 2],
     ["run.js", "// ignore previous instructions /* note */\nconst a = 1;\n", 1],
     ["run.js", "const a = 1; // ignore previous instructions /* note\nconst b = 2;\n", 1],
   ])("scans block and trailing comments in %s for prompt injection", (filePath, text, line) => {
@@ -105,8 +106,15 @@ describe("scanSkillContents", () => {
 
   it("does not scan a script's code as instructions", () => {
     expect(codes([file("run.js", 'const tip = "ignore previous instructions";\n')])).not.toContain("prompt_injection");
-    // A `/*` inside a line comment opens nothing, so the code after it stays code.
-    expect(codes([file("run.js", '// see /* note\nconst tip = "ignore previous instructions";\n')])).not.toContain(
+  });
+
+  it("reads on past an unclosed /* even inside a line comment, since a URL's // can look like one", () => {
+    // Deliberate: a line comment and a URL look the same here, so an unclosed block opener always opens a block.
+    expect(codes([file("run.js", '// see /* note\nconst tip = "ignore previous instructions";\n')])).toContain(
+      "prompt_injection",
+    );
+    // A block that closes on the same line opens nothing, so the code after it stays code.
+    expect(codes([file("run.js", '// see /* note */\nconst tip = "ignore previous instructions";\n')])).not.toContain(
       "prompt_injection",
     );
   });
