@@ -54,6 +54,8 @@ export interface TurnRuntimeRequest {
   policyTaskId?: string;
   fullWebAccess?: boolean;
   historyMessages: ChatCompletionRequest["messages"];
+  /** Server-owned signal for recall evidence already included in the prepared prompt. */
+  hasPreparedRecallEvidence?: boolean;
   outputMessageId?: string;
   modelRouter?: ChatTurnTraceRecord["routing"]["modelRouter"];
   /** Which setting chose the model, from the verified route decision; absent when no decision is in scope. */

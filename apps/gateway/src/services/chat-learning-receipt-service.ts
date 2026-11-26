@@ -1,6 +1,42 @@
 import { NotFoundError, type LearningUseLink, type TurnLearningReceipt } from "@goatcitadel/contracts";
+import { logger } from "@goatcitadel/gateway-core";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { MemoryLifecycleService } from "./memory-lifecycle-service.js";
+
+const log = logger.child("chat-learning-receipt");
+
+function readAdmittedChatTurnContext(storage: Pick<AsyncStorage, "contextManifests">, turnId: string) {
+  return storage.contextManifests.maybeGetDetailByTurn(turnId);
+}
+
+export async function hasOtherAdmittedRecallEvidence(
+  storage: Pick<AsyncStorage, "contextManifests">,
+  input: { memoryMode: "auto" | "on" | "off"; turnId: string; userMessageId: string },
+): Promise<boolean> {
+  if (input.memoryMode === "off") return false;
+  try {
+    const admitted = await readAdmittedChatTurnContext(storage, input.turnId);
+    if (!admitted) return true;
+    return admitted.entries.some((entry) => {
+      const { admittedMemories, sourceCitations, citationsCount } = entry.metadata;
+      if (Array.isArray(admittedMemories) && admittedMemories.length > 0) return true;
+      if (entry.kind !== "memory_context") return false;
+      // Retrieval can cite the current user message itself. It adds no prior evidence.
+      return (
+        !Array.isArray(sourceCitations) ||
+        (sourceCitations.length === 0 && Boolean(entry.contentText?.trim())) ||
+        (typeof citationsCount === "number" && citationsCount > sourceCitations.length) ||
+        sourceCitations.some(
+          (source) => source?.sourceType !== "transcript" || source.sourceRef !== input.userMessageId,
+        )
+      );
+    });
+  } catch {
+    log.warn("Could not inspect admitted context for a chat history miss", { turnId: input.turnId });
+    return true;
+  }
+}
+
 export interface ChatLearningReceiptDeps {
   storage: Pick<
     AsyncStorage,
@@ -131,9 +167,10 @@ export class ChatLearningReceiptService {
         });
       }
     }
+    const { storage } = this.deps;
     const [manifest, usage] = await Promise.all([
-      this.deps.storage.contextManifests.maybeGetDetailByTurn(turnId),
-      this.deps.storage.modelUsageEvents.list({ workspaceId: meta.workspaceId, sessionId, turnId, limit: 200 }),
+      readAdmittedChatTurnContext(storage, turnId),
+      storage.modelUsageEvents.list({ workspaceId: meta.workspaceId, sessionId, turnId, limit: 200 }),
     ]);
     if (usage.nextCursor) {
       result.truncated = true;
