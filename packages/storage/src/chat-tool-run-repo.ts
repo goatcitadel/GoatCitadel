@@ -12,6 +12,8 @@ import {
 } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
 
+const MAX_COMPLETE_TURN_READ = 100;
+
 interface ChatToolRunRow {
   tool_run_id: string;
   turn_id: string;
@@ -83,7 +85,9 @@ export class ChatToolRunRepository {
   private readonly getStmt;
   private readonly getForUpdateStmt;
   private readonly insertStmt;
+  private readonly hasByTurnStmt;
   private readonly listByTurnStmt;
+  private readonly readCompleteByTurnStmt;
   private readonly listBySessionStmt;
   private readonly findByApprovalStmt;
   private readonly countCallsByToolSinceStmt;
@@ -166,10 +170,15 @@ export class ChatToolRunRepository {
         AND result_json = @expectedResultJson
       RETURNING *
     `);
+    this.hasByTurnStmt = db.prepare("SELECT 1 FROM chat_tool_runs WHERE turn_id = @turnId LIMIT 1");
     this.listByTurnStmt = db.prepare(`
       SELECT * FROM chat_tool_runs
       WHERE turn_id = @turnId
       ORDER BY started_at ASC
+    `);
+    this.readCompleteByTurnStmt = db.prepare(`
+      SELECT * FROM chat_tool_runs WHERE turn_id = @turnId
+      ORDER BY started_at ASC, tool_run_id ASC LIMIT @limit
     `);
     this.listBySessionStmt = db.prepare(`
       SELECT * FROM chat_tool_runs
@@ -267,9 +276,23 @@ export class ChatToolRunRepository {
     return row === undefined ? undefined : mapRow(this.readToolRunRow(toolRunId, row));
   }
 
+  /** Any persisted receipt, even if its current schema is unreadable. */
+  public hasByTurn(turnId: string): boolean {
+    return this.hasByTurnStmt.get({ turnId }) !== undefined;
+  }
+
   public listByTurn(turnId: string): ChatToolRunRecord[] {
     const rows = toChatToolRunRows(this.listByTurnStmt.all({ turnId }));
     return rows.map(mapRow);
+  }
+
+  /** Reads one bounded snapshot. An unreadable row or overflow means the history is incomplete. */
+  public readCompleteByTurn(turnId: string, limit: number): ChatToolRunRecord[] | undefined {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_COMPLETE_TURN_READ) return undefined;
+    const raw = this.readCompleteByTurnStmt.all({ turnId, limit: limit + 1 });
+    if (raw.length > limit) return undefined;
+    const rows = toChatToolRunRows(raw);
+    return rows.length === raw.length ? rows.map(mapRow) : undefined;
   }
 
   /** Uses the existing turn/started_at index; the ID breaks timestamp ties. */

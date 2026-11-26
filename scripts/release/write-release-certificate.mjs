@@ -11,7 +11,7 @@ import {
   RELEASE_PAYLOAD_ROOTS,
   validateReleaseManifest,
 } from "../packaging/lib/package-renderers.mjs";
-import { resolveLaneProof, selectReleaseCommitRun } from "./release-certificate-proof.mjs";
+import { resolveRequiredLaneProofs, selectReleaseCommitRun } from "./release-certificate-proof.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
@@ -557,27 +557,12 @@ async function resolveRuntimePayloads({ mappings, artifactsDir, releaseAssets, v
 }
 
 async function resolveRequiredLanes({ commit, repository }) {
-  const releaseProofRun = await fetchLatestWorkflowRun({
-    repository,
-    commit,
-    workflowFile: RELEASE_PROOF_WORKFLOW_FILE,
+  return resolveRequiredLaneProofs({
+    specs: REQUIRED_LANE_SPECS,
+    releaseProofWorkflowFile: RELEASE_PROOF_WORKFLOW_FILE,
+    targetCommit: commit,
+    readWorkflowRun: (workflowFile) => fetchLatestWorkflowRun({ repository, commit, workflowFile }),
   });
-
-  return Promise.all(
-    REQUIRED_LANE_SPECS.map(async (spec) => {
-      const directRun = await fetchLatestWorkflowRun({ repository, commit, workflowFile: spec.workflowFile });
-      return {
-        ...resolveLaneProof({
-          spec,
-          directRun,
-          releaseProofRun,
-          releaseProofWorkflowFile: RELEASE_PROOF_WORKFLOW_FILE,
-          targetCommit: commit,
-        }),
-        checkedAt: new Date().toISOString(),
-      };
-    }),
-  );
 }
 
 async function fetchLatestWorkflowRun({ repository, commit, workflowFile }) {

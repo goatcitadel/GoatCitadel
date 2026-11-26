@@ -245,13 +245,36 @@ describe("ChatToolRunRepository", () => {
     setRawField(db, "tool-run-a", "status", "unknown_status");
     assert.throws(() => repo.get("tool-run-a"), /Chat tool run tool-run-a not found/);
     assert.deepEqual(repo.listByTurn("turn-a"), []);
+    assert.equal(repo.hasByTurn("turn-a"), true);
+    assert.equal(repo.readCompleteByTurn("turn-a", 32), undefined);
     setRawField(db, "tool-run-a", "status", "started");
 
     setStartedAtBlob(db, "tool-run-a");
     assert.throws(() => repo.get("tool-run-a"), /Chat tool run tool-run-a not found/);
     assert.deepEqual(repo.listByTurn("turn-a"), []);
+    assert.equal(repo.hasByTurn("turn-a"), true);
+    assert.equal(repo.readCompleteByTurn("turn-a", 32), undefined);
     assert.deepEqual(repo.listBySession("session-a"), []);
     assert.equal(repo.listByTurnIds(["turn-a"]).size, 0);
+  });
+
+  it("reads an entire bounded turn in receipt order and refuses an overflowing turn", () => {
+    const { repo } = createStore();
+    assert.equal(repo.hasByTurn("empty-turn"), false);
+    assert.deepEqual(repo.readCompleteByTurn("empty-turn", 2), []);
+
+    for (const toolRunId of ["run-b", "run-a"]) {
+      repo.create({
+        toolRunId,
+        turnId: "turn",
+        sessionId: "session",
+        toolName: "file.read",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      });
+    }
+    assert.equal(repo.hasByTurn("turn"), true);
+    assert.deepEqual(repo.readCompleteByTurn("turn", 2)?.map((run) => run.toolRunId), ["run-a", "run-b"]);
+    assert.equal(repo.readCompleteByTurn("turn", 1), undefined);
   });
 
   it("projects legacy rows conservatively after migration without persisting invented evidence", () => {

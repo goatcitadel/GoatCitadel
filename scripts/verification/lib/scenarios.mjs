@@ -1740,11 +1740,18 @@ export async function runOperatorProofLane(context, _options = {}) {
     stack = await startVerificationStack(context, {
       runtimeRoot: operatorRuntimeRoot,
       includeUi: false,
+      // AppContainer runs the compiled child from the installer without a source loader.
+      gatewayMode: process.platform === "win32" ? "built" : "source",
       gatewayEnv: {
         GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED: "true",
         GOATCITADEL_DURABLE_FOUNDATION_ENABLED: "true",
         GOATCITADEL_FEATURE_DURABLE_KERNEL_V1_ENABLED: "true",
-        GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false",
+        ...(process.platform === "win32"
+          ? {
+              GOATCITADEL_CODE_MODE_BEST_EFFORT_SANDBOX_ENABLED: "true",
+              GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "true",
+            }
+          : { GOATCITADEL_CODE_MODE_SANDBOX_REQUIRED: "false" }),
         [DETERMINISTIC_LLM_KEY_ENV]: "verification-stub-key",
       },
     });
@@ -1906,7 +1913,11 @@ export async function runOperatorProofLane(context, _options = {}) {
           sessionId,
         });
         if (completedRun.body?.status !== "completed") {
-          throw new Error(`code mode run ${runId} finished with status ${completedRun.body?.status ?? "unknown"}`);
+          const detail = completedRun.body?.error;
+          throw new Error(
+            `Code Mode run ${runId} finished with status ${completedRun.body?.status ?? "unknown"}` +
+              (typeof detail === "string" ? `: ${clampString(detail, 240)}` : ""),
+          );
         }
         const candidateId = `candidate-${String(completedRun.body?.codeHash ?? "").slice(0, 12)}`;
         const candidateLifecycle = await exerciseCapabilityCandidatePromotionAndRevocation(

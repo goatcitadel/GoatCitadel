@@ -21,6 +21,24 @@ export function summarizeWorkflowRun(run, workflowFile) {
   };
 }
 
+export async function resolveRequiredLaneProofs({ specs, releaseProofWorkflowFile, targetCommit, readWorkflowRun }) {
+  const workflowFiles = new Set([releaseProofWorkflowFile, ...specs.map((spec) => spec.workflowFile)]);
+  const runs = new Map(
+    await Promise.all([...workflowFiles].map(async (file) => [file, await readWorkflowRun(file)])),
+  );
+  const checkedAt = new Date().toISOString();
+  return specs.map((spec) => ({
+    ...resolveLaneProof({
+      spec,
+      directRun: runs.get(spec.workflowFile),
+      releaseProofRun: runs.get(releaseProofWorkflowFile),
+      releaseProofWorkflowFile,
+      targetCommit,
+    }),
+    checkedAt,
+  }));
+}
+
 export function resolveLaneProof({ spec, directRun, releaseProofRun, releaseProofWorkflowFile, targetCommit }) {
   const releaseProofMatchesCommit = !targetCommit || releaseProofRun.head_sha === targetCommit;
   const directRunMatchesCommit = !targetCommit || directRun.head_sha === targetCommit;

@@ -7,13 +7,26 @@ on:
   workflow_dispatch:
     inputs:
       allow_unsigned:
-        description: "Manual runs are unsigned smoke only. Choose true to run; false intentionally runs no jobs."
+        description: "Build unsigned smoke artifacts. Choose false when replaying an existing installer."
         required: true
         default: "true"
         type: choice
         options:
           - "true"
           - "false"
+      beta_upgrade:
+        description: "Also test an unattended upgrade from the pinned 0.9.2 Beta 2 installer"
+        type: boolean
+        default: false
+      live_acceptance_run:
+        description: "Successful manual installer run ID to replay on a disposable Windows x64 runner"
+        type: string
+      live_acceptance_commit:
+        description: "Exact source commit of the x64 installer to replay"
+        type: string
+      live_acceptance_sha256:
+        description: "Independently verified SHA-256 of the unsigned x64 EXE"
+        type: string
 
 concurrency:
   group: release-installers-${{ github.ref }}
@@ -34,6 +47,60 @@ env:
   INNO_SETUP_SHA256: 9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732
 
 jobs:
+  windows-installed-live:
+    name: Installed live acceptance (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/heads/') && github.event.inputs.allow_unsigned == 'false' && inputs.live_acceptance_run != '' }}
+    env:
+      INSTALLER_RUN: ${{ inputs.live_acceptance_run }}
+      INSTALLER_COMMIT: ${{ inputs.live_acceptance_commit }}
+      INSTALLER_SHA256: ${{ inputs.live_acceptance_sha256 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch the exact installer from the successful unsigned run
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ($env:INSTALLER_RUN -cnotmatch '^[1-9][0-9]{0,19}$' -or
+              $env:INSTALLER_COMMIT -cnotmatch '^[0-9a-f]{40}$' -or
+              $env:INSTALLER_SHA256 -cnotmatch '^[0-9a-f]{64}$') {
+            throw "Supply an installer run ID, a full commit SHA, and a pinned EXE SHA-256."
+          }
+          $runJson = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:INSTALLER_RUN"
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read the installer workflow run." }
+          $run = $runJson | ConvertFrom-Json
+          if ($run.head_repository.full_name -ne $env:GITHUB_REPOSITORY -or
+              $run.path -cne ".github/workflows/release-installers.yml" -or
+              $run.event -cne "workflow_dispatch" -or $run.conclusion -cne "success" -or
+              $run.head_sha -cne $env:INSTALLER_COMMIT) {
+            throw "The installer run does not match the successful unsigned workflow and exact candidate commit."
+          }
+          $candidate = Join-Path $env:RUNNER_TEMP "installed-live/candidate"
+          gh run download $env:INSTALLER_RUN --repo $env:GITHUB_REPOSITORY --name windows-x64-unsigned-package-smoke-assets --dir $candidate
+          if ($LASTEXITCODE -ne 0) { throw "Unable to download the x64 installer artifact." }
+
+      - name: Run installed provider, channel, and approval checks
+        shell: pwsh
+        run: |
+          & ./scripts/packaging/replay-windows-installed-live.ps1 `
+            -InstallerRunId $env:INSTALLER_RUN `
+            -CandidateCommit $env:INSTALLER_COMMIT `
+            -InstallerSha256 $env:INSTALLER_SHA256
+
+      - name: Upload installed live evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-x64-installed-live-acceptance
+          path: ${{ runner.temp }}/installed-live/evidence/*.json
+          if-no-files-found: warn
+
   windows-build-inputs:
     runs-on: ${{ matrix.runner }}
     if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true') }}
@@ -164,14 +231,30 @@ jobs:
       - name: Smoke install unsigned Windows installer
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
         shell: pwsh
-        timeout-minutes: 30
+        timeout-minutes: 50
         run: |
           $packageVersion = node -e "process.stdout.write(require('./package.json').version)"
-          & ./scripts/packaging/smoke-windows-installer.ps1 `
-            -InstallerPath "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe" `
-            -ExpectedReleaseManifestPath "artifacts/installers/bundles/GoatCitadel-$packageVersion-${{ matrix.target }}/app/release-manifest.json" `
-            -Target "${{ matrix.target }}" `
-            -TrustMode unsigned
+          foreach ($upgrade in @($false, ('${{ inputs.beta_upgrade }}' -eq 'true')) | Select-Object -Unique) {
+            $upgradeOptions = @{}
+            if ($upgrade) {
+              $beta = Join-Path $env:RUNNER_TEMP "GoatCitadel-Setup-${{ matrix.target }}-beta.2.exe"
+              $betaHashes = @{
+                "windows-x64" = "ec92babd695001161f69738381765f494592722ff2b0f9a27a13891c4663ff99"
+                "windows-arm64" = "da8fdd91039dc2614912439d36467328101c90d8136b81c953607d3ec78f0798"
+              }
+              Invoke-WebRequest -Uri "https://github.com/goatcitadel/GoatCitadel/releases/download/preview-0.9.2-beta.2/GoatCitadel-Setup-${{ matrix.target }}.exe" -OutFile $beta -TimeoutSec 180
+              $upgradeOptions = @{
+                ScratchRoot = Join-Path $env:RUNNER_TEMP "beta-upgrade"
+                BetaInstallerPath = $beta
+                BetaInstallerSha256 = $betaHashes["${{ matrix.target }}"]
+              }
+            }
+            & ./scripts/packaging/smoke-windows-installer.ps1 `
+              -InstallerPath "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe" `
+              -ExpectedReleaseManifestPath "artifacts/installers/bundles/GoatCitadel-$packageVersion-${{ matrix.target }}/app/release-manifest.json" `
+              -Target "${{ matrix.target }}" `
+              -TrustMode unsigned @upgradeOptions
+          }
 
       - name: Upload unsigned Windows convenience artifact
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
@@ -181,6 +264,14 @@ jobs:
           path: |
             artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe
             artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe.sha256
+          if-no-files-found: error
+
+      - name: Upload Windows beta upgrade evidence
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_unsigned == 'true' && inputs.beta_upgrade }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.target }}-beta-upgrade-proof
+          path: ${{ runner.temp }}/beta-upgrade/${{ matrix.target }}-beta-upgrade-proof.json
           if-no-files-found: error
 
   windows-component-sign:

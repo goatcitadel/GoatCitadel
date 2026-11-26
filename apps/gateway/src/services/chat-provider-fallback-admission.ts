@@ -145,7 +145,7 @@ export async function authorizeAdmittedChatProviderFallback(
       ) {
         reject("Chat fallback preference changed after admission.");
       }
-      if ((await host.storage.chatToolRuns.listByTurn(input.turnId)).length !== 0) {
+      if (await host.storage.chatToolRuns.hasByTurn(input.turnId)) {
         reject("Initial Chat fallback cannot run after tool execution.");
       }
       if (

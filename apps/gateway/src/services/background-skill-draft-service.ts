@@ -187,17 +187,9 @@ export async function assertBackgroundSkillSourcesCurrent(
       trace.completion.failedFileMutations?.length
     )
       throw new ConflictError({ message: "Background skill requires current successful source work." });
-    const tools = [];
-    let after: { startedAt: string; toolRunId: string } | undefined;
-    for (let page = 0; page < 4; page++) {
-      const rows = await storage.chatToolRuns.listByTurnPage(source.sourceTurnId, after, 32);
-      tools.push(...rows);
-      if (rows.length < 32) break;
-      const last = rows.at(-1)!;
-      after = { startedAt: last.startedAt, toolRunId: last.toolRunId };
-    }
+    const tools = await storage.chatToolRuns.readCompleteByTurn(source.sourceTurnId, 100);
     if (
-      tools.length > 100 ||
+      !tools ||
       tools.some(
         (tool) =>
           tool.sessionId !== input.sessionId ||

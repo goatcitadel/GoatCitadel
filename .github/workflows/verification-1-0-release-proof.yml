@@ -2,6 +2,11 @@ name: Verification 1.0 Release Proof
 
 on:
   workflow_dispatch:
+    inputs:
+      review_candidate:
+        description: "Run the full proof on a codex/ review branch with no provider credentials"
+        type: boolean
+        default: false
   pull_request:
     branches: [main]
   merge_group:
@@ -24,7 +29,11 @@ permissions:
 
 jobs:
   required-lanes:
-    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      (inputs.review_candidate && startsWith(github.ref, 'refs/heads/codex/'))
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     strategy:
@@ -146,12 +155,12 @@ jobs:
       - name: Run release proof lane
         env:
           GOATCITADEL_UI_PACKAGE: "@goatcitadel/mission-control-next"
-          OPENAI_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.OPENAI_API_KEY || '' }}
-          ANTHROPIC_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.ANTHROPIC_API_KEY || '' }}
-          GOOGLE_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.GOOGLE_API_KEY || '' }}
-          MOONSHOT_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.MOONSHOT_API_KEY || '' }}
-          PERPLEXITY_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.PERPLEXITY_API_KEY || '' }}
-          MINIMAX_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && secrets.MINIMAX_API_KEY || '' }}
+          OPENAI_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && secrets.OPENAI_API_KEY || '' }}
+          ANTHROPIC_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && secrets.ANTHROPIC_API_KEY || '' }}
+          GOOGLE_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && secrets.GOOGLE_API_KEY || '' }}
+          MOONSHOT_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && secrets.MOONSHOT_API_KEY || '' }}
+          PERPLEXITY_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && secrets.PERPLEXITY_API_KEY || '' }}
+          MINIMAX_API_KEY: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag') && secrets.MINIMAX_API_KEY || '' }}
         run: pnpm "${{ matrix.laneScript }}"
 
       - name: Run review generation

@@ -23,18 +23,10 @@ export async function collectChatContinuityLinks(
   const links: ChatContinuityCanonicalLink[] = [];
   for (const turnId of turnIds) {
     const [tools, artifacts] = await Promise.all([
-      storage.chatToolRuns.listByTurnPage(turnId, undefined, 32),
+      storage.chatToolRuns.readCompleteByTurn(turnId, 32),
       storage.chatGeneratedArtifacts.listByTurn(turnId, 17),
     ]);
-    if (tools.length === 32) {
-      const last = tools.at(-1)!;
-      if (
-        (await storage.chatToolRuns.listByTurnPage(turnId, { startedAt: last.startedAt, toolRunId: last.toolRunId }, 1))
-          .length
-      )
-        return { links: [], complete: false };
-    }
-    if (artifacts.length > 16) return { links: [], complete: false };
+    if (!tools || artifacts.length > 16) return { links: [], complete: false };
     for (const artifact of artifacts) {
       if (artifact.sessionId !== sessionId || artifact.workspaceId !== meta.workspaceId || artifact.turnId !== turnId)
         continue;

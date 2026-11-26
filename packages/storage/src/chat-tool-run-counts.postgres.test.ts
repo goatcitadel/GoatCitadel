@@ -37,3 +37,29 @@ test("PostgreSQL counts executed and failed calls per tool as plain numbers", { 
     await scope.teardown();
   }
 });
+
+test("PostgreSQL keeps unreadable receipts distinct from an empty turn", { skip: !connectionString }, async () => {
+  const scope = await createRemoteWorkerPostgresTestScope(connectionString!, "tool_turn_history");
+  try {
+    const repo = new ChatToolRunRepository(scope.db);
+    assert.equal(repo.hasByTurn("turn"), false);
+    assert.deepEqual(repo.readCompleteByTurn("turn", 1), []);
+    for (const toolRunId of ["run-b", "run-a"]) {
+      repo.create({
+        toolRunId,
+        turnId: "turn",
+        sessionId: "session",
+        toolName: "file.read",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      });
+    }
+    assert.deepEqual(repo.readCompleteByTurn("turn", 2)?.map((run) => run.toolRunId), ["run-a", "run-b"]);
+    assert.equal(repo.readCompleteByTurn("turn", 1), undefined);
+
+    scope.db.prepare("UPDATE chat_tool_runs SET status = ? WHERE tool_run_id = ?").run("unknown", "run-a");
+    assert.equal(repo.hasByTurn("turn"), true);
+    assert.equal(repo.readCompleteByTurn("turn", 2), undefined);
+  } finally {
+    await scope.teardown();
+  }
+});

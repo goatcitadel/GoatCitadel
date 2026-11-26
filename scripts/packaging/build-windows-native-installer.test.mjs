@@ -98,7 +98,11 @@ test("installer promotes during ssInstall before Inno managed state can commit",
   const iss = renderSample();
 
   assert.match(iss, /procedure StopExistingGoatCitadelRuntime\(DuringUninstall: Boolean\);/);
-  assert.match(iss, /PowerShellLiteral\(LauncherPath\) \+ ' stop --json"/);
+  assert.match(iss, /StopCommand \+ ' stop --json"/);
+  assert.match(
+    iss,
+    /if FileExists\(NodePath\) and FileExists\(LauncherPath\) then[\s\S]*?StopCommand := PowerShellLiteral\(NodePath\) \+ ' ' \+ PowerShellLiteral\(LauncherPath\)/,
+  );
   const curSteps = iss.match(/procedure CurStepChanged\(CurStep: TSetupStep\);[\s\S]*?procedure CurUninstallStepChanged/)?.[0] ?? "";
   const postInstallIndex = curSteps.indexOf("if CurStep = ssPostInstall then");
   assert.ok(postInstallIndex > 0);
@@ -346,7 +350,7 @@ test("installer never passes paths to PowerShell as trailing -Command arguments"
 
   assert.match(iss, /\$payloadRoot = ' \+ PowerShellLiteral\(PayloadRoot\)/);
   assert.match(iss, /Remove-Item -LiteralPath ' \+ PowerShellLiteral\(DirectoryPath\)/);
-  assert.match(iss, /-Command "& ' \+ PowerShellLiteral\(LauncherPath\)/);
+  assert.match(iss, /-Command "& ' \+ StopCommand \+ ' stop --json"/);
   assert.match(iss, /PowerShellLiteral\('\\\\\?\\' \+ AppPayloadPath\)/);
 
   // {app} must never be spliced into a single-quoted PowerShell string by ExpandConstant

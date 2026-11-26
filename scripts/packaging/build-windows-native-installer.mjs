@@ -466,19 +466,33 @@ end;
 
 procedure StopExistingGoatCitadelRuntime(DuringUninstall: Boolean);
 var
+  NodePath: String;
   LauncherPath: String;
+  StopCommand: String;
   Parameters: String;
 begin
   if not GoatCitadelInstallMarkerExists() then
   begin
     Exit;
   end;
-  LauncherPath := ExpandConstant('{app}\\bin\\goatcitadel.cmd');
-  if not FileExists(LauncherPath) then
+  NodePath := ExpandConstant('{app}\\app\\runtime\\node\\node.exe');
+  LauncherPath := ExpandConstant('{app}\\app\\bin\\goatcitadel.mjs');
+  if FileExists(NodePath) and FileExists(LauncherPath) then
   begin
-    Exit;
+    // The legacy cmd wrapper always replaces GOATCITADEL_HOME. Use the
+    // bundled launcher directly so an explicit runtime profile stays in scope.
+    StopCommand := PowerShellLiteral(NodePath) + ' ' + PowerShellLiteral(LauncherPath);
+  end
+  else
+  begin
+    LauncherPath := ExpandConstant('{app}\\bin\\goatcitadel.cmd');
+    if not FileExists(LauncherPath) then
+    begin
+      Exit;
+    end;
+    StopCommand := PowerShellLiteral(LauncherPath);
   end;
-  Parameters := '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& ' + PowerShellLiteral(LauncherPath) + ' stop --json"';
+  Parameters := '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& ' + StopCommand + ' stop --json"';
   if DuringUninstall then
   begin
     RunUninstallBestEffort(

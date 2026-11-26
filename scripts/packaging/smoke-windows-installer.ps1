@@ -1,10 +1,13 @@
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = "DetachedManifest")]
 param(
   [Parameter(Mandatory = $true)]
   [string]$InstallerPath,
 
-  [Parameter(Mandatory = $true)]
+  [Parameter(Mandatory = $true, ParameterSetName = "DetachedManifest")]
   [string]$ExpectedReleaseManifestPath,
+
+  [Parameter(Mandatory = $true, ParameterSetName = "InstalledLive")]
+  [hashtable]$LiveAcceptance,
 
   [Parameter(Mandatory = $true)]
   [ValidateSet("windows-x64", "windows-arm64")]
@@ -14,7 +17,12 @@ param(
   [ValidateSet("signed", "unsigned")]
   [string]$TrustMode,
 
-  [string]$ScratchRoot = $env:RUNNER_TEMP
+  [string]$ScratchRoot = $env:RUNNER_TEMP,
+
+  [string]$BetaInstallerPath,
+
+  [ValidatePattern("^[0-9a-f]{64}$")]
+  [string]$BetaInstallerSha256
 )
 
 Set-StrictMode -Version Latest
@@ -38,8 +46,35 @@ if (Test-Path -LiteralPath $smokeRoot) {
 }
 
 $installer = (Resolve-Path -LiteralPath $InstallerPath -ErrorAction Stop).Path
-$detachedReleaseManifestPath = (Resolve-Path -LiteralPath $ExpectedReleaseManifestPath -ErrorAction Stop).Path
 $signedMode = $TrustMode -eq "signed"
+$upgradeMode = -not [string]::IsNullOrWhiteSpace($BetaInstallerPath)
+$liveMode = $PSCmdlet.ParameterSetName -eq "InstalledLive"
+if ($liveMode) {
+  if ($env:GITHUB_ACTIONS -ne "true" -or $env:RUNNER_ENVIRONMENT -ne "github-hosted" -or
+      $Target -ne "windows-x64" -or $signedMode -or $upgradeMode -or
+      $LiveAcceptance.CandidateCommit -cnotmatch '^[a-f0-9]{40}$' -or
+      $LiveAcceptance.InstallerSha256 -cnotmatch '^[a-f0-9]{64}$') {
+    throw "Installed live acceptance requires a disposable x64 GitHub runner and a pinned unsigned EXE."
+  }
+  $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($installerHash -cne $LiveAcceptance.InstallerSha256) {
+    throw "The installer bytes do not match the pinned acceptance digest."
+  }
+}
+else {
+  $detachedReleaseManifestPath = (Resolve-Path -LiteralPath $ExpectedReleaseManifestPath -ErrorAction Stop).Path
+}
+if ($upgradeMode -ne (-not [string]::IsNullOrWhiteSpace($BetaInstallerSha256)) -or ($upgradeMode -and $signedMode)) {
+  throw "Beta upgrade proof needs an installer and its SHA-256 in unsigned smoke mode."
+}
+if ($upgradeMode) {
+  $betaInstaller = (Resolve-Path -LiteralPath $BetaInstallerPath -ErrorAction Stop).Path
+  $observedBetaHash = (Get-FileHash -LiteralPath $betaInstaller -Algorithm SHA256).Hash
+  if ($observedBetaHash -ne $BetaInstallerSha256) {
+    throw "The beta installer SHA-256 does not match its pinned release asset."
+  }
+  . (Join-Path $PSScriptRoot "lib/windows-beta-upgrade-proof.ps1")
+}
 $installerSignature = Get-AuthenticodeSignature -LiteralPath $installer
 if ($signedMode -and $installerSignature.Status -ne "Valid") {
   throw "Signed installer smoke requires a valid Authenticode signature; '$installer' is $($installerSignature.Status)."
@@ -99,6 +134,8 @@ $installed = $false
 $uninstalled = $false
 $cleanupFailures = [System.Collections.Generic.List[string]]::new()
 $primaryFailure = $null
+$upgradeEnvironment = @{}
+$betaSnapshot = $null
 
 function Redact-DiagnosticLine([string]$Line) {
   return ($Line `
@@ -197,12 +234,57 @@ function Stop-InstalledProcesses {
 
 try {
   New-Item -ItemType Directory -Path $smokeRoot -ErrorAction Stop | Out-Null
-  $install = Start-Process -FilePath $installer -ArgumentList @(
+  $installerArgs = @(
     "/VERYSILENT",
     "/SUPPRESSMSGBOXES",
     "/NORESTART",
     "/DIR=`"$installDir`""
-  ) -Wait -PassThru
+  )
+  if ($upgradeMode) {
+    $upgradeSettings = @{
+      GOATCITADEL_AUTH_MODE = "token"
+      GOATCITADEL_AUTH_TOKEN = [Guid]::NewGuid().ToString("N") + [Guid]::NewGuid().ToString("N")
+      GOATCITADEL_DISABLE_SECRET_STORE = "true"
+      GOATCITADEL_DEV_DIAGNOSTICS_ENABLED = "true"
+    }
+    foreach ($name in $upgradeSettings.Keys) {
+      $upgradeEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+      [Environment]::SetEnvironmentVariable($name, $upgradeSettings[$name], "Process")
+    }
+    $betaInstall = Start-Process -FilePath $betaInstaller -ArgumentList $installerArgs -Wait -PassThru
+    if ($betaInstall.ExitCode -ne 0) {
+      throw "Beta installer exited with $($betaInstall.ExitCode)"
+    }
+    $betaManifest = Get-Content -LiteralPath (Join-Path $appHome "release-manifest.json") -Raw | ConvertFrom-Json
+    if ($betaManifest.target -cne $Target -or $betaManifest.version -cne "0.9.2-beta.2" -or
+        $betaManifest.sourceCommit -cne "627c83d8afa870f5278816a30b1677e29d7fda83" -or $betaManifest.sourceModified -ne $false) {
+      throw "Installed beta manifest does not match the pinned upgrade source."
+    }
+    $originalNodePath = [Environment]::GetEnvironmentVariable("NODE_PATH", "Process")
+    try {
+      if ($Target -eq "windows-arm64") {
+        $env:NODE_PATH = New-BetaArm64SeedModulePath $appHome $detachedReleaseManifestPath (Join-Path $smokeRoot "beta-seed-modules")
+      }
+      $betaLaunchOutput = & $bundledNode $launcher launch --no-open --wait --json 2>$launchStderr
+      $betaLaunchExitCode = $LASTEXITCODE
+    }
+    finally {
+      [Environment]::SetEnvironmentVariable("NODE_PATH", $originalNodePath, "Process")
+    }
+    $betaLaunchOutput | ForEach-Object { Redact-DiagnosticLine $_ } | Set-Content -LiteralPath $launchStdout -Encoding UTF8
+    $betaLaunchLine = $betaLaunchOutput | Where-Object { $_.TrimStart().StartsWith("{") } | Select-Object -Last 1
+    if ($betaLaunchExitCode -ne 0 -or -not $betaLaunchLine) {
+      throw "The pinned beta launcher exited with code $betaLaunchExitCode or omitted JSON readiness."
+    }
+    $betaLaunch = $betaLaunchLine | ConvertFrom-Json
+    if ($betaLaunch.status -ne "ready") {
+      throw "The pinned beta did not reach packaged runtime readiness."
+    }
+    $betaSnapshot = New-BetaUpgradeProfile $betaLaunch.gatewayUrl
+    Stop-InstalledProcesses
+    $env:GOATCITADEL_DEV_DIAGNOSTICS_ENABLED = "false"
+  }
+  $install = Start-Process -FilePath $installer -ArgumentList $installerArgs -Wait -PassThru
   if ($install.ExitCode -ne 0) {
     throw "Installer exited with $($install.ExitCode)"
   }
@@ -289,9 +371,11 @@ try {
     throw "Installed release manifest was not found at $installedReleaseManifestPath"
   }
   $installedManifestHash = (Get-FileHash -LiteralPath $installedReleaseManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
-  $detachedManifestHash = (Get-FileHash -LiteralPath $detachedReleaseManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
-  if ($installedManifestHash -cne $detachedManifestHash) {
-    throw "Installed release manifest does not match the detached release manifest bytes."
+  if (-not $liveMode) {
+    $detachedManifestHash = (Get-FileHash -LiteralPath $detachedReleaseManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($installedManifestHash -cne $detachedManifestHash) {
+      throw "Installed release manifest does not match the detached release manifest bytes."
+    }
   }
   $releaseManifest = Get-Content -LiteralPath $installedReleaseManifestPath -Raw -ErrorAction Stop | ConvertFrom-Json
   $expectedArch = if ($Target -eq "windows-arm64") { "arm64" } else { "x64" }
@@ -302,6 +386,9 @@ try {
       [string]$releaseManifest.sourceCommit -cnotmatch '^[0-9a-f]{40}$' -or
       [string]::IsNullOrWhiteSpace([string]$releaseManifest.version)) {
     throw "Installed release manifest target, architecture, commit, version, or clean-source truth is invalid."
+  }
+  if ($liveMode -and $releaseManifest.sourceCommit -cne $LiveAcceptance.CandidateCommit) {
+    throw "The installed manifest does not identify the requested candidate commit."
   }
   & $payloadValidatorPath `
     -StageRoot $installDir `
@@ -335,6 +422,10 @@ try {
   $desktopStartup = $null
   $expectedWebViewPath = "/settings/onboarding"
   $expectedWebViewTitle = "GoatCitadel Settings · Get started"
+  if ($upgradeMode) {
+    $expectedWebViewPath = "/"
+    $expectedWebViewTitle = "GoatCitadel"
+  }
   # Each cold launcher endpoint has a three-minute bound. Allow both plus page
   # navigation, while rejecting native failures immediately. Debug-port flags are
   # intentionally ignored by elevated WebView2 hosts on hosted Windows runners.
@@ -507,9 +598,24 @@ try {
     throw "Runtime readiness smoke failed: runtime status is '$($runtimeStatus.status)' (gateway healthy=$($runtimeStatus.readiness.gateway), ui healthy=$($runtimeStatus.readiness.ui)); expected 'ready' with both the gateway and Mission Control answering /health."
   }
   Write-Host "Runtime readiness smoke passed: gateway + Mission Control reached status=ready (gateway $($runtimeStatus.gatewayUrl)/health, ui $($runtimeStatus.uiUrl)/health)."
+  if ($upgradeMode) {
+    $current = Get-UpgradeProfileSnapshot $runtimeStatus.gatewayUrl $betaSnapshot.WorkspaceId $betaSnapshot.SessionId $betaSnapshot.Marker
+    if ($current.WorkspaceName -cne $betaSnapshot.WorkspaceName -or $current.Transcript -cne $betaSnapshot.Transcript) {
+      throw "Unattended upgrade changed the beta workspace or saved transcript."
+    }
+    Write-Host "Beta upgrade preserved the workspace, transcript, guidance file, and setting in SQLite."
+  }
 
   Stop-InstalledProcesses
   Start-Sleep -Seconds 2
+
+  if ($liveMode) {
+    & $bundledNode (Join-Path $PSScriptRoot "windows-installed-live.mjs") `
+      $appHome $smokeRoot $LiveAcceptance.EvidenceDirectory $LiveAcceptance.OllamaExe $LiveAcceptance.NtfyExe
+    if ($LASTEXITCODE -ne 0) {
+      throw "One or more installed live feature checks failed. See the retained feature records."
+    }
+  }
 
   $uninstaller = Join-Path $installDir "unins000.exe"
   if (-not (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
@@ -544,6 +650,42 @@ try {
           Select-Object -First 5 -ExpandProperty FullName) -join "`n"
       throw "Uninstall left immutable payload at $payloadPath`n$sample"
     }
+  }
+  if ($upgradeMode) {
+    $dataPreserved = Test-Path -LiteralPath (Join-Path $runtimeBase "runtime-root/data/index.db") -PathType Leaf
+    if (-not $dataPreserved) {
+      throw "Uninstaller did not retain the upgrade profile's SQLite data."
+    }
+    $upgradeProofPath = Join-Path $scratchFullPath "$Target-beta-upgrade-proof.json"
+    [ordered]@{
+      target = $Target
+      storageBackend = "sqlite"
+      fromVersion = $betaManifest.version
+      fromCommit = $betaManifest.sourceCommit
+      fromInstallerSha256 = $observedBetaHash.ToLowerInvariant()
+      candidateVersion = $releaseManifest.version
+      candidateCommit = $releaseManifest.sourceCommit
+      candidateInstallerSha256 = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+      betaSeedDependency = if ($Target -eq "windows-arm64") { "@img/sharp-win32-arm64 from the manifested candidate" } else { $null }
+      retained = @("workspace", "chat transcript", "guidance file", "workspace setting", "uninstalled profile data")
+    } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $upgradeProofPath -Encoding UTF8
+  }
+  if ($liveMode) {
+    [ordered]@{
+      sourceCommit = $releaseManifest.sourceCommit
+      sourceModified = $releaseManifest.sourceModified
+      candidateVersion = $releaseManifest.version
+      target = $Target
+      installerSha256 = $installerHash
+      installedManifestSha256 = $installedManifestHash
+      authenticode = [string]$installerSignature.Status
+      windowsVersion = [System.Environment]::OSVersion.Version.ToString()
+      runnerArchitecture = $env:RUNNER_ARCH
+      installerRunId = $LiveAcceptance.InstallerRunId
+      nativeFirstLaunch = $true
+      installedPayloadValidated = $true
+      uninstallVerified = $true
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LiveAcceptance.EvidenceDirectory "lifecycle.json") -Encoding UTF8
   }
   if (Test-Path -LiteralPath $installDir) {
     Get-ChildItem -LiteralPath $installDir -Force -ErrorAction SilentlyContinue |
@@ -685,6 +827,9 @@ finally {
   }
   else {
     $env:GOATCITADEL_MISSION_CONTROL_URL = $previousMissionControlUrl
+  }
+  foreach ($name in $upgradeEnvironment.Keys) {
+    [Environment]::SetEnvironmentVariable($name, $upgradeEnvironment[$name], "Process")
   }
   if ($null -ne $primaryFailure) {
     $failureMessage = "Installer smoke failed: $primaryFailure"
