@@ -79,11 +79,29 @@ jobs:
       - name: Verify desktop at the packaged commit
         run: pnpm verify:desktop
       - name: Build native host
-        run: pnpm package:windows-host --target $env:PREVIEW_TARGET
+        run: |
+          $actual = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:PREVIEW_COMMIT) { throw "Pinned packaging checkout does not match HEAD." }
+          # The workflow SHA identifies its driver branch. Packaging resolves the verified source checkout.
+          Remove-Item Env:GITHUB_SHA -ErrorAction Stop
+          pnpm package:windows-host --target $env:PREVIEW_TARGET
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build optional unsigned identity
-        run: pnpm package:windows-msix --allow-unsigned
+        run: |
+          $actual = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:PREVIEW_COMMIT) { throw "Pinned packaging checkout does not match HEAD." }
+          # The workflow SHA identifies its driver branch. Packaging resolves the verified source checkout.
+          Remove-Item Env:GITHUB_SHA -ErrorAction Stop
+          pnpm package:windows-msix --allow-unsigned
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build versioned bundle
-        run: pnpm package:bundle --target $env:PREVIEW_TARGET --version $env:PREVIEW_VERSION
+        run: |
+          $actual = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:PREVIEW_COMMIT) { throw "Pinned packaging checkout does not match HEAD." }
+          # The workflow SHA identifies its driver branch. Packaging resolves the verified source checkout.
+          Remove-Item Env:GITHUB_SHA -ErrorAction Stop
+          pnpm package:bundle --target $env:PREVIEW_TARGET --version $env:PREVIEW_VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install pinned Inno Setup
         shell: pwsh
         run: |
@@ -93,7 +111,13 @@ jobs:
           $result = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') -WindowStyle Hidden -Wait -PassThru
           if ($result.ExitCode -ne 0) { throw "Inno Setup failed: $($result.ExitCode)" }
       - name: Build unsigned Preview installer
-        run: pnpm package:windows --target $env:PREVIEW_TARGET --version $env:PREVIEW_VERSION
+        run: |
+          $actual = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:PREVIEW_COMMIT) { throw "Pinned packaging checkout does not match HEAD." }
+          # The workflow SHA identifies its driver branch. Packaging resolves the verified source checkout.
+          Remove-Item Env:GITHUB_SHA -ErrorAction Stop
+          pnpm package:windows --target $env:PREVIEW_TARGET --version $env:PREVIEW_VERSION
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Smoke test the exact installer
         timeout-minutes: 30
         shell: pwsh
