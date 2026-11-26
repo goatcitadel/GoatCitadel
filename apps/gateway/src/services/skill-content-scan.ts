@@ -141,10 +141,11 @@ const BLOCK_COMMENTS: ReadonlyArray<readonly [open: string, close: string]> = [
   ["<!--", "-->"],
 ];
 /**
- * Where a line comment starts: `//` anywhere but right after `:` (a URL's `https://`), so `code;// note` counts; `#` at
- * the start or after whitespace, as shells need. Reading too much here only means more text is checked.
+ * Where a line comment may start: any `//` or `#` (but not PowerShell's `#>` block close). This deliberately reads a
+ * URL or a `#` inside a string as a comment too: telling them apart needs a parser per language, and each shortcut
+ * was a way around the check. Reading too much only means more text is checked.
  */
-const LINE_COMMENT = /(?<![:/])\/\/|(?:^|(?<=\s))#(?!>)/u;
+const LINE_COMMENT = /\/\/|#(?!>)/u;
 
 /**
  * A script's comments with its code blanked, line for line, so promptware line numbers still point at the right line.
