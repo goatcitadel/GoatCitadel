@@ -140,8 +140,8 @@ const BLOCK_COMMENTS: ReadonlyArray<readonly [open: string, close: string]> = [
   ["<#", "#>"],
   ["<!--", "-->"],
 ];
-/** A comment after code on the same line: `code // note` or `code # note`. */
-const TRAILING_COMMENT = /\s(?:\/\/|#)(.*)$/u;
+/** Where a line comment starts: `//` or `#` at the start or after whitespace (`code // note`, `*/ // note`). */
+const LINE_COMMENT = /(?:^|(?<=\s))(?:\/\/|#(?!>))/u;
 
 /**
  * A script's comments with its code blanked, line for line, so promptware line numbers still point at the right line.
@@ -169,16 +169,19 @@ function lineComments(lineText: string, state: { closer?: string }): string {
       continue;
     }
     const opening = firstBlockOpening(rest);
-    const trailing = TRAILING_COMMENT.exec(rest);
-    if (opening && (!trailing || opening.start <= trailing.index)) {
-      state.closer = opening.close;
-      rest = rest.slice(opening.start + opening.open.length);
-      continue;
+    // A whole-line comment that doesn't open with a block comment runs to the end; a `/*` inside it opens nothing.
+    if (kept.length === 0 && COMMENT_LINE.test(rest) && !(opening && !rest.slice(0, opening.start).trim())) {
+      return rest;
     }
-    // The whole line is a comment, or a line comment runs to its end; otherwise what is left is code.
-    if (kept.length === 0 && COMMENT_LINE.test(rest)) return rest;
-    if (trailing) kept.push(trailing[1] ?? "");
-    break;
+    // Whichever comment starts first wins: a line comment (even right after a block's close) runs to the line's end.
+    const lineComment = LINE_COMMENT.exec(rest);
+    if (lineComment && (!opening || lineComment.index < opening.start)) {
+      kept.push(rest.slice(lineComment.index));
+      break;
+    }
+    if (!opening) break;
+    state.closer = opening.close;
+    rest = rest.slice(opening.start + opening.open.length);
   }
   return kept.join(" ");
 }
