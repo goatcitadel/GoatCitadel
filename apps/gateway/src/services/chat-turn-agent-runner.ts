@@ -2479,6 +2479,13 @@ export class ChatTurnAgentRunner {
     // never on content sniffing — so a live user pasting a run contract into
     // chat cannot flip approval/user-input/streaming semantics in production.
     const promptLabEvalIntegrityTurn = normalizationProfile === "prompt_pack_harness";
+    const freshChatRecall =
+      input.mode === "chat" &&
+      !promptLabEvalIntegrityTurn &&
+      !input.routedContextRequested &&
+      input.historyMessages.filter((message) => message.role !== "system" && message.role !== "developer").length ===
+        1 &&
+      detectConversationRecallIntent(input.content);
     const parsedPromptLabTask = promptLabContract.userTask?.trim();
     const promptLabTaskForInspection =
       parsedPromptLabTask || extractPrimaryUserTaskContent(input.content) || input.content;
@@ -4666,6 +4673,9 @@ export class ChatTurnAgentRunner {
           }
 
           const thinkingStreamEnabled = (await this.deps.chatThinkingStreamV1Enabled?.()) === true;
+          // Keep the model free to refine an empty search, but hold its prose
+          // until we know whether it ran another lookup or finished the turn.
+          const priorChatSearchMiss = freshChatRecall && hasOnlyEmptyPriorChatSearches(toolRuns);
           let streamedThinking = false;
           let completion: ChatCompletionResponse;
           let completedFirstProviderRequest = false;
@@ -4726,7 +4736,7 @@ export class ChatTurnAgentRunner {
                       };
                     }
                   }
-                  if (streamed.delta && !streamed.sawToolCall && !readOnlyExplorerScopeRoot) {
+                  if (streamed.delta && !streamed.sawToolCall && !readOnlyExplorerScopeRoot && !priorChatSearchMiss) {
                     streamYieldedVisibleChunk = true;
                     yield {
                       type: "delta",
@@ -4753,7 +4763,12 @@ export class ChatTurnAgentRunner {
                     delta: heldThinking,
                   };
                 }
-                if (heldStream.delta && aggregate.toolCalls.size === 0 && !readOnlyExplorerScopeRoot) {
+                if (
+                  heldStream.delta &&
+                  aggregate.toolCalls.size === 0 &&
+                  !readOnlyExplorerScopeRoot &&
+                  !priorChatSearchMiss
+                ) {
                   streamYieldedVisibleChunk = true;
                   yield {
                     type: "delta",
@@ -6230,6 +6245,23 @@ export class ChatTurnAgentRunner {
           }
         }
       }
+    }
+
+    // Settle a scoped search miss before generic synthesis, including when the
+    // last lookup used the final provider loop.
+    if (
+      freshChatRecall &&
+      finalStatus === "completed" &&
+      !finalFailure &&
+      !approvalPayload &&
+      !pendingUserInput &&
+      !toolUseClosed &&
+      !durableFanoutWaiting &&
+      hasOnlyEmptyPriorChatSearches(toolRuns)
+    ) {
+      assistantContent =
+        "I couldn’t verify that from our earlier chats. The history search found no matching messages.";
+      completionState = { ...completionState, status: "complete" };
     }
 
     if (terminalExecutionFailure) {
@@ -16223,6 +16255,20 @@ function detectConversationRecallIntent(content: string): boolean {
   const pastDecision =
     /\b(?:what|which)\s+(?:did we (?:decide|agree|choose|pick|settle on)|(?:decision|option) did we (?:make|choose|pick))\b/iu;
   return pastDecision.test(prompt) || (recall.test(prompt) && priorChat.test(prompt));
+}
+
+function hasOnlyEmptyPriorChatSearches(toolRuns: readonly ChatToolRunRecord[]): boolean {
+  return (
+    toolRuns.length > 0 &&
+    toolRuns.every(
+      (run) =>
+        run.toolName === "session.search" &&
+        run.status === "executed" &&
+        run.result?.scope === "prior" &&
+        Array.isArray(run.result.hits) &&
+        run.result.hits.length === 0,
+    )
+  );
 }
 
 function detectMemoryLookupIntent(content: string): boolean {

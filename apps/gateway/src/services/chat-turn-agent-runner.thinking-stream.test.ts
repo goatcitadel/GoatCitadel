@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
-import type { ChatCompletionResponse } from "@goatcitadel/contracts";
+import { describe, expect, it, vi } from "vitest";
+import type { ChatCompletionResponse, ToolInvokeResult } from "@goatcitadel/contracts";
 import { ChatTurnAgentRunner, type ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
 import { READ_ONLY_EXPLORER_PERMISSION_PROFILE_ID } from "./workspace-explorer-path-projection.js";
-import { createMockStorage, createToolCatalog } from "./chat-turn-agent-runner-test-fixtures.js";
+import {
+  createEffectAwareInvokeToolForTest,
+  createMockStorage,
+  createToolCatalog,
+} from "./chat-turn-agent-runner-test-fixtures.js";
 
 function reasoningCompletion(answer: string): ChatCompletionResponse {
   return {
@@ -259,6 +263,99 @@ const reasoningStream = [
 ];
 
 describe("ChatTurnAgentRunner incremental thinking stream", () => {
+  it.each([
+    { webMode: "auto", foundOnRetry: false },
+    { webMode: "auto", foundOnRetry: true },
+    { webMode: "off", foundOnRetry: false },
+  ] as const)(
+    "grounds fresh-chat recall after a search retry (Web $webMode, found a hit: $foundOnRetry)",
+    async ({ webMode, foundOnRetry }) => {
+      const unsupportedAnswer = "We haven't made a decision yet.";
+      const supportedAnswer = "We chose the ferry.";
+      const search = (query: string, id: string) => ({
+        id,
+        model: "m",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id,
+                  type: "function",
+                  function: {
+                    name: "session_search",
+                    arguments: JSON.stringify({ scope: "prior", query }),
+                  },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      });
+      const replies = [
+        search("Ferry departure decision", "call-1"),
+        search("Ferry departure", "call-2"),
+        {
+          id: "answer",
+          model: "m",
+          choices: [
+            {
+              index: 0,
+              delta: { content: foundOnRetry ? supportedAnswer : unsupportedAnswer },
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ];
+      const hit = { sessionId: "past", messageId: "past-message", sequence: 1, content: supportedAnswer };
+      const toolResult = (hits: unknown[]): ToolInvokeResult => ({
+        outcome: "executed",
+        policyReason: "allowed",
+        auditEventId: "recall-audit",
+        result: { scope: "prior", hits },
+      });
+      const invokeTool = vi
+        .fn()
+        .mockResolvedValueOnce(toolResult([]))
+        .mockResolvedValueOnce(toolResult(foundOnRetry ? [hit] : []));
+      const orchestrator = new ChatTurnAgentRunner({
+        storage: createMockStorage() as never,
+        listToolCatalog: () => [{ ...createToolCatalog()[0]!, toolName: "session.search", category: "knowledge" }],
+        createChatCompletion: vi.fn(),
+        createChatCompletionStream: async () => {
+          const reply = replies.shift();
+          if (!reply) throw new Error("Unexpected recall completion request");
+          return (async function* () {
+            yield reply;
+          })();
+        },
+        invokeTool,
+        invokeToolWithEffectTruth: createEffectAwareInvokeToolForTest(invokeTool),
+      });
+      const chunks = [];
+      for await (const chunk of orchestrator.runStream({
+        ...baseTurn("fresh-recall", "What did we decide about the ferry departure?"),
+        retrievalMode: "standard",
+        webMode,
+      }))
+        chunks.push(chunk);
+
+      expect(invokeTool).toHaveBeenCalledTimes(2);
+      expect(replies).toHaveLength(webMode === "off" ? 1 : 0);
+      expect(chunks.filter((chunk) => chunk.type === "delta").map((chunk) => chunk.delta)).toEqual(
+        foundOnRetry ? [supportedAnswer] : [],
+      );
+      expect(chunks.find((chunk) => chunk.type === "message_done")).toMatchObject({
+        content: foundOnRetry
+          ? supportedAnswer
+          : "I couldn’t verify that from our earlier chats. The history search found no matching messages.",
+      });
+    },
+  );
+
   it("yields one thinking_delta per provider reasoning chunk, in order, before message_done", async () => {
     const seen: Array<Record<string, unknown>> = [];
     const orchestrator = new ChatTurnAgentRunner({

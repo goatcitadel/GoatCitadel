@@ -78,6 +78,20 @@ export function installedRecall(root, evidence, withStub, poll) {
     await page.goBack();
     await answerText.waitFor();
 
+    const noMatch = await settle("Unverified decision", "What did we decide about the Zephyr permit deadline?");
+    const noMatchSearches = noMatch.turn.toolRuns.filter((run) => run.toolName === "session.search");
+    assert.equal(noMatchSearches.length, 2);
+    for (const search of noMatchSearches) {
+      assert.equal(search.status, "executed");
+      assert.equal(search.result?.scope, "prior");
+      assert.deepEqual(search.result?.hits, []);
+    }
+    assert.equal(noMatch.turn.citations?.length ?? 0, 0);
+    await page.locator('[aria-label="Messages"]').getByText(
+      "I couldn’t verify that from our earlier chats. The history search found no matching messages.", { exact: true },
+    ).waitFor();
+    await page.screenshot({ path: path.join(evidence, "recall-no-match.png") });
+
     const promote = async (state, screenshot) => {
       const candidate = await poll(async () => (await state.receipt()).proposals.find(
         (row) => row.kind === "memory" && row.candidate?.status === "proposed",
@@ -115,6 +129,7 @@ export function installedRecall(root, evidence, withStub, poll) {
       sourceMessageId: source.turn.userMessage.messageId,
       recallTurnId: recalled.turn.turnId,
       priorSearchRunId: lookup.toolRunId,
+      noMatchTurnId: noMatch.turn.turnId,
       originalLearningId: first.learningId,
       correctedLearningId: corrected.learningId,
       correctedTurnId: revised.turn.turnId,
@@ -127,6 +142,9 @@ export function installedRecall(root, evidence, withStub, poll) {
       { type: "success", replyText: "Recorded the Aurora rollout decision in this chat." },
       { type: "tool_call", name: "session_search", arguments: { scope: "prior", query: "Aurora rollout" } },
       { type: "success", replyText: "The earlier chat chose the violet harbor route." },
+      { type: "tool_call", name: "session_search", arguments: { scope: "prior", query: "Zephyr permit deadline" } },
+      { type: "tool_call", name: "session_search", arguments: { scope: "session", query: "Zephyr permit" } },
+      { type: "success", replyText: "We haven't made a decision yet." },
     ],
   });
 }
