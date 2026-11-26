@@ -6831,9 +6831,10 @@ export class ChatTurnAgentRunner {
     // Persist only the citations the answer relied on; scored prompt-lab output keeps its raw evidence.
     if (!promptLabEvalIntegrityTurn) {
       const selected = selectAnswerCitations({ citations, assistantContent, toolRuns });
-      const finalized = input.webMode === "deep" && finalStatus === "completed"
-        ? attachResearchPassages({ citations: selected, assistantContent, toolRuns })
-        : selected;
+      const finalized =
+        input.webMode === "deep" && finalStatus === "completed"
+          ? attachResearchPassages({ citations: selected, assistantContent, toolRuns })
+          : selected;
       citations.splice(0, citations.length, ...finalized);
     }
     const updatedTrace = await this.patchTurnTrace(input, input.turnId, {
@@ -7050,6 +7051,7 @@ export class ChatTurnAgentRunner {
       catalog.map((tool) => tool.toolName),
     );
     const memoryLookupIntent = detectMemoryLookupIntent(input.content) || detectMemoryToolsOnlyPrompt(input.content);
+    const conversationRecallIntent = detectConversationRecallIntent(input.content);
     const memoryPersistenceIntent = detectMemoryPersistenceIntent(input.content);
     const webLookupIntent = intents.webLookup || [...explicitToolMentions].some((toolName) => isWebToolName(toolName));
     const promptLabHasExplicitToolFamily =
@@ -7323,6 +7325,7 @@ export class ChatTurnAgentRunner {
       presentationArtifactIntent: intents.presentationArtifact,
       documentArtifactIntent: intents.documentArtifact,
       memoryLookupIntent,
+      conversationRecallIntent,
       memoryPersistenceIntent,
       explicitToolMentions,
       projectBound,
@@ -9393,6 +9396,19 @@ export class ChatTurnAgentRunner {
     };
   } {
     let args = { ...input.rawArgs };
+    if (
+      input.toolName === "session.search" &&
+      !input.evalIntegrityTurn &&
+      detectConversationRecallIntent(input.userContent)
+    ) {
+      const continuingPriorSearch =
+        (args.scope === undefined || args.scope === "session") &&
+        !/\b(?:this|current)\s+(?:chat|conversation|session|thread)\b/iu.test(input.userContent) &&
+        input.priorToolRuns?.some(
+          (run) => run.toolName === "session.search" && run.status === "executed" && run.result?.scope === "prior",
+        );
+      if (args.scope === "all" || continuingPriorSearch) args.scope = "prior";
+    }
     let presentationGrounding:
       | {
           sourceTermCount: number;
@@ -10291,6 +10307,7 @@ function buildEssentialToolSet(input: {
   presentationArtifactIntent: boolean;
   documentArtifactIntent: boolean;
   memoryLookupIntent: boolean;
+  conversationRecallIntent: boolean;
   memoryPersistenceIntent: boolean;
   explicitToolMentions: Set<string>;
   projectBound: boolean;
@@ -10353,6 +10370,10 @@ function buildEssentialToolSet(input: {
   }
   if (input.memoryLookupIntent) {
     tools.add("memory.read");
+  }
+  if (input.conversationRecallIntent) {
+    tools.add("session.search");
+    tools.add("session.history");
   }
   if (input.memoryPersistenceIntent) {
     tools.add("memory.write");
@@ -10991,6 +11012,12 @@ function applyTurnWebRestriction(input: ChatTurnAgentRunnerInput): ChatTurnAgent
 
 function detectLiveDataIntent(content: string): boolean {
   if (isExplicitLocalMcpTask(content) || hasExplicitWebRestriction(content)) return false;
+  if (
+    detectConversationRecallIntent(content) &&
+    !detectExplicitWebLookupIntent(content) &&
+    !detectDirectUrlIntent(content)
+  )
+    return false;
   return hasLiveDataIntent(content);
 }
 
@@ -11007,6 +11034,13 @@ function detectDirectUrlIntent(content: string): boolean {
 
 function detectWebLookupIntent(content: string, historyMessages: ChatCompletionRequest["messages"]): boolean {
   if (isExplicitLocalMcpTask(content) || hasExplicitWebRestriction(content)) return false;
+  if (
+    detectConversationRecallIntent(content) &&
+    !detectExplicitWebLookupIntent(content) &&
+    !detectDirectUrlIntent(content) &&
+    !detectWebPageInteractionIntent(content)
+  )
+    return false;
   return (
     detectLiveDataIntent(content) ||
     hasExternalResearchIntent(content) ||
@@ -11508,7 +11542,35 @@ function inferCitationsFromToolResult(toolRun: ChatToolRunRecord): ChatCitationR
   }
   const result = toolRun.result as Record<string, unknown>;
   const items: ChatCitationRecord[] = [];
-  if (CHAT_ROUTED_CONTEXT_TOOL_NAMES.includes(toolRun.toolName as (typeof CHAT_ROUTED_CONTEXT_TOOL_NAMES)[number])) {
+  if (toolRun.toolName === "session.search" && toolRun.status === "executed" && Array.isArray(result.hits)) {
+    for (const hit of result.hits) {
+      if (!hit || typeof hit !== "object" || Array.isArray(hit)) continue;
+      const { sessionId, messageId, sequence, excerpt } = hit as Record<string, unknown>;
+      if (
+        typeof sessionId !== "string" ||
+        !sessionId ||
+        typeof messageId !== "string" ||
+        !messageId ||
+        typeof sequence !== "number" ||
+        !Number.isSafeInteger(sequence) ||
+        sequence < 1 ||
+        (result.scope === "all" && sessionId === toolRun.sessionId)
+      ) {
+        continue;
+      }
+      const target = new URLSearchParams({ sessionId, messageId, sequence: String(sequence) });
+      items.push({
+        citationId: `${toolRun.toolRunId}-${items.length}`,
+        title: "Open matching message",
+        url: `goatcitadel://chat-history?${target}`,
+        snippet: typeof excerpt === "string" ? truncatePlainText(excerpt, 220) : undefined,
+        sourceType: "tool",
+      });
+      if (items.length === 5) break;
+    }
+  } else if (
+    CHAT_ROUTED_CONTEXT_TOOL_NAMES.includes(toolRun.toolName as (typeof CHAT_ROUTED_CONTEXT_TOOL_NAMES)[number])
+  ) {
     const candidates = Array.isArray(result.matches)
       ? result.matches
       : result.receipt && typeof result.receipt === "object"
@@ -16151,6 +16213,16 @@ function hasStandaloneToolReference(content: string, candidate: string): boolean
 
 function escapeRegexLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function detectConversationRecallIntent(content: string): boolean {
+  const prompt = content.trim();
+  const recall = /\b(?:what|which|when|where|why|how|recall|find|look up|show|remind me|did we)\b/iu;
+  const priorChat =
+    /\b(?:(?:previous|earlier|prior|last|another|past)\s+(?:chats?|conversations?|sessions?|threads?)|chat history|conversation history)\b/iu;
+  const pastDecision =
+    /\b(?:what|which)\s+(?:did we (?:decide|agree|choose|pick|settle on)|(?:decision|option) did we (?:make|choose|pick))\b/iu;
+  return pastDecision.test(prompt) || (recall.test(prompt) && priorChat.test(prompt));
 }
 
 function detectMemoryLookupIntent(content: string): boolean {

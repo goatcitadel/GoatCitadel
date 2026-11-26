@@ -69,6 +69,8 @@ export interface SearchMessagesOptions {
   workspaceId: string;
   /** Restrict the search to a single session. Omit to search across this workspace. */
   sessionId?: string;
+  /** Exclude a session from workspace search before ranking and limiting hits. */
+  excludeSessionId?: string;
   /** Include sessions hidden from history. Defaults to false. */
   includeHidden?: boolean;
   /** Maximum number of ranked hits to return (clamped to [1, 50]). */
@@ -173,6 +175,7 @@ export class ChatMessageRepository {
   private readonly getCursorStmt;
   private readonly searchStmt;
   private readonly searchScopedStmt;
+  private readonly searchOtherSessionsStmt;
   private readonly contextBeforeStmt;
   private readonly contextAfterStmt;
   private readonly sessionWorkspaceStmt;
@@ -282,6 +285,7 @@ export class ChatMessageRepository {
     `);
     this.searchStmt = db.prepare(buildSearchSql(db.dialect, false));
     this.searchScopedStmt = db.prepare(buildSearchSql(db.dialect, true));
+    this.searchOtherSessionsStmt = db.prepare(buildSearchSql(db.dialect, false, true));
     this.contextBeforeStmt = db.prepare(`
       SELECT m.message_id, m.role, m.content, m.timestamp, m.seq
       FROM chat_messages AS m
@@ -437,17 +441,23 @@ export class ChatMessageRepository {
       return [];
     }
     const sessionId = options.sessionId?.trim();
+    const excludeSessionId = options.excludeSessionId?.trim();
     const includeHidden = options.includeHidden === true ? 1 : 0;
 
     const rows = sessionId
       ? toSearchRows(this.searchScopedStmt.all(matchExpression, workspaceId, includeHidden, sessionId, limit))
-      : toSearchRows(this.searchStmt.all(matchExpression, workspaceId, includeHidden, limit));
+      : excludeSessionId
+        ? toSearchRows(
+            this.searchOtherSessionsStmt.all(matchExpression, workspaceId, includeHidden, excludeSessionId, limit),
+          )
+        : toSearchRows(this.searchStmt.all(matchExpression, workspaceId, includeHidden, limit));
 
     return rows
       .filter(
         (row) =>
           row.workspace_id === workspaceId &&
           (!sessionId || row.session_id === sessionId) &&
+          row.session_id !== excludeSessionId &&
           (includeHidden !== 0 || row.include_in_history !== 0),
       )
       .map((row) => ({
@@ -1376,7 +1386,10 @@ function extractSearchTokens(rawQuery: string): string[] | null {
   return tokens && tokens.length <= MAX_SEARCH_QUERY_TOKENS ? tokens : null;
 }
 
-function buildSearchSql(dialect: DatabaseClient["dialect"], scoped: boolean): string {
+function buildSearchSql(dialect: DatabaseClient["dialect"], scoped: boolean, excludeSession = false): string {
+  const sessionFilter = scoped
+    ? " AND m.session_id = ?"
+    : ` AND (meta.origin IS NULL OR meta.origin = 'operator')${excludeSession ? " AND m.session_id <> ?" : ""}`;
   if (dialect === "postgres") {
     return `
       WITH search_query AS (
@@ -1398,7 +1411,7 @@ function buildSearchSql(dialect: DatabaseClient["dialect"], scoped: boolean): st
       CROSS JOIN search_query
       WHERE m.content_search_vector @@ search_query.query
         AND meta.workspace_id = ?
-        AND (? <> 0 OR meta.include_in_history <> 0)${scoped ? " AND m.session_id = ?" : " AND (meta.origin IS NULL OR meta.origin = 'operator')"}
+        AND (? <> 0 OR meta.include_in_history <> 0)${sessionFilter}
       ORDER BY score ASC, m.timestamp DESC, m.seq DESC
       LIMIT ?
     `;
@@ -1423,7 +1436,7 @@ function buildSearchSql(dialect: DatabaseClient["dialect"], scoped: boolean): st
     INNER JOIN chat_session_meta AS meta ON meta.session_id = m.session_id
     WHERE chat_messages_fts MATCH ?
       AND meta.workspace_id = ?
-      AND (? <> 0 OR meta.include_in_history <> 0)${scoped ? " AND m.session_id = ?" : " AND (meta.origin IS NULL OR meta.origin = 'operator')"}
+      AND (? <> 0 OR meta.include_in_history <> 0)${sessionFilter}
     ORDER BY score ASC
     LIMIT ?
   `;

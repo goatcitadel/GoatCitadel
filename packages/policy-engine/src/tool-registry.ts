@@ -988,12 +988,12 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     riskLevel: "safe",
     requiresApproval: false,
     description:
-      "Full-text search over past messages in this conversation's history (tier-2 recall). Use to pull older context that is no longer in the active window.",
+      "Search chat messages. Use scope 'prior' for earlier chats in this workspace, 'session' for this chat, or 'all' for both. Shared chats can only search their own history.",
     argSchema: {
       type: "object",
       properties: {
         query: { type: "string", maxLength: 512 },
-        scope: { type: "string", enum: ["session", "all"] },
+        scope: { type: "string", enum: ["session", "all", "prior"] },
         limit: { type: "integer", minimum: 1, maximum: 50 },
         contextRadius: { type: "integer", minimum: 0, maximum: 10 },
       },
@@ -1001,8 +1001,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     },
     examples: [
       {
-        title: "Recall what was decided earlier about deployment",
-        args: { query: "deployment decision", limit: 5 },
+        title: "Find a deployment decision in an earlier chat",
+        args: { query: "Aurora deployment", scope: "prior", limit: 5 },
       },
     ],
     pack: "core",
@@ -1011,8 +1011,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     recommendedContexts: ["chat", "cowork", "code"],
     preferredForIntents: ["recall_history", "memory_lookup"],
     usageHints: [
-      "Use when the user references something from earlier in the conversation that you can no longer see.",
-      "Defaults to this session; scope:'all' remains confined to the active workspace.",
+      "Start with the exact named subject (for example Aurora Relay), then add optional keywords. Answer using the excerpts when they contain the decision.",
+      "If the search returns no matching earlier messages, say you could not verify the decision. Use session.history only when a relevant hit needs surrounding context.",
     ],
   },
   {

@@ -18,6 +18,11 @@ on:
         description: "Also test an unattended upgrade from the pinned 0.9.2 Beta 2 installer"
         type: boolean
         default: false
+      recall_x64_only:
+        description: "Build only the unsigned Windows x64 candidate for recall acceptance."
+        required: false
+        type: boolean
+        default: false
       live_acceptance_run:
         description: "Successful manual installer run ID to replay on a disposable Windows x64 runner"
         type: string
@@ -85,7 +90,7 @@ jobs:
           gh run download $env:INSTALLER_RUN --repo $env:GITHUB_REPOSITORY --name windows-x64-unsigned-package-smoke-assets --dir $candidate
           if ($LASTEXITCODE -ne 0) { throw "Unable to download the x64 installer artifact." }
 
-      - name: Run installed provider, channel, and approval checks
+      - name: Run installed provider, channel, approval, and recall checks
         shell: pwsh
         run: |
           & ./scripts/packaging/replay-windows-installed-live.ps1 `
@@ -98,7 +103,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-x64-installed-live-acceptance
-          path: ${{ runner.temp }}/installed-live/evidence/*.json
+          path: |
+            ${{ runner.temp }}/installed-live/evidence/*.json
+            ${{ runner.temp }}/installed-live/evidence/recall-*.png
           if-no-files-found: warn
 
   windows-build-inputs:
@@ -109,11 +116,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: windows-x64
-            runner: windows-latest
-          - target: windows-arm64
-            runner: windows-11-arm
+        include: >-
+          ${{ fromJSON(inputs.recall_x64_only && '[{"target":"windows-x64","runner":"windows-latest"}]'
+          || '[{"target":"windows-x64","runner":"windows-latest"},{"target":"windows-arm64","runner":"windows-11-arm"}]') }}
     steps:
       - name: Require the Windows package publisher for a tagged release
         if: github.event_name == 'push'
@@ -249,12 +254,23 @@ jobs:
                 BetaInstallerSha256 = $betaHashes["${{ matrix.target }}"]
               }
             }
+            if ('${{ inputs.recall_x64_only }}' -eq 'true') {
+              $upgradeOptions.RecallEvidenceDirectory = Join-Path $env:RUNNER_TEMP 'recall-install-evidence'
+            }
             & ./scripts/packaging/smoke-windows-installer.ps1 `
               -InstallerPath "artifacts/installers/windows/GoatCitadel-Setup-${{ matrix.target }}.exe" `
               -ExpectedReleaseManifestPath "artifacts/installers/bundles/GoatCitadel-$packageVersion-${{ matrix.target }}/app/release-manifest.json" `
               -Target "${{ matrix.target }}" `
               -TrustMode unsigned @upgradeOptions
           }
+
+      - name: Upload clean Windows recall evidence
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.allow_unsigned == 'true' && inputs.recall_x64_only }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-x64-clean-recall-proof
+          path: ${{ runner.temp }}/recall-install-evidence
+          if-no-files-found: warn
 
       - name: Upload unsigned Windows convenience artifact
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' }}
@@ -736,7 +752,7 @@ jobs:
 
   linux:
     runs-on: ubuntu-latest
-    if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true') }}
+    if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' && !inputs.recall_x64_only) }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -804,7 +820,7 @@ jobs:
 
   macos-build-inputs:
     runs-on: macos-15
-    if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true') }}
+    if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' && !inputs.recall_x64_only) }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

@@ -298,7 +298,7 @@ describe("tool registry", () => {
     expect(tool?.argSchema).toMatchObject({ required: ["query"] });
     const scopeSchema = (tool?.argSchema as { properties?: { scope?: { enum?: string[] } } } | undefined)?.properties
       ?.scope;
-    expect(scopeSchema?.enum).toEqual(["session", "all"]);
+    expect(scopeSchema?.enum).toEqual(["session", "all", "prior"]);
     expect(tool?.recommendedContexts).toEqual(expect.arrayContaining(["chat", "cowork", "code"]));
   });
 

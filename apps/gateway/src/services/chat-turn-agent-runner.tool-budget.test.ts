@@ -98,6 +98,23 @@ describe("ordinary Chat bounded tool exposure", () => {
     expect(schema.canonicalToModel.has("fixture.tool_15")).toBe(false);
   });
 
+  it("exposes scoped history tools for explicit recall from a fresh Chat", async () => {
+    const { runner, denied, catalog } = harness();
+    catalog.push(tool("session.search"), tool("session.history"));
+
+    const recall = input("What did we decide about the Aurora rollout in an earlier chat?");
+    const schema = await runner.resolveCapabilityToolSchema(recall);
+    expect(schema.canonicalToModel.has("session.search")).toBe(true);
+    expect(schema.canonicalToModel.has("session.history")).toBe(true);
+
+    const currentWork = await runner.resolveCapabilityToolSchema(input("Help me decide how to roll out Aurora."));
+    expect(currentWork.canonicalToModel.has("session.search")).toBe(false);
+
+    denied.add("session.search");
+    const restricted = await runner.resolveCapabilityToolSchema(recall);
+    expect(restricted.canonicalToModel.has("session.search")).toBe(false);
+  });
+
   it("nominates deferred discovery tools only after a fresh policy pass, including resume", async () => {
     const { runner, denied, inspectToolAccess } = harness();
     const turn = input();

@@ -9,6 +9,8 @@ describe("natural memory intent", () => {
     ["Remember that I prefer concise replies.", "explicit_save", "reply_length", "concise"],
     ["Keep in mind that I prefer detailed explanations.", "explicit_save", "reply_length", "detailed"],
     ["No, use detailed explanations from now on.", "correction", "reply_length", "detailed"],
+    ["Remember that I prefer a three-bullet weekly update.", "explicit_save", "weekly_update_bullet_count", "3"],
+    ["Actually, I prefer a two-bullet weekly update.", "correction", "weekly_update_bullet_count", "2"],
     ["Prefiero respuestas concisas.", "inferred_candidate", "reply_length", "concise"],
     ["Recuerda que prefiero respuestas concisas.", "explicit_save", "reply_length", "concise"],
     ["No, usa explicaciones detalladas de ahora en adelante.", "correction", "reply_length", "detailed"],

@@ -7,6 +7,7 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
+import { installedRecall, withNativeRecallPage } from "./lib/windows-installed-recall.mjs";
 import {
   DETERMINISTIC_LLM_KEY_ENV,
   DETERMINISTIC_LLM_MODEL,
@@ -15,7 +16,9 @@ import {
 } from "../verification/lib/scenarios/deterministic-llm-stub.mjs";
 
 const exec = promisify(execFile);
-const [app, scratch, evidence, ollamaExe, ntfyExe] = process.argv.slice(2);
+const [app, scratch, evidence, ollamaExe, fixtureArgument] = process.argv.slice(2);
+const recallOnly = ollamaExe === "--recall-only";
+const ntfyExe = recallOnly ? undefined : fixtureArgument;
 const ollamaModel = "qwen2.5:0.5b";
 const modelDigest = "a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67";
 const ntfyTokenEnv = "NTFY_READINESS_TOKEN";
@@ -95,7 +98,7 @@ async function withServer(exe, args, cwd, childEnv, run) {
   }
 }
 
-async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [] }, run) {
+async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [], recall = false }, run) {
   const [gatewayPort, uiPort] = await ports(2);
   const home = path.join(root, "home");
   const configDir = path.join(home, "runtime-root", "config");
@@ -105,8 +108,17 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [] 
   config.assistant.database.driver = "sqlite";
   config.assistant.durable.enabled = true;
   config.assistant.durable.executionEnabled = true;
-  config.assistant.toolApprovalMode = "approve_all";
-  config.toolPolicy.approvalMode = "approve_all";
+  if (recall) {
+    config.assistant.memory.enabled = true;
+    Object.assign(config.assistant.features, {
+      durableKernelV1Enabled: true,
+      memoryLifecycleAdminV1Enabled: true,
+      autonomyV1Disabled: true,
+    });
+  } else {
+    config.assistant.toolApprovalMode = "approve_all";
+    config.toolPolicy.approvalMode = "approve_all";
+  }
   config.toolPolicy.sandbox.networkAllowlist = [new URL(provider.baseUrl).host, ...allow];
   config.cronJobs = { jobs: [] };
   const providerId = provider.providerId;
@@ -151,21 +163,27 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [] 
     if (!response.ok) throw new Error(`${method} ${route} returned ${response.status} ${redacted(JSON.stringify(data))}`);
     return data;
   }
-  async function send(title, content) {
+  async function send(title, content, page) {
     const created = await api("/api/v1/chat/sessions", "POST", { title, workspaceId: "default" });
     const id = created.sessionId ?? created.session?.sessionId;
     assert.ok(id, "The Gateway did not create a session");
     const route = `/api/v1/chat/sessions/${encodeURIComponent(id)}`;
     const guided = providerId === DETERMINISTIC_LLM_PROVIDER_ID;
     const controls = {
-      providerId, model, webMode: "off", memoryMode: "off", thinkingLevel: "off",
+      providerId, model, webMode: "off", memoryMode: recall ? "on" : "off", thinkingLevel: "off",
       speedMode: guided ? "standard" : "fast", subagentPolicy: "off",
       toolAutonomy: guided ? "safe_auto" : "manual", orchestrationEnabled: false,
     };
     const prefs = await api(route + "/prefs");
     await api(route + "/prefs", "PATCH", { ...controls, expectedRevision: prefs.revision });
+    if (page) {
+      await page.goto(`http://127.0.0.1:${uiPort}/chat?shell=cockpit&sessionId=${encodeURIComponent(id)}`);
+      await page.getByPlaceholder(/^Message GoatCitadel/u).fill(content);
+      await page.getByRole("button", { name: "Send", exact: true }).click();
+      return { id, route, content };
+    }
     const input = {
-      action: "send", content, providerId, model, webMode: "off", memoryMode: "off", thinkingLevel: "off",
+      action: "send", content, providerId, model, webMode: "off", memoryMode: controls.memoryMode, thinkingLevel: "off",
       speedMode: controls.speedMode, subagentPolicy: "off", prefsOverride: controls,
     };
     const preflight = await api(route + "/route-preflight", "POST", input);
@@ -199,7 +217,18 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [] 
         if (!error.message.includes("returned 409") || !error.message.includes("STATE_CONFLICT")) throw error;
       }
     }, "onboarding completion to persist", 10_000);
-    return await run({ api, send, waitForTurn });
+    const restart = async () => {
+      const stopped = await cli("stop");
+      assert.equal(stopped.notStopped?.length ?? 0, 0);
+      const restarted = await cli("launch", "--no-open", "--wait");
+      assert.equal(restarted.status, "ready");
+    };
+    const withNative = async (visit) => {
+      const debugPort = fixtureArgument ? Number(fixtureArgument) : (await ports(1))[0];
+      assert.ok(Number.isInteger(debugPort) && debugPort > 0 && debugPort <= 65535);
+      return withNativeRecallPage({ app, root, runtimeEnv, uiPort, debugPort, poll, visit });
+    };
+    return await run({ api, send, waitForTurn, restart, withNative });
   } finally {
     const stopped = await cli("stop");
     assert.equal(stopped.notStopped?.length ?? 0, 0, "An installed runtime process did not stop");
@@ -401,7 +430,11 @@ async function realChannel(root) {
   });
 }
 
-for (const [name, check] of [["provider", realProvider], ["channel", realChannel], ["approval", governedApproval]]) {
+const recallCheck = ["recall", (root) => installedRecall(root, evidence, withStub, poll)];
+const checks = recallOnly
+  ? [recallCheck]
+  : [["provider", realProvider], ["channel", realChannel], ["approval", governedApproval]];
+for (const [name, check] of checks) {
   const root = await fs.mkdtemp(path.join(scratch, `${name}-`));
   let result;
   try {

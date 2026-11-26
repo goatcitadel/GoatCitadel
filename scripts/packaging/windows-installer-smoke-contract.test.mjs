@@ -51,7 +51,7 @@ test("manual unsigned and tagged signed Windows jobs call one shared lifecycle s
   assert.doesNotMatch(unsignedSmokeStep, /Start-Process -FilePath \$installer -ArgumentList/);
   assert.doesNotMatch(signedJob, /Start-Process -FilePath \$installer -ArgumentList/);
   assert.equal((workflow.match(/smoke-windows-installer\.ps1/g) ?? []).length, 2);
-  assert.match(unsignedJob, /target: windows-x64[\s\S]*?target: windows-arm64/);
+  assert.match(unsignedJob, /"target":"windows-x64"[\s\S]*?"target":"windows-arm64"/);
   assert.match(signedJob, /target: windows-x64[\s\S]*?target: windows-arm64/);
 });
 

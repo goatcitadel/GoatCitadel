@@ -101,6 +101,19 @@ test("workspace recall excludes repeated automation sessions before the result l
   });
 });
 
+test("prior-chat recall excludes the calling session before applying the result limit", () => {
+  withDatabase((db) => {
+    ensureSearchSessions(db, "current", "prior");
+    const repo = new ChatMessageRepository(db);
+    repo.upsert(makeMessage("current", "user", "Kestrel decision Kestrel decision"));
+    repo.upsert(makeMessage("prior", "user", "Kestrel decision: violet harbor"));
+    assert.deepEqual(
+      search(repo, "Kestrel decision", { excludeSessionId: "current", limit: 1 }).map((hit) => hit.sessionId),
+      ["prior"],
+    );
+  });
+});
+
 test("searchMessages uses Postgres search vectors and coerces numeric rows", () => {
   const preparedSql: string[] = [];
   const searchCalls: unknown[][] = [];

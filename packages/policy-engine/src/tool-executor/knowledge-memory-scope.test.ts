@@ -160,4 +160,35 @@ describe("governed memory tool reads", () => {
       ),
     ).rejects.toThrow("unavailable");
   });
+
+  it("retries a prior-chat paraphrase with its named subject and excludes the caller in both reads", async () => {
+    const searchMessages = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          workspaceId: "workspace-A",
+          sessionId: "prior-chat",
+          messageId: "m1",
+          sequence: 4,
+          content: "Juniper Atlas: locker 83",
+        },
+        { workspaceId: "workspace-B", sessionId: "foreign-chat", messageId: "m2", sequence: 5, content: "foreign" },
+        { workspaceId: "workspace-A", sessionId: "private-chat", messageId: "m3", sequence: 6, content: "current" },
+      ]);
+    const result = await executeKnowledgeTool(
+      request("session.search", { query: "Juniper Atlas parcels", scope: "prior" }),
+      {} as never,
+      {
+        sessions: { getBySessionId: vi.fn(async () => ({ kind: "dm" })) },
+        chatSessionMeta: { get: vi.fn(async () => ({ workspaceId: "workspace-A", includeInHistory: true })) },
+        chatMessages: { searchMessages },
+      } as never,
+      {} as never,
+    );
+    const options = expect.objectContaining({ workspaceId: "workspace-A", excludeSessionId: "private-chat" });
+    expect(searchMessages).toHaveBeenNthCalledWith(1, "Juniper Atlas parcels", options);
+    expect(searchMessages).toHaveBeenNthCalledWith(2, "Juniper Atlas", options);
+    expect(result.hits).toEqual([expect.objectContaining({ messageId: "m1", excerpt: "Juniper Atlas: locker 83" })]);
+  });
 });
