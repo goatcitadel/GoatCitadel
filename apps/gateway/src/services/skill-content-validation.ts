@@ -1,6 +1,7 @@
 import { parseSkillMarkdown, resolveSkillNameViolation } from "@goatcitadel/skills";
 import { scanPromptwareContent, type PromptwareScanFinding } from "./assembled-prompt-injection-guard.js";
 import { normalizeSkillId } from "./skill-import-service.js";
+import { scanScriptText } from "./skill-script-scan.js";
 
 /**
  * Shared skill-content validation + security scan.
@@ -98,7 +99,10 @@ export function validateSkillContent(input: ValidateSkillContentInput): SkillCon
     errors.push(`Invalid SKILL.md: ${(error as Error).message}`);
   }
 
-  const suspiciousScripts = SUSPICIOUS_SCRIPT_PATTERN.test(input.skillMarkdown);
+  // Drafts keep the older, broader pattern (any `rm -rf`) on top of the shared script rules.
+  const suspiciousScripts =
+    SUSPICIOUS_SCRIPT_PATTERN.test(input.skillMarkdown) ||
+    scanScriptText(input.skillMarkdown).some((finding) => finding.dangerous);
   const networkIndicators = NETWORK_INDICATOR_PATTERN.test(input.skillMarkdown);
   const containsSecret = SECRET_CONTENT_PATTERN.test(input.skillMarkdown);
   const promptwareFindings = scanPromptwareContent({
