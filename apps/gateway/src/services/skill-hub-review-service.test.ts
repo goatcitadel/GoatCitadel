@@ -238,6 +238,46 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
         expectedField: "UNREADABLE_SKILL_FILE",
       },
       {
+        // The older promptware check also flags hidden text, as an injection; the specific reason must win.
+        name: "hidden text the older check also flags",
+        mutate: (validation) => {
+          validation.valid = false;
+          validation.checks.promptwareSafe = false;
+          validation.promptwareFindings = [
+            {
+              scannerVersion: "1.0.0",
+              ruleId: "hidden_text_obfuscation",
+              severity: "critical",
+              sourcePath: "SKILL.md",
+              startLine: 3,
+              endLine: 3,
+              evidenceHash: "b".repeat(64),
+              excerpt: "[redacted fixture]",
+            },
+          ];
+          validation.scanVerdict = {
+            verdict: "block",
+            findings: [{ code: "hidden_text", path: "SKILL.md", line: 3, dangerous: true }],
+            scannerVersion: "1.0.0",
+          };
+        },
+        expectedField: "HIDDEN_TEXT_DETECTED",
+      },
+      {
+        // An unreadable file also leaves the older check incomplete; the specific reason must win.
+        name: "unreadable file the older check also misses",
+        mutate: (validation) => {
+          validation.checks.promptwareScanComplete = false;
+          validation.promptwareUnscannedPaths = ["notes.txt"];
+          validation.scanVerdict = {
+            verdict: "block",
+            findings: [{ code: "unreadable_file", path: "notes.txt", dangerous: true }],
+            scannerVersion: "1.0.0",
+          };
+        },
+        expectedField: "UNREADABLE_SKILL_FILE",
+      },
+      {
         name: "promptware scan incomplete",
         mutate: (validation) => {
           validation.checks.promptwareScanComplete = false;

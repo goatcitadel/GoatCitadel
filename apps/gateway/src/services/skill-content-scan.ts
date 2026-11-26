@@ -134,11 +134,40 @@ function scanOneFile(file: SkillScanFile): SkillScanFinding[] {
   return findings;
 }
 
-/** A script with its code lines blanked, so promptware line numbers still point at the right line. */
+/** Block comments a script can carry instructions in: C-style, PowerShell, and HTML-style. */
+const BLOCK_COMMENTS: ReadonlyArray<readonly [open: string, close: string]> = [
+  ["/*", "*/"],
+  ["<#", "#>"],
+  ["<!--", "-->"],
+];
+/** A comment after code on the same line: `code // note` or `code # note`. */
+const TRAILING_COMMENT = /\s(?:\/\/|#)(.*)$/u;
+
+/**
+ * A script's comments with its code blanked, line for line, so promptware line numbers still point at the right line.
+ * Block comments keep their whole body, and a comment after code keeps the comment part.
+ */
 function commentsOnly(text: string): string {
+  let closer: string | undefined;
   return text
     .split(/\r\n|\r|\n/u)
-    .map((lineText) => (COMMENT_LINE.test(lineText) ? lineText : ""))
+    .map((lineText) => {
+      if (closer) {
+        const end = lineText.indexOf(closer);
+        if (end < 0) return lineText;
+        closer = undefined;
+        return lineText.slice(0, end);
+      }
+      for (const [open, close] of BLOCK_COMMENTS) {
+        const start = lineText.indexOf(open);
+        if (start < 0) continue;
+        const body = lineText.slice(start + open.length);
+        if (!body.includes(close)) closer = close;
+        return body.slice(0, closer ? undefined : body.indexOf(close));
+      }
+      if (COMMENT_LINE.test(lineText)) return lineText;
+      return TRAILING_COMMENT.exec(lineText)?.[1] ?? "";
+    })
     .join("\n");
 }
 
@@ -174,6 +203,8 @@ export async function readSkillScanFiles(dir: string): Promise<{ files: SkillSca
     try {
       entries = await fsp.readdir(current, { withFileTypes: true });
     } catch {
+      // A folder that can't be listed is reported, so its files never read as a clean, empty skill.
+      files.push({ path: relativePath(dir, current) || ".", bytes: new Uint8Array(), unreadable: true });
       continue;
     }
     for (const entry of entries) {
@@ -207,6 +238,8 @@ export function readSkillScanFilesSync(dir: string): { files: SkillScanFile[]; t
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
     } catch {
+      // A folder that can't be listed is reported, so its files never read as a clean, empty skill.
+      files.push({ path: relativePath(dir, current) || ".", bytes: new Uint8Array(), unreadable: true });
       continue;
     }
     for (const entry of entries) {

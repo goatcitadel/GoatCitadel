@@ -37,8 +37,21 @@ describe("skill script scan", () => {
     },
   );
 
+  it.each([
+    "Remove-Item -Recurse -Force 'C:\\*'",
+    'Remove-Item -Recurse -Force "C:\\"',
+    "Remove-Item -Recurse -Force 'C:\\'",
+    'del /f /s /q "C:\\"',
+    "rm -rf '/'",
+    'rm -rf "$HOME"',
+  ])("flags destructive deletes of a quoted root: %s", (text) => {
+    expect(rules(text)).toContain("destructive_delete");
+  });
+
   it("does not flag removing a build folder", () => {
     expect(rules("rm -rf ./build")).not.toContain("destructive_delete");
+    expect(rules("Remove-Item -Recurse -Force './build'")).not.toContain("destructive_delete");
+    expect(rules("Remove-Item -Recurse -Force 'C:\\temp\\build'")).not.toContain("destructive_delete");
   });
 
   it.each([

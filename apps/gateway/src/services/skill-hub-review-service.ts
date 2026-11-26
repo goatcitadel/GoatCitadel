@@ -518,14 +518,15 @@ async function prepareReview(context: MaterializedSkillReviewContext, source: Re
 }
 
 function assertCompleteValidation(validation: SkillImportValidationResult): void {
+  // The shared scan's dangerous findings refuse with their own reason, ahead of the older promptware guards, which
+  // stay as the fallback: hidden text also reads to them as an injection, and an unreadable file as an incomplete scan.
+  assertNoScanBlockers(validation, rejectReview);
   if (validation.checks.promptwareScanComplete !== true || validation.promptwareUnscannedPaths.length > 0) {
     rejectReview("PROMPTWARE_SCAN_INCOMPLETE", "Skill source promptware coverage was incomplete.");
   }
   if (validation.checks.promptwareSafe !== true || validation.promptwareFindings.length > 0) {
     rejectReview("PROMPT_INJECTION_DETECTED", "Skill source contains prompt-injection instructions.");
   }
-  // The shared scan's dangerous findings refuse with their own reason, ahead of the general validation failure.
-  assertNoScanBlockers(validation, rejectReview);
   if (!validation.valid) {
     rejectReview("VALIDATION_FAILED", "Skill source failed production admission validation.");
   }

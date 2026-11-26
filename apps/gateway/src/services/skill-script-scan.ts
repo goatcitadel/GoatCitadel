@@ -33,7 +33,8 @@ export const BROAD_SCRIPT_RISK_PATTERN =
  */
 export const SCRIPT_SCAN_MAX_LINE_CHARS = 4096;
 
-const DRIVE_ROOT_PATTERN = /\s[a-z]:\\(?:\s|$|\*)/i;
+/** A whole drive, `C:\` or `C:\*`, bare or quoted. */
+const DRIVE_ROOT_PATTERN = /\s['"]?[a-z]:\\\*?['"]?(?=\s|$|;|\))/i;
 
 /** `Remove-Item … -Recurse … C:\` on one line, by substring checks so a long line can't make it backtrack. */
 function removesWholeDrive(lineText: string): boolean {
@@ -69,8 +70,8 @@ const SCRIPT_RULES: ReadonlyArray<{
     dangerous: true,
     test: removesWholeDrive,
     patterns: [
-      /\brm\s+-(?:rf|fr)\s+(?:--no-preserve-root\s+)?(?:\/|~|\$HOME)\/?\*?(?:\s|$)/i,
-      /\bdel\s+(?:\/[a-z]\s+)*[a-z]:\\(?:\s|$|\*)/i,
+      /\brm\s+-(?:rf|fr)\s+(?:--no-preserve-root\s+)?['"]?(?:\/|~|\$HOME)\/?\*?['"]?(?:\s|$)/i,
+      /\bdel\s+(?:\/[a-z]\s+)*['"]?[a-z]:\\\*?['"]?(?=\s|$)/i,
     ],
   },
   {

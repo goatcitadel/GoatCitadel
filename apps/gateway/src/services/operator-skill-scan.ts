@@ -1,5 +1,6 @@
 import type { LoadedSkill, SkillScanSummary } from "@goatcitadel/contracts";
-import { readSkillScanFiles, scanSkillContents } from "./skill-content-scan.js";
+import { skillContentTreeSha256 } from "./skill-content-integrity.js";
+import { readSkillScanFiles, scanSkillContents, type SkillScanFile } from "./skill-content-scan.js";
 
 /**
  * The content scan of a skill in the operator's own folders (workspace skills and `.assistant/skills`). Its verdict is
@@ -20,9 +21,18 @@ export async function operatorSkillScanVerdict(
   if (cached) return cached;
   const files = await readSkillScanFiles(skill.dir);
   const summary = { ...scanSkillContents(files.files, "operator", { truncated: files.truncated }), treeSha256 };
-  if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value!);
-  cache.set(key, summary);
+  // The hash was taken before these reads, so the files may have changed since: keep the result only when the bytes
+  // just scanned are exactly the content the hash names, or a later read of that content would reuse the wrong scan.
+  if (!files.truncated && scannedExactly(files.files, treeSha256)) {
+    if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value!);
+    cache.set(key, summary);
+  }
   return summary;
+}
+
+function scannedExactly(files: readonly SkillScanFile[], treeSha256: string): boolean {
+  const fullyRead = files.every((file) => !file.unreadable && (file.size ?? file.bytes.length) === file.bytes.length);
+  return fullyRead && skillContentTreeSha256(files) === treeSha256;
 }
 
 export function clearOperatorSkillScanCache(): void {
