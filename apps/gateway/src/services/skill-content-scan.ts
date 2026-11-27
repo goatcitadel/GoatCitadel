@@ -32,7 +32,7 @@ export const SKILL_SCAN_MAX_FILES = 80;
 export const SKILL_SCAN_MAX_FILE_BYTES = 220_000;
 const MAX_FINDINGS = 32;
 
-/** Files read as prompt text by the promptware scan. Script files are read for their comments only. */
+/** Files read as prompt text by the promptware scan. Script files are read whole as well. */
 const PROMPT_TEXT_FILE = /\.(md|markdown|txt|json|ya?ml|toml|html?|svg)$/i;
 /** Images and fonts: not text, never sent to a model, so not scanned. */
 const ASSET_FILE = /\.(png|jpe?g|gif|webp|ico|bmp|woff2?|ttf|otf|eot)$/i;
@@ -41,7 +41,6 @@ const ASSET_FILE = /\.(png|jpe?g|gif|webp|ico|bmp|woff2?|ttf|otf|eot)$/i;
 export function isSkillAssetPath(filePath: string): boolean {
   return ASSET_FILE.test(filePath);
 }
-const COMMENT_LINE = /^\s*(?:#|\/\/|--|;|\/\*|\*|<#|REM\b|::|'|<!--)/i;
 
 export function scanSkillContents(
   files: readonly SkillScanFile[],
@@ -95,7 +94,9 @@ function scanOneFile(file: SkillScanFile): SkillScanFinding[] {
   }
   const isScript = SCRIPT_FILE_PATTERN.test(file.path);
   const findings: SkillScanFinding[] = [];
-  const promptText = isScript ? commentsOnly(text) : PROMPT_TEXT_FILE.test(file.path) ? text : undefined;
+  // A script is checked whole: telling its comments from its code takes a parser per language, and every shortcut
+  // was a way around the check. An injection phrase in a code string is flagged too.
+  const promptText = isScript || PROMPT_TEXT_FILE.test(file.path) ? text : undefined;
   if (promptText !== undefined) {
     for (const finding of scanPromptwareContent({
       source: "imported_skill",
@@ -132,90 +133,6 @@ function scanOneFile(file: SkillScanFile): SkillScanFinding[] {
     findings.push({ code: "network_use", path: file.path, ...(line > 0 ? { line } : {}), dangerous: false });
   }
   return findings;
-}
-
-/** Block comments a script can carry instructions in: C-style, PowerShell, and HTML-style. */
-const BLOCK_COMMENTS: ReadonlyArray<readonly [open: string, close: string]> = [
-  ["/*", "*/"],
-  ["<#", "#>"],
-  ["<!--", "-->"],
-];
-/**
- * Where a line comment may start: any `//` or `#` (but not PowerShell's `#>` block close). This deliberately reads a
- * URL or a `#` inside a string as a comment too: telling them apart needs a parser per language, and each shortcut
- * was a way around the check. Reading too much only means more text is checked.
- */
-const LINE_COMMENT = /\/\/|#(?!>)/u;
-
-/**
- * A script's comments with its code blanked, line for line, so promptware line numbers still point at the right line.
- * Block comments keep their whole body, and a comment after code keeps the comment part.
- */
-function commentsOnly(text: string): string {
-  const state: { closer?: string } = {};
-  return text
-    .split(/\r\n|\r|\n/u)
-    .map((lineText) => lineComments(lineText, state))
-    .join("\n");
-}
-
-/** Every comment on one line, left to right, carrying an open block comment over to the next line in `state`. */
-function lineComments(lineText: string, state: { closer?: string }): string {
-  const kept: string[] = [];
-  let rest = lineText;
-  while (rest) {
-    if (state.closer) {
-      const end = rest.indexOf(state.closer);
-      if (end < 0) return [...kept, rest].join(" ");
-      kept.push(rest.slice(0, end));
-      rest = rest.slice(end + state.closer.length);
-      delete state.closer;
-      continue;
-    }
-    const opening = firstBlockOpening(rest);
-    // A whole-line comment that doesn't open with a block comment runs to the end; an unclosed `/*` in it still opens
-    // a block, since telling a comment from a URL here takes a parser and reading on only checks more.
-    if (kept.length === 0 && COMMENT_LINE.test(rest) && !(opening && !rest.slice(0, opening.start).trim())) {
-      const closer = unclosedBlockCloser(rest);
-      if (closer) state.closer = closer;
-      return rest;
-    }
-    // Whichever comment starts first wins: a line comment (even right after a block's close) runs to the line's end.
-    const lineComment = LINE_COMMENT.exec(rest);
-    if (lineComment && (!opening || lineComment.index < opening.start)) {
-      const comment = rest.slice(lineComment.index);
-      kept.push(comment);
-      // A URL's `//` looks like a line comment, so an unclosed `/*` after it still opens a block for the next lines.
-      const closer = unclosedBlockCloser(comment);
-      if (closer) state.closer = closer;
-      break;
-    }
-    if (!opening) break;
-    state.closer = opening.close;
-    rest = rest.slice(opening.start + opening.open.length);
-  }
-  return kept.join(" ");
-}
-
-/** The closer a block comment opened in `text` still waits for, if its last block is left open. */
-function unclosedBlockCloser(text: string): string | undefined {
-  let rest = text;
-  for (let opening = firstBlockOpening(rest); opening; opening = firstBlockOpening(rest)) {
-    const afterOpen = rest.slice(opening.start + opening.open.length);
-    const end = afterOpen.indexOf(opening.close);
-    if (end < 0) return opening.close;
-    rest = afterOpen.slice(end + opening.close.length);
-  }
-  return undefined;
-}
-
-function firstBlockOpening(text: string): { start: number; open: string; close: string } | undefined {
-  let first: { start: number; open: string; close: string } | undefined;
-  for (const [open, close] of BLOCK_COMMENTS) {
-    const start = text.indexOf(open);
-    if (start >= 0 && (!first || start < first.start)) first = { start, open, close };
-  }
-  return first;
 }
 
 function dedupe(findings: SkillScanFinding[]): SkillScanFinding[] {
