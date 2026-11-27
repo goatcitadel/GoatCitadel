@@ -1,4 +1,4 @@
-name: Build Windows Preview 0.9.5
+name: Build Windows Preview 0.9.6
 on:
   workflow_dispatch:
 permissions:
@@ -10,7 +10,7 @@ env:
   DOTNET_VERSION: 10.0.300
 jobs:
   identity:
-    if: github.repository == 'goatcitadel/GoatCitadel' && github.ref == 'refs/heads/codex/preview-0.9.5-build'
+    if: github.repository == 'goatcitadel/GoatCitadel' && github.ref == 'refs/heads/codex/preview-0.9.6-build'
     runs-on: ubuntu-latest
     outputs:
       commit: ${{ steps.identity.outputs.commit }}
@@ -21,7 +21,7 @@ jobs:
         id: identity
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE: 661e69adab925e24703e3e77c0085936f72e7461
+          CANDIDATE: 03f7af750c4fe0f02d4317633197fa520038eb19
         shell: bash
         run: |
           set -euo pipefail
@@ -31,7 +31,7 @@ jobs:
           {
             echo "commit=$CANDIDATE"
             echo "sequence=$sequence"
-            echo "version=0.9.5"
+            echo "version=0.9.6"
           } >> "$GITHUB_OUTPUT"
 
   windows:
