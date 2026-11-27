@@ -201,19 +201,14 @@ export async function installedSkillCapture(runtime, fixture) {
   const control = await api("/api/v1/workspaces", "POST", { name: "Weekly brief untrained control" });
   assert.ok(control.workspaceId && control.workspaceId !== workspaceId);
   assert.equal(await isCallable(approved.runtimeSkillId, control.workspaceId), false);
-  const pairs = [];
-  for (const [index, task] of weeklyBriefCases.entries()) {
-    const order = index % 2 === 0 ? ["disabled", "enabled"] : ["enabled", "disabled"];
-    const outcomes = {};
-    for (const condition of order) {
-      const scope = condition === "enabled" ? workspaceId : control.workspaceId;
-      const prompt = `$${approved.runtimeSkillId}\nWrite a weekly project brief using these notes only.\n\n${task.input}`;
+  async function runArm(task, condition) {
+    const scope = condition === "enabled" ? workspaceId : control.workspaceId;
+    const prompt = `$${approved.runtimeSkillId}\nWrite a weekly project brief using these notes only.\n\n${task.input}`;
+    try {
       const chat = await send(`Held-out brief ${task.id} ${condition}`, prompt, undefined, {
         providerId: "ollama",
         model,
         workspaceId: scope,
-      }).catch((error) => {
-        throw new Error(`Benchmark ${task.id} (${condition}): ${error.message}`, { cause: error });
       });
       const turn = await waitForTurn(chat, "completed");
       assert.equal(turn.trace.model, model);
@@ -240,7 +235,8 @@ export async function installedSkillCapture(runtime, fixture) {
         }, `the applied skill receipt for ${task.id}`, 15_000).catch(() => readSkill())
         : await readSkill();
       const answer = turn.assistantMessage?.content ?? "";
-      outcomes[condition] = {
+      return {
+        status: "completed",
         score: gradeWeeklyBrief(answer, task),
         answer,
         modelUsageEventId: dispatch.eventId,
@@ -250,15 +246,26 @@ export async function installedSkillCapture(runtime, fixture) {
         toolCalls: turn.toolRuns?.map((tool) => tool.toolName) ?? [],
         userCorrections: 0,
       };
+    } catch (error) {
+      return { status: "unverified", error: error.message };
     }
-    const valid = !outcomes.disabled.skillApplied && outcomes.enabled.versionId === approved.capture.versionId;
+  }
+  const pairs = [];
+  for (const [index, task] of weeklyBriefCases.entries()) {
+    const order = index % 2 === 0 ? ["disabled", "enabled"] : ["enabled", "disabled"];
+    const outcomes = {};
+    for (const condition of order) {
+      outcomes[condition] = await runArm(task, condition);
+    }
+    const valid = outcomes.disabled.status === "completed" && outcomes.enabled.status === "completed"
+      && !outcomes.disabled.skillApplied && outcomes.enabled.versionId === approved.capture.versionId;
     pairs.push({
       id: task.id,
       notes: task.input,
       order,
       valid,
       ...outcomes,
-      ...gradeBriefPair(outcomes.disabled.score, outcomes.enabled.score),
+      ...(valid && gradeBriefPair(outcomes.disabled.score, outcomes.enabled.score)),
     });
     await writeFile(path.join(evidence, "skill-reuse-progress.json"), JSON.stringify({ pairs }, null, 2));
   }
