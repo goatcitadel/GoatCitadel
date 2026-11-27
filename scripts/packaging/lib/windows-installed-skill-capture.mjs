@@ -73,18 +73,13 @@ export async function installedSkillCapture(runtime, fixture) {
     try {
       const chat = await send("Weekly project brief capture", syntheticSource, page);
       const original = await waitForTurn(chat, "completed");
-      const turnRoute = `${chat.route}/turns/${encodeURIComponent(original.turnId)}`;
-      const edits = { content: correction, subagentPolicy: "off" };
-      const preflight = await api(`${chat.route}/route-preflight`, "POST", {
-        ...edits,
-        action: "edit",
-        turnId: original.turnId,
-      });
-      assert.ok(preflight.decision, preflight.blockedReason);
-      await api(`${turnRoute}/edit`, "POST", { ...edits, routeDecision: preflight.decision });
+      const originalArticle = page.locator(`[data-turn-id="${original.turnId}"]`);
+      await press("More message actions", originalArticle).click();
+      await page.getByRole("menuitem", { name: "Edit your message and resend", exact: true }).click();
+      await page.getByPlaceholder(/^Message GoatCitadel/u).fill(correction);
+      await press("Send edited message").click();
       const correctedTurn = await waitForTurn({ ...chat, content: correction }, "completed");
       assert.equal(correctedTurn.branchKind, "edit");
-      await page.reload();
       const correctedArticle = page.locator(`[data-turn-id="${correctedTurn.turnId}"]`);
       const save = press("Save as skill", correctedArticle);
       await save.click();
