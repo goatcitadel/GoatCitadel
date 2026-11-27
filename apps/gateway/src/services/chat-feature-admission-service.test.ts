@@ -109,7 +109,7 @@ async function harness(content = "# Reports\n\nRead source evidence and summariz
     getModelContextWindow: () => state.contextWindow,
     routeFingerprint: () => "b".repeat(64),
   };
-  return { host, bindings, resolveSkills, bindFeatureReferences, state, lifecycle, catalog, dir };
+  return { host, bindings, resolveSkills, bindFeatureReferences, state, lifecycle, catalog, dir, skill };
 }
 
 function admission(id = "admission"): ActiveTurnAdmission {
@@ -269,6 +269,45 @@ describe("fresh Chat feature skill admission", () => {
     });
     expect(fitting?.references.selectedSkills?.activatedSkills.map((skill) => skill.reasons)).toEqual([
       ["metadata_ranked"],
+    ]);
+  });
+
+  it("drops oversized optional matches while keeping an explicitly selected skill and its dependencies", async () => {
+    const required = await harness();
+    const dependency = await harness("# Notes\nRead only the supplied source notes.");
+    const optional = await harness("# Research\n" + "Read source evidence. ".repeat(400));
+    required.skill.requires = ["notes"];
+    const named = (fixture: typeof required, name: string) => {
+      const skill = { ...fixture.skill, name, skillId: `bundled:${name}`, keywords: [name] };
+      return {
+        skill,
+        lifecycle: { ...fixture.lifecycle, skillId: skill.skillId },
+        entry: { ...fixture.catalog[0], capabilityId: `skill:${skill.skillId}`, skillId: skill.skillId, title: name },
+      };
+    };
+    const fixtures = [named(required, "reports"), named(dependency, "notes"), named(optional, "research")];
+    const catalog = fixtures.map(({ entry }) => entry);
+    const loadedSkills = fixtures.map(({ skill }) => skill);
+    required.host.listCallable = async () => catalog;
+    required.host.listLifecycle = async () => fixtures.map(({ lifecycle }) => lifecycle);
+    required.host.listLoadedSkills = async () => loadedSkills;
+    required.host.resolveSkills = async (text) =>
+      resolveCallableSkillSelection({
+        request: { text },
+        loadedSkills,
+        inspectableCatalog: catalog,
+        callableCatalog: catalog,
+      }).decision;
+    required.state.contextWindow = 8192;
+    const content = "Use reports to summarize these research notes.";
+    const admitted = await resolveChatFeatureAdmission(required.host, {
+      ...request("explicit-with-auto"),
+      content,
+      admission: { ...admission("explicit-with-auto"), admittedRequest: { content } },
+    });
+    expect(admitted?.references.selectedSkills?.activatedSkills.map(({ skillId }) => skillId)).toEqual([
+      "bundled:notes",
+      "bundled:reports",
     ]);
   });
 

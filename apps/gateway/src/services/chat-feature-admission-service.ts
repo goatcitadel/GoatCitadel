@@ -11,6 +11,7 @@ import {
   type ChatProviderFallbackPreference,
 } from "@goatcitadel/contracts";
 import { createHash } from "node:crypto";
+import { resolveDependencies } from "@goatcitadel/skills";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { ActiveTurnAdmission } from "./chat-turn-types.js";
 import type { ChatTurnPrepHost } from "./chat-turn-prep-service.js";
@@ -219,8 +220,14 @@ export async function resolveChatFeatureAdmission(
         },
       }).selectedSkills;
       // Validate the exact rendered bytes and budget before making the immutable binding.
-      if (await fitsSkillInstructionBudget(host, { ...references, selectedSkills }, workspaceId)) {
-        references.selectedSkills = selectedSkills;
+      if (selectedSkills) {
+        const fitting = await selectWithinSkillInstructionBudget(
+          host,
+          { ...references, selectedSkills },
+          workspaceId,
+          decision,
+        );
+        if (fitting) references.selectedSkills = fitting;
       }
     }
   }
@@ -316,25 +323,46 @@ export async function resolveChatFeatureAdmission(
   });
 }
 
-/**
- * Automatic skill matches are optional context: when they do not fit the
- * model's instruction budget the turn continues without them. A skill the
- * operator named explicitly still fails the turn with the actionable budget
- * error, because silently dropping an explicit request would hide it.
- */
-async function fitsSkillInstructionBudget(
+// Optional matches cannot displace skills the operator selected or their dependencies.
+type SelectedSkills = NonNullable<ChatTurnFeatureReferences["selectedSkills"]>;
+async function selectWithinSkillInstructionBudget(
   host: ChatFeatureAdmissionHost,
-  references: ChatTurnFeatureReferences,
+  references: ChatTurnFeatureReferences & { selectedSkills: SelectedSkills },
   workspaceId: string,
-): Promise<boolean> {
+  decision: SkillActivationDecision,
+): Promise<SelectedSkills | undefined> {
+  const { selectedSkills } = references;
   try {
     await renderAdmittedSkillInstructions(host, references, workspaceId);
-    return true;
+    return selectedSkills;
   } catch (error) {
     if (!(error instanceof SkillInstructionBudgetExceededError)) throw error;
-    const activated = references.selectedSkills?.activatedSkills ?? [];
-    if (activated.some((receipt) => receipt.reasons.includes("explicit"))) throw error;
-    return false;
+    const explicitIds = new Set(
+      selectedSkills.activatedSkills
+        .filter((receipt) => receipt.reasons.includes("explicit"))
+        .map(({ skillId }) => skillId),
+    );
+    if (explicitIds.size === 0) return undefined;
+    const eligible = decision.selected.filter((skill) => !skill.requiresConfirmation && skill.state !== "disabled");
+    const required = resolveDependencies(
+      eligible.filter(({ skillId }) => explicitIds.has(skillId)),
+      eligible,
+    );
+    const requiredIds = new Set(required.ordered.map(({ skillId }) => skillId));
+    if (
+      required.blocked.length ||
+      [...explicitIds].some((skillId) => !requiredIds.has(skillId)) ||
+      requiredIds.size >= selectedSkills.activatedSkills.length
+    )
+      throw error;
+
+    const explicitSelection = {
+      ...selectedSkills,
+      trustedSkills: selectedSkills.trustedSkills.filter(({ skillId }) => requiredIds.has(skillId)),
+      activatedSkills: selectedSkills.activatedSkills.filter(({ skillId }) => requiredIds.has(skillId)),
+    };
+    await renderAdmittedSkillInstructions(host, { ...references, selectedSkills: explicitSelection }, workspaceId);
+    return explicitSelection;
   }
 }
 
