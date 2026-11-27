@@ -28,15 +28,21 @@ export async function installedSkillCapture(runtime, fixture) {
   };
   async function applyReviewedPlan(plan, candidateRoute, versionId, expectedState) {
     const planRoute = `/api/v1/change-plans/${encodeURIComponent(plan.planId)}`;
+    assert.equal(plan.origin.workspaceId, workspaceId);
+    const context = {
+      workspaceId,
+      ...(plan.origin.sessionId && { sessionId: plan.origin.sessionId }),
+      ...(plan.origin.turnId && { turnId: plan.origin.turnId }),
+    };
     const respond = ({ revision, requiredAction }) =>
       api(`${planRoute}/responses`, "POST", {
-        workspaceId,
+        ...context,
         expectedRevision: revision,
         actionId: requiredAction.actionId,
         actionNonce: requiredAction.actionNonce,
         values: {},
       });
-    const read = () => api(`${planRoute}?workspaceId=${workspaceId}`);
+    const read = () => api(`${planRoute}?${new URLSearchParams(context)}`);
     const review = await read();
     assert.equal(review.requiredAction?.kind, "artifact_review");
     assert.equal(review.request.versionId, versionId);
@@ -44,7 +50,7 @@ export async function installedSkillCapture(runtime, fixture) {
     const confirm = await respond(review);
     assert.equal(confirm.status, "awaiting_confirmation");
     const waiting = await api(`${planRoute}/confirmations`, "POST", {
-      workspaceId,
+      ...context,
       expectedRevision: confirm.revision,
       actionNonce: confirm.requiredAction.actionNonce,
     });
