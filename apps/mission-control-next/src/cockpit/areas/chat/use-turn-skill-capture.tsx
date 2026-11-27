@@ -13,7 +13,7 @@ const WorkflowSkillCaptureControl = lazy(() =>
 );
 
 /**
- * Save as skill for one turn. It is offered from the answer's More menu; choosing it opens the existing capture
+ * Save as skill for one turn. Either turn action opens the existing capture
  * block, which keeps its own governance (prepare in the composer, review the draft, stage an inactive candidate,
  * review activation as a change plan). `eligible` is false for a read-only history, a channel message or a turn
  * still streaming.
@@ -23,7 +23,7 @@ export function useTurnSkillCapture(
   actions: Pick<TurnActions, "workspaceId" | "selectedSessionId" | "onDraftChange" | "composerRef" | "onReviewPlan">,
   eligible: boolean,
   draftEmpty: boolean,
-): { onSaveAsSkill?: () => void; control: ReactNode } {
+): { onSaveAsSkill?: (source?: "inline" | "menu") => void; control: ReactNode } {
   const [requested, setRequested] = useSessionViewState(
     JSON.stringify(["chat-skill-capture", actions.workspaceId, actions.selectedSessionId, turn.turnId]),
     false,
@@ -31,19 +31,23 @@ export function useTurnSkillCapture(
   // Set only by the menu choice, and lost on a remount, so scrolling back to this answer never moves focus.
   const [focusPending, setFocusPending] = useState(false);
   const wrapper = useRef<HTMLDivElement>(null);
+  const opener = useRef<"inline" | "menu">("menu");
   const closeBlock = () => {
-    // The block unmounts with the state change; the answer's More button, where the choice began, takes focus back.
-    const moreButton = wrapper.current?.closest("article")?.querySelector<HTMLElement>(MORE_BUTTON);
+    const article = wrapper.current?.closest("article");
     setRequested(false);
     queueMicrotask(() => {
-      if (moreButton?.isConnected) moreButton.focus();
+      if (!article?.isConnected) return;
+      const inline =
+        opener.current === "inline" ? article.querySelector<HTMLElement>("[data-save-skill-action]") : null;
+      (inline ?? article.querySelector<HTMLElement>(MORE_BUTTON))?.focus();
     });
   };
   const visibility = eligible && actions.selectedSessionId ? skillCaptureVisibility(turn, requested) : "hidden";
   if (visibility === "hidden") return { control: null };
   if (visibility === "offered")
     return {
-      onSaveAsSkill: () => {
+      onSaveAsSkill: (source = "menu") => {
+        opener.current = source;
         setFocusPending(true);
         setRequested(true);
       },

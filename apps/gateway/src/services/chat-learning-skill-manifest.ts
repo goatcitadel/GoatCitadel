@@ -5,6 +5,19 @@ import {
   type ChatTurnFeatureReferences,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
+
+function admittedSkillSources(
+  skills: NonNullable<ChatTurnCapabilityProfileRecord["selection"]["activatedSkills"]>,
+  trustedSkills: ChatTurnCapabilityProfileRecord["selection"]["trustedSkills"],
+) {
+  return skills.map(({ skillId, instructionSha256, treeSha256, capabilityId }) => {
+    const sourceRef = trustedSkills.find(
+      (trusted) =>
+        trusted.skillId === skillId && trusted.capabilityId === capabilityId && trusted.treeSha256 === treeSha256,
+    )?.sourceRef;
+    return { skillId, instructionSha256, treeSha256, ...(sourceRef ? { sourceRef } : {}) };
+  });
+}
 export async function resolveChatLearningSkillManifest(
   deps: {
     storage: Pick<
@@ -50,11 +63,7 @@ export async function resolveChatLearningSkillManifest(
         if (instruction)
           return {
             instruction,
-            sources: skills.map((skill) => ({
-              skillId: skill.skillId,
-              instructionSha256: skill.instructionSha256,
-              treeSha256: skill.treeSha256,
-            })),
+            sources: admittedSkillSources(skills, frozen!.references.selectedSkills!.trustedSkills),
           };
       }
     }
@@ -73,11 +82,7 @@ export async function resolveChatLearningSkillManifest(
       if (instruction)
         return {
           instruction,
-          sources: skills.map((skill) => ({
-            skillId: skill.skillId,
-            instructionSha256: skill.instructionSha256,
-            treeSha256: skill.treeSha256,
-          })),
+          sources: admittedSkillSources(skills, profile.selection.trustedSkills),
         };
     }
   }

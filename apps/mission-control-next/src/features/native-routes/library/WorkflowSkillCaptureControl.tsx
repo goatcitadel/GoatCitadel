@@ -89,6 +89,7 @@ function CaptureControl({
   const receiptKey = JSON.stringify(["workflow-capture-receipt", operation.presentationScope]);
   const [choices, setChoices] = useState<CapabilityProposalRecord[]>([]);
   const [busy, setBusy] = useSessionViewState(receiptKey + ":busy", false);
+  const actionLock = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useSessionViewState<WorkflowSkillCaptureResult | null>(receiptKey + ":candidate", null);
   const [plan, setPlan] = useSessionViewState<ChangePlanRecord | null>(receiptKey + ":plan", null);
@@ -113,7 +114,8 @@ function CaptureControl({
   )
     return null;
   const run = async (task: () => Promise<void>) => {
-    if (busy || operation.locked || !operation.current()) return;
+    if (actionLock.current || busy || operation.locked || !operation.current()) return;
+    actionLock.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -121,6 +123,7 @@ function CaptureControl({
     } catch (failure) {
       if (operation.current()) setError(describeApiError(failure, "Skill capture failed.").summary);
     } finally {
+      actionLock.current = false;
       setBusy(false);
     }
   };

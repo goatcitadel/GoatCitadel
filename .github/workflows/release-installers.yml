@@ -32,6 +32,10 @@ on:
       live_acceptance_sha256:
         description: "Independently verified SHA-256 of the unsigned x64 EXE"
         type: string
+      skill_capture_only:
+        description: "Limit the installed replay to skill capture and the paired skill-reuse pilot."
+        type: boolean
+        default: false
 
 concurrency:
   group: release-installers-${{ github.ref }}
@@ -61,6 +65,7 @@ jobs:
       INSTALLER_RUN: ${{ inputs.live_acceptance_run }}
       INSTALLER_COMMIT: ${{ inputs.live_acceptance_commit }}
       INSTALLER_SHA256: ${{ inputs.live_acceptance_sha256 }}
+      GOATCITADEL_INSTALLED_SKILL_CAPTURE_ONLY: ${{ inputs.skill_capture_only }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -106,6 +111,7 @@ jobs:
           path: |
             ${{ runner.temp }}/installed-live/evidence/*.json
             ${{ runner.temp }}/installed-live/evidence/recall-*.png
+            ${{ runner.temp }}/installed-live/evidence/skill-*.png
           if-no-files-found: warn
 
   windows-build-inputs:

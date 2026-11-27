@@ -8,6 +8,8 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { installedRecall, withNativeRecallPage } from "./lib/windows-installed-recall.mjs";
+import { installedSkillCapture } from "./lib/windows-installed-skill-capture.mjs";
+import { briefInstructions } from "../verification/lib/assistant-parity/weekly-brief-pilot.mjs";
 import {
   DETERMINISTIC_LLM_KEY_ENV,
   DETERMINISTIC_LLM_MODEL,
@@ -16,9 +18,9 @@ import {
 } from "../verification/lib/scenarios/deterministic-llm-stub.mjs";
 
 const exec = promisify(execFile);
-const [app, scratch, evidence, ollamaExe, fixtureArgument] = process.argv.slice(2);
+const [app, scratch, evidence, nativeDebugPort, ollamaExe, ntfyExe] = process.argv.slice(2);
 const recallOnly = ollamaExe === "--recall-only";
-const ntfyExe = recallOnly ? undefined : fixtureArgument;
+const skillCaptureOnly = process.env.GOATCITADEL_INSTALLED_SKILL_CAPTURE_ONLY === "true";
 const ollamaModel = "qwen2.5:0.5b";
 const modelDigest = "a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67";
 const ntfyTokenEnv = "NTFY_READINESS_TOKEN";
@@ -98,7 +100,7 @@ async function withServer(exe, args, cwd, childEnv, run) {
   }
 }
 
-async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [], recall = false }, run) {
+async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [], recall = false, skillCapture = false, extraProviders = [] }, run) {
   const [gatewayPort, uiPort] = await ports(2);
   const home = path.join(root, "home");
   const configDir = path.join(home, "runtime-root", "config");
@@ -119,10 +121,16 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
     config.assistant.toolApprovalMode = "approve_all";
     config.toolPolicy.approvalMode = "approve_all";
   }
-  config.toolPolicy.sandbox.networkAllowlist = [new URL(provider.baseUrl).host, ...allow];
+  if (skillCapture) Object.assign(config.assistant.features, {
+    durableKernelV1Enabled: true,
+    evolutionControlPlaneV1Enabled: true,
+    chatSkillInstructionsV1Enabled: true,
+  });
+  const providers = [provider, ...extraProviders];
+  config.toolPolicy.sandbox.networkAllowlist = [...providers.map((item) => new URL(item.baseUrl).host), ...allow];
   config.cronJobs = { jobs: [] };
   const providerId = provider.providerId;
-  config.llm = { activeProviderId: providerId, activeModel: model, providers: [provider] };
+  config.llm = { activeProviderId: providerId, activeModel: model, providers };
   await fs.mkdir(configDir, { recursive: true });
   await fs.mkdir(runtimeDir, { recursive: true });
   await writeJson(path.join(configDir, "goatcitadel.json"), config);
@@ -163,14 +171,16 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
     if (!response.ok) throw new Error(`${method} ${route} returned ${response.status} ${redacted(JSON.stringify(data))}`);
     return data;
   }
-  async function send(title, content, page) {
-    const created = await api("/api/v1/chat/sessions", "POST", { title, workspaceId: "default" });
+  async function send(title, content, page, options = {}) {
+    const created = await api("/api/v1/chat/sessions", "POST", { title, workspaceId: options.workspaceId ?? "default" });
     const id = created.sessionId ?? created.session?.sessionId;
     assert.ok(id, "The Gateway did not create a session");
     const route = `/api/v1/chat/sessions/${encodeURIComponent(id)}`;
-    const guided = providerId === DETERMINISTIC_LLM_PROVIDER_ID;
+    const selectedProvider = options.providerId ?? providerId;
+    const selectedModel = options.model ?? model;
+    const guided = selectedProvider === DETERMINISTIC_LLM_PROVIDER_ID;
     const controls = {
-      providerId, model, webMode: "off", memoryMode: recall ? "on" : "off", thinkingLevel: "off",
+      providerId: selectedProvider, model: selectedModel, webMode: "off", memoryMode: recall ? "on" : "off", thinkingLevel: "off",
       speedMode: guided ? "standard" : "fast", subagentPolicy: "off",
       toolAutonomy: guided ? "safe_auto" : "manual", orchestrationEnabled: false,
     };
@@ -183,7 +193,7 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
       return { id, route, content };
     }
     const input = {
-      action: "send", content, providerId, model, webMode: "off", memoryMode: controls.memoryMode, thinkingLevel: "off",
+      action: "send", content, providerId: selectedProvider, model: selectedModel, webMode: "off", memoryMode: controls.memoryMode, thinkingLevel: "off",
       speedMode: controls.speedMode, subagentPolicy: "off", prefsOverride: controls,
     };
     const preflight = await api(route + "/route-preflight", "POST", input);
@@ -224,7 +234,7 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
       assert.equal(restarted.status, "ready");
     };
     const withNative = async (visit) => {
-      const debugPort = fixtureArgument ? Number(fixtureArgument) : (await ports(1))[0];
+      const debugPort = Number(nativeDebugPort);
       assert.ok(Number.isInteger(debugPort) && debugPort > 0 && debugPort <= 65535);
       return withNativeRecallPage({ app, root, runtimeEnv, uiPort, debugPort, poll, visit });
     };
@@ -235,7 +245,7 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
   }
 }
 
-async function realProvider(root) {
+async function withPinnedOllama(root, run) {
   const [port] = await ports(1);
   const serverEnv = {
     ...env, OLLAMA_HOST: `127.0.0.1:${port}`, OLLAMA_MODELS: path.join(root, "models"),
@@ -256,7 +266,13 @@ async function realProvider(root) {
     const ollama = config.llm.providers.find((entry) => entry.providerId === "ollama");
     assert.ok(ollama, "The installed provider catalog omitted Ollama");
     const provider = { ...ollama, baseUrl: `http://127.0.0.1:${port}/v1`, defaultModel: ollamaModel, models: [ollamaModel] };
-    return withRuntime(root, { provider, model: ollamaModel }, async ({ send, waitForTurn, api }) => {
+    return run(provider, serverVersion);
+  });
+}
+
+async function realProvider(root) {
+  return withPinnedOllama(root, (provider, serverVersion) =>
+    withRuntime(root, { provider, model: ollamaModel }, async ({ send, waitForTurn, api }) => {
       const started = performance.now();
       const chat = await send("Installed live Ollama", `Reply with this text and nothing else: ${marker}`);
       const turn = await waitForTurn(chat, "completed");
@@ -272,8 +288,7 @@ async function realProvider(root) {
         providerCalls: turn.trace.completion.providerCallCount, response: redacted(turn.assistantMessage.content).slice(0, 160),
         elapsedMs: Math.round(performance.now() - started),
       };
-    });
-  });
+    }));
 }
 
 async function withStub(root, runtimeOptions, run, stubOptions = {}) {
@@ -431,9 +446,13 @@ async function realChannel(root) {
 }
 
 const recallCheck = ["recall", (root) => installedRecall(root, evidence, withStub, poll)];
+const skillCheck = ["skill-capture", (root) => withPinnedOllama(root, (provider, serverVersion) =>
+  withStub(root, { skillCapture: true, extraProviders: [provider] }, (runtime) => installedSkillCapture(runtime, {
+    evidence, poll, model: ollamaModel, modelDigest, serverVersion,
+  }), { promptReplyRules: [{ ruleId: "workflow-capture", userContentIncludes: "WORKFLOW_SKILL_CAPTURE_V1 ", replyText: briefInstructions }] }))];
 const checks = recallOnly
   ? [recallCheck]
-  : [["provider", realProvider], ["channel", realChannel], ["approval", governedApproval]];
+  : skillCaptureOnly ? [skillCheck] : [["provider", realProvider], ["channel", realChannel], ["approval", governedApproval]];
 for (const [name, check] of checks) {
   const root = await fs.mkdtemp(path.join(scratch, `${name}-`));
   let result;

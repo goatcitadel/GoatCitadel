@@ -20,7 +20,7 @@ export type TurnActionHandlers = Pick<
   | "onCreateGeneratedArtifact"
 > & {
   /** Opens Save as skill for this answer. Set only when the answer can become a skill. */
-  onSaveAsSkill?: () => void;
+  onSaveAsSkill?: (source?: "inline" | "menu") => void;
 };
 
 const INLINE = "inline-flex min-h-8 items-center px-1 text-accent hover:underline";
@@ -66,11 +66,20 @@ export function ChatTurnActions({
   const retry = () => actions.onRetryTurn(turn.turnId);
   const canBranch = !streaming && !readOnly;
   const canSave = Boolean(turn.assistantMessage) && turn.trace.status !== "failed" && !readOnly;
+  const canOfferSkillInline =
+    actions.onSaveAsSkill &&
+    !streaming &&
+    !readOnly &&
+    !resendBlocked &&
+    hasAnswer &&
+    turn.trace.status === "completed" &&
+    turn.trace.completion?.status === "complete" &&
+    (turn.branchKind === "edit" || turn.toolRuns?.some((tool) => tool.status === "executed"));
   const siblings = turn.branch.siblingTurnIds ?? [];
   const copyLabel = streaming ? "Copy answer so far" : "Copy answer";
   const saveAsSkill = () => {
     handedFocusOn.current = true;
-    actions.onSaveAsSkill?.();
+    actions.onSaveAsSkill?.("menu");
   };
   const secondary = [
     canBranch
@@ -128,6 +137,16 @@ export function ChatTurnActions({
           ) : (
             copyLabel
           )}
+        </button>
+      ) : null}
+      {canOfferSkillInline ? (
+        <button
+          type="button"
+          data-save-skill-action
+          onClick={() => actions.onSaveAsSkill?.("inline")}
+          className={phone ? PHONE : INLINE}
+        >
+          Save as skill
         </button>
       ) : null}
       {secondary.length ? (

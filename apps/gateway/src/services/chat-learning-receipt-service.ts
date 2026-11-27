@@ -94,6 +94,7 @@ export class ChatLearningReceiptService {
       truncated: false,
     };
     const library = `/library/memory?workspaceId=${encodeURIComponent(meta.workspaceId)}`;
+    const versions = this.deps.storage.candidateSkillVersions;
     try {
       const [candidates, ready] = await Promise.all([
         this.deps.memory.listTraceMemoryCandidatesForTurn({
@@ -153,7 +154,7 @@ export class ChatLearningReceiptService {
         const proposal = await this.deps.storage.capabilityProposals.find(proposalId);
         if (!proposal?.candidateId) continue;
         const versionId = typeof proposal.payload.versionId === "string" ? proposal.payload.versionId : undefined,
-          version = versionId ? await this.deps.storage.candidateSkillVersions.find(versionId) : undefined;
+          version = versionId ? await versions.find(versionId) : undefined;
         if (!version || version.workspaceId !== meta.workspaceId || version.candidateId !== proposal.candidateId)
           continue;
         result.proposals.push({
@@ -227,13 +228,24 @@ export class ChatLearningReceiptService {
               href: skill ? admittedSkillHref(ref) : library,
             };
             if (
-              !result.usedSources.some(
-                (link) => link.kind === used.kind && link.ref === ref && link.sourceHash === hash,
-              )
-            ) {
-              if (result.usedSources.length < 80) result.usedSources.push(used);
-              else result.truncated = true;
+              result.usedSources.some((link) => link.kind === used.kind && link.ref === ref && link.sourceHash === hash)
+            )
+              continue;
+            if (result.usedSources.length >= 80) {
+              result.truncated = true;
+              continue;
             }
+            if (skill && ref.startsWith("extra:reviewed-") && typeof source.sourceRef === "string") {
+              const candidate = /^candidate:([\w-]{1,128}):([\w-]{1,128})$/u.exec(source.sourceRef);
+              if (candidate) {
+                const version = await versions.find(candidate[2]!);
+                if (version?.candidateId === candidate[1] && version.workspaceId === meta.workspaceId) {
+                  used.skillVersion = { name: version.title, versionId: version.versionId };
+                  used.href = `/library/candidate_skill/${encodeURIComponent(source.sourceRef)}?workspaceId=${encodeURIComponent(meta.workspaceId)}`;
+                }
+              }
+            }
+            result.usedSources.push(used);
           }
         }
       }

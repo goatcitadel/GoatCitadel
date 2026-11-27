@@ -77,6 +77,34 @@ it("does not turn failed, foreign or legacy context into a use receipt", async (
     ({ manifest: { turnId: "t", sessionId: "foreign" }, entries: [f.entry] }) as never;
   expect((await f.service.getTurnLearningReceipt("s", "t", "A")).usedSources).toEqual([]);
 });
+it("links the exact workspace-scoped skill version from a successful model dispatch", async () => {
+  const f = fixture();
+  const entry = {
+    ...f.entry,
+    kind: "system_message",
+    metadata: {
+      ...f.entry.metadata,
+      admittedSkills: [
+        { skillId: "extra:reviewed-abc", instructionSha256: "a".repeat(64), sourceRef: "candidate:c:v1" },
+      ],
+    },
+  };
+  f.deps.storage.contextManifests.maybeGetDetailByTurn = async () => ({
+    manifest: { turnId: "t", sessionId: "s" },
+    entries: [entry],
+  });
+  let workspaceId = "A";
+  f.deps.storage.candidateSkillVersions.find = async () =>
+    ({ candidateId: "c", versionId: "v1", workspaceId, title: "Weekly project brief" }) as never;
+  const skill = async () =>
+    (await f.service.getTurnLearningReceipt("s", "t", "A")).usedSources.find((source) => source.kind === "skill");
+  expect(await skill()).toMatchObject({
+    skillVersion: { name: "Weekly project brief", versionId: "v1" },
+    href: "/library/candidate_skill/candidate%3Ac%3Av1?workspaceId=A",
+  });
+  workspaceId = "foreign";
+  expect((await skill())?.skillVersion).toBeUndefined();
+});
 it("shows only the frozen skill batch containing the source turn and withholds unbound legacy job references", async () => {
   const f = fixture();
   const job = {

@@ -73,7 +73,7 @@ interface CompletionContextManifestInput {
 
 interface AdmittedSkillContext {
   instruction: string;
-  sources: { skillId: string; instructionSha256: string; treeSha256: string }[];
+  sources: { skillId: string; instructionSha256: string; treeSha256: string; sourceRef?: string }[];
 }
 
 type ContextManifestWriter = Pick<Storage["contextManifests"], "ensure" | "appendEntry">;

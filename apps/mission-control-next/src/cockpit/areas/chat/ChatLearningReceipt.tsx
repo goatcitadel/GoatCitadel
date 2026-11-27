@@ -79,10 +79,17 @@ export function ChatLearningReceipt({
                 <a className="underline" href={link.href}>
                   {link.kind === "memory"
                     ? "View memory context"
-                    : link.href === "/capabilities/skills"
-                      ? "Browse skills"
-                      : "View skill instructions"}
+                    : link.skillVersion
+                      ? link.skillVersion.name
+                      : link.href === "/capabilities/skills"
+                        ? "Browse skills"
+                        : "View skill instructions"}
                 </a>
+                {link.skillVersion ? (
+                  <p className="text-xs">
+                    Version <code>{link.skillVersion.versionId}</code>
+                  </p>
+                ) : null}
                 <p className="text-xs">Recorded when the model request was sent successfully.</p>
                 <TechnicalDetails>
                   <code>{link.ref}</code>

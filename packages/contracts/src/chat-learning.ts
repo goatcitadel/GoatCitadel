@@ -5,6 +5,7 @@ export interface LearningUseLink {
   sourceHash: string;
   state: "used_in_turn";
   href: string;
+  skillVersion?: { name: string; versionId: string };
 }
 export interface LearningAppliedLink {
   kind: "memory" | "skill";

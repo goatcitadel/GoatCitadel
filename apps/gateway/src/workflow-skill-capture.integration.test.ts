@@ -14,6 +14,7 @@ import {
   type WorkflowSkillCaptureResult,
   type CandidateSkillDetailRecord,
   type ChangePlanRecord,
+  type TurnLearningReceipt,
 } from "@goatcitadel/contracts";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
@@ -475,6 +476,18 @@ describe("workflow capture through current authenticated public Chat", { timeout
             ),
           );
           expect(injected).toBe(active);
+          const receipt = await app!.inject({
+            method: "GET",
+            url: `${freshUrl}/turns/${turn.turnId}/learning-receipt?workspaceId=${workspaceId}`,
+            headers: headers(),
+          });
+          expect(receipt.statusCode, receipt.body).toBe(200);
+          const skillUse = (receipt.json() as TurnLearningReceipt).usedSources.find(
+            (item) => item.ref === runtimeSkillId,
+          );
+          expect(skillUse?.skillVersion?.versionId).toBe(
+            active ? (phase === "promote_revision" ? revisionResult?.versionId : result.versionId) : undefined,
+          );
           const otherBody = parseSkillMarkdown(phase === "promote_revision" ? markdown : revisedMarkdown).body;
           expect(
             requests.some((request) => JSON.stringify(request.body).includes(JSON.stringify(otherBody).slice(1, -1))),

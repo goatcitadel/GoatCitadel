@@ -281,4 +281,38 @@ describe("Chat turn actions", () => {
     );
     expect(onSaveAsSkill).toHaveBeenCalledOnce();
   });
+  it.each(["workflow", "correction", "failed", "ordinary"])(
+    "offers inline skill capture for a completed %s when appropriate",
+    async (kind) => {
+      const onSaveAsSkill = vi.fn();
+      const subject = {
+        ...turn,
+        branchKind: kind === "correction" ? "edit" : "append",
+        trace: {
+          ...turn.trace,
+          status: kind === "failed" ? "failed" : "completed",
+          completion: { status: "complete" },
+        },
+        toolRuns: kind === "workflow" || kind === "failed" ? [{ status: "executed", toolName: "fixture.read" }] : [],
+      } as typeof turn;
+      await act(async () =>
+        root.render(
+          <ChatTurnActions
+            turn={subject}
+            actions={{ ...handlers(), onSaveAsSkill }}
+            streaming={false}
+            readOnly={false}
+            hasAnswer
+            onCopy={vi.fn()}
+          />,
+        ),
+      );
+      const inline = [...container.querySelectorAll("button")].find((button) => button.textContent === "Save as skill");
+      if (kind === "workflow" || kind === "correction") {
+        expect(inline).toBeDefined();
+        await act(async () => inline!.click());
+        expect(onSaveAsSkill).toHaveBeenCalledOnce();
+      } else expect(inline).toBeUndefined();
+    },
+  );
 });
