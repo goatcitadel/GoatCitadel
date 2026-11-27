@@ -87,6 +87,7 @@ const hasPhrase = (text, phrase) => ` ${normalize(text)} `.includes(` ${normaliz
 const headings = ["Status", "Risks", "Next steps"];
 const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const calendarDateRE = /\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?)\b/giu;
+const deniedKnownRiskRE = /\b(?:no (?:known |significant |remaining )?risks?\b(?!\s+(?:other than|except)\b)|risks?\s*:\s*(?:none\b|n\/a\b))/iu;
 
 export function gradeWeeklyBrief(answer, task) {
   const matches = [
@@ -105,6 +106,7 @@ export function gradeWeeklyBrief(answer, task) {
   const missingFacts = task.facts.filter((fact) => !hasPhrase(answer, fact));
   const followedCorrection = !hasPhrase(answer, task.canceled);
   const contradictedStatus = task.statusContradiction.test(answer);
+  const deniedKnownRisk = deniedKnownRiskRE.test(answer);
   return {
     sections,
     missingFacts,
@@ -112,6 +114,7 @@ export function gradeWeeklyBrief(answer, task) {
     ownerAndDateInNextSteps,
     unsupportedDates,
     contradictedStatus,
+    deniedKnownRisk,
     score:
       sections.length +
       task.facts.length -
@@ -126,9 +129,11 @@ export function gradeBriefPair(disabled, enabled) {
     enabled.missingFacts.some((fact) => !disabled.missingFacts.includes(fact)) ||
     (disabled.followedCorrection && !enabled.followedCorrection) ||
     enabled.unsupportedDates.some((date) => !disabled.unsupportedDates.includes(date)) ||
-    (enabled.contradictedStatus && !disabled.contradictedStatus);
+    (enabled.contradictedStatus && !disabled.contradictedStatus) ||
+    (enabled.deniedKnownRisk && !disabled.deniedKnownRisk);
   return {
-    improved: enabled.score > disabled.score && !regression && !enabled.contradictedStatus && !enabled.unsupportedDates.length,
+    improved: enabled.score > disabled.score && !regression && !enabled.contradictedStatus &&
+      !enabled.deniedKnownRisk && !enabled.unsupportedDates.length,
     regression,
   };
 }

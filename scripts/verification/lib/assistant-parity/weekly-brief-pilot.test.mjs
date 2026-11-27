@@ -38,3 +38,12 @@ test("flags an invented calendar date even if it uses the right weekday", () => 
 
   assert.deepEqual(gradeBriefPair(disabled, enabled), { improved: false, regression: true });
 });
+
+test("flags a false risk dismissal even when the rest of the brief preserves the facts", () => {
+  const task = weeklyBriefCases.find(({ id }) => id === "warehouse");
+  const answer = "Status: The pilot reached the depot.\nRisks: Unstable barcode readers.\nNext steps: Omar will replace the readers on Monday.";
+  const disabled = gradeWeeklyBrief(answer, task);
+  const enabled = gradeWeeklyBrief(answer.replace("Unstable barcode readers.", "No significant risks from unstable barcode readers."), task);
+
+  assert.deepEqual(gradeBriefPair(disabled, enabled), { improved: false, regression: true });
+});

@@ -189,8 +189,9 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
     const selectedModel = options.model ?? model;
     const guided = selectedProvider === DETERMINISTIC_LLM_PROVIDER_ID;
     const controls = {
-      providerId: selectedProvider, model: selectedModel, webMode: "off", memoryMode: recall ? "on" : "off", thinkingLevel: "off",
-      speedMode: guided ? "standard" : "fast", subagentPolicy: "off",
+      providerId: selectedProvider, model: selectedModel, webMode: "off", memoryMode: recall ? "on" : "off",
+      thinkingLevel: options.thinkingLevel ?? "off", speedMode: guided || options.useStream ? "standard" : "fast",
+      subagentPolicy: "off",
       toolAutonomy: guided ? "safe_auto" : "manual", orchestrationEnabled: false,
     };
     const prefs = await api(route + "/prefs");
@@ -202,12 +203,31 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
       return { id, route, content };
     }
     const input = {
-      action: "send", content, providerId: selectedProvider, model: selectedModel, webMode: "off", memoryMode: controls.memoryMode, thinkingLevel: "off",
+      action: "send", content, providerId: selectedProvider, model: selectedModel, webMode: "off",
+      memoryMode: controls.memoryMode, thinkingLevel: controls.thinkingLevel,
       speedMode: controls.speedMode, subagentPolicy: "off", prefsOverride: controls,
     };
     const preflight = await api(route + "/route-preflight", "POST", input);
     assert.ok(preflight.decision, "Chat preflight omitted its route decision");
-    await api(route + "/agent-send", "POST", { ...input, routeDecision: preflight.decision });
+    const submission = { ...input, routeDecision: preflight.decision };
+    if (options.useStream) {
+      const response = await request(gatewayPort, route + "/agent-send/stream", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
+          "Idempotency-Key": randomUUID(),
+        },
+        body: JSON.stringify(submission),
+        signal: AbortSignal.timeout(240_000),
+      });
+      const body = await response.text();
+      if (!response.ok) throw new Error(`Chat stream returned HTTP ${response.status} ${redacted(body)}`);
+      assert.match(response.headers.get("content-type") ?? "", /^text\/event-stream\b/u);
+    } else {
+      await api(route + "/agent-send", "POST", submission);
+    }
     return { id, route, content };
   }
   async function waitForTurn(chat, status) {
@@ -216,7 +236,11 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
       const turn = thread.turns?.find((entry) => entry.userMessage?.content === chat.content);
       if (turn?.trace?.status === status) return turn;
       if (["failed", "cancelled", "completed", "partial"].includes(turn?.trace?.status)) {
-        throw new Error(`Unexpected Chat settlement ${turn.trace.status} ${redacted(JSON.stringify(turn.trace.failure))}`);
+        throw new Error(`Unexpected Chat settlement ${turn.trace.status} ${redacted(JSON.stringify({
+          failure: turn.trace.failure,
+          completion: turn.trace.completion,
+          executionProfile: turn.trace.routing?.executionProfile,
+        }))}`);
       }
     }, `the Chat turn to reach ${status}`, 155_000);
   }

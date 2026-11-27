@@ -210,9 +210,12 @@ export async function installedSkillCapture(runtime, fixture) {
           providerId: "ollama",
           model,
           workspaceId: scope,
+          thinkingLevel: "standard",
+          useStream: true,
         });
         const turn = await waitForTurn(chat, "completed");
         assert.equal(turn.trace.model, model);
+        assert.equal(turn.trace.routing?.executionProfile, "standard", "A written brief must stay on standard Chat");
         const usageRoute = `/api/v1/ops/workspaces/${encodeURIComponent(scope)}/model-usage?sessionId=${encodeURIComponent(chat.id)}&turnId=${encodeURIComponent(turn.turnId)}`;
         const dispatch = await poll(
           async () =>
@@ -241,6 +244,7 @@ export async function installedSkillCapture(runtime, fixture) {
           score: gradeWeeklyBrief(answer, task),
           answer,
           modelUsageEventId: dispatch.eventId,
+          executionProfile: turn.trace.routing.executionProfile,
           skillApplied: Boolean(usedSkill),
           versionId: usedSkill?.skillVersion?.versionId,
           turnId: turn.turnId,
