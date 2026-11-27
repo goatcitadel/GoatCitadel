@@ -70,12 +70,15 @@ export async function installedSkillCapture(runtime, fixture) {
   const approved = await withNative(async (page) => {
     const press = (name, root = page) => root.getByRole("button", { name, exact: true });
     let stage = "complete the source workflow";
+    const rejectedRequests = [];
+    page.on("response", async (response) => {
+      const route = new URL(response.url()).pathname;
+      if (response.status() < 400 || !/\/(route-preflight|agent-send|skill-captures)\b/u.test(route)) return;
+      const reply = await response.json().catch(() => ({}));
+      rejectedRequests.push({ status: response.status(), route, error: reply.error });
+    });
     try {
-      const chat = await send(
-        "Weekly project brief capture",
-        `${syntheticSource} Use Status, Risks and Next steps headings. Keep the owner and date. Correction: omit the canceled logo redesign.`,
-        page,
-      );
+      const chat = await send("Weekly project brief capture", syntheticSource, page);
       const sourceTurn = await waitForTurn(chat, "completed");
       const sourceArticle = page.locator(`[data-turn-id="${sourceTurn.turnId}"]`);
       stage = "open and prepare skill capture";
@@ -88,6 +91,11 @@ export async function installedSkillCapture(runtime, fixture) {
         "focus on skill capture review",
         10_000,
       );
+      await sourceArticle
+        .getByLabel(/What should the skill preserve/)
+        .fill(
+          "Use Status, Risks and Next steps headings. Keep the owner and date. Omit canceled work such as the logo redesign.",
+        );
       const [prepared] = await Promise.all([
         page.waitForResponse(
           (response) =>
@@ -175,7 +183,8 @@ export async function installedSkillCapture(runtime, fixture) {
       };
     } catch (error) {
       await take(page, "failure").catch(() => undefined);
-      throw new Error(`${stage}: ${error.message}`, { cause: error });
+      const diagnostic = rejectedRequests.length ? ` ${JSON.stringify(rejectedRequests.at(-1))}` : "";
+      throw new Error(`${stage}: ${error.message}${diagnostic}`, { cause: error });
     }
   });
 
