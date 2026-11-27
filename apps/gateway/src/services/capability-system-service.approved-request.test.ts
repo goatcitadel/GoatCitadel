@@ -22,11 +22,13 @@ import {
   type ApprovedCodeModeRequest,
 } from "./capability-system-service.js";
 import { CODE_MODE_OFF_TOOL_ERROR, CODE_MODE_UNSUPPORTED_TOOL_ERROR } from "./code-mode-request-tool.js";
+import { resolveCurrentCodeModeSandboxMetadata } from "./code-mode-sandbox-runner.js";
 import { readToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
 
 // Each case spawns a real Code Mode child process; a contended Windows host needs headroom.
 const RUN_TIMEOUT_MS = 60_000;
 const READY: CodeModeReadiness = { enabled: true, sandboxEnabled: true, sandboxSupported: true, canRun: true };
+const TEST_SANDBOX = { mode: "best_effort_host", required: false, bestEffortHostEnabled: false } as const;
 /** The registry's file helpers a Code Mode script can be offered, including those that search across the read roots. */
 const CODE_MODE_FILE_HELPER_TOOLS = createDefaultToolRegistry()
   .toCatalog()
@@ -90,7 +92,7 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
       records: SavedApprovalRows;
     };
     expect(saved.compilerApiVersion).toBe("6.0.3");
-    const fx = createFixture({ records: saved.records, runId: saved.runId, sessionId: saved.request.sessionId });
+    const fx = createFixture({ records: saved.records, sessionId: saved.request.sessionId });
     for (const artifact of saved.artifacts) {
       const artifactPath = path.resolve(fx.root, artifact.relPath);
       fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
@@ -108,7 +110,8 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
     expect(fx.storage.approvals.get(saved.request.approvalId).status).toBe("approved");
 
     const expected = { runId: saved.runId, status: "completed", result: { text: "café", value: 42 } };
-    await expect(fx.service.runApprovedCodeModeRequest(saved.request)).resolves.toMatchObject(expected);
+    const first = await fx.service.runApprovedCodeModeRequest(saved.request);
+    expect(first, first.error).toMatchObject(expected);
     await expect(fx.service.runApprovedCodeModeRequest(saved.request)).resolves.toMatchObject(expected);
 
     const after = await fx.asyncStorage.codeModeRuns.get(saved.runId);
@@ -1029,13 +1032,12 @@ function toolRequest(approved: ApprovedCodeModeRequest): ToolInvokeRequest {
   };
 }
 
-function createFixture(saved?: { records: SavedApprovalRows; runId: string; sessionId: string }) {
+function createFixture(saved?: { records: SavedApprovalRows; sessionId: string }) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-code-mode-request-")));
   roots.push(root);
   const { storage, asyncStorage } = saved
     ? restoreFixtureDatabase(root, saved.records, saved.sessionId)
     : sharedStorage();
-  const savedSandbox = saved ? storage.codeModeRuns.get(saved.runId).sandbox : undefined;
   fixtureCount += 1;
   const fixtureId = fixtureCount;
   let turnCount = 0;
@@ -1082,14 +1084,12 @@ function createFixture(saved?: { records: SavedApprovalRows; runId: string; sess
       codeModeArtifactRoot: "./data/code-mode-artifacts",
       tempRoot: "./data/code-mode-temp",
       // Runs unsandboxed in the test process tree; readiness is stubbed below.
-      codeModeSandbox: { mode: "best_effort_host", required: false, bestEffortHostEnabled: false },
+      codeModeSandbox: TEST_SANDBOX,
       codeModeDockerBackend: { enabled: false },
       codeModeAiderAdapter: { enabled: false },
     },
     storage: asyncStorage,
     readFeatureFlags: async () => featureFlags,
-    // The captured run was approved with this synthetic posture. Keep the probe portable across hosts.
-    ...(savedSandbox ? { resolveSandboxMetadata: () => savedSandbox } : {}),
     listToolCatalog: () => [docsExtractTextTool(), ...CODE_MODE_FILE_HELPER_TOOLS],
     listSwitchedOffToolNames: () => new Set(),
     listLoadedSkills: () => [],
@@ -1198,12 +1198,17 @@ function restoreFixtureDatabase(root: string, records: SavedApprovalRows, sessio
   restoredDatabases.push(asyncStorage);
   storage.db.transaction("immediate", () => {
     for (const [table, row] of Object.entries(records)) {
-      const columns = Object.keys(row);
+      // Adapt only the host posture in the disposable database. The real launcher checks it against the current host.
+      const restoredRow =
+        table === "code_mode_runs"
+          ? { ...row, sandbox_json: JSON.stringify(resolveCurrentCodeModeSandboxMetadata(TEST_SANDBOX)) }
+          : row;
+      const columns = Object.keys(restoredRow);
       const placeholders = columns.map(() => "?").join(", ");
       const columnList = columns.map(quoteFixtureIdentifier).join(", ");
       storage.db
         .prepare(`INSERT INTO ${quoteFixtureIdentifier(table)} (${columnList}) VALUES (${placeholders})`)
-        .run(...Object.values(row));
+        .run(...Object.values(restoredRow));
       if (table === "sessions") {
         // Session lifecycle intents require a current timestamp. Recreate only the parent session's control metadata.
         storage.chatSessionMeta.ensure(sessionId, new Date().toISOString(), "default");
