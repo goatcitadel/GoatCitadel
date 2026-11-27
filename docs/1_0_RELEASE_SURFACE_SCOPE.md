@@ -63,6 +63,7 @@ The Cockpit router owns path resolution. The launch registry anchors these statu
 | `/system/dashboards` | `ship` | Manage saved layouts whose widgets read canonical data. |
 | `/system/browser-sessions` | `ship` | Inspect browser sessions and their granted access. |
 | `/system/improvement` | `experimental` | Inspect improvement proposals and their evidence. |
+| `/system/repairs` | `experimental` | See stuck work the detect-only repair sweep noticed; it watches and changes nothing. |
 | `/settings/general` | `ship` | Configure general and appearance defaults. |
 | `/settings/models` | `ship` | Configure providers, test connections and inspect model or local runtime options. |
 | `/settings/safety` | `ship` | Review approvals, trust policy and permission settings. |

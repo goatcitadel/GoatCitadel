@@ -149,6 +149,7 @@ import { createMobileRouteService, type MobileRoutePort, type MobileRouteService
 import { createNpuRouteService, type NpuRoutePort, type NpuRouteService } from "./npu-route-service.js";
 import type { PersonalOpsRouteService } from "./personal-ops-route-service.js";
 import type { OpsSavedBoardService } from "./ops-saved-board-service.js";
+import type { RuntimeRepairsRuntime } from "./runtime-repair/runtime-repair-composition.js";
 import type {
   CommunicationsMailDraftRecovery,
   CommunicationsMailDraftStore,
@@ -411,6 +412,8 @@ export interface GatewayRouteServices {
   npu: NpuRouteService;
   personalOps: PersonalOpsRouteService;
   opsSavedBoards?: OpsSavedBoardService;
+  /** Detect-only Runtime Repair Sweep findings. Absent in partial test hosts. */
+  runtimeRepairs?: RuntimeRepairsRuntime;
   onboarding: OnboardingRouteService;
   obsidian: ObsidianRouteService;
   orchestration: OrchestrationRouteService;

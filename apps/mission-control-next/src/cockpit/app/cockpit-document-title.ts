@@ -1,6 +1,6 @@
 import { RAIL_GROUPS, readRouteSectionLabel } from "../../app/route-navigation-metadata";
 import { CAPABILITIES_TABS } from "../areas/capabilities/capabilities-tabs";
-import { SYSTEM_IMPROVEMENT_VIEW, SYSTEM_VIEWS } from "../areas/system/system-views";
+import { SYSTEM_IMPROVEMENT_VIEW, SYSTEM_REPAIRS_VIEW, SYSTEM_VIEWS } from "../areas/system/system-views";
 import { WORK_VIEWS } from "../areas/work/work-views";
 
 type RouteModelArea = "settings" | "library" | "ops";
@@ -20,7 +20,7 @@ const labelsById = (views: ReadonlyArray<{ id: string; label: string }>) =>
  * tab the operator clicked: System › Spend is "Spend", not the Classic "Costs", and Browser sessions is not Sessions.
  */
 const COCKPIT_TAB_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  system: labelsById([...SYSTEM_VIEWS, SYSTEM_IMPROVEMENT_VIEW]),
+  system: labelsById([...SYSTEM_VIEWS, SYSTEM_IMPROVEMENT_VIEW, SYSTEM_REPAIRS_VIEW]),
   work: labelsById(WORK_VIEWS),
   capabilities: { ...labelsById(CAPABILITIES_TABS), advanced: "Advanced setup" },
   settings: { "first-run": "Get started" },

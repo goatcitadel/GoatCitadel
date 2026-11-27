@@ -77,7 +77,7 @@ export interface SourceSummary {
   auditEvents: number;
 }
 
-const AUDIT_STREAMS = ["tool_invocations", "policy_blocks", "approvals", "hooks"] as const;
+const AUDIT_STREAMS = ["tool_invocations", "policy_blocks", "approvals", "hooks", "runtime_repairs"] as const;
 const CUTOVER_IMPORT_BATCH_SIZE = 1000;
 const SQLITE_IMPORT_EXCLUDED_TABLES = new Set(["schema_migrations"]);
 

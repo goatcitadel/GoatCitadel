@@ -3197,6 +3197,22 @@
       "evidence": "google-workspace-review-service.test.ts covers the source, workspace, and staged-file checks. The architecture collector measures 10 accesses and zero host callbacks.",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 10
+    },
+    {
+      "path": "apps/gateway/src/services/runtime-repair/runtime-repair-composition.ts",
+      "planStep": "C0",
+      "reason": "Builds the detect-only Runtime Repair Sweep from the route composition port and adapts storage to its read-only and audit ports, so GatewayService only adds two lines.",
+      "evidence": "runtime-repair-composition.test.ts and runtime-repair-sweep.storage.test.ts cover the adapters, throttling and admission. The architecture collector measures 6 accesses and zero host callbacks.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 6
+    },
+    {
+      "path": "apps/gateway/src/services/runtime-repair/runtime-repair-sweep-service.ts",
+      "planStep": "C0",
+      "reason": "Owns the detect-only Runtime Repair Sweep: bounded reads of durable-run and approval state, finding transitions in the runtime_repairs audit stream, and rebuild after restart. It never writes to an owner.",
+      "evidence": "runtime-repair-sweep-service.test.ts and runtime-repair-sweep.storage.test.ts cover dedupe, clearing, unreadable sources, audit failures and rebuild. The architecture collector measures 11 accesses and zero host callbacks.",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 11
     }
   ]
 }

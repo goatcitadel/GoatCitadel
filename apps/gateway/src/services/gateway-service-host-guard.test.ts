@@ -93,6 +93,7 @@ const EXTRACTED_GATEWAY_SERVICE_SYMBOLS = [
 const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "mcpAdministration",
   "approvalRuntime",
+  "runSharedHostCronWork",
   "assemblyService",
   "backupRetentionService",
   "capabilityScopeResolver",

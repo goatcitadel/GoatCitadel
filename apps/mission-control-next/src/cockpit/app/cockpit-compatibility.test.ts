@@ -131,6 +131,7 @@ describe("Cockpit compatibility coverage", () => {
     "/library/agents?view=catalog",
     "/library/communications?workspaceId=w#compose",
     "/system/browser-sessions?sessionId=s%2F1",
+    "/system/repairs",
     "/library/curator?skillId=skill-a",
     "/library/journey?category=memory&eventId=e-1",
     "/library/prompt-packs",

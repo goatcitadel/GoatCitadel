@@ -61,6 +61,7 @@ import { commsRoutes } from "./routes/comms.js";
 import { communicationsRoutes } from "./routes/communications.js";
 import { personalOpsRoutes } from "./routes/personal-ops.js";
 import { opsSavedBoardRoutes } from "./routes/ops-boards.js";
+import { runtimeRepairsRoutes } from "./routes/runtime-repairs.js";
 import { knowledgeRoutes } from "./routes/knowledge.js";
 import { authRoutes } from "./routes/auth.js";
 import { secretsRoutes } from "./routes/secrets.js";
@@ -471,6 +472,10 @@ export async function buildApp(options: GatewayPluginOptions = {}) {
       throw new Error("Ops saved board route service is not composed.");
     }
     await app.register(opsSavedBoardRoutes, { service: app.services.opsSavedBoards });
+    if (!app.services.runtimeRepairs) {
+      throw new Error("Runtime repair route service is not composed.");
+    }
+    await app.register(runtimeRepairsRoutes, { service: app.services.runtimeRepairs });
     await app.register(knowledgeRoutes);
     await app.register(engineeringLearningRoutes);
     await app.register(async (changePlanApp) => {

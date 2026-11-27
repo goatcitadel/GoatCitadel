@@ -21,7 +21,7 @@ const AUDIT_RECENT_DELIVERY_ID_LIMIT = 10_000;
 const AUDIT_DELIVERY_TAIL_BYTES = 512 * 1024;
 const AUDIT_TAIL_START_BYTES = 64 * 1024;
 
-export type AuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks";
+export type AuditStream = "tool_invocations" | "policy_blocks" | "approvals" | "hooks" | "runtime_repairs";
 
 export interface AuditAppendOptions {
   deliveryId?: string;

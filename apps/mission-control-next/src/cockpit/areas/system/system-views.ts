@@ -17,3 +17,10 @@ export const SYSTEM_IMPROVEMENT_VIEW = {
   label: "Improvement",
   path: "/system/improvement",
 } as const;
+
+/** Repairs watches only in Phase 0: reachable by direct link, not a tab, until it can act (docs/RUNTIME_REPAIR_SWEEP.md). */
+export const SYSTEM_REPAIRS_VIEW = {
+  id: "repairs",
+  label: "Repairs",
+  path: "/system/repairs",
+} as const;
