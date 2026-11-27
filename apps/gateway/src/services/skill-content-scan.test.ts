@@ -320,4 +320,54 @@ describe("skill scan file readers", () => {
       syncOpen.mockRestore();
     }
   });
+
+  it.each(["identity", "version"] as const)(
+    "discards bytes and closes scan handles on file %s changes",
+    async (kind) => {
+      root = mkdtempSync(path.join(os.tmpdir(), "skill-scan-"));
+      const filename = path.join(root, "SKILL.md");
+      writeFileSync(filename, CLEAN_SKILL);
+      const observed = fs.lstatSync(filename, { bigint: true });
+      const changed = Object.assign(fs.lstatSync(filename, { bigint: true }), {
+        ...(kind === "identity" ? { ino: observed.ino + 1n } : { mtimeNs: observed.mtimeNs + 1n }),
+      });
+      const openedStat = kind === "identity" ? changed : observed;
+      const unreadable = [{ path: "SKILL.md", bytes: new Uint8Array(), unreadable: true }];
+
+      const handle = await fsp.open(filename, "r");
+      const openAsync = vi.spyOn(fsp, "open").mockResolvedValueOnce(handle);
+      const statAsync = vi.spyOn(handle, "stat").mockResolvedValueOnce(openedStat).mockResolvedValueOnce(changed);
+      const readAsync = vi.spyOn(handle, "read");
+      const closeAsync = vi.spyOn(handle, "close");
+      try {
+        expect((await readSkillScanFiles(root)).files).toEqual(unreadable);
+        expect(readAsync).toHaveBeenCalledTimes(kind === "identity" ? 0 : 1);
+        expect(closeAsync).toHaveBeenCalledOnce();
+      } finally {
+        openAsync.mockRestore();
+        statAsync.mockRestore();
+        readAsync.mockRestore();
+        closeAsync.mockRestore();
+        await handle.close();
+      }
+
+      const fd = fs.openSync(filename, "r");
+      const openSync = vi.spyOn(fs, "openSync").mockReturnValueOnce(fd);
+      const statSync = vi.spyOn(fs, "fstatSync").mockReturnValueOnce(openedStat).mockReturnValueOnce(changed);
+      const readSync = vi.spyOn(fs, "readSync");
+      const closeSync = vi.spyOn(fs, "closeSync");
+      try {
+        expect(readSkillScanFilesSync(root).files).toEqual(unreadable);
+        expect(readSync).toHaveBeenCalledTimes(kind === "identity" ? 0 : 1);
+        expect(closeSync).toHaveBeenCalledExactlyOnceWith(fd);
+      } finally {
+        const closed = closeSync.mock.calls.some(([descriptor]) => descriptor === fd);
+        openSync.mockRestore();
+        statSync.mockRestore();
+        readSync.mockRestore();
+        closeSync.mockRestore();
+        if (!closed) fs.closeSync(fd);
+      }
+    },
+  );
 });
