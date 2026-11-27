@@ -90,8 +90,9 @@ public sealed partial class MainWindow
                 // Launch never stops anything: over a live, unowned process it only waits and fails, and the next
                 // checks lead to another attempt or a give-up.
                 await StopRuntimeAsync(byWatchdog: true);
+                // The window may have closed, or the operator acted, while the stop ran.
+                if (_cleanedUp || Watchdog.OperatorGeneration != generation) return;
             }
-            if (_cleanedUp || Watchdog.OperatorGeneration != generation) return;
             await LaunchRuntimeAsync(byWatchdog: true);
         }
         finally
