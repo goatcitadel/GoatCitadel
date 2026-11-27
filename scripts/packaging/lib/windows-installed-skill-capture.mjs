@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   briefInstructions,
@@ -119,7 +120,9 @@ export async function installedSkillCapture(runtime, fixture) {
       const draft = await waitForTurn({ ...chat, content: prompt }, "completed");
       assert.equal(draft.assistantMessage?.content.trim(), briefInstructions.trim());
       const draftArticle = page.locator(`[data-turn-id="${draft.turnId}"]`);
-      await draftArticle.getByText("Review skill draft", { exact: true }).click();
+      const reviewDraft = draftArticle.getByText("Review skill draft", { exact: true });
+      await reviewDraft.click();
+      await reviewDraft.evaluate((element) => element.scrollIntoView({ block: "center" }));
       await take(page, "draft-review");
       const [staged] = await Promise.all([
         page.waitForResponse(
@@ -193,6 +196,7 @@ export async function installedSkillCapture(runtime, fixture) {
       throw new Error(`${stage}: ${error.message}${diagnostic}`, { cause: error });
     }
   });
+  await writeFile(path.join(evidence, "skill-capture-native.json"), JSON.stringify(approved, null, 2));
 
   const control = await api("/api/v1/workspaces", "POST", { name: "Weekly brief untrained control" });
   assert.ok(control.workspaceId && control.workspaceId !== workspaceId);
@@ -247,6 +251,19 @@ export async function installedSkillCapture(runtime, fixture) {
       ...gradeBriefPair(outcomes.disabled.score, outcomes.enabled.score),
     });
   }
+  const improved = pairs.filter((pair) => pair.improved).length;
+  const regressions = pairs.filter((pair) => pair.regression).length;
+  const benchmark = {
+    provider: "ollama",
+    serverVersion,
+    model,
+    modelDigest,
+    improved,
+    regressions,
+    gatePassed: improved >= 4 && regressions === 0,
+    pairs,
+  };
+  await writeFile(path.join(evidence, "skill-reuse-benchmark.json"), JSON.stringify(benchmark, null, 2));
   const detail = await api(approved.candidateRoute);
   const requested = await api(`${approved.candidateRoute}/revoke`, "POST", {
     expectedRevision: detail.revision,
@@ -272,21 +289,10 @@ export async function installedSkillCapture(runtime, fixture) {
   const fresh = await send("Revoked skill stays absent", `Write a ${briefSkillName}. ${syntheticSource}`);
   const freshTurn = await waitForTurn(fresh, "completed");
   assert.ok(!(await receiptFor(fresh, freshTurn)).usedSources.some((source) => source.ref === approved.runtimeSkillId));
-  const improved = pairs.filter((pair) => pair.improved).length;
-  const regressions = pairs.filter((pair) => pair.regression).length;
   return {
     ...approved,
     revocation,
     revokedAfterRestartTurnId: freshTurn.turnId,
-    benchmark: {
-      provider: "ollama",
-      serverVersion,
-      model,
-      modelDigest,
-      improved,
-      regressions,
-      gatePassed: improved >= 4 && regressions === 0,
-      pairs,
-    },
+    benchmark,
   };
 }

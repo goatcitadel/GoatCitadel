@@ -100,7 +100,7 @@ async function withServer(exe, args, cwd, childEnv, run) {
   }
 }
 
-async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [], recall = false, skillCapture = false, extraProviders = [] }, run) {
+async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [], recall = false, skillCapture = false, extraProviders = [], extraModelMetadata = {} }, run) {
   const [gatewayPort, uiPort] = await ports(2);
   const home = path.join(root, "home");
   const configDir = path.join(home, "runtime-root", "config");
@@ -135,9 +135,13 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
   await fs.mkdir(runtimeDir, { recursive: true });
   await writeJson(path.join(configDir, "goatcitadel.json"), config);
   await writeJson(path.join(runtimeDir, "launcher-settings.json"), { schemaVersion: 1, gatewayPort, uiPort });
+  const modelMetadata = { ...extraModelMetadata };
   if (providerId === DETERMINISTIC_LLM_PROVIDER_ID) {
+    modelMetadata[`${providerId}/${model}`] = { contextWindow: 128000, outputTokenLimit: 16000 };
+  }
+  if (Object.keys(modelMetadata).length) {
     await writeJson(path.join(configDir, "llm-model-metadata.json"), {
-      version: 1, entries: { [`${providerId}/${model}`]: { contextWindow: 128000, outputTokenLimit: 16000 } },
+      version: 1, entries: modelMetadata,
     });
   }
   const token = testSecret();
@@ -268,11 +272,20 @@ async function withPinnedOllama(root, run) {
     });
     const tagList = await (await request(port, "/api/tags")).json();
     assert.equal(tagList.models.find((entry) => entry.name === ollamaModel)?.digest, modelDigest);
+    const show = await request(port, "/api/show", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: ollamaModel }),
+    });
+    assert.ok(show.ok, `Ollama model metadata request failed with HTTP ${show.status}`);
+    const { model_info: modelInfo } = await show.json();
+    const contextWindow = modelInfo?.[`${modelInfo["general.architecture"]}.context_length`];
+    assert.ok(Number.isSafeInteger(contextWindow) && contextWindow > 0, "Ollama omitted the model context window");
     const config = await readJson(path.join(app, "templates", "config", "goatcitadel.example.json"));
     const ollama = config.llm.providers.find((entry) => entry.providerId === "ollama");
     assert.ok(ollama, "The installed provider catalog omitted Ollama");
     const provider = { ...ollama, baseUrl: `http://127.0.0.1:${port}/v1`, defaultModel: ollamaModel, models: [ollamaModel] };
-    return run(provider, serverVersion);
+    return run(provider, serverVersion, contextWindow);
   });
 }
 
@@ -452,8 +465,12 @@ async function realChannel(root) {
 }
 
 const recallCheck = ["recall", (root) => installedRecall(root, evidence, withStub, poll)];
-const skillCheck = ["skill-capture", (root) => withPinnedOllama(root, (provider, serverVersion) =>
-  withStub(root, { skillCapture: true, extraProviders: [provider] }, (runtime) => installedSkillCapture(runtime, {
+const skillCheck = ["skill-capture", (root) => withPinnedOllama(root, (provider, serverVersion, contextWindow) =>
+  withStub(root, {
+    skillCapture: true,
+    extraProviders: [provider],
+    extraModelMetadata: { [`${provider.providerId}/${ollamaModel}`]: { contextWindow, outputTokenLimit: 1024 } },
+  }, (runtime) => installedSkillCapture(runtime, {
     evidence, poll, model: ollamaModel, modelDigest, serverVersion,
   }), {
     replyText: "Status: Build passed.\nRisks: Approval is missing.\nNext steps: Jess checks approval on Friday.",
