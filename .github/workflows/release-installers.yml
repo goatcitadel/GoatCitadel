@@ -33,7 +33,7 @@ on:
         description: "Independently verified SHA-256 of the unsigned x64 EXE"
         type: string
       skill_capture_only:
-        description: "Limit the installed replay to skill capture and the paired skill-reuse pilot."
+        description: "Build only Windows x64 or replay only skill capture and the paired skill-reuse pilot."
         type: boolean
         default: false
 
@@ -123,7 +123,7 @@ jobs:
       fail-fast: false
       matrix:
         include: >-
-          ${{ fromJSON(inputs.recall_x64_only && '[{"target":"windows-x64","runner":"windows-latest"}]'
+          ${{ fromJSON((inputs.recall_x64_only || inputs.skill_capture_only) && '[{"target":"windows-x64","runner":"windows-latest"}]'
           || '[{"target":"windows-x64","runner":"windows-latest"},{"target":"windows-arm64","runner":"windows-11-arm"}]') }}
     steps:
       - name: Require the Windows package publisher for a tagged release
@@ -758,7 +758,7 @@ jobs:
 
   linux:
     runs-on: ubuntu-latest
-    if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' && !inputs.recall_x64_only) }}
+    if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' && !inputs.recall_x64_only && !inputs.skill_capture_only) }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -826,7 +826,7 @@ jobs:
 
   macos-build-inputs:
     runs-on: macos-15
-    if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' && !inputs.recall_x64_only) }}
+    if: ${{ (github.event_name == 'push' && github.repository == 'goatcitadel/GoatCitadel' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_unsigned == 'true' && !inputs.recall_x64_only && !inputs.skill_capture_only) }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

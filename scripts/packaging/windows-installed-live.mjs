@@ -212,6 +212,14 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
     }, `the Chat turn to reach ${status}`, 155_000);
   }
 
+  const stopRuntime = async () => {
+    let stopped = await cli("stop");
+    for (let retry = 0; retry < 2 && (stopped.notStopped?.length ?? 0) > 0; retry++) {
+      await delay(750);
+      stopped = await cli("stop");
+    }
+    assert.equal(stopped.notStopped?.length ?? 0, 0, "An installed fixture runtime process did not stop");
+  };
   try {
     const launch = await cli("launch", "--no-open", "--wait");
     assert.equal(launch.status, "ready");
@@ -228,8 +236,7 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
       }
     }, "onboarding completion to persist", 10_000);
     const restart = async () => {
-      const stopped = await cli("stop");
-      assert.equal(stopped.notStopped?.length ?? 0, 0);
+      await stopRuntime();
       const restarted = await cli("launch", "--no-open", "--wait");
       assert.equal(restarted.status, "ready");
     };
@@ -240,8 +247,7 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
     };
     return await run({ api, send, waitForTurn, restart, withNative });
   } finally {
-    const stopped = await cli("stop");
-    assert.equal(stopped.notStopped?.length ?? 0, 0, "An installed runtime process did not stop");
+    await stopRuntime();
   }
 }
 
