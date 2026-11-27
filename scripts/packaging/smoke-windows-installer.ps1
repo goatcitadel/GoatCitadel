@@ -132,9 +132,12 @@ $previousGatewayUrl = [Environment]::GetEnvironmentVariable("GOATCITADEL_GATEWAY
 $previousMissionControlUrl = [Environment]::GetEnvironmentVariable("GOATCITADEL_MISSION_CONTROL_URL", "Process")
 $env:GOATCITADEL_HOME = $runtimeBase
 $env:GOATCITADEL_APP_DIR = $appHome
-# This clean-profile lifecycle fixture has no PostgreSQL cluster. Choose its
-# isolated SQLite database explicitly now that the launcher honors configuration.
-$env:GOATCITADEL_DATABASE_DRIVER = "sqlite"
+# Exercise the shipped database default on a clean install. Pin SQLite only for
+# the historical beta upgrade fixture.
+Remove-Item Env:GOATCITADEL_DATABASE_DRIVER -ErrorAction SilentlyContinue
+if ($upgradeMode) {
+  $env:GOATCITADEL_DATABASE_DRIVER = "sqlite"
+}
 $env:WEBVIEW2_USER_DATA_FOLDER = $webViewDataDir
 Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER -ErrorAction SilentlyContinue
 Remove-Item Env:GOATCITADEL_GATEWAY_URL -ErrorAction SilentlyContinue
@@ -628,6 +631,10 @@ try {
       throw "Unattended upgrade changed the beta workspace or saved transcript."
     }
     Write-Host "Beta upgrade preserved the workspace, transcript, guidance file, and setting in SQLite."
+  }
+
+  if (-not $upgradeMode -and -not (Test-Path -LiteralPath (Join-Path $runtimeBase "runtime-root/data/index.db") -PathType Leaf)) {
+    throw "Clean Windows install did not create its default SQLite database."
   }
 
   Stop-InstalledProcesses
