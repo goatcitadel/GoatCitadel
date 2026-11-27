@@ -207,7 +207,7 @@ export async function installedSkillCapture(runtime, fixture) {
     const outcomes = {};
     for (const condition of order) {
       const scope = condition === "enabled" ? workspaceId : control.workspaceId;
-      const prompt = `Write a ${briefSkillName} using these notes only.\n\n${task.input}`;
+      const prompt = `@skill ${approved.runtimeSkillId}\nWrite a weekly project brief using these notes only.\n\n${task.input}`;
       const chat = await send(`Held-out brief ${task.id} ${condition}`, prompt, undefined, {
         providerId: "ollama",
         model,
@@ -230,10 +230,13 @@ export async function installedSkillCapture(runtime, fixture) {
         "confirmation that the pinned Ollama model produced a response",
         15_000,
       );
-      const receipt = await receiptFor(chat, turn, scope);
-      const versionId = receipt.usedSources.find((source) => source.ref === approved.runtimeSkillId)?.skillVersion
-        ?.versionId;
-      assert.equal(versionId, condition === "enabled" ? approved.capture.versionId : undefined);
+      const readVersion = async () => (await receiptFor(chat, turn, scope)).usedSources.find(
+        (source) => source.ref === approved.runtimeSkillId,
+      )?.skillVersion?.versionId;
+      const versionId = condition === "enabled"
+        ? await poll(readVersion, `the applied skill receipt for ${task.id}`, 15_000)
+        : await readVersion();
+      assert.equal(versionId, condition === "enabled" ? approved.capture.versionId : undefined, `Skill version for ${task.id} (${condition})`);
       const answer = turn.assistantMessage?.content ?? "";
       outcomes[condition] = {
         score: gradeWeeklyBrief(answer, task),

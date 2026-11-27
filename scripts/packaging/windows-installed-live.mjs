@@ -22,6 +22,7 @@ const [app, scratch, evidence, nativeDebugPort, ollamaExe, ntfyExe] = process.ar
 const recallOnly = ollamaExe === "--recall-only";
 const skillCaptureOnly = process.env.GOATCITADEL_INSTALLED_SKILL_CAPTURE_ONLY === "true";
 const ollamaModel = "qwen2.5:0.5b";
+const skillPilotContextWindow = 8192;
 const modelDigest = "a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67";
 const ntfyTokenEnv = "NTFY_READINESS_TOKEN";
 const marker = "READINESS-" + randomUUID().slice(0, 8).toUpperCase();
@@ -263,7 +264,7 @@ async function withPinnedOllama(root, run) {
   const serverEnv = {
     ...env, OLLAMA_HOST: `127.0.0.1:${port}`, OLLAMA_MODELS: path.join(root, "models"),
     USERPROFILE: root, OLLAMA_NO_CLOUD: "1", OLLAMA_NUM_PARALLEL: "1", CUDA_VISIBLE_DEVICES: "-1",
-    ...(skillCaptureOnly && { OLLAMA_CONTEXT_LENGTH: "4096", OLLAMA_KEEP_ALIVE: "30m" }),
+    ...(skillCaptureOnly && { OLLAMA_CONTEXT_LENGTH: String(skillPilotContextWindow), OLLAMA_KEEP_ALIVE: "30m" }),
   };
   return withServer(ollamaExe, ["serve"], root, serverEnv, async () => {
     const serverVersion = await poll(async () => {
@@ -299,7 +300,7 @@ async function withPinnedOllama(root, run) {
     assert.ok(ollama, "The installed provider catalog omitted Ollama");
     const provider = { ...ollama, baseUrl: `http://127.0.0.1:${port}/v1`, defaultModel: ollamaModel, models: [ollamaModel] };
     try {
-      return await run(provider, serverVersion, skillCaptureOnly ? Math.min(4096, contextWindow) : contextWindow);
+      return await run(provider, serverVersion, Math.min(skillPilotContextWindow, contextWindow));
     } catch (error) {
       if (skillCaptureOnly) {
         const log = await fs.readFile(path.join(root, `${path.basename(ollamaExe)}.log`), "utf8").catch(() => "");
