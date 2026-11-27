@@ -195,8 +195,8 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
         return redacted(JSON.stringify({
           type: event.err?.type,
           code: event.err?.code,
-          message: event.err?.message,
-          frames: event.err?.stack?.split("\n").slice(1, 4),
+          message: event.err?.error ?? event.err?.message,
+          frames: event.err?.stack?.split("\n").filter((line) => /^\s+at\s/u.test(line)).slice(0, 3),
         }));
       } catch {
         continue;
