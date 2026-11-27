@@ -171,6 +171,10 @@ Dependabot alerts are actionable dependency findings, but this repo still needs 
 
 This alert means CodeQL found a `stream.pipeline(...)` call whose returned promise or callback error path is not visibly handled.
 
+Import `pipeline` from `node:stream/promises` for the promise-based patterns below. When a call uses
+the callback API from `node:stream`, inspect the error in the completion callback and propagate it
+through the owning operation's failure path.
+
 Current repo pattern:
 
 1. Prefer `await pipeline(...)` inside `try/catch` when already in an async handler.
@@ -185,7 +189,7 @@ Live query pattern:
 gh api --paginate "repos/goatcitadel/GoatCitadel/code-scanning/alerts?state=open&per_page=100" --jq '.[] | select(.rule.id=="js/unhandled-error-in-stream-pipeline")'
 ```
 
-If the query is empty and local `pipeline(...)` call sites are visibly awaited or caught, treat the rule as currently clear. If GitHub still shows an alert for already-handled code, dismiss as `false positive` only with a comment naming the exact local handler and the validation/query evidence.
+If the query is empty and local call sites explicitly handle pipeline failures, treat the rule as currently clear. If GitHub still shows an alert for already-handled code, dismiss as `false positive` only with a comment naming the exact local handler and the validation/query evidence.
 
 ---
 
