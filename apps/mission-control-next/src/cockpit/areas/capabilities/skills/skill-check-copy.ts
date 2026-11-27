@@ -1,6 +1,6 @@
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
-import type { SkillHubBlockerCode } from "@goatcitadel/contracts";
+import type { SkillHubBlockerCode, SkillScanFindingCode } from "@goatcitadel/contracts";
 
 // What GoatCitadel's checks found, in plain words. The codes themselves come from the Gateway as it stored them, and
 // appear on screen only inside Technical details; nothing here decides whether a skill can be installed.
@@ -27,6 +27,19 @@ export const SKILL_BLOCKER_COPY: Readonly<Record<SkillHubBlockerCode, string>> =
   CANDIDATE_ALREADY_EXISTS: "It's already installed.",
   RUNTIME_ALREADY_EXISTS: "It's already installed.",
   BUNDLED_SKILL_NAME_TAKEN: "GoatCitadel already has a built-in skill with this name.",
+  HIDDEN_TEXT_DETECTED: "Its files contain hidden or disguised text.",
+  UNREADABLE_SKILL_FILE: "Some of its files can't be read, so they couldn't be checked.",
+};
+
+/** One plain sentence for each thing the content check of a skill in the operator's own folders can find. */
+export const SKILL_SCAN_FINDING_COPY: Readonly<Record<SkillScanFindingCode, string>> = {
+  prompt_injection: "Its instructions try to override GoatCitadel's rules.",
+  hidden_text: "Its files contain hidden or disguised text.",
+  unsafe_script: "It includes scripts that look unsafe.",
+  risky_script: "It mentions commands worth a closer look, such as deleting files or reading passwords.",
+  network_use: "It reaches out to the internet.",
+  unreadable_file: "Some of its files can't be read, so they couldn't be checked.",
+  scan_incomplete: "Some of its files couldn't be checked.",
 };
 
 /** The sentence for a code the map doesn't hold: it is one of GoatCitadel's checks all the same. */

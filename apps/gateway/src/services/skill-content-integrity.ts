@@ -48,6 +48,26 @@ export function captureSkillContentIntegritySync(skillDir: string): SkillContent
   return buildManifest(metadata.map(hashFileSync));
 }
 
+/**
+ * The tree hash of files already read into memory, by the same rules as {@link captureSkillContentIntegrity}, so a
+ * caller can tell whether bytes it holds are the content a stored hash names. Undefined when they exceed its limits.
+ */
+export function skillContentTreeSha256(files: ReadonlyArray<{ path: string; bytes: Uint8Array }>): string | undefined {
+  const entries = files
+    .filter((file) => shouldIncludeSkillContentPath(file.path))
+    .map((file) => ({
+      path: file.path,
+      sha256: createHash("sha256").update(file.bytes).digest("hex"),
+      bytes: file.bytes.byteLength,
+    }))
+    .sort((left, right) => compareText(left.path, right.path));
+  try {
+    return buildManifest(entries).treeSha256;
+  } catch {
+    return undefined;
+  }
+}
+
 export function skillContentIntegrityMatches(
   expected: SkillContentIntegrityManifest,
   actual: SkillContentIntegrityManifest,

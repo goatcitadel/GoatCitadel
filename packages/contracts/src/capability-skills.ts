@@ -3,6 +3,7 @@ import type { CapabilityCatalogEntry, SkillLifecycleState } from "./capabilities
 import type { SkillCategoryId, SkillOrigin } from "./skill-categories.js";
 import type { SkillHubOperationSettlementDisposition } from "./skill-hub-lifecycle.js";
 import type { SkillRuntimeState, SkillSourceProvider } from "./skills.js";
+import type { SkillScanFinding } from "./skill-scan.js";
 
 // ---------------------------------------------------------------------------
 // Skill use counts: GET /api/v1/capabilities/skills/usage
@@ -39,6 +40,8 @@ export interface CapabilitySkillItem {
   skillId: string;
   name: string;
   description: string;
+  /** The content check of a skill in the operator's own folders found something. Shown, never enforced. */
+  scanWarning?: true;
   category: SkillCategoryId;
   /**
    * `built_in` only for GoatCitadel's own skills: bundled ones, and shipped ones whose provenance shows they came from
@@ -130,6 +133,8 @@ export interface CapabilitySkillDetail {
   };
   trustLabel?: string;
   reviewWarning?: string;
+  /** What the content check of a skill in the operator's own folders found. Absent when it found nothing. */
+  scanFindings?: SkillScanFinding[];
   note?: string;
   stateUpdatedAt?: string;
   /** The inspectable catalog's `skill:<id>` entry, for the policy and source inspectors. Absent when unreadable. */

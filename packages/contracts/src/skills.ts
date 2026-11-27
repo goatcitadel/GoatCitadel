@@ -1,3 +1,4 @@
+import type { SkillScanSummary } from "./skill-scan.js";
 import type { CapabilityCategory, SkillLifecycleRecord, SkillLifecycleState } from "./capabilities.js";
 
 export interface SkillFrontmatter {
@@ -78,6 +79,11 @@ export interface SkillListItem extends LoadedSkill {
   callable?: boolean;
   trustLabel?: string;
   reviewWarning?: string;
+  /**
+   * The content scan of a skill in the operator's own folders (workspace or managed), worked out when skills are
+   * listed and not stored. It is at most a warning and never changes callability.
+   */
+  scanVerdict?: SkillScanSummary;
 }
 
 export interface SkillActivationDecision {
@@ -328,7 +334,8 @@ export type SkillPromptwareRuleId =
   | "privileged_prompt_exfiltration"
   | "approval_policy_bypass"
   | "tool_execution_without_approval"
-  | "role_identity_override";
+  | "role_identity_override"
+  | "hidden_text_obfuscation";
 
 export interface SkillPromptwareFinding {
   scannerVersion: string;
@@ -344,6 +351,8 @@ export interface SkillPromptwareFinding {
 export interface SkillImportValidationResult {
   valid: boolean;
   riskLevel: "low" | "medium" | "high";
+  /** The shared content scan; `block` findings are also listed in `errors`. */
+  scanVerdict?: SkillScanSummary;
   reviewDisposition?: "allow" | "conditional" | "reference_only" | "reject";
   reviewMessage?: string;
   errors: string[];

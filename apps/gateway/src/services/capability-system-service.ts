@@ -1,3 +1,4 @@
+import { operatorSkillScanVerdict } from "./operator-skill-scan.js";
 import { applyReleaseBoundSkillRetrust } from "./release-bound-skill-retrust-owner.js";
 import { assertBackgroundSkillEvaluationCurrent } from "./background-skill-candidate-evidence.js";
 import {
@@ -672,6 +673,11 @@ export class CapabilitySystemService {
         const state = stateMap.get(skill.skillId);
         const lifecycle = await this.resolveSkillLifecycle(skill);
         if (!lifecycle) return undefined;
+        const integrity = lifecycle.provenance?.contentIntegrity;
+        const scanVerdict = await operatorSkillScanVerdict(
+          skill,
+          integrity?.verified ? integrity.treeSha256 : undefined,
+        );
         return {
           ...skill,
           revision:
@@ -689,6 +695,7 @@ export class CapabilitySystemService {
           callable: isSkillCallable(lifecycle, state?.state ?? "enabled"),
           trustLabel: lifecycle.trustLabel,
           reviewWarning: lifecycle.reviewWarning,
+          ...(scanVerdict ? { scanVerdict } : {}),
         };
       }),
     );

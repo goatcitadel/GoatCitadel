@@ -155,6 +155,7 @@ export function buildCapabilitySkillItems(input: {
         skillId: skill.skillId,
         name: skill.name,
         description: skill.description ?? "",
+        ...(skill.scanVerdict?.verdict === "warn" ? { scanWarning: true as const } : {}),
         category: skillCategoryFor({ skillId: skill.skillId, tags: skill.tags, keywords: skill.keywords }),
         // A built-in plugin's skill is GoatCitadel's own, by the plugin record's trust, never a replayed check's.
         origin:
@@ -219,6 +220,9 @@ export function buildCapabilitySkillDetail(
       : {}),
     ...(skill.trustLabel ? { trustLabel: skill.trustLabel } : {}),
     ...(skill.reviewWarning ? { reviewWarning: skill.reviewWarning } : {}),
+    ...(skill.scanVerdict?.findings.length
+      ? { scanFindings: skill.scanVerdict.findings.map((finding) => ({ ...finding })) }
+      : {}),
     ...(skill.note ? { note: skill.note } : {}),
     ...(skill.stateUpdatedAt ? { stateUpdatedAt: skill.stateUpdatedAt } : {}),
     ...(catalogEntry ? { catalogEntry } : {}),

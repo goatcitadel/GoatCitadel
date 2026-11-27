@@ -1,4 +1,4 @@
-import { SKILL_HUB_BLOCKER_CODES } from "@goatcitadel/contracts";
+import { SKILL_HUB_BLOCKER_CODES, SKILL_SCAN_FINDING_CODES } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
 import {
   blockerLines,
@@ -6,6 +6,7 @@ import {
   CANT_BE_INSTALLED,
   describeCheckFailure,
   SKILL_BLOCKER_COPY,
+  SKILL_SCAN_FINDING_COPY,
   UNKNOWN_BLOCKER_COPY,
 } from "./skill-check-copy";
 
@@ -31,11 +32,23 @@ describe("skill check copy", () => {
     expect(blockerSentence("ARTIFACT_NOT_RETAINED")).toBe(UNKNOWN_BLOCKER_COPY);
   });
 
+  it("words a risky script finding for every command it covers", () => {
+    expect(SKILL_SCAN_FINDING_COPY.risky_script).toBe(
+      "It mentions commands worth a closer look, such as deleting files or reading passwords.",
+    );
+  });
+
+  it("has plain words for every content check finding", () => {
+    for (const code of SKILL_SCAN_FINDING_CODES) expect(SKILL_SCAN_FINDING_COPY[code], code).toMatch(/^[A-Z].*\.$/u);
+    expect(Object.keys(SKILL_SCAN_FINDING_COPY).sort()).toEqual([...SKILL_SCAN_FINDING_CODES].sort());
+  });
+
   it("uses none of the words the copy guard keeps out of the cockpit", async () => {
     const rules = (await copyRatchets()).filter((rule) => rule.pattern);
     expect(rules.map((rule) => rule.id)).toEqual(expect.arrayContaining(["internal-terms", "glossary-terms"]));
     const values = [
       ...Object.values(SKILL_BLOCKER_COPY),
+      ...Object.values(SKILL_SCAN_FINDING_COPY),
       UNKNOWN_BLOCKER_COPY,
       CANT_BE_INSTALLED,
       ...[

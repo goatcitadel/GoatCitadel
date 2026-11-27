@@ -45,6 +45,7 @@ import {
   type SkillHubPluginSkillInput,
 } from "./skill-hub-plugin-skill-source.js";
 import type { MaterializedSkillReviewContext, SkillImportService } from "./skill-import-service.js";
+import { assertNoScanBlockers, scanVerdictBlockers } from "./skill-hub-scan-blockers.js";
 
 export const SKILL_HUB_REVIEW_SCHEMA_VERSION = "goatcitadel.skill-hub-review.v1" as const;
 
@@ -517,6 +518,9 @@ async function prepareReview(context: MaterializedSkillReviewContext, source: Re
 }
 
 function assertCompleteValidation(validation: SkillImportValidationResult): void {
+  // The shared scan's dangerous findings refuse with their own reason, ahead of the older promptware guards, which
+  // stay as the fallback: hidden text also reads to them as an injection, and an unreadable file as an incomplete scan.
+  assertNoScanBlockers(validation, rejectReview);
   if (validation.checks.promptwareScanComplete !== true || validation.promptwareUnscannedPaths.length > 0) {
     rejectReview("PROMPTWARE_SCAN_INCOMPLETE", "Skill source promptware coverage was incomplete.");
   }
@@ -664,6 +668,7 @@ function standardizedBlockers(validation: SkillImportValidationResult): SkillHub
     ...(!validation.checks.promptwareScanComplete || validation.promptwareUnscannedPaths.length > 0
       ? ["PROMPTWARE_SCAN_INCOMPLETE" as const]
       : []),
+    ...scanVerdictBlockers(validation),
   ];
   return [...new Set(blockers)].sort(compareStrings);
 }

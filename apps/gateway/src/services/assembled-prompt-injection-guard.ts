@@ -10,7 +10,8 @@ export type PromptwareRuleId =
   | "privileged_prompt_exfiltration"
   | "approval_policy_bypass"
   | "tool_execution_without_approval"
-  | "role_identity_override";
+  | "role_identity_override"
+  | "hidden_text_obfuscation";
 
 export type PromptwareSeverity = "critical" | "high";
 
@@ -62,7 +63,16 @@ export type PromptwareScanSource =
   | "imported_skill"
   | "memory_context"
   | "tool_output"
-  | "delegated_output";
+  | "delegated_output"
+  | "plugin_prompt_pack"
+  /** A skill's instructions as a chat turn loads them: the original rules only, so a warning never stops a skill. */
+  | "runtime_skill";
+
+/** Skill and prompt pack files get the stricter pass: normalized text, hidden characters and decoded base64. */
+export const SKILL_CONTENT_SOURCES: ReadonlySet<PromptwareScanSource> = new Set([
+  "imported_skill",
+  "plugin_prompt_pack",
+]);
 
 export interface PromptwareScanFinding {
   source: PromptwareScanSource;
@@ -94,26 +104,127 @@ export function scanPromptwareContent(input: {
 }): PromptwareScanFinding[] {
   const maxFindings = Math.max(1, Math.min(input.maxFindings ?? PROMPTWARE_MAX_FINDINGS, PROMPTWARE_MAX_FINDINGS));
   const evidenceHash = createHash("sha256").update(input.content).digest("hex");
+  const findings = scanPromptwareRules(input.source, input.content, input.sourcePath, evidenceHash, maxFindings);
+  if (SKILL_CONTENT_SOURCES.has(input.source)) {
+    findings.push(...scanSkillContentVariants(input, evidenceHash, maxFindings));
+  }
+  const seen = new Set<string>();
+  return findings
+    .sort((left, right) => left.matchIndex - right.matchIndex || left.ruleId.localeCompare(right.ruleId))
+    .filter((finding) => {
+      const key = `${finding.ruleId}:${finding.startLine}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, maxFindings)
+    .map(({ matchIndex: _matchIndex, ...finding }) => finding);
+}
+
+// Joiners (ZWJ, ZWNJ) are left out: emoji sequences and Persian spelling use them every day.
+const HIDDEN_TEXT_PATTERN = /[\u200B\u2060\u202A-\u202E\u2066-\u2069\uFEFF]/u;
+const ZERO_WIDTH_GLOBAL = /[\u200B-\u200D\u2060\uFEFF]/gu;
+const BASE64_RUN = /[A-Za-z0-9+/]{200,}={0,2}/gu;
+const BASE64_DECODE_LIMIT = 64 * 1024;
+
+/** The stricter pass for skill content. Findings point at the original text's lines. */
+function scanSkillContentVariants(
+  input: { source: PromptwareScanSource; content: string; sourcePath?: string },
+  evidenceHash: string,
+  maxFindings: number,
+): LocatedPromptwareFinding[] {
+  const { content } = input;
+  const findings: LocatedPromptwareFinding[] = [];
+  // A byte order mark at the very start is ordinary; anywhere else it hides text.
+  const body = content.startsWith("\uFEFF") ? ` ${content.slice(1)}` : content;
+  const hidden = HIDDEN_TEXT_PATTERN.exec(body);
+  if (hidden) {
+    findings.push(locatedFinding(input, evidenceHash, "hidden_text_obfuscation", "high", hidden.index, 1));
+  }
+  // Normalizing keeps the text's length close to the original, so line numbers stay usable.
+  const normalized = content.normalize("NFKC").replace(ZERO_WIDTH_GLOBAL, "");
+  if (normalized !== content) {
+    for (const finding of scanPromptwareRules(input.source, normalized, input.sourcePath, evidenceHash, maxFindings)) {
+      findings.push({ ...finding, excerpt: buildRedactedExcerpt(normalized, finding.matchIndex, 0) });
+    }
+  }
+  BASE64_RUN.lastIndex = 0;
+  let run: RegExpExecArray | null;
+  while (findings.length < maxFindings && (run = BASE64_RUN.exec(content)) !== null) {
+    const decoded = decodeBase64Text(run[0].slice(0, BASE64_DECODE_LIMIT));
+    if (!decoded) continue;
+    for (const finding of scanPromptwareRules(input.source, decoded, input.sourcePath, evidenceHash, maxFindings)) {
+      findings.push({
+        ...finding,
+        startLine: lineNumberAt(content, run.index),
+        endLine: lineNumberAt(content, run.index + run[0].length),
+        excerpt: buildRedactedExcerpt(decoded, finding.matchIndex, 0),
+        matchIndex: run.index,
+      });
+    }
+  }
+  return findings;
+}
+
+function decodeBase64Text(run: string): string | undefined {
+  const usable = run.slice(0, run.length - (run.length % 4));
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(usable, "base64"));
+    // Decoded text worth scanning reads as text: mostly printable characters.
+    const printable = text.replace(/[^\t\n\r\x20-\x7E\u00A0-\uFFFF]/gu, "");
+    return printable.length >= text.length * 0.95 ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function locatedFinding(
+  input: { source: PromptwareScanSource; content: string; sourcePath?: string },
+  evidenceHash: string,
+  ruleId: PromptwareRuleId,
+  severity: PromptwareSeverity,
+  index: number,
+  length: number,
+): LocatedPromptwareFinding {
+  return {
+    source: input.source,
+    sourcePath: input.sourcePath,
+    scannerVersion: PROMPTWARE_SCANNER_VERSION,
+    ruleId,
+    severity,
+    startLine: lineNumberAt(input.content, index),
+    endLine: lineNumberAt(input.content, index + length),
+    marker: ruleId,
+    evidenceHash,
+    excerpt: buildRedactedExcerpt(input.content, index, length),
+    matchIndex: index,
+  };
+}
+
+function scanPromptwareRules(
+  source: PromptwareScanSource,
+  content: string,
+  sourcePath: string | undefined,
+  evidenceHash: string,
+  maxFindings: number,
+): LocatedPromptwareFinding[] {
   const findings: LocatedPromptwareFinding[] = [];
 
   for (const rule of PROMPTWARE_RULES) {
     rule.pattern.lastIndex = 0;
     let match: RegExpExecArray | null;
-    while (findings.length < maxFindings && (match = rule.pattern.exec(input.content)) !== null) {
-      if (!isProtectiveNegation(input.content, match.index)) {
-        findings.push({
-          source: input.source,
-          sourcePath: input.sourcePath,
-          scannerVersion: PROMPTWARE_SCANNER_VERSION,
-          ruleId: rule.id,
-          severity: rule.severity,
-          startLine: lineNumberAt(input.content, match.index),
-          endLine: lineNumberAt(input.content, match.index + match[0].length),
-          marker: rule.id,
-          evidenceHash,
-          excerpt: buildRedactedExcerpt(input.content, match.index, match[0].length),
-          matchIndex: match.index,
-        });
+    while (findings.length < maxFindings && (match = rule.pattern.exec(content)) !== null) {
+      if (!isProtectiveNegation(content, match.index)) {
+        findings.push(
+          locatedFinding(
+            { source, content, sourcePath },
+            evidenceHash,
+            rule.id,
+            rule.severity,
+            match.index,
+            match[0].length,
+          ),
+        );
       }
       if (match[0].length === 0) {
         rule.pattern.lastIndex += 1;
@@ -124,10 +235,7 @@ export function scanPromptwareContent(input: {
     }
   }
 
-  return findings
-    .sort((left, right) => left.matchIndex - right.matchIndex || left.ruleId.localeCompare(right.ruleId))
-    .slice(0, maxFindings)
-    .map(({ matchIndex: _matchIndex, ...finding }) => finding);
+  return findings;
 }
 
 export function assertNoAssembledPromptInjection(prompt: string): void {

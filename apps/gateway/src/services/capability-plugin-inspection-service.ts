@@ -38,6 +38,7 @@ import type { FetchedPluginSource } from "./plugin-source-service.js";
 import { readClaudeCodeSkillWarnings } from "./claude-code-skill-warnings.js";
 import { CLAUDE_CODE_SETTING_NOT_KEPT, SKILL_RUNS_SHELL_COMMANDS } from "./skill-hub-claude-code-dialect.js";
 import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
+import { scanPromptwareContent } from "./assembled-prompt-injection-guard.js";
 import type { SkillHubPluginSkillInput } from "./skill-hub-plugin-skill-source.js";
 import {
   SOURCE_REPLAY_CONFLICT,
@@ -526,6 +527,8 @@ export class CapabilityPluginInspectionService {
     }
     const content = await readSnapshotText(file);
     if (typeof content !== "string") return unread(content);
+    const scanRefusal = promptPackScanRefusal(content, piece.path);
+    if (scanRefusal) return unread(scanRefusal);
 
     const packId = pluginPromptPackId(context.manifest.pluginId, piece.id);
     let prepared: ReturnType<typeof preparePromptPackImport>;
@@ -718,6 +721,17 @@ function reviewBlocked(code: string): CapabilityPluginPieceCheck {
     code,
     Object.hasOwn(DIALECT_BLOCKED_MESSAGES, code) ? DIALECT_BLOCKED_MESSAGES[code]! : SKILL_BLOCKED_MESSAGE,
   );
+}
+
+/** A prompt pack reaches a model as written, so it gets the same promptware scan as a skill's files. */
+function promptPackScanRefusal(content: string, sourcePath: string): CapabilityPluginPieceCheck | undefined {
+  const findings = scanPromptwareContent({ source: "plugin_prompt_pack", sourcePath, content });
+  if (findings.some((finding) => finding.ruleId === "hidden_text_obfuscation")) {
+    return blocked("HIDDEN_TEXT_DETECTED", "Its files contain hidden or disguised text.");
+  }
+  return findings.length > 0
+    ? blocked("PROMPT_INJECTION_DETECTED", "Its instructions try to override GoatCitadel's rules.")
+    : undefined;
 }
 
 function blocked(code: string, message: string): CapabilityPluginPieceCheck {
