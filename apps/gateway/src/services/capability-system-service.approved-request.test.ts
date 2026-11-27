@@ -41,6 +41,8 @@ const ATTEMPT_HELPER =
   "catch (error) { return String(error && error.message ? error.message : error); } };";
 
 const roots: string[] = [];
+type SavedApprovalRows = Record<string, Record<string, string | number | null>>;
+const restoredDatabases: ReturnType<typeof createSqliteAsyncStorage>[] = [];
 let fixtureCount = 0;
 // One migrated in-memory database for the file; every fixture uses its own session, turn and root.
 let shared: { storage: Storage; asyncStorage: ReturnType<typeof createSqliteAsyncStorage>; dir: string } | undefined;
@@ -63,8 +65,9 @@ beforeAll(() => {
   sharedStorage();
 }, 300_000);
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  for (const database of restoredDatabases.splice(0)) await database.close();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -77,6 +80,52 @@ afterAll(async () => {
 });
 
 describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TIMEOUT_MS }, () => {
+  it("resumes the saved TypeScript 6 approval and runs it only once", async () => {
+    const fixtureUrl = new URL("./__fixtures__/code-mode-typescript6-approval.json", import.meta.url);
+    const saved = JSON.parse(fs.readFileSync(fixtureUrl, "utf8")) as {
+      compilerApiVersion: string;
+      runId: string;
+      request: ApprovedCodeModeRequest;
+      artifacts: { relPath: string; text: string }[];
+      records: SavedApprovalRows;
+    };
+    expect(saved.compilerApiVersion).toBe("6.0.3");
+    const fx = createFixture({ records: saved.records, runId: saved.runId, sessionId: saved.request.sessionId });
+    for (const artifact of saved.artifacts) {
+      const artifactPath = path.resolve(fx.root, artifact.relPath);
+      fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+      fs.writeFileSync(artifactPath, artifact.text, { flag: "wx" });
+    }
+
+    const before = await fx.asyncStorage.codeModeRuns.get(saved.runId);
+    expect(before).toMatchObject({
+      status: "approval_pending",
+      approvalId: saved.request.approvalId,
+      language: "typescript",
+      codeHash: saved.request.approvedSourceSha256,
+      executionRecovery: { phase: "not_started", generation: 0 },
+    });
+    expect(fx.storage.approvals.get(saved.request.approvalId).status).toBe("approved");
+
+    const expected = { runId: saved.runId, status: "completed", result: { text: "café", value: 42 } };
+    await expect(fx.service.runApprovedCodeModeRequest(saved.request)).resolves.toMatchObject(expected);
+    await expect(fx.service.runApprovedCodeModeRequest(saved.request)).resolves.toMatchObject(expected);
+
+    const after = await fx.asyncStorage.codeModeRuns.get(saved.runId);
+    expect(after).toMatchObject({
+      approvalId: before.approvalId,
+      codeHash: before.codeHash,
+      codeArtifact: before.codeArtifact,
+      wrapperManifestArtifact: before.wrapperManifestArtifact,
+      policySnapshotArtifact: before.policySnapshotArtifact,
+    });
+    expect(fs.readFileSync(path.resolve(fx.root, after.codeArtifact.relPath))).toEqual(
+      Buffer.from(saved.request.source, "utf8"),
+    );
+    expect(fx.createApproval).not.toHaveBeenCalled();
+    expect(fx.spawnCodeModeChild).toHaveBeenCalledTimes(1);
+  });
+
   it("runs approved source and returns the guest result", async () => {
     const fx = createFixture();
     const source = "return { pages: 3 };";
@@ -103,25 +152,98 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
     expect(fx.createApproval).not.toHaveBeenCalled();
   });
 
-  it.each(["pending approval", "queued approval", "stale claim"] as const)("SEC-CODE-001 refuses a legacy %s when the live feature is off", async (state) => {
+  it.each(["javascript", "typescript"] as const)(
+    "rejects malformed %s before creating a run or approval",
+    async (language) => {
+      const fx = createFixture();
+      const existingRuns = fx.storage.codeModeRuns.list();
+
+      await expect(fx.service.createCodeModeRun({ language, source: "return { value: ; };" })).rejects.toThrow(
+        /^Code Mode source could not be parsed:/,
+      );
+
+      expect(fx.createApproval).not.toHaveBeenCalled();
+      expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
+      expect(fx.storage.codeModeRuns.list()).toEqual(existingRuns);
+    },
+  );
+
+  it("rejects malformed source from an existing approval before registering or dispatching a run", async () => {
     const fx = createFixture();
-    const run = await fx.service.createCodeModeRun({ language: "javascript", source: "return { ran: true };", saveCandidateOnSuccess: false });
-    const approvalId = run.approvalId!;
-    expect(fx.storage.approvals.get(approvalId).status).toBe("pending");
-    if (state === "pending approval") fx.featureFlags.codeModeV1Enabled = false;
-    fx.storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator-1" });
-    if (state === "stale claim") {
-      const claimed = await fx.asyncStorage.codeModeRuns.claimForExecution({ runId: run.runId, approvalId, sandbox: run.sandbox!, startedAt: new Date(Date.now() - 10 * 60_000).toISOString() });
-      expect(claimed?.executionRecovery.phase).toBe("claimed");
-    }
-    fx.featureFlags.codeModeV1Enabled = false;
-    const result = await fx.service.executeApprovedCodeModeRun(approvalId);
+    const request = fx.approvedRequest("return { value: ; };");
+
+    await expect(fx.service.runApprovedCodeModeRequest(request)).rejects.toThrow(
+      /^Code Mode source could not be parsed:/,
+    );
+
+    expect(await fx.service.listCodeModeRuns({ sessionId: request.sessionId, limit: 10 })).toEqual([]);
+    expect(fx.createApproval).not.toHaveBeenCalled();
     expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
-    expect(fx.invokeTool).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ result: { status: "failed", error: expect.stringMatching(/Code Mode.*(?:off|disabled)/i) } });
-    expect(await fx.asyncStorage.codeModeRuns.get(run.runId)).toMatchObject({ status: "failed" });
-    expect(fx.storage.pendingApprovalActions.find(approvalId)?.resolutionStatus).toBe("failed");
   });
+
+  it.each(["javascript", "typescript"] as const)("accepts TSX syntax at %s source admission", async (language) => {
+    const fx = createFixture();
+
+    await expect(fx.service.createCodeModeRun({ language, source: "return <Example />;" })).resolves.toMatchObject({
+      language,
+      status: "approval_pending",
+    });
+    expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
+  });
+
+  it("fails an approved TypeScript run before dispatch when admitted TSX cannot be emitted", async () => {
+    const fx = createFixture();
+    const request: ApprovedCodeModeRequest = {
+      ...fx.approvedRequest("return <Example />;"),
+      language: "typescript",
+    };
+    const markDispatch = vi.spyOn(fx.storage.codeModeRuns, "markExecutionBoundaryCrossed");
+
+    const result = await fx.service.runApprovedCodeModeRequest(request);
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: expect.stringMatching(/^FIELD_INVALID: TypeScript transpilation failed:/),
+    });
+    const run = await fx.asyncStorage.codeModeRuns.get(result.runId);
+    expect(run.executionRecovery.boundaryCrossedAt).toBeUndefined();
+    expect(markDispatch).not.toHaveBeenCalled();
+    expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
+  });
+
+  it.each(["pending approval", "queued approval", "stale claim"] as const)(
+    "SEC-CODE-001 refuses a legacy %s when the live feature is off",
+    async (state) => {
+      const fx = createFixture();
+      const run = await fx.service.createCodeModeRun({
+        language: "javascript",
+        source: "return { ran: true };",
+        saveCandidateOnSuccess: false,
+      });
+      const approvalId = run.approvalId!;
+      expect(fx.storage.approvals.get(approvalId).status).toBe("pending");
+      if (state === "pending approval") fx.featureFlags.codeModeV1Enabled = false;
+      fx.storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator-1" });
+      if (state === "stale claim") {
+        const claimed = await fx.asyncStorage.codeModeRuns.claimForExecution({
+          runId: run.runId,
+          approvalId,
+          sandbox: run.sandbox!,
+          startedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+        });
+        expect(claimed?.executionRecovery.phase).toBe("claimed");
+      }
+      fx.featureFlags.codeModeV1Enabled = false;
+      const result = await fx.service.executeApprovedCodeModeRun(approvalId);
+      expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
+      expect(fx.invokeTool).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        result: { status: "failed", error: expect.stringMatching(/Code Mode.*(?:off|disabled)/i) },
+      });
+      expect(await fx.asyncStorage.codeModeRuns.get(run.runId)).toMatchObject({ status: "failed" });
+      expect(fx.storage.pendingApprovalActions.find(approvalId)?.resolutionStatus).toBe("failed");
+    },
+  );
 
   it("SEC-CODE-001 rechecks the live feature immediately before child request dispatch", async () => {
     const fx = createFixture();
@@ -132,20 +254,33 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
       fx.featureFlags.codeModeV1Enabled = false;
       return child;
     }) as typeof spawn);
-    const run = await fx.service.createCodeModeRun({ language: "javascript", source: "return { ran: true };", saveCandidateOnSuccess: false });
+    const run = await fx.service.createCodeModeRun({
+      language: "javascript",
+      source: "return { ran: true };",
+      saveCandidateOnSuccess: false,
+    });
     const approvalId = run.approvalId!;
     fx.storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator-1" });
     const result = await fx.service.executeApprovedCodeModeRun(approvalId);
     expect(fx.spawnCodeModeChild).toHaveBeenCalledOnce();
-    expect(childSend?.mock.calls.filter(([message]) => (message as { method?: string }).method === "run.execute")).toHaveLength(0);
+    expect(
+      childSend?.mock.calls.filter(([message]) => (message as { method?: string }).method === "run.execute"),
+    ).toHaveLength(0);
     expect(result).toBeUndefined();
-    expect(await fx.asyncStorage.codeModeRuns.get(run.runId)).toMatchObject({ status: "approval_pending", executionRecovery: { phase: "not_started", disposition: "retryable" } });
+    expect(await fx.asyncStorage.codeModeRuns.get(run.runId)).toMatchObject({
+      status: "approval_pending",
+      executionRecovery: { phase: "not_started", disposition: "retryable" },
+    });
     expect(fx.storage.pendingApprovalActions.find(approvalId)?.resolutionStatus).toBe("pending");
   });
 
   it("SEC-CODE-001 preserves a terminal legacy result while the live feature is off", async () => {
     const fx = createFixture();
-    const run = await fx.service.createCodeModeRun({ language: "javascript", source: "return { ran: true };", saveCandidateOnSuccess: false });
+    const run = await fx.service.createCodeModeRun({
+      language: "javascript",
+      source: "return { ran: true };",
+      saveCandidateOnSuccess: false,
+    });
     const approvalId = run.approvalId!;
     fx.storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator-1" });
     const completed = await fx.service.executeApprovedCodeModeRun(approvalId);
@@ -676,6 +811,39 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
     expect(result).toMatchObject({ runId, status: "completed", result: { pages: 3 } });
   });
 
+  it("resumes an approved TypeScript run with its exact stored source and hash", async () => {
+    const fx = createFixture();
+    // Retain whitespace and non-ASCII text so normalization would change the approved digest.
+    const source = [
+      "",
+      "const fetch: string = 'literal key';",
+      "const text: string = 'café';",
+      "return { text, fetch: 'literal key' };",
+      "",
+    ].join("\r\n");
+    const request: ApprovedCodeModeRequest = { ...fx.approvedRequest(source), language: "typescript" };
+    const runId = await seedStaleRequestRun(fx, request, "claimed");
+    const before = await fx.asyncStorage.codeModeRuns.get(runId);
+    const sourcePath = path.resolve(fx.root, before.codeArtifact.relPath);
+    const approvedBytes = Buffer.from(source, "utf8");
+    expect(fs.readFileSync(sourcePath)).toEqual(approvedBytes);
+    expect(before.codeHash).toBe(request.approvedSourceSha256);
+    expect(before.codeArtifact.sha256).toBe(request.approvedSourceSha256);
+
+    const result = await fx.service.runApprovedCodeModeRequest(request);
+
+    expect(result).toMatchObject({ runId, status: "completed", result: { text: "café", fetch: "literal key" } });
+    const after = await fx.asyncStorage.codeModeRuns.get(runId);
+    expect(after).toMatchObject({
+      approvalId: request.approvalId,
+      codeHash: before.codeHash,
+      codeArtifact: before.codeArtifact,
+    });
+    expect(fs.readFileSync(sourcePath)).toEqual(approvedBytes);
+    expect(fx.createApproval).not.toHaveBeenCalled();
+    expect(fx.spawnCodeModeChild).toHaveBeenCalledTimes(1);
+  });
+
   it("terminalizes an orphaned request run on read instead of leaving it running", async () => {
     const fx = createFixture();
     const dispatched = fx.approvedRequest("return { pages: 3 };");
@@ -861,23 +1029,28 @@ function toolRequest(approved: ApprovedCodeModeRequest): ToolInvokeRequest {
   };
 }
 
-function createFixture() {
+function createFixture(saved?: { records: SavedApprovalRows; runId: string; sessionId: string }) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-code-mode-request-")));
   roots.push(root);
-  const { storage, asyncStorage } = sharedStorage();
+  const { storage, asyncStorage } = saved
+    ? restoreFixtureDatabase(root, saved.records, saved.sessionId)
+    : sharedStorage();
+  const savedSandbox = saved ? storage.codeModeRuns.get(saved.runId).sandbox : undefined;
   fixtureCount += 1;
   const fixtureId = fixtureCount;
   let turnCount = 0;
   const sessionId = `session-request-${fixtureId}`;
-  storage.sessions.upsert({
-    sessionId,
-    sessionKey: `mission:operator:${sessionId}`,
-    kind: "dm",
-    channel: "mission",
-    account: "operator",
-    timestamp: new Date().toISOString(),
-  });
-  storage.chatSessionMeta.ensure(sessionId, new Date().toISOString(), "default");
+  if (!saved) {
+    storage.sessions.upsert({
+      sessionId,
+      sessionKey: `mission:operator:${sessionId}`,
+      kind: "dm",
+      channel: "mission",
+      account: "operator",
+      timestamp: new Date().toISOString(),
+    });
+    storage.chatSessionMeta.ensure(sessionId, new Date().toISOString(), "default");
+  }
 
   const toolConfig: ToolPolicyConfig = {
     profiles: { danger: ["*"] },
@@ -915,6 +1088,8 @@ function createFixture() {
     },
     storage: asyncStorage,
     readFeatureFlags: async () => featureFlags,
+    // The captured run was approved with this synthetic posture. Keep the probe portable across hosts.
+    ...(savedSandbox ? { resolveSandboxMetadata: () => savedSandbox } : {}),
     listToolCatalog: () => [docsExtractTextTool(), ...CODE_MODE_FILE_HELPER_TOOLS],
     listSwitchedOffToolNames: () => new Set(),
     listLoadedSkills: () => [],
@@ -1011,6 +1186,35 @@ function createFixture() {
     spawnCodeModeChild,
     approvedRequest,
   };
+}
+
+function restoreFixtureDatabase(root: string, records: SavedApprovalRows, sessionId: string) {
+  const storage = new Storage({
+    dbPath: ":memory:",
+    transcriptsDir: path.join(root, "transcripts"),
+    auditDir: path.join(root, "audit"),
+  });
+  const asyncStorage = createSqliteAsyncStorage(storage);
+  restoredDatabases.push(asyncStorage);
+  storage.db.transaction("immediate", () => {
+    for (const [table, row] of Object.entries(records)) {
+      const columns = Object.keys(row);
+      const placeholders = columns.map(() => "?").join(", ");
+      const columnList = columns.map(quoteFixtureIdentifier).join(", ");
+      storage.db
+        .prepare(`INSERT INTO ${quoteFixtureIdentifier(table)} (${columnList}) VALUES (${placeholders})`)
+        .run(...Object.values(row));
+      if (table === "sessions") {
+        // Session lifecycle intents require a current timestamp. Recreate only the parent session's control metadata.
+        storage.chatSessionMeta.ensure(sessionId, new Date().toISOString(), "default");
+      }
+    }
+  });
+  return { storage, asyncStorage };
+}
+
+function quoteFixtureIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
 }
 
 function docsExtractTextTool(): ToolCatalogEntry {
