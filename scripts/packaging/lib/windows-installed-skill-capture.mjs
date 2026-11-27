@@ -207,7 +207,7 @@ export async function installedSkillCapture(runtime, fixture) {
     const outcomes = {};
     for (const condition of order) {
       const scope = condition === "enabled" ? workspaceId : control.workspaceId;
-      const prompt = `@skill ${approved.runtimeSkillId}\nWrite a weekly project brief using these notes only.\n\n${task.input}`;
+      const prompt = `$${approved.runtimeSkillId}\nWrite a weekly project brief using these notes only.\n\n${task.input}`;
       const chat = await send(`Held-out brief ${task.id} ${condition}`, prompt, undefined, {
         providerId: "ollama",
         model,
@@ -230,43 +230,50 @@ export async function installedSkillCapture(runtime, fixture) {
         "confirmation that the pinned Ollama model produced a response",
         15_000,
       );
-      const readVersion = async () => (await receiptFor(chat, turn, scope)).usedSources.find(
+      const readSkill = async () => (await receiptFor(chat, turn, scope)).usedSources.find(
         (source) => source.ref === approved.runtimeSkillId,
-      )?.skillVersion?.versionId;
-      const versionId = condition === "enabled"
-        ? await poll(readVersion, `the applied skill receipt for ${task.id}`, 15_000)
-        : await readVersion();
-      assert.equal(versionId, condition === "enabled" ? approved.capture.versionId : undefined, `Skill version for ${task.id} (${condition})`);
+      );
+      const usedSkill = condition === "enabled"
+        ? await poll(async () => {
+          const source = await readSkill();
+          return source?.skillVersion && source;
+        }, `the applied skill receipt for ${task.id}`, 15_000).catch(() => readSkill())
+        : await readSkill();
       const answer = turn.assistantMessage?.content ?? "";
       outcomes[condition] = {
         score: gradeWeeklyBrief(answer, task),
         answer,
         modelUsageEventId: dispatch.eventId,
-        versionId,
+        skillApplied: Boolean(usedSkill),
+        versionId: usedSkill?.skillVersion?.versionId,
         turnId: turn.turnId,
         toolCalls: turn.toolRuns?.map((tool) => tool.toolName) ?? [],
         userCorrections: 0,
       };
     }
+    const valid = !outcomes.disabled.skillApplied && outcomes.enabled.versionId === approved.capture.versionId;
     pairs.push({
       id: task.id,
       notes: task.input,
       order,
+      valid,
       ...outcomes,
       ...gradeBriefPair(outcomes.disabled.score, outcomes.enabled.score),
     });
     await writeFile(path.join(evidence, "skill-reuse-progress.json"), JSON.stringify({ pairs }, null, 2));
   }
-  const improved = pairs.filter((pair) => pair.improved).length;
-  const regressions = pairs.filter((pair) => pair.regression).length;
+  const validPairs = pairs.filter((pair) => pair.valid);
+  const improved = validPairs.filter((pair) => pair.improved).length;
+  const regressions = validPairs.filter((pair) => pair.regression).length;
   const benchmark = {
     provider: "ollama",
     serverVersion,
     model,
     modelDigest,
+    validPairs: validPairs.length,
     improved,
     regressions,
-    gatePassed: improved >= 4 && regressions === 0,
+    gatePassed: validPairs.length === weeklyBriefCases.length && improved >= 4 && regressions === 0,
     pairs,
   };
   await writeFile(path.join(evidence, "skill-reuse-benchmark.json"), JSON.stringify(benchmark, null, 2));
