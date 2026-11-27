@@ -27,6 +27,7 @@ import { shortcutKeys, shortcutLabel } from "./platform-keys";
 import { fetchWorkspaces } from "@goatcitadel/mission-control-shared/api/workspaces";
 import type { EventStreamConnectionState } from "@goatcitadel/mission-control-shared/api/shell-client";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { useDesktopUpdates } from "../../features/desktop-updates/desktop-update-bridge";
 import { otherThemeOptions } from "./theme-options";
 import { useCockpitShellSwitch } from "./use-cockpit-shell-switch";
 import { queryKeys } from "../data/query-keys";
@@ -136,6 +137,9 @@ export function Sidebar({
   const shellSwitch = useCockpitShellSwitch();
   const { area: current, pathname, search, hash, navigate } = useCockpitRoute();
   const preload = useCockpitPreload();
+  const installedVersion = useDesktopUpdates()?.installedVersion;
+  const showVersion =
+    installedVersion?.trim() && installedVersion !== "unknown" && installedVersion !== "source checkout";
   const { activeCitadelId, activeWorkspaceId, themePreference, setTheme } = useUiPreferences();
   const workspaces = useQuery({
     queryKey: queryKeys.workspaces(activeCitadelId),
@@ -300,6 +304,9 @@ export function Sidebar({
             <Settings aria-hidden="true" className="size-4" />
           </MenuTrigger>
           <MenuContent align="end">
+            {collapsed && showVersion ? (
+              <div className="wrap-anywhere px-2 py-1.5 text-xs text-fg-muted">Version {installedVersion}</div>
+            ) : null}
             <MenuItem onSelect={() => navigate("/settings/general")}>Settings</MenuItem>
             {otherThemeOptions(themePreference).map((option) => (
               <MenuItem key={option.value} onSelect={() => setTheme(option.value)}>
@@ -310,6 +317,9 @@ export function Sidebar({
           </MenuContent>
         </Menu>
       </div>
+      {!collapsed && showVersion ? (
+        <div className="wrap-anywhere px-2 text-xs text-fg-muted">Version {installedVersion}</div>
+      ) : null}
       {shellSwitch.feedback}
     </aside>
   );
