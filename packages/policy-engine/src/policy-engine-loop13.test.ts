@@ -3,9 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ToolPolicyConfig } from "@goatcitadel/contracts";
+import type { ApprovalRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
+import { redactSecretText } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { ToolPolicyEngine } from "./engine.js";
+import { withLegacyToolApprovalPreview } from "./knowledge-approval-preview.js";
 import { resolveExecutableCommand, resolveRestrictedCommand } from "./tool-executor.js";
 
 const createdDirs: string[] = [];
@@ -150,6 +152,127 @@ describe("policy engine loop13 branch tails", () => {
       }),
       expect.any(Number),
     );
+  });
+
+  it("saves the reviewed default channel destination without changing the executable message arguments", async () => {
+    const root = createRoot();
+    const storage = createStorageStub();
+    const connection = {
+      connectionId: "updates-channel",
+      revision: "connection-version-1",
+      kind: "channel",
+      key: "slack",
+      label: "Updates",
+      config: { defaultChannel: "C-FIXTURE" },
+    };
+    Object.assign(storage, { integrationConnections: { get: vi.fn(async () => connection) } });
+    const engine = new ToolPolicyEngine(createConfig(root), storage);
+    const args = { connectionId: connection.connectionId, message: "Local approval review fixture" };
+    await expect(engine.invoke(request("channel.send", args))).resolves.toMatchObject({ outcome: "approval_required" });
+    expect(storage.approvals.createWithTtlDuration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: args,
+        preview: expect.objectContaining({
+          reviewKind: "communications.operation",
+          target: "C-FIXTURE",
+          input: args.message,
+        }),
+      }),
+      expect.any(Number),
+    );
+    expect(storage.pendingApprovalActions.upsertPending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ args, defaultChannelConnectionRevision: connection.revision }),
+      }),
+    );
+  });
+
+  it.each([
+    ["capabilities.search", { query: "browser controls" }, { query: "browser controls" }],
+    ["skills.read", { skillId: "bundled:notes" }, { input: "Skill id: bundled:notes\nRelative path: SKILL.md" }],
+    ["session.status", {}, { input: "No additional selectors" }],
+    ["context.list", {}, { input: "No additional selectors" }],
+    ["context.grep", { pattern: "budget", caseSensitive: false }, { input: "Pattern: budget\nCase sensitive: false" }],
+    ["context.query", { query: "budget", entryIndex: 0 }, { input: "Query: budget\nEntry index: 0" }],
+    [
+      "context.read_range",
+      { entryIndex: 0, startLine: 1, endLine: 3 },
+      { input: "Entry index: 0\nStart line: 1\nEnd line: 3" },
+    ],
+    ["project.files.list", { prefix: "drafts", limit: 3 }, { input: "Prefix: drafts\nLimit: 3" }],
+    ["project.files.read", { path: "draft.md" }, { input: "Path: draft.md" }],
+    ["fs.list", { path: "." }, { input: "Path: ." }],
+    [
+      "file.read_range",
+      { path: "draft.md", startLine: 2, endLine: 3 },
+      { input: "Path: draft.md\nStart line: 2\nEnd line: 3" },
+    ],
+    ["file.find", { path: ".", pattern: "budget" }, { input: "Path: .\nPattern: budget" }],
+    ["code.search", { path: ".", query: "budget" }, { input: "Path: .\nQuery: budget" }],
+    ["code.search_files", { path: ".", query: "draft" }, { input: "Path: .\nQuery: draft" }],
+    ["docs.read_bytes", { attachmentId: "attachment", length: 32 }, { input: "Attachment id: attachment\nLength: 32" }],
+    [
+      "docs.extract_text",
+      { attachmentId: "attachment", maxChars: 32 },
+      { input: "Attachment id: attachment\nMax chars: 32" },
+    ],
+    [
+      "user_input.request",
+      { title: "Layout", question: "Compact or spacious?" },
+      { input: "Title: Layout\nQuestion: Compact or spacious?" },
+    ],
+    [
+      "chat.reminder.preview",
+      { localDueAt: "2026-11-28T10:00", timezone: "America/Los_Angeles" },
+      { input: "Local due at: 2026-11-28T10:00\nTimezone: America/Los_Angeles" },
+    ],
+    [
+      "document.propose_patch",
+      { targetKind: "personal_note", targetId: "note", proposedContent: "New text" },
+      { input: "Target kind: personal_note\nTarget id: note\nProposed content: New text" },
+    ],
+    ["runtime.configure", { targetId: "search.brave" }, { input: "Target id: search.brave" }],
+  ] as const)("projects new and saved Approve All reviews for %s", async (toolName, args, reviewed) => {
+    const root = createRoot();
+    const storage = createStorageStub();
+    const engine = new ToolPolicyEngine(createConfig(root, "approve_all"), storage);
+    const expected = { reviewKind: "knowledge.operation", toolName, ...reviewed };
+
+    // Managed project reads have their own admission path. Exercise their saved review projection below.
+    if (!toolName.startsWith("project.files.")) {
+      const invokeArgs = "path" in args ? { ...args, path: path.join(root, args.path) } : args;
+      await expect(engine.invoke(request(toolName, invokeArgs))).resolves.toMatchObject({
+        outcome: "approval_required",
+      });
+      expect(storage.approvals.createWithTtlDuration).toHaveBeenCalledWith(
+        expect.objectContaining({
+          preview: expect.objectContaining({
+            ...expected,
+            ...("path" in args && "input" in reviewed
+              ? {
+                  input: reviewed.input.replace(
+                    `Path: ${args.path}`,
+                    `Path: ${redactSecretText(path.join(root, args.path), { env: process.env }).value}`,
+                  ),
+                }
+              : {}),
+          }),
+        }),
+        expect.any(Number),
+      );
+    }
+    const legacy: ApprovalRequest = {
+      approvalId: "legacy-local-read",
+      kind: toolName,
+      riskLevel: "safe",
+      status: "pending",
+      explanationStatus: "not_requested",
+      createdAt: "2026-11-27T00:00:00Z",
+      payload: args,
+      preview: { toolName },
+      linkage: { actionType: "tool.invoke", toolName },
+    };
+    expect(withLegacyToolApprovalPreview(legacy).preview).toMatchObject(expected);
   });
 
   it("quotes Windows package-manager commands and leaves non-package managers untouched", async () => {

@@ -52,6 +52,57 @@ describe("knowledgeApprovalPreview scope summary", () => {
 });
 
 describe("knowledge lookup approval previews", () => {
+  it("rejects incomplete or out-of-schema local read selectors and redacts secrets in valid ones", () => {
+    expect(knowledgeApprovalPreview(request("skills.read", { args: { skillId: " " } }))).toBeUndefined();
+    expect(
+      knowledgeApprovalPreview(request("context.query", { args: { query: "budget", workspaceId: "other" } })),
+    ).toBeUndefined();
+    expect(
+      knowledgeApprovalPreview(request("docs.read_bytes", { args: { path: "draft.md", attachmentId: "attachment" } })),
+    ).toBeUndefined();
+    const token = "synthetic-approval-redaction-fixture";
+    const preview = knowledgeApprovalPreview(request("context.query", { args: { query: `Bearer ${token}` } }));
+    expect(preview?.input).toContain("[REDACTED]");
+    expect(preview?.input).not.toContain(token);
+    expect(knowledgeApprovalPreview(request("fs.list", { args: {} }))).toMatchObject({ input: "Path: ." });
+  });
+
+  it("shows the capability search scope for new and previously saved approvals", () => {
+    const toolName = "capabilities.search";
+    const payload = { query: "  browser.errand Google Cloud  ", limit: 3 };
+    const approval: ApprovalRequest = {
+      approvalId: "pending-capability-search",
+      kind: toolName,
+      riskLevel: "safe",
+      status: "pending",
+      explanationStatus: "not_requested",
+      createdAt: "2026-11-27T00:00:00Z",
+      payload,
+      preview: { toolName },
+      linkage: { actionType: "tool.invoke", toolName },
+    };
+    const expected = {
+      reviewKind: "knowledge.operation",
+      toolName,
+      target: "Available tools and skills in this workspace",
+      query: "browser.errand Google Cloud",
+      optionsSummary: "Maximum results: 3",
+    };
+
+    expect(knowledgeApprovalPreview(request(toolName, { args: payload }))).toMatchObject(expected);
+    expect(withLegacyToolApprovalPreview(approval)).toMatchObject({ preview: expected });
+    expect(approval.preview).toEqual({ toolName });
+    expect(knowledgeApprovalPreview(request(toolName, { args: { query: payload.query } }))).toMatchObject({
+      optionsSummary: "Maximum results: 5",
+    });
+
+    for (const args of [{ query: " " }, { ...payload, limit: 6 }, { ...payload, workspaceId: "other" }]) {
+      expect(knowledgeApprovalPreview(request(toolName, { args }))).toBeUndefined();
+      const invalid = { ...approval, payload: args };
+      expect(withLegacyToolApprovalPreview(invalid)).toBe(invalid);
+    }
+  });
+
   it("gives a no-argument clock request an exact review and recovers an existing bare approval", () => {
     const expected = {
       reviewKind: "knowledge.operation",

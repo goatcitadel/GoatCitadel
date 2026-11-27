@@ -52,6 +52,7 @@ function createMattermostStorage(
     integrationConnections: {
       get: vi.fn(() => ({
         connectionId,
+        revision: "mattermost-revision-1",
         key: "mattermost",
         config: {
           serverUrl: "https://mattermost.example",
@@ -94,6 +95,60 @@ afterEach(() => {
 });
 
 describe("comms mutation boundary tracking", () => {
+  it.each([undefined, "stale-revision"])(
+    "blocks an approved default send before provider contact when its binding is %s",
+    async (revision) => {
+      const { storage } = createMattermostStorage("conn-review", "delivery-review");
+      Object.assign(storage, {
+        pendingApprovalActions: {
+          find: vi.fn(async () => ({
+            actionType: "tool.invoke",
+            resolutionStatus: "pending",
+            request: { defaultChannelConnectionRevision: revision },
+          })),
+        },
+      });
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(
+        executeCommsTool(
+          { ...channelSendRequest("conn-review", []), approvedByApprovalId: "approval-review" },
+          policyConfig(["mattermost.example"]),
+          storage,
+        ),
+      ).rejects.toThrow("The default channel destination is no longer approved");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(storage.commsDeliveries.createQueued).not.toHaveBeenCalled();
+    },
+  );
+
+  it("dispatches a default send only against the reviewed connection revision", async () => {
+    const { storage } = createMattermostStorage("conn-review", "delivery-review");
+    Object.assign(storage, {
+      pendingApprovalActions: {
+        find: vi.fn(async () => ({
+          actionType: "tool.invoke",
+          resolutionStatus: "pending",
+          request: { defaultChannelConnectionRevision: "mattermost-revision-1" },
+        })),
+      },
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith("/users/me")) return mattermostBotResponse();
+      expect(JSON.parse(String(init?.body))).toMatchObject({ channel_id: MATTERMOST_CHANNEL_ID });
+      return new Response(JSON.stringify({ id: "post-review" }), { status: 201 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      executeCommsTool(
+        { ...channelSendRequest("conn-review", []), approvedByApprovalId: "approval-review" },
+        policyConfig(["mattermost.example"]),
+        storage,
+      ),
+    ).resolves.toMatchObject({ status: "sent", providerMessageId: "post-review" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["complete", "fail"] as const)("awaits the durable boundary before a channel POST (%s)", async (mode) => {
     const calls: FetchCall[] = [];
     const { storage, markFailed } = createMattermostStorage("conn-async", "delivery-async");

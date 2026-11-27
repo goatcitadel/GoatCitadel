@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { changeRequestApprovalPreview } from "./change-request-approval-preview.js";
 import { knowledgeApprovalPreview } from "./knowledge-approval-preview.js";
 import { browserApprovalPreview } from "./browser-approval-preview.js";
+import { reviewDefaultChannelSend } from "./default-channel-send-approval.js";
 import { admitNativeRuntimeWithPolicy, type NativeRuntimePolicyAdmissionInput } from "./native-runtime-admission.js";
 import { NATIVE_INSTALLATION_POLICY, snapshotNativeInstallationPolicyRequest } from "./native-installation-policy.js";
 import { isDeepStrictEqual } from "node:util";
@@ -984,6 +985,7 @@ export class ToolPolicyEngine {
     // regardless of dryRun.
 
     if (evaluation.requiresApproval) {
+      const channelSend = await reviewDefaultChannelSend(request, this.storage.integrationConnections);
       let invocationAuditPayload: Record<string, unknown> | undefined;
       let invocationOutcome: "approval_required" | "blocked" = "approval_required";
       let invocationPolicyReason = evaluation.policyReason;
@@ -993,7 +995,7 @@ export class ToolPolicyEngine {
           riskLevel: evaluation.riskLevel,
           payload: request.args,
           preview: {
-            ...this.buildApprovalPreview(request, identity, options.mcpReadOnlyHint),
+            ...(channelSend?.preview ?? this.buildApprovalPreview(request, identity, options.mcpReadOnlyHint)),
             ...(evaluation.outsideRootWrite ? { outsideRootWrite: evaluation.outsideRootWrite } : {}),
             // Display only: tells the operator this read leaves every trusted root, so it is not mistaken
             // for an ordinary workspace read.
@@ -1012,10 +1014,18 @@ export class ToolPolicyEngine {
           if (!createdApproval.expiresAt) {
             throw new Error("Database-owned approval creation did not return an expiry timestamp.");
           }
+          if (
+            channelSend &&
+            Object.entries(channelSend.preview).some(([key, value]) => createdApproval.preview[key] !== value)
+          ) {
+            throw new Error("The approved channel send preview must match its bound destination and message.");
+          }
           await this.storage.pendingApprovalActions.upsertPending({
             approvalId: createdApproval.approvalId,
             actionType: "tool.invoke",
-            request: pendingActionRequest,
+            request: channelSend
+              ? { ...pendingActionRequest, defaultChannelConnectionRevision: channelSend.connectionRevision }
+              : pendingActionRequest,
             expiresAt: createdApproval.expiresAt,
           });
 
@@ -4078,7 +4088,11 @@ function toPendingApprovalRequestRecord(value: unknown): Record<string, unknown>
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
-  const { signal: _signal, ...persistable } = value as Record<string, unknown>;
+  const {
+    signal: _signal,
+    defaultChannelConnectionRevision: _untrustedRevision,
+    ...persistable
+  } = value as Record<string, unknown>;
   return persistable;
 }
 

@@ -172,6 +172,21 @@ async function executeCommsToolWithBoundaryTracking(
     throw new Error(`The canonical ${scopedKey} connection scope changed before dispatch.`);
   }
   const connectionConfig = record(connection.config);
+  if (toolName === "channel.send" && !asString(args.target) && request.approvedByApprovalId) {
+    const pending = await storage.pendingApprovalActions.find(request.approvedByApprovalId);
+    const revision = pending?.request.defaultChannelConnectionRevision;
+    if (
+      pending?.resolutionStatus !== "pending" ||
+      pending.actionType !== "tool.invoke" ||
+      typeof revision !== "string" ||
+      revision !== connection.revision ||
+      !resolveReviewableDefaultChannelDestination(connection.key, connectionConfig)
+    ) {
+      throw new CommsPreBoundaryProviderError(
+        "The default channel destination is no longer approved. Request a new approval.",
+      );
+    }
+  }
   bindChannelEnvSecretReader(connection, approvalActionSecrets);
   const target =
     asString(args.target) ?? resolveDefaultChannelTarget(connection.key, connectionConfig) ?? connection.key;
@@ -834,6 +849,28 @@ function resolveDefaultChannelTarget(connectionKey: string, config: Record<strin
     }
   }
   return undefined;
+}
+
+/** Only destinations the send adapter addresses directly can be reviewed from a saved connection. */
+export function resolveReviewableDefaultChannelDestination(
+  connectionKey: string,
+  config: Record<string, unknown>,
+): string | undefined {
+  if (!Object.hasOwn(CHANNEL_TARGET_KEYS, connectionKey)) return undefined;
+  const target = normalizeChannelTarget(resolveDefaultChannelTarget(connectionKey, config), connectionKey);
+  if (
+    ["slack", "discord", "google-chat"].includes(connectionKey) &&
+    (asString(config.webhookUrl) || asString(config.webhookUrlEnv))
+  ) {
+    return undefined;
+  }
+  if (connectionKey === "google-chat") {
+    if (!(asString(config.serviceAccountKey) || asString(config.serviceAccountKeyEnv))) return undefined;
+    return [target, asString(config.defaultSpace)].find(
+      (candidate) => candidate && GOOGLE_CHAT_SPACE_NAME_PATTERN.test(candidate),
+    );
+  }
+  return target;
 }
 
 function renderChannelMessage(message: string, attachmentsRaw: unknown): string {

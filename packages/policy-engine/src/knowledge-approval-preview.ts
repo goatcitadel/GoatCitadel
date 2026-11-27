@@ -3,6 +3,8 @@ import { clampInt, redactSecretText, type ApprovalRequest, type ToolInvokeReques
 import { browserApprovalPreview } from "./browser-approval-preview.js";
 import { toolActionApprovalPreview } from "./tool-action-approval-preview.js";
 import { capabilityExplanationApprovalPreview } from "./capability-explanation-approval-preview.js";
+import { parseCapabilitySearchArgs } from "./capability-search-args.js";
+import { localToolApprovalPreview } from "./local-tool-approval-preview.js";
 
 const LOOKUP_LIMITS = new Map<string, { fallback: number; max: number }>([
   ["memory.search", { fallback: 12, max: 100 }],
@@ -16,6 +18,18 @@ function trimmedText(value: unknown): string | undefined {
 }
 
 function lookupApprovalPreview(toolName: string, args: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (toolName === "capabilities.search") {
+    const search = parseCapabilitySearchArgs(args);
+    if (!search) return undefined;
+    return {
+      reviewKind: "knowledge.operation",
+      toolName,
+      target: "Available tools and skills in this workspace",
+      query: redactSecretText(search.query, { env: process.env }).value,
+      optionsSummary: `Maximum results: ${search.limit}`,
+      summary: "Search for matching tools and skills. Using a result is subject to its own permissions and approvals.",
+    };
+  }
   if (toolName === "capabilities.explain") return capabilityExplanationApprovalPreview(args);
   if (toolName === "time.now") {
     return {
@@ -45,7 +59,7 @@ function lookupApprovalPreview(toolName: string, args: Record<string, unknown>):
     };
   }
   const limits = LOOKUP_LIMITS.get(toolName);
-  if (!limits) return undefined;
+  if (!limits) return localToolApprovalPreview(toolName, args);
   const redact = (value: string) => redactSecretText(value, { env: process.env }).value;
   const query =
     trimmedText(args.query) ??

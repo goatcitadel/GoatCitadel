@@ -46,6 +46,7 @@ import type { FirecrawlOperatorEndpoint } from "./firecrawl-endpoint.js";
 import { readCodeModeRequestArgs } from "./tool-executor/code-mode-request-args.js";
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
 import { matchesToolPattern } from "./tool-patterns.js";
+import { parseCapabilitySearchArgs } from "./capability-search-args.js";
 import {
   BROWSER_ERRAND_TOOL_NAME,
   CHANGE_REQUEST_TOOL_NAME,
@@ -560,14 +561,7 @@ export async function executeTool(
       return finalizeToolResult({ status: "optional_input_requested", title: title.trim(), question: question.trim() });
     }
     case "capabilities.search": {
-      const { query, limit } = request.args;
-      if (
-        Object.keys(request.args).some((key) => key !== "query" && key !== "limit") ||
-        typeof query !== "string" ||
-        !query.trim() ||
-        query.length > 512 ||
-        (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 5))
-      ) {
+      if (!parseCapabilitySearchArgs(request.args)) {
         throw new Error("Capability discovery requires a bounded query and optional limit from 1 to 5.");
       }
       if (!runtimeHooks.searchCapabilities) throw new Error("Capability discovery is unavailable in this runtime.");
