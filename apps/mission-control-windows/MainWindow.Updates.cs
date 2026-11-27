@@ -25,6 +25,12 @@ public sealed partial class MainWindow
             var install = _launcherService.ResolveLauncher();
             if (!File.Exists(Path.Join(install.InstallRoot, "app", "release-manifest.json"))) return;
             _updates = new DesktopUpdateService(install.InstallRoot);
+            var installedVersion = _updates.Status.InstalledVersion;
+            if (_appWindow is not null && !string.IsNullOrWhiteSpace(installedVersion)
+                && installedVersion is not ("unknown" or "source checkout"))
+            {
+                _appWindow.Title = $"GoatCitadel Mission Control · {installedVersion}";
+            }
             _updateCts = new();
             _updates.Changed += status => DispatcherQueue.TryEnqueue(() =>
             {

@@ -4,6 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const route = vi.hoisted(() => ({ pathname: "/chat", search: "", hash: "", area: "chat", navigate: vi.fn() }));
+const desktop = vi.hoisted(() => ({ installedVersion: undefined as string | undefined }));
+vi.mock("../../features/desktop-updates/desktop-update-bridge", () => ({
+  useDesktopUpdates: () => (desktop.installedVersion === undefined ? null : desktop),
+}));
 vi.mock("@tanstack/react-query", () => ({ useQuery: () => ({ data: { items: [] } }) }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({
@@ -35,7 +39,7 @@ vi.mock("../ui/Menu", () => ({
       {children}
     </button>
   ),
-  MenuContent: () => null,
+  MenuContent: ({ children }: { children: ReactNode }) => <div role="menu">{children}</div>,
   MenuItem: () => null,
 }));
 
@@ -44,6 +48,7 @@ let host: HTMLDivElement;
 
 beforeEach(() => {
   route.area = "chat";
+  desktop.installedVersion = undefined;
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -76,3 +81,20 @@ it("marks the Settings gear as a current row while Settings is open", async () =
   expect(gear.getAttribute("aria-current")).toBe("page");
   expect(gear.hasAttribute("data-current-row")).toBe(true);
 });
+
+it.each([false, true])("shows the exact installed release near Settings (collapsed: %s)", async (collapsed) => {
+  desktop.installedVersion = "1.2.3-preview.42.abcdef0";
+  await renderSidebar(collapsed);
+  const version = "Version 1.2.3-preview.42.abcdef0";
+  expect(host.textContent).toContain(version);
+  expect(host.querySelector('[role="menu"]')?.textContent?.includes(version)).toBe(collapsed);
+});
+
+it.each([undefined, "unknown", "source checkout"])(
+  "omits unavailable release versions (%s)",
+  async (installedVersion) => {
+    desktop.installedVersion = installedVersion;
+    await renderSidebar(false);
+    expect(host.textContent).not.toContain("Version");
+  },
+);
