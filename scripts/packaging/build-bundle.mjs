@@ -165,7 +165,18 @@ async function main() {
     copyDesktopExecutable();
   }
   const windowsIdentityPackage = copyWindowsIdentityPackage();
-  copyDirectory(path.join(repoRoot, "config"), path.join(templatesRoot, "config"));
+  const configTemplatesDir = path.join(templatesRoot, "config");
+  copyDirectory(path.join(repoRoot, "config"), configTemplatesDir);
+  if (targetInfo.platform === "windows") {
+    // The Windows installer ships SQLite but relies on the host for PostgreSQL server tools.
+    for (const filename of ["goatcitadel.example.json", "assistant.config.example.json"]) {
+      const templatePath = path.join(configTemplatesDir, filename);
+      const config = JSON.parse(fs.readFileSync(templatePath, "utf8"));
+      const assistant = filename === "goatcitadel.example.json" ? config.assistant : config;
+      assistant.database.driver = "sqlite";
+      fs.writeFileSync(templatePath, `${JSON.stringify(config, null, 2)}\n`);
+    }
+  }
   copyIfExists(path.join(repoRoot, ".env.example"), path.join(templatesRoot, ".env.example"));
   copyIfExists(path.join(repoRoot, "skills"), path.join(templatesRoot, "skills"));
   // Read in place by the packaged Gateway (`built-in-plugins-root.ts`), never seeded into the writable runtime root.
