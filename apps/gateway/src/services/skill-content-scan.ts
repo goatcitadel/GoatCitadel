@@ -33,8 +33,6 @@ export const SKILL_SCAN_MAX_FILE_BYTES = 220_000;
 export const SKILL_SCAN_MAX_ENTRIES = 384;
 const MAX_FINDINGS = 32;
 
-/** Files read as prompt text by the promptware scan. Script files are read whole as well. */
-const PROMPT_TEXT_FILE = /\.(md|markdown|txt|json|ya?ml|toml|html?|svg)$/i;
 /** Images and fonts: not text, never sent to a model, so not scanned. */
 const ASSET_FILE = /\.(png|jpe?g|gif|webp|ico|bmp|woff2?|ttf|otf|eot)$/i;
 
@@ -95,19 +93,14 @@ function scanOneFile(file: SkillScanFile): SkillScanFinding[] {
   }
   const isScript = SCRIPT_FILE_PATTERN.test(file.path);
   const findings: SkillScanFinding[] = [];
-  // A script is checked whole: telling its comments from its code takes a parser per language, and every shortcut
-  // was a way around the check. An injection phrase in a code string is flagged too.
-  const promptText = isScript || PROMPT_TEXT_FILE.test(file.path) ? text : undefined;
-  if (promptText !== undefined) {
-    for (const finding of scanPromptwareContent({
-      source: "imported_skill",
-      sourcePath: file.path,
-      content: promptText,
-    })) {
-      const code: SkillScanFindingCode =
-        finding.ruleId === "hidden_text_obfuscation" ? "hidden_text" : "prompt_injection";
-      findings.push({ code, path: file.path, line: finding.startLine, dangerous: true });
-    }
+  for (const finding of scanPromptwareContent({
+    source: "imported_skill",
+    sourcePath: file.path,
+    content: text,
+  })) {
+    const code: SkillScanFindingCode =
+      finding.ruleId === "hidden_text_obfuscation" ? "hidden_text" : "prompt_injection";
+    findings.push({ code, path: file.path, line: finding.startLine, dangerous: true });
   }
   const scriptFindings = scanScriptText(text);
   if (hasOverlongLine(text)) findings.push({ code: "scan_incomplete", path: file.path, dangerous: true });
@@ -158,19 +151,20 @@ const SCAN_OPEN_FLAGS =
 const scanStatOptions = { bigint: true } as const;
 
 function assertSameScanEntry(before: BigIntStats, after: BigIntStats): void {
-  if (before.dev !== after.dev || before.ino !== after.ino || before.birthtimeNs !== after.birthtimeNs) {
+  if (
+    before.dev !== after.dev ||
+    before.ino !== after.ino ||
+    before.birthtimeNs !== after.birthtimeNs ||
+    before.mtimeNs !== after.mtimeNs ||
+    before.ctimeNs !== after.ctimeNs
+  ) {
     throw new Error("Skill scan entry changed.");
   }
 }
 
 function assertSameScanFile(before: BigIntStats, after: BigIntStats): void {
   assertSameScanEntry(before, after);
-  if (
-    !after.isFile() ||
-    before.size !== after.size ||
-    before.mtimeNs !== after.mtimeNs ||
-    before.ctimeNs !== after.ctimeNs
-  ) {
+  if (!after.isFile() || before.size !== after.size) {
     throw new Error("Skill scan file changed.");
   }
 }
