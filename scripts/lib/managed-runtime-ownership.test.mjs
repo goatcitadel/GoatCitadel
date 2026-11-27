@@ -511,6 +511,108 @@ test("a standalone status probe reports launch-in-progress rather than collision
   assert.equal(afterExitPayload.endpointOwnership.gateway.conflict, true);
 });
 
+test("installed Windows profile can reset after failed Gateway startup and restore its PostgreSQL files", {
+  skip: process.platform !== "win32",
+}, async (t) => {
+  const [gatewayPort, uiPort, postgresPort] = await reservePorts(3);
+  const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-launcher-ownership-profile-"));
+  const appRoot = path.join(installRoot, "app");
+  const profile = path.join(installRoot, "runtime-root");
+  const recovery = path.join(installRoot, "profile-recovery");
+  const launcherEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+    !/^(?:GOATCITADEL_|NODE_OPTIONS$)/iu.test(key)));
+  Object.assign(launcherEnv, {
+    GOATCITADEL_HOME: installRoot,
+    GOATCITADEL_DESKTOP_HOST: "1",
+    GC_TEST_MANAGED_START_LOG: path.join(installRoot, "managed-starts.ndjson"),
+  });
+  materializeManagedPackagedFixture(installRoot, { profileRecovery: true });
+  const entry = materializeLauncherCodeFixture(appRoot, gatewayPort, uiPort);
+  const run = (...args) => runLauncher(args, launcherEnv, entry);
+  const readResult = (result) => {
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    return JSON.parse(result.stdout);
+  };
+  const foreignListener = createLauncherFixtureServer([]);
+  t.after(async () => {
+    await close(foreignListener);
+    const stopped = readResult(await run("stop", "--json"));
+    assert.ok(stopped.status === "stale" || stopped.status === "stopped");
+    assert.ok(stopped.notStopped.every(({ reason, endpointResponded }) => reason === "metadata_stale" && !endpointResponded));
+    removeOwnedTestRoot(installRoot);
+  });
+
+  const legacyAssistant = {
+    dataDir: "./data",
+    database: {
+      driver: "postgres",
+      postgres: { mode: "bundled" },
+      bundledPostgres: { enabled: true, binDir: path.join(installRoot, "missing-pg16-bin"), dataDir: "./data/postgres", port: postgresPort },
+    },
+  };
+  const legacyFiles = new Map([
+    ["config/goatcitadel.json", Buffer.from(JSON.stringify({ assistant: legacyAssistant }, null, 2) + "\r\n")],
+    ["config/assistant.config.json", Buffer.from(JSON.stringify(legacyAssistant) + "\n")],
+    ["data/postgres/PG_VERSION", Buffer.from("16\n")],
+    ["data/postgres/profile-sentinel", Buffer.from([0, 10, 255])],
+  ]);
+  for (const [relative, bytes] of legacyFiles) {
+    const file = path.join(profile, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, bytes);
+  }
+  const templates = path.join(appRoot, "templates", "config");
+  fs.mkdirSync(templates, { recursive: true });
+  const freshAssistant = { dataDir: "./data", database: { driver: "sqlite" } };
+  fs.writeFileSync(path.join(templates, "goatcitadel.example.json"), JSON.stringify({ assistant: freshAssistant }));
+  fs.writeFileSync(path.join(templates, "assistant.config.example.json"), JSON.stringify(freshAssistant));
+  const assertLegacyFiles = (root) => {
+    for (const [relative, bytes] of legacyFiles) {
+      assert.deepEqual(fs.readFileSync(path.join(root, relative)), bytes, relative);
+    }
+  };
+
+  const failed = await run("launch", "--no-open", "--json");
+  assert.equal(failed.status, 1, failed.stderr || failed.stdout);
+  assert.match(failed.stderr, /Managed Gateway process exited before .* became healthy/);
+  const stopped = readResult(await run("stop", "--json"));
+  assert.equal(stopped.status, "stale");
+  assert.deepEqual(stopped.readiness, { gateway: false, ui: false });
+  assert.match(stopped.startupFailure.summary, /did not contain both initdb and pg_ctl/);
+  assert.deepEqual(stopped.notStopped.map(({ label, reason, endpointResponded }) =>
+    ({ label, reason, endpointResponded })), [{ label: "gateway", reason: "metadata_stale", endpointResponded: false }]);
+  assertLegacyFiles(profile);
+
+  await listen(foreignListener, gatewayPort);
+  const refused = await run("desktop-profile", "reset", "--confirmed");
+  assert.equal(refused.status, 1, refused.stderr || refused.stdout);
+  assert.match(refused.stderr, /Could not stop this install's runtime/);
+  const foreignHealth = await fetch(`${serverUrl(foreignListener)}/health`);
+  assert.deepEqual(await foreignHealth.json(), { status: "ok" });
+  assertLegacyFiles(profile);
+  assert.equal(fs.existsSync(path.join(recovery, "pending.json")), false);
+  assert.deepEqual(readResult(await run("desktop-profile", "list")).backups, []);
+  await close(foreignListener);
+
+  const { outgoing } = readResult(await run("desktop-profile", "reset", "--confirmed"));
+  assert.ok(readResult(await run("desktop-profile", "list")).backups.some(({ id, reason }) => id === outgoing && reason === "reset"));
+  assertLegacyFiles(path.join(recovery, "backups", outgoing, "profile"));
+  assert.equal(fs.existsSync(path.join(recovery, "pending.json")), false);
+
+  const relaunched = readResult(await run("launch", "--no-open", "--json"));
+  assert.deepEqual(relaunched.readiness, { gateway: true, ui: true });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(profile, "config/goatcitadel.json"), "utf8")), { assistant: freshAssistant });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(profile, "config/assistant.config.json"), "utf8")), freshAssistant);
+  assert.ok(fs.lstatSync(path.join(profile, "data/index.db")).isFile());
+
+  const restored = readResult(await run("desktop-profile", "restore", outgoing, "--confirmed"));
+  assertLegacyFiles(profile);
+  assert.equal(fs.existsSync(path.join(profile, "data/index.db")), false);
+  assert.equal(fs.existsSync(path.join(recovery, "pending.json")), false);
+  assert.deepEqual(readResult(await run("desktop-profile", "list")).backups.map(({ id, reason }) => [id, reason]), [[restored.outgoing, "restore"]]);
+  assert.ok(fs.lstatSync(path.join(recovery, "backups", restored.outgoing, "profile/data/index.db")).isFile());
+});
+
 test("health deadline remains active when a listener stalls after sending headers", async (t) => {
   const sockets = new Set();
   const stalled = http.createServer((_request, response) => {
@@ -686,15 +788,37 @@ function materializePackagedFixture(installRoot) {
   fs.writeFileSync(path.join(appRoot, "runtime", "ui-static-server.mjs"), "\n", "utf8");
 }
 
-function materializeManagedPackagedFixture(installRoot) {
+function materializeManagedPackagedFixture(installRoot, { profileRecovery = false } = {}) {
   materializePackagedFixture(installRoot);
   const fixtureServerSource = [
     'import fs from "node:fs";',
     'import http from "node:http";',
+    `const profileRecovery = ${profileRecovery};`,
     "const service = process.env.GOATCITADEL_MANAGED_SERVICE;",
     'const port = Number(service === "gateway" ? process.env.GATEWAY_PORT : process.env.GOATCITADEL_UI_PORT);',
     'const host = service === "gateway" ? process.env.GATEWAY_HOST : process.env.GOATCITADEL_UI_HOST;',
     'fs.appendFileSync(process.env.GC_TEST_MANAGED_START_LOG, JSON.stringify({ service, pid: process.pid, databaseDriver: process.env.GOATCITADEL_DATABASE_DRIVER, gatewayOrigin: process.env.GOATCITADEL_UI_GATEWAY_ORIGIN, allowedOrigins: process.env.GOATCITADEL_ALLOWED_ORIGINS, startupFailureFile: process.env.GOATCITADEL_STARTUP_FAILURE_FILE }) + "\\n");',
+    'if (profileRecovery && service === "gateway") {',
+    '  const root = process.env.GOATCITADEL_ROOT_DIR;',
+    '  for (const name of ["goatcitadel", "assistant.config"]) {',
+    '    const config = root + "/config/" + name;',
+    '    if (!fs.existsSync(config + ".json")) fs.copyFileSync(config + ".example.json", config + ".json");',
+    '  }',
+    '  const assistant = JSON.parse(fs.readFileSync(root + "/config/goatcitadel.json", "utf8")).assistant;',
+    '  if (assistant.database.driver === "postgres") {',
+    '    const pidFile = root + "/../runtime/gateway.pid";',
+    '    for (let attempt = 0; attempt < 200 && !fs.existsSync(pidFile); attempt++) {',
+    '      await new Promise((resolve) => setTimeout(resolve, 50));',
+    '    }',
+    '    const summary = "Configured bundledPostgres.binDir did not contain both initdb and pg_ctl.";',
+    '    fs.writeFileSync(process.env.GOATCITADEL_STARTUP_FAILURE_FILE, JSON.stringify({ version: 1, summary, retryable: true, at: new Date().toISOString() }));',
+    '    process.exit(1);',
+    '  }',
+    '  const { DatabaseSync } = await import("node:sqlite");',
+    '  const sqlite = new DatabaseSync(root + "/data/index.db");',
+    '  sqlite.exec("CREATE TABLE fixture (id INTEGER PRIMARY KEY)");',
+    '  sqlite.close();',
+    '}',
     "const server = http.createServer((request, response) => {",
     '  response.setHeader("content-type", "application/json");',
     '  if (request.url === "/health") {',
