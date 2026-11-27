@@ -202,6 +202,63 @@ public sealed class GatewayWatchdogTests
     }
 
     [TestMethod]
+    public void RemembersWhyItGaveUpUntilTheOperatorStartsItAgain()
+    {
+        var watchdog = Create();
+        watchdog.Observe(WatchdogObservation.Healthy);
+        watchdog.Observe(WatchdogObservation.NotRetryable("database files are locked"));
+        Assert.AreEqual("database files are locked", watchdog.GiveUpReason);
+        ObserveAfter(watchdog, TimeSpan.FromSeconds(10), Down("a later check"));
+        Assert.AreEqual("database files are locked", watchdog.GiveUpReason, "later checks keep the original reason");
+
+        watchdog.ResetForOperatorLaunch();
+        Assert.IsNull(watchdog.GiveUpReason);
+    }
+
+    [TestMethod]
+    public void EveryOperatorActionStartsANewGenerationSoQueuedRestartsCanTellTheyAreStale()
+    {
+        var watchdog = Create();
+        var start = watchdog.OperatorGeneration;
+        watchdog.Pause();
+        var afterStop = watchdog.OperatorGeneration;
+        watchdog.ResetForOperatorLaunch();
+        Assert.IsTrue(afterStop > start);
+        Assert.IsTrue(watchdog.OperatorGeneration > afterStop);
+    }
+
+    [TestMethod]
+    public void AGatewayItsOwnStopLeftDownIsNotMistakenForADeliberateStop()
+    {
+        var watchdog = Create();
+        watchdog.Observe(WatchdogObservation.Healthy);
+        Assert.AreEqual(WatchdogAction.Restart, FailUntilDecision(watchdog).Action);
+        watchdog.MarkStoppedByWatchdog();
+
+        // The restart's stop removed the Gateway record, then the relaunch did not bring it back.
+        WatchdogDecision decision = WatchdogDecision.Wait;
+        for (var check = 0; check < 50 && decision.Action == WatchdogAction.None; check++)
+        {
+            decision = ObserveAfter(watchdog, TimeSpan.FromSeconds(10), WatchdogObservation.Stopped);
+        }
+        Assert.AreEqual(WatchdogAction.Restart, decision.Action, "the watchdog keeps trying");
+    }
+
+    [TestMethod]
+    public void OnceTheGatewayIsBackADeliberateStopIsHonouredAgain()
+    {
+        var watchdog = Create();
+        watchdog.Observe(WatchdogObservation.Healthy);
+        FailUntilDecision(watchdog);
+        watchdog.MarkStoppedByWatchdog();
+        ObserveAfter(watchdog, TimeSpan.FromSeconds(10), WatchdogObservation.Healthy);
+        for (var check = 0; check < 20; check++)
+        {
+            Assert.AreEqual(WatchdogAction.None, ObserveAfter(watchdog, TimeSpan.FromSeconds(10), WatchdogObservation.Stopped).Action);
+        }
+    }
+
+    [TestMethod]
     public void NeverRestartsWhenTheOperatorTurnedItOff()
     {
         var watchdog = Create(GatewayWatchdogSettings.Defaults with { Enabled = false });

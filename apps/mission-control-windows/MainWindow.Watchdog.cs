@@ -46,22 +46,24 @@ public sealed partial class MainWindow
 
     /// <summary>Keeps the give-up explanation visible on later status checks, which re-render the recovery panel.</summary>
     private string WithWatchdogNote(string message) =>
-        _watchdog is { GaveUp: true }
-            ? $"GoatCitadel stopped responding and couldn't be restarted. {WatchdogGaveUpAdvice} Last check: {message}"
+        _watchdog is { GaveUp: true } watchdog
+            ? $"GoatCitadel stopped responding and couldn't be restarted: {watchdog.GiveUpReason} {WatchdogGaveUpAdvice} Latest check: {message}"
             : message;
 
     private void HandleWatchdogDecision(WatchdogDecision decision)
     {
         if (decision.Action == WatchdogAction.None || _cleanedUp) return;
         _watchdogLog?.Record(DateTimeOffset.UtcNow, decision);
+        // An operator stop or launch between now and the queued callback overtakes this decision.
+        var generation = Watchdog.OperatorGeneration;
         // Act after the status check that produced this decision has finished rendering.
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (_cleanedUp) return;
+            if (_cleanedUp || Watchdog.OperatorGeneration != generation) return;
             if (decision.Action == WatchdogAction.Restart)
             {
                 ShowToast($"GoatCitadel stopped responding. Restarting it (try {decision.Attempt} of {decision.MaxAttempts}).");
-                _ = WatchdogRestartAsync();
+                _ = WatchdogRestartAsync(generation);
                 return;
             }
 
@@ -70,21 +72,26 @@ public sealed partial class MainWindow
         });
     }
 
-    private async Task WatchdogRestartAsync()
+    private async Task WatchdogRestartAsync(long generation)
     {
         if (_watchdogRestartInFlight || _cleanedUp || _profileRecoveryChanging) return;
+        if (Watchdog.OperatorGeneration != generation) return;
         _watchdogRestartInFlight = true;
         try
         {
             // A crashed Gateway is relaunched directly: stop would refuse its stale record and block recovery. Only a
             // hung one still running is stopped first, through the launcher, which refuses any process it can't
-            // prove it owns. A refused stop leaves the runtime polled, so further failed checks lead to the next
-            // attempt or a give-up.
-            if (WatchdogRestartPlanner.For(_lastRuntime) == WatchdogRestartPlan.StopThenLaunch
-                && !await StopRuntimeAsync(byWatchdog: true))
+            // prove it owns.
+            if (WatchdogRestartPlanner.For(_lastRuntime) == WatchdogRestartPlan.StopThenLaunch)
             {
-                return;
+                // Until the Gateway is ready again, a record this stop removed is not an operator's stop.
+                Watchdog.MarkStoppedByWatchdog();
+                // A partly refused stop (for example the UI refused, the Gateway stopped) still needs the launch.
+                // Launch never stops anything: over a live, unowned process it only waits and fails, and the next
+                // checks lead to another attempt or a give-up.
+                await StopRuntimeAsync(byWatchdog: true);
             }
+            if (_cleanedUp || Watchdog.OperatorGeneration != generation) return;
             await LaunchRuntimeAsync(byWatchdog: true);
         }
         finally

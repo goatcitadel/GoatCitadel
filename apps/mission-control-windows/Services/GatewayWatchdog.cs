@@ -70,6 +70,7 @@ public sealed class GatewayWatchdog
     private DateTimeOffset _nextRestartAllowedAt = DateTimeOffset.MinValue;
     private bool _armed;
     private bool _paused;
+    private bool _stoppedByWatchdog;
 
     public GatewayWatchdog(GatewayWatchdogSettings settings, Func<DateTimeOffset>? now = null)
     {
@@ -80,6 +81,15 @@ public sealed class GatewayWatchdog
     /// <summary>True once the watchdog stopped restarting; only an operator launch clears it.</summary>
     public bool GaveUp { get; private set; }
 
+    /// <summary>Why the watchdog gave up, kept so later status checks can still explain it.</summary>
+    public string? GiveUpReason { get; private set; }
+
+    /// <summary>
+    /// Advances on every operator stop or launch. A restart decided under an older generation was overtaken by
+    /// the operator and must not run.
+    /// </summary>
+    public long OperatorGeneration { get; private set; }
+
     public WatchdogDecision Observe(WatchdogObservation observation)
     {
         if (observation.Kind == WatchdogObservationKind.Healthy)
@@ -87,9 +97,15 @@ public sealed class GatewayWatchdog
             // Only a Gateway that was ready at least once is watched; a failed first start has its own recovery.
             _armed = true;
             _consecutiveFailures = 0;
+            _stoppedByWatchdog = false;
             return WatchdogDecision.Wait;
         }
-        if (observation.Kind == WatchdogObservationKind.Stopped)
+        if (observation.Kind == WatchdogObservationKind.Stopped && _stoppedByWatchdog)
+        {
+            // The watchdog's own stop removed the record and the Gateway has not come back: still a failure.
+            observation = WatchdogObservation.Unhealthy("The Gateway was stopped for a restart and has not come back.");
+        }
+        else if (observation.Kind == WatchdogObservationKind.Stopped)
         {
             // A deliberate stop is never undone, and it is not part of a failure streak.
             _consecutiveFailures = 0;
@@ -126,7 +142,15 @@ public sealed class GatewayWatchdog
     {
         _paused = true;
         _consecutiveFailures = 0;
+        _stoppedByWatchdog = false;
+        OperatorGeneration++;
     }
+
+    /// <summary>
+    /// The watchdog is about to stop a hung Gateway. Until it is ready again, a missing process record is the
+    /// result of that stop, not an operator's choice, so it keeps counting as a failure.
+    /// </summary>
+    public void MarkStoppedByWatchdog() => _stoppedByWatchdog = true;
 
     /// <summary>The operator started the runtime: forget earlier failures and watch again once it is ready.</summary>
     public void ResetForOperatorLaunch()
@@ -134,6 +158,9 @@ public sealed class GatewayWatchdog
         _paused = false;
         _armed = false;
         GaveUp = false;
+        GiveUpReason = null;
+        _stoppedByWatchdog = false;
+        OperatorGeneration++;
         _consecutiveFailures = 0;
         _restarts.Clear();
         _nextRestartAllowedAt = DateTimeOffset.MinValue;
@@ -142,6 +169,7 @@ public sealed class GatewayWatchdog
     private WatchdogDecision GiveUp(string reason)
     {
         GaveUp = true;
+        GiveUpReason = reason;
         return new WatchdogDecision(WatchdogAction.GiveUp, reason, _restarts.Count, _settings.MaxRestartsPerWindow);
     }
 
