@@ -197,7 +197,7 @@ export async function installedSkillCapture(runtime, fixture) {
       });
       const turn = await waitForTurn(chat, "completed");
       assert.equal(turn.trace.model, model);
-      assert.equal(turn.trace.providerId, "ollama");
+      assert.equal(turn.assistantMessage?.providerId ?? turn.assistantMessage?.metadata?.providerId, "ollama");
       const receipt = await receiptFor(chat, turn, scope);
       const versionId = receipt.usedSources.find((source) => source.ref === approved.runtimeSkillId)?.skillVersion
         ?.versionId;
