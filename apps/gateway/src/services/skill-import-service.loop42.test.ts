@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSanitizedGitEnvironment } from "./hardened-git.js";
 import { SkillImportService } from "./skill-import-service.js";
 
 describe("SkillImportService loop42 git install behavior", () => {
@@ -66,8 +67,9 @@ function createGitSkillRepo(rootDir: string): string {
     "utf8",
   );
   fs.writeFileSync(path.join(repoDir, "LICENSE"), "MIT\n", "utf8");
-  execFileSync("git", ["init"], { cwd: repoDir, stdio: "ignore", windowsHide: true });
-  execFileSync("git", ["add", "SKILL.md", "LICENSE"], { cwd: repoDir, stdio: "ignore", windowsHide: true });
+  const gitOptions = { cwd: repoDir, env: buildSanitizedGitEnvironment(), stdio: "ignore" as const, windowsHide: true };
+  execFileSync("git", ["init", "--template="], gitOptions);
+  execFileSync("git", ["add", "SKILL.md", "LICENSE"], gitOptions);
   execFileSync(
     "git",
     [
@@ -76,10 +78,11 @@ function createGitSkillRepo(rootDir: string): string {
       "-c",
       "user.email=goatcitadel-test@example.invalid",
       "commit",
+      "--no-gpg-sign",
       "-m",
       "Initial skill fixture",
     ],
-    { cwd: repoDir, stdio: "ignore", windowsHide: true },
+    gitOptions,
   );
   return repoDir;
 }

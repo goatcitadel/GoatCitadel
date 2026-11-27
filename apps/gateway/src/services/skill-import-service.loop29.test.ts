@@ -130,9 +130,7 @@ describe("SkillImportService loop 29 runtime behavior", () => {
     // The staged validation copy is removed after the redirect returns.
     const stagingRoot = path.join(rootDir, "skills", ".import-staging");
     expect(removed.some((target) => target.startsWith(stagingRoot))).toBe(true);
-    const stagingEntries = fs.existsSync(stagingRoot)
-      ? fs.readdirSync(stagingRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory())
-      : [];
+    const stagingEntries = fs.existsSync(stagingRoot) ? fs.readdirSync(stagingRoot) : [];
     expect(stagingEntries).toEqual([]);
     // And skills/extra was never created at all.
     expect(fs.existsSync(path.join(rootDir, "skills", "extra"))).toBe(false);

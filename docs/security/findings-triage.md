@@ -151,7 +151,7 @@ For any secret-scanning alert *not* in a file covered by §3 or `secret_scanning
 
 1. Treat it as a real leak until proven otherwise.
 2. Do not preemptively close the alert. Follow [SECURITY.md](../../SECURITY.md) reporting/rotation guidance.
-3. If after investigation it is genuinely a test fixture, prefer relocating to `**/__fixtures__/**` over expanding the allowlist (per §2 rule 4).
+3. If after investigation it is genuinely a test fixture, prefer relocating to `**/__fixtures__/**` as described in [step 4 of the secret alert workflow](#what-to-do-when-a-new-secret-alert-fires).
 
 ---
 
