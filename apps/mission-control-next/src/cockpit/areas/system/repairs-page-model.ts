@@ -140,7 +140,7 @@ export function buildRepairsPage(snapshot: RuntimeRepairSweepSnapshot): RepairsP
   const base = { open, cleared, checks, lastTickAt: snapshot.lastTickAt };
   const metrics: Metric[] = [
     { term: "Open", value: open.length.toLocaleString() },
-    { term: "Cleared since this Gateway started", value: cleared.length.toLocaleString() },
+    { term: "Cleared since GoatCitadel started", value: cleared.length.toLocaleString() },
   ];
   if (!snapshot.ready) return { ...base, state: "first_check_pending", intro: "", metrics };
   if (!open.length && !failedChecks) return { ...base, state: "all_clear", intro: "", metrics };

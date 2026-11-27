@@ -155,11 +155,9 @@ export class RuntimeRepairSweepService {
         ["nowMs", nowMs],
         ...Object.entries(sources).map(([key, result]) => [key, result.value]),
       ]) as unknown as RuntimeRepairObservation;
-      const healthyDetectors = this.recordDetectorStatus(sources, nowIso);
-      const candidates = detectRuntimeRepairFindings(observation).filter((item) =>
-        healthyDetectors.has(item.detectorId),
-      );
-      await this.applyCandidates(candidates, healthyDetectors, nowIso);
+      const { healthy, complete } = this.recordDetectorStatus(sources, nowIso);
+      const candidates = detectRuntimeRepairFindings(observation).filter((item) => healthy.has(item.detectorId));
+      await this.applyCandidates(candidates, complete, nowIso);
       this.lastTickAt = nowIso;
     } catch (error) {
       this.options.onError?.("runtime repair sweep tick failed", error);
@@ -256,12 +254,16 @@ export class RuntimeRepairSweepService {
     return { value, truncated: runIds.length >= limits.waitingRuns || waits.length > checked.length };
   }
 
-  /** Records per-detector status and returns the detectors whose sources were read. */
+  /**
+   * Records per-detector status. `healthy`: the source was read, so its findings can be recorded. `complete`: it was
+   * read without hitting its limit, so a finding it no longer reports really went away and can be cleared.
+   */
   private recordDetectorStatus(
     sources: { [Key in SourceKey]: SourceResult<unknown> },
     nowIso: string,
-  ): Set<RuntimeRepairDetectorId> {
+  ): { healthy: Set<RuntimeRepairDetectorId>; complete: Set<RuntimeRepairDetectorId> } {
     const healthy = new Set<RuntimeRepairDetectorId>();
+    const complete = new Set<RuntimeRepairDetectorId>();
     for (const [source, detectorIds] of Object.entries(DETECTORS_BY_SOURCE) as [
       SourceKey,
       RuntimeRepairDetectorId[],
@@ -275,14 +277,16 @@ export class RuntimeRepairSweepService {
           ...(result.error ? { lastError: result.error } : {}),
         });
         if (!result.error) healthy.add(detectorId);
+        if (!result.error && !result.truncated) complete.add(detectorId);
       }
     }
-    return healthy;
+    return { healthy, complete };
   }
 
   private async applyCandidates(
     candidates: RuntimeRepairFindingCandidate[],
-    healthyDetectors: Set<RuntimeRepairDetectorId>,
+    /** Only these detectors may clear a finding they did not report: an unread or truncated source proves nothing. */
+    completeDetectors: Set<RuntimeRepairDetectorId>,
     nowIso: string,
   ): Promise<void> {
     const seen = new Set<string>();
@@ -303,7 +307,7 @@ export class RuntimeRepairSweepService {
       await this.recordObserved(item, nowIso);
     }
     for (const finding of [...this.open.values()]) {
-      if (seen.has(finding.fingerprint) || !healthyDetectors.has(finding.detectorId)) continue;
+      if (seen.has(finding.fingerprint) || !completeDetectors.has(finding.detectorId)) continue;
       await this.recordCleared(finding, nowIso);
     }
   }

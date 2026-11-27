@@ -167,6 +167,43 @@ describe("RuntimeRepairSweepService", () => {
     expect(status?.truncated).toBe(true);
   });
 
+  it("keeps a finding open when a truncated read no longer reaches it, instead of calling it cleared", async () => {
+    const harness = createHarness({ deadLetters: [deadLetter({ deadLetterId: "dead-old" })] });
+    const sweep = harness.build();
+    await sweep.runTick();
+    expect(sweep.snapshot().open).toHaveLength(1);
+
+    // 200 newer dead letters push the old one out of the newest-first read, but it is still unresolved.
+    harness.state.deadLetters = Array.from({ length: 200 }, (_, index) =>
+      deadLetter({ deadLetterId: `dead-new-${index}` }),
+    );
+    harness.advance(60_000);
+    await sweep.runTick();
+
+    expect(harness.events.filter((event) => event.event === "finding_cleared")).toEqual([]);
+    expect(sweep.snapshot().open.map((finding) => finding.subject.deadLetterId)).toContain("dead-old");
+  });
+
+  it("clears an unseen finding once the read is complete again", async () => {
+    const harness = createHarness({ deadLetters: [deadLetter({ deadLetterId: "dead-old" })] });
+    const sweep = harness.build();
+    await sweep.runTick();
+    harness.state.deadLetters = Array.from({ length: 200 }, (_, index) =>
+      deadLetter({ deadLetterId: `dead-new-${index}` }),
+    );
+    harness.advance(60_000);
+    await sweep.runTick();
+
+    harness.state.deadLetters = [];
+    harness.advance(60_000);
+    await sweep.runTick();
+
+    expect(
+      harness.events.filter((event) => event.event === "finding_cleared").map((event) => event.findingId),
+    ).toContain("finding-1");
+    expect(sweep.snapshot().open).toEqual([]);
+  });
+
   it("only checks approval wait runs and treats a missing approval as orphaned", async () => {
     const chatRun: DurableRunRecord = { ...waitRun("run-chat", "unused"), workflowKey: "chat.turn.execute" };
     const harness = createHarness({ waitingRuns: [chatRun, waitRun("run-1", "approval-gone")] });

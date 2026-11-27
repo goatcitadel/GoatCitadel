@@ -71,7 +71,7 @@ describe("repairs page model", () => {
     expect(page.intro).toBe("2 things look stuck as of the last check. GoatCitadel checks every 5 minutes.");
     expect(page.metrics.map((metric) => [metric.term, metric.value])).toEqual([
       ["Open", "2"],
-      ["Cleared since this Gateway started", "1"],
+      ["Cleared since GoatCitadel started", "1"],
     ]);
   });
 

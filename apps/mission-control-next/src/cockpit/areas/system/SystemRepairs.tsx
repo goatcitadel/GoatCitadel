@@ -58,7 +58,7 @@ export function SystemRepairs() {
         <EmptyState
           tone="error"
           title="Repairs unavailable"
-          description={describeApiError(query.error, "The Gateway didn't answer. Try again in a moment.").summary}
+          description={describeApiError(query.error, "GoatCitadel didn't answer. Try again in a moment.").summary}
           action={<Button onClick={() => void query.refetch()}>Try again</Button>}
         />
       ) : null}
@@ -93,7 +93,7 @@ export function SystemRepairs() {
             </Section>
           ) : null}
           {page.cleared.length ? (
-            <Section title="Cleared recently" description="Problems that went away since this Gateway started.">
+            <Section title="Cleared recently" description="Problems that went away since GoatCitadel last started.">
               <ul aria-label="Cleared problems" className="divide-y divide-line-subtle">
                 {page.cleared.map((item) => (
                   <FindingRow key={item.findingId} item={item} cleared />
@@ -122,11 +122,11 @@ function FindingRow({ item, cleared = false }: { item: PresentedRepairFinding; c
           <TimeText value={item.firstSeenAt} prefix="First noticed" />
         </div>
         <TechnicalDetails>
-          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
+          <dl className="space-y-1 text-xs">
             {item.technical.map(([term, value]) => (
-              <div key={term} className="contents">
-                <dt className="text-fg-muted">{term}</dt>
-                <dd className="font-mono break-all text-fg-secondary">{value}</dd>
+              <div key={term} className="flex min-w-0 gap-3">
+                <dt className="shrink-0 text-fg-muted">{term}</dt>
+                <dd className="min-w-0 font-mono break-all text-fg-secondary">{value}</dd>
               </div>
             ))}
           </dl>
