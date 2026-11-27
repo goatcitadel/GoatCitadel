@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { promisify } from "node:util";
+import { promisify, stripVTControlCharacters } from "node:util";
 import { installedRecall, withNativeRecallPage } from "./lib/windows-installed-recall.mjs";
 import { installedSkillCapture } from "./lib/windows-installed-skill-capture.mjs";
 import { briefInstructions } from "../verification/lib/assistant-parity/weekly-brief-pilot.mjs";
@@ -152,6 +152,7 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
   const token = testSecret();
   const runtimeEnv = {
     ...env, ...fixtureEnv,
+    ...(skillCapture && { GOATCITADEL_VERBOSE: "true" }),
     GOATCITADEL_HOME: home,
     GOATCITADEL_APP_DIR: app,
     GOATCITADEL_AUTH_MODE: "token",
@@ -184,11 +185,12 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
     return data;
   }
   async function streamFailure(sessionId) {
-    const log = await fs.readFile(path.join(runtimeDir, "logs", "gateway.stdout.log"), "utf8").catch(() => "");
-    for (const line of log.split(/\r?\n/u).reverse()) {
-      if (!line.includes(sessionId) || !line.includes("chat SSE stream failed")) continue;
+    const log = await fs.readFile(path.join(runtimeDir, "logs", "gateway.stderr.log"), "utf8").catch(() => "");
+    const lines = stripVTControlCharacters(log).split(/\r?\n/u);
+    for (let index = lines.length - 2; index >= 0; index--) {
+      if (!lines[index].includes("chat SSE stream failed") || !lines[index + 1].includes(sessionId)) continue;
       try {
-        const event = JSON.parse(line);
+        const event = JSON.parse(lines[index + 1]);
         if (event.sessionId !== sessionId) continue;
         return redacted(JSON.stringify({
           type: event.err?.type,
