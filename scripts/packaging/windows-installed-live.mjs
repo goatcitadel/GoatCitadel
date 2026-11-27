@@ -21,6 +21,7 @@ const exec = promisify(execFile);
 const [app, scratch, evidence, nativeDebugPort, ollamaExe, ntfyExe] = process.argv.slice(2);
 const recallOnly = ollamaExe === "--recall-only";
 const skillCaptureOnly = process.env.GOATCITADEL_INSTALLED_SKILL_CAPTURE_ONLY === "true";
+const skillLifecycleOnly = skillCaptureOnly && process.env.GOATCITADEL_INSTALLED_SKILL_LIFECYCLE_ONLY === "true";
 const ollamaModel = "qwen2.5:0.5b";
 const skillPilotContextWindow = 32768;
 const modelDigest = "a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67";
@@ -226,7 +227,9 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
       await delay(750);
       stopped = await cli("stop");
     }
-    assert.equal(stopped.notStopped?.length ?? 0, 0, "An installed fixture runtime process did not stop");
+    const refusals = stopped.notStopped.filter((item) => item.pidState !== "stale" || item.endpointResponded);
+    assert.equal(refusals.length, 0, `An installed fixture runtime process did not stop: ${JSON.stringify(refusals)}`);
+    assert.equal(stopped.status, "stopped", "An installed fixture endpoint still responds after shutdown");
   };
   try {
     const launch = await cli("launch", "--no-open", "--wait");
@@ -491,17 +494,21 @@ async function realChannel(root) {
 }
 
 const recallCheck = ["recall", (root) => installedRecall(root, evidence, withStub, poll)];
-const skillCheck = ["skill-capture", (root) => withPinnedOllama(root, (provider, serverVersion, contextWindow) =>
-  withStub(root, {
+const skillCheck = ["skill-capture", (root) => {
+  const run = (provider, serverVersion, contextWindow) => withStub(root, {
     skillCapture: true,
-    extraProviders: [provider],
-    extraModelMetadata: { [`${provider.providerId}/${ollamaModel}`]: { contextWindow, outputTokenLimit: 1024 } },
+    ...(provider && {
+      extraProviders: [provider],
+      extraModelMetadata: { [`${provider.providerId}/${ollamaModel}`]: { contextWindow, outputTokenLimit: 1024 } },
+    }),
   }, (runtime) => installedSkillCapture(runtime, {
-    evidence, poll, model: ollamaModel, modelDigest, serverVersion,
+    evidence, poll, model: ollamaModel, modelDigest, serverVersion, lifecycleOnly: skillLifecycleOnly,
   }), {
     replyText: "Status: Build passed.\nRisks: Approval is missing.\nNext steps: Jess checks approval on Friday.",
     promptReplyRules: [{ ruleId: "workflow-capture", userContentIncludes: "WORKFLOW_SKILL_CAPTURE_V1 ", replyText: briefInstructions }],
-  }))];
+  });
+  return skillLifecycleOnly ? run() : withPinnedOllama(root, run);
+}];
 const checks = recallOnly
   ? [recallCheck]
   : skillCaptureOnly ? [skillCheck] : [["provider", realProvider], ["channel", realChannel], ["approval", governedApproval]];

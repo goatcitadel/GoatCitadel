@@ -198,92 +198,97 @@ export async function installedSkillCapture(runtime, fixture) {
   });
   await writeFile(path.join(evidence, "skill-capture-native.json"), JSON.stringify(approved, null, 2));
 
-  const control = await api("/api/v1/workspaces", "POST", { name: "Weekly brief untrained control" });
-  assert.ok(control.workspaceId && control.workspaceId !== workspaceId);
-  assert.equal(await isCallable(approved.runtimeSkillId, control.workspaceId), false);
-  async function runArm(task, condition) {
-    const scope = condition === "enabled" ? workspaceId : control.workspaceId;
-    const prompt = `$${approved.runtimeSkillId}\nWrite a weekly project brief using these notes only.\n\n${task.input}`;
-    try {
-      const chat = await send(`Held-out brief ${task.id} ${condition}`, prompt, undefined, {
-        providerId: "ollama",
-        model,
-        workspaceId: scope,
+  async function compareSkillReuse() {
+    const control = await api("/api/v1/workspaces", "POST", { name: "Weekly brief untrained control" });
+    assert.ok(control.workspaceId && control.workspaceId !== workspaceId);
+    assert.equal(await isCallable(approved.runtimeSkillId, control.workspaceId), false);
+    async function runArm(task, condition) {
+      const scope = condition === "enabled" ? workspaceId : control.workspaceId;
+      const prompt = `$${approved.runtimeSkillId}\nWrite a weekly project brief using these notes only.\n\n${task.input}`;
+      try {
+        const chat = await send(`Held-out brief ${task.id} ${condition}`, prompt, undefined, {
+          providerId: "ollama",
+          model,
+          workspaceId: scope,
+        });
+        const turn = await waitForTurn(chat, "completed");
+        assert.equal(turn.trace.model, model);
+        const usageRoute = `/api/v1/ops/workspaces/${encodeURIComponent(scope)}/model-usage?sessionId=${encodeURIComponent(chat.id)}&turnId=${encodeURIComponent(turn.turnId)}`;
+        const dispatch = await poll(
+          async () =>
+            (await api(usageRoute)).items.find(
+              (event) =>
+                event.effectiveProviderId === "ollama" &&
+                event.dispatchedModelId === model &&
+                event.transportStatus === "accepted" &&
+                event.terminalOutcome === "succeeded",
+            ),
+          "confirmation that the pinned Ollama model produced a response",
+          15_000,
+        );
+        const readSkill = async () => (await receiptFor(chat, turn, scope)).usedSources.find(
+          (source) => source.ref === approved.runtimeSkillId,
+        );
+        const usedSkill = condition === "enabled"
+          ? await poll(async () => {
+            const source = await readSkill();
+            return source?.skillVersion && source;
+          }, `the applied skill receipt for ${task.id}`, 15_000).catch(() => readSkill())
+          : await readSkill();
+        const answer = turn.assistantMessage?.content ?? "";
+        return {
+          status: "completed",
+          score: gradeWeeklyBrief(answer, task),
+          answer,
+          modelUsageEventId: dispatch.eventId,
+          skillApplied: Boolean(usedSkill),
+          versionId: usedSkill?.skillVersion?.versionId,
+          turnId: turn.turnId,
+          toolCalls: turn.toolRuns?.map((tool) => tool.toolName) ?? [],
+          userCorrections: 0,
+        };
+      } catch (error) {
+        return { status: "unverified", error: error.message };
+      }
+    }
+    const pairs = [];
+    for (const [index, task] of weeklyBriefCases.entries()) {
+      const order = index % 2 === 0 ? ["disabled", "enabled"] : ["enabled", "disabled"];
+      const outcomes = {};
+      for (const condition of order) {
+        outcomes[condition] = await runArm(task, condition);
+      }
+      const valid = outcomes.disabled.status === "completed" && outcomes.enabled.status === "completed"
+        && !outcomes.disabled.skillApplied && outcomes.enabled.versionId === approved.capture.versionId;
+      pairs.push({
+        id: task.id,
+        notes: task.input,
+        order,
+        valid,
+        ...outcomes,
+        ...(valid && gradeBriefPair(outcomes.disabled.score, outcomes.enabled.score)),
       });
-      const turn = await waitForTurn(chat, "completed");
-      assert.equal(turn.trace.model, model);
-      const usageRoute = `/api/v1/ops/workspaces/${encodeURIComponent(scope)}/model-usage?sessionId=${encodeURIComponent(chat.id)}&turnId=${encodeURIComponent(turn.turnId)}`;
-      const dispatch = await poll(
-        async () =>
-          (await api(usageRoute)).items.find(
-            (event) =>
-              event.effectiveProviderId === "ollama" &&
-              event.dispatchedModelId === model &&
-              event.transportStatus === "accepted" &&
-              event.terminalOutcome === "succeeded",
-          ),
-        "confirmation that the pinned Ollama model produced a response",
-        15_000,
-      );
-      const readSkill = async () => (await receiptFor(chat, turn, scope)).usedSources.find(
-        (source) => source.ref === approved.runtimeSkillId,
-      );
-      const usedSkill = condition === "enabled"
-        ? await poll(async () => {
-          const source = await readSkill();
-          return source?.skillVersion && source;
-        }, `the applied skill receipt for ${task.id}`, 15_000).catch(() => readSkill())
-        : await readSkill();
-      const answer = turn.assistantMessage?.content ?? "";
-      return {
-        status: "completed",
-        score: gradeWeeklyBrief(answer, task),
-        answer,
-        modelUsageEventId: dispatch.eventId,
-        skillApplied: Boolean(usedSkill),
-        versionId: usedSkill?.skillVersion?.versionId,
-        turnId: turn.turnId,
-        toolCalls: turn.toolRuns?.map((tool) => tool.toolName) ?? [],
-        userCorrections: 0,
-      };
-    } catch (error) {
-      return { status: "unverified", error: error.message };
+      await writeFile(path.join(evidence, "skill-reuse-progress.json"), JSON.stringify({ pairs }, null, 2));
     }
+    const validPairs = pairs.filter((pair) => pair.valid);
+    const improved = validPairs.filter((pair) => pair.improved).length;
+    const regressions = validPairs.filter((pair) => pair.regression).length;
+    const benchmark = {
+      provider: "ollama",
+      serverVersion,
+      model,
+      modelDigest,
+      validPairs: validPairs.length,
+      improved,
+      regressions,
+      gatePassed: validPairs.length === weeklyBriefCases.length && improved >= 4 && regressions === 0,
+      pairs,
+    };
+    await writeFile(path.join(evidence, "skill-reuse-benchmark.json"), JSON.stringify(benchmark, null, 2));
+    return benchmark;
   }
-  const pairs = [];
-  for (const [index, task] of weeklyBriefCases.entries()) {
-    const order = index % 2 === 0 ? ["disabled", "enabled"] : ["enabled", "disabled"];
-    const outcomes = {};
-    for (const condition of order) {
-      outcomes[condition] = await runArm(task, condition);
-    }
-    const valid = outcomes.disabled.status === "completed" && outcomes.enabled.status === "completed"
-      && !outcomes.disabled.skillApplied && outcomes.enabled.versionId === approved.capture.versionId;
-    pairs.push({
-      id: task.id,
-      notes: task.input,
-      order,
-      valid,
-      ...outcomes,
-      ...(valid && gradeBriefPair(outcomes.disabled.score, outcomes.enabled.score)),
-    });
-    await writeFile(path.join(evidence, "skill-reuse-progress.json"), JSON.stringify({ pairs }, null, 2));
-  }
-  const validPairs = pairs.filter((pair) => pair.valid);
-  const improved = validPairs.filter((pair) => pair.improved).length;
-  const regressions = validPairs.filter((pair) => pair.regression).length;
-  const benchmark = {
-    provider: "ollama",
-    serverVersion,
-    model,
-    modelDigest,
-    validPairs: validPairs.length,
-    improved,
-    regressions,
-    gatePassed: validPairs.length === weeklyBriefCases.length && improved >= 4 && regressions === 0,
-    pairs,
-  };
-  await writeFile(path.join(evidence, "skill-reuse-benchmark.json"), JSON.stringify(benchmark, null, 2));
+
+  const benchmark = fixture.lifecycleOnly ? undefined : await compareSkillReuse();
   const detail = await api(approved.candidateRoute);
   const requested = await api(`${approved.candidateRoute}/revoke`, "POST", {
     expectedRevision: detail.revision,
