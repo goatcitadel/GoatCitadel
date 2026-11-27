@@ -47,3 +47,15 @@ test("flags a false risk dismissal even when the rest of the brief preserves the
 
   assert.deepEqual(gradeBriefPair(disabled, enabled), { improved: false, regression: true });
 });
+
+test("gives no improvement credit for extra structure when the reused brief still lists canceled work", () => {
+  const task = weeklyBriefCases.find(({ id }) => id === "warehouse");
+  const disabled = gradeWeeklyBrief("Omar will replace barcode readers at the depot on Monday. Gate camera trial canceled.", task);
+  const enabled = gradeWeeklyBrief(
+    "Status: Pilot reached the depot.\nRisks: Unstable barcode readers.\nNext steps: Omar will replace readers on Monday. Gate camera trial canceled.",
+    task,
+  );
+
+  assert.ok(enabled.score > disabled.score);
+  assert.deepEqual(gradeBriefPair(disabled, enabled), { improved: false, regression: false });
+});

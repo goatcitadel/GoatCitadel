@@ -183,6 +183,25 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
     if (!response.ok) throw new Error(`${method} ${route} returned ${response.status} ${redacted(JSON.stringify(data))}`);
     return data;
   }
+  async function streamFailure(sessionId) {
+    const log = await fs.readFile(path.join(runtimeDir, "logs", "gateway.stdout.log"), "utf8").catch(() => "");
+    for (const line of log.split(/\r?\n/u).reverse()) {
+      if (!line.includes(sessionId) || !line.includes("chat SSE stream failed")) continue;
+      try {
+        const event = JSON.parse(line);
+        if (event.sessionId !== sessionId) continue;
+        return redacted(JSON.stringify({
+          type: event.err?.type,
+          code: event.err?.code,
+          message: event.err?.message,
+          frames: event.err?.stack?.split("\n").slice(1, 4),
+        }));
+      } catch {
+        continue;
+      }
+    }
+    return "";
+  }
   async function send(title, content, page, options = {}) {
     const created = await api("/api/v1/chat/sessions", "POST", { title, workspaceId: options.workspaceId ?? "default" });
     const id = created.sessionId ?? created.session?.sessionId;
@@ -231,7 +250,10 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
       const chunks = parseGatewayChatSse(body);
       const turnId = chunks.find((chunk) => chunk.sessionId === id && typeof chunk.turnId === "string")?.turnId;
       const rejected = chunks.find((chunk) => chunk.type === "error");
-      if (!turnId) throw new Error(`Chat stream did not admit a turn: ${redacted(rejected?.error ?? "no turn ID")}`);
+      if (!turnId) {
+        const cause = await streamFailure(id);
+        throw new Error(`Chat stream did not admit a turn: ${redacted(rejected?.error ?? "no turn ID")} ${cause}`.trim());
+      }
       return { id, route, content, turnId };
     } else {
       await api(route + "/agent-send", "POST", submission);

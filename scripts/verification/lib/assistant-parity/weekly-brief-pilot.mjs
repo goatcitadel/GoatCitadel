@@ -13,13 +13,19 @@ Use for a weekly-project-brief based on supplied project updates.
 Use the supplied project status, risks, next actions, people and dates.
 
 ## Instructions
-Find the current status, the real risk, and the next action. Preserve the next owner and date exactly. Omit canceled work entirely, even when the source includes it.
+1. Leave every canceled item out of the brief. Do this before selecting any other notes.
+2. Copy the source wording for the current status, actual risk, next action, owner and due day. Keep the due day exactly as supplied.
+3. Write the finished brief for these notes using the three labels below.
 
 ## Failure handling
 If an owner or date is missing, say Unknown. Use only supplied facts.
 
 ## Output
-Use exactly these three headings on their own lines: Status, Risks, Next steps. Put the next owner and date under Next steps.
+Use three short lines in this form:
+
+Status: <recorded status>
+Risks: <recorded risk>
+Next steps: <owner> will <action> on <due day>.
 
 ## Verification
 Check that the brief contains the correct status, risk, next action, owner and date. Check that no canceled item is mentioned.
@@ -132,7 +138,7 @@ export function gradeBriefPair(disabled, enabled) {
     (enabled.contradictedStatus && !disabled.contradictedStatus) ||
     (enabled.deniedKnownRisk && !disabled.deniedKnownRisk);
   return {
-    improved: enabled.score > disabled.score && !regression && !enabled.contradictedStatus &&
+    improved: enabled.score > disabled.score && enabled.followedCorrection && !regression && !enabled.contradictedStatus &&
       !enabled.deniedKnownRisk && !enabled.unsupportedDates.length,
     regression,
   };
