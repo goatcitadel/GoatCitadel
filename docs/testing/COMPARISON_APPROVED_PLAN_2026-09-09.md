@@ -138,6 +138,16 @@ heartbeat cleanup, settings application, and their focused evidence owners. Ever
 pre-existing owner cap and the original architecture baseline remain unchanged.
 Future growth above the registered caps requires a separate decision.
 
+Additional operator clarification, November 27: Runtime Repair Sweep Phase 0
+([design](../RUNTIME_REPAIR_SWEEP.md)) adds a detect-only sweep in its own
+`apps/gateway/src/services/runtime-repair/` folder outside `GatewayService`, which
+stays within its 13132-line limit (two added lines). Record the dependency/host caps of
+**6/0** for `runtime-repair-composition.ts` and **11/0** for
+`runtime-repair-sweep-service.ts` as explicit C0 gate-reconciliation scope exceptions.
+Every access goes through the sweep's own narrow read-only and audit ports. Every
+original baseline-owner limit remains unchanged; this does not permit future growth
+above these caps.
+
 ### 2. Simplify onboarding through the first useful response
 
 Use the existing guided setup and Change Plans to provide one continuous flow:

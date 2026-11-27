@@ -609,6 +609,7 @@ export const COCKPIT_RELEASE_SURFACE_STATUS_BY_PATH = {
   "/system/dashboards": "ship",
   "/system/browser-sessions": "ship",
   "/system/improvement": "experimental",
+  "/system/repairs": "experimental",
   "/settings/general": "ship",
   "/settings/models": "ship",
   "/settings/safety": "ship",

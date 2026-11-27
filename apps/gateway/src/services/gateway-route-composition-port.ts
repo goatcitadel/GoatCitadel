@@ -94,6 +94,8 @@ export interface GatewayRouteCompositionPort {
   ): Promise<import("@goatcitadel/contracts").ChatSendMessageRequest>;
   readonly approvalEffectsService: ApprovalEffectsService;
   readonly approvalRuntime: ApprovalRuntimeService;
+  /** Runs background cron work only when this Gateway is admitted to it on a shared host. */
+  readonly runSharedHostCronWork: (label: string, work: () => Promise<void>) => Promise<unknown>;
   readonly assemblyService: AssemblyService;
   readonly backupRetentionService: BackupRetentionService;
   readonly capabilityScopeResolver: CapabilityScopeResolver;
@@ -290,6 +292,7 @@ export type GatewayRouteCompositionPrivateDependencies = Pick<
   GatewayRouteCompositionPort,
   | "mcpAdministration"
   | "approvalRuntime"
+  | "runSharedHostCronWork"
   | "assemblyService"
   | "backupRetentionService"
   | "capabilityScopeResolver"
@@ -335,6 +338,7 @@ export function createGatewayRouteCompositionPort(
     createRemoteWorkerExecutionOwners: () => gateway.createRemoteWorkerExecutionOwners(),
     mcpAdministration: privateDependencies.mcpAdministration,
     approvalRuntime: privateDependencies.approvalRuntime,
+    runSharedHostCronWork: privateDependencies.runSharedHostCronWork,
     assemblyService: privateDependencies.assemblyService,
     backupRetentionService: privateDependencies.backupRetentionService,
     capabilityScopeResolver: privateDependencies.capabilityScopeResolver,

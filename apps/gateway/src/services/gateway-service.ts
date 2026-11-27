@@ -3750,6 +3750,7 @@ export class GatewayService {
   private buildRouteCompositionPort() {
     return createGatewayRouteCompositionPort(this, {
       mcpAdministration: this.mcpAdministration,
+      runSharedHostCronWork: (label, work) => this.tryRunWithSharedHostWork("cron", label, work),
       approvalRuntime: this.approvalRuntime,
       assemblyService: this.assemblyService,
       backupRetentionService: this.backupRetentionService,
@@ -5699,6 +5700,7 @@ export class GatewayService {
             this.engineeringLearningService.refreshAll(),
           ),
       },
+      { label: "runtime repair sweep", run: () => this.routeServices?.runtimeRepairs?.runIfDue() },
       {
         label: "channel deliveries",
         run: async () => await this.drainDueChannelDeliveries(),

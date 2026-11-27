@@ -5,6 +5,7 @@ import { composeIntegrationChannelRouteDependencies } from "./gateway-route-comp
 import { composeRuntimeAdminRouteDependencies } from "./gateway-route-composition-runtime.js";
 import { composeMemoryKnowledgeRouteDependencies } from "./gateway-route-composition-memory.js";
 import { composeToolsMcpRouteDependencies } from "./gateway-route-composition-tools.js";
+import { composeRuntimeRepairs } from "./runtime-repair/runtime-repair-composition.js";
 import {
   composeCommunicationsMailDraftRecovery,
   composeCommunicationsMailDraftStore,
@@ -44,5 +45,6 @@ export function composeGatewayRouteServices(gateway: GatewayRouteCompositionPort
     chatAssistantSupport: composeChatAssistantSupport(gateway),
     mailDrafts: composeCommunicationsMailDraftStore(gateway),
     mailDraftRecovery: composeCommunicationsMailDraftRecovery(gateway),
+    runtimeRepairs: composeRuntimeRepairs(gateway),
   };
 }

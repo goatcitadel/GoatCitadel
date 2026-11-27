@@ -32,6 +32,7 @@ const systemViews = new Set([
   "dashboards",
   "browser-sessions",
   "improvement",
+  "repairs",
   "runtime",
 ]);
 // The shipped Capabilities tabs; any other segment resolves missing.

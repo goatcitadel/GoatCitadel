@@ -10,6 +10,7 @@ import { SystemDiagnostics } from "./SystemDiagnostics";
 import { SystemQuality } from "./SystemQuality";
 import { SystemBrowserSessions } from "./SystemBrowserSessions";
 import { SystemImprovement } from "./SystemImprovement";
+import { SystemRepairs } from "./SystemRepairs";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { AreaTabsProvider } from "../../ui/AreaHeader";
 import { SYSTEM_VIEWS as VIEWS } from "./system-views";
@@ -18,8 +19,11 @@ const TABS = VIEWS.map((item) => ({ id: item.id, label: item.label, href: item.p
 
 export function SystemArea() {
   const { rest, navigate } = useCockpitRoute();
-  // Improvement is experimental: reachable by direct link and the Classic /ops/improvement mapping, not a tab.
-  const view = rest[0] === "improvement" ? "improvement" : (VIEWS.find((item) => item.id === rest[0])?.id ?? "health");
+  // Improvement is experimental and Repairs watches only: both are reachable by direct link, not a tab.
+  const view =
+    rest[0] === "improvement" || rest[0] === "repairs"
+      ? rest[0]
+      : (VIEWS.find((item) => item.id === rest[0])?.id ?? "health");
   return (
     <AreaTabsProvider
       label="System views"
@@ -47,6 +51,8 @@ export function SystemArea() {
         <SystemBrowserSessions />
       ) : view === "improvement" ? (
         <SystemImprovement />
+      ) : view === "repairs" ? (
+        <SystemRepairs />
       ) : view === "runtime" && rest[1] === "diagnostics" ? (
         // Runtime diagnostics folded into System › Diagnostics; old bookmarks keep working.
         <SystemDiagnostics />

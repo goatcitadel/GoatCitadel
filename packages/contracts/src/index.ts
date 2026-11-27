@@ -269,3 +269,4 @@ export * from "./assistant-readiness.js";
 export * from "./follow-through.js";
 export * from "./chat-learning.js";
 export * from "./chat-continuation.js";
+export * from "./runtime-repair.js";
