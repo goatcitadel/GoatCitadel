@@ -78,6 +78,9 @@ public sealed class NotificationService : IDisposable
     public void ShowOperatorAttention(OperatorAttentionPayload payload) =>
         Show(payload.Title, payload.Body, payload.RoutePath ?? "/ops/notifications");
 
+    /// <summary>The watchdog gave up restarting the runtime; opening it shows System once the operator starts it.</summary>
+    public void ShowRuntimeStopped(string body) => Show("GoatCitadel stopped", body, "/system");
+
     public void Dispose()
     {
         if (!_registered)

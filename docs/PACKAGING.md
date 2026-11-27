@@ -77,6 +77,16 @@ The generated installer installs into `%LOCALAPPDATA%\GoatCitadel`, creates Star
 
 Stage B is the package-identity lane. It builds a sparse MSIX external-location identity package with `pnpm package:windows-msix`, embeds the signed identity package into `app/identity/`, and has the Inno installer register it with `Add-AppxPackage -ExternalLocation` when present. Public Windows releases must sign the identity package and smoke package registration, protocol manifest registration, uninstall cleanup, and signed artifact verification before publication. The public `WINDOWS_MSIX_PUBLISHER` repository variable, or local `GOATCITADEL_WINDOWS_MSIX_PUBLISHER`, must match the signing certificate subject because the WinUI host embeds the same package identity in its executable manifest. Local unsigned manifest-only proof is available with `pnpm package:windows-msix --allow-unsigned`, but unsigned MSIX packages are not bundled into installer payloads.
 
+### Runtime watchdog
+
+The WinUI host restarts a runtime that stops responding. It already polls `goatcitadel status --json` every 10 seconds; once the runtime has been ready in this session, a run of failed checks (3 by default) triggers a restart. A Gateway that crashed (its process gone, record left behind) is relaunched with `goatcitadel launch`, which starts a new one over the dead record; `goatcitadel stop` would refuse that record. A Gateway that hung (its process still running) is first stopped with `goatcitadel stop`, which refuses any process the launcher cannot prove it owns, and then launched. Restarts back off (5 s, 30 s, then 2 min). After 3 restarts within 10 minutes, or a startup failure the launcher marks as not retryable, the host stops trying, shows a Windows notification, and keeps the explanation on its recovery screen until you start the runtime again.
+
+The watchdog never undoes a deliberate stop. Stopping from the desktop app or the tray pauses it, and a runtime stopped elsewhere (for example `goatcitadel stop` in a terminal, which removes the launcher's process record) is not treated as a crash. A crash leaves that record behind and is.
+
+- Limits can be tuned without a rebuild in `%LOCALAPPDATA%\GoatCitadel\runtime\desktop\watchdog.json` (`enabled`, `failedChecksBeforeRestart`, `backoffSeconds`, `maxRestartsPerWindow`, `windowMinutes`). Values are clamped (2–10 checks, 5 s–10 min per backoff step with at most 5 steps, 1–5 restarts, a 1–60 minute window); an unreadable or wrong-typed value falls back to its default, and only a literal `"enabled": false` turns the watchdog off.
+- Each restart and give-up is appended to `%LOCALAPPDATA%\GoatCitadel\runtime\logs\desktop-watchdog.jsonl` (newest 200 entries, no credentials or URLs).
+- The watchdog runs only while the desktop app is open. It does not supervise a runtime started from a terminal without the app, and Docker installs rely on the container restart policy instead.
+
 ## macOS packaging
 
 macOS arm64 packaging is experimental:

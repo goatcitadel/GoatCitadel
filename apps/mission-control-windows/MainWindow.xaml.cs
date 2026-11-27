@@ -351,9 +351,10 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task LaunchRuntimeAsync()
+    private async Task LaunchRuntimeAsync(bool byWatchdog = false)
     {
         if (_cleanedUp || _profileRecoveryChanging) return;
+        if (!byWatchdog) Watchdog.ResetForOperatorLaunch();
         var observation = _runtimeLifecycle.BeginTransition();
         _webViewInitializationTask ??= InitializeWebViewAsync(observation);
         _deferredRoutes.MarkUnavailable();
@@ -375,6 +376,7 @@ public sealed partial class MainWindow : Window
 
             if (!_runtimeLifecycle.IsCurrent(observation)) return;
             _lastRuntime = result;
+            ObserveRuntimeStatusForWatchdog(result);
             if (result.IsReady)
             {
                 await ShowReadyRuntimeAsync(result, observation);
@@ -460,6 +462,7 @@ public sealed partial class MainWindow : Window
             var result = await _runtimeStatusService.ReadStatusAsync(observation.Token);
             if (!_runtimeLifecycle.IsCurrent(observation) || request != _runtimeStatusSequence) return;
             _lastRuntime = result;
+            ObserveRuntimeStatusForWatchdog(result);
             var message = $"Runtime {result.Status}: gateway {(result.Readiness.Gateway ? "ready" : "not ready")}, UI {(result.Readiness.Ui ? "ready" : "not ready")}.";
             if (notify)
             {
@@ -489,7 +492,7 @@ public sealed partial class MainWindow : Window
             {
                 _deferredRoutes.MarkUnavailable();
                 RenderRuntime(result);
-                RenderRecovery(message);
+                RenderRecovery(WithWatchdogNote(message));
             }
         }
         catch (InvalidOperationException error)
@@ -525,9 +528,11 @@ public sealed partial class MainWindow : Window
         await LaunchRuntimeAsync();
     }
 
-    private async Task<bool> StopRuntimeAsync()
+    private async Task<bool> StopRuntimeAsync(bool byWatchdog = false)
     {
         if (_cleanedUp || _profileRecoveryChanging) return false;
+        // An operator stop (or an update handoff) must not be undone by the watchdog.
+        if (!byWatchdog) Watchdog.Pause();
         var observation = _runtimeLifecycle.BeginStop();
         _deferredRoutes.MarkUnavailable();
         StopRuntimeStatusPolling();
@@ -875,6 +880,7 @@ public sealed partial class MainWindow : Window
     private void RenderRuntimeStatusFailure(Exception error, bool notify, bool syncShell, DesktopRuntimeObservation observation)
     {
         if (!_runtimeLifecycle.IsCurrent(observation)) return;
+        ObserveRuntimeStatusFailureForWatchdog(error);
         if (notify)
         {
             ShowToast(error.Message);
@@ -883,7 +889,7 @@ public sealed partial class MainWindow : Window
         if (syncShell)
         {
             _deferredRoutes.MarkUnavailable();
-            RenderRecovery($"Runtime status check failed: {error.Message}");
+            RenderRecovery(WithWatchdogNote($"Runtime status check failed: {error.Message}"));
         }
     }
 
