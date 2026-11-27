@@ -1,3 +1,4 @@
+import { createSkillImportSettings } from "./skill-import-settings.test-support.js";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
@@ -20,7 +21,7 @@ describe("SkillImportService loop 29 runtime behavior", () => {
 
   it("records failed validation history when the source cannot be materialized", async () => {
     const missingSource = path.join(rootDir, "missing-skill");
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
 
     await expect(
       service.validateImport({
@@ -65,7 +66,7 @@ describe("SkillImportService loop 29 runtime behavior", () => {
     );
     fs.writeFileSync(path.join(sourceDir, "LICENSE"), "MIT\n", "utf8");
 
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
     const firstAttempt = await service.installImport({
       sourceRef: sourceDir,
       sourceType: "local_path",
@@ -112,7 +113,7 @@ describe("SkillImportService loop 29 runtime behavior", () => {
   it("cleans up staging after the redirect so no verified bytes survive outside temp space", async () => {
     const sourceDir = path.join(rootDir, "cleanup-race-skill");
     writeSkillSource(sourceDir, "Use version one of this deterministic skill.");
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
     const removed: string[] = [];
     const originalRm = fsPromises.rm.bind(fsPromises);
     vi.spyOn(fsPromises, "rm").mockImplementation(async (targetPath, options) => {
@@ -154,14 +155,4 @@ function writeSkillSource(sourceDir: string, instruction: string): void {
     "utf8",
   );
   fs.writeFileSync(path.join(sourceDir, "LICENSE"), "MIT\n", "utf8");
-}
-
-function createSystemSettingsRepo() {
-  const values = new Map<string, { value: unknown }>();
-  return {
-    get: (key: string) => values.get(key),
-    set: (key: string, value: unknown) => {
-      values.set(key, { value });
-    },
-  };
 }

@@ -1,6 +1,6 @@
 # GitHub Security Findings — Triage Reference
 
-Last updated: 2026-10-12
+Last updated: 2026-11-27
 
 This document explains how to triage the recurring categories of GitHub Security findings against this repo and how to fix them **once** without rediscovering the same root cause every time. New AI agents (Claude, Codex, Copilot review bots) and human contributors should read this before opening a PR that touches rate-limit configuration, stream pipeline error handling, Dependabot alerts, the secret-scanning allowlist, or the synthetic-token fixtures used by the secret-redaction tests.
 
@@ -141,7 +141,7 @@ Alerts #102–#143 were dismissed as `false positive` before this document exist
 
 A future agent reading the file in isolation may see what looks like a hardcoded secret and try to remove or replace it with `<TOKEN>`-style placeholders. **This breaks the test's purpose.** The redactor's correctness can only be demonstrated against inputs that match the shape of the secrets it claims to redact. The fixture file is allowlisted in `secret_scanning.yml` precisely so this contradiction can coexist.
 
-If the redactor learns to scrub a new pattern, add the matching fixture token here using the same conventions (clearly outside any real provider's issued-keyspace, e.g., leading `1234567890` octet for Telegram). Do not move the fixtures outside this file unless you also update the allowlist.
+For each new fixture, record how it was generated and what establishes that it cannot be a provider-issued credential. A recognizable numeric prefix alone is insufficient. Keep fixtures in the allowlisted test file or update the allowlist if the file moves.
 
 ---
 

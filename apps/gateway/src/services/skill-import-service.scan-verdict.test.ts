@@ -1,20 +1,9 @@
+import { createSkillImportSettings } from "./skill-import-settings.test-support.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SkillImportService } from "./skill-import-service.js";
-
-function createSystemSettingsRepo() {
-  const store = new Map<string, unknown>();
-  return {
-    get<T>(key: string): { value: T } | undefined {
-      return store.has(key) ? { value: store.get(key) as T } : undefined;
-    },
-    set(key: string, value: unknown) {
-      store.set(key, value);
-    },
-  };
-}
 
 describe("skill import scan verdict", () => {
   let rootDir: string;
@@ -36,7 +25,7 @@ describe("skill import scan verdict", () => {
   });
 
   function service() {
-    return new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    return new SkillImportService(rootDir, createSkillImportSettings());
   }
 
   function validate() {

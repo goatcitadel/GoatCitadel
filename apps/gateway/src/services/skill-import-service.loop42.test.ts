@@ -1,24 +1,10 @@
+import { createSkillImportSettings } from "./skill-import-settings.test-support.js";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillImportService } from "./skill-import-service.js";
-
-function createSystemSettingsRepo() {
-  const store = new Map<string, unknown>();
-  return {
-    get<T>(key: string): { value: T } | undefined {
-      if (!store.has(key)) {
-        return undefined;
-      }
-      return { value: store.get(key) as T };
-    },
-    set(key: string, value: unknown) {
-      store.set(key, value);
-    },
-  };
-}
 
 describe("SkillImportService loop42 git install behavior", () => {
   let rootDir: string;
@@ -37,7 +23,7 @@ describe("SkillImportService loop42 git install behavior", () => {
     { timeout: 120_000 },
     async () => {
       const repoDir = createGitSkillRepo(rootDir);
-      const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+      const service = new SkillImportService(rootDir, createSkillImportSettings());
 
       await expect(
         service.installImport({

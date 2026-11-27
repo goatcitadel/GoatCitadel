@@ -1,3 +1,4 @@
+import { createSkillImportSettings } from "./skill-import-settings.test-support.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -404,8 +405,8 @@ describe("Loop 8 gateway service coverage", () => {
 
   it("records skill import provenance, duplicate failures, and remote bundle errors in history", async () => {
     const rootDir = createTempRoot("goat-loop8-skill-import-");
-    const settings = createSystemSettingsRepo();
-    const service = new SkillImportService(rootDir, settings as never);
+    const settings = createSkillImportSettings();
+    const service = new SkillImportService(rootDir, settings);
     const firstSkill = createSkillFixture(rootDir, "Cloudflare API", "Inspect and manage Cloudflare DNS records.");
     const secondSkill = createSkillFixture(rootDir, "Cloudflare Manager", "Manage Cloudflare DNS zones safely.");
 
@@ -1049,21 +1050,6 @@ function createApprovalRequest(input: ApprovalCreateInput): ApprovalRequest {
     createdAt: "2026-05-14T00:00:00.000Z",
     expiresAt: input.expiresAt,
     explanationStatus: "not_requested",
-  };
-}
-
-function createSystemSettingsRepo() {
-  const store = new Map<string, unknown>();
-  return {
-    get<T>(key: string): { value: T } | undefined {
-      if (!store.has(key)) {
-        return undefined;
-      }
-      return { value: store.get(key) as T };
-    },
-    set(key: string, value: unknown) {
-      store.set(key, value);
-    },
   };
 }
 

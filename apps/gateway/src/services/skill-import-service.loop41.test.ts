@@ -1,3 +1,4 @@
+import { createSkillImportSettings } from "./skill-import-settings.test-support.js";
 import AdmZip from "adm-zip";
 import fs from "node:fs";
 import os from "node:os";
@@ -5,21 +6,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillImportService } from "./skill-import-service.js";
 import { SKILL_CONTENT_INTEGRITY_LIMITS } from "./skill-content-integrity.js";
-
-function createSystemSettingsRepo() {
-  const store = new Map<string, unknown>();
-  return {
-    get<T>(key: string): { value: T } | undefined {
-      if (!store.has(key)) {
-        return undefined;
-      }
-      return { value: store.get(key) as T };
-    },
-    set(key: string, value: unknown) {
-      store.set(key, value);
-    },
-  };
-}
 
 describe("SkillImportService loop41 zip install behavior", () => {
   let rootDir: string;
@@ -40,7 +26,7 @@ describe("SkillImportService loop41 zip install behavior", () => {
   it("validates local zip bundles and redirects without ever publishing bytes", async () => {
     const firstZip = createSkillZip(rootDir, "zip-runtime-tool-a.zip");
     const secondZip = createSkillZip(rootDir, "zip-runtime-tool-b.zip");
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
 
     const firstAttempt = await service.installImport({
       sourceRef: firstZip,
@@ -115,7 +101,7 @@ describe("SkillImportService loop41 zip install behavior", () => {
       Buffer.alloc(SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes + 1),
     );
     zip.writeZip(zipPath);
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
 
     await expect(
       service.installImport({

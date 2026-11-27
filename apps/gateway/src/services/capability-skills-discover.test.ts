@@ -1,3 +1,4 @@
+import { createSkillImportSettings } from "./skill-import-settings.test-support.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,18 +19,6 @@ import { SkillImportService, type InstalledSkillSource } from "./skill-import-se
 const WORKSPACE = "default";
 const GOG_ID = "source:clawhub.ai/steipete/gog";
 const TEN_MINUTES_MS = 10 * 60 * 1000;
-
-function createSystemSettingsRepo() {
-  const store = new Map<string, unknown>();
-  return {
-    get<T>(key: string): { value: T } | undefined {
-      return store.has(key) ? { value: store.get(key) as T } : undefined;
-    },
-    set(key: string, value: unknown) {
-      store.set(key, value);
-    },
-  };
-}
 
 function idsOf(items: readonly CapabilitySkillDiscoverItem[]): string[] {
   return items.map((item) => item.id);
@@ -142,7 +131,7 @@ describe("Capabilities skill discovery", () => {
 
   /** A Discover service over a real source owner on this root, with the installs list and the clock given. */
   function wire(options: { installs?: CapabilitySkillInstall[]; now?: () => Date } = {}) {
-    const imports = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const imports = new SkillImportService(rootDir, createSkillImportSettings());
     return new CapabilitySkillDiscoverService(
       {
         readSourceCatalog: (readOptions) => imports.readSourceCatalog(readOptions),
@@ -372,7 +361,7 @@ describe("Capabilities skill discovery", () => {
         },
       }),
     );
-    const imports = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const imports = new SkillImportService(rootDir, createSkillImportSettings());
     const sources = sourcesAnswering(
       [listing("Playwright", { sourceUrl: "https://github.com/example/playwright-skill", installability: "direct" })],
       { listInstalledSources: () => imports.listInstalledSources() },

@@ -1,3 +1,4 @@
+import { createSkillImportSettings } from "./skill-import-settings.test-support.js";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -386,7 +387,7 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
         if (testCase.append) await fs.appendFile(target, testCase.append, "utf8");
         // The real import check reads the files; its scan results replace the fixture's, so both the older promptware
         // guards and the shared scan see what is actually on disk.
-        const real = await new SkillImportService(activeHarness.rootDir, settingsRepoStub()).validateImport({
+        const real = await new SkillImportService(activeHarness.rootDir, createSkillImportSettings()).validateImport({
           sourceRef: activeHarness.sourceDir,
           sourceType: "local_path",
           sourceProvider: "local",
@@ -1162,17 +1163,11 @@ async function pluginSkillFixture(
   }
   const store = new PluginSnapshotStore(path.join(harness.rootDir, "data", "plugins", "snapshots"));
   const snapshot = await store.importDirectory(pluginDir);
-  const settings = new Map<string, unknown>();
   let clock = Date.parse("2026-07-14T01:00:00.000Z");
   const service = new SkillHubReviewService({
     storage: createSqliteAsyncStorage(harness.storage),
     artifactStore: harness.artifactStore,
-    skillImport: new SkillImportService(harness.rootDir, {
-      get: async <T>(key: string) => settings.get(key) as T | undefined,
-      set: async (key: string, value: unknown) => {
-        settings.set(key, value);
-      },
-    } as unknown as ConstructorParameters<typeof SkillImportService>[1]),
+    skillImport: new SkillImportService(harness.rootDir, createSkillImportSettings()),
     resolvePluginSkillDir: (treeSha256, relativePath) => store.resolve(treeSha256, relativePath),
     now: () => new Date(clock++).toISOString(),
   });
@@ -1189,16 +1184,6 @@ async function pluginSkillFixture(
       ...(options.dialect ? { dialect: options.dialect } : {}),
     },
   };
-}
-
-function settingsRepoStub(): ConstructorParameters<typeof SkillImportService>[1] {
-  const settings = new Map<string, unknown>();
-  return {
-    get: <T>(key: string) => (settings.has(key) ? { value: settings.get(key) as T } : undefined),
-    set: (key: string, value: unknown) => {
-      settings.set(key, value);
-    },
-  } as unknown as ConstructorParameters<typeof SkillImportService>[1];
 }
 
 async function createHarness(

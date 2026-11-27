@@ -1,3 +1,4 @@
+import { createSkillImportSettings } from "./skill-import-settings.test-support.js";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import os from "node:os";
@@ -31,7 +32,7 @@ describe("SkillImportService loop 35 import behavior", () => {
       fs.writeFileSync(path.join(sourceDir, `filler-${String(index).padStart(3, "0")}.txt`), "x", "utf8");
     }
 
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
     const result = await service.validateImport({
       sourceRef: sourceDir,
       sourceType: "local_path",
@@ -77,7 +78,7 @@ describe("SkillImportService loop 35 import behavior", () => {
   });
 
   it("records remote bundle fetch failures and blocks marketplace listings before import", async () => {
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
 
     await expect(
       service.validateImport({
@@ -159,8 +160,44 @@ describe("SkillImportService loop 35 import behavior", () => {
     ]);
   });
 
+  it("keeps concurrent validation outcomes and records an install rejection once", async () => {
+    const sourceRef = path.join(rootDir, "bad-skill");
+    fs.mkdirSync(sourceRef);
+    fs.writeFileSync(path.join(sourceRef, "SKILL.md"), "Missing frontmatter.\n");
+    const input = { sourceRef, sourceType: "local_path" as const, sourceProvider: "local" as const };
+    const settings = createSkillImportSettings();
+    const read = settings.get;
+    let release!: () => void;
+    const bothRead = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(settings, "get")
+      .mockImplementationOnce(async (key) => {
+        const snapshot = await read(key);
+        await bothRead;
+        return snapshot;
+      })
+      .mockImplementationOnce(async (key) => {
+        const snapshot = await read(key);
+        release();
+        return snapshot;
+      });
+    const first = new SkillImportService(rootDir, settings);
+    const second = new SkillImportService(rootDir, settings);
+    await Promise.all([first.validateImport(input), second.validateImport(input)]);
+    await expect(first.installImport(input)).rejects.toThrow(/Invalid SKILL.md/);
+
+    const history = await first.listHistory();
+    expect(history.map(({ action, outcome }) => [action, outcome])).toEqual([
+      ["install", "rejected"],
+      ["validate", "rejected"],
+      ["validate", "rejected"],
+    ]);
+    expect(new Set(history.map(({ importId }) => importId)).size).toBe(3);
+  });
+
   it("blocks hosted bundle private hosts and private redirects", async () => {
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -226,7 +263,7 @@ describe("SkillImportService loop 35 import behavior", () => {
       }),
     );
 
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
     const redirected = await service.installImport({
       sourceRef: "https://example.test/skill.md",
     });
@@ -270,8 +307,9 @@ describe("SkillImportService loop 35 import behavior", () => {
   });
 
   it("validates portable hosted skill bundle manifests and keeps scripts non-callable", async () => {
+    const sourceRef = "https://example.test/SKILL.md?revision=2";
     const skill = [
-      "---",
+      "\uFEFF---",
       "name: Portable Hosted Bundle",
       "description: Portable hosted bundle fixture with manifest hash coverage.",
       "---",
@@ -297,7 +335,7 @@ describe("SkillImportService loop 35 import behavior", () => {
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
         const url = String(input);
-        if (url === "https://example.test/skill.md") {
+        if (url === sourceRef) {
           return new Response(skill, { status: 200 });
         }
         if (url === "https://example.test/goatcitadel.skill-bundle.json") {
@@ -313,14 +351,15 @@ describe("SkillImportService loop 35 import behavior", () => {
       }),
     );
 
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
     const result = await service.validateImport({
-      sourceRef: "https://example.test/skill.md",
+      sourceRef,
       sourceType: "remote_bundle",
       sourceProvider: "external",
     });
 
     expect(result.valid).toBe(true);
+    expect(result.candidate.sourceRef).toBe(sourceRef);
     expect(result.bundleManifest).toMatchObject({
       status: "valid",
       assetsVerified: 3,
@@ -337,6 +376,37 @@ describe("SkillImportService loop 35 import behavior", () => {
         expect.stringContaining("Imported scripts remain non-callable"),
       ]),
     );
+  });
+
+  it.each([
+    ["server error", () => new Response(null, { status: 503 }), /HTTP 503/],
+    [
+      "transport error",
+      () => {
+        throw new Error("fixture network failure");
+      },
+      /fixture network failure/,
+    ],
+    ["body limit", () => new Response(new Uint8Array(512 * 1024 + 1)), /bytes|limit/i],
+  ] as const)("refuses hosted validation when the bundle manifest has a %s", async (_label, manifest, detail) => {
+    const sourceRef = "https://example.test/skill.md";
+    const manifestUrl = "https://example.test/goatcitadel.skill-bundle.json";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url === sourceRef)
+          return new Response("---\nname: test\ndescription: A manifest fixture.\n---\nUse this fixture.");
+        if (url === manifestUrl) return manifest();
+        throw new Error(`Unexpected fixture URL: ${url}`);
+      }),
+    );
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
+    const validation = service.validateImport({ sourceRef, sourceType: "remote_bundle" });
+    await expect(validation).rejects.toThrow(
+      /Failed to fetch hosted skill bundle file goatcitadel\.skill-bundle\.json/,
+    );
+    await expect(validation).rejects.toThrow(detail);
   });
 
   it("rejects portable skill bundle manifests with mismatched asset hashes", async () => {
@@ -375,7 +445,7 @@ describe("SkillImportService loop 35 import behavior", () => {
       }),
     );
 
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
     const result = await service.validateImport({
       sourceRef: "https://example.test/skill.md",
       sourceType: "remote_bundle",
@@ -416,7 +486,7 @@ describe("SkillImportService loop 35 import behavior", () => {
       "utf8",
     );
 
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
     const result = await service.validateImport({
       sourceRef: skillDir,
       sourceType: "local_path",
@@ -453,7 +523,7 @@ describe("SkillImportService loop 35 import behavior", () => {
       "utf8",
     );
 
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
     const result = await service.validateImport({
       sourceRef: skillDir,
       sourceType: "local_path",
@@ -466,7 +536,7 @@ describe("SkillImportService loop 35 import behavior", () => {
   });
 
   it("classifies direct ssh git, generic reference, and local zip lookup sources", async () => {
-    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSkillImportSettings());
 
     await expect(service.lookupSources("git@github.com:Owner/Repo.git", 5)).resolves.toMatchObject({
       parsedSource: {
@@ -504,16 +574,6 @@ describe("SkillImportService loop 35 import behavior", () => {
     });
   });
 });
-
-function createSystemSettingsRepo() {
-  const values = new Map<string, { value: unknown }>();
-  return {
-    get: (key: string) => values.get(key),
-    set: (key: string, value: unknown) => {
-      values.set(key, { value });
-    },
-  };
-}
 
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");

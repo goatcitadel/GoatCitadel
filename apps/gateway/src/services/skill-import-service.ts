@@ -76,6 +76,7 @@ import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 
 const IMPORT_HISTORY_KEY = "skill_import_history_v1";
 const MAX_IMPORT_HISTORY = 300;
+const MAX_IMPORT_HISTORY_WRITE_ATTEMPTS = 16;
 const TEMP_CLEANUP_OPTIONS = {
   recursive: true,
   force: true,
@@ -200,7 +201,7 @@ interface SkillInstallDuplicateMatch {
 }
 
 const HOSTED_SKILL_BUNDLE_FILES = [
-  { remoteName: "skill.md", localName: "SKILL.md", required: true },
+  { localName: "SKILL.md", required: true },
   { remoteName: SKILL_BUNDLE_MANIFEST_FILENAME, localName: SKILL_BUNDLE_MANIFEST_FILENAME, required: false },
   { remoteName: "heartbeat.md", localName: "HEARTBEAT.md", required: false },
   { remoteName: "messaging.md", localName: "MESSAGING.md", required: false },
@@ -886,7 +887,7 @@ const NATIVE_OVERLAP_HINTS: Record<
 export class SkillImportService {
   public constructor(
     private readonly rootDir: string,
-    private readonly systemSettings: Pick<Storage["systemSettings"], "get" | "set">,
+    private readonly systemSettings: Pick<Storage["systemSettings"], "get" | "compareAndSet">,
   ) {}
 
   /**
@@ -1118,6 +1119,7 @@ export class SkillImportService {
     const importId = randomUUID();
     let materialized: MaterializedSkillSource | undefined;
     let stagingPath: string | undefined;
+    let rejectionRecorded = false;
     try {
       materialized = await this.materializeSkillSource(input);
       const sourceSkillDir = materialized.skillDir;
@@ -1163,6 +1165,7 @@ export class SkillImportService {
           },
           createdAt: new Date().toISOString(),
         });
+        rejectionRecorded = true;
         throw new Error(`Skill import validation failed: ${validation.errors.join("; ")}`);
       }
       if (validation.riskLevel === "high" && !input.confirmHighRisk) {
@@ -1187,6 +1190,7 @@ export class SkillImportService {
           },
           createdAt: new Date().toISOString(),
         });
+        rejectionRecorded = true;
         throw new Error("High-risk skill import requires explicit confirmation.");
       }
 
@@ -1220,6 +1224,7 @@ export class SkillImportService {
         redirect,
       };
     } catch (error) {
+      if (rejectionRecorded) throw error;
       const sourceType = inferSourceType(input.sourceRef, input.sourceType);
       const sourceProvider = inferSourceProvider(input.sourceRef, input.sourceProvider);
       await this.appendHistory({
@@ -1254,8 +1259,12 @@ export class SkillImportService {
   }
 
   private async appendHistory(record: SkillImportHistoryRecord): Promise<void> {
-    const rows = (await this.systemSettings.get<SkillImportHistoryRecord[]>(IMPORT_HISTORY_KEY))?.value ?? [];
-    await this.systemSettings.set(IMPORT_HISTORY_KEY, [record, ...rows].slice(0, MAX_IMPORT_HISTORY));
+    for (let attempt = 0; attempt < MAX_IMPORT_HISTORY_WRITE_ATTEMPTS; attempt += 1) {
+      const previous = await this.systemSettings.get<SkillImportHistoryRecord[]>(IMPORT_HISTORY_KEY);
+      const next = [record, ...(previous?.value ?? [])].slice(0, MAX_IMPORT_HISTORY);
+      if (await this.systemSettings.compareAndSet(IMPORT_HISTORY_KEY, previous, next)) return;
+    }
+    throw new Error("Skill import history changed too often to record this attempt.");
   }
 
   private async collectSourceCatalog(
@@ -2655,38 +2664,27 @@ export const __normalizeSkillIdForTests = normalizeSkillId;
 async function materializeHostedSkillBundle(sourceUrl: string, targetDir: string): Promise<void> {
   const bundleUrl = new URL(sourceUrl);
   const baseUrl = new URL(".", bundleUrl);
-  let primaryFetched = false;
 
   for (const file of HOSTED_SKILL_BUNDLE_FILES) {
-    const fileUrl = new URL(file.remoteName, baseUrl);
+    const fileUrl = file.required ? bundleUrl : new URL(file.remoteName, baseUrl);
     try {
       const response = await fetchHostedSkillBundleFile(fileUrl.toString());
       if (!response.ok) {
-        if (file.required) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        continue;
+        await response.body?.cancel();
+        if (!file.required && (response.status === 404 || response.status === 410)) continue;
+        throw new Error(`HTTP ${response.status}`);
       }
-      const content = await readBoundedResponseText(response, {
+      const content = await readBoundedResponseBytes(response, {
         maxBytes: 512 * 1024,
         timeoutMs: 9_000,
         label: `Hosted skill bundle ${file.localName}`,
       });
-      await fs.writeFile(path.join(targetDir, file.localName), content, "utf8");
-      if (file.required) {
-        primaryFetched = true;
-      }
+      await fs.writeFile(path.join(targetDir, file.localName), content);
     } catch (error) {
-      if (file.required) {
-        throw new Error(`Failed to fetch hosted skill bundle file ${file.localName}: ${(error as Error).message}`, {
-          cause: error,
-        });
-      }
+      throw new Error(`Failed to fetch hosted skill bundle file ${file.localName}: ${(error as Error).message}`, {
+        cause: error,
+      });
     }
-  }
-
-  if (!primaryFetched) {
-    throw new Error(`Hosted skill bundle is missing required SKILL.md content: ${sourceUrl}`);
   }
 
   await materializeHostedSkillBundleManifestAssets(baseUrl, targetDir);
@@ -2706,9 +2704,12 @@ async function fetchHostedSkillBundleFile(url: string): Promise<Response> {
 
 async function materializeHostedSkillBundleManifestAssets(baseUrl: URL, targetDir: string): Promise<void> {
   const manifestPath = path.join(targetDir, SKILL_BUNDLE_MANIFEST_FILENAME);
-  const manifestRaw = await fs.readFile(manifestPath, "utf8").catch(() => undefined);
-  if (!manifestRaw) {
-    return;
+  let manifestRaw: string;
+  try {
+    manifestRaw = await fs.readFile(manifestPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
   }
   const manifest = parseSkillBundleManifest(manifestRaw);
   if (manifest.assets.length > SKILL_CONTENT_INTEGRITY_LIMITS.maxFiles) {

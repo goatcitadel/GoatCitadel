@@ -1,3 +1,4 @@
+import { createSkillImportSettings } from "./skill-import-settings.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -32,7 +33,6 @@ beforeAll(async () => {
     process.platform === "win32"
       ? new PowerShellSkillHubWindowsSecurityProtocol({ idleShutdownMs: Number.POSITIVE_INFINITY })
       : undefined;
-  const settings = new Map<string, unknown>();
   service = new SkillHubReviewService({
     storage: createSqliteAsyncStorage(storage),
     artifactStore: new SkillHubArtifactStore(path.join(rootDir, "artifacts"), {
@@ -40,12 +40,7 @@ beforeAll(async () => {
         windowsSecurity ? { windowsSecurity: new NodeSkillHubWindowsSecurity(windowsSecurity) } : {},
       ),
     }),
-    skillImport: new SkillImportService(repoRoot, {
-      get: async <T>(key: string) => settings.get(key) as T | undefined,
-      set: async (key: string, value: unknown) => {
-        settings.set(key, value);
-      },
-    } as ConstructorParameters<typeof SkillImportService>[1]),
+    skillImport: new SkillImportService(repoRoot, createSkillImportSettings()),
     shippedSkillPackRoot: packRoot,
   });
 }, 180_000); // One full SQLite migration replay.
