@@ -13,11 +13,10 @@ const workspaceId = "default";
 const captureMarker = "WORKFLOW_SKILL_CAPTURE_V1 ";
 const syntheticSource =
   "Write a weekly project brief. Status: build passed. Risk: missing approval. Next: Jess checks approval on Friday.";
-const correction = `${syntheticSource} Use Status, Risks and Next steps headings. Keep the owner and date. Omit the canceled logo redesign.`;
 
 export async function installedSkillCapture(runtime, fixture) {
   const { api, send, waitForTurn, restart, withNative } = runtime;
-  const { poll, evidence, model, modelDigest, serverVersion } = fixture;
+  const { poll, evidence, model, modelDigest, serverVersion, fileName } = fixture;
   const take = (page, name) => page.screenshot({ path: path.join(evidence, `skill-${name}.png`) });
   const receiptFor = (chat, turn, scope = workspaceId) =>
     api(
@@ -70,20 +69,30 @@ export async function installedSkillCapture(runtime, fixture) {
 
   const approved = await withNative(async (page) => {
     const press = (name, root = page) => root.getByRole("button", { name, exact: true });
+    let stage = "complete the source workflow";
     try {
-      const chat = await send("Weekly project brief capture", syntheticSource, page);
-      const original = await waitForTurn(chat, "completed");
-      const originalArticle = page.locator(`[data-turn-id="${original.turnId}"]`);
-      await press("More message actions", originalArticle).click();
-      await page.getByRole("menuitem", { name: "Edit your message and resend", exact: true }).click();
-      await page.getByPlaceholder(/^Message GoatCitadel/u).fill(correction);
-      await press("Send edited message").click();
-      const correctedTurn = await waitForTurn({ ...chat, content: correction }, "completed");
-      assert.equal(correctedTurn.branchKind, "edit");
-      const correctedArticle = page.locator(`[data-turn-id="${correctedTurn.turnId}"]`);
-      const save = press("Save as skill", correctedArticle);
+      const chat = await send(
+        "Weekly project brief capture",
+        `Use fs.read to read ${fileName} and write the weekly project brief. Use Status, Risks and Next steps headings. Keep the owner and date. Correction: omit the canceled logo redesign.`,
+        page,
+      );
+      const waiting = await waitForTurn(chat, "waiting_for_approval");
+      const read = waiting.toolRuns.find((tool) => tool.toolName === "fs.read" && tool.status === "approval_required");
+      assert.ok(read?.approvalId);
+      const approval = await api(`/api/v1/approvals/${encodeURIComponent(read.approvalId)}`);
+      assert.match(JSON.stringify(approval.preview), new RegExp(fileName.replaceAll(".", "\\.")));
+      await api("/api/v1/chat/tools/approve", "POST", {
+        sessionId: chat.id,
+        approvalId: read.approvalId,
+        allowScope: "once",
+      });
+      const sourceTurn = await waitForTurn(chat, "completed");
+      assert.equal(sourceTurn.toolRuns.find((tool) => tool.toolRunId === read.toolRunId)?.status, "executed");
+      const sourceArticle = page.locator(`[data-turn-id="${sourceTurn.turnId}"]`);
+      stage = "open and prepare inline skill capture";
+      const save = press("Save as skill", sourceArticle);
       await save.click();
-      const summary = correctedArticle.locator("summary").filter({ hasText: /^Save as skill$/ });
+      const summary = sourceArticle.locator("summary").filter({ hasText: /^Save as skill$/ });
       await summary.waitFor();
       await poll(
         () => summary.evaluate((element) => document.activeElement === element),
@@ -96,12 +105,13 @@ export async function installedSkillCapture(runtime, fixture) {
             response.request().method() === "POST" &&
             new URL(response.url()).pathname.endsWith("/skill-captures/prepare"),
         ),
-        press("Prepare skill draft", correctedArticle).click(),
+        press("Prepare skill draft", sourceArticle).click(),
       ]);
       assert.equal(prepared.status(), 200);
       const { prompt } = await prepared.json();
       assert.ok(prompt.startsWith(captureMarker));
       await page.getByRole("region", { name: "Review captured workflow" }).waitFor();
+      stage = "generate, review, and stage the draft";
       await press("Send").click();
       const draft = await waitForTurn({ ...chat, content: prompt }, "completed");
       assert.equal(draft.assistantMessage?.content.trim(), briefInstructions.trim());
@@ -127,6 +137,7 @@ export async function installedSkillCapture(runtime, fixture) {
         `${candidateRoute}/versions/${encodeURIComponent(capture.versionId)}/review?workspaceId=${workspaceId}`,
       );
       assert.ok(JSON.stringify(artifactReview).includes(briefSkillName));
+      stage = "review and approve the exact candidate version";
       const [planResponse] = await Promise.all([
         page.waitForResponse(
           (response) =>
@@ -138,6 +149,7 @@ export async function installedSkillCapture(runtime, fixture) {
       const plan = await planResponse.json();
       const activation = await applyReviewedPlan(plan, candidateRoute, capture.versionId, "approved");
       assert.equal(await isCallable(runtimeSkillId), true);
+      stage = "display the applied version in fresh Chat";
       const fresh = await send("Use the reviewed skill", `Write a ${briefSkillName}. ${syntheticSource}`, page);
       const freshTurn = await waitForTurn(fresh, "completed");
       const used = await poll(
@@ -166,7 +178,7 @@ export async function installedSkillCapture(runtime, fixture) {
         candidateRoute,
         runtimeSkillId,
         activation,
-        sourceTurnId: correctedTurn.turnId,
+        sourceTurnId: sourceTurn.turnId,
         draftTurnId: draft.turnId,
         appliedTurnId: freshTurn.turnId,
         appliedSessionId: fresh.id,
@@ -174,7 +186,7 @@ export async function installedSkillCapture(runtime, fixture) {
       };
     } catch (error) {
       await take(page, "failure").catch(() => undefined);
-      throw error;
+      throw new Error(`${stage}: ${error.message}`, { cause: error });
     }
   });
 

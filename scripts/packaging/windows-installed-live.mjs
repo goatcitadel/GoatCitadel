@@ -452,10 +452,20 @@ async function realChannel(root) {
 }
 
 const recallCheck = ["recall", (root) => installedRecall(root, evidence, withStub, poll)];
-const skillCheck = ["skill-capture", (root) => withPinnedOllama(root, (provider, serverVersion) =>
-  withStub(root, { skillCapture: true, extraProviders: [provider] }, (runtime) => installedSkillCapture(runtime, {
-    evidence, poll, model: ollamaModel, modelDigest, serverVersion,
-  }), { promptReplyRules: [{ ruleId: "workflow-capture", userContentIncludes: "WORKFLOW_SKILL_CAPTURE_V1 ", replyText: briefInstructions }] }))];
+const skillCheck = ["skill-capture", (root) => withPinnedOllama(root, async (provider, serverVersion) => {
+  const fileName = "skill-capture-weekly.md";
+  const fixtureFile = path.join(root, "home", "runtime-root", "workspace", fileName);
+  await fs.mkdir(path.dirname(fixtureFile), { recursive: true });
+  await fs.writeFile(fixtureFile, "Build passed. Risk: missing approval. Jess checks approval on Friday. Logo redesign is canceled.\n", { flag: "wx" });
+  return withStub(root, { skillCapture: true, extraProviders: [provider] }, (runtime) => installedSkillCapture(runtime, {
+    evidence, poll, model: ollamaModel, modelDigest, serverVersion, fileName,
+  }), {
+    replyText: "Status: Build passed.\nRisks: Approval is missing.\nNext steps: Jess checks approval on Friday.",
+    dispatchPlanRequiredTool: "fs_read",
+    dispatchPlan: [{ type: "tool_call", name: "fs_read", arguments: { path: fixtureFile }, callId: "weekly_brief_fixture_read" }],
+    promptReplyRules: [{ ruleId: "workflow-capture", userContentIncludes: "WORKFLOW_SKILL_CAPTURE_V1 ", replyText: briefInstructions }],
+  });
+})];
 const checks = recallOnly
   ? [recallCheck]
   : skillCaptureOnly ? [skillCheck] : [["provider", realProvider], ["channel", realChannel], ["approval", governedApproval]];
