@@ -113,6 +113,9 @@ const CODING_ITERATION_RE =
 const DIRECT_CODING_ACTION_RE = /\b(?:build|implement|debug|fix|repair|patch)\b/iu;
 const CODE_FILE_ACTION_RE =
   /\b(?:create|write|generate|modify)\b[^\r\n.!?]{0,80}(?:\b(?:module|script|code)\b|\b[\w.-]+\.(?:ps1|psm1|py|ts|tsx|js|jsx|mjs|cjs|rs|go|java|cs|sh|bat|cmd)\b)/iu;
+const LEADING_SKILL_SELECTOR_RE = /^(?:(?:@skill[ \t]+[\w:-]+|\$[\w-]+:[\w:-]+)\s+)+/iu;
+const PROSE_OUTPUT_REQUEST_RE =
+  /^(?:please\s+)?(?:build|create|draft|write|generate|prepare)\s+(?:(?:a|an|the)\s+)?(?:[\p{L}-]+[ \t]+){0,4}(?:brief|report|document|presentation|summary)\b/iu;
 
 /** Server-owned admission hint. A local route and durable execution are required separately. */
 export function detectSustainedCodingIntent(content: string): boolean {
@@ -125,10 +128,7 @@ export function detectSustainedCodingIntent(content: string): boolean {
   ) {
     return false;
   }
-  if (
-    /^\s*(?:build|create|write|generate)\s+(?:a|an|the)?\s*(?:report|document|presentation|summary)\b/iu.test(text) &&
-    !CODE_FILE_ACTION_RE.test(text)
-  )
+  if (PROSE_OUTPUT_REQUEST_RE.test(text.replace(LEADING_SKILL_SELECTOR_RE, "")) && !CODE_FILE_ACTION_RE.test(text))
     return false;
   // A request to discuss a project is not authorization to edit or run it.
   if (

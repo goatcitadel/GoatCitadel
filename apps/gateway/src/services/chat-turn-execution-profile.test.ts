@@ -49,4 +49,28 @@ describe("chat turn execution profile", () => {
     expect(resolveSustainedLocalCodingProfile(coding)).toBe("sustained_local_coding");
     expect(resolveSustainedLocalCodingProfile({ ...coding, advisoryPlanning: true })).toBe("standard");
   });
+
+  it.each([
+    "Approved checkout screenshots are marked ready, but tax rounding has a known risk. Mina owns the tax test on Wednesday.",
+    "Android sign-in passed its smoke test. Session expiry is the remaining risk. On Saturday Theo will run the expiry test.",
+    "Search indexing is ready for staging. The weak spot is stale permissions after reindexing. Asha will rerun the access audit on Tuesday.",
+  ])("keeps a project brief with technical source notes on the standard path (%s)", (notes) => {
+    expect(
+      resolveSustainedLocalCodingProfile({
+        content: `$extra:reviewed-123\nWrite a weekly project brief using these notes only.\n\n${notes}`,
+        providerId: "ollama",
+        durableEnabled: true,
+      }),
+    ).toBe("standard");
+  });
+
+  it("keeps an explicit code-file request with a prose deliverable on the coding path", () => {
+    expect(
+      resolveSustainedLocalCodingProfile({
+        content: "Write a project brief. Then modify sorter.ts to fix the comparator and run the tests.",
+        providerId: "ollama",
+        durableEnabled: true,
+      }),
+    ).toBe("sustained_local_coding");
+  });
 });

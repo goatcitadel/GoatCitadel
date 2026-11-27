@@ -34,6 +34,7 @@ export const weeklyBriefCases = [
       "Search indexing is ready for staging. The weak spot is stale permissions after reindexing. Asha will rerun the access audit on Tuesday. The query dashboard has been canceled.",
     facts: ["staging", "permissions", "access audit", "Asha", "Tuesday"],
     canceled: "query dashboard",
+    statusContradiction: /\b(?:not ready|not started|not yet ready|failed staging)\b/iu,
   },
   {
     id: "archives",
@@ -41,6 +42,7 @@ export const weeklyBriefCases = [
       "The archive restore passed. Backup retention remains the risk. On Friday Niko will verify the retention window. The tape migration was canceled.",
     facts: ["restore", "retention", "Niko", "Friday"],
     canceled: "tape migration",
+    statusContradiction: /\b(?:restore (?:failed|did not pass|has not run)|not started)\b/iu,
   },
   {
     id: "checkout",
@@ -48,6 +50,7 @@ export const weeklyBriefCases = [
       "Approved checkout screenshots are marked ready, but tax rounding has a known risk. Mina owns the tax test on Wednesday. The gift receipt experiment was canceled.",
     facts: ["screenshots", "rounding", "tax test", "Mina", "Wednesday"],
     canceled: "gift receipt",
+    statusContradiction: /\b(?:screenshots (?:are not ready|were rejected)|no screenshots)\b/iu,
   },
   {
     id: "warehouse",
@@ -55,6 +58,7 @@ export const weeklyBriefCases = [
       "An inventory pilot reached its first depot. Unstable barcode readers could delay adoption. Omar will replace the affected readers on Monday. The gate camera trial is canceled.",
     facts: ["depot", "barcode", "replace", "Omar", "Monday"],
     canceled: "gate camera",
+    statusContradiction: /\b(?:pilot (?:has not started|has not reached)|no depots?)\b/iu,
   },
   {
     id: "migration",
@@ -62,6 +66,7 @@ export const weeklyBriefCases = [
       "Contact migration finished validation. Duplicate addresses may affect delivery. Lena will review the exceptions on Thursday. Calendar import is now canceled.",
     facts: ["validation", "duplicate", "exceptions", "Lena", "Thursday"],
     canceled: "calendar import",
+    statusContradiction: /\b(?:not (?:yet )?(?:started|complete[dp]?)|validation (?:failed|is pending|has not finished)|still (?:in|under) validation)\b/iu,
   },
   {
     id: "mobile",
@@ -69,6 +74,7 @@ export const weeklyBriefCases = [
       "Android sign-in passed its smoke test. Session expiry is the remaining risk. On Saturday Theo will run the expiry test. The icon redesign was canceled.",
     facts: ["sign-in", "expiry", "Theo", "Saturday"],
     canceled: "icon redesign",
+    statusContradiction: /\b(?:sign-in failed|smoke test (?:failed|did not pass|is pending))\b/iu,
   },
 ];
 
@@ -80,6 +86,7 @@ const normalize = (text) =>
 const hasPhrase = (text, phrase) => ` ${normalize(text)} `.includes(` ${normalize(phrase)} `);
 const headings = ["Status", "Risks", "Next steps"];
 const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const calendarDateRE = /\b(?:\d{4}-\d{1,2}-\d{1,2}|\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?)\b/giu;
 
 export function gradeWeeklyBrief(answer, task) {
   const matches = [
@@ -91,15 +98,20 @@ export function gradeWeeklyBrief(answer, task) {
   const nextSteps = next ? answer.slice(next.index + next[0].length, matches[nextIndex + 1]?.index) : "";
   const [owner, due] = task.facts.slice(-2);
   const ownerAndDateInNextSteps = hasPhrase(nextSteps, owner) && hasPhrase(nextSteps, due);
-  const unsupportedDates = days.filter((day) => day !== due && hasPhrase(answer, day));
+  const unsupportedDates = [
+    ...days.filter((day) => day !== due && hasPhrase(answer, day)),
+    ...new Set(Array.from(answer.matchAll(calendarDateRE), ([date]) => normalize(date))),
+  ];
   const missingFacts = task.facts.filter((fact) => !hasPhrase(answer, fact));
   const followedCorrection = !hasPhrase(answer, task.canceled);
+  const contradictedStatus = task.statusContradiction.test(answer);
   return {
     sections,
     missingFacts,
     followedCorrection,
     ownerAndDateInNextSteps,
     unsupportedDates,
+    contradictedStatus,
     score:
       sections.length +
       task.facts.length -
@@ -113,6 +125,10 @@ export function gradeBriefPair(disabled, enabled) {
   const regression =
     enabled.missingFacts.some((fact) => !disabled.missingFacts.includes(fact)) ||
     (disabled.followedCorrection && !enabled.followedCorrection) ||
-    enabled.unsupportedDates.some((date) => !disabled.unsupportedDates.includes(date));
-  return { improved: enabled.score > disabled.score && !regression, regression };
+    enabled.unsupportedDates.some((date) => !disabled.unsupportedDates.includes(date)) ||
+    (enabled.contradictedStatus && !disabled.contradictedStatus);
+  return {
+    improved: enabled.score > disabled.score && !regression && !enabled.contradictedStatus && !enabled.unsupportedDates.length,
+    regression,
+  };
 }
