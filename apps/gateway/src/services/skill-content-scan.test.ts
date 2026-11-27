@@ -143,6 +143,13 @@ describe("scanSkillContents", () => {
       findings: [{ code: "scan_incomplete", path: ".", dangerous: true }],
     });
     expect(scanSkillContents([big], "operator").verdict).toBe("warn");
+    expect(scanSkillContents([{ ...big, size: 1 }], "untrusted").verdict).toBe("block");
+  });
+
+  it("ignores unreadable assets while reporting unreadable directories", () => {
+    const bytes = new Uint8Array();
+    expect(scanSkillContents([{ path: "logo.png", bytes, unreadable: true }], "untrusted").verdict).toBe("clean");
+    expect(scanSkillContents([{ path: "assets.png/", bytes, unreadable: true }], "untrusted").verdict).toBe("block");
   });
 
   it("reports a file with a line too long to check as not fully checked, quickly", () => {
@@ -249,5 +256,15 @@ describe("skill scan file readers", () => {
     const expected = { files: [{ path: "large.md", size, bytes: new Uint8Array() }], truncated: false };
     expect(await readSkillScanFiles(skill)).toEqual(expected);
     expect(readSkillScanFilesSync(skill)).toEqual(expected);
+  });
+
+  it("skips assets in both readers unless their bytes are needed for integrity", async () => {
+    root = mkdtempSync(path.join(os.tmpdir(), "skill-scan-"));
+    writeFileSync(path.join(root, "logo.png"), Uint8Array.of(1, 2, 3));
+    expect(await readSkillScanFiles(root)).toEqual({ files: [], truncated: false });
+    expect(readSkillScanFilesSync(root)).toEqual({ files: [], truncated: false });
+    expect((await readSkillScanFiles(root, { includeAssetBytes: true })).files).toEqual([
+      { path: "logo.png", bytes: Uint8Array.of(1, 2, 3), size: 3 },
+    ]);
   });
 });

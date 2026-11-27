@@ -82,9 +82,9 @@ function verdictFor(findings: readonly SkillScanFinding[], origin: SkillScanOrig
 }
 
 function scanOneFile(file: SkillScanFile): SkillScanFinding[] {
+  if (isSkillAssetPath(file.path)) return [];
   if (file.unreadable) return [{ code: "unreadable_file", path: file.path, dangerous: true }];
-  if (ASSET_FILE.test(file.path)) return [];
-  if ((file.size ?? file.bytes.length) > SKILL_SCAN_MAX_FILE_BYTES) {
+  if (file.bytes.length > SKILL_SCAN_MAX_FILE_BYTES || (file.size ?? 0) > SKILL_SCAN_MAX_FILE_BYTES) {
     return [{ code: "scan_incomplete", path: file.path, dangerous: true }];
   }
   let text: string;
@@ -183,6 +183,11 @@ function unreadableScanFile(relative: string): SkillScanFile {
   return { path: relative, bytes: new Uint8Array(), unreadable: true };
 }
 
+function unreadableScanDirectory(root: string, directory: string): SkillScanFile {
+  const relative = relativePath(root, directory);
+  return unreadableScanFile(relative ? `${relative}/` : ".");
+}
+
 async function readScanFile(root: string, filename: string): Promise<SkillScanFile> {
   const relative = relativePath(root, filename);
   try {
@@ -245,7 +250,10 @@ function readScanFileSync(root: string, filename: string): SkillScanFile {
 }
 
 /** Reads regular files within both scan budgets, skipping symlinks and `.git` directories. */
-export async function readSkillScanFiles(dir: string): Promise<{ files: SkillScanFile[]; truncated: boolean }> {
+export async function readSkillScanFiles(
+  dir: string,
+  options: { includeAssetBytes?: boolean } = {},
+): Promise<{ files: SkillScanFile[]; truncated: boolean }> {
   let root: string;
   try {
     const before = await fsp.lstat(dir, scanStatOptions);
@@ -269,12 +277,13 @@ export async function readSkillScanFiles(dir: string): Promise<{ files: SkillSca
         const fullPath = path.join(current, entry.name);
         if (entry.isDirectory() && entry.name !== ".git") queue.push(fullPath);
         if (!entry.isFile()) continue;
+        if (isSkillAssetPath(entry.name) && !options.includeAssetBytes) continue;
         if (files.length >= SKILL_SCAN_MAX_FILES) return { files, truncated: true };
         files.push(await readScanFile(root, fullPath));
       }
       assertSameScanEntry(before, await fsp.lstat(current, scanStatOptions));
     } catch {
-      files.push(unreadableScanFile(relativePath(root, current) || "."));
+      files.push(unreadableScanDirectory(root, current));
     }
   }
   return { files, truncated: false };
@@ -307,6 +316,7 @@ export function readSkillScanFilesSync(dir: string): { files: SkillScanFile[]; t
           const fullPath = path.join(current, entry.name);
           if (entry.isDirectory() && entry.name !== ".git") queue.push(fullPath);
           if (!entry.isFile()) continue;
+          if (isSkillAssetPath(entry.name)) continue;
           if (files.length >= SKILL_SCAN_MAX_FILES) return { files, truncated: true };
           files.push(readScanFileSync(root, fullPath));
         }
@@ -315,7 +325,7 @@ export function readSkillScanFilesSync(dir: string): { files: SkillScanFile[]; t
       }
       assertSameScanEntry(before, fs.lstatSync(current, scanStatOptions));
     } catch {
-      files.push(unreadableScanFile(relativePath(root, current) || "."));
+      files.push(unreadableScanDirectory(root, current));
     }
   }
   return { files, truncated: false };

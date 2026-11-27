@@ -51,6 +51,7 @@ describe("operatorSkillScanVerdict", () => {
   it("reuses the result while the content hash is unchanged and rescans when it changes", async () => {
     const spy = vi.spyOn(reader, "readSkillScanFiles");
     const skill = { skillId: "mine", source: "workspace" as const, dir };
+    fs.writeFileSync(path.join(dir, "logo.png"), Uint8Array.of(1, 2, 3));
     const cleanTree = (await captureSkillContentIntegrity(dir)).treeSha256;
     await operatorSkillScanVerdict(skill, cleanTree);
     await operatorSkillScanVerdict(skill, cleanTree);

@@ -19,7 +19,7 @@ export async function operatorSkillScanVerdict(
   const key = JSON.stringify([skill.skillId, treeSha256]);
   const cached = cache.get(key);
   if (cached) return cached;
-  const read = await readSkillScanFiles(skill.dir);
+  const read = await readSkillScanFiles(skill.dir, { includeAssetBytes: true });
   // Check exactly the files the content hash covers (it leaves out GoatCitadel's own source.json), so the scan and the
   // key it is cached under always describe the same content.
   const files = { ...read, files: read.files.filter((file) => shouldIncludeSkillContentPath(file.path)) };
