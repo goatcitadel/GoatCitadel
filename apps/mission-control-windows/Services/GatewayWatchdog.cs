@@ -153,3 +153,26 @@ public sealed class GatewayWatchdog
         }
     }
 }
+
+public enum WatchdogRestartPlan
+{
+    /// <summary>Run <c>goatcitadel launch</c> only.</summary>
+    LaunchOnly,
+
+    /// <summary>Run the ownership-checked <c>goatcitadel stop</c>, then <c>launch</c>.</summary>
+    StopThenLaunch,
+}
+
+/// <summary>
+/// Chooses how a watchdog restart runs, from the last status the launcher reported. The launcher's rules
+/// (scripts/lib/managed-runtime-ownership.mjs) decide it: <c>stop</c> only acts on a verified, still-running process
+/// and reports every other record as not stopped, while <c>launch</c> spawns a new Gateway over a dead record whose
+/// port is silent but only waits on a running one.
+/// </summary>
+public static class WatchdogRestartPlanner
+{
+    public static WatchdogRestartPlan For(DesktopRuntimeStatus? lastStatus) =>
+        // Only a hung Gateway (its process still running) needs stopping first. A crashed one (stale record) would
+        // make stop refuse and block the relaunch, and stopping it would also take down a UI that is still fine.
+        lastStatus?.Pids.Gateway.State == "running" ? WatchdogRestartPlan.StopThenLaunch : WatchdogRestartPlan.LaunchOnly;
+}

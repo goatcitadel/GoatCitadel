@@ -76,9 +76,15 @@ public sealed partial class MainWindow
         _watchdogRestartInFlight = true;
         try
         {
-            // Stop goes through the launcher, which refuses any process it can't prove it owns; a refused stop
-            // leaves the runtime polled, and further failed checks lead to the next attempt or a give-up.
-            if (!await StopRuntimeAsync(byWatchdog: true)) return;
+            // A crashed Gateway is relaunched directly: stop would refuse its stale record and block recovery. Only a
+            // hung one still running is stopped first, through the launcher, which refuses any process it can't
+            // prove it owns. A refused stop leaves the runtime polled, so further failed checks lead to the next
+            // attempt or a give-up.
+            if (WatchdogRestartPlanner.For(_lastRuntime) == WatchdogRestartPlan.StopThenLaunch
+                && !await StopRuntimeAsync(byWatchdog: true))
+            {
+                return;
+            }
             await LaunchRuntimeAsync(byWatchdog: true);
         }
         finally

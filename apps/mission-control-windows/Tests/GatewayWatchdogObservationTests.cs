@@ -52,6 +52,25 @@ public sealed class GatewayWatchdogObservationTests
     }
 
     [TestMethod]
+    public void ACrashedGatewayIsRelaunchedWithoutAStopTheLauncherWouldRefuse() =>
+        // `goatcitadel stop` refuses a stale record (metadata_stale); `launch` spawns over it.
+        Assert.AreEqual(WatchdogRestartPlan.LaunchOnly, WatchdogRestartPlanner.For(Status("stale")));
+
+    [TestMethod]
+    public void AHungGatewayIsStoppedFirstBecauseLaunchWouldOnlyWaitForIt() =>
+        Assert.AreEqual(WatchdogRestartPlan.StopThenLaunch, WatchdogRestartPlanner.For(Status("running")));
+
+    [TestMethod]
+    public void AnUnknownOrUnownedProcessIsNeverStopped()
+    {
+        Assert.AreEqual(WatchdogRestartPlan.LaunchOnly, WatchdogRestartPlanner.For(null));
+        foreach (var state in new[] { "missing", "unverified", "reused", "invalid" })
+        {
+            Assert.AreEqual(WatchdogRestartPlan.LaunchOnly, WatchdogRestartPlanner.For(Status(state)), state);
+        }
+    }
+
+    [TestMethod]
     public void AGatewayThatIsUpWhileTheUiIsDownIsUnhealthy() =>
         Assert.AreEqual(WatchdogObservationKind.Unhealthy, WatchdogObservation.FromStatus(Status("running", gateway: true)).Kind);
 }
