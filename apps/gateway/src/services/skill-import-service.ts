@@ -3057,7 +3057,9 @@ function describeBlockingScanFindings(
   ];
   return messages.flatMap(([code, message]) => {
     const paths = pathsFor(code);
-    return paths.length > 0 ? [`${message}: ${summarizePathList(paths)}.`] : [];
+    if (paths.length === 0) return [];
+    const named = paths.filter((filePath) => filePath !== ".");
+    return [named.length > 0 ? `${message}: ${summarizePathList(named)}.` : `${message}.`];
   });
 }
 

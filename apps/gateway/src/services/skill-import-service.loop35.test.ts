@@ -48,7 +48,11 @@ describe("SkillImportService loop 35 import behavior", () => {
         licenseDetected: false,
       },
     });
-    expect(result.errors).toEqual([expect.stringContaining("Invalid SKILL.md")]);
+    const errors = [
+      expect.stringContaining("Invalid SKILL.md"),
+      "Security scan could not fully check all skill files.",
+    ];
+    expect(result.errors).toEqual(errors);
     expect(result.warnings).toEqual(
       expect.arrayContaining([
         "Potentially risky script indicators detected.",
@@ -65,7 +69,7 @@ describe("SkillImportService loop 35 import behavior", () => {
         sourceType: "local_path",
         riskLevel: "high",
         details: expect.objectContaining({
-          errors: [expect.stringContaining("Invalid SKILL.md")],
+          errors,
           warnings: expect.arrayContaining(["Potentially risky script indicators detected."]),
         }),
       }),
