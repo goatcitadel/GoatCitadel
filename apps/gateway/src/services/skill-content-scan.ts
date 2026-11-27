@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fs, { type BigIntStats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import type { SkillScanFinding, SkillScanFindingCode, SkillScanSummary } from "@goatcitadel/contracts";
@@ -68,7 +68,8 @@ export function collectSkillFindings(
 /** The verdict from every finding, and the findings kept for display: at most 32, dangerous ones first. */
 export function summarizeSkillFindings(all: readonly SkillScanFinding[], origin: SkillScanOrigin): SkillScanSummary {
   // The verdict reads every finding; the cap keeps dangerous findings first, so a block always shows its reason.
-  const kept = [...all.filter((finding) => finding.dangerous), ...all.filter((finding) => !finding.dangerous)]
+  const ordered = [...all].sort(byPlace);
+  const kept = [...ordered.filter((finding) => finding.dangerous), ...ordered.filter((finding) => !finding.dangerous)]
     .slice(0, MAX_FINDINGS)
     .sort(byPlace);
   return { verdict: verdictFor(all, origin), findings: kept, scannerVersion: PROMPTWARE_SCANNER_VERSION };
@@ -151,30 +152,129 @@ function relativePath(root: string, fullPath: string): string {
   return path.relative(root, fullPath).replaceAll("\\", "/");
 }
 
+const SCAN_OPEN_FLAGS =
+  fs.constants.O_RDONLY |
+  (process.platform === "win32" ? 0 : (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+const scanStatOptions = { bigint: true } as const;
+
+function assertSameScanEntry(before: BigIntStats, after: BigIntStats): void {
+  if (before.dev !== after.dev || before.ino !== after.ino || before.birthtimeNs !== after.birthtimeNs) {
+    throw new Error("Skill scan entry changed.");
+  }
+}
+
+function assertSameScanFile(before: BigIntStats, after: BigIntStats): void {
+  assertSameScanEntry(before, after);
+  if (
+    !after.isFile() ||
+    before.size !== after.size ||
+    before.mtimeNs !== after.mtimeNs ||
+    before.ctimeNs !== after.ctimeNs
+  ) {
+    throw new Error("Skill scan file changed.");
+  }
+}
+
+function assertCanonicalScanPath(expected: string, canonical: string): void {
+  if (path.relative(expected, canonical) !== "") throw new Error("Skill scan path resolves to a different entry.");
+}
+
+function unreadableScanFile(relative: string): SkillScanFile {
+  return { path: relative, bytes: new Uint8Array(), unreadable: true };
+}
+
+async function readScanFile(root: string, filename: string): Promise<SkillScanFile> {
+  const relative = relativePath(root, filename);
+  try {
+    const before = await fsp.lstat(filename, scanStatOptions);
+    if (!before.isFile()) return unreadableScanFile(relative);
+    assertCanonicalScanPath(filename, await fsp.realpath(filename));
+    const handle = await fsp.open(filename, SCAN_OPEN_FLAGS);
+    try {
+      const opened = await handle.stat(scanStatOptions);
+      assertSameScanFile(before, opened);
+      // Where no no-follow open is available, compare the opened handle with the checked path before reading.
+      assertCanonicalScanPath(filename, await fsp.realpath(filename));
+      assertSameScanFile(opened, await fsp.lstat(filename, scanStatOptions));
+      const size = Number(opened.size);
+      if (size > SKILL_SCAN_MAX_FILE_BYTES) return { path: relative, bytes: new Uint8Array(), size };
+      const bytes = new Uint8Array(size);
+      for (let offset = 0; offset < size; ) {
+        const { bytesRead } = await handle.read(bytes, offset, size - offset, offset);
+        if (bytesRead === 0) return unreadableScanFile(relative);
+        offset += bytesRead;
+      }
+      assertSameScanFile(opened, await handle.stat(scanStatOptions));
+      return { path: relative, bytes, size };
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return unreadableScanFile(relative);
+  }
+}
+
+function readScanFileSync(root: string, filename: string): SkillScanFile {
+  const relative = relativePath(root, filename);
+  try {
+    const before = fs.lstatSync(filename, scanStatOptions);
+    if (!before.isFile()) return unreadableScanFile(relative);
+    assertCanonicalScanPath(filename, fs.realpathSync.native(filename));
+    const fd = fs.openSync(filename, SCAN_OPEN_FLAGS);
+    try {
+      const opened = fs.fstatSync(fd, scanStatOptions);
+      assertSameScanFile(before, opened);
+      assertCanonicalScanPath(filename, fs.realpathSync.native(filename));
+      assertSameScanFile(opened, fs.lstatSync(filename, scanStatOptions));
+      const size = Number(opened.size);
+      if (size > SKILL_SCAN_MAX_FILE_BYTES) return { path: relative, bytes: new Uint8Array(), size };
+      const bytes = new Uint8Array(size);
+      for (let offset = 0; offset < size; ) {
+        const bytesRead = fs.readSync(fd, bytes, offset, size - offset, offset);
+        if (bytesRead === 0) return unreadableScanFile(relative);
+        offset += bytesRead;
+      }
+      assertSameScanFile(opened, fs.fstatSync(fd, scanStatOptions));
+      return { path: relative, bytes, size };
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return unreadableScanFile(relative);
+  }
+}
+
 /** Reads regular files within both scan budgets, skipping symlinks and `.git` directories. */
 export async function readSkillScanFiles(dir: string): Promise<{ files: SkillScanFile[]; truncated: boolean }> {
+  let root: string;
+  try {
+    const before = await fsp.lstat(dir, scanStatOptions);
+    if (!before.isDirectory()) throw new Error("Skill scan root is not a directory.");
+    root = await fsp.realpath(dir);
+    assertSameScanEntry(before, await fsp.lstat(root, scanStatOptions));
+  } catch {
+    return { files: [unreadableScanFile(".")], truncated: false };
+  }
   const files: SkillScanFile[] = [];
-  const queue = [dir];
+  const queue = [root];
   let entriesRead = 0;
   while (queue.length > 0) {
     const current = queue.shift()!;
     try {
+      const before = await fsp.lstat(current, scanStatOptions);
+      if (!before.isDirectory()) throw new Error("Skill scan entry is not a directory.");
+      assertCanonicalScanPath(current, await fsp.realpath(current));
       for await (const entry of await fsp.opendir(current)) {
         if (++entriesRead > SKILL_SCAN_MAX_ENTRIES) return { files, truncated: true };
         const fullPath = path.join(current, entry.name);
         if (entry.isDirectory() && entry.name !== ".git") queue.push(fullPath);
         if (!entry.isFile()) continue;
         if (files.length >= SKILL_SCAN_MAX_FILES) return { files, truncated: true };
-        try {
-          const size = (await fsp.stat(fullPath)).size;
-          const bytes = size > SKILL_SCAN_MAX_FILE_BYTES ? new Uint8Array() : await fsp.readFile(fullPath);
-          files.push({ path: relativePath(dir, fullPath), bytes, size });
-        } catch {
-          files.push({ path: relativePath(dir, fullPath), bytes: new Uint8Array(), unreadable: true });
-        }
+        files.push(await readScanFile(root, fullPath));
       }
+      assertSameScanEntry(before, await fsp.lstat(current, scanStatOptions));
     } catch {
-      files.push({ path: relativePath(dir, current) || ".", bytes: new Uint8Array(), unreadable: true });
+      files.push(unreadableScanFile(relativePath(root, current) || "."));
     }
   }
   return { files, truncated: false };
@@ -182,12 +282,24 @@ export async function readSkillScanFiles(dir: string): Promise<{ files: SkillSca
 
 /** The same walk as {@link readSkillScanFiles}, synchronously, for skill discovery. */
 export function readSkillScanFilesSync(dir: string): { files: SkillScanFile[]; truncated: boolean } {
+  let root: string;
+  try {
+    const before = fs.lstatSync(dir, scanStatOptions);
+    if (!before.isDirectory()) throw new Error("Skill scan root is not a directory.");
+    root = fs.realpathSync.native(dir);
+    assertSameScanEntry(before, fs.lstatSync(root, scanStatOptions));
+  } catch {
+    return { files: [unreadableScanFile(".")], truncated: false };
+  }
   const files: SkillScanFile[] = [];
-  const queue = [dir];
+  const queue = [root];
   let entriesRead = 0;
   while (queue.length > 0) {
     const current = queue.shift()!;
     try {
+      const before = fs.lstatSync(current, scanStatOptions);
+      if (!before.isDirectory()) throw new Error("Skill scan entry is not a directory.");
+      assertCanonicalScanPath(current, fs.realpathSync.native(current));
       const directory = fs.opendirSync(current);
       try {
         for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
@@ -196,19 +308,14 @@ export function readSkillScanFilesSync(dir: string): { files: SkillScanFile[]; t
           if (entry.isDirectory() && entry.name !== ".git") queue.push(fullPath);
           if (!entry.isFile()) continue;
           if (files.length >= SKILL_SCAN_MAX_FILES) return { files, truncated: true };
-          try {
-            const size = fs.statSync(fullPath).size;
-            const bytes = size > SKILL_SCAN_MAX_FILE_BYTES ? new Uint8Array() : fs.readFileSync(fullPath);
-            files.push({ path: relativePath(dir, fullPath), bytes, size });
-          } catch {
-            files.push({ path: relativePath(dir, fullPath), bytes: new Uint8Array(), unreadable: true });
-          }
+          files.push(readScanFileSync(root, fullPath));
         }
       } finally {
         directory.closeSync();
       }
+      assertSameScanEntry(before, fs.lstatSync(current, scanStatOptions));
     } catch {
-      files.push({ path: relativePath(dir, current) || ".", bytes: new Uint8Array(), unreadable: true });
+      files.push(unreadableScanFile(relativePath(root, current) || "."));
     }
   }
   return { files, truncated: false };

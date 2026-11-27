@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import {
   readSkillScanFiles,
   readSkillScanFilesSync,
   scanSkillContents,
+  summarizeSkillFindings,
   type SkillScanFile,
 } from "./skill-content-scan.js";
 
@@ -177,10 +178,13 @@ describe("scanSkillContents", () => {
   });
 
   it("sorts findings by path then line and caps them at 32", () => {
-    const files = Array.from({ length: 40 }, (_, index) =>
-      file(`n${String(index).padStart(2, "0")}.md`, "see https://x.example"),
-    ).reverse();
-    const findings = scanSkillContents(files, "untrusted").findings;
+    const unordered = Array.from({ length: 40 }, (_, index) => ({
+      code: "network_use" as const,
+      path: `n${String(index).padStart(2, "0")}.md`,
+      line: 1,
+      dangerous: false,
+    })).reverse();
+    const findings = summarizeSkillFindings(unordered, "untrusted").findings;
     expect(findings).toHaveLength(32);
     expect(findings[0]?.path).toBe("n00.md");
     expect(findings[31]?.path).toBe("n31.md");
@@ -229,5 +233,21 @@ describe("skill scan file readers", () => {
     mkdirSync(path.join(root, "0", "one-too-many"));
     expect(await readSkillScanFiles(root)).toEqual({ files: [], truncated: true });
     expect(readSkillScanFilesSync(root)).toEqual({ files: [], truncated: true });
+  });
+
+  it("skips linked directories and reads no more than the file byte budget", async () => {
+    root = mkdtempSync(path.join(os.tmpdir(), "skill-scan-"));
+    const skill = path.join(root, "skill");
+    const neighbor = path.join(root, "neighbor");
+    mkdirSync(skill);
+    mkdirSync(neighbor);
+    writeFileSync(path.join(neighbor, "notes.md"), "Neighbor fixture");
+    symlinkSync(neighbor, path.join(skill, "linked"), "junction");
+    const size = SKILL_SCAN_MAX_FILE_BYTES + 1;
+    writeFileSync(path.join(skill, "large.md"), "a".repeat(size));
+
+    const expected = { files: [{ path: "large.md", size, bytes: new Uint8Array() }], truncated: false };
+    expect(await readSkillScanFiles(skill)).toEqual(expected);
+    expect(readSkillScanFilesSync(skill)).toEqual(expected);
   });
 });
