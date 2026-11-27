@@ -149,6 +149,40 @@ describe("comms mutation boundary tracking", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not fall back to a bot channel when an approved webhook credential is unavailable", async () => {
+    const { storage } = createMattermostStorage("conn-review", "delivery-review");
+    Object.assign(storage, {
+      integrationConnections: {
+        get: vi.fn(async () => ({
+          connectionId: "conn-review",
+          revision: "webhook-revision",
+          key: "slack",
+          config: { webhookUrlEnv: "APPROVAL_FIXTURE_WEBHOOK", botToken: "fixture-bot", defaultChannel: "C-FIXTURE" },
+        })),
+      },
+      pendingApprovalActions: {
+        find: vi.fn(async () => ({
+          actionType: "tool.invoke",
+          resolutionStatus: "pending",
+          request: { defaultChannelConnectionRevision: "webhook-revision" },
+        })),
+      },
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      executeCommsTool(
+        { ...channelSendRequest("conn-review", []), approvedByApprovalId: "approval-review" },
+        policyConfig(["slack.com"]),
+        storage,
+      ),
+    ).resolves.toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("reviewed channel route is unavailable"),
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each(["complete", "fail"] as const)("awaits the durable boundary before a channel POST (%s)", async (mode) => {
     const calls: FetchCall[] = [];
     const { storage, markFailed } = createMattermostStorage("conn-async", "delivery-async");

@@ -172,15 +172,17 @@ async function executeCommsToolWithBoundaryTracking(
     throw new Error(`The canonical ${scopedKey} connection scope changed before dispatch.`);
   }
   const connectionConfig = record(connection.config);
+  let approvedRoute: ChannelSendReviewRoute | undefined;
   if (toolName === "channel.send" && !asString(args.target) && request.approvedByApprovalId) {
     const pending = await storage.pendingApprovalActions.find(request.approvedByApprovalId);
     const revision = pending?.request.defaultChannelConnectionRevision;
+    approvedRoute = resolveChannelSendReviewRoute(connection.key, connectionConfig);
     if (
       pending?.resolutionStatus !== "pending" ||
       pending.actionType !== "tool.invoke" ||
       typeof revision !== "string" ||
       revision !== connection.revision ||
-      !resolveReviewableDefaultChannelDestination(connection.key, connectionConfig)
+      !approvedRoute
     ) {
       throw new CommsPreBoundaryProviderError(
         "The default channel destination is no longer approved. Request a new approval.",
@@ -283,6 +285,15 @@ async function executeCommsToolWithBoundaryTracking(
     protectedApprovalTokenRef = providerRequest.secretRef;
     // Held only for this provider call; the stored connection and everything recorded below keep the references.
     const providerConfig = resolveSavedChannelSecrets(connection, connectionConfig, approvalActionSecrets);
+    if (
+      (approvedRoute?.kind === "webhook" &&
+        (!secretFrom(providerConfig, "webhookUrl", "webhookUrlEnv") || providerRequest.args.interactiveActions)) ||
+      (approvedRoute?.kind === "destination" &&
+        connection.key === "google-chat" &&
+        !resolveGoogleChatServiceAccountKey(providerConfig))
+    ) {
+      throw new CommsPreBoundaryProviderError("The reviewed channel route is unavailable. Request a new approval.");
+    }
     providerMessageId = await executeCommsProviderTool(
       toolName,
       connection.key,
@@ -851,26 +862,27 @@ function resolveDefaultChannelTarget(connectionKey: string, config: Record<strin
   return undefined;
 }
 
-/** Only destinations the send adapter addresses directly can be reviewed from a saved connection. */
-export function resolveReviewableDefaultChannelDestination(
+type ChannelSendReviewRoute = { kind: "destination" | "webhook"; target: string };
+
+/** The outbound route may come from the credential-backed webhook instead of the default channel field. */
+export function resolveChannelSendReviewRoute(
   connectionKey: string,
   config: Record<string, unknown>,
-): string | undefined {
+): ChannelSendReviewRoute | undefined {
   if (!Object.hasOwn(CHANNEL_TARGET_KEYS, connectionKey)) return undefined;
-  const target = normalizeChannelTarget(resolveDefaultChannelTarget(connectionKey, config), connectionKey);
-  if (
-    ["slack", "discord", "google-chat"].includes(connectionKey) &&
-    (asString(config.webhookUrl) || asString(config.webhookUrlEnv))
-  ) {
-    return undefined;
+  const configuredWebhook = asString(config.webhookUrl) || asString(config.webhookUrlEnv);
+  if (configuredWebhook && (connectionKey === "slack" || connectionKey === "discord")) {
+    return { kind: "webhook", target: connectionKey === "slack" ? "Slack webhook" : "Discord webhook" };
   }
+  let target = normalizeChannelTarget(resolveDefaultChannelTarget(connectionKey, config), connectionKey);
   if (connectionKey === "google-chat") {
-    if (!(asString(config.serviceAccountKey) || asString(config.serviceAccountKeyEnv))) return undefined;
-    return [target, asString(config.defaultSpace)].find(
+    if (configuredWebhook || !(asString(config.serviceAccountKey) || asString(config.serviceAccountKeyEnv)))
+      return undefined;
+    target = [target, asString(config.defaultSpace)].find(
       (candidate) => candidate && GOOGLE_CHAT_SPACE_NAME_PATTERN.test(candidate),
     );
   }
-  return target;
+  return target ? { kind: "destination", target } : undefined;
 }
 
 function renderChannelMessage(message: string, attachmentsRaw: unknown): string {

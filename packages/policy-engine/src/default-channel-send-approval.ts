@@ -1,6 +1,6 @@
 import { NotFoundError, redactSecretText, type ToolInvokeRequest } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
-import { resolveReviewableDefaultChannelDestination } from "./tool-executor/comms-executor.js";
+import { resolveChannelSendReviewRoute } from "./tool-executor/comms-executor.js";
 
 const reviewableArguments = new Set(["connectionId", "message", "target", "replyToMessageId", "__gcSafety"]);
 
@@ -33,8 +33,8 @@ export async function reviewDefaultChannelSend(
   ) {
     return undefined;
   }
-  const destination = resolveReviewableDefaultChannelDestination(connection.key, connection.config);
-  if (!destination || destination.length > 512) return undefined;
+  const route = resolveChannelSendReviewRoute(connection.key, connection.config);
+  if (!route || route.target.length > 512) return undefined;
 
   const redact = (value: string) => redactSecretText(value, { env: process.env }).value;
   return {
@@ -44,8 +44,11 @@ export async function reviewDefaultChannelSend(
       toolName: request.toolName,
       sessionId: request.sessionId,
       taskId: request.taskId,
-      target: redact(destination),
-      summary: `Send a message to the default destination for ${redact(connection.label)}.`,
+      target: redact(route.target),
+      summary:
+        route.kind === "webhook"
+          ? `Send a message using the webhook saved on ${redact(connection.label)}.`
+          : `Send a message to the default destination for ${redact(connection.label)}.`,
       input: [
         replyToMessageId?.trim() ? `Reply to message ${redact(replyToMessageId.trim())}` : "",
         redact(message.trim()),

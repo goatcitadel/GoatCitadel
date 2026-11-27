@@ -193,6 +193,9 @@ describe("GoatCitadel's own deliveries while a tool group is off", { timeout: 12
     const approvedSend = async (message: string) => {
       const asked = await live.invokeTool(aiCall("channel.send", { connectionId: connection.connectionId, message }));
       expect(asked.outcome, asked.policyReason).toBe("approval_required");
+      const approval = await live.storage.approvals.get(asked.approvalId!);
+      expect(approval.preview).toMatchObject({ target: "Discord webhook", input: message });
+      expect(JSON.stringify(approval.preview)).not.toContain(fakeDiscord!.webhookUrl);
       return asked.approvalId!;
     };
 
