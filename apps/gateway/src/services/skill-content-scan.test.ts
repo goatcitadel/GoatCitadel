@@ -50,9 +50,9 @@ describe("scanSkillContents", () => {
     expect(codes(files)).toContain("unsafe_script");
   });
 
-  it("warns for a risky but not dangerous script for both origins", () => {
+  it.each(["operator", "untrusted"] as const)("warns for a risky script from %s", (origin) => {
     const files = [file("setup.py", "open('~/.ssh/id_rsa')\n")];
-    expect(scanSkillContents(files, "untrusted")).toMatchObject({
+    expect(scanSkillContents(files, origin)).toMatchObject({
       verdict: "warn",
       findings: [{ code: "risky_script", path: "setup.py", line: 1, dangerous: false }],
     });
@@ -209,10 +209,18 @@ describe("scanSkillContents", () => {
       line: 1,
       dangerous: false,
     })).reverse();
+    unordered.push(
+      { code: "network_use", path: "n00.md", line: 6, dangerous: false },
+      { code: "network_use", path: "n00.md", line: 3, dangerous: false },
+    );
     const findings = summarizeSkillFindings(unordered, "untrusted").findings;
     expect(findings).toHaveLength(32);
-    expect(findings[0]?.path).toBe("n00.md");
-    expect(findings[31]?.path).toBe("n31.md");
+    expect(findings.slice(0, 3).map(({ path, line }) => [path, line])).toEqual([
+      ["n00.md", 1],
+      ["n00.md", 3],
+      ["n00.md", 6],
+    ]);
+    expect(findings[31]?.path).toBe("n29.md");
   });
 });
 
@@ -276,7 +284,7 @@ describe("skill scan file readers", () => {
     expect(readSkillScanFilesSync(skill)).toEqual(expected);
   });
 
-  it("skips assets in both readers unless their bytes are needed for integrity", async () => {
+  it("skips assets in both readers by default and includes them for async integrity checks", async () => {
     root = mkdtempSync(path.join(os.tmpdir(), "skill-scan-"));
     writeFileSync(path.join(root, "logo.png"), Uint8Array.of(1, 2, 3));
     expect(await readSkillScanFiles(root)).toEqual({ files: [], truncated: false });

@@ -370,6 +370,13 @@ A second limit in the executor would duplicate that guard.
 | An unconstrained matched read grant can still be limited by other applicable read grants | The physical executor retains applicable path constraints before evaluating the read posture. The suggested early fallback to `full_disk` would expand the reads permitted by the physical executor. Keep the current boundary until the policy owner explicitly decides the precedence of overlapping grants. |
 | The QQBot multipart test claims sequential message numbers but exercises only one chunk | The test now submits both chunks and checks the original inbound message ID and fresh sequence numbers. The executor and channel setup guide specify a separately randomized sequence for every send. |
 
+### 2026-11-27 skill scanner test follow-up
+
+The finding on `deadb76e0` proposed testing asset-byte opt-in on the synchronous reader. Only
+`operatorSkillScanVerdict` requests asset bytes to verify its whole-tree cache key, and it uses the
+asynchronous reader. The synchronous reader always skips assets. The reader tests cover both defaults
+and the async opt-in, and the operator cache test covers a tree that contains an asset.
+
 ### There is no way to dismiss an AI finding
 
 Unlike Standard findings, which carry a per-row **Dismiss** button, the AI findings surface offers
