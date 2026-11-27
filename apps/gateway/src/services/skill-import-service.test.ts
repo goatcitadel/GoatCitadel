@@ -1050,7 +1050,7 @@ describe("SkillImportService validation", () => {
     );
     fs.writeFileSync(path.join(skillDir, "LICENSE"), "MIT\n");
 
-    const service = new SkillImportService("F:/code/personal-ai", createSystemSettingsRepo() as never);
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
     await expect(
       service.validateImport({
         sourceRef: skillDir,

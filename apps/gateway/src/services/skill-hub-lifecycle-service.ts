@@ -30,7 +30,12 @@ import { parseSkillMarkdown } from "@goatcitadel/skills";
 import { CapabilityPluginStore } from "./capability-plugin-store.js";
 import { pluginSkillSource } from "./plugin-owned-refusal.js";
 import { takesPowerAway } from "./skill-hub-operation-power.js";
-import { contentScanSettlement, scanVerifiedArtifactContent } from "./skill-hub-artifact-content-scan.js";
+import {
+  contentScanSettlement,
+  scanVerifiedArtifactContent,
+  scanVerifiedArtifactPromptware,
+  type VerifiedArtifactEntry,
+} from "./skill-hub-artifact-content-scan.js";
 import { promptwareFindingBlockers } from "./skill-hub-scan-blockers.js";
 import { SKILL_STATE_METADATA_SETTING_KEY } from "./skill-state-keys.js";
 import {
@@ -59,12 +64,7 @@ import {
   toRootRelative,
 } from "./skill-hub-lifecycle-values.js";
 import { SkillHubArtifactStore, type SkillHubArtifactFilesystem } from "./skill-hub-artifact-store.js";
-import {
-  PROMPTWARE_SCANNER_ID,
-  PROMPTWARE_MAX_FINDINGS,
-  PROMPTWARE_SCANNER_VERSION,
-  scanPromptwareContent,
-} from "./assembled-prompt-injection-guard.js";
+import { PROMPTWARE_SCANNER_ID, PROMPTWARE_SCANNER_VERSION } from "./assembled-prompt-injection-guard.js";
 import {
   SkillHubLifecycleFilesystem,
   type SkillHubLifecycleFilesystemMutation,
@@ -235,8 +235,16 @@ export class SkillHubLifecycleService {
     }
 
     const bundlePath = this.options.artifactStore.resolveBundlePath(artifact.bundleRelPath);
+    const readArtifactText = (entry: VerifiedArtifactEntry) =>
+      this.filesystem.readVerifiedText({
+        sourceRoot: bundlePath,
+        sourcePath: path.join(bundlePath, ...entry.path.split("/")),
+        expectedBytes: entry.bytes,
+        expectedSha256: entry.sha256,
+        signal,
+      });
     if (!takesPowerAway(intent.operationKind)) {
-      const promptwareScan = await this.scanVerifiedArtifactPromptware(bundlePath, artifact, signal);
+      const promptwareScan = await scanVerifiedArtifactPromptware(artifact.manifest.files, readArtifactText);
       if (promptwareScan.unscannedPaths.length > 0) {
         return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
           code: "promptware_scan_incomplete",
@@ -264,15 +272,7 @@ export class SkillHubLifecycleService {
           boundaryCrossed: false,
         });
       }
-      const contentScan = await scanVerifiedArtifactContent(artifact.manifest.files, (entry) =>
-        this.filesystem.readVerifiedText({
-          sourceRoot: bundlePath,
-          sourcePath: path.join(bundlePath, ...entry.path.split("/")),
-          expectedBytes: entry.bytes,
-          expectedSha256: entry.sha256,
-          signal,
-        }),
-      );
+      const contentScan = await scanVerifiedArtifactContent(artifact.manifest.files, readArtifactText);
       if (contentScan.kind !== "clean") {
         const detail = contentScanSettlement(contentScan);
         return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, detail);
@@ -280,13 +280,7 @@ export class SkillHubLifecycleService {
     }
     const skillEntry = artifact.manifest.files.find((file) => file.path === "SKILL.md");
     if (!skillEntry) throw new ConflictError({ message: "Skill Hub artifact is missing its SKILL.md entry." });
-    const skillMarkdown = await this.filesystem.readVerifiedText({
-      sourceRoot: bundlePath,
-      sourcePath: path.join(bundlePath, "SKILL.md"),
-      expectedBytes: skillEntry.bytes,
-      expectedSha256: skillEntry.sha256,
-      signal,
-    });
+    const skillMarkdown = await readArtifactText(skillEntry);
     const parsed = parseSkillMarkdown(skillMarkdown);
     assertSkillIdentity(intent.skillId, parsed.frontmatter.name);
     try {
@@ -300,8 +294,28 @@ export class SkillHubLifecycleService {
       });
     }
 
-    const mutate = () =>
-      this.mutateVerifiedOperation(intent, snapshot, artifact, skillMarkdown, parsed.frontmatter.name, signal);
+    const mutate = async () => {
+      const work = () =>
+        this.mutateVerifiedOperation(intent, snapshot, artifact, skillMarkdown, parsed.frontmatter.name, signal);
+      if (intent.operationKind !== "activate") return await work();
+      return await this.runTransaction(async () => {
+        const replay = await storage.skillHubOperations.findSettlementByOperationId(intent.operationId);
+        if (replay) return { settlement: replay, replayed: true };
+        // Revocation acquires these same fences before changing candidate or runtime state.
+        try {
+          await this.fenceExisting(intent, this.now());
+          await this.assertExpectedRevisions(intent);
+        } catch (error) {
+          if (!isConflict(error)) throw error;
+          return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
+            code: "stale_aggregate_revision",
+            boundaryCrossed: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return await work();
+      });
+    };
     const result =
       intent.operationKind === "remove"
         ? await this.plugins.withLock(
@@ -381,6 +395,12 @@ export class SkillHubLifecycleService {
     }
 
     if (intent.operationKind === "activate") {
+      if (candidate.lifecycleState === "revoked") {
+        return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
+          code: "candidate_revoked",
+          boundaryCrossed: false,
+        });
+      }
       if (!(await this.artifactStillVerifies(artifact.bundleRelPath, artifact.manifest))) {
         return await this.settle(intent, artifact.artifactId, "blocked", UNKNOWN_TREE_SHA256, {
           code: "artifact_tamper",
@@ -995,43 +1015,6 @@ export class SkillHubLifecycleService {
     manifest: Parameters<SkillHubArtifactStore["verify"]>[0]["manifest"],
   ): Promise<boolean> {
     return this.options.artifactStore.verify({ bundleRelPath, manifest });
-  }
-
-  private async scanVerifiedArtifactPromptware(
-    bundlePath: string,
-    artifact: SkillHubSnapshotArtifactRecord,
-    signal: AbortSignal,
-  ): Promise<{
-    findings: Array<{ ruleId: string; sourcePath: string; evidenceHash: string }>;
-    unscannedPaths: string[];
-  }> {
-    const findings: Array<{ ruleId: string; sourcePath: string; evidenceHash: string }> = [];
-    const unscannedPaths: string[] = [];
-    for (const entry of artifact.manifest.files) {
-      if (!/\.(?:md|txt)$/iu.test(entry.path)) continue;
-      try {
-        const content = await this.filesystem.readVerifiedText({
-          sourceRoot: bundlePath,
-          sourcePath: path.join(bundlePath, ...entry.path.split("/")),
-          expectedBytes: entry.bytes,
-          expectedSha256: entry.sha256,
-          signal,
-        });
-        const fileFindings = scanPromptwareContent({
-          source: "imported_skill",
-          sourcePath: entry.path,
-          content,
-        }).map((finding) => ({
-          ruleId: finding.ruleId,
-          sourcePath: finding.sourcePath ?? entry.path,
-          evidenceHash: finding.evidenceHash,
-        }));
-        findings.push(...fileFindings.slice(0, Math.max(0, PROMPTWARE_MAX_FINDINGS - findings.length)));
-      } catch {
-        unscannedPaths.push(entry.path);
-      }
-    }
-    return { findings, unscannedPaths };
   }
 
   private now(): string {

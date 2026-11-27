@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  SKILL_SCAN_MAX_ENTRIES,
   SKILL_SCAN_MAX_FILE_BYTES,
   readSkillScanFiles,
   readSkillScanFilesSync,
@@ -215,5 +216,18 @@ describe("skill scan file readers", () => {
       expect(read.files).toEqual([{ path: ".", bytes: new Uint8Array(), unreadable: true }]);
       expect(scanSkillContents(read.files, "untrusted").verdict).toBe("block");
     }
+  });
+
+  it("enforces an entry budget even when the tree contains only directories", async () => {
+    root = mkdtempSync(path.join(os.tmpdir(), "skill-scan-"));
+    for (let index = 0; index < SKILL_SCAN_MAX_ENTRIES; index += 1) {
+      mkdirSync(path.join(root, String(index)));
+    }
+    expect(await readSkillScanFiles(root)).toEqual({ files: [], truncated: false });
+    expect(readSkillScanFilesSync(root)).toEqual({ files: [], truncated: false });
+
+    mkdirSync(path.join(root, "0", "one-too-many"));
+    expect(await readSkillScanFiles(root)).toEqual({ files: [], truncated: true });
+    expect(readSkillScanFilesSync(root)).toEqual({ files: [], truncated: true });
   });
 });

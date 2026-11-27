@@ -30,6 +30,7 @@ export interface SkillScanFile {
 
 export const SKILL_SCAN_MAX_FILES = 80;
 export const SKILL_SCAN_MAX_FILE_BYTES = 220_000;
+export const SKILL_SCAN_MAX_ENTRIES = 384;
 const MAX_FINDINGS = 32;
 
 /** Files read as prompt text by the promptware scan. Script files are read whole as well. */
@@ -146,46 +147,34 @@ function dedupe(findings: SkillScanFinding[]): SkillScanFinding[] {
 
 // ── readers ──────────────────────────────────────────────────────────
 
-interface WalkEntry {
-  name: string;
-  isDirectory(): boolean;
-  isFile(): boolean;
-}
-
 function relativePath(root: string, fullPath: string): string {
   return path.relative(root, fullPath).replaceAll("\\", "/");
 }
 
-/** Every regular file under `dir` (not `.git`, not symlinks), up to SKILL_SCAN_MAX_FILES, read for the scan. */
+/** Reads regular files within both scan budgets, skipping symlinks and `.git` directories. */
 export async function readSkillScanFiles(dir: string): Promise<{ files: SkillScanFile[]; truncated: boolean }> {
   const files: SkillScanFile[] = [];
   const queue = [dir];
+  let entriesRead = 0;
   while (queue.length > 0) {
     const current = queue.shift()!;
-    let entries: WalkEntry[];
     try {
-      entries = await fsp.readdir(current, { withFileTypes: true });
+      for await (const entry of await fsp.opendir(current)) {
+        if (++entriesRead > SKILL_SCAN_MAX_ENTRIES) return { files, truncated: true };
+        const fullPath = path.join(current, entry.name);
+        if (entry.isDirectory() && entry.name !== ".git") queue.push(fullPath);
+        if (!entry.isFile()) continue;
+        if (files.length >= SKILL_SCAN_MAX_FILES) return { files, truncated: true };
+        try {
+          const size = (await fsp.stat(fullPath)).size;
+          const bytes = size > SKILL_SCAN_MAX_FILE_BYTES ? new Uint8Array() : await fsp.readFile(fullPath);
+          files.push({ path: relativePath(dir, fullPath), bytes, size });
+        } catch {
+          files.push({ path: relativePath(dir, fullPath), bytes: new Uint8Array(), unreadable: true });
+        }
+      }
     } catch {
-      // A folder that can't be listed is reported, so its files never read as a clean, empty skill.
       files.push({ path: relativePath(dir, current) || ".", bytes: new Uint8Array(), unreadable: true });
-      continue;
-    }
-    for (const entry of entries) {
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name !== ".git") queue.push(fullPath);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      if (files.length >= SKILL_SCAN_MAX_FILES) return { files, truncated: true };
-      try {
-        const size = (await fsp.stat(fullPath)).size;
-        const bytes = size > SKILL_SCAN_MAX_FILE_BYTES ? new Uint8Array() : await fsp.readFile(fullPath);
-        files.push({ path: relativePath(dir, fullPath), bytes, size });
-      } catch {
-        // Gone or locked mid-walk: report it, so one file never fails the whole scan.
-        files.push({ path: relativePath(dir, fullPath), bytes: new Uint8Array(), unreadable: true });
-      }
     }
   }
   return { files, truncated: false };
@@ -195,31 +184,31 @@ export async function readSkillScanFiles(dir: string): Promise<{ files: SkillSca
 export function readSkillScanFilesSync(dir: string): { files: SkillScanFile[]; truncated: boolean } {
   const files: SkillScanFile[] = [];
   const queue = [dir];
+  let entriesRead = 0;
   while (queue.length > 0) {
     const current = queue.shift()!;
-    let entries: WalkEntry[];
     try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
-      // A folder that can't be listed is reported, so its files never read as a clean, empty skill.
-      files.push({ path: relativePath(dir, current) || ".", bytes: new Uint8Array(), unreadable: true });
-      continue;
-    }
-    for (const entry of entries) {
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name !== ".git") queue.push(fullPath);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      if (files.length >= SKILL_SCAN_MAX_FILES) return { files, truncated: true };
+      const directory = fs.opendirSync(current);
       try {
-        const size = fs.statSync(fullPath).size;
-        const bytes = size > SKILL_SCAN_MAX_FILE_BYTES ? new Uint8Array() : fs.readFileSync(fullPath);
-        files.push({ path: relativePath(dir, fullPath), bytes, size });
-      } catch {
-        files.push({ path: relativePath(dir, fullPath), bytes: new Uint8Array(), unreadable: true });
+        for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
+          if (++entriesRead > SKILL_SCAN_MAX_ENTRIES) return { files, truncated: true };
+          const fullPath = path.join(current, entry.name);
+          if (entry.isDirectory() && entry.name !== ".git") queue.push(fullPath);
+          if (!entry.isFile()) continue;
+          if (files.length >= SKILL_SCAN_MAX_FILES) return { files, truncated: true };
+          try {
+            const size = fs.statSync(fullPath).size;
+            const bytes = size > SKILL_SCAN_MAX_FILE_BYTES ? new Uint8Array() : fs.readFileSync(fullPath);
+            files.push({ path: relativePath(dir, fullPath), bytes, size });
+          } catch {
+            files.push({ path: relativePath(dir, fullPath), bytes: new Uint8Array(), unreadable: true });
+          }
+        }
+      } finally {
+        directory.closeSync();
       }
+    } catch {
+      files.push({ path: relativePath(dir, current) || ".", bytes: new Uint8Array(), unreadable: true });
     }
   }
   return { files, truncated: false };

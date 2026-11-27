@@ -7,6 +7,7 @@ import {
   type SkillScanFile,
 } from "./skill-content-scan.js";
 import { findingBlockers } from "./skill-hub-scan-blockers.js";
+import { PROMPTWARE_MAX_FINDINGS, scanPromptwareContent } from "./assembled-prompt-injection-guard.js";
 
 export interface VerifiedArtifactEntry {
   /** Path inside the artifact, with `/` separators. */
@@ -21,6 +22,34 @@ export type ArtifactContentScanOutcome =
   | { kind: "blocked"; blockerCodes: SkillHubBlockerCode[]; findings: SkillScanFinding[] };
 
 const encoder = new TextEncoder();
+
+export async function scanVerifiedArtifactPromptware(
+  entries: readonly VerifiedArtifactEntry[],
+  readText: (entry: VerifiedArtifactEntry) => Promise<string>,
+): Promise<{
+  findings: Array<{ ruleId: string; sourcePath: string; evidenceHash: string }>;
+  unscannedPaths: string[];
+}> {
+  const findings: Array<{ ruleId: string; sourcePath: string; evidenceHash: string }> = [];
+  const unscannedPaths: string[] = [];
+  for (const entry of entries) {
+    if (!/\.(?:md|txt)$/iu.test(entry.path)) continue;
+    try {
+      const content = await readText(entry);
+      const fileFindings = scanPromptwareContent({ source: "imported_skill", sourcePath: entry.path, content }).map(
+        (finding) => ({
+          ruleId: finding.ruleId,
+          sourcePath: finding.sourcePath ?? entry.path,
+          evidenceHash: finding.evidenceHash,
+        }),
+      );
+      findings.push(...fileFindings.slice(0, Math.max(0, PROMPTWARE_MAX_FINDINGS - findings.length)));
+    } catch {
+      unscannedPaths.push(entry.path);
+    }
+  }
+  return { findings, unscannedPaths };
+}
 
 /**
  * The shared content scan over a reviewed artifact's verified files, run again right before install. A review taken

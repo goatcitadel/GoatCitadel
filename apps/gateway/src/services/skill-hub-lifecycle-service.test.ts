@@ -209,6 +209,23 @@ describe("SkillHubLifecycleService", () => {
     });
     expect(replay.replayed).toBe(true);
     expect(replay.settlement.settlementId).toBe(revoked.settlement.settlementId);
+
+    const sourcePath = path.join(harness.rootDir, "skills", "extra", "demo", "source.json");
+    const originalSource = await fs.readFile(sourcePath, "utf8");
+    const reactivation = await approveAndApply(harness, {
+      ...template(harness, "activate", "operation-reactivate-revoked", {
+        expectedCandidateAbsent: false,
+        expectedCandidateRevision: 3,
+        expectedRuntimeAbsent: false,
+        expectedRuntimeRevision: 2,
+      }),
+      createdAt: "2026-07-14T00:02:00.000Z",
+    });
+    expect(reactivation.settlement).toMatchObject({
+      disposition: "blocked",
+      result: { code: "candidate_revoked", boundaryCrossed: false },
+    });
+    expect(await fs.readFile(sourcePath, "utf8")).toBe(originalSource);
   }, 60_000); // Full lifecycle integration performs repeated CAS hashing and atomic filesystem projections.
 
   it("rejects foreign effect identity before acknowledging an existing settlement replay", async () => {
