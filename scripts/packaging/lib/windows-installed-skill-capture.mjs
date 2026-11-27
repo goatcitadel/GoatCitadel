@@ -212,6 +212,8 @@ export async function installedSkillCapture(runtime, fixture) {
         providerId: "ollama",
         model,
         workspaceId: scope,
+      }).catch((error) => {
+        throw new Error(`Benchmark ${task.id} (${condition}): ${error.message}`, { cause: error });
       });
       const turn = await waitForTurn(chat, "completed");
       assert.equal(turn.trace.model, model);
@@ -250,6 +252,7 @@ export async function installedSkillCapture(runtime, fixture) {
       ...outcomes,
       ...gradeBriefPair(outcomes.disabled.score, outcomes.enabled.score),
     });
+    await writeFile(path.join(evidence, "skill-reuse-progress.json"), JSON.stringify({ pairs }, null, 2));
   }
   const improved = pairs.filter((pair) => pair.improved).length;
   const regressions = pairs.filter((pair) => pair.regression).length;

@@ -162,6 +162,7 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
     return JSON.parse(result.stdout);
   }
   async function api(route, method = "GET", body) {
+    const timeoutMs = skillCapture && route.endsWith("/agent-send") ? 240_000 : 125_000;
     const response = await request(gatewayPort, route, {
       method,
       headers: {
@@ -169,7 +170,9 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
         ...(body && { "Content-Type": "application/json", "Idempotency-Key": randomUUID() }),
       },
       body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(125_000),
+      signal: AbortSignal.timeout(timeoutMs),
+    }).catch((error) => {
+      throw new Error(`${method} ${route}: ${error.message}`, { cause: error });
     });
     const data = await response.json();
     if (!response.ok) throw new Error(`${method} ${route} returned ${response.status} ${redacted(JSON.stringify(data))}`);
@@ -260,6 +263,7 @@ async function withPinnedOllama(root, run) {
   const serverEnv = {
     ...env, OLLAMA_HOST: `127.0.0.1:${port}`, OLLAMA_MODELS: path.join(root, "models"),
     USERPROFILE: root, OLLAMA_NO_CLOUD: "1", OLLAMA_NUM_PARALLEL: "1", CUDA_VISIBLE_DEVICES: "-1",
+    ...(skillCaptureOnly && { OLLAMA_CONTEXT_LENGTH: "4096", OLLAMA_KEEP_ALIVE: "30m" }),
   };
   return withServer(ollamaExe, ["serve"], root, serverEnv, async () => {
     const serverVersion = await poll(async () => {
@@ -281,11 +285,32 @@ async function withPinnedOllama(root, run) {
     const { model_info: modelInfo } = await show.json();
     const contextWindow = modelInfo?.[`${modelInfo["general.architecture"]}.context_length`];
     assert.ok(Number.isSafeInteger(contextWindow) && contextWindow > 0, "Ollama omitted the model context window");
+    if (skillCaptureOnly) {
+      const warmup = await request(port, "/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: ollamaModel, messages: [{ role: "user", content: "Reply READY." }], max_tokens: 4 }),
+        signal: AbortSignal.timeout(90_000),
+      });
+      assert.ok(warmup.ok && (await warmup.json()).choices?.length, "The pinned Ollama model did not warm up");
+    }
     const config = await readJson(path.join(app, "templates", "config", "goatcitadel.example.json"));
     const ollama = config.llm.providers.find((entry) => entry.providerId === "ollama");
     assert.ok(ollama, "The installed provider catalog omitted Ollama");
     const provider = { ...ollama, baseUrl: `http://127.0.0.1:${port}/v1`, defaultModel: ollamaModel, models: [ollamaModel] };
-    return run(provider, serverVersion, contextWindow);
+    try {
+      return await run(provider, serverVersion, skillCaptureOnly ? Math.min(4096, contextWindow) : contextWindow);
+    } catch (error) {
+      if (skillCaptureOnly) {
+        const log = await fs.readFile(path.join(root, `${path.basename(ollamaExe)}.log`), "utf8").catch(() => "");
+        const requests = log.split(/\r?\n/u).flatMap((line) => {
+          const result = line.match(/\[GIN\].*?\|\s*(\d{3})\s*\|\s*([\d.]+\s*[\p{L}µ]+)\s*\|.*?\b(GET|POST)\s+"(\/v1\/chat\/completions|\/api\/chat)"/u);
+          return result ? [{ status: Number(result[1]), duration: result[2], method: result[3], route: result[4] }] : [];
+        });
+        await writeJson(path.join(evidence, "skill-ollama-transport.json"), { requests }).catch(() => undefined);
+      }
+      throw error;
+    }
   });
 }
 
