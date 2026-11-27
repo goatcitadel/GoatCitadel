@@ -1425,9 +1425,9 @@ async function* runDirectTurnStreamWithSubagentFanout(
  * the authoritative {@link ChatSendMessageResponse} the buffered child-send would
  * have produced. The child's own answer-recovery happens at its `message_done`;
  * we forward deltas live (never gating first-token on recovery) and reconcile the
- * persisted/rendered string later through the parent's divergence guard.
+ * persisted/rendered string through the parent's authoritative message_done.
  *
- * Fallback contract:
+ * Fallback contract for errors other than durable control and usage accounting:
  *  - throws BEFORE any delta was pushed → fall back to the buffered
  *    `agentSendChatMessage` send so the result is byte-identical to today.
  *  - throws AFTER ≥1 delta was pushed → do NOT re-send (that would duplicate
@@ -1487,7 +1487,7 @@ async function driveTerminalDelegatedStream(
       }
     }
   } catch (error) {
-    if (isAuthoritativeModelUsageAccountingError(error)) {
+    if (isAuthoritativeModelUsageAccountingError(error) || isDurableControlError(error)) {
       throw error;
     }
     if (deltaCount === 0) {
@@ -1895,11 +1895,9 @@ export async function* streamPreparedAgentChatTurn(
       const progressQueue = createAsyncProgressQueue<
         { kind: "trace"; trace: ChatTurnTraceRecord } | { kind: "delta"; delta: string }
       >();
-      let streamedFinalText = "";
       let streamedRealFinalDeltas = false;
       const finalDeltaSink: FinalDeltaSink = {
         push(delta) {
-          streamedFinalText += delta;
           progressQueue.push({ kind: "delta", delta });
         },
         markStreamed() {
@@ -1978,16 +1976,6 @@ export async function* streamPreparedAgentChatTurn(
       if (!finalText) {
         finalText = buildEmptyAssistantTurnFallbackText();
       }
-      // Divergence guard: only treat the live-streamed deltas as the rendered
-      // final text when the terminal step completed AND the streamed concat
-      // exactly matches the authoritative `finalText`. If the child recovered,
-      // repaired, or returned empty (so the engine's finalOutput diverges), fall
-      // back to the synthetic split of `finalText` below — the persisted and
-      // rendered text always agree.
-      const terminalStepCompleted = orchestrationResult.finalStep?.status === "completed";
-      streamedRealFinalDeltas =
-        streamedRealFinalDeltas && terminalStepCompleted && streamedFinalText.trim() === finalText;
-
       await observeBeforeAssistantMessageWrite(host, {
         workspaceId: prepared.workspaceId,
         sessionId,
@@ -2118,9 +2106,8 @@ export async function* streamPreparedAgentChatTurn(
         ...committedTrace,
         toolRuns: orchestrationToolRuns,
       };
-      // Skip the synthetic post-hoc split when the real terminal-synthesizer
-      // tokens were already streamed live above and matched the authoritative
-      // final text (no double emit). Otherwise fall back to splitting finalText.
+      // Once live deltas have been sent, message_done replaces them with the
+      // authoritative text if recovery or repair changed the answer.
       if (!streamedRealFinalDeltas) {
         for (const slice of splitIntoChunks(finalText, 120)) {
           yield {

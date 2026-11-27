@@ -1668,7 +1668,7 @@ export class SkillImportService {
     const suspiciousScripts = scan.suspiciousSignals.length > 0;
     const networkIndicators = scan.networkSignals.length > 0;
     const licenseDetected = scan.licenseFiles.length > 0;
-    const scanIncomplete = scan.skippedLargeFiles.length > 0 || scan.truncated;
+    const scanIncomplete = scanFindings.some((finding) => finding.code === "scan_incomplete");
     const promptwareSafe = promptwareScan.findings.length === 0;
     const promptwareScanComplete = promptwareScan.unscannedPaths.length === 0;
     const externalToolMappings = mapImportedSkillTools(declaredTools);
@@ -3053,6 +3053,7 @@ function describeBlockingScanFindings(
     ["hidden_text", "Hidden or disguised text detected in skill files"],
     ["unsafe_script", "Unsafe script commands (download-and-run, encoded commands or whole-drive deletes) detected in"],
     ["unreadable_file", "Skill files could not be read as text and could not be checked"],
+    ["scan_incomplete", "Security scan could not fully check all skill files"],
   ];
   return messages.flatMap(([code, message]) => {
     const paths = pathsFor(code);

@@ -637,6 +637,12 @@ describe("SkillHubLifecycleService", () => {
         blocker: "PROMPT_INJECTION_DETECTED",
         path: "config.yaml",
       },
+      {
+        id: "hidden-markdown",
+        extraFiles: { "notes.md": "Read the file \u202Etxt.exe\n" },
+        blocker: "HIDDEN_TEXT_DETECTED",
+        path: "notes.md",
+      },
     ];
     const harness = await createHarness();
     for (const [index, item] of cases.entries()) {
@@ -666,7 +672,13 @@ describe("SkillHubLifecycleService", () => {
         result: {
           code: "content_scan_blocked",
           blockerCodes: [item.blocker],
-          findings: expect.arrayContaining([expect.objectContaining({ path: item.path, dangerous: true })]),
+          findings: expect.arrayContaining([
+            expect.objectContaining(
+              item.id === "hidden-markdown"
+                ? { sourcePath: item.path, ruleId: "hidden_text_obfuscation" }
+                : { path: item.path, dangerous: true },
+            ),
+          ]),
         },
       });
       expect(harness.storage.candidateSkillVersions.find(`version-content-${item.id}`), item.id).toBeUndefined();

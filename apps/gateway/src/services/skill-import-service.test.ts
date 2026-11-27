@@ -777,7 +777,7 @@ describe("SkillImportService validation", () => {
     ).rejects.toThrow(/not installable/i);
   });
 
-  it("warns when the security scan skips oversized files", async () => {
+  it("refuses imports when the security scan skips oversized files", async () => {
     const skillDir = path.join(rootDir, "oversized-skill");
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(
@@ -802,8 +802,9 @@ describe("SkillImportService validation", () => {
       sourceProvider: "local",
     });
 
-    expect(result.valid).toBe(true);
-    expect(result.riskLevel).toBe("medium");
+    expect(result.valid).toBe(false);
+    expect(result.riskLevel).toBe("high");
+    expect(result.errors).toContain("Security scan could not fully check all skill files: bundle.js.");
     expect(result.warnings).toEqual(
       expect.arrayContaining([
         expect.stringContaining("Security scan skipped large files"),

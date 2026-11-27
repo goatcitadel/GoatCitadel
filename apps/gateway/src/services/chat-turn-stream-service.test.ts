@@ -2642,13 +2642,10 @@ describe("streamPreparedAgentChatTurn S1 terminal-token streaming", () => {
     expect(deltas.map((delta) => delta.delta)).toEqual(["Final buffered answer."]);
   });
 
-  it("falls back to the synthetic split of finalText when the streamed concat diverges (recovery)", async () => {
+  it("replaces a streamed draft through message_done when the final answer diverges", async () => {
     const host = createHost();
     host.resolvePreparedTurnOrchestration = vi.fn(async () => createDelegatedModeOrchestrationResolution()) as never;
     host.agentSendChatMessage = plannerBufferedSendMock() as never;
-    // The child streams partial tokens but recovers a DIFFERENT authoritative
-    // answer at message_done. The persisted/rendered text must be the recovered
-    // finalText (split path), not the diverging streamed concat.
     const childStream = childStreamMock({
       deltas: ["partial draft "],
       doneContent: "Recovered authoritative final answer.",
@@ -2671,10 +2668,7 @@ describe("streamPreparedAgentChatTurn S1 terminal-token streaming", () => {
     expect(messageDone?.content).toBe("Recovered authoritative final answer.");
     const deltas = chunks.filter((chunk) => chunk.type === "delta");
     const deltaTexts = deltas.map((delta) => delta.delta);
-    // The diverging live token ("partial draft ") may have streamed, but the
-    // authoritative finalText is (also) emitted via the synthetic split so the
-    // rendered transcript ends on the recovered answer.
-    expect(deltaTexts).toContain("Recovered authoritative final answer.");
+    expect(deltaTexts).toEqual(["partial draft "]);
     expect(host.ingestEvent).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
@@ -2686,6 +2680,27 @@ describe("streamPreparedAgentChatTurn S1 terminal-token streaming", () => {
 });
 
 describe("executeDelegatedPlanStep S1 streaming fallback", () => {
+  it.each([false, true])("propagates durable interruption even with a terminal result (%s)", async (sendTerminal) => {
+    const host = createHost();
+    const interruption = new Error("worker interrupted");
+    interruption.name = "DurableWorkerInterruptionError";
+    const childStream = childStreamMock({ deltas: ["Partial answer."], doneContent: "Final answer." });
+    host.agentSendChatMessageStream = vi.fn(async function* () {
+      if (sendTerminal) yield* childStream();
+      throw interruption;
+    }) as never;
+    host.agentSendChatMessage = vi.fn() as never;
+
+    await expect(
+      executeDelegatedPlanStep(host, createPreparedTurn({ mode: "cowork" }), {
+        ...createDelegatedStepInput(),
+        streamTerminalStep: true,
+        finalDeltaSink: { push: vi.fn(), markStreamed: vi.fn() },
+      } as never),
+    ).rejects.toBe(interruption);
+    expect(host.agentSendChatMessage).not.toHaveBeenCalled();
+  });
+
   it("streams the terminal child and reconstructs the completed step result", async () => {
     const host = createHost();
     const childStream = childStreamMock({ deltas: ["Final ", "answer."] });

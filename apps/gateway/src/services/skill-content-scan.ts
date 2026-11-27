@@ -59,8 +59,7 @@ export function collectSkillFindings(
   opts: { truncated?: boolean } = {},
 ): SkillScanFinding[] {
   const findings: SkillScanFinding[] = [];
-  // An incomplete scan is reported, not escalated: imports warn about it, and the Skill Hub review refuses it itself.
-  if (opts.truncated) findings.push({ code: "scan_incomplete", path: ".", dangerous: false });
+  if (opts.truncated) findings.push({ code: "scan_incomplete", path: ".", dangerous: true });
   for (const file of files) findings.push(...scanOneFile(file));
   return dedupe(findings).sort(byPlace);
 }
@@ -84,7 +83,7 @@ function scanOneFile(file: SkillScanFile): SkillScanFinding[] {
   if (file.unreadable) return [{ code: "unreadable_file", path: file.path, dangerous: true }];
   if (ASSET_FILE.test(file.path)) return [];
   if ((file.size ?? file.bytes.length) > SKILL_SCAN_MAX_FILE_BYTES) {
-    return [{ code: "scan_incomplete", path: file.path, dangerous: false }];
+    return [{ code: "scan_incomplete", path: file.path, dangerous: true }];
   }
   let text: string;
   try {
@@ -109,7 +108,7 @@ function scanOneFile(file: SkillScanFile): SkillScanFinding[] {
     }
   }
   const scriptFindings = scanScriptText(text);
-  if (hasOverlongLine(text)) findings.push({ code: "scan_incomplete", path: file.path, dangerous: false });
+  if (hasOverlongLine(text)) findings.push({ code: "scan_incomplete", path: file.path, dangerous: true });
   const ruledLines = new Set(scriptFindings.map((finding) => finding.line));
   text.split(/\r\n|\r|\n/u).forEach((lineText, index) => {
     // The broader original check (any `rm -rf`) stays a caution signal where no rule already spoke.

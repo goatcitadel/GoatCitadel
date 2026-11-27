@@ -36,9 +36,10 @@ export async function scanVerifiedArtifactContent(
     files.push(await readScanFile(entry, readText));
   }
   const findings = collectSkillFindings(files, { truncated: entries.length > SKILL_SCAN_MAX_FILES });
-  const blockerCodes = [...new Set(findingBlockers(findings))];
+  const contentFindings = findings.filter((finding) => finding.code !== "scan_incomplete");
+  const blockerCodes = [...new Set(findingBlockers(contentFindings))];
   if (blockerCodes.length > 0) {
-    return { kind: "blocked", blockerCodes, findings: findings.filter((finding) => finding.dangerous) };
+    return { kind: "blocked", blockerCodes, findings: contentFindings.filter((finding) => finding.dangerous) };
   }
   const incomplete = findings.filter((finding) => finding.code === "scan_incomplete");
   if (incomplete.length > 0) return { kind: "incomplete", sourcePaths: incomplete.map((finding) => finding.path) };

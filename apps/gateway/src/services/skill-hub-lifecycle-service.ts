@@ -31,6 +31,7 @@ import { CapabilityPluginStore } from "./capability-plugin-store.js";
 import { pluginSkillSource } from "./plugin-owned-refusal.js";
 import { takesPowerAway } from "./skill-hub-operation-power.js";
 import { contentScanSettlement, scanVerifiedArtifactContent } from "./skill-hub-artifact-content-scan.js";
+import { promptwareFindingBlockers } from "./skill-hub-scan-blockers.js";
 import { SKILL_STATE_METADATA_SETTING_KEY } from "./skill-state-keys.js";
 import {
   withoutSkillMetadata,
@@ -247,9 +248,12 @@ export class SkillHubLifecycleService {
         });
       }
       if (promptwareScan.findings.length > 0) {
+        const blockerCodes = promptwareFindingBlockers(promptwareScan.findings);
         return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
-          code: "prompt_injection_detected",
-          blockerCodes: ["PROMPT_INJECTION_DETECTED"],
+          code: blockerCodes.includes("PROMPT_INJECTION_DETECTED")
+            ? "prompt_injection_detected"
+            : "content_scan_blocked",
+          blockerCodes,
           scannerId: PROMPTWARE_SCANNER_ID,
           scannerVersion: PROMPTWARE_SCANNER_VERSION,
           findings: promptwareScan.findings.map((finding) => ({

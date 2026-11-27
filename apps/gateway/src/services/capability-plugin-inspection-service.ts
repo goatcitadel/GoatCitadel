@@ -544,6 +544,10 @@ export class CapabilityPluginInspectionService {
       warn(context.input.log, piece.id, error, "a plugin's prompt pack couldn't be read");
       return unread(blocked("PROMPT_PACK_INVALID", PROMPT_PACK_INVALID_MESSAGE));
     }
+    for (const { prompt } of prepared.write.tests) {
+      const refusal = promptPackScanRefusal(prompt, piece.path);
+      if (refusal) return unread(refusal);
+    }
     const ready = {
       ...view,
       label: prepared.write.name,

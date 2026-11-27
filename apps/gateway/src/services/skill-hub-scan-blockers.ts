@@ -10,6 +10,7 @@ export const SCAN_BLOCKER_MESSAGES: Partial<Record<SkillHubBlockerCode, string>>
   HIDDEN_TEXT_DETECTED: "Skill source contains hidden or disguised text.",
   SUSPICIOUS_SCRIPT_INDICATOR: "Skill source contains unsafe script commands.",
   UNREADABLE_SKILL_FILE: "Skill source contains files that could not be read and checked.",
+  PROMPTWARE_SCAN_INCOMPLETE: "GoatCitadel could not scan all of the skill source.",
 };
 
 const BLOCKER_FOR_FINDING: Partial<Record<SkillScanFindingCode, SkillHubBlockerCode>> = {
@@ -17,7 +18,16 @@ const BLOCKER_FOR_FINDING: Partial<Record<SkillScanFindingCode, SkillHubBlockerC
   hidden_text: "HIDDEN_TEXT_DETECTED",
   unsafe_script: "SUSPICIOUS_SCRIPT_INDICATOR",
   unreadable_file: "UNREADABLE_SKILL_FILE",
+  scan_incomplete: "PROMPTWARE_SCAN_INCOMPLETE",
 };
+
+export function promptwareFindingBlockers(findings: readonly { ruleId: string }[]): SkillHubBlockerCode[] {
+  const codes = new Set<SkillHubBlockerCode>();
+  for (const { ruleId } of findings) {
+    codes.add(ruleId === "hidden_text_obfuscation" ? "HIDDEN_TEXT_DETECTED" : "PROMPT_INJECTION_DETECTED");
+  }
+  return [...codes];
+}
 
 /** Dangerous findings, as the blocker codes the Skills tab explains, in finding order. */
 export function findingBlockers(findings: readonly SkillScanFinding[]): SkillHubBlockerCode[] {

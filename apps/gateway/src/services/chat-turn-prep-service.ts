@@ -1411,15 +1411,16 @@ export async function prepareAgentChatTurn(
       });
     }
   }
+  let activatedSkillInstructions: string | undefined;
+  const hasSelectedSkills = Boolean(featureAdmission?.references.selectedSkills);
   if (capabilityProfile) {
     history = upsertChatCapabilityProfileSystemInstruction(history, capabilityProfile, {
       advisoryPlanning: prefs.planningMode === "advisory",
     });
-    const activatedSkillInstructions = await host.resolveActivatedSkillInstructions?.(capabilityProfile);
-    history = upsertChatActivatedSkillSystemInstruction(history, activatedSkillInstructions);
+    activatedSkillInstructions = await host.resolveActivatedSkillInstructions?.(capabilityProfile);
   }
   if (featureAdmission?.references.selectedSkills) {
-    const activatedSkillInstructions = await host.resolveAdmittedSkillInstructions?.(
+    activatedSkillInstructions = await host.resolveAdmittedSkillInstructions?.(
       featureAdmission.references,
       workspaceId,
     );
@@ -1428,6 +1429,8 @@ export async function prepareAgentChatTurn(
         message: "Admitted skill instructions are unavailable. Review skill state and retry.",
       });
     }
+  }
+  if (capabilityProfile || hasSelectedSkills) {
     history = upsertChatActivatedSkillSystemInstruction(history, activatedSkillInstructions);
   }
   history = upsertChatTurnBindingSystemInstruction(history, featureAdmission?.references);
@@ -1511,6 +1514,9 @@ export async function prepareAgentChatTurn(
       history = upsertChatCapabilityProfileSystemInstruction(history, capabilityProfile, {
         advisoryPlanning: prefs.planningMode === "advisory",
       });
+    }
+    if (capabilityProfile || hasSelectedSkills) {
+      history = upsertChatActivatedSkillSystemInstruction(history, activatedSkillInstructions);
     }
     history = upsertChatTurnBindingSystemInstruction(history, featureAdmission?.references);
     if (routedContextSnapshot) {

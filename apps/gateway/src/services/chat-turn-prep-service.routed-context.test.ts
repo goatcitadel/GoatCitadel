@@ -494,6 +494,34 @@ describe.skip("prepareAgentChatTurn routed context with frozen profiles", () => 
     expect(harness.buildHistory).toHaveBeenCalledTimes(2);
   });
 
+  it("preserves the resolved skill instructions when a force action rebuilds routed history", async () => {
+    const harness = createHarness({ withPriorTurn: true });
+    const instruction = "Server-owned governed runtime skill instructions follow. Summarize the material.";
+    const resolveSkills = vi.fn(async () => instruction);
+    harness.host.resolveActivatedSkillInstructions = resolveSkills;
+    const forceAction = { actionId: "action-rebuild", actorHash: `sha256:${"f".repeat(64)}` };
+    harness.host.resolvePendingCompactionBreakerForceAction = vi.fn(() => forceAction);
+
+    const prepared = await prepareAgentChatTurn(
+      harness.host,
+      SESSION_ID,
+      routedRequest({ authActorId: "token:operator-1", authActorSource: "token" }),
+      { turnId: "turn-force-with-skill" },
+    );
+
+    expect(harness.buildHistory).toHaveBeenLastCalledWith(
+      SESSION_ID,
+      expect.any(Array),
+      expect.any(Object),
+      expect.objectContaining({ compactionDimension: expect.objectContaining({ forceAction }) }),
+      expect.any(Object),
+    );
+    expect(resolveSkills).toHaveBeenCalledTimes(1);
+    expect(prepared.history.filter((message) => message.content === instruction)).toEqual([
+      { role: "system", content: instruction },
+    ]);
+  });
+
   it("replaces stale routed blocks and injects the final exact block once", async () => {
     const harness = createHarness({
       history: [

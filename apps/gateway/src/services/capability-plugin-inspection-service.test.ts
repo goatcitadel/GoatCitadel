@@ -10,6 +10,7 @@ import {
   type CapabilityPluginPieceView,
   type McpServerTemplateRecord,
 } from "@goatcitadel/contracts";
+import * as promptware from "./assembled-prompt-injection-guard.js";
 import {
   CapabilityPluginInspectionService,
   CapabilityPluginManifestRefusedError,
@@ -1364,6 +1365,22 @@ describe("CapabilityPluginInspectionService", () => {
     expect(piece(inspection, "hidden").check).toMatchObject({ status: "blocked", code: "HIDDEN_TEXT_DETECTED" });
     expect(piece(inspection, "checks").check).toEqual({ status: "ready" });
     expect(inspection.installable).toBe(false);
+  });
+
+  it("scans the raw prompt pack and each parsed prompt before marking it ready", async () => {
+    const sourcePath = "prompt-packs/checks.md";
+    const { inspect } = await harness({ pieces: [{ kind: "prompt_pack", id: "checks", path: sourcePath }] });
+    const scan = vi.spyOn(promptware, "scanPromptwareContent");
+    try {
+      expect(piece(await inspect(), "checks").check).toEqual({ status: "ready" });
+      expect(scan.mock.calls.map(([input]) => input)).toEqual([
+        { source: "plugin_prompt_pack", sourcePath, content: PROMPT_PACK_MD },
+        { source: "plugin_prompt_pack", sourcePath, content: "Summarize the meeting in two lines." },
+        { source: "plugin_prompt_pack", sourcePath, content: "List the actions from the meeting." },
+      ]);
+    } finally {
+      scan.mockRestore();
+    }
   });
 
   it("blocks a prompt pack the parser refuses, or that isn't text, in plain words with the detail logged", async () => {
