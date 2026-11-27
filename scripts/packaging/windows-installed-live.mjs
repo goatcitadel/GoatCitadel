@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import { installedRecall, withNativeRecallPage } from "./lib/windows-installed-recall.mjs";
 import { installedSkillCapture } from "./lib/windows-installed-skill-capture.mjs";
 import { briefInstructions } from "../verification/lib/assistant-parity/weekly-brief-pilot.mjs";
+import { parseGatewayChatSse } from "../verification/lib/scenarios/gateway-chat-fault-recovery-lane.mjs";
 import {
   DETERMINISTIC_LLM_KEY_ENV,
   DETERMINISTIC_LLM_MODEL,
@@ -22,9 +23,11 @@ const [app, scratch, evidence, nativeDebugPort, ollamaExe, ntfyExe] = process.ar
 const recallOnly = ollamaExe === "--recall-only";
 const skillCaptureOnly = process.env.GOATCITADEL_INSTALLED_SKILL_CAPTURE_ONLY === "true";
 const skillLifecycleOnly = skillCaptureOnly && process.env.GOATCITADEL_INSTALLED_SKILL_LIFECYCLE_ONLY === "true";
-const ollamaModel = "qwen2.5:0.5b";
+const ollamaModel = skillCaptureOnly ? "qwen2.5:3b" : "qwen2.5:0.5b";
 const skillPilotContextWindow = 32768;
-const modelDigest = "a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67";
+const modelDigest = skillCaptureOnly
+  ? "357c53fb659c5076de1d65ccb0b397446227b71a42be9d1603d46168015c9e4b"
+  : "a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67";
 const ntfyTokenEnv = "NTFY_READINESS_TOKEN";
 const marker = "READINESS-" + randomUUID().slice(0, 8).toUpperCase();
 const sample = "Synthetic approved file " + marker;
@@ -225,6 +228,11 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
       const body = await response.text();
       if (!response.ok) throw new Error(`Chat stream returned HTTP ${response.status} ${redacted(body)}`);
       assert.match(response.headers.get("content-type") ?? "", /^text\/event-stream\b/u);
+      const chunks = parseGatewayChatSse(body);
+      const turnId = chunks.find((chunk) => chunk.sessionId === id && typeof chunk.turnId === "string")?.turnId;
+      const rejected = chunks.find((chunk) => chunk.type === "error");
+      if (!turnId) throw new Error(`Chat stream did not admit a turn: ${redacted(rejected?.error ?? "no turn ID")}`);
+      return { id, route, content, turnId };
     } else {
       await api(route + "/agent-send", "POST", submission);
     }
@@ -233,7 +241,7 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
   async function waitForTurn(chat, status) {
     return poll(async () => {
       const thread = await api(chat.route + "/thread");
-      const turn = thread.turns?.find((entry) => entry.userMessage?.content === chat.content);
+      const turn = thread.turns?.find((entry) => chat.turnId ? entry.turnId === chat.turnId : entry.userMessage?.content === chat.content);
       if (turn?.trace?.status === status) return turn;
       if (["failed", "cancelled", "completed", "partial"].includes(turn?.trace?.status)) {
         throw new Error(`Unexpected Chat settlement ${turn.trace.status} ${redacted(JSON.stringify({

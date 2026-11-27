@@ -204,7 +204,7 @@ export async function installedSkillCapture(runtime, fixture) {
     assert.equal(await isCallable(approved.runtimeSkillId, control.workspaceId), false);
     async function runArm(task, condition) {
       const scope = condition === "enabled" ? workspaceId : control.workspaceId;
-      const prompt = `$${approved.runtimeSkillId}\nWrite a weekly project brief using these notes only.\n\n${task.input}`;
+      const prompt = `$${approved.runtimeSkillId}\nWrite a weekly project brief using these notes only. Return only the finished brief in at most 100 words.\n\n${task.input}`;
       try {
         const chat = await send(`Held-out brief ${task.id} ${condition}`, prompt, undefined, {
           providerId: "ollama",
