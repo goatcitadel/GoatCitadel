@@ -164,6 +164,8 @@ export async function installedSkillCapture(runtime, fixture) {
         used.href,
       );
       await take(page, "applied-version");
+      await page.getByRole("link", { name: used.skillVersion.name, exact: true }).click();
+      await page.waitForURL((url) => url.pathname.startsWith("/library/candidate_skill/"));
       return {
         capture,
         candidateRoute,
@@ -172,6 +174,7 @@ export async function installedSkillCapture(runtime, fixture) {
         sourceTurnId: correctedTurn.turnId,
         draftTurnId: draft.turnId,
         appliedTurnId: freshTurn.turnId,
+        appliedSessionId: fresh.id,
         appliedVersion: used.skillVersion,
       };
     } catch (error) {
@@ -197,7 +200,19 @@ export async function installedSkillCapture(runtime, fixture) {
       });
       const turn = await waitForTurn(chat, "completed");
       assert.equal(turn.trace.model, model);
-      assert.equal(turn.assistantMessage?.providerId ?? turn.assistantMessage?.metadata?.providerId, "ollama");
+      const usageRoute = `/api/v1/ops/workspaces/${encodeURIComponent(scope)}/model-usage?sessionId=${encodeURIComponent(chat.id)}&turnId=${encodeURIComponent(turn.turnId)}`;
+      const dispatch = await poll(
+        async () =>
+          (await api(usageRoute)).items.find(
+            (event) =>
+              event.effectiveProviderId === "ollama" &&
+              event.dispatchedModelId === model &&
+              event.transportStatus === "accepted" &&
+              event.terminalOutcome === "succeeded",
+          ),
+        "confirmation that the pinned Ollama model produced a response",
+        15_000,
+      );
       const receipt = await receiptFor(chat, turn, scope);
       const versionId = receipt.usedSources.find((source) => source.ref === approved.runtimeSkillId)?.skillVersion
         ?.versionId;
@@ -206,6 +221,7 @@ export async function installedSkillCapture(runtime, fixture) {
       outcomes[condition] = {
         score: gradeWeeklyBrief(answer, task),
         answer,
+        modelUsageEventId: dispatch.eventId,
         versionId,
         turnId: turn.turnId,
         toolCalls: turn.toolRuns?.map((tool) => tool.toolName) ?? [],
@@ -233,6 +249,15 @@ export async function installedSkillCapture(runtime, fixture) {
   );
   await restart();
   assert.equal(await isCallable(approved.runtimeSkillId), false);
+  const priorReceipt = await receiptFor(
+    { route: `/api/v1/chat/sessions/${encodeURIComponent(approved.appliedSessionId)}` },
+    { turnId: approved.appliedTurnId },
+  );
+  assert.equal(
+    priorReceipt.usedSources.find((source) => source.ref === approved.runtimeSkillId)?.skillVersion?.versionId,
+    approved.capture.versionId,
+    "Revocation changed the version shown on a historical turn",
+  );
   const fresh = await send("Revoked skill stays absent", `Write a ${briefSkillName}. ${syntheticSource}`);
   const freshTurn = await waitForTurn(fresh, "completed");
   assert.ok(!(await receiptFor(fresh, freshTurn)).usedSources.some((source) => source.ref === approved.runtimeSkillId));

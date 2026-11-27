@@ -239,7 +239,7 @@ export class ChatLearningReceiptService {
               const candidate = /^candidate:([\w-]{1,128}):([\w-]{1,128})$/u.exec(source.sourceRef);
               if (candidate) {
                 const version = await versions.find(candidate[2]!);
-                if (version?.candidateId === candidate[1] && version.workspaceId === meta.workspaceId) {
+                if (version && version.candidateId === candidate[1] && version.workspaceId === meta.workspaceId) {
                   used.skillVersion = { name: version.title, versionId: version.versionId };
                   used.href = `/library/candidate_skill/${encodeURIComponent(source.sourceRef)}?workspaceId=${encodeURIComponent(meta.workspaceId)}`;
                 }

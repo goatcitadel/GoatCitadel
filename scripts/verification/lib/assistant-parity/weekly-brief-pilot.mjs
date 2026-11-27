@@ -72,25 +72,47 @@ export const weeklyBriefCases = [
   },
 ];
 
-const hasPhrase = (text, phrase) => text.toLowerCase().includes(phrase.toLowerCase());
+const normalize = (text) =>
+  text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+const hasPhrase = (text, phrase) => ` ${normalize(text)} `.includes(` ${normalize(phrase)} `);
+const headings = ["Status", "Risks", "Next steps"];
+const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 export function gradeWeeklyBrief(answer, task) {
-  const sections = ["Status", "Risks", "Next steps"].filter((heading) =>
-    new RegExp(`^\\s*(?:#{1,6}\\s*)?(?:\\*\\*)?${heading}(?:\\*\\*)?\\s*(?::|$)`, "imu").test(answer),
-  );
+  const matches = [
+    ...answer.matchAll(/^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?(Status|Risks|Next steps)(?:\*\*)?[ \t]*(?::|$)/gimu),
+  ];
+  const sections = headings.filter((heading) => matches.some((match) => normalize(match[1]) === normalize(heading)));
+  const nextIndex = matches.findIndex((match) => normalize(match[1]) === "next steps");
+  const next = matches[nextIndex];
+  const nextSteps = next ? answer.slice(next.index + next[0].length, matches[nextIndex + 1]?.index) : "";
+  const [owner, due] = task.facts.slice(-2);
+  const ownerAndDateInNextSteps = hasPhrase(nextSteps, owner) && hasPhrase(nextSteps, due);
+  const unsupportedDates = days.filter((day) => day !== due && hasPhrase(answer, day));
   const missingFacts = task.facts.filter((fact) => !hasPhrase(answer, fact));
   const followedCorrection = !hasPhrase(answer, task.canceled);
   return {
     sections,
     missingFacts,
     followedCorrection,
-    score: sections.length + task.facts.length - missingFacts.length + Number(followedCorrection),
+    ownerAndDateInNextSteps,
+    unsupportedDates,
+    score:
+      sections.length +
+      task.facts.length -
+      missingFacts.length +
+      Number(followedCorrection) +
+      Number(ownerAndDateInNextSteps),
   };
 }
 
 export function gradeBriefPair(disabled, enabled) {
   const regression =
     enabled.missingFacts.some((fact) => !disabled.missingFacts.includes(fact)) ||
-    (disabled.followedCorrection && !enabled.followedCorrection);
+    (disabled.followedCorrection && !enabled.followedCorrection) ||
+    enabled.unsupportedDates.some((date) => !disabled.unsupportedDates.includes(date));
   return { improved: enabled.score > disabled.score && !regression, regression };
 }
