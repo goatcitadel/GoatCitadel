@@ -306,6 +306,23 @@ const selectedSkill = z
           .strict(),
       )
       .max(16),
+    contextDocuments: z
+      .array(
+        z
+          .object({
+            docType: z.enum(["product", "design"]),
+            scope: z.literal("workspace"),
+            sha256: digest,
+            bytes: z.number().int().nonnegative(),
+            truncated: z.boolean(),
+          })
+          .strict(),
+      )
+      .max(2)
+      .refine((documents) => new Set(documents.map(({ docType }) => docType)).size === documents.length, {
+        message: "Skill context document types must be unique",
+      })
+      .optional(),
   })
   .strict();
 

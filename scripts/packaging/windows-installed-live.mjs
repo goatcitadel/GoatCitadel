@@ -285,7 +285,12 @@ async function withRuntime(root, { provider, model, fixtureEnv = {}, allow = [],
     }
     const refusals = stopped.notStopped.filter((item) => item.pidState !== "stale" || item.endpointResponded);
     assert.equal(refusals.length, 0, `An installed fixture runtime process did not stop: ${JSON.stringify(refusals)}`);
-    assert.equal(stopped.status, "stopped", "An installed fixture endpoint still responds after shutdown");
+    assert.ok(["stopped", "stale"].includes(stopped.status), `Unexpected installed shutdown status: ${stopped.status}`);
+    const settledEndpoints = await Promise.all([
+      request(gatewayPort, "/livez").catch(() => undefined),
+      request(uiPort, "/").catch(() => undefined),
+    ]);
+    assert.ok(settledEndpoints.every((response) => response === undefined), "An installed fixture endpoint still responds after shutdown");
   };
   try {
     const launch = await cli("launch", "--no-open", "--wait");

@@ -48,6 +48,51 @@ describe("Chat feature reference decoding", () => {
       }),
     ).toThrow(/exact trusted/u);
   });
+  it("round-trips frozen workspace guidance on profile-free skill receipts", () => {
+    const identity = { capabilityId: "skill:design", skillId: "design", treeSha256: "a".repeat(64) };
+    const document = { docType: "design", scope: "workspace", sha256: "c".repeat(64), bytes: 200, truncated: false };
+    const stateWithDocuments = (contextDocuments: unknown) => ({
+      ...base,
+      selectedSkills: {
+        selectionMode: "legacy",
+        instructionBudgetTokens: 4096,
+        trustedSkills: [
+          {
+            ...identity,
+            category: "built_in",
+            lifecycleState: "trusted",
+            trustLabel: "trusted",
+            source: "bundled",
+            contentIntegrityManifestVersion: "goatcitadel.skill-tree.v1",
+            contentFileCount: 1,
+            contentBytes: 100,
+          },
+        ],
+        activatedSkills: [
+          {
+            ...identity,
+            confidence: 0.85,
+            reasons: ["keyword"],
+            instructionSha256: "b".repeat(64),
+            instructionBytes: 300,
+            modules: [],
+            contextDocuments,
+          },
+        ],
+      },
+    });
+    for (const contextDocuments of [[], [document, { ...document, docType: "product" }]]) {
+      const input = stateWithDocuments(contextDocuments);
+      expect(readChatTurnFeatureReferences(input)).toEqual(input);
+    }
+    for (const contextDocuments of [
+      [document, document],
+      [{ ...document, text: "workspace prose" }],
+      [{ ...document, scope: "global" }],
+    ]) {
+      expect(() => readChatTurnFeatureReferences(stateWithDocuments(contextDocuments))).toThrow();
+    }
+  });
   it("records an operator model council request and rejects any other council shape", () => {
     const modelCouncil = { version: "chat.model-council.admission.v1" };
     expect(readChatTurnFeatureReferences({ ...base, modelCouncil }).modelCouncil).toEqual(modelCouncil);
