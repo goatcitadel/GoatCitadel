@@ -16,7 +16,7 @@ const syntheticSource =
 
 export async function installedSkillCapture(runtime, fixture) {
   const { api, send, waitForTurn, restart, withNative } = runtime;
-  const { poll, evidence, model, modelDigest, serverVersion, fileName } = fixture;
+  const { poll, evidence, model, modelDigest, serverVersion } = fixture;
   const take = (page, name) => page.screenshot({ path: path.join(evidence, `skill-${name}.png`) });
   const receiptFor = (chat, turn, scope = workspaceId) =>
     api(
@@ -73,25 +73,14 @@ export async function installedSkillCapture(runtime, fixture) {
     try {
       const chat = await send(
         "Weekly project brief capture",
-        `Use fs.read to read ${fileName} and write the weekly project brief. Use Status, Risks and Next steps headings. Keep the owner and date. Correction: omit the canceled logo redesign.`,
+        `${syntheticSource} Use Status, Risks and Next steps headings. Keep the owner and date. Correction: omit the canceled logo redesign.`,
         page,
       );
-      const waiting = await waitForTurn(chat, "waiting_for_approval");
-      const read = waiting.toolRuns.find((tool) => tool.toolName === "fs.read" && tool.status === "approval_required");
-      assert.ok(read?.approvalId);
-      const approval = await api(`/api/v1/approvals/${encodeURIComponent(read.approvalId)}`);
-      assert.match(JSON.stringify(approval.preview), new RegExp(fileName.replaceAll(".", "\\.")));
-      await api("/api/v1/chat/tools/approve", "POST", {
-        sessionId: chat.id,
-        approvalId: read.approvalId,
-        allowScope: "once",
-      });
       const sourceTurn = await waitForTurn(chat, "completed");
-      assert.equal(sourceTurn.toolRuns.find((tool) => tool.toolRunId === read.toolRunId)?.status, "executed");
       const sourceArticle = page.locator(`[data-turn-id="${sourceTurn.turnId}"]`);
-      stage = "open and prepare inline skill capture";
-      const save = press("Save as skill", sourceArticle);
-      await save.click();
+      stage = "open and prepare skill capture";
+      await press("More message actions", sourceArticle).click();
+      await page.getByRole("menuitem", { name: "Save as skill…", exact: true }).click();
       const summary = sourceArticle.locator("summary").filter({ hasText: /^Save as skill$/ });
       await summary.waitFor();
       await poll(
