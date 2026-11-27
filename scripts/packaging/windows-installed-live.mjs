@@ -22,7 +22,7 @@ const [app, scratch, evidence, nativeDebugPort, ollamaExe, ntfyExe] = process.ar
 const recallOnly = ollamaExe === "--recall-only";
 const skillCaptureOnly = process.env.GOATCITADEL_INSTALLED_SKILL_CAPTURE_ONLY === "true";
 const ollamaModel = "qwen2.5:0.5b";
-const skillPilotContextWindow = 8192;
+const skillPilotContextWindow = 32768;
 const modelDigest = "a8b0c51577010a279d933d14c2a8ab4b268079d44c5c8830c0a93900f1827c67";
 const ntfyTokenEnv = "NTFY_READINESS_TOKEN";
 const marker = "READINESS-" + randomUUID().slice(0, 8).toUpperCase();
