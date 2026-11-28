@@ -11,10 +11,12 @@ import {
   ScriptKind,
   ScriptTarget,
   SyntaxKind,
+  type BinaryExpression,
   type BindingElement,
   type Expression,
   type Identifier,
   type Node,
+  type PropertyName,
 } from "typescript-7/ast";
 import * as ast from "typescript-7/ast/is";
 
@@ -91,54 +93,54 @@ async function checkTranspile(
 }
 
 function findForbiddenGuestSourceReference(root: Node): string | undefined {
-  let forbiddenLabel: string | undefined;
-  const visit = (node: Node): void => {
-    if (forbiddenLabel) {
-      return;
+  const pending = [root];
+  for (let node = pending.pop(); node; node = pending.pop()) {
+    const label = readBlockedGuestSourceNodeLabel(node);
+    if (label) {
+      return label;
     }
-    if (ast.isImportDeclaration(node) || ast.isImportEqualsDeclaration(node)) {
-      forbiddenLabel = "import statements";
-      return;
+    const children: Node[] = [];
+    node.forEachChild((child) => {
+      children.push(child);
+    });
+    for (const child of children.reverse()) {
+      pending.push(child);
     }
-    if (ast.isExportDeclaration(node) && node.moduleSpecifier) {
-      forbiddenLabel = "module re-exports";
-      return;
+  }
+  return undefined;
+}
+
+function readBlockedGuestSourceNodeLabel(node: Node): string | undefined {
+  if (ast.isImportDeclaration(node) || ast.isImportEqualsDeclaration(node)) {
+    return "import statements";
+  }
+  if (ast.isExportDeclaration(node) && node.moduleSpecifier) {
+    return "module re-exports";
+  }
+  if (ast.isCallExpression(node)) {
+    return readBlockedGuestSourceCallLabel(node.expression);
+  }
+  if (ast.isPropertyAccessExpression(node) || ast.isElementAccessExpression(node)) {
+    // The traversal visits the receiver separately, including every segment of a member chain.
+    const name = readStaticGuestPropertyName(node);
+    if (name === "process") {
+      return "process";
     }
-    if (ast.isCallExpression(node)) {
-      forbiddenLabel = readBlockedGuestSourceCallLabel(node.expression);
-      if (forbiddenLabel) {
-        return;
-      }
+    if (isGuestGlobalReceiver(node.expression)) {
+      return readBlockedGuestGlobalPropertyLabel(name);
     }
-    if (ast.isPropertyAccessExpression(node) || ast.isElementAccessExpression(node)) {
-      const name = readStaticGuestPropertyName(node);
-      if (name === "process" || isProcessGuestSourceExpression(node.expression)) {
-        forbiddenLabel = "process";
-        return;
-      }
-      if (name && isGuestGlobalReceiver(node.expression)) {
-        forbiddenLabel = readBlockedGuestSourceIdentifierLabel(name);
-        if (forbiddenLabel) {
-          return;
-        }
-      }
-    }
-    if (ast.isBindingElement(node)) {
-      forbiddenLabel = readBlockedGuestSourceBindingLabel(node);
-      if (forbiddenLabel) {
-        return;
-      }
-    }
-    if (ast.isIdentifier(node) && isBlockedGuestSourceIdentifierReference(node)) {
-      forbiddenLabel = readBlockedGuestSourceIdentifierLabel(node.text);
-      if (forbiddenLabel) {
-        return;
-      }
-    }
-    node.forEachChild(visit);
-  };
-  visit(root);
-  return forbiddenLabel;
+  }
+  if (ast.isBindingElement(node)) {
+    return readBlockedGuestSourceBindingLabel(node);
+  }
+  if (ast.isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken) {
+    return readBlockedGuestSourceAssignmentLabel(node);
+  }
+  if (ast.isIdentifier(node)) {
+    const label = readBlockedGuestSourceIdentifierLabel(node.text);
+    return label && isBlockedGuestSourceIdentifierReference(node) ? label : undefined;
+  }
+  return undefined;
 }
 
 function readBlockedGuestSourceBindingLabel(binding: BindingElement): string | undefined {
@@ -155,18 +157,42 @@ function readBlockedGuestSourceBindingLabel(binding: BindingElement): string | u
   ) {
     return undefined;
   }
-  const key = binding.propertyName ?? binding.name;
-  if (!key) {
+  if (binding.propertyName) {
+    return readBlockedGuestGlobalPatternLabel(binding.propertyName);
+  }
+  return binding.name && ast.isIdentifier(binding.name)
+    ? readBlockedGuestSourceIdentifierLabel(binding.name.text)
+    : undefined;
+}
+
+function readBlockedGuestSourceAssignmentLabel(assignment: BinaryExpression): string | undefined {
+  const pattern = unwrapGuestSourceExpression(assignment.left);
+  if (!ast.isObjectLiteralExpression(pattern) || !isGuestGlobalReceiver(assignment.right)) {
     return undefined;
   }
-  if (ast.isIdentifier(key)) {
+  let label: string | undefined;
+  pattern.forEachChild((property) => {
+    if (!label && (ast.isPropertyAssignment(property) || ast.isShorthandPropertyAssignment(property))) {
+      label = readBlockedGuestGlobalPatternLabel(property.name);
+    }
+  });
+  return label;
+}
+
+function readBlockedGuestGlobalPatternLabel(key: PropertyName): string | undefined {
+  if (ast.isComputedPropertyName(key)) {
+    return readBlockedGuestGlobalPropertyLabel(readStaticGuestKey(key.expression));
+  }
+  if (ast.isIdentifier(key) || ast.isStringLiteral(key)) {
     return readBlockedGuestSourceIdentifierLabel(key.text);
   }
-  const expression = ast.isComputedPropertyName(key) ? unwrapGuestSourceExpression(key.expression) : key;
-  if (ast.isStringLiteral(expression) || ast.isNoSubstitutionTemplateLiteral(expression)) {
-    return readBlockedGuestSourceIdentifierLabel(expression.text);
-  }
   return undefined;
+}
+
+function readBlockedGuestGlobalPropertyLabel(name: string | undefined): string | undefined {
+  return name === undefined
+    ? "computed global properties with unresolved names"
+    : readBlockedGuestSourceIdentifierLabel(name);
 }
 
 function isGuestGlobalReceiver(expression: Expression): boolean {
@@ -178,9 +204,6 @@ function readBlockedGuestSourceCallLabel(expression: Expression): string | undef
   expression = unwrapGuestSourceExpression(expression);
   if (expression.kind === SyntaxKind.ImportKeyword) {
     return "dynamic import";
-  }
-  if (isProcessGuestSourceExpression(expression)) {
-    return "process";
   }
   if (ast.isIdentifier(expression)) {
     return readBlockedGuestSourceIdentifierLabel(expression.text);
@@ -205,30 +228,34 @@ function readBlockedGuestSourceIdentifierLabel(text: string): string | undefined
   return undefined;
 }
 
-function isProcessGuestSourceExpression(expression: Expression): boolean {
-  expression = unwrapGuestSourceExpression(expression);
-  if (ast.isIdentifier(expression)) {
-    return expression.text === "process";
-  }
-  if (ast.isPropertyAccessExpression(expression) || ast.isElementAccessExpression(expression)) {
-    return (
-      readStaticGuestPropertyName(expression) === "process" || isProcessGuestSourceExpression(expression.expression)
-    );
-  }
-  return false;
-}
-
 function readStaticGuestPropertyName(expression: Expression): string | undefined {
   if (ast.isPropertyAccessExpression(expression)) {
     return expression.name.text;
   }
   if (ast.isElementAccessExpression(expression)) {
-    const key = unwrapGuestSourceExpression(expression.argumentExpression);
-    if (ast.isStringLiteral(key) || ast.isNoSubstitutionTemplateLiteral(key)) {
-      return key.text;
-    }
+    return readStaticGuestKey(expression.argumentExpression);
   }
   return undefined;
+}
+
+function readStaticGuestKey(expression: Expression): string | undefined {
+  const root = unwrapGuestSourceExpression(expression);
+  if (ast.isNumericLiteral(root)) {
+    return root.text;
+  }
+  const pending = [root];
+  const parts: string[] = [];
+  for (let current = pending.pop(); current; current = pending.pop()) {
+    const key = unwrapGuestSourceExpression(current);
+    if (ast.isStringLiteral(key) || ast.isNoSubstitutionTemplateLiteral(key)) {
+      parts.push(key.text);
+    } else if (ast.isBinaryExpression(key) && key.operatorToken.kind === SyntaxKind.PlusToken) {
+      pending.push(key.right, key.left);
+    } else {
+      return undefined;
+    }
+  }
+  return parts.join("");
 }
 
 function unwrapGuestSourceExpression(expression: Expression): Expression {

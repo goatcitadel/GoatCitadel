@@ -69,6 +69,41 @@ describe("Code Mode guest source validation", () => {
     ).resolves.toBeUndefined();
   });
 
+  it.each([
+    "let reference; ({ fetch: reference } = globalThis);",
+    'let reference; ({ ["fetch"]: reference } = (globalThis));',
+    "let fetch; ({ fetch } = globalThis);",
+  ])("checks reserved global properties in assignment patterns", async (source) => {
+    await expect(validateGuestSource("javascript", source)).rejects.toThrow(
+      "Code Mode source may not reference fetch.",
+    );
+  });
+
+  it.each([
+    'const unused = globalThis["fe" + "tch"];',
+    'const unused = () => globalThis["fe" + ("t" + "ch")]();',
+    'const { ["fe" + "tch"]: unused } = globalThis;',
+  ])("recognizes reserved names assembled from string literals", async (source) => {
+    await expect(validateGuestSource("javascript", source)).rejects.toThrow(
+      "Code Mode source may not reference fetch.",
+    );
+  });
+
+  it("allows known ordinary global keys and rejects unresolved computed keys", async () => {
+    await expect(validateGuestSource("javascript", 'const unused = globalThis["Ma" + "th"];')).resolves.toBeUndefined();
+    await expect(validateGuestSource("javascript", "const read = (key) => globalThis[key];")).rejects.toThrow(
+      "Code Mode source may not reference computed global properties with unresolved names.",
+    );
+  });
+
+  it("walks a long ordinary member chain and still detects a reserved segment", async () => {
+    const members = ".next".repeat(400);
+    await expect(validateGuestSource("javascript", `const head = {}; head${members};`)).resolves.toBeUndefined();
+    await expect(validateGuestSource("javascript", `const head = {}; head.process${members};`)).rejects.toThrow(
+      "Code Mode source may not reference process.",
+    );
+  });
+
   it("rejects TypeScript annotations in JavaScript source", async () => {
     await expect(validateGuestSource("javascript", "const value: number = 1;")).rejects.toThrow(
       /^Code Mode source could not be parsed:/,
