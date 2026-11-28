@@ -8,6 +8,7 @@ import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
 
 const TEMP_ROOTS: string[] = [];
 const CHILD_CLOSES = new WeakMap<ChildProcess, Promise<CloseResult>>();
+const ACTIVE_CHILDREN = new Set<ChildProcess>();
 
 async function createHarnessPath(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "goat-code-mode-child-"));
@@ -18,6 +19,13 @@ async function createHarnessPath(): Promise<string> {
 }
 
 afterEach(async () => {
+  const children = [...ACTIVE_CHILDREN];
+  for (const child of children) {
+    if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  }
+  await Promise.all(children.map(waitForClose));
   while (TEMP_ROOTS.length > 0) {
     const next = TEMP_ROOTS.pop();
     if (next) {
@@ -407,18 +415,23 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
 
 async function spawnHarness(options: { transport?: "node_ipc" | "stdio_jsonrpc" } = {}): Promise<ChildProcess> {
   const harnessPath = await createHarnessPath();
+  const transport = options.transport ?? "node_ipc";
   const child = spawn(process.execPath, [harnessPath], {
     shell: false,
-    stdio: options.transport === "stdio_jsonrpc" ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe", "ipc"],
+    stdio: transport === "stdio_jsonrpc" ? ["pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe", "ipc"],
     env: {
       ...process.env,
-      ...(options.transport === "stdio_jsonrpc" ? { GOATCITADEL_CODE_MODE_TRANSPORT: "stdio_jsonrpc" } : {}),
+      GOATCITADEL_CODE_MODE_TRANSPORT: transport,
     },
   });
+  ACTIVE_CHILDREN.add(child);
   CHILD_CLOSES.set(
     child,
     new Promise((resolve) => {
-      child.once("close", (code, signal) => resolve({ code, signal }));
+      child.once("close", (code, signal) => {
+        ACTIVE_CHILDREN.delete(child);
+        resolve({ code, signal });
+      });
     }),
   );
   return child;
@@ -468,15 +481,25 @@ function waitForChildMessage(
 
 type CloseResult = { code: number | null; signal: NodeJS.Signals | null };
 
-function waitForClose(child: ChildProcess): Promise<CloseResult> {
+async function waitForClose(child: ChildProcess): Promise<CloseResult> {
   const trackedClose = CHILD_CLOSES.get(child);
-  if (trackedClose) {
-    return trackedClose;
+  if (!trackedClose) {
+    throw new Error("Code Mode child close tracking was not registered.");
   }
-  return new Promise((resolve, reject) => {
-    child.once("close", (code, signal) => resolve({ code, signal }));
-    child.once("error", reject);
-  });
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      trackedClose,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Code Mode test child ${child.pid ?? "without a PID"} did not close.`)),
+          4000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 type JsonRpcMessage = {
