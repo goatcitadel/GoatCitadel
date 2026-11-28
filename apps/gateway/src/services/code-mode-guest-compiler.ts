@@ -250,14 +250,15 @@ function isBlockedGuestSourceIdentifierReference(identifier: Identifier): boolea
   if (!parent) {
     return true;
   }
-  if (ast.isPropertyAccessExpression(parent) && parent.name === identifier) {
-    return false;
-  }
-  if (ast.isPropertyAssignment(parent) && parent.name === identifier) {
-    return false;
-  }
   if (
-    (ast.isPropertySignatureDeclaration(parent) || ast.isMethodSignatureDeclaration(parent)) &&
+    (ast.isPropertyAccessExpression(parent) ||
+      ast.isPropertyAssignment(parent) ||
+      ast.isPropertySignatureDeclaration(parent) ||
+      ast.isMethodSignatureDeclaration(parent) ||
+      ast.isPropertyDeclaration(parent) ||
+      ast.isMethodDeclaration(parent) ||
+      ast.isGetAccessorDeclaration(parent) ||
+      ast.isSetAccessorDeclaration(parent)) &&
     parent.name === identifier
   ) {
     return false;

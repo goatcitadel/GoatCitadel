@@ -40,6 +40,20 @@ describe("Code Mode guest source validation", () => {
   });
 
   it.each([
+    "const values = { fetch() { return 1; } };",
+    "class Values { fetch = 1; }",
+    "const values = { get fetch() { return 1; }, set fetch(value) {} };",
+  ])("allows ordinary, noncomputed member names in %s", async (source) => {
+    await expect(validateGuestSource("javascript", source)).resolves.toBeUndefined();
+  });
+
+  it("checks references inside a computed member name", async () => {
+    await expect(validateGuestSource("javascript", "const values = { [fetch]() { return 1; } };")).rejects.toThrow(
+      "Code Mode source may not reference fetch.",
+    );
+  });
+
+  it.each([
     'const { "fetch": reference } = globalThis;',
     'const { [("fetch")]: reference } = (globalThis);',
     "function use({ [`fetch`]: reference } = globalThis) {}",
