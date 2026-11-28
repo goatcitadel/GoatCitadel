@@ -44,8 +44,8 @@ export async function validateGuestSource(language: CodeModeLanguage, source: st
       throw error;
     }
     // Preserve the existing JSX admission contract. The execution compiler still owns emission.
-    fileName = "code-mode-source.tsx";
-    scriptKind = ScriptKind.TSX;
+    fileName = isTypeScript ? "code-mode-source.tsx" : "code-mode-source.jsx";
+    scriptKind = isTypeScript ? ScriptKind.TSX : ScriptKind.JSX;
     await checkTranspile(
       compiler,
       source,

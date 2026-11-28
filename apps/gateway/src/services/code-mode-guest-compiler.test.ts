@@ -32,4 +32,10 @@ describe("Code Mode guest source validation", () => {
       validateGuestSource("typescript", "const values: { fetch: number } = { fetch: 1 }; values.fetch;"),
     ).resolves.toBeUndefined();
   });
+
+  it("rejects TypeScript annotations in JavaScript source", async () => {
+    await expect(validateGuestSource("javascript", "const value: number = 1;")).rejects.toThrow(
+      /^Code Mode source could not be parsed:/,
+    );
+  });
 });

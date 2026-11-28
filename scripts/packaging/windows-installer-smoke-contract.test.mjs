@@ -156,7 +156,7 @@ test("shared installer smoke bounds destructive cleanup to its validated scratch
   assert.match(smokeScript, /function Stop-InstalledProcesses/);
   assert.match(
     smokeScript,
-    /\nNew-Item -ItemType Directory -Path \$smokeRoot -ErrorAction Stop \| Out-Null\r?\ntry \{\s*\$env:GOATCITADEL_HOME = \$runtimeBase/,
+    /New-Item -ItemType Directory -Path \$smokeRoot -ErrorAction Stop \| Out-Null\s*\$ownsSmokeRoot = \$true\s*\$env:GOATCITADEL_HOME = \$runtimeBase/,
   );
   assert.match(smokeScript, /Remove-Item -LiteralPath \$smokeRoot -Recurse -Force -ErrorAction Stop/);
   assert.doesNotMatch(smokeScript, /Remove-Item[^\n]*(?:\$env:RUNNER_TEMP|\$ScratchRoot)/);
@@ -166,6 +166,18 @@ test("shared installer smoke bounds destructive cleanup to its validated scratch
   assert.match(smokeScript, /StartsWith\(\$installPrefix/);
   assert.match(smokeScript, /Installed process teardown did not complete within 15 seconds/);
   assert.doesNotMatch(smokeScript, /CommandLine -match "goatcitadel"/);
+});
+
+test("installer smoke holds the per-user registration lock across preflight and owned cleanup", () => {
+  assert.match(smokeScript, /"Global\\GoatCitadel\.InstallerSmoke\.\$sid"/);
+  assert.match(
+    smokeScript,
+    /\$registrationLock = Enter-InstallerSmokeRegistrationLock\s*try \{\s*if \(Test-Path -LiteralPath \$protocolRegistryPath\)[\s\S]*?Get-AppxPackage GoatCitadel\.MissionControl\.Windows[\s\S]*?New-Item -ItemType Directory -Path \$smokeRoot/,
+  );
+  assert.match(
+    smokeScript,
+    /finally \{\s*try \{\s*if \(\$ownsSmokeRoot\) \{\s*try \{\s*Stop-InstalledProcesses[\s\S]*?Remove-Item -LiteralPath \$smokeRoot[\s\S]*?\$registrationLock\.ReleaseMutex\(\)[\s\S]*?\$registrationLock\.Dispose\(\)/,
+  );
 });
 
 test("desktop launch and cleanup are pinned to an isolated runtime before host startup", () => {

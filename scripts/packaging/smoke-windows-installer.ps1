@@ -113,12 +113,6 @@ $expectedProtocolCommand = '"{0}" "%1"' -f $desktop
 $payloadValidatorPath = Join-Path $PSScriptRoot "validate-windows-bundle.ps1"
 . (Join-Path $PSScriptRoot "lib/windows-desktop-startup.ps1")
 
-if (Test-Path -LiteralPath $protocolRegistryPath) {
-  throw "Refusing to overwrite an existing goatcitadel protocol registration during isolated installer smoke."
-}
-if (Get-AppxPackage GoatCitadel.MissionControl.Windows -ErrorAction SilentlyContinue) {
-  throw "Refusing to replace an existing GoatCitadel package identity during isolated installer smoke."
-}
 if (-not (Test-Path -LiteralPath $payloadValidatorPath -PathType Leaf)) {
   throw "Installed payload validator was not found at $payloadValidatorPath"
 }
@@ -255,10 +249,49 @@ function Stop-InstalledProcesses {
   throw "Installed process teardown did not complete within 15 seconds: $remainingSummary"
 }
 
-# Reserve the shared path before entering the cleanup scope. New-Item without
-# -Force rejects a directory that another invocation created first.
-New-Item -ItemType Directory -Path $smokeRoot -ErrorAction Stop | Out-Null
+function Enter-InstallerSmokeRegistrationLock {
+  $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+  try {
+    $sid = $identity.User.Value
+  }
+  finally {
+    $identity.Dispose()
+  }
+  # Protocol registration and package identity are shared by all targets for this user.
+  $mutex = [System.Threading.Mutex]::new($false, "Global\GoatCitadel.InstallerSmoke.$sid")
+  $acquired = $false
+  try {
+    try {
+      $acquired = $mutex.WaitOne(0)
+    }
+    catch [System.Threading.AbandonedMutexException] {
+      # WaitOne grants ownership before reporting that the previous owner exited.
+      $acquired = $true
+    }
+    if (-not $acquired) {
+      throw "Another GoatCitadel installer smoke holds the current user's registration lock."
+    }
+    return $mutex
+  }
+  finally {
+    if (-not $acquired) {
+      $mutex.Dispose()
+    }
+  }
+}
+
+$ownsSmokeRoot = $false
+$registrationLock = Enter-InstallerSmokeRegistrationLock
 try {
+  if (Test-Path -LiteralPath $protocolRegistryPath) {
+    throw "Refusing to overwrite an existing goatcitadel protocol registration during isolated installer smoke."
+  }
+  if (Get-AppxPackage GoatCitadel.MissionControl.Windows -ErrorAction SilentlyContinue) {
+    throw "Refusing to replace an existing GoatCitadel package identity during isolated installer smoke."
+  }
+  # New-Item without -Force rejects an existing directory.
+  New-Item -ItemType Directory -Path $smokeRoot -ErrorAction Stop | Out-Null
+  $ownsSmokeRoot = $true
   $env:GOATCITADEL_HOME = $runtimeBase
   $env:GOATCITADEL_APP_DIR = $appHome
   # Exercise the shipped database default on a clean install. Pin SQLite only for
@@ -781,139 +814,153 @@ try {
 }
 catch {
   $primaryFailure = $_.Exception.Message
-  try { Show-RuntimeLogs }
-  catch { Write-Warning "Could not read startup diagnostics: $($_.Exception.Message)" }
+  if ($ownsSmokeRoot) {
+    try { Show-RuntimeLogs }
+    catch { Write-Warning "Could not read startup diagnostics: $($_.Exception.Message)" }
+  }
 }
 finally {
   try {
-    Stop-InstalledProcesses
-  }
-  catch {
-    $cleanupFailures.Add("Installed process cleanup failed: $($_.Exception.Message)")
-  }
+    if ($ownsSmokeRoot) {
+      try {
+        Stop-InstalledProcesses
+      }
+      catch {
+        $cleanupFailures.Add("Installed process cleanup failed: $($_.Exception.Message)")
+      }
 
-  $uninstaller = Join-Path $installDir "unins000.exe"
-  if (-not $uninstalled -and (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
-    try {
-      $cleanup = Start-Process -FilePath $uninstaller -ArgumentList @(
-        "/VERYSILENT",
-        "/SUPPRESSMSGBOXES",
-        "/NORESTART"
-      ) -Wait -PassThru
-      if ($cleanup.ExitCode -eq 0) {
-        $uninstalled = $true
+      $uninstaller = Join-Path $installDir "unins000.exe"
+      if (-not $uninstalled -and (Test-Path -LiteralPath $uninstaller -PathType Leaf)) {
+        try {
+          $cleanup = Start-Process -FilePath $uninstaller -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART"
+          ) -Wait -PassThru
+          if ($cleanup.ExitCode -eq 0) {
+            $uninstalled = $true
+          }
+          else {
+            $cleanupFailures.Add("Cleanup uninstaller exited with $($cleanup.ExitCode).")
+          }
+        }
+        catch {
+          $cleanupFailures.Add("Cleanup uninstall failed: $($_.Exception.Message)")
+        }
+      }
+      elseif ($installed -and -not $uninstalled) {
+        $cleanupFailures.Add("Installed candidate is missing its cleanup uninstaller; recovery payload was preserved.")
+      }
+
+      # Preflight proved that no identity or protocol registration existed. Remove
+      # only the exact candidate-owned registrations even when setup failed before
+      # reporting success, then verify they are gone before deleting recovery files.
+      foreach ($candidateIdentity in @(Get-AppxPackage GoatCitadel.MissionControl.Windows -ErrorAction SilentlyContinue)) {
+        try {
+          Remove-AppxPackage -Package $candidateIdentity.PackageFullName -ErrorAction Stop
+        }
+        catch {
+          $cleanupFailures.Add("Candidate package identity cleanup failed: $($_.Exception.Message)")
+        }
+      }
+      if (Get-AppxPackage GoatCitadel.MissionControl.Windows -ErrorAction SilentlyContinue) {
+        $cleanupFailures.Add("Candidate package identity remained registered after cleanup.")
+      }
+
+      if (Test-Path -LiteralPath $protocolRegistryPath) {
+        try {
+          $cleanupProtocolCommand = if (Test-Path -LiteralPath $protocolCommandRegistryPath) {
+            (Get-Item -LiteralPath $protocolCommandRegistryPath -ErrorAction Stop).GetValue("")
+          }
+          else {
+            $null
+          }
+          if ([string]::Equals($cleanupProtocolCommand, $expectedProtocolCommand, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Remove-Item -LiteralPath $protocolRegistryPath -Recurse -Force -ErrorAction Stop
+          }
+          else {
+            $cleanupFailures.Add("Refused to remove a goatcitadel protocol registration not bound to this smoke install.")
+          }
+        }
+        catch {
+          $cleanupFailures.Add("Candidate protocol cleanup failed: $($_.Exception.Message)")
+        }
+      }
+      if (Test-Path -LiteralPath $protocolRegistryPath) {
+        $cleanupFailures.Add("Candidate protocol registration remained after cleanup.")
+      }
+
+      if ($null -eq $primaryFailure -and
+          $cleanupFailures.Count -eq 0 -and
+          (Test-Path -LiteralPath $smokeRoot)) {
+        try {
+          Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+          $cleanupFailures.Add("Installer smoke scratch cleanup failed: $($_.Exception.Message)")
+        }
+      }
+      if (Test-Path -LiteralPath $smokeRoot) {
+        if ($null -eq $primaryFailure -and $cleanupFailures.Count -eq 0) {
+          $cleanupFailures.Add("Installer smoke scratch root remained after cleanup.")
+        }
+        Write-Warning "Preserving installer smoke recovery payload at $smokeRoot"
+      }
+
+      if ($null -eq $previousGoatCitadelHome) {
+        Remove-Item Env:GOATCITADEL_HOME -ErrorAction SilentlyContinue
       }
       else {
-        $cleanupFailures.Add("Cleanup uninstaller exited with $($cleanup.ExitCode).")
+        $env:GOATCITADEL_HOME = $previousGoatCitadelHome
       }
-    }
-    catch {
-      $cleanupFailures.Add("Cleanup uninstall failed: $($_.Exception.Message)")
-    }
-  }
-  elseif ($installed -and -not $uninstalled) {
-    $cleanupFailures.Add("Installed candidate is missing its cleanup uninstaller; recovery payload was preserved.")
-  }
-
-  # Preflight proved that no identity or protocol registration existed. Remove
-  # only the exact candidate-owned registrations even when setup failed before
-  # reporting success, then verify they are gone before deleting recovery files.
-  foreach ($candidateIdentity in @(Get-AppxPackage GoatCitadel.MissionControl.Windows -ErrorAction SilentlyContinue)) {
-    try {
-      Remove-AppxPackage -Package $candidateIdentity.PackageFullName -ErrorAction Stop
-    }
-    catch {
-      $cleanupFailures.Add("Candidate package identity cleanup failed: $($_.Exception.Message)")
-    }
-  }
-  if (Get-AppxPackage GoatCitadel.MissionControl.Windows -ErrorAction SilentlyContinue) {
-    $cleanupFailures.Add("Candidate package identity remained registered after cleanup.")
-  }
-
-  if (Test-Path -LiteralPath $protocolRegistryPath) {
-    try {
-      $cleanupProtocolCommand = if (Test-Path -LiteralPath $protocolCommandRegistryPath) {
-        (Get-Item -LiteralPath $protocolCommandRegistryPath -ErrorAction Stop).GetValue("")
+      if ($null -eq $previousGoatCitadelAppDir) {
+        Remove-Item Env:GOATCITADEL_APP_DIR -ErrorAction SilentlyContinue
       }
       else {
-        $null
+        $env:GOATCITADEL_APP_DIR = $previousGoatCitadelAppDir
       }
-      if ([string]::Equals($cleanupProtocolCommand, $expectedProtocolCommand, [System.StringComparison]::OrdinalIgnoreCase)) {
-        Remove-Item -LiteralPath $protocolRegistryPath -Recurse -Force -ErrorAction Stop
+      if ($null -eq $previousWebViewDataFolder) {
+        Remove-Item Env:WEBVIEW2_USER_DATA_FOLDER -ErrorAction SilentlyContinue
       }
       else {
-        $cleanupFailures.Add("Refused to remove a goatcitadel protocol registration not bound to this smoke install.")
+        $env:WEBVIEW2_USER_DATA_FOLDER = $previousWebViewDataFolder
+      }
+      if ($null -eq $previousDatabaseDriver) {
+        Remove-Item Env:GOATCITADEL_DATABASE_DRIVER -ErrorAction SilentlyContinue
+      }
+      else {
+        $env:GOATCITADEL_DATABASE_DRIVER = $previousDatabaseDriver
+      }
+      if ($null -eq $previousDesktopLauncher) {
+        Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER -ErrorAction SilentlyContinue
+      }
+      else {
+        $env:GOATCITADEL_DESKTOP_LAUNCHER = $previousDesktopLauncher
+      }
+      if ($null -eq $previousGatewayUrl) {
+        Remove-Item Env:GOATCITADEL_GATEWAY_URL -ErrorAction SilentlyContinue
+      }
+      else {
+        $env:GOATCITADEL_GATEWAY_URL = $previousGatewayUrl
+      }
+      if ($null -eq $previousMissionControlUrl) {
+        Remove-Item Env:GOATCITADEL_MISSION_CONTROL_URL -ErrorAction SilentlyContinue
+      }
+      else {
+        $env:GOATCITADEL_MISSION_CONTROL_URL = $previousMissionControlUrl
+      }
+      foreach ($name in $upgradeEnvironment.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $upgradeEnvironment[$name], "Process")
       }
     }
-    catch {
-      $cleanupFailures.Add("Candidate protocol cleanup failed: $($_.Exception.Message)")
-    }
   }
-  if (Test-Path -LiteralPath $protocolRegistryPath) {
-    $cleanupFailures.Add("Candidate protocol registration remained after cleanup.")
-  }
-
-  if ($null -eq $primaryFailure -and
-      $cleanupFailures.Count -eq 0 -and
-      (Test-Path -LiteralPath $smokeRoot)) {
+  finally {
     try {
-      Remove-Item -LiteralPath $smokeRoot -Recurse -Force -ErrorAction Stop
+      $registrationLock.ReleaseMutex()
     }
-    catch {
-      $cleanupFailures.Add("Installer smoke scratch cleanup failed: $($_.Exception.Message)")
+    finally {
+      $registrationLock.Dispose()
     }
-  }
-  if (Test-Path -LiteralPath $smokeRoot) {
-    if ($null -eq $primaryFailure -and $cleanupFailures.Count -eq 0) {
-      $cleanupFailures.Add("Installer smoke scratch root remained after cleanup.")
-    }
-    Write-Warning "Preserving installer smoke recovery payload at $smokeRoot"
-  }
-
-  if ($null -eq $previousGoatCitadelHome) {
-    Remove-Item Env:GOATCITADEL_HOME -ErrorAction SilentlyContinue
-  }
-  else {
-    $env:GOATCITADEL_HOME = $previousGoatCitadelHome
-  }
-  if ($null -eq $previousGoatCitadelAppDir) {
-    Remove-Item Env:GOATCITADEL_APP_DIR -ErrorAction SilentlyContinue
-  }
-  else {
-    $env:GOATCITADEL_APP_DIR = $previousGoatCitadelAppDir
-  }
-  if ($null -eq $previousWebViewDataFolder) {
-    Remove-Item Env:WEBVIEW2_USER_DATA_FOLDER -ErrorAction SilentlyContinue
-  }
-  else {
-    $env:WEBVIEW2_USER_DATA_FOLDER = $previousWebViewDataFolder
-  }
-  if ($null -eq $previousDatabaseDriver) {
-    Remove-Item Env:GOATCITADEL_DATABASE_DRIVER -ErrorAction SilentlyContinue
-  }
-  else {
-    $env:GOATCITADEL_DATABASE_DRIVER = $previousDatabaseDriver
-  }
-  if ($null -eq $previousDesktopLauncher) {
-    Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER -ErrorAction SilentlyContinue
-  }
-  else {
-    $env:GOATCITADEL_DESKTOP_LAUNCHER = $previousDesktopLauncher
-  }
-  if ($null -eq $previousGatewayUrl) {
-    Remove-Item Env:GOATCITADEL_GATEWAY_URL -ErrorAction SilentlyContinue
-  }
-  else {
-    $env:GOATCITADEL_GATEWAY_URL = $previousGatewayUrl
-  }
-  if ($null -eq $previousMissionControlUrl) {
-    Remove-Item Env:GOATCITADEL_MISSION_CONTROL_URL -ErrorAction SilentlyContinue
-  }
-  else {
-    $env:GOATCITADEL_MISSION_CONTROL_URL = $previousMissionControlUrl
-  }
-  foreach ($name in $upgradeEnvironment.Keys) {
-    [Environment]::SetEnvironmentVariable($name, $upgradeEnvironment[$name], "Process")
   }
   if ($null -ne $primaryFailure) {
     $failureMessage = "Installer smoke failed: $primaryFailure"
