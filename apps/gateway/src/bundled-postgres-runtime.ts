@@ -549,9 +549,11 @@ async function tryStartNativeBundledPostgres(
     return undefined;
   }
 
-  setBootCheckpoint("native-pg:mkdir-dataDir");
-  await fs.mkdir(dataDir, { recursive: true });
   if (!initialized) {
+    // Let initdb create PGDATA. On Windows it may be unable to change the
+    // permissions of a directory precreated by the Gateway process.
+    setBootCheckpoint("native-pg:mkdir-dataDir-parent");
+    await fs.mkdir(path.dirname(dataDir), { recursive: true });
     // Initialise with scram-sha-256 against the generated superuser password
     // rather than trust auth. Native clusters bind loopback-only, but native is
     // now the default backend, so this must not be weaker than the Docker path
