@@ -26,4 +26,10 @@ describe("Code Mode guest source validation", () => {
       validateGuestSource("typescript", "const identity = <T>(value: T) => value; identity(1);"),
     ).resolves.toBeUndefined();
   });
+
+  it("allows ordinary object property names in TypeScript signatures", async () => {
+    await expect(
+      validateGuestSource("typescript", "const values: { fetch: number } = { fetch: 1 }; values.fetch;"),
+    ).resolves.toBeUndefined();
+  });
 });

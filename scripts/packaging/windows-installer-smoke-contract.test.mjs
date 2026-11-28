@@ -154,6 +154,10 @@ test("shared installer smoke bounds destructive cleanup to its validated scratch
   assert.match(smokeScript, /Refusing to overwrite an existing installer smoke directory/);
   assert.match(smokeScript, /try \{[\s\S]*?finally \{/);
   assert.match(smokeScript, /function Stop-InstalledProcesses/);
+  assert.match(
+    smokeScript,
+    /\nNew-Item -ItemType Directory -Path \$smokeRoot -ErrorAction Stop \| Out-Null\r?\ntry \{\s*\$env:GOATCITADEL_HOME = \$runtimeBase/,
+  );
   assert.match(smokeScript, /Remove-Item -LiteralPath \$smokeRoot -Recurse -Force -ErrorAction Stop/);
   assert.doesNotMatch(smokeScript, /Remove-Item[^\n]*(?:\$env:RUNNER_TEMP|\$ScratchRoot)/);
   assert.match(smokeScript, /\[REDACTED\]/);
@@ -228,6 +232,28 @@ test(
     }
     foreach ($invalid in @($null, [pscustomobject]@{})) {
       if (Get-VerifiedDesktopNavigation -Snapshot $invalid -ExpectedProcessId 123 -StartedAfter $started) { throw 'Malformed snapshot accepted' }
+      if (Get-VerifiedDesktopStartupFailure -Snapshot $invalid -ExpectedProcessId 123 -StartedAfter $started) { throw 'Malformed failure accepted' }
+    }
+    $failure = @{ schemaVersion=1; processId=123; phase='webview-failed';
+      recordedAt=[DateTimeOffset]::UtcNow.ToString('O'); errorType='COMException'; errorCode='0x80004005' }
+    $reported = Get-VerifiedDesktopStartupFailure -Snapshot ([pscustomobject]$failure) -ExpectedProcessId 123 -StartedAfter $started
+    if (-not $reported -or $reported.phase -ne $failure.phase -or $reported.errorCode -ne $failure.errorCode) {
+      throw 'Owned native startup failure dropped'
+    }
+    $jsonFailure = $failure | ConvertTo-Json | ConvertFrom-Json
+    if (-not (Get-VerifiedDesktopStartupFailure -Snapshot $jsonFailure -ExpectedProcessId 123 -StartedAfter $started)) {
+      throw 'Owned native startup failure dropped after JSON decoding'
+    }
+    foreach ($key in @('processId', 'phase', 'errorType', 'errorCode')) {
+      $partial = $failure.Clone()
+      $partial.Remove($key)
+      if (Get-VerifiedDesktopStartupFailure -Snapshot ([pscustomobject]$partial) -ExpectedProcessId 123 -StartedAfter $started) {
+        throw ('Incomplete failure accepted: ' + $key)
+      }
+    }
+    if ((Get-VerifiedDesktopStartupFailure -Snapshot ([pscustomobject]$failure) -ExpectedProcessId 124 -StartedAfter $started) -or
+        (Get-VerifiedDesktopStartupFailure -Snapshot ([pscustomobject]$failure) -ExpectedProcessId 123 -StartedAfter ([DateTimeOffset]::UtcNow.AddSeconds(5)))) {
+      throw 'Foreign or stale startup failure accepted'
     }
   `,
       ],

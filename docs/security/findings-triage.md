@@ -1,6 +1,6 @@
 # GitHub Security Findings — Triage Reference
 
-Last updated: 2026-11-27
+Last updated: 2026-11-28
 
 This document explains how to triage the recurring categories of GitHub Security findings against this repo and how to fix them **once** without rediscovering the same root cause every time. New AI agents (Claude, Codex, Copilot review bots) and human contributors should read this before opening a PR that touches rate-limit configuration, stream pipeline error handling, Dependabot alerts, the secret-scanning allowlist, or the synthetic-token fixtures used by the secret-redaction tests.
 
@@ -380,6 +380,14 @@ The finding on `deadb76e0` proposed testing asset-byte opt-in on the synchronous
 `operatorSkillScanVerdict` requests asset bytes to verify its whole-tree cache key, and it uses the
 asynchronous reader. The synchronous reader always skips assets. The reader tests cover both defaults
 and the async opt-in, and the operator cache test covers a tree that contains an asset.
+
+### 2026-11-28 embedded Node runtime platform finding
+
+The finding on `48c9bf3b3` recommended normalizing Node's `darwin` platform to `macos`.
+The [packaging target](../../scripts/packaging/lib/packaging-targets.mjs) already defines `darwin`
+as the platform for `macos-arm64`. Both the native Node copy and SQLite schema staging compare
+against that platform field. The [Darwin local-copy regression](../../scripts/packaging/build-bundle-node-runtime.test.mjs)
+passes and asserts that the matching runtime makes zero archive requests.
 
 ### There is no way to dismiss an AI finding
 

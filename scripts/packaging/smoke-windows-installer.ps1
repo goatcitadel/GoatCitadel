@@ -130,19 +130,7 @@ $previousWebViewDataFolder = [Environment]::GetEnvironmentVariable("WEBVIEW2_USE
 $previousDesktopLauncher = [Environment]::GetEnvironmentVariable("GOATCITADEL_DESKTOP_LAUNCHER", "Process")
 $previousGatewayUrl = [Environment]::GetEnvironmentVariable("GOATCITADEL_GATEWAY_URL", "Process")
 $previousMissionControlUrl = [Environment]::GetEnvironmentVariable("GOATCITADEL_MISSION_CONTROL_URL", "Process")
-$env:GOATCITADEL_HOME = $runtimeBase
-$env:GOATCITADEL_APP_DIR = $appHome
-# Exercise the shipped database default on a clean install. Pin SQLite only for
-# the historical beta upgrade fixture.
-Remove-Item Env:GOATCITADEL_DATABASE_DRIVER -ErrorAction SilentlyContinue
-if ($upgradeMode) {
-  $env:GOATCITADEL_DATABASE_DRIVER = "sqlite"
-}
-$env:WEBVIEW2_USER_DATA_FOLDER = $webViewDataDir
-Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER -ErrorAction SilentlyContinue
-Remove-Item Env:GOATCITADEL_GATEWAY_URL -ErrorAction SilentlyContinue
-Remove-Item Env:GOATCITADEL_MISSION_CONTROL_URL -ErrorAction SilentlyContinue
-$runtimeIsolationConfigured = $true
+$runtimeIsolationConfigured = $false
 $hostProc = $null
 $installed = $false
 $uninstalled = $false
@@ -267,8 +255,23 @@ function Stop-InstalledProcesses {
   throw "Installed process teardown did not complete within 15 seconds: $remainingSummary"
 }
 
+# Reserve the shared path before entering the cleanup scope. New-Item without
+# -Force rejects a directory that another invocation created first.
+New-Item -ItemType Directory -Path $smokeRoot -ErrorAction Stop | Out-Null
 try {
-  New-Item -ItemType Directory -Path $smokeRoot -ErrorAction Stop | Out-Null
+  $env:GOATCITADEL_HOME = $runtimeBase
+  $env:GOATCITADEL_APP_DIR = $appHome
+  # Exercise the shipped database default on a clean install. Pin SQLite only for
+  # the historical beta upgrade fixture.
+  Remove-Item Env:GOATCITADEL_DATABASE_DRIVER -ErrorAction SilentlyContinue
+  if ($upgradeMode) {
+    $env:GOATCITADEL_DATABASE_DRIVER = "sqlite"
+  }
+  $env:WEBVIEW2_USER_DATA_FOLDER = $webViewDataDir
+  Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER -ErrorAction SilentlyContinue
+  Remove-Item Env:GOATCITADEL_GATEWAY_URL -ErrorAction SilentlyContinue
+  Remove-Item Env:GOATCITADEL_MISSION_CONTROL_URL -ErrorAction SilentlyContinue
+  $runtimeIsolationConfigured = $true
   $installerArgs = @(
     "/VERYSILENT",
     "/SUPPRESSMSGBOXES",
@@ -472,16 +475,18 @@ try {
       throw "Desktop host exited during embedded Mission Control smoke with code $hex."
     }
     try {
-      $desktopStartup = Get-Content -LiteralPath $desktopStartupPath -Raw -ErrorAction Stop | ConvertFrom-Json
+      $desktopStartup = Get-Content -LiteralPath $desktopStartupPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
       $webViewTarget = Get-VerifiedDesktopNavigation -Snapshot $desktopStartup `
         -ExpectedProcessId $hostProc.Id -StartedAfter $hostProc.StartTime.ToUniversalTime()
     }
     catch {
+      $desktopStartup = $null
       $webViewTarget = $null
     }
-    if ($desktopStartup -and $desktopStartup.processId -eq $hostProc.Id -and
-        $desktopStartup.phase -in @("webview-failed", "runtime-failed")) {
-      throw "Native startup failed: $($desktopStartup.phase) ($($desktopStartup.errorType), $($desktopStartup.errorCode)). See startup and runtime logs."
+    $startupFailure = Get-VerifiedDesktopStartupFailure -Snapshot $desktopStartup `
+      -ExpectedProcessId $hostProc.Id -StartedAfter $hostProc.StartTime.ToUniversalTime()
+    if ($startupFailure) {
+      throw "Native startup failed: $($startupFailure.phase) ($($startupFailure.errorType), $($startupFailure.errorCode)). See startup and runtime logs."
     }
     if ($webViewTarget) {
       try {

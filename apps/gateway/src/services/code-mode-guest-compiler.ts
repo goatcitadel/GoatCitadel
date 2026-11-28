@@ -7,7 +7,15 @@ import {
   ModuleResolutionKind,
   type TranspileOptions,
 } from "typescript-7/async";
-import { ScriptKind, ScriptTarget, SyntaxKind, type Expression, type Identifier, type Node } from "typescript-7/ast";
+import {
+  ScriptKind,
+  ScriptTarget,
+  SyntaxKind,
+  type Expression,
+  type Identifier,
+  type Node,
+  type PropertySignatureDeclaration,
+} from "typescript-7/ast";
 import * as ast from "typescript-7/ast/is";
 
 const compilerOptions = {
@@ -191,6 +199,9 @@ function isBlockedGuestSourceIdentifierReference(identifier: Identifier): boolea
     return false;
   }
   if (ast.isPropertyAssignment(parent) && parent.name === identifier) {
+    return false;
+  }
+  if (parent.kind === SyntaxKind.PropertySignature && (parent as PropertySignatureDeclaration).name === identifier) {
     return false;
   }
   if (ast.isBindingElement(parent) && parent.name === identifier) {
