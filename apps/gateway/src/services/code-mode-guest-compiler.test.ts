@@ -38,4 +38,20 @@ describe("Code Mode guest source validation", () => {
       /^Code Mode source could not be parsed:/,
     );
   });
+
+  it.each(['export * from "fixture-module";', 'export { value } from "fixture-module";'])(
+    "rejects source dependencies declared by a re-export",
+    async (source) => {
+      await expect(validateGuestSource("typescript", source)).rejects.toThrow("module re-exports");
+    },
+  );
+
+  it.each([
+    ["javascript", 'const unused = (globalThis)[("fetch")];'],
+    ["typescript", 'const unused = (globalThis as unknown)!["fetch"];'],
+    ["typescript", 'const unused = (<unknown>globalThis)["fetch"];'],
+    ["typescript", 'const unused = (globalThis satisfies unknown)["fetch"];'],
+  ] as const)("recognizes reserved globals through transparent %s syntax", async (language, source) => {
+    await expect(validateGuestSource(language, source)).rejects.toThrow("Code Mode source may not reference fetch.");
+  });
 });

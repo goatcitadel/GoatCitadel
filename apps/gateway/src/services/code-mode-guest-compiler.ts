@@ -100,6 +100,10 @@ function findForbiddenGuestSourceReference(root: Node): string | undefined {
       forbiddenLabel = "import statements";
       return;
     }
+    if (ast.isExportDeclaration(node) && node.moduleSpecifier) {
+      forbiddenLabel = "module re-exports";
+      return;
+    }
     if (ast.isCallExpression(node)) {
       forbiddenLabel = readBlockedGuestSourceCallLabel(node.expression);
       if (forbiddenLabel) {
@@ -108,15 +112,12 @@ function findForbiddenGuestSourceReference(root: Node): string | undefined {
     }
     if (ast.isPropertyAccessExpression(node) || ast.isElementAccessExpression(node)) {
       const name = readStaticGuestPropertyName(node);
-      if (name === "process" || isProcessGuestSourceExpression(node.expression)) {
+      const receiver = unwrapGuestSourceExpression(node.expression);
+      if (name === "process" || isProcessGuestSourceExpression(receiver)) {
         forbiddenLabel = "process";
         return;
       }
-      if (
-        name &&
-        ast.isIdentifier(node.expression) &&
-        (node.expression.text === "globalThis" || node.expression.text === "global")
-      ) {
+      if (name && ast.isIdentifier(receiver) && (receiver.text === "globalThis" || receiver.text === "global")) {
         forbiddenLabel = readBlockedGuestSourceIdentifierLabel(name);
         if (forbiddenLabel) {
           return;
@@ -136,6 +137,7 @@ function findForbiddenGuestSourceReference(root: Node): string | undefined {
 }
 
 function readBlockedGuestSourceCallLabel(expression: Expression): string | undefined {
+  expression = unwrapGuestSourceExpression(expression);
   if (expression.kind === SyntaxKind.ImportKeyword) {
     return "dynamic import";
   }
@@ -166,6 +168,7 @@ function readBlockedGuestSourceIdentifierLabel(text: string): string | undefined
 }
 
 function isProcessGuestSourceExpression(expression: Expression): boolean {
+  expression = unwrapGuestSourceExpression(expression);
   if (ast.isIdentifier(expression)) {
     return expression.text === "process";
   }
@@ -182,12 +185,26 @@ function readStaticGuestPropertyName(expression: Expression): string | undefined
     return expression.name.text;
   }
   if (ast.isElementAccessExpression(expression)) {
-    const key = expression.argumentExpression;
+    const key = unwrapGuestSourceExpression(expression.argumentExpression);
     if (ast.isStringLiteral(key) || ast.isNoSubstitutionTemplateLiteral(key)) {
       return key.text;
     }
   }
   return undefined;
+}
+
+function unwrapGuestSourceExpression(expression: Expression): Expression {
+  while (
+    ast.isParenthesizedExpression(expression) ||
+    ast.isAsExpression(expression) ||
+    ast.isTypeAssertion(expression) ||
+    ast.isNonNullExpression(expression) ||
+    ast.isSatisfiesExpression(expression) ||
+    ast.isExpressionWithTypeArguments(expression)
+  ) {
+    expression = expression.expression;
+  }
+  return expression;
 }
 
 function isBlockedGuestSourceIdentifierReference(identifier: Identifier): boolean {
