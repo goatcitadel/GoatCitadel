@@ -381,13 +381,18 @@ The finding on `deadb76e0` proposed testing asset-byte opt-in on the synchronous
 asynchronous reader. The synchronous reader always skips assets. The reader tests cover both defaults
 and the async opt-in, and the operator cache test covers a tree that contains an asset.
 
-### 2026-11-28 embedded Node runtime platform finding
+### 2026-11-28 AI findings follow-up
 
 The finding on `48c9bf3b3` recommended normalizing Node's `darwin` platform to `macos`.
 The [packaging target](../../scripts/packaging/lib/packaging-targets.mjs) already defines `darwin`
 as the platform for `macos-arm64`. Both the native Node copy and SQLite schema staging compare
 against that platform field. The [Darwin local-copy regression](../../scripts/packaging/build-bundle-node-runtime.test.mjs)
 passes and asserts that the matching runtime makes zero archive requests.
+
+The TypeScript JSX finding on `365b1d1ac` describes the existing admission and execution
+contract. The [approved-request tests](../../apps/gateway/src/services/capability-system-service.approved-request.test.ts)
+verify that TSX can reach approval review and that an approved TypeScript run which cannot emit
+that source records a failed run before dispatch. Retain that behavior for existing requests.
 
 ### There is no way to dismiss an AI finding
 

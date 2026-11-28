@@ -33,6 +33,28 @@ describe("Code Mode guest source validation", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("allows ordinary method names in TypeScript signatures", async () => {
+    await expect(
+      validateGuestSource("typescript", "const values: { fetch(): number } = { fetch: () => 1 };"),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    'const { "fetch": reference } = globalThis;',
+    'const { [("fetch")]: reference } = (globalThis);',
+    "function use({ [`fetch`]: reference } = globalThis) {}",
+  ])("rejects reserved global properties in object bindings", async (source) => {
+    await expect(validateGuestSource("javascript", source)).rejects.toThrow(
+      "Code Mode source may not reference fetch.",
+    );
+  });
+
+  it("allows ordinary object bindings with the same property name", async () => {
+    await expect(
+      validateGuestSource("javascript", "const values = { fetch: 1 }; const { fetch: value } = values;"),
+    ).resolves.toBeUndefined();
+  });
+
   it("rejects TypeScript annotations in JavaScript source", async () => {
     await expect(validateGuestSource("javascript", "const value: number = 1;")).rejects.toThrow(
       /^Code Mode source could not be parsed:/,

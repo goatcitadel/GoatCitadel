@@ -11,10 +11,10 @@ import {
   ScriptKind,
   ScriptTarget,
   SyntaxKind,
+  type BindingElement,
   type Expression,
   type Identifier,
   type Node,
-  type PropertySignatureDeclaration,
 } from "typescript-7/ast";
 import * as ast from "typescript-7/ast/is";
 
@@ -112,16 +112,21 @@ function findForbiddenGuestSourceReference(root: Node): string | undefined {
     }
     if (ast.isPropertyAccessExpression(node) || ast.isElementAccessExpression(node)) {
       const name = readStaticGuestPropertyName(node);
-      const receiver = unwrapGuestSourceExpression(node.expression);
-      if (name === "process" || isProcessGuestSourceExpression(receiver)) {
+      if (name === "process" || isProcessGuestSourceExpression(node.expression)) {
         forbiddenLabel = "process";
         return;
       }
-      if (name && ast.isIdentifier(receiver) && (receiver.text === "globalThis" || receiver.text === "global")) {
+      if (name && isGuestGlobalReceiver(node.expression)) {
         forbiddenLabel = readBlockedGuestSourceIdentifierLabel(name);
         if (forbiddenLabel) {
           return;
         }
+      }
+    }
+    if (ast.isBindingElement(node)) {
+      forbiddenLabel = readBlockedGuestSourceBindingLabel(node);
+      if (forbiddenLabel) {
+        return;
       }
     }
     if (ast.isIdentifier(node) && isBlockedGuestSourceIdentifierReference(node)) {
@@ -134,6 +139,39 @@ function findForbiddenGuestSourceReference(root: Node): string | undefined {
   };
   visit(root);
   return forbiddenLabel;
+}
+
+function readBlockedGuestSourceBindingLabel(binding: BindingElement): string | undefined {
+  const pattern = binding.parent;
+  const declaration = pattern?.parent;
+  if (
+    binding.dotDotDotToken ||
+    !pattern ||
+    !ast.isObjectBindingPattern(pattern) ||
+    !declaration ||
+    (!ast.isVariableDeclaration(declaration) && !ast.isParameterDeclaration(declaration)) ||
+    !declaration.initializer ||
+    !isGuestGlobalReceiver(declaration.initializer)
+  ) {
+    return undefined;
+  }
+  const key = binding.propertyName ?? binding.name;
+  if (!key) {
+    return undefined;
+  }
+  if (ast.isIdentifier(key)) {
+    return readBlockedGuestSourceIdentifierLabel(key.text);
+  }
+  const expression = ast.isComputedPropertyName(key) ? unwrapGuestSourceExpression(key.expression) : key;
+  if (ast.isStringLiteral(expression) || ast.isNoSubstitutionTemplateLiteral(expression)) {
+    return readBlockedGuestSourceIdentifierLabel(expression.text);
+  }
+  return undefined;
+}
+
+function isGuestGlobalReceiver(expression: Expression): boolean {
+  const receiver = unwrapGuestSourceExpression(expression);
+  return ast.isIdentifier(receiver) && (receiver.text === "globalThis" || receiver.text === "global");
 }
 
 function readBlockedGuestSourceCallLabel(expression: Expression): string | undefined {
@@ -218,10 +256,13 @@ function isBlockedGuestSourceIdentifierReference(identifier: Identifier): boolea
   if (ast.isPropertyAssignment(parent) && parent.name === identifier) {
     return false;
   }
-  if (parent.kind === SyntaxKind.PropertySignature && (parent as PropertySignatureDeclaration).name === identifier) {
+  if (
+    (ast.isPropertySignatureDeclaration(parent) || ast.isMethodSignatureDeclaration(parent)) &&
+    parent.name === identifier
+  ) {
     return false;
   }
-  if (ast.isBindingElement(parent) && parent.name === identifier) {
+  if (ast.isBindingElement(parent) && (parent.name === identifier || parent.propertyName === identifier)) {
     return false;
   }
   if (ast.isVariableDeclaration(parent) && parent.name === identifier) {
