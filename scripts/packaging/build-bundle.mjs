@@ -192,7 +192,7 @@ async function main() {
     nodeVersion,
     destinationDir: runtimeNodeDir,
   });
-  if (target === "windows-arm64") {
+  if (targetInfo.platform === "windows") {
     await stageWindowsPostgres16(path.join(appRoot, "runtime"));
   }
   if (
@@ -803,7 +803,7 @@ function copyDirectory(sourceDir, destinationDir) {
 
 async function stageWindowsPostgres16(runtimeDir) {
   // PostgreSQL 16's Windows server is x64 and runs under Windows 11 ARM64 emulation.
-  if (process.platform !== "win32") throw new Error("Windows ARM64 packaging needs a Windows build host.");
+  if (process.platform !== "win32") throw new Error("Windows PostgreSQL packaging needs a Windows build host.");
   const archiveName = "postgresql-16.16-2-windows-x64-binaries.zip";
   const expectedSha256 = "add1de261b150e6923266abee293f05050795e73f5356158aee4221a2170c073";
   const url = `https://get.enterprisedb.com/postgresql/${archiveName}`;
@@ -841,7 +841,7 @@ function stagePostgresVisualCppRuntime(bin) {
     windowsHide: true,
   });
   if (lookup.error || lookup.status !== 0 || !lookup.stdout.trim()) {
-    throw new Error("Windows ARM64 packaging needs the Visual Studio x64 VC redistributable files.");
+    throw new Error("Windows PostgreSQL packaging needs the Visual Studio x64 VC redistributable files.");
   }
   const redistRoot = path.join(lookup.stdout.trim(), "VC", "Redist", "MSVC");
   const versions = fs.readdirSync(redistRoot)

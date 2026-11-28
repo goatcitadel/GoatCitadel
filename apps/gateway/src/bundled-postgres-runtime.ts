@@ -985,7 +985,7 @@ function resolvePackagedWindowsPostgres16(config: GatewayRuntimeConfig, missingB
   const appDir = process.env.GOATCITADEL_APP_DIR?.trim();
   if (
     process.platform !== "win32" ||
-    process.arch !== "arm64" ||
+    (process.arch !== "x64" && process.arch !== "arm64") ||
     !appDir ||
     !fsSync.existsSync(path.join(appDir, "release-manifest.json")) ||
     !/[/\\]postgresql[/\\]16[/\\]bin$/i.test(path.normalize(missingBinDir))

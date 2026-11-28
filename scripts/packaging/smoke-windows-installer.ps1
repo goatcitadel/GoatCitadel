@@ -640,7 +640,7 @@ try {
   Stop-InstalledProcesses
   Start-Sleep -Seconds 2
 
-  if ($Target -eq "windows-arm64" -and -not $upgradeMode) {
+  if (-not $upgradeMode -and -not $liveMode) {
     . (Join-Path $PSScriptRoot "lib/windows-packaged-postgres-smoke.ps1")
     Test-PackagedPostgresRecovery -Node $bundledNode -Launcher $launcher -AppHome $appHome -RuntimeBase $runtimeBase
   }
