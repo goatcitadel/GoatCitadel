@@ -1,7 +1,9 @@
+import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { createInterface } from "node:readline";
 import { spawn, type ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { CODE_MODE_CHILD_SOURCE } from "./code-mode-child-source.js";
@@ -87,18 +89,20 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
     expect(close.signal).toBeNull();
   });
 
-  it("supports stdio JSON-RPC transport without mixing protocol and console stdout", async () => {
+  it("round-trips a stdio capability without mixing protocol and console output", async () => {
     const child = await spawnHarness({ transport: "stdio_jsonrpc" });
-    let stdout = "";
+    const { stdin, stdout, stderr: stderrStream } = child;
+    if (!stdin || !stdout || !stderrStream) {
+      throw new Error("Code Mode stdio child is missing a pipe.");
+    }
+    const lines = createInterface({ input: stdout, crlfDelay: Infinity });
     let stderr = "";
-    child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+    stderrStream.setEncoding("utf8").on("data", (chunk: string) => {
       stderr += chunk;
     });
 
-    child.stdin?.write(
+    const deadlineAt = Date.now() + 3000;
+    stdin.write(
       `${JSON.stringify({
         jsonrpc: "2.0",
         id: "run-stdio-transport",
@@ -107,29 +111,44 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
           runId: "run-stdio-transport",
           source: `
             console.log("guest log on stderr");
-            return { ok: true };
+            return await capabilities.fs.read({ path: "README.md" });
           `,
           input: {},
-          wrapperManifest: { wrappers: [] },
-          deadlineAt: Date.now() + 2000,
+          wrapperManifest: { wrappers: [{ name: "fs.read" }] },
+          deadlineAt,
         },
       })}\n`,
     );
 
-    const close = await waitForClose(child);
-    expect(close.code).toBe(0);
-    expect(stderr).toContain("guest log on stderr");
-    const lines = stdout.split(/\r?\n/u);
-    expect(lines.pop()).toBe("");
-    const messages = lines.map((line) => {
+    const messages: unknown[] = [];
+    for await (const line of lines) {
+      let parsed: unknown;
       try {
-        return JSON.parse(line) as unknown;
+        parsed = JSON.parse(line) as unknown;
       } catch (error) {
         throw new Error(`Invalid JSON-RPC stdout line: ${JSON.stringify(line)}`, { cause: error });
       }
-    });
+      messages.push(parsed);
+      if (isJsonRpcMessage(parsed) && isCapabilityInvoke(parsed)) {
+        stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: parsed.id, result: { ok: true, path: "README.md" } })}\n`);
+      }
+    }
+
+    const close = await waitForClose(child);
+    expect(close.code).toBe(0);
+    expect(stderr).toContain("guest log on stderr");
     expect(messages).toEqual([
-      expect.objectContaining({ jsonrpc: "2.0", id: "run-stdio-transport", result: { ok: true } }),
+      expect.objectContaining({
+        jsonrpc: "2.0",
+        id: expect.any(String),
+        method: "capability.invoke",
+        params: expect.objectContaining({ wrapperName: "fs.read", deadlineAt }),
+      }),
+      expect.objectContaining({
+        jsonrpc: "2.0",
+        id: "run-stdio-transport",
+        result: expect.objectContaining({ ok: true, path: "README.md" }),
+      }),
     ]);
   });
 
@@ -442,6 +461,7 @@ async function spawnHarness(options: { transport?: "node_ipc" | "stdio_jsonrpc" 
       });
     }),
   );
+  await once(child, "spawn");
   return child;
 }
 
