@@ -300,10 +300,10 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
 
     child.send({
       jsonrpc: "2.0",
-      id: "run-parent-disconnect",
+      id: "run-wrapper-deadline-exceeded",
       method: "run.execute",
       params: {
-        runId: "run-parent-disconnect",
+        runId: "run-wrapper-deadline-exceeded",
         source: `
           return await capabilities.fs.read({ path: "README.md" });
         `,
@@ -322,7 +322,7 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
 
     const response = await waitForChildMessage(
       child,
-      (message) => isResponseMessage(message) && message.id === "run-parent-disconnect",
+      (message) => isResponseMessage(message) && message.id === "run-wrapper-deadline-exceeded",
     );
     const close = await waitForClose(child);
 
@@ -370,7 +370,7 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
       code: "RUN_DEADLINE_EXCEEDED",
       message: "Code Mode wrapper deadline exceeded before invocation.",
     });
-    expect(messages.filter((message) => isJsonRpcMessage(message) && isCapabilityInvoke(message))).toEqual([]);
+    expect(messages).not.toContainEqual(expect.objectContaining({ method: "capability.invoke" }));
     expect(close.code).toBe(0);
   });
 
@@ -411,6 +411,14 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
     });
     expect(close.code).toBe(0);
   });
+});
+
+it("rejects malformed capability invocation parameters", () => {
+  const message = { id: "fixture", method: "capability.invoke" };
+  expect(isCapabilityInvoke({ ...message, params: {} })).toBe(false);
+  expect(isCapabilityInvoke({ ...message, params: { wrapperName: 1 } })).toBe(false);
+  expect(isCapabilityInvoke({ ...message, params: { wrapperName: "fixture", deadlineAt: "soon" } })).toBe(false);
+  expect(isCapabilityInvoke({ ...message, params: { wrapperName: "fixture", deadlineAt: 5 } })).toBe(true);
 });
 
 async function spawnHarness(options: { transport?: "node_ipc" | "stdio_jsonrpc" } = {}): Promise<ChildProcess> {
@@ -523,5 +531,13 @@ function isCapabilityInvoke(message: JsonRpcMessage): message is JsonRpcMessage 
   method: "capability.invoke";
   params: { wrapperName: string; deadlineAt?: number };
 } {
-  return typeof message.id === "string" && message.method === "capability.invoke" && typeof message.params === "object";
+  const params = message.params;
+  return (
+    typeof message.id === "string" &&
+    message.method === "capability.invoke" &&
+    typeof params === "object" &&
+    params !== null &&
+    typeof params.wrapperName === "string" &&
+    (params.deadlineAt === undefined || (typeof params.deadlineAt === "number" && Number.isFinite(params.deadlineAt)))
+  );
 }
