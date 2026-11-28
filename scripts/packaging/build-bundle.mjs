@@ -192,6 +192,9 @@ async function main() {
     nodeVersion,
     destinationDir: runtimeNodeDir,
   });
+  if (target === "windows-arm64") {
+    await stageWindowsPostgres16(path.join(appRoot, "runtime"));
+  }
   if (
     (process.platform === "win32" ? "windows" : process.platform) === targetInfo.platform &&
     process.arch === targetInfo.arch &&
@@ -796,6 +799,69 @@ function removeDirectory(targetPath) {
 function copyDirectory(sourceDir, destinationDir) {
   fs.mkdirSync(path.dirname(destinationDir), { recursive: true });
   fs.cpSync(sourceDir, destinationDir, { recursive: true });
+}
+
+async function stageWindowsPostgres16(runtimeDir) {
+  // PostgreSQL 16's Windows server is x64 and runs under Windows 11 ARM64 emulation.
+  if (process.platform !== "win32") throw new Error("Windows ARM64 packaging needs a Windows build host.");
+  const archiveName = "postgresql-16.16-2-windows-x64-binaries.zip";
+  const expectedSha256 = "add1de261b150e6923266abee293f05050795e73f5356158aee4221a2170c073";
+  const url = `https://get.enterprisedb.com/postgresql/${archiveName}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`PostgreSQL download failed (${response.status}): ${url}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (createHash("sha256").update(bytes).digest("hex") !== expectedSha256) {
+    throw new Error(`PostgreSQL archive checksum mismatch: ${archiveName}`);
+  }
+  const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-postgres-"));
+  try {
+    const archive = path.join(scratchDir, archiveName);
+    fs.writeFileSync(archive, bytes);
+    const entries = ["bin", "lib", "share", "server_license.txt", "commandlinetools_3rd_party_licenses.txt"];
+    const args = ["-xf", archive, "-C", runtimeDir, ...entries.map((entry) => `pgsql/${entry}`)];
+    const extraction = spawnSync(WINDOWS_TAR_PATH, args, { stdio: "inherit" });
+    if (extraction.error || extraction.status !== 0) {
+      throw extraction.error ?? new Error(`PostgreSQL archive extraction exited with code ${extraction.status}.`);
+    }
+    const bin = path.join(runtimeDir, "pgsql", "bin");
+    for (const tool of ["postgres", "initdb", "pg_ctl", "pg_controldata"]) {
+      readRequiredRegularFile(path.join(bin, `${tool}.exe`), `Packaged PostgreSQL ${tool}`);
+    }
+    stagePostgresVisualCppRuntime(bin);
+  } finally {
+    removeDirectory(scratchDir);
+  }
+}
+
+function stagePostgresVisualCppRuntime(bin) {
+  // Copy the x64 app-local redistributables from Visual Studio, including on ARM hosts.
+  const installerDir = path.join(process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)", "Microsoft Visual Studio", "Installer");
+  const lookup = spawnSync(path.join(installerDir, "vswhere.exe"), ["-latest", "-products", "*", "-property", "installationPath"], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (lookup.error || lookup.status !== 0 || !lookup.stdout.trim()) {
+    throw new Error("Windows ARM64 packaging needs the Visual Studio x64 VC redistributable files.");
+  }
+  const redistRoot = path.join(lookup.stdout.trim(), "VC", "Redist", "MSVC");
+  const versions = fs.readdirSync(redistRoot)
+    .filter((entry) => /^14\.\d+\.\d+$/.test(entry))
+    .sort((left, right) => right.localeCompare(left, "en", { numeric: true }));
+  for (const version of versions) {
+    const x64 = path.join(redistRoot, version, "x64");
+    if (!fs.existsSync(x64)) continue;
+    const crt = fs.readdirSync(x64).find((entry) => /^Microsoft\.VC\d+\.CRT$/i.test(entry));
+    if (!crt) continue;
+    const source = path.join(x64, crt);
+    for (const required of ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"]) {
+      readRequiredRegularFile(path.join(source, required), `PostgreSQL x64 runtime ${required}`);
+    }
+    for (const filename of fs.readdirSync(source).filter((entry) => entry.endsWith(".dll"))) {
+      copyFile(path.join(source, filename), path.join(bin, filename));
+    }
+    return;
+  }
+  throw new Error("No x64 Microsoft Visual C++ app-local redistributable files found.");
 }
 
 function resolveSourceCommit() {
