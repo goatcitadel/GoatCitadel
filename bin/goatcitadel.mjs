@@ -767,8 +767,11 @@ async function runInstalledProfileAction(args) {
       inspectLocalProfileStorage(packagedRuntimeRoot, path.join(baseDir, "profile-recovery", "backups", selected.id, "profile"));
     }
     const stopped = await stopGoatCitadelRuntime();
-    const refusals = stopped.notStopped.filter((item) => item.pidState !== "stale" || item.endpointResponded);
-    if (refusals.length || stopped.status !== "stopped") {
+    // A Gateway that exited before readiness can leave stale PID metadata.
+    // Only allow it when neither endpoint responds and there are no other stop refusals.
+    const refused = stopped.notStopped.some((item) => item.reason !== "metadata_stale" || item.endpointResponded);
+    const endpointResponded = Object.values(stopped.endpointOwnership).some((item) => item.endpointResponded);
+    if (refused || endpointResponded || (stopped.status !== "stopped" && stopped.status !== "stale")) {
       throw new Error("Could not stop this install's runtime. Check Runtime Status in the Windows tray and try again.");
     }
     stopProfilePostgres(postgres);

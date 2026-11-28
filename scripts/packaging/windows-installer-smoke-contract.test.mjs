@@ -161,7 +161,7 @@ test("shared installer smoke bounds destructive cleanup to its validated scratch
 test("desktop launch and cleanup are pinned to an isolated runtime before host startup", () => {
   const homeAssignment = smokeScript.indexOf("$env:GOATCITADEL_HOME = $runtimeBase");
   const appAssignment = smokeScript.indexOf("$env:GOATCITADEL_APP_DIR = $appHome");
-  const databaseAssignment = smokeScript.indexOf('$env:GOATCITADEL_DATABASE_DRIVER = "sqlite"');
+  const databaseClear = smokeScript.indexOf("Remove-Item Env:GOATCITADEL_DATABASE_DRIVER");
   const webViewAssignment = smokeScript.indexOf("$env:WEBVIEW2_USER_DATA_FOLDER = $webViewDataDir");
   const launcherClear = smokeScript.indexOf("Remove-Item Env:GOATCITADEL_DESKTOP_LAUNCHER");
   const gatewayClear = smokeScript.indexOf("Remove-Item Env:GOATCITADEL_GATEWAY_URL");
@@ -170,7 +170,9 @@ test("desktop launch and cleanup are pinned to an isolated runtime before host s
 
   assert.ok(homeAssignment >= 0 && homeAssignment < hostLaunch);
   assert.ok(appAssignment >= 0 && appAssignment < hostLaunch);
-  assert.ok(databaseAssignment >= 0 && databaseAssignment < hostLaunch);
+  assert.ok(databaseClear >= 0 && databaseClear < hostLaunch);
+  assert.match(smokeScript, /if \(\$upgradeMode\) \{\s*\$env:GOATCITADEL_DATABASE_DRIVER = "sqlite"\s*\}/);
+  assert.match(smokeScript, /Clean Windows install did not create its default SQLite database/);
   assert.match(smokeScript, /\$env:GOATCITADEL_DATABASE_DRIVER = \$previousDatabaseDriver/);
   assert.ok(webViewAssignment >= 0 && webViewAssignment < hostLaunch);
   assert.ok(launcherClear >= 0 && launcherClear < hostLaunch);
