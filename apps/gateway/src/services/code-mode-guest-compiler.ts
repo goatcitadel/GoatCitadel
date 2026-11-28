@@ -22,20 +22,30 @@ const compilerOptions = {
   inlineSources: false,
 };
 
-export async function validateGuestSource(source: string): Promise<void> {
+export async function validateGuestSource(language: CodeModeLanguage, source: string): Promise<void> {
   await using compiler = new API();
-  // The beta's standalone AST lease has no diagnostics. Ask its isolated transpiler for TSX syntax errors.
-  await checkTranspile(
-    compiler,
-    source,
-    {
-      fileName: "code-mode-source.tsx",
-      compilerOptions: { ...compilerOptions, jsx: JsxEmit.Preserve },
-      reportDiagnostics: true,
-    },
-    "Code Mode source could not be parsed",
-  );
-  await using parsed = await compiler.createSourceFile("code-mode-source.tsx", source, { scriptKind: ScriptKind.TSX });
+  const isTypeScript = language === "typescript";
+  let fileName = isTypeScript ? "code-mode-source.ts" : "code-mode-source.js";
+  let scriptKind = isTypeScript ? ScriptKind.TS : ScriptKind.JS;
+  // The beta's standalone AST lease has no diagnostics. Ask its isolated transpiler to check syntax.
+  const syntaxError = "Code Mode source could not be parsed";
+  try {
+    await checkTranspile(compiler, source, { fileName, compilerOptions, reportDiagnostics: true }, syntaxError);
+  } catch (error) {
+    if (!(error instanceof ValidationError)) {
+      throw error;
+    }
+    // Preserve the existing JSX admission contract. The execution compiler still owns emission.
+    fileName = "code-mode-source.tsx";
+    scriptKind = ScriptKind.TSX;
+    await checkTranspile(
+      compiler,
+      source,
+      { fileName, compilerOptions: { ...compilerOptions, jsx: JsxEmit.Preserve }, reportDiagnostics: true },
+      syntaxError,
+    );
+  }
+  await using parsed = await compiler.createSourceFile(fileName, source, { scriptKind });
   const forbiddenLabel = findForbiddenGuestSourceReference(parsed.sourceFile);
   if (forbiddenLabel) {
     throw new ValidationError({ message: `Code Mode source may not reference ${forbiddenLabel}.` });

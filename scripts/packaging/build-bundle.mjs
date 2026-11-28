@@ -246,7 +246,11 @@ function parseArgs(argv) {
       continue;
     }
     if (arg === "--node-sha256") {
-      parsed.nodeSha256 = argv[index + 1];
+      const digest = argv[index + 1]?.trim();
+      if (!digest || !/^[0-9a-f]{64}$/iu.test(digest)) {
+        throw new Error("--node-sha256 requires a 64-character hexadecimal SHA-256 digest.");
+      }
+      parsed.nodeSha256 = digest;
       index += 1;
       continue;
     }
@@ -318,6 +322,7 @@ async function installEmbeddedNodeRuntime({ target: bundleTarget, nodeVersion: r
   const destinationPath = path.join(destinationDir, runtimeFilename);
 
   if (
+    args.nodeSha256 === undefined &&
     (process.platform === "win32" ? "windows" : process.platform) === targetInfo.platform &&
     process.arch === targetInfo.arch &&
     process.version === normalizedVersion

@@ -218,11 +218,32 @@ function Stop-InstalledProcesses {
   if ($runtimeIsolationConfigured -and
       (Test-Path -LiteralPath $bundledNode -PathType Leaf) -and
       (Test-Path -LiteralPath $launcher -PathType Leaf)) {
+    $stop = [System.Diagnostics.Process]::new()
     try {
-      & $bundledNode $launcher stop --json 1>$null 2>$null
+      $stop.StartInfo.FileName = $bundledNode
+      $stop.StartInfo.Arguments = '"' + $launcher + '" stop --json'
+      $stop.StartInfo.UseShellExecute = $false
+      $stop.StartInfo.CreateNoWindow = $true
+      $stop.StartInfo.RedirectStandardOutput = $true
+      $stop.StartInfo.RedirectStandardError = $true
+      [void]$stop.Start()
+      $stop.BeginOutputReadLine()
+      $stop.BeginErrorReadLine()
+      if (-not $stop.WaitForExit(15000)) {
+        Write-Warning "The packaged runtime stop command exceeded 15 seconds. Continuing with the installed-process backstop."
+        if (-not $stop.HasExited) {
+          $stop.Kill()
+        }
+      }
+      elseif ($stop.ExitCode -ne 0) {
+        Write-Warning "The packaged runtime stop command exited $($stop.ExitCode). Continuing with the installed-process backstop."
+      }
     }
     catch {
       Write-Warning "Could not stop the packaged runtime through the launcher: $($_.Exception.Message)"
+    }
+    finally {
+      $stop.Dispose()
     }
   }
 
@@ -619,6 +640,10 @@ try {
       $status.Kill()
       Show-RuntimeLogs
       throw "Runtime readiness smoke failed: 'goatcitadel status --json' did not exit within 60 seconds."
+    }
+    $statusOutputTasks = [System.Threading.Tasks.Task[]]@($statusStdoutTask, $statusStderrTask)
+    if (-not [System.Threading.Tasks.Task]::WaitAll($statusOutputTasks, 15000)) {
+      throw "Runtime readiness smoke failed: status output streams did not close within 15 seconds of process exit."
     }
     $statusExitCode = $status.ExitCode
     [System.IO.File]::WriteAllText($statusStdout, $statusStdoutTask.Result, $utf8WithoutBom)

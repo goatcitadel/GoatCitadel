@@ -7,12 +7,23 @@ describe("Code Mode guest source validation", () => {
     ["const unused = globalThis[`process`];", "process"],
     ['const toolkit = {}; toolkit["setTimeout"]();', "timers or schedulers"],
   ])("rejects a reserved static member in %s", async (source, label) => {
-    await expect(validateGuestSource(source)).rejects.toThrow(`Code Mode source may not reference ${label}.`);
+    await expect(validateGuestSource("javascript", source)).rejects.toThrow(
+      `Code Mode source may not reference ${label}.`,
+    );
   });
 
   it("allows ordinary static member reads and calls", async () => {
     await expect(
-      validateGuestSource('const values = { fetch: 1, read: () => 2 }; values["fetch"] + values[`read`]();'),
+      validateGuestSource(
+        "javascript",
+        'const values = { fetch: 1, read: () => 2 }; values["fetch"] + values[`read`]();',
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("parses generic arrow functions using TypeScript syntax", async () => {
+    await expect(
+      validateGuestSource("typescript", "const identity = <T>(value: T) => value; identity(1);"),
     ).resolves.toBeUndefined();
   });
 });

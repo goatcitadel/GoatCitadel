@@ -259,6 +259,14 @@ test("installer and bundled launcher preserve scratch paths containing spaces", 
   assert.match(smokeScript, /Arguments = "\$quotedLauncher status --json"/);
   assert.match(smokeScript, /\$status = \[System\.Diagnostics\.Process\]::new\(\)/);
   assert.match(smokeScript, /\$status\.WaitForExit\(60000\)[\s\S]*?\$statusExitCode = \$status\.ExitCode/);
+  assert.match(
+    smokeScript,
+    /\[System\.Threading\.Tasks\.Task\]::WaitAll\(\$statusOutputTasks, 15000\)[\s\S]*?\$statusStdoutTask\.Result[\s\S]*?\$statusStderrTask\.Result/,
+  );
+  assert.match(
+    smokeScript,
+    /\$stop\.WaitForExit\(15000\)[\s\S]*?\$stop\.Kill\(\)[\s\S]*?\$stop\.Dispose\(\)[\s\S]*?Backstop kill after installer smoke/,
+  );
 });
 
 test("failure cleanup verifies owned registrations before deleting recovery payload", () => {

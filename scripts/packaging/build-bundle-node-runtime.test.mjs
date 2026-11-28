@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ const start = "async function installEmbeddedNodeRuntime(",
 assert.equal(source.split(start).length, 2);
 assert.equal(source.split(end).length, 2);
 const body = source.slice(source.indexOf(start), source.indexOf(end));
+const checksumBody = source.slice(source.indexOf(end), source.indexOf("function writeLaunchers("));
 
 async function fixture(row) {
   const parent = fs.realpathSync(os.tmpdir());
@@ -23,31 +25,29 @@ async function fixture(row) {
     destinationDir = path.join(temp, "out");
   const bytes = Buffer.from("synthetic owned Node bytes; not executable\n");
   fs.writeFileSync(execPath, bytes);
+  const digest = row.checksum === "correct" ? createHash("sha256").update(bytes).digest("hex") : row.checksum;
   const fetches = [],
     downloadsForbidden = new Error("fixture stopped at exact archive fetch; no network");
   const stages = [];
   const install = vm.runInNewContext(
-    "(" + body + ")",
+    `(() => { ${body} ${checksumBody} return installEmbeddedNodeRuntime; })()`,
     {
       fs,
       Buffer,
+      createHash,
       path,
       os: { tmpdir: () => temp },
       requirePackagingTarget,
       nodeArchiveName,
       nodeArchiveRoot,
       process: { platform: row.platform, arch: row.arch, version: "v22.23.4", execPath },
-      args: {},
+      args: { nodeSha256: digest },
       fetch: async (url) => {
         fetches.push(url);
         if (row.download) {
           return { ok: true, arrayBuffer: async () => bytes };
         }
         throw downloadsForbidden;
-      },
-      verifyNodeArchiveChecksum: async ({ archiveBuffer }) => {
-        assert.deepEqual(archiveBuffer, bytes);
-        stages.push("verified");
       },
       expandNodeRuntimeArchive: ({ archivePath, expandedRoot, targetInfo }) => {
         assert.deepEqual(fs.readFileSync(archivePath), bytes);
@@ -72,11 +72,15 @@ async function fixture(row) {
       assert.notEqual(clone.ino, original.ino);
       if (row.platform !== "win32" && process.platform !== "win32") assert.equal(clone.mode & 0o777, 0o755);
     } else {
-      if (row.download) {
+      if (row.checksum === "correct") {
         await promise;
         assert.deepEqual(fs.readFileSync(path.join(destinationDir, "node.exe")), bytes);
       } else {
-        await assert.rejects(promise, (error) => error === downloadsForbidden);
+        if (digest) {
+          await assert.rejects(promise, /Node runtime checksum mismatch/);
+        } else {
+          await assert.rejects(promise, (error) => error === downloadsForbidden);
+        }
         assert.equal(
           fs.existsSync(path.join(destinationDir, requirePackagingTarget(row.target).nodeExecutableName)),
           false,
@@ -87,7 +91,7 @@ async function fixture(row) {
         "https://nodejs.org/dist/" + version + "/" + nodeArchiveName(version, requirePackagingTarget(row.target)),
       ]);
     }
-    assert.deepEqual(stages, row.download ? ["verified", "expanded"] : []);
+    assert.deepEqual(stages, row.checksum === "correct" ? ["expanded"] : []);
     assert.deepEqual(fs.readdirSync(temp).sort(), ["out", "owned-node.bin"]);
   } finally {
     assert.match(path.basename(temp), /^gc-node-runtime-[a-z0-9]+$/iu);
@@ -130,11 +134,20 @@ for (const row of [
     local: false,
   },
   {
-    name: "Windows archive install removes its staging directory after copying",
+    name: "Windows matching runtime verifies an explicit archive digest and removes staging after copying",
     platform: "win32",
     arch: "x64",
-    target: "windows-arm64",
+    target: "windows-x64",
     download: true,
+    checksum: "correct",
+  },
+  {
+    name: "Windows matching runtime rejects a mismatched explicit archive digest without copying",
+    platform: "win32",
+    arch: "x64",
+    target: "windows-x64",
+    download: true,
+    checksum: "0".repeat(64),
   },
   {
     name: "Linux matching runtime retains local copy",

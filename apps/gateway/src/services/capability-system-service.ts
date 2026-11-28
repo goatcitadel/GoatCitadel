@@ -2015,7 +2015,7 @@ export class CapabilitySystemService {
     if (!source) {
       throw new ValidationError({ message: "Code Mode source is required." });
     }
-    await validateGuestSource(source);
+    await validateGuestSource(request.language, source);
     await this.ensureSkillLifecycleBackfill();
 
     const runId = `code-run-${randomUUID()}`;
@@ -2679,7 +2679,7 @@ export class CapabilitySystemService {
         message: "The code to run does not match the approved code. Ask for approval again.",
       });
     }
-    await validateGuestSource(request.source);
+    await validateGuestSource(request.language, request.source);
     const approval = this.requireApprovedCodeModeRequestApproval(
       request,
       await storage.approvals.get(request.approvalId).catch(() => undefined),
