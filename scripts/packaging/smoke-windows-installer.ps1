@@ -557,30 +557,47 @@ try {
   $launchStartInfo.RedirectStandardOutput = $true
   $launchStartInfo.RedirectStandardError = $true
   $launch = [System.Diagnostics.Process]::new()
-  $launch.StartInfo = $launchStartInfo
-  [void]$launch.Start()
-  $launchStdoutTask = $launch.StandardOutput.ReadToEndAsync()
-  $launchStderrTask = $launch.StandardError.ReadToEndAsync()
-  $launchExited = $launch.WaitForExit(600000)
-  if (-not $launchExited) {
-    Show-RuntimeLogs
-    Write-Host "::group::Readiness hang diagnostics"
-    netstat -ano | Select-String ":8787|:5173" | ForEach-Object { Write-Host $_ }
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-      Where-Object {
-        $_.ExecutablePath -and
-        $_.ExecutablePath.StartsWith($installPrefix, [System.StringComparison]::OrdinalIgnoreCase)
-      } |
-      ForEach-Object { Write-Host "PID $($_.ProcessId) $($_.Name): $(Redact-DiagnosticLine ([string]$_.CommandLine))" }
-    Write-Host "::endgroup::"
-    & taskkill.exe /PID $launch.Id /T /F 2>$null | Out-Null
+  try {
+    $launch.StartInfo = $launchStartInfo
+    [void]$launch.Start()
+    $launchStdoutTask = $launch.StandardOutput.ReadToEndAsync()
+    $launchStderrTask = $launch.StandardError.ReadToEndAsync()
+    $launchExited = $launch.WaitForExit(600000)
+    if (-not $launchExited) {
+      Show-RuntimeLogs
+      Write-Host "::group::Readiness hang diagnostics"
+      netstat -ano | Select-String ":8787|:5173" | ForEach-Object { Write-Host $_ }
+      Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+          $_.ExecutablePath -and
+          $_.ExecutablePath.StartsWith($installPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+        } |
+        ForEach-Object { Write-Host "PID $($_.ProcessId) $($_.Name): $(Redact-DiagnosticLine ([string]$_.CommandLine))" }
+      Write-Host "::endgroup::"
+      $killExitCode = 0
+      if (-not $launch.HasExited) {
+        & taskkill.exe /PID $launch.Id /T /F 2>$null | Out-Null
+        $killExitCode = $LASTEXITCODE
+      }
+      if (-not $launch.WaitForExit(15000)) {
+        throw "Runtime readiness smoke failed: the launcher did not exit within 15 seconds after the termination attempt (taskkill exit code $killExitCode)."
+      }
+      if ($killExitCode -ne 0) {
+        Write-Warning "taskkill exited $killExitCode after the readiness timeout. The launcher has exited."
+      }
+    }
+
+    $launchOutputTasks = [System.Threading.Tasks.Task[]]@($launchStdoutTask, $launchStderrTask)
+    if (-not [System.Threading.Tasks.Task]::WaitAll($launchOutputTasks, 15000)) {
+      throw "Runtime readiness smoke failed: launcher output streams did not close within 15 seconds of process exit."
+    }
+    $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($launchStdout, $launchStdoutTask.Result, $utf8WithoutBom)
+    [System.IO.File]::WriteAllText($launchStderr, $launchStderrTask.Result, $utf8WithoutBom)
+    $launchExitCode = $launch.ExitCode
+  } finally {
+    $launch.Dispose()
   }
-  $launch.WaitForExit()
-  $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
-  [System.IO.File]::WriteAllText($launchStdout, $launchStdoutTask.Result, $utf8WithoutBom)
-  [System.IO.File]::WriteAllText($launchStderr, $launchStderrTask.Result, $utf8WithoutBom)
-  $launchExitCode = $launch.ExitCode
-  $launch.Dispose()
   if (-not $launchExited) {
     Show-RuntimeLogs
     throw "Runtime readiness smoke failed: 'goatcitadel launch --wait' did not exit within 10 minutes. Launcher output, runtime logs, and listener/process state are printed above."

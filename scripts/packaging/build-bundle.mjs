@@ -332,35 +332,39 @@ async function installEmbeddedNodeRuntime({ target: bundleTarget, nodeVersion: r
   const archiveName = nodeArchiveName(normalizedVersion, targetInfo);
   const archiveUrl = `https://nodejs.org/dist/${normalizedVersion}/${archiveName}`;
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-node-runtime-"));
-  const archivePath = path.join(tempRoot, archiveName);
-  const expandedRoot = path.join(tempRoot, "expanded");
+  try {
+    const archivePath = path.join(tempRoot, archiveName);
+    const expandedRoot = path.join(tempRoot, "expanded");
 
-  const response = await fetch(archiveUrl);
-  if (!response.ok) {
-    throw new Error(`Failed to download embedded Node runtime from ${archiveUrl} (${response.status})`);
-  }
-  const archiveBuffer = Buffer.from(await response.arrayBuffer());
-  await verifyNodeArchiveChecksum({
-    archiveName,
-    archiveUrl,
-    archiveBuffer,
-    expectedSha256: args.nodeSha256,
-  });
-  fs.writeFileSync(archivePath, archiveBuffer);
-  fs.mkdirSync(expandedRoot, { recursive: true });
+    const response = await fetch(archiveUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to download embedded Node runtime from ${archiveUrl} (${response.status})`);
+    }
+    const archiveBuffer = Buffer.from(await response.arrayBuffer());
+    await verifyNodeArchiveChecksum({
+      archiveName,
+      archiveUrl,
+      archiveBuffer,
+      expectedSha256: args.nodeSha256,
+    });
+    fs.writeFileSync(archivePath, archiveBuffer);
+    fs.mkdirSync(expandedRoot, { recursive: true });
 
-  expandNodeRuntimeArchive({ archivePath, expandedRoot, targetInfo });
+    expandNodeRuntimeArchive({ archivePath, expandedRoot, targetInfo });
 
-  const extractedNodePath =
-    targetInfo.nodeArchiveType === "zip"
-      ? path.join(expandedRoot, nodeArchiveRoot(normalizedVersion, targetInfo), "node.exe")
-      : path.join(expandedRoot, nodeArchiveRoot(normalizedVersion, targetInfo), "bin", "node");
-  if (!fs.existsSync(extractedNodePath)) {
-    throw new Error(`Embedded Node runtime was extracted without ${runtimeFilename}: ${extractedNodePath}`);
-  }
-  fs.copyFileSync(extractedNodePath, destinationPath);
-  if (targetInfo.platform !== "windows") {
-    fs.chmodSync(destinationPath, 0o755);
+    const extractedNodePath =
+      targetInfo.nodeArchiveType === "zip"
+        ? path.join(expandedRoot, nodeArchiveRoot(normalizedVersion, targetInfo), "node.exe")
+        : path.join(expandedRoot, nodeArchiveRoot(normalizedVersion, targetInfo), "bin", "node");
+    if (!fs.existsSync(extractedNodePath)) {
+      throw new Error(`Embedded Node runtime was extracted without ${runtimeFilename}: ${extractedNodePath}`);
+    }
+    fs.copyFileSync(extractedNodePath, destinationPath);
+    if (targetInfo.platform !== "windows") {
+      fs.chmodSync(destinationPath, 0o755);
+    }
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 3 });
   }
 }
 

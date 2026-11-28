@@ -1,4 +1,5 @@
 import process from "node:process";
+import { formatWithOptions } from "node:util";
 import chalk from "chalk";
 import type { FastifyBaseLogger } from "fastify";
 import { SESSION_CONTROL_TOKEN_HEADER } from "@goatcitadel/contracts";
@@ -97,10 +98,14 @@ export function createTerminalReporter(options: TerminalReporterOptions): Termin
   return {
     verbose,
     trace(message: string, meta?: unknown) {
-      emitTerminalLine("trace", options.scope, message, meta, verbose, bindings);
+      if (verbose) {
+        emitTerminalLine("trace", options.scope, message, meta, verbose, bindings);
+      }
     },
     debug(message: string, meta?: unknown) {
-      emitTerminalLine("debug", options.scope, message, meta, verbose, bindings);
+      if (verbose) {
+        emitTerminalLine("debug", options.scope, message, meta, verbose, bindings);
+      }
     },
     info(message: string, meta?: unknown) {
       emitTerminalLine("info", options.scope, message, meta, verbose, bindings);
@@ -136,7 +141,6 @@ export function createGatewayLogger(verbose = isVerboseLoggingEnabled()): Fastif
 
 class PrettyGatewayLogger implements FastifyBaseLogger {
   public level: TerminalLevel | "silent";
-  private readonly reporter;
 
   public constructor(
     private readonly verbose: boolean,
@@ -144,11 +148,6 @@ class PrettyGatewayLogger implements FastifyBaseLogger {
     level: TerminalLevel | "silent" = verbose ? "debug" : "info",
   ) {
     this.level = level;
-    this.reporter = createTerminalReporter({
-      scope: "gateway",
-      verbose,
-      bindings,
-    });
   }
 
   public child(bindings: LoggerBindings, options?: LoggerChildOptions): FastifyBaseLogger {
@@ -194,26 +193,7 @@ class PrettyGatewayLogger implements FastifyBaseLogger {
       return;
     }
     const normalized = normalizeLogArgs(args);
-    switch (level) {
-      case "trace":
-        this.reporter.trace(normalized.message, normalized.meta);
-        break;
-      case "debug":
-        this.reporter.debug(normalized.message, normalized.meta);
-        break;
-      case "info":
-        this.reporter.info(normalized.message, normalized.meta);
-        break;
-      case "warn":
-        this.reporter.warn(normalized.message, normalized.meta);
-        break;
-      case "error":
-        this.reporter.error(normalized.message, normalized.meta);
-        break;
-      case "fatal":
-        this.reporter.fatal(normalized.message, normalized.meta);
-        break;
-    }
+    emitTerminalLine(level, "gateway", normalized.message, normalized.meta, this.verbose, this.bindings);
   }
 }
 
@@ -230,10 +210,6 @@ function emitTerminalLine(
   bindings: Record<string, unknown>,
   variant: "default" | "success" = "default",
 ): void {
-  if ((level === "debug" || level === "trace") && !verbose) {
-    return;
-  }
-
   const timestamp = chalk.dim(
     new Date().toLocaleTimeString("en-US", {
       hour12: false,
@@ -474,22 +450,26 @@ function normalizeLogArgs(args: unknown[]): { message: string; meta?: unknown } 
   }
 
   if (typeof args[0] === "string") {
+    const interpolated = interpolateLogMessage(args[0], args.slice(1));
+    if (interpolated !== undefined) {
+      return { message: interpolated };
+    }
     return {
       message: args[0],
       meta: args.length > 1 ? args[1] : undefined,
     };
   }
 
-  if (args[0] instanceof Error) {
+  if (typeof args[1] === "string") {
     return {
-      message: typeof args[1] === "string" ? args[1] : args[0].message,
+      message: interpolateLogMessage(args[1], args.slice(2)) ?? args[1],
       meta: args[0],
     };
   }
 
-  if (typeof args[1] === "string") {
+  if (args[0] instanceof Error) {
     return {
-      message: args[1],
+      message: args[0].message,
       meta: args[0],
     };
   }
@@ -506,6 +486,18 @@ function normalizeLogArgs(args: unknown[]): { message: string; meta?: unknown } 
     message: String(args[0] ?? ""),
     meta: args.length > 1 ? args[1] : undefined,
   };
+}
+
+function interpolateLogMessage(message: string, values: unknown[]): string | undefined {
+  const count = message.match(/%%|%[sdifjoOc]/g)?.filter((token) => token !== "%%").length ?? 0;
+  if (count === 0 || values.length === 0) {
+    return undefined;
+  }
+  return formatWithOptions(
+    { customInspect: false, depth: 2 },
+    message,
+    ...values.slice(0, count).map((value) => sanitizeUnknown(value, false)),
+  );
 }
 
 function inferMessageFromMeta(meta: unknown): string {
@@ -537,14 +529,21 @@ function fallbackMessageForLevel(level: TerminalLevel): string {
 
 function sanitizeUnknown(value: unknown, verbose: boolean, seen = new WeakSet<object>()): unknown {
   if (value instanceof Error) {
+    const code = "code" in value ? value.code : undefined;
     return {
       error: redactSecretsInString(value.message),
-      code: "code" in value ? (value as Error & { code?: string }).code : undefined,
+      code:
+        typeof code === "string" || typeof code === "number" || typeof code === "bigint"
+          ? sanitizeUnknown(code, verbose)
+          : undefined,
       stack: verbose && value.stack ? redactSecretsInString(value.stack) : undefined,
     };
   }
   if (typeof value === "string") {
     return redactSecretsInString(value);
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {

@@ -1,11 +1,51 @@
 import { SESSION_CONTROL_GENERATION_HEADER, SESSION_CONTROL_TOKEN_HEADER } from "@goatcitadel/contracts";
 import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createGatewayLogger } from "./runtime-ux.js";
+import { createGatewayLogger, createTerminalReporter } from "./runtime-ux.js";
 
 describe("runtime logger coverage", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("honors explicit logger levels independently of metadata verbosity", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const logger = createGatewayLogger(false);
+    logger.debug("default debug stays hidden");
+    createTerminalReporter({ scope: "test", verbose: false }).trace("reporter trace stays hidden");
+    logger.level = "debug";
+    logger.debug({ hiddenDetail: "detail" }, "explicit debug");
+    logger.child({}, { level: "trace" }).trace("explicit child trace");
+
+    expect(log).toHaveBeenCalledTimes(2);
+    expect(log.mock.calls[0]?.[0]).toContain("explicit debug");
+    expect(log.mock.calls[0]?.[0]).not.toContain("hiddenDetail");
+    expect(log.mock.calls[1]?.[0]).toContain("explicit child trace");
+  });
+
+  it("interpolates logger arguments and preserves redaction", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logger = createGatewayLogger(false);
+    const credential = "interpolated-sensitive-value";
+    logger.info("Listening on %s:%d", "localhost", 8787, "unused argument");
+    logger.warn({ operation: "connect" }, "Credentials %j", { password: credential });
+    logger.warn(new Error("refused"), "Retry %d", 2);
+
+    expect(log.mock.calls[0]?.[0]).toContain("Listening on localhost:8787");
+    expect(log.mock.calls[0]?.[0]).not.toContain("unused argument");
+    expect(warn.mock.calls[0]?.[0]).toContain('Credentials {"password":"[redacted]"}');
+    expect(warn.mock.calls[0]?.[0]).not.toContain(credential);
+    expect(warn.mock.calls[1]?.[0]).toContain("Retry 2");
+    expect(warn.mock.calls[1]?.[0]).toContain("refused");
+  });
+
+  it("serializes nested BigInt metadata without loss of precision", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logger = createGatewayLogger(true);
+    logger.warn({ timing: { samples: [9007199254740993n] } }, "Slow operation");
+
+    expect(warn.mock.calls[0]?.[0]).toContain('"samples":["9007199254740993"]');
   });
 
   it("sanitizes circular metadata without crashing in verbose mode", () => {

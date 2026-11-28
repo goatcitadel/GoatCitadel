@@ -36,8 +36,9 @@ test("manual unsigned and tagged signed Windows jobs call one shared lifecycle s
     signedJob,
     /Admit exact signed Windows release input[\s\S]*?Smoke install signed Windows installer[\s\S]*?smoke-windows-installer\.ps1[\s\S]*?-ExpectedReleaseManifestPath "artifacts\/installers\/windows\/app\/release-manifest\.json"[\s\S]*?-TrustMode signed/,
   );
-  assert.ok(
-    signedJob.indexOf("Checkout installer smoke owner") < signedJob.indexOf("Smoke install signed Windows installer"),
+  assert.match(
+    signedJob,
+    /- name: Checkout installer smoke owner[\s\S]*?- name: Smoke install signed Windows installer/,
     "signed job must check out the shared smoke owner before invoking it",
   );
   assert.ok(
@@ -107,7 +108,12 @@ test("unsigned trust mode permits omitted or unsigned identity without weakening
     smokeScript,
     /\$launchStartInfo = \[System\.Diagnostics\.ProcessStartInfo\]::new\(\)[\s\S]*?RedirectStandardOutput = \$true[\s\S]*?RedirectStandardError = \$true[\s\S]*?\$launch = \[System\.Diagnostics\.Process\]::new\(\)/,
   );
-  assert.match(smokeScript, /ReadToEndAsync\(\)[\s\S]*?WaitForExit\(600000\)[\s\S]*?\$launch\.WaitForExit\(\)/);
+  assert.match(
+    smokeScript,
+    /ReadToEndAsync\(\)[\s\S]*?\$launch\.WaitForExit\(600000\)[\s\S]*?taskkill\.exe \/PID \$launch\.Id[\s\S]*?\$killExitCode = \$LASTEXITCODE[\s\S]*?\$launch\.WaitForExit\(15000\)[\s\S]*?\$killExitCode -ne 0/,
+  );
+  assert.match(smokeScript, /\[System\.Threading\.Tasks\.Task\]::WaitAll\(\$launchOutputTasks, 15000\)/);
+  assert.doesNotMatch(smokeScript, /\$launch\.WaitForExit\(\)/);
   assert.match(smokeScript, /WriteAllText\(\$launchStdout, \$launchStdoutTask\.Result/);
   assert.match(smokeScript, /WriteAllText\(\$launchStderr, \$launchStderrTask\.Result/);
   assert.match(smokeScript, /if \(\$launchExitCode -ne 0\)/);

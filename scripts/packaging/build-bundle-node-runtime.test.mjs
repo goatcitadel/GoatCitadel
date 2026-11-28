@@ -25,12 +25,12 @@ async function fixture(row) {
   fs.writeFileSync(execPath, bytes);
   const fetches = [],
     downloadsForbidden = new Error("fixture stopped at exact archive fetch; no network");
-  let unexpectedVerification = false,
-    unexpectedExpansion = false;
+  const stages = [];
   const install = vm.runInNewContext(
     "(" + body + ")",
     {
       fs,
+      Buffer,
       path,
       os: { tmpdir: () => temp },
       requirePackagingTarget,
@@ -40,15 +40,21 @@ async function fixture(row) {
       args: {},
       fetch: async (url) => {
         fetches.push(url);
+        if (row.download) {
+          return { ok: true, arrayBuffer: async () => bytes };
+        }
         throw downloadsForbidden;
       },
-      verifyNodeArchiveChecksum: async () => {
-        unexpectedVerification = true;
-        throw new Error("unexpected verifier");
+      verifyNodeArchiveChecksum: async ({ archiveBuffer }) => {
+        assert.deepEqual(archiveBuffer, bytes);
+        stages.push("verified");
       },
-      expandNodeRuntimeArchive: () => {
-        unexpectedExpansion = true;
-        throw new Error("unexpected expansion");
+      expandNodeRuntimeArchive: ({ archivePath, expandedRoot, targetInfo }) => {
+        assert.deepEqual(fs.readFileSync(archivePath), bytes);
+        stages.push("expanded");
+        const extracted = path.join(expandedRoot, nodeArchiveRoot("v22.23.4", targetInfo), "node.exe");
+        fs.mkdirSync(path.dirname(extracted), { recursive: true });
+        fs.writeFileSync(extracted, bytes);
       },
     },
     { filename },
@@ -66,18 +72,23 @@ async function fixture(row) {
       assert.notEqual(clone.ino, original.ino);
       if (row.platform !== "win32" && process.platform !== "win32") assert.equal(clone.mode & 0o777, 0o755);
     } else {
-      await assert.rejects(promise, (error) => error === downloadsForbidden);
+      if (row.download) {
+        await promise;
+        assert.deepEqual(fs.readFileSync(path.join(destinationDir, "node.exe")), bytes);
+      } else {
+        await assert.rejects(promise, (error) => error === downloadsForbidden);
+        assert.equal(
+          fs.existsSync(path.join(destinationDir, requirePackagingTarget(row.target).nodeExecutableName)),
+          false,
+        );
+      }
       const version = "v" + (row.version ?? "22.23.4").replace(/^v/u, "");
       assert.deepEqual(fetches, [
         "https://nodejs.org/dist/" + version + "/" + nodeArchiveName(version, requirePackagingTarget(row.target)),
       ]);
-      assert.equal(
-        fs.existsSync(path.join(destinationDir, requirePackagingTarget(row.target).nodeExecutableName)),
-        false,
-      );
     }
-    assert.equal(unexpectedVerification, false);
-    assert.equal(unexpectedExpansion, false);
+    assert.deepEqual(stages, row.download ? ["verified", "expanded"] : []);
+    assert.deepEqual(fs.readdirSync(temp).sort(), ["out", "owned-node.bin"]);
   } finally {
     assert.match(path.basename(temp), /^gc-node-runtime-[a-z0-9]+$/iu);
     assert.equal(path.dirname(temp), parent);
@@ -117,6 +128,13 @@ for (const row of [
     target: "windows-x64",
     version: "22.23.5",
     local: false,
+  },
+  {
+    name: "Windows archive install removes its staging directory after copying",
+    platform: "win32",
+    arch: "x64",
+    target: "windows-arm64",
+    download: true,
   },
   {
     name: "Linux matching runtime retains local copy",
@@ -164,12 +182,15 @@ test("SQLite schema reference is generated in the staged Gateway with the suppli
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(path.join(storage, "package.json"), '{"type":"module"}');
   fs.writeFileSync(path.join(path.dirname(target), "schema-reference.js"), "");
-  fs.writeFileSync(path.join(storage, "sqlite.js"), `
+  fs.writeFileSync(
+    path.join(storage, "sqlite.js"),
+    `
     export function buildPackagedSqliteSchemaReference() {
       return { compatibilityKey: "a".repeat(64), shapeSha256: "b".repeat(64),
         shape: { entries: [{ name: "staged_shape" }] } };
     }
-  `);
+  `,
+  );
   assert.equal(stageSqliteSchemaReference(stage, process.execPath), true);
   const packagedSqliteSchemaReference = JSON.parse(fs.readFileSync(target, "utf8"));
   assert.deepEqual(packagedSqliteSchemaReference.shape.entries, [{ name: "staged_shape" }]);

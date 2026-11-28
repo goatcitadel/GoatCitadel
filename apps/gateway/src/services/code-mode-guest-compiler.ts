@@ -88,9 +88,22 @@ function findForbiddenGuestSourceReference(root: Node): string | undefined {
         return;
       }
     }
-    if (ast.isPropertyAccessExpression(node) && isProcessGuestSourceExpression(node.expression)) {
-      forbiddenLabel = "process";
-      return;
+    if (ast.isPropertyAccessExpression(node) || ast.isElementAccessExpression(node)) {
+      const name = readStaticGuestPropertyName(node);
+      if (name === "process" || isProcessGuestSourceExpression(node.expression)) {
+        forbiddenLabel = "process";
+        return;
+      }
+      if (
+        name &&
+        ast.isIdentifier(node.expression) &&
+        (node.expression.text === "globalThis" || node.expression.text === "global")
+      ) {
+        forbiddenLabel = readBlockedGuestSourceIdentifierLabel(name);
+        if (forbiddenLabel) {
+          return;
+        }
+      }
     }
     if (ast.isIdentifier(node) && isBlockedGuestSourceIdentifierReference(node)) {
       forbiddenLabel = readBlockedGuestSourceIdentifierLabel(node.text);
@@ -114,10 +127,8 @@ function readBlockedGuestSourceCallLabel(expression: Expression): string | undef
   if (ast.isIdentifier(expression)) {
     return readBlockedGuestSourceIdentifierLabel(expression.text);
   }
-  if (ast.isPropertyAccessExpression(expression)) {
-    return readBlockedGuestSourceIdentifierLabel(expression.name.text);
-  }
-  return undefined;
+  const name = readStaticGuestPropertyName(expression);
+  return name ? readBlockedGuestSourceIdentifierLabel(name) : undefined;
 }
 
 function readBlockedGuestSourceIdentifierLabel(text: string): string | undefined {
@@ -140,10 +151,25 @@ function isProcessGuestSourceExpression(expression: Expression): boolean {
   if (ast.isIdentifier(expression)) {
     return expression.text === "process";
   }
-  if (ast.isPropertyAccessExpression(expression)) {
-    return expression.name.text === "process" || isProcessGuestSourceExpression(expression.expression);
+  if (ast.isPropertyAccessExpression(expression) || ast.isElementAccessExpression(expression)) {
+    return (
+      readStaticGuestPropertyName(expression) === "process" || isProcessGuestSourceExpression(expression.expression)
+    );
   }
   return false;
+}
+
+function readStaticGuestPropertyName(expression: Expression): string | undefined {
+  if (ast.isPropertyAccessExpression(expression)) {
+    return expression.name.text;
+  }
+  if (ast.isElementAccessExpression(expression)) {
+    const key = expression.argumentExpression;
+    if (ast.isStringLiteral(key) || ast.isNoSubstitutionTemplateLiteral(key)) {
+      return key.text;
+    }
+  }
+  return undefined;
 }
 
 function isBlockedGuestSourceIdentifierReference(identifier: Identifier): boolean {
