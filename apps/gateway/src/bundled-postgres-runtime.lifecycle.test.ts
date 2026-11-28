@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { existsSync, mkdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -107,6 +108,7 @@ beforeEach(() => {
   mocks.tcpPortAcceptsConnections.mockReset();
   mocks.tcpPortAcceptsConnections.mockResolvedValue(false);
   mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
+    if (path.basename(command) === nativeExecutableName("initdb")) mkdirSync(args[1], { recursive: true });
     if (command === "docker" && args[0] === "info") {
       return "";
     }
@@ -603,6 +605,10 @@ describe("bundled postgres runtime lifecycle", () => {
 
     mocks.spawn.mockImplementation(() => mockPgCtlExit(1));
     mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
+      if (command === initdb) {
+        expect(existsSync(args[1])).toBe(false);
+        mkdirSync(args[1]);
+      }
       if (command === pgCtl && args.includes("stop")) {
         throw new Error("already stopped");
       }

@@ -640,6 +640,11 @@ try {
   Stop-InstalledProcesses
   Start-Sleep -Seconds 2
 
+  if (-not $upgradeMode -and -not $liveMode) {
+    . (Join-Path $PSScriptRoot "lib/windows-packaged-postgres-smoke.ps1")
+    Test-PackagedPostgresRecovery -Node $bundledNode -Launcher $launcher -AppHome $appHome -RuntimeBase $runtimeBase
+  }
+
   if ($liveMode) {
     & $bundledNode (Join-Path $PSScriptRoot "windows-installed-live.mjs") `
       $appHome $smokeRoot $LiveAcceptance.EvidenceDirectory $LiveAcceptance.OllamaExe $LiveAcceptance.NtfyExe

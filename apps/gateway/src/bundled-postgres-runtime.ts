@@ -528,7 +528,7 @@ async function tryStartNativeBundledPostgres(
   const dataDir = path.resolve(config.rootDir, config.assistant.database.bundledPostgres.dataDir);
   const initialized = bundledClusterIsInitialized(dataDir);
 
-  // An explicit binDir always wins. Auto-discovery only adopts a host install
+  // A usable explicit binDir wins. Auto-discovery only adopts a host install
   // for a data directory we have not initialised yet: an existing cluster may
   // have been created by the Docker backend (postgres:16-alpine writes a Linux
   // cluster that a native host binary cannot start), so silently switching
@@ -549,9 +549,11 @@ async function tryStartNativeBundledPostgres(
     return undefined;
   }
 
-  setBootCheckpoint("native-pg:mkdir-dataDir");
-  await fs.mkdir(dataDir, { recursive: true });
   if (!initialized) {
+    // Let initdb create PGDATA. On Windows it may be unable to change the
+    // permissions of a directory precreated by the Gateway process.
+    setBootCheckpoint("native-pg:mkdir-dataDir-parent");
+    await fs.mkdir(path.dirname(dataDir), { recursive: true });
     // Initialise with scram-sha-256 against the generated superuser password
     // rather than trust auth. Native clusters bind loopback-only, but native is
     // now the default backend, so this must not be weaker than the Docker path
@@ -977,8 +979,40 @@ function resolveNativePostgresCommands(config: GatewayRuntimeConfig): NativePost
   if (!configuredBinDir || configuredBinDir === AUTO_NATIVE_BIN_DIR) {
     return undefined;
   }
-  const binDir = path.isAbsolute(configuredBinDir) ? configuredBinDir : path.resolve(config.rootDir, configuredBinDir);
-  return nativePostgresCommandsInBinDir(binDir, process.platform);
+  const binDir = path.resolve(config.rootDir, configuredBinDir);
+  return nativePostgresCommandsInBinDir(binDir, process.platform) ?? resolvePackagedWindowsPostgres16(config, binDir);
+}
+
+function resolvePackagedWindowsPostgres16(config: GatewayRuntimeConfig, missingBinDir: string) {
+  const appDir = process.env.GOATCITADEL_APP_DIR?.trim();
+  if (
+    process.platform !== "win32" ||
+    (process.arch !== "x64" && process.arch !== "arm64") ||
+    !appDir ||
+    !fsSync.existsSync(path.join(appDir, "release-manifest.json")) ||
+    !/[/\\]postgresql[/\\]16[/\\]bin$/i.test(path.normalize(missingBinDir))
+  ) {
+    return undefined;
+  }
+
+  const dataDir = path.resolve(config.rootDir, config.assistant.database.bundledPostgres.dataDir);
+  // An initialized cluster must be GoatCitadel-managed Windows PostgreSQL 16.
+  // An unrecognized or partially created cluster is never initialized over.
+  const stat = fsSync.lstatSync(dataDir, { throwIfNoEntry: false });
+  if (stat) {
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return undefined;
+    if (bundledClusterIsInitialized(dataDir)) {
+      if (
+        !nativeBackendMarkerExists(dataDir) ||
+        fsSync.readFileSync(path.join(dataDir, "PG_VERSION"), "utf8").trim() !== "16"
+      ) {
+        return undefined;
+      }
+    } else if (fsSync.readdirSync(dataDir).length > 0) {
+      return undefined;
+    }
+  }
+  return nativePostgresCommandsInBinDir(path.join(appDir, "runtime", "pgsql", "bin"), "win32");
 }
 
 function bundledClusterIsInitialized(dataDir: string): boolean {
