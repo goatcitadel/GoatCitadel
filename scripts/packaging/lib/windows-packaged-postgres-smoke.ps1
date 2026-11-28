@@ -40,6 +40,13 @@ function Test-PackagedPostgresRecovery {
     return $identifier.Matches[0].Groups[1].Value
   }
 
+  function Stop-TestCluster {
+    if (Test-Path -LiteralPath (Join-Path $data "postmaster.pid")) {
+      & $pgCtl -D $data stop -m fast -w -t 45 | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "The disposable PostgreSQL cluster did not stop cleanly." }
+    }
+  }
+
   try {
     $initialId = $null
     foreach ($attempt in 1, 2) {
@@ -51,17 +58,14 @@ function Test-PackagedPostgresRecovery {
       if ($attempt -eq 1) { $initialId = $identity }
       elseif ($identity -cne $initialId) { throw "Packaged PostgreSQL did not preserve the existing cluster." }
       & $Node $Launcher stop --json | Out-Null
-      if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath (Join-Path $data "postmaster.pid"))) {
-        throw "Packaged PostgreSQL did not stop cleanly with the Gateway."
-      }
+      if ($LASTEXITCODE -ne 0) { throw "The PostgreSQL smoke Gateway did not stop." }
+      Stop-TestCluster
     }
     Write-Host "Packaged PostgreSQL initialized and reopened the same cluster with missing host PostgreSQL 16 tools."
   } finally {
     try {
       & $Node $Launcher stop --json | Out-Null
-      if (Test-Path -LiteralPath (Join-Path $data "postmaster.pid")) {
-        & $pgCtl -D $data stop -m fast -w | Out-Null
-      }
+      Stop-TestCluster
     } finally {
       foreach ($name in $previous.Keys) {
         [Environment]::SetEnvironmentVariable($name, $previous[$name], "Process")

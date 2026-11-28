@@ -813,7 +813,7 @@ async function stageWindowsPostgres16(runtimeDir) {
   if (createHash("sha256").update(bytes).digest("hex") !== expectedSha256) {
     throw new Error(`PostgreSQL archive checksum mismatch: ${archiveName}`);
   }
-  const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-postgres-"));
+  const scratchDir = fs.mkdtempSync(path.join(outDir, ".goatcitadel-postgres-"));
   try {
     const archive = path.join(scratchDir, archiveName);
     fs.writeFileSync(archive, bytes);
