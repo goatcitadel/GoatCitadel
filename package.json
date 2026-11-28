@@ -295,7 +295,7 @@
     "sharp": "0.35.5",
     "tsx": "4.22.4",
     "typescript": "npm:@typescript/typescript6@6.0.2",
-    "typescript-7": "npm:typescript@7.0.2",
+    "typescript-7": "npm:typescript@7.1.0-beta",
     "typescript-eslint": "8.58.0",
     "vitest": "4.1.12",
     "zod": "4.6.6"

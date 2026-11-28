@@ -12,6 +12,10 @@ type TerminalReporterOptions = {
 };
 type LoggerBindings = Record<string, unknown>;
 type LoggerChildOptions = { level?: string };
+type TerminalReporter = Record<TerminalLevel | "success", (message: string, meta?: unknown) => void> & {
+  verbose: boolean;
+  child(childBindings?: LoggerBindings): TerminalReporter;
+};
 
 const levelWeight: Record<TerminalLevel | "silent", number> = {
   trace: 10,
@@ -86,7 +90,7 @@ export function formatVerboseFlagHint(): string {
   return chalk.dim("use --verbose for request traces and full startup detail");
 }
 
-export function createTerminalReporter(options: TerminalReporterOptions) {
+export function createTerminalReporter(options: TerminalReporterOptions): TerminalReporter {
   const verbose = options.verbose ?? isVerboseLoggingEnabled();
   const bindings = sanitizeObject(options.bindings);
 

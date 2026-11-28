@@ -1,12 +1,12 @@
 # TypeScript 7 Compiler
 
-GoatCitadel uses TypeScript 7 as the workspace compiler while keeping the TypeScript 6 API package available for tools and runtime code that import `typescript`.
+GoatCitadel uses the TypeScript 7.1 beta for workspace builds and Gateway Code Mode. The root TypeScript 6 API package still supports lint and verification tooling.
 
 ## Toolchain Layout
 
-- `typescript-7` is pinned to `npm:typescript@7.0.2` and provides the default `tsc` binary.
+- `typescript-7` is pinned to `npm:typescript@7.1.0-beta` and provides the default `tsc` binary.
 - `typescript` is pinned to `npm:@typescript/typescript6@6.0.2` so API consumers and TypeScript-aware tooling still resolve the stable TS6 API surface.
-- `apps/gateway` keeps the TS6 compatibility package as a production dependency because Code Mode source validation imports `typescript` at runtime.
+- `apps/gateway` declares the same beta as a production dependency. Code Mode uses its async API for source validation and isolated TypeScript emit.
 - `pnpm ts7:toolchain` verifies that `tsc` resolves to TS7, `tsc6` resolves to TS6, and `import "typescript"` resolves to the TS6 API package.
 
 ## Commands
@@ -14,7 +14,7 @@ GoatCitadel uses TypeScript 7 as the workspace compiler while keeping the TypeSc
 - `pnpm ts7:toolchain`
   Checks the compiler/API split described above.
 - `pnpm ts7:typecheck`
-  Runs the stable TS7 compiler across the explicit workspace project groups:
+  Runs the pinned TS7 compiler across the explicit workspace project groups:
   - `gateway`
   - `mission-control-next`
 - `pnpm ts7:build`
@@ -31,7 +31,6 @@ During `pnpm dev`, `GOATCITADEL_DEV_WORKSPACE_TSC_GRAPH=1` routes the bootstrap/
 ## What Stays on the TS6 API
 
 - Direct `typescript` API consumers, including:
-  - `apps/gateway/src/services/capability-system-service.ts`
   - `scripts/coverage-collect.mjs`
   - `scripts/verification/lib/architecture-metrics.mjs`
 - `typescript-eslint`
@@ -57,4 +56,4 @@ Each TS6/TS7 command gets one warm-up run and one measured run by default. The r
 
 - Treat benchmark output as performance evidence, not as a replacement for required release verification lanes.
 - A meaningful win is a consistent median reduction across measured runs, not a single fast outlier.
-- If a future TS7 API release replaces the need for `@typescript/typescript6`, remove the compatibility package only after `typescript-eslint`, gateway runtime source validation, and verification scripts pass against the TS7 API.
+- Remove `@typescript/typescript6` after `typescript-eslint` and the remaining verification scripts work with the TS7 API.

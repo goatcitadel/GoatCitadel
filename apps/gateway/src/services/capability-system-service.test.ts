@@ -1401,7 +1401,7 @@ describe("CapabilitySystemService", () => {
 
   // Docker proof lane (#368, `pnpm verify:code-mode:docker`): runs only when CI provides a pulled, digest-pinned image.
   it.skipIf(!process.env.GOATCITADEL_CODE_MODE_DOCKER_PROOF_IMAGE)(
-    "docker proof: executes an approved Code Mode run in a digest-pinned container with hash-checked artifacts",
+    "docker proof: executes an approved TypeScript Code Mode run in a digest-pinned container with hash-checked artifacts",
     async () => {
       const image = process.env.GOATCITADEL_CODE_MODE_DOCKER_PROOF_IMAGE!;
       expect(image).toMatch(/@sha256:[a-f0-9]{64}$/);
@@ -1415,9 +1415,10 @@ describe("CapabilitySystemService", () => {
         }) as never,
       });
 
+      const source = "const sum: number = 1 + 2; return { ok: true, sum };";
       const run = await harness.service.createCodeModeRun({
-        language: "javascript",
-        source: "return { ok: true, sum: 1 + 2 };",
+        language: "typescript",
+        source,
         executionBackendId: "docker-container",
       });
       expect(run).toMatchObject({ status: "approval_pending", executionBackend: { backendId: "docker-container" } });
@@ -1444,7 +1445,7 @@ describe("CapabilitySystemService", () => {
         const bytes = await fs.readFile(path.resolve(harness.rootDir, artifact.relPath));
         expect(createHash("sha256").update(bytes).digest("hex"), artifact.relPath).toBe(artifact.sha256);
       }
-      expect(finished.codeHash).toBe(sha256Text("return { ok: true, sum: 1 + 2 };"));
+      expect(finished.codeHash).toBe(sha256Text(source));
     },
     180_000,
   );

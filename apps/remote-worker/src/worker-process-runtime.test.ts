@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ConnectedWorkerConfig } from "./worker-runtime-config.js";
-import type { ConnectedWorkerReport } from "./connected-worker-runtime.js";
+import type { ConnectedWorkerConfig, WorkerRunConfig } from "./worker-runtime-config.js";
+import type { ConnectedWorkerReport, runConnectedWorker } from "./connected-worker-runtime.js";
 import { runWorkerProcess } from "./worker-process-runtime.js";
 
 const config = { runId: "process-fixture", stopAfter: "complete", runMode: "continuous" } as ConnectedWorkerConfig;
@@ -13,26 +13,47 @@ const report = (outcome: "completed" | "stopped", awaiting?: string): ConnectedW
 });
 
 describe("connected worker foreground lifecycle", () => {
-  it.each(["native_runtime_owner", "native_parent_continuation"])("does not retry unresolved %s work", async awaiting => {
-    const nativeRuntime = { run: vi.fn() }, runOnce = vi.fn(async () => report("stopped", awaiting)), waitForOffer = vi.fn();
-    await expect(runWorkerProcess(config, { signal: new AbortController().signal, nativeRuntime, runOnce, publishReport: vi.fn(), waitForOffer }))
-      .rejects.toThrow("operator reconciliation");
-    expect(runOnce).toHaveBeenCalledWith(config, expect.objectContaining({ nativeRuntime }));
-    expect(runOnce).toHaveBeenCalledTimes(1); expect(waitForOffer).not.toHaveBeenCalled();
-  });
-  it.each(["approval_resolution", "parent_recovery"])("polls serially through %s waits and stops cleanly without abandoning retained work", async (awaiting) => {
-    const shutdown = new AbortController();
-    const runOnce = vi.fn(async () => report("stopped", awaiting));
-    const publishReport = vi.fn();
-    const waitForOffer = vi.fn(async () => { if (runOnce.mock.calls.length === 3) shutdown.abort(); });
-    await runWorkerProcess(config, { signal: shutdown.signal, runOnce, publishReport, waitForOffer });
-    expect(runOnce).toHaveBeenCalledTimes(3);
-    expect(waitForOffer).toHaveBeenCalledTimes(3);
-    expect(publishReport).toHaveBeenLastCalledWith(expect.objectContaining({
-      reason: "shutdown_requested", recoveryRequired: false,
-      lastReport: expect.objectContaining({ awaiting }),
-    }));
-  });
+  it.each(["native_runtime_owner", "native_parent_continuation"])(
+    "does not retry unresolved %s work",
+    async (awaiting) => {
+      const nativeRuntime = { run: vi.fn() },
+        runOnce = vi.fn(async () => report("stopped", awaiting)),
+        waitForOffer = vi.fn();
+      await expect(
+        runWorkerProcess(config, {
+          signal: new AbortController().signal,
+          nativeRuntime,
+          runOnce,
+          publishReport: vi.fn(),
+          waitForOffer,
+        }),
+      ).rejects.toThrow("operator reconciliation");
+      expect(runOnce).toHaveBeenCalledWith(config, expect.objectContaining({ nativeRuntime }));
+      expect(runOnce).toHaveBeenCalledTimes(1);
+      expect(waitForOffer).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["approval_resolution", "parent_recovery"])(
+    "polls serially through %s waits and stops cleanly without abandoning retained work",
+    async (awaiting) => {
+      const shutdown = new AbortController();
+      const runOnce = vi.fn(async () => report("stopped", awaiting));
+      const publishReport = vi.fn();
+      const waitForOffer = vi.fn(async () => {
+        if (runOnce.mock.calls.length === 3) shutdown.abort();
+      });
+      await runWorkerProcess(config, { signal: shutdown.signal, runOnce, publishReport, waitForOffer });
+      expect(runOnce).toHaveBeenCalledTimes(3);
+      expect(waitForOffer).toHaveBeenCalledTimes(3);
+      expect(publishReport).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          reason: "shutdown_requested",
+          recoveryRequired: false,
+          lastReport: expect.objectContaining({ awaiting }),
+        }),
+      );
+    },
+  );
 
   it("waits between empty polls and completed assignments without overlapping work", async () => {
     const shutdown = new AbortController();
@@ -104,8 +125,8 @@ describe("connected worker foreground lifecycle", () => {
   it("propagates process cancellation into the active request and retains recovery truth", async () => {
     const shutdown = new AbortController();
     const publishReport = vi.fn();
-    const runOnce = vi.fn(async (_config, { signal } = {}) => {
-      expect(signal).toBe(shutdown.signal);
+    const runOnce = vi.fn(async (_config: WorkerRunConfig, options?: Parameters<typeof runConnectedWorker>[1]) => {
+      expect(options?.signal).toBe(shutdown.signal);
       shutdown.abort();
       throw new Error("cancelled request with unknown outcome");
     });

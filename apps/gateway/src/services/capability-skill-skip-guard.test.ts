@@ -1,7 +1,9 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
+import { API } from "typescript-7/async";
+import type { Node } from "typescript-7/ast";
+import { isCallExpression, isFunctionLikeDeclaration, isPropertyAccessExpression } from "typescript-7/ast/is";
 import { describe, expect, it } from "vitest";
 import { OPERATOR_SKILL_SKIP_NOTES } from "./capability-skill-actions-service.js";
 
@@ -84,7 +86,7 @@ describe("Capabilities skill switch skip guard", () => {
     expect(() => assertSkipNotesOnlyInSwitch(inventory)).not.toThrow();
   });
 
-  it("lets only the Capabilities skill switch ask for a skill approval and resolve it", () => {
+  it("lets only the Capabilities skill switch ask for a skill approval and resolve it", async () => {
     const inventory = readInventory();
     // The switch and both facades really name both calls, so each rule below is exercised.
     for (const path of [SKIP_SERVICE, ...OWNER_FACADES]) {
@@ -98,7 +100,7 @@ describe("Capabilities skill switch skip guard", () => {
         /\.createSkillHubApproval\(/u,
       );
     }
-    expect(() => assertOnlySwitchResolvesItsRequest(inventory)).not.toThrow();
+    await assertOnlySwitchResolvesItsRequest(inventory);
   });
 
   it("lets only the Capabilities skill route call the switch, and only its composition build it", () => {
@@ -207,7 +209,7 @@ describe("Capabilities skill switch skip guard", () => {
     );
   });
 
-  it("names the offending file when anything else asks for a skill approval and resolves one", () => {
+  it("names the offending file when anything else asks for a skill approval and resolves one", async () => {
     const resolveAfterRequest = [
       "async function skip(skills: any, approvals: any) {",
       "  const outcome = await skills.setSkillState('a', 'enabled', undefined, { expectedRevision: 1 });",
@@ -218,7 +220,7 @@ describe("Capabilities skill switch skip guard", () => {
       "const ask = (skills: any) => skills.requestSkillStateApproval('a', 'sleep', undefined, { expectedRevision: 1 });",
       "const approve = (approvals: any, id: string) => approvals.resolveApproval(id, { decision: 'approve' });",
     ].join("\n");
-    expect(() =>
+    await expect(
       assertOnlySwitchResolvesItsRequest([
         { relativePath: SKIP_SERVICE, content: resolveAfterRequest },
         // A facade may hold both in separate functions, but never chain them in one.
@@ -227,12 +229,12 @@ describe("Capabilities skill switch skip guard", () => {
         // Anywhere else, naming both is enough.
         { relativePath: "apps/gateway/src/routes/skills.ts", content: separateFunctions },
       ]),
-    ).toThrow(
+    ).rejects.toThrow(
       "A skill approval is resolved by code that also asks for it, outside the Capabilities skill switch: apps/gateway/src/services/gateway-service.ts, apps/gateway/src/routes/skills.ts",
     );
   });
 
-  it("names the offending file when anything else asks for a Skill Hub approval and resolves one", () => {
+  it("names the offending file when anything else asks for a Skill Hub approval and resolves one", async () => {
     const hubSkip = [
       "async function install(skills: any, approvals: any, input: any) {",
       "  const created = await skills.createSkillHubApproval(input);",
@@ -243,7 +245,7 @@ describe("Capabilities skill switch skip guard", () => {
       "const ask = (skillHub: any, input: any) => skillHub.createSkillHubApproval(input);",
       "const approve = (approvals: any, id: string) => approvals.resolveApproval(id, { decision: 'approve' });",
     ].join("\n");
-    expect(() =>
+    await expect(
       assertOnlySwitchResolvesItsRequest([
         { relativePath: SKIP_SERVICE, content: hubSkip },
         { relativePath: "apps/gateway/src/services/capability-skills-composition.ts", content: separateFunctions },
@@ -251,7 +253,7 @@ describe("Capabilities skill switch skip guard", () => {
         { relativePath: "apps/gateway/src/routes/skills.ts", content: hubSkip },
         { relativePath: "apps/gateway/src/services/skills-route-service.ts", content: separateFunctions },
       ]),
-    ).toThrow(
+    ).rejects.toThrow(
       "A skill approval is resolved by code that also asks for it, outside the Capabilities skill switch: apps/gateway/src/routes/skills.ts, apps/gateway/src/services/skills-route-service.ts",
     );
   });
@@ -304,14 +306,16 @@ function assertOnlyCompositionRevokesForPlugins(inventory: readonly SourceFile[]
   }
 }
 
-function assertOnlySwitchResolvesItsRequest(inventory: readonly SourceFile[]): void {
-  const offenders = inventory
-    .filter((file) => {
-      if (file.relativePath === SKIP_SERVICE) return false;
-      if (!REQUEST_CALL.test(file.content) || !RESOLVE_CALL.test(file.content)) return false;
-      return OWNER_FACADES.has(file.relativePath) ? hasFunctionDoingBoth(file) : true;
-    })
-    .map((file) => file.relativePath);
+async function assertOnlySwitchResolvesItsRequest(inventory: readonly SourceFile[]): Promise<void> {
+  const offenders: string[] = [];
+  await using compiler = new API();
+  for (const file of inventory) {
+    if (file.relativePath === SKIP_SERVICE || !REQUEST_CALL.test(file.content) || !RESOLVE_CALL.test(file.content))
+      continue;
+    if (!OWNER_FACADES.has(file.relativePath) || (await hasFunctionDoingBoth(compiler, file))) {
+      offenders.push(file.relativePath);
+    }
+  }
   if (offenders.length > 0) {
     throw new Error(
       `A skill approval is resolved by code that also asks for it, outside the Capabilities skill switch: ${offenders.join(", ")}`,
@@ -320,11 +324,12 @@ function assertOnlySwitchResolvesItsRequest(inventory: readonly SourceFile[]): v
 }
 
 /** Whether one function, method or arrow, not counting the functions nested in it, makes both calls. */
-function hasFunctionDoingBoth(file: SourceFile): boolean {
-  const source = ts.createSourceFile(file.relativePath, file.content, ts.ScriptTarget.Latest, true);
-  const callsByFunction = new Map<ts.Node, Set<"request" | "resolve">>();
-  const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+async function hasFunctionDoingBoth(compiler: API, file: SourceFile): Promise<boolean> {
+  await using parsed = await compiler.createSourceFile(file.relativePath, file.content);
+  const source = parsed.sourceFile;
+  const callsByFunction = new Map<Node, Set<"request" | "resolve">>();
+  const visit = (node: Node): void => {
+    if (isCallExpression(node) && isPropertyAccessExpression(node.expression)) {
       const name = node.expression.name.text;
       const kind = REQUEST_METHODS.has(name) ? "request" : name === RESOLVE_METHOD ? "resolve" : undefined;
       if (kind) {
@@ -332,15 +337,15 @@ function hasFunctionDoingBoth(file: SourceFile): boolean {
         callsByFunction.set(owner, new Set([...(callsByFunction.get(owner) ?? []), kind]));
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(source);
   return [...callsByFunction.values()].some((kinds) => kinds.size === 2);
 }
 
-function enclosingFunction(node: ts.Node): ts.Node | undefined {
+function enclosingFunction(node: Node): Node | undefined {
   for (let current = node.parent; current; current = current.parent) {
-    if (ts.isFunctionLike(current)) return current;
+    if (isFunctionLikeDeclaration(current)) return current;
   }
   return undefined;
 }
