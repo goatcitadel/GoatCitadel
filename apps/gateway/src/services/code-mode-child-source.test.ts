@@ -37,11 +37,17 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
       params: {
         runId: "run-ambient-globals",
         source: `
+          const guestGlobal = globalThis;
           return {
             processType: typeof process,
             requireType: typeof require,
             globalProcessType: typeof globalThis.process,
             globalType: typeof global,
+            aliasedProcessType: typeof guestGlobal.process,
+            aliasedFetchType: typeof guestGlobal["fe" + "tch"],
+            aliasedRequireType: typeof guestGlobal["require"],
+            aliasedTimerType: typeof guestGlobal["setTimeout"],
+            aliasedSchedulerType: typeof guestGlobal["queueMicrotask"],
           };
         `,
         input: {},
@@ -63,6 +69,11 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
       requireType: "undefined",
       globalProcessType: "undefined",
       globalType: "undefined",
+      aliasedProcessType: "undefined",
+      aliasedFetchType: "undefined",
+      aliasedRequireType: "undefined",
+      aliasedTimerType: "undefined",
+      aliasedSchedulerType: "undefined",
     });
     expect(close.code).toBe(0);
     expect(close.signal).toBeNull();

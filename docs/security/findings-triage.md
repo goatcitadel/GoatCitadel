@@ -389,10 +389,17 @@ as the platform for `macos-arm64`. Both the native Node copy and SQLite schema s
 against that platform field. The [Darwin local-copy regression](../../scripts/packaging/build-bundle-node-runtime.test.mjs)
 passes and asserts that the matching runtime makes zero archive requests.
 
-The TypeScript JSX finding on `365b1d1ac` describes the existing admission and execution
+The TypeScript JSX finding on `365b1d1ac` and `f4d350f4d` describes the existing admission and execution
 contract. The [approved-request tests](../../apps/gateway/src/services/capability-system-service.approved-request.test.ts)
 verify that TSX can reach approval review and that an approved TypeScript run which cannot emit
 that source records a failed run before dispatch. Retain that behavior for existing requests.
+
+The global-alias finding on `f4d350f4d` concerns the admission check. The
+[guest runtime](../../apps/gateway/src/services/code-mode-child-source.ts) assigns unavailable
+values to the reserved ambient globals and binds guest `globalThis` to that same object.
+The [child process regression](../../apps/gateway/src/services/code-mode-child-source.test.ts)
+verifies that aliases and computed keys still read `undefined`. Keep the source check focused on
+syntax it can inspect directly. Code Mode runs trusted code and the guest VM is a hardening layer.
 
 ### There is no way to dismiss an AI finding
 
