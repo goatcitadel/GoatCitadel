@@ -1,8 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
-import { describe, expect, it, vi } from "vitest";
+import { API } from "typescript-7/async";
+import type { Node } from "typescript-7/ast";
+import { isStringLiteral, isTemplateLiteralToken } from "typescript-7/ast/is";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   runDiscordBotLiveChecks,
   runMattermostBotLiveChecks,
@@ -70,15 +72,19 @@ function mentionsSandboxAsAWord(literal: string): boolean {
   return /sandbox/iu.test(rest);
 }
 
-function stringLiterals(file: string): string[] {
+let compiler: API | undefined;
+afterAll(() => compiler?.[Symbol.asyncDispose]());
+
+async function stringLiterals(file: string): Promise<string[]> {
   const text = readFileSync(file, "utf8");
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  compiler ??= new API();
+  await using parsed = await compiler.createSourceFile(file, text);
   const literals: string[] = [];
-  const visit = (node: ts.Node): void => {
-    if (ts.isStringLiteral(node) || ts.isTemplateLiteralToken(node)) literals.push(node.text);
-    ts.forEachChild(node, visit);
+  const visit = (node: Node): void => {
+    if (isStringLiteral(node) || isTemplateLiteralToken(node)) literals.push(node.text);
+    node.forEachChild(visit);
   };
-  visit(source);
+  visit(parsed.sourceFile);
   return literals;
 }
 
@@ -87,8 +93,8 @@ const relativeToRepo = (file: string) => path.relative(repoRoot, file).replaceAl
 describe("the setup test's message is a test message wherever an operator can read it", () => {
   it.each(SOURCES.map((file) => [relativeToRepo(file), file] as const))(
     "%s has no operator-visible 'sandbox' beyond stored keys and other people's words",
-    (_name, file) => {
-      const literals = stringLiterals(file);
+    async (_name, file) => {
+      const literals = await stringLiterals(file);
       const offenders = literals.filter(mentionsSandboxAsAWord);
 
       expect(offenders).toEqual([]);
@@ -127,8 +133,8 @@ describe("the setup test's message is a test message wherever an operator can re
     expect(mentionsSandboxAsAWord("add sandbox.api.sgroup.qq.com when Test mode is on")).toBe(false);
   });
 
-  it("still finds the stored step keys, so the allowance above is exercised", () => {
-    const keys = stringLiterals(path.join(servicesDir, "channel-bot-live-probes.ts")).filter((literal) =>
+  it("still finds the stored step keys, so the allowance above is exercised", async () => {
+    const keys = (await stringLiterals(path.join(servicesDir, "channel-bot-live-probes.ts"))).filter((literal) =>
       /^[a-z_]*sandbox_send$/u.test(literal),
     );
 

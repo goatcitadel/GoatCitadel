@@ -14,8 +14,6 @@ import path from "node:path";
 import process from "node:process";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
-import type * as TypeScript from "typescript";
 import type {
   ApprovalCreateInput,
   ApprovalRequest,
@@ -149,6 +147,7 @@ import {
 } from "./code-mode-execution-backends.js";
 import { CODE_MODE_AIDER_DEFAULT_COMMAND } from "./code-mode-aider-adapter-plan.js";
 import { CODE_MODE_DOCKER_DEFAULT_COMMAND, isDigestPinnedImageRef } from "./code-mode-docker-launch.js";
+import { transpileGuestSource, validateGuestSource } from "./code-mode-guest-compiler.js";
 import { assertCodeModeSandboxAvailable, resolveCodeModeSandboxMetadata } from "./code-mode-sandbox-runner.js";
 import { AutonomousActivationGrantService } from "./autonomous-activation-grant-service.js";
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
@@ -2016,7 +2015,7 @@ export class CapabilitySystemService {
     if (!source) {
       throw new ValidationError({ message: "Code Mode source is required." });
     }
-    validateGuestSource(source);
+    await validateGuestSource(source);
     await this.ensureSkillLifecycleBackfill();
 
     const runId = `code-run-${randomUUID()}`;
@@ -2680,7 +2679,7 @@ export class CapabilitySystemService {
         message: "The code to run does not match the approved code. Ask for approval again.",
       });
     }
-    validateGuestSource(request.source);
+    await validateGuestSource(request.source);
     const approval = this.requireApprovedCodeModeRequestApproval(
       request,
       await storage.approvals.get(request.approvalId).catch(() => undefined),
@@ -3559,7 +3558,7 @@ export class CapabilitySystemService {
       );
       const runInput = inputBinding.input;
       const wrapperPolicyContext = buildCodeModeWrapperPolicyContext(runPolicyContext, finalRun);
-      const compiledSource = transpileGuestSource(finalRun.language, source);
+      const compiledSource = await transpileGuestSource(finalRun.language, source);
       throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution started.`);
       const assertLaunchAllowed = async () => this.assertChatAutoCodeModeAllowed(finalRun);
       const beforeExecutionDispatch = async () => {
@@ -7135,172 +7134,6 @@ function buildCodeModeApprovalPayload(input: {
     permissionProfileLabel: input.permissionProfileLabel,
     localOperatorOverrideId: input.localOperatorOverrideId,
   };
-}
-
-const requireGuestCompiler = createRequire(import.meta.url);
-
-function loadGuestCompiler(): typeof TypeScript {
-  return requireGuestCompiler("typescript") as typeof TypeScript;
-}
-
-function validateGuestSource(source: string): void {
-  const ts = loadGuestCompiler();
-  const sourceFile = ts.createSourceFile(
-    "code-mode-source.ts",
-    source,
-    ts.ScriptTarget.ES2022,
-    true,
-    ts.ScriptKind.TSX,
-  );
-  const parseDiagnostics =
-    (sourceFile as TypeScript.SourceFile & { parseDiagnostics?: readonly TypeScript.Diagnostic[] }).parseDiagnostics ??
-    [];
-  const parseError = parseDiagnostics[0];
-  if (parseError) {
-    throw new ValidationError({
-      message: `Code Mode source could not be parsed: ${ts.flattenDiagnosticMessageText(parseError.messageText, "\n")}`,
-    });
-  }
-  const forbiddenLabel = findForbiddenGuestSourceReference(ts, sourceFile);
-  if (forbiddenLabel) {
-    throw new ValidationError({
-      message: `Code Mode source may not reference ${forbiddenLabel}.`,
-    });
-  }
-}
-
-function findForbiddenGuestSourceReference(ts: typeof TypeScript, root: TypeScript.Node): string | undefined {
-  let forbiddenLabel: string | undefined;
-  const visit = (node: TypeScript.Node): void => {
-    if (forbiddenLabel) {
-      return;
-    }
-    if (ts.isImportDeclaration(node) || ts.isImportEqualsDeclaration(node)) {
-      forbiddenLabel = "import statements";
-      return;
-    }
-    if (ts.isCallExpression(node)) {
-      forbiddenLabel = readBlockedGuestSourceCallLabel(ts, node.expression);
-      if (forbiddenLabel) {
-        return;
-      }
-    }
-    if (ts.isPropertyAccessExpression(node) && isProcessGuestSourceExpression(ts, node.expression)) {
-      forbiddenLabel = "process";
-      return;
-    }
-    if (ts.isIdentifier(node) && isBlockedGuestSourceIdentifierReference(ts, node)) {
-      forbiddenLabel = readBlockedGuestSourceIdentifierLabel(node.text);
-      if (forbiddenLabel) {
-        return;
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(root);
-  return forbiddenLabel;
-}
-
-function readBlockedGuestSourceCallLabel(ts: typeof TypeScript, expression: TypeScript.Expression): string | undefined {
-  if (expression.kind === ts.SyntaxKind.ImportKeyword) {
-    return "dynamic import";
-  }
-  if (isProcessGuestSourceExpression(ts, expression)) {
-    return "process";
-  }
-  if (ts.isIdentifier(expression)) {
-    return readBlockedGuestSourceIdentifierLabel(expression.text);
-  }
-  if (ts.isPropertyAccessExpression(expression)) {
-    return readBlockedGuestSourceIdentifierLabel(expression.name.text);
-  }
-  return undefined;
-}
-
-function readBlockedGuestSourceIdentifierLabel(text: string): string | undefined {
-  if (text === "require") {
-    return "require";
-  }
-  if (text === "process") {
-    return "process";
-  }
-  if (text === "fetch") {
-    return "fetch";
-  }
-  if (text === "setTimeout" || text === "setInterval" || text === "setImmediate" || text === "queueMicrotask") {
-    return "timers or schedulers";
-  }
-  return undefined;
-}
-
-function isProcessGuestSourceExpression(ts: typeof TypeScript, expression: TypeScript.Expression): boolean {
-  if (ts.isIdentifier(expression)) {
-    return expression.text === "process";
-  }
-  if (ts.isPropertyAccessExpression(expression)) {
-    return expression.name.text === "process" || isProcessGuestSourceExpression(ts, expression.expression);
-  }
-  return false;
-}
-
-function isBlockedGuestSourceIdentifierReference(ts: typeof TypeScript, identifier: TypeScript.Identifier): boolean {
-  const parent = identifier.parent;
-  if (!parent) {
-    return true;
-  }
-  if (ts.isPropertyAccessExpression(parent) && parent.name === identifier) {
-    return false;
-  }
-  if (ts.isPropertyAssignment(parent) && parent.name === identifier) {
-    return false;
-  }
-  if (ts.isBindingElement(parent) && parent.name === identifier) {
-    return false;
-  }
-  if (ts.isVariableDeclaration(parent) && parent.name === identifier) {
-    return false;
-  }
-  if (ts.isParameter(parent) && parent.name === identifier) {
-    return false;
-  }
-  if (ts.isFunctionDeclaration(parent) && parent.name === identifier) {
-    return false;
-  }
-  if (ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent)) {
-    return false;
-  }
-  return true;
-}
-
-function transpileGuestSource(language: CodeModeLanguage, source: string): string {
-  if (language === "javascript") {
-    return source;
-  }
-  const ts = loadGuestCompiler();
-  const transpiled = ts.transpileModule(source, {
-    compilerOptions: {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      isolatedModules: true,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
-      noResolve: true,
-      removeComments: false,
-      sourceMap: false,
-      inlineSourceMap: false,
-      inlineSources: false,
-    },
-    reportDiagnostics: true,
-  });
-  const errors = (transpiled.diagnostics ?? []).filter(
-    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
-  );
-  const firstError = errors[0];
-  if (firstError) {
-    throw new ValidationError({
-      message: `TypeScript transpilation failed: ${ts.flattenDiagnosticMessageText(firstError.messageText, "\n")}`,
-    });
-  }
-  return transpiled.outputText;
 }
 
 function normalizeRunResult(result: unknown): Record<string, unknown> {

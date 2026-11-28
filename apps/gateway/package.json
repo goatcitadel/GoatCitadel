@@ -42,7 +42,7 @@
     "ora": "9.3.0",
     "pg": "8.20.0",
     "shell-quote": "1.11.0",
-    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "typescript-7": "npm:typescript@7.1.0-beta",
     "undici": "6.29.1",
     "zod": "4.6.6"
   },

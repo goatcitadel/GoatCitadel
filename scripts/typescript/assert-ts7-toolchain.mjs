@@ -4,7 +4,7 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 
 const pnpmExecutable = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-const EXPECTED_TS7_VERSION = "Version 7.0.2";
+const EXPECTED_TS7_VERSION = "Version 7.1.0-beta";
 const EXPECTED_TS6_VERSION_PATTERN = /^Version 6\.0\.\d+$/;
 
 async function main() {
