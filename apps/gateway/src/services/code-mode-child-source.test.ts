@@ -81,6 +81,14 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
 
   it("supports stdio JSON-RPC transport without mixing protocol and console stdout", async () => {
     const child = await spawnHarness({ transport: "stdio_jsonrpc" });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+      stderr += chunk;
+    });
 
     child.stdin?.write(
       `${JSON.stringify({
@@ -100,14 +108,21 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
       })}\n`,
     );
 
-    const response = await waitForStdioChildMessage(
-      child,
-      (message) => isResponseMessage(message) && message.id === "run-stdio-transport",
-    );
     const close = await waitForClose(child);
-
-    expect(response.result).toMatchObject({ ok: true });
     expect(close.code).toBe(0);
+    expect(stderr).toContain("guest log on stderr");
+    const lines = stdout.split(/\r?\n/u);
+    expect(lines.pop()).toBe("");
+    const messages = lines.map((line) => {
+      try {
+        return JSON.parse(line) as unknown;
+      } catch (error) {
+        throw new Error(`Invalid JSON-RPC stdout line: ${JSON.stringify(line)}`, { cause: error });
+      }
+    });
+    expect(messages).toEqual([
+      expect.objectContaining({ jsonrpc: "2.0", id: "run-stdio-transport", result: { ok: true } }),
+    ]);
   });
 
   it("rejects oversized inbound IPC messages with a structured error", async () => {
@@ -314,6 +329,14 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
 
   it("fails with RUN_DEADLINE_EXCEEDED before invoking a wrapper when the deadline has already passed", async () => {
     const child = await spawnHarness();
+    const messages: unknown[] = [];
+    child.on("message", (message) => {
+      messages.push(message);
+    });
+    const responsePromise = waitForChildMessage(
+      child,
+      (message) => isResponseMessage(message) && message.id === "run-expired-deadline",
+    );
 
     child.send({
       jsonrpc: "2.0",
@@ -332,16 +355,14 @@ describe("CODE_MODE_CHILD_SOURCE", () => {
       },
     });
 
-    const response = await waitForChildMessage(
-      child,
-      (message) => isResponseMessage(message) && message.id === "run-expired-deadline",
-    );
+    const response = await responsePromise;
     const close = await waitForClose(child);
 
     expect(response.error).toMatchObject({
       code: "RUN_DEADLINE_EXCEEDED",
       message: "Code Mode wrapper deadline exceeded before invocation.",
     });
+    expect(messages.filter((message) => isJsonRpcMessage(message) && isCapabilityInvoke(message))).toEqual([]);
     expect(close.code).toBe(0);
   });
 
@@ -401,59 +422,6 @@ async function spawnHarness(options: { transport?: "node_ipc" | "stdio_jsonrpc" 
     }),
   );
   return child;
-}
-
-function waitForStdioChildMessage(
-  child: ChildProcess,
-  predicate: (message: JsonRpcMessage) => boolean,
-  timeoutMs = 5000,
-): Promise<JsonRpcMessage> {
-  return new Promise((resolve, reject) => {
-    let buffer = "";
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("Timed out waiting for Code Mode stdio child message."));
-    }, timeoutMs);
-
-    const onData = (chunk: Buffer | string) => {
-      buffer += String(chunk);
-      let newlineIndex = buffer.indexOf("\n");
-      while (newlineIndex >= 0) {
-        const line = buffer.slice(0, newlineIndex).trim();
-        buffer = buffer.slice(newlineIndex + 1);
-        if (line.length > 0) {
-          const parsed = JSON.parse(line) as unknown;
-          if (isJsonRpcMessage(parsed) && predicate(parsed)) {
-            cleanup();
-            resolve(parsed);
-            return;
-          }
-        }
-        newlineIndex = buffer.indexOf("\n");
-      }
-    };
-
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-
-    const onClose = () => {
-      cleanup();
-      reject(new Error("Code Mode stdio child closed before emitting the expected message."));
-    };
-
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.stdout?.off("data", onData);
-      child.off("error", onError);
-      child.off("close", onClose);
-    };
-
-    child.stdout?.on("data", onData);
-    child.once("error", onError);
-    child.once("close", onClose);
-  });
 }
 
 function waitForChildMessage(
